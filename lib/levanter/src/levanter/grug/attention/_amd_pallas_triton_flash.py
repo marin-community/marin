@@ -9,19 +9,25 @@ Forward, dQ and dK/dV are separate ``pallas_call``s in the FlashAttention-2 layo
   ``lb[q] <= k <= q``. A sliding window ``W`` gives ``lb[q] >= q - W + 1`` and packed segment IDs give
   ``lb[q] >= start of q's segment``. Key blocks entirely outside ``[lb, q]`` are never visited, so a window-2048
   layer at 4096 tokens does about 37.5% of the dense work and a causal layer about 50%.
+- A mask carrying ``fa4_bounds`` supplies the bounds directly, and the kernels trust them. Queries marked invalid
+  get ``lb[q] = q`` and attend only to themselves. The resulting ``lb`` must satisfy ``lb[q] <= q`` and be
+  nondecreasing along the sequence, which holds for the output of ``fa4_cute_segment_bounds`` when every segment
+  ID, padding included, is one contiguous run. The dK/dV pass relies on the ordering, so other bounds give wrong
+  key and value gradients without raising.
 - Blocks entirely inside the allowed band skip the mask computation.
 - Grouped-query attention indexes the shared K/V head per query head instead of materializing repeated K/V. The
-  dK/dV program owns one KV head and accumulates over its query-head group.
+  dK/dV program owns one KV head and accumulates over its query-head group one head at a time, so the group size
+  need not be a power of two: Triton needs power-of-two sizes only for the tiles a kernel loads, and every load
+  here is a ``(block, head_dim)`` tile.
 - bf16 inputs, f32 softmax statistics and accumulators, and the log-sum-exp kept in base 2.
 
 Segment semantics: each maximal run of equal segment IDs is one document, the packed-data convention. A segment
 ID that reappears after a different ID starts a new document here, whereas ``reference_attention`` would let the
 two runs see each other. Query and key segment IDs must be equal (self-attention).
 
-JAX 0.11 deprecates the Pallas Triton backend, and Mosaic GPU, its replacement, does not target AMD GPUs. The same
-kernels launched through ``jax_triton`` replace this module once jaxlib fixes a race in its ROCm kernel loader: on a
-kernel's first launch it reads and deletes the compiled hsaco file without holding its cache lock, so a jax_triton
-kernel fails when one process launches it on several AMD GPUs at once.
+JAX 0.11 deprecates the Pallas Triton backend, and Mosaic GPU, its replacement, does not target AMD GPUs.
+``gpu_triton_flash`` (``_triton_flash.py``) runs the same algorithm through ``jax_triton`` and is faster on MI355X;
+it needs ``jax_rocm10_plugin`` 0.12.0 or newer.
 """
 
 import dataclasses
@@ -83,10 +89,8 @@ def _validate(q: jax.Array, k: jax.Array, v: jax.Array, block_sizes: TritonFlash
             f"gpu_pallas_triton_flash needs self-attention shapes, got q={q.shape} k={k.shape} v={v.shape}"
         )
     num_kv_heads = k.shape[2]
-    if num_q_heads % num_kv_heads != 0 or not _is_power_of_two(num_q_heads // num_kv_heads):
-        raise ValueError(
-            f"gpu_pallas_triton_flash needs a power-of-two GQA ratio, got Hq={num_q_heads} Hkv={num_kv_heads}"
-        )
+    if num_q_heads % num_kv_heads != 0:
+        raise ValueError(f"gpu_pallas_triton_flash needs Hq divisible by Hkv, got Hq={num_q_heads} Hkv={num_kv_heads}")
     if not _is_power_of_two(head_dim) or head_dim < 16:
         raise ValueError(f"gpu_pallas_triton_flash needs a power-of-two head_dim >= 16, got {head_dim}")
     for name, size in dataclasses.asdict(block_sizes).items():
@@ -98,9 +102,12 @@ def _key_lower_bounds(mask: AttentionMask, *, batch: int, seq_len: int) -> Int[A
     """Inclusive lowest key position each query may attend to, for a causal ``AttentionMask``."""
     if not mask.is_causal:
         raise NotImplementedError("gpu_pallas_triton_flash supports causal self-attention only")
-    if mask.fa4_bounds is not None:
-        raise NotImplementedError("gpu_pallas_triton_flash does not read FA4/CuTe precomputed bounds")
     positions = jnp.arange(seq_len, dtype=jnp.int32)[None, :]
+    if mask.fa4_bounds is not None:
+        # The precomputed bounds take precedence over segment IDs and the window, as in gpu_fa4_cute. They are not
+        # validated; see the module docstring for the ordering they must satisfy.
+        fa4_lower, valid = mask.fa4_bounds
+        return jnp.where(valid, fa4_lower, positions)
     lower = jnp.zeros((batch, seq_len), dtype=jnp.int32)
     if mask.segment_ids is not None:
         q_seg, kv_seg = mask.segment_ids

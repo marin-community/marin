@@ -7,6 +7,7 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
 - `lib/zephyr/AGENTS.md` — Zephyr (dataset processing)
 - `lib/fray/AGENTS.md` — Fray (distributed execution)
+- `lib/taskforge/AGENTS.md` — Taskforge (effect-driven task generation)
 
 ## Operational Guides
 
@@ -98,6 +99,9 @@ uv run --no-project infra/ci/run_tests.py
   to supply its acknowledgement. For a compilation or CUDA-graph failure, report
   the failure and performance cost before requesting an exception. See the
   [serving guidance](experiments/evaluation/serve/models/README.md#vllm-eager-execution).
+- Do not commit datasets, run outputs, or result dumps. Publish them to object
+  storage or a Hugging Face dataset and commit a reference. Small test fixtures
+  are fine. See [large data](docs/dev-guide/large-data.md).
 - Never read or write large amounts of data across GCS regions; GCS storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
@@ -120,6 +124,7 @@ uv run --no-project infra/ci/run_tests.py
   monitoring it through an exit condition. The skill owns PR-body content,
   lint-review timing, publication, and monitoring procedure.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
+- When a PR, issue, or agent report links an `s3://` or `gs://` object for a person to inspect, include a Filer link beside the storage URL when useful. Use the stable private host with the encoded storage URL in the fragment, for example `https://filer.marina.oa.dev/#s3%3A%2F%2Fbucket%2Fpath%2Ffile.parquet`. Filer requires Marina login; keep the storage URL too for CLI use. The Filer app's **Copy Filer link** button produces this URL.
 
 ## Code Style
 

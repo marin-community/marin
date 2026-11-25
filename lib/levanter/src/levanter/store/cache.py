@@ -227,6 +227,35 @@ class TreeCache(AsyncDataset[T_co]):
     async def get_flat_field_batch(self, field: str, offsets: Sequence[int], length: int) -> Sequence[np.ndarray]:
         return await self._reader.get_flat_field_batch(field, offsets, length)
 
+    async def flat_field_document_offsets(self, field: str, start: int, stop: int) -> np.ndarray:
+        """Read cumulative token offsets for document rows ``[start, stop)``, ``start < stop``, without reading tokens."""
+        if start < 0 or stop <= start or stop > self.flat_field_num_rows(field):
+            raise ValueError(f"Invalid document range [{start}, {stop})")
+        if not self.is_sharded:
+            field_store = _tree_field(self.store.tree, field)
+            first = 0 if start == 0 else int(await field_store.offsets[start].read())
+            ends = await field_store.offsets[start + 1 : stop + 1].read()
+            return np.concatenate(([first], np.asarray(ends, dtype=np.int64)))
+
+        shard_names, row_ends = self._ensure_shard_row_offsets()
+        _, field_ends = self._ensure_shard_field_offsets(field)
+        pieces: list[np.ndarray] = []
+        cursor = start
+        while cursor < stop:
+            shard_index = int(np.searchsorted(row_ends, cursor, side="right"))
+            row_base = int(row_ends[shard_index - 1]) if shard_index else 0
+            field_base = int(field_ends[shard_index - 1]) if shard_index else 0
+            local_start = cursor - row_base
+            local_stop = min(stop, int(row_ends[shard_index])) - row_base
+            field_store = await self._shard_field_store_async(shard_names[shard_index], field)
+            if not pieces:
+                first = 0 if local_start == 0 else int(await field_store.offsets[local_start].read())
+                pieces.append(np.array([field_base + first], dtype=np.int64))
+            ends = await field_store.offsets[local_start + 1 : local_stop + 1].read()
+            pieces.append(np.asarray(ends, dtype=np.int64) + field_base)
+            cursor = row_base + local_stop
+        return np.concatenate(pieces)
+
     def _ensure_shard_row_offsets(self) -> Tuple[List[str], np.ndarray]:
         if self._shard_row_offsets is not None:
             return self.ledger.finished_shards, self._shard_row_offsets
@@ -1006,6 +1035,7 @@ def write_levanter_cache(
     *,
     metadata: dict[str, Any],
     batch_size: int = _LEVANTER_BATCH_SIZE,
+    max_pending_batches: int = 128,
 ) -> dict:
     """Write tokenized records to Levanter cache format.
 
@@ -1014,6 +1044,7 @@ def write_levanter_cache(
         output_path: Path to output cache directory
         metadata: Metadata for the cache
         batch_size: Number of records to accumulate before flushing to disk.
+        max_pending_batches: Maximum queued batches awaiting the background writer.
 
     Returns:
         ``{"path", "count", "exemplar"}`` where ``exemplar`` is the first record
@@ -1022,6 +1053,8 @@ def write_levanter_cache(
     """
     if batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    if max_pending_batches < 1:
+        raise ValueError(f"max_pending_batches must be >= 1, got {max_pending_batches}")
 
     ensure_parent_dir(output_path)
     record_iter = iter(records)
@@ -1041,7 +1074,7 @@ def write_levanter_cache(
                 for batch in batches:
                     writer.write_batch(batch)
 
-            with ThreadedBatchWriter(_drain_batches) as threaded:
+            with ThreadedBatchWriter(_drain_batches, maxsize=max_pending_batches) as threaded:
                 threaded.submit([exemplar])
                 count += 1
                 zephyr_counters.pipeline.update_counter("zephyr/records_out", 1)

@@ -411,48 +411,6 @@ def test_composite_verifier_routes_each_plane_to_its_verifier():
     assert fed_identity.user_id == "parent-cluster"
 
 
-def test_endpoint_token_surfaces_endpoint_as_audience():
-    """An endpoint token verifies (aud is the fixed proxy plane) and surfaces its
-    bound endpoint name as ``identity.audience`` (what the /proxy gate matches)."""
-    mgr = _jwt_manager()
-    token = mgr.create_endpoint_token("/serve/foo", "k-ep", ttl_seconds=60)
-    identity = mgr.verify(token)
-    assert identity.audience == "/serve/foo"
-
-
-# -- CIDR network-location auth -------------------------------------------------
-
-
-def test_cidr_only_auth_config_enables_request_auth():
-    """An auth block with only trusted_cidrs turns auth on.
-
-    Direct in-network peers resolve to an admin identity; external and
-    forwarded peers are rejected; the cluster's worker JWT still verifies
-    through the same policy.
-    """
-    auth = create_controller_auth(
-        AuthConfig(trusted_cidrs=["10.0.0.0/8"]), cluster_name=_CLUSTER, signing_key_pem=_SIGNING_KEY
-    )
-    policy = request_auth_policy(auth)
-    assert not policy.allows_anonymous
-
-    inside = policy.resolve(None, client_address="10.1.2.3:5555", headers={})
-    assert inside is not None
-    assert inside.role == "admin"
-
-    with pytest.raises(ValueError, match="Missing authentication"):
-        policy.resolve(None, client_address="203.0.113.9:5555", headers={})
-
-    # A forwarded request whose socket peer is an in-CIDR ingress hop must not
-    # inherit the hop's network location.
-    with pytest.raises(ValueError, match="Missing authentication"):
-        policy.resolve(None, client_address="10.1.2.3:5555", headers={"x-forwarded-for": "203.0.113.9"})
-
-    worker = policy.resolve(auth.worker_token, client_address="203.0.113.9:5555", headers={})
-    assert worker is not None
-    assert worker.user_id == WORKER_USER
-
-
 # -- Optional auth (gradual adoption) -----------------------------------------
 
 

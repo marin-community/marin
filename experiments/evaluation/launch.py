@@ -13,24 +13,39 @@ import re
 import socket
 import subprocess
 import uuid
+from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
+from urllib.parse import urlsplit
 
+from evalrecords.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
+from evalrecords.records import (
+    CW_RECORDS_PREFIX,
+    DEFAULT_RECORDS_PREFIX,
+    EvalRef,
+    EvaluationSelection,
+    ModelConfigRef,
+    ModelRef,
+    PromptFormat,
+    RLAttemptRef,
+    RunStatus,
+    TaskEvidence,
+    TaskMachineBackend,
+    list_records,
+    scoring_settings,
+)
+from fray.current_client import current_client
+from fray.types import ResourceConfig
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client.client import IrisClient
 from iris.cluster.config import load_config
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc import job_pb2
+from marin.evaluation.dataset_evaluator import DatasetEvaluator
 from marin.evaluation.eval_env import EVAL_ENV_KEYS, env_vars_from_keys
-from marin.evaluation.eval_policy import RUNTIME_COMMITS, policy_violations, runtime_violations
-from marin.evaluation.evalchemy.config import load_evalchemy_config
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor
-from marin.evaluation.evalchemy.runtime import (
-    evalchemy_evaluator_source_hash,
-    evalchemy_runtime_descriptor,
-    evalchemy_runtime_source_hash,
-)
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
@@ -38,23 +53,15 @@ from marin.evaluation.harbor.driver_config import (
     preflight_harbor_configs,
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
-from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform
+from marin.evaluation.hardware import AcceleratorChoice, Platform, default_platform, supports_request_seed
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import (
-    CW_RECORDS_PREFIX,
-    DEFAULT_RECORDS_PREFIX,
-    EvalRef,
-    ModelConfigRef,
-    ModelRef,
-    RunStatus,
-    list_records,
-)
 from marin.evaluation.runner import (
     EndpointRoute,
     EvalExecutor,
     Evaluation,
     EvaluationBatch,
     EvaluationIdentity,
+    EvaluationOutcome,
     EvaluationStep,
     HostedJudge,
     LaunchProvenance,
@@ -63,26 +70,50 @@ from marin.evaluation.runner import (
     run_evaluation_steps,
 )
 from marin.evaluation.serving_config import resolved_serve_config
+from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, JUDGE_API_KEY
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from marin.inference.iris import RemoteInferenceSession
+from marin.inference.types import InferenceBackendState
+from marin.rollouts.evaluation import EVALUATION_EXECUTION_REVISION
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretSpec, resolve_secret_spec
+from zephyr.context import ZephyrContext
 
+from experiments.evaluation.curated import (
+    DEFAULT_RUN_SEED,
+    agent_ref_for,
+    corpus_key,
+    corpus_steps,
+    pinned_model,
+    record_ref_for,
+    resolve_selection,
+    runs_agent,
+    selected_sources,
+    settings_for,
+)
 from experiments.evaluation.evals import (
-    EVALS,
-    EvalchemyDefinition,
+    DAYTONA_SECRET_ENV,
     EvaluationDefinition,
     HarborDefinition,
     harbor_model_agent_kwargs,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
+from experiments.evaluation.policy_finalization import (
+    PolicyFinalization,
+    policy_executor,
+    policy_reference,
+    requires_policy_judge,
+)
+from experiments.post_training.task_curation.campaign import CampaignRuntime
+from experiments.post_training.task_curation.pipeline import download_hosts
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
 _ORCHESTRATOR_CPU = 4.0
-_ORCHESTRATOR_MEMORY = "16g"
+_ORCHESTRATOR_MEMORY = "8g"
 _ORCHESTRATOR_DISK = "16g"
 _SERVE_THROUGHPUT_FIELDS = frozenset({"max_num_batched_tokens", "max_num_seqs", "gpu_memory_utilization"})
 _EVALCHEMY_THROUGHPUT_FIELDS = frozenset({"num_concurrent"})
@@ -95,17 +126,32 @@ def _model_identity(model: ModelRef) -> dict:
         mode="json",
         exclude={
             "config_digest": True,
-            "config": {"serve": _SERVE_THROUGHPUT_FIELDS},
-            "source_config": {"serve": _SERVE_THROUGHPUT_FIELDS},
+            "config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
+            "source_config": {
+                "serve": _SERVE_THROUGHPUT_FIELDS,
+                "evaluation_num_concurrent": True,
+                "evaluation_request_timeout": True,
+            },
         },
     )
+
+
+def _judge_identity(config: ModelConfigRef | None) -> dict | None:
+    return None if config is None else config.model_dump(mode="json", exclude={"evaluation_request_timeout"})
 
 
 def _evaluation_identity(evaluation: EvalRef) -> dict:
     excluded = {"tasks": {"__all__": {"benchmark"}}}
     if evaluation.evalchemy is not None:
         excluded.update({"source_digest": True, "evalchemy": _EVALCHEMY_THROUGHPUT_FIELDS})
-    return evaluation.model_dump(mode="json", exclude=excluded)
+    identity = evaluation.model_dump(mode="json", exclude=excluded)
+    if evaluation.curated is not None:
+        identity["curated"]["settings"] = scoring_settings(evaluation.curated.settings.model_dump(mode="json"))
+    return identity
 
 
 def _same_evaluation(prior: EvalRef, current: EvalRef) -> bool:
@@ -127,9 +173,7 @@ class LaunchSpec:
     """One model, evaluation selection, execution target, and record destination."""
 
     model: ModelConfig
-    evals: tuple[str, ...]
-    evalchemy_definitions: tuple[EvalchemyDefinition, ...]
-    harbor_definitions: tuple[HarborDefinition, ...]
+    evals: tuple[EvaluationDefinition, ...]
     platform: Platform
     accelerator: str | None
     limit: int | None
@@ -142,6 +186,7 @@ class LaunchSpec:
     judge_model: ModelConfig | None = None
     judge_accelerator: str | None = None
     seed: int | None = None
+    task_evidence: TaskEvidence | None = None
     retry_unscored_harbor_trials: bool = False
     version: str | None = None
     description: str | None = None
@@ -149,6 +194,15 @@ class LaunchSpec:
     cache_key: str | None = None
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
+    policy_finalization: PolicyFinalization | None = None
+    rl_attempt: RLAttemptRef | None = None
+    task_machine_backend: TaskMachineBackend | None = None
+    """Replaces the task-machine backend of every curated selection that runs on task machines."""
+
+
+# EvalDash scans these record roots (`DEFAULT_SCAN_PREFIXES` adds read-only legacy roots).
+POLICY_RECORDS_PREFIXES = (DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX)
+POLICY_RECORD_ROOTS = tuple(StoragePath(prefix) for prefix in POLICY_RECORDS_PREFIXES)
 
 
 def _git_sha() -> str:
@@ -185,26 +239,33 @@ def _capability_origin(cluster: str) -> str:
     return config.dashboard_url
 
 
+def _is_catalogued_results_path(path: str) -> bool:
+    """Whether `path` is `<root>/<run_id>/results` under a prefix EvalDash scans for `record.json`."""
+    results = StoragePath(path)
+    return results.name == "results" and results.parent.parent in POLICY_RECORD_ROOTS
+
+
 def records_prefix_for(accel: AcceleratorChoice, spec: LaunchSpec) -> str:
-    """Resolve the configured TPU or CoreWeave records store."""
+    """Resolve the configured TPU or CoreWeave records store.
+
+    Policy launches may write remote records only to a prefix EvalDash catalogs; a local path stays
+    available for dry runs and tests.
+    """
     if spec.records_prefix:
-        return spec.records_prefix if "://" in spec.records_prefix else os.path.abspath(spec.records_prefix)
-    if accel.target_cluster:
-        return CW_RECORDS_PREFIX
-    return DEFAULT_RECORDS_PREFIX
+        prefix = spec.records_prefix if "://" in spec.records_prefix else os.path.abspath(spec.records_prefix)
+    elif accel.target_cluster:
+        prefix = CW_RECORDS_PREFIX
+    else:
+        prefix = DEFAULT_RECORDS_PREFIX
+    if spec.policy_finalization is not None and "://" in prefix and StoragePath(prefix) not in POLICY_RECORD_ROOTS:
+        raise ValueError(
+            f"policy records prefix {prefix!r} is not catalogued by EvalDash; use one of {POLICY_RECORDS_PREFIXES}"
+        )
+    return prefix
 
 
 def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefinition], ...]:
-    registry_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (eval_key, EVALS[eval_key]) for eval_key in spec.evals
-    )
-    evalchemy_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (definition.name, definition) for definition in spec.evalchemy_definitions
-    )
-    harbor_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (definition.name, definition) for definition in spec.harbor_definitions
-    )
-    definitions = registry_definitions + evalchemy_definitions + harbor_definitions
+    definitions = tuple((definition.name, definition) for definition in spec.evals)
     if not definitions:
         raise ValueError("at least one evaluation is required")
     names = [name for name, _ in definitions]
@@ -216,11 +277,12 @@ def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefi
 @dataclass(frozen=True)
 class _ResolvedDefinition:
     record_ref: EvalRef
-    runtime_descriptor: str
-    cache_runtime_descriptor: str
-    executor: EvalExecutor
+    runtime_descriptor: str | None
+    cache_runtime_descriptor: str | None
+    executor: EvalExecutor | None
     endpoint_route: EndpointRoute
     secret_env: dict[str, SecretSpec]
+    egress_allow: tuple[str, ...]
 
 
 def _resolve_definitions(
@@ -228,45 +290,61 @@ def _resolve_definitions(
     model: ModelConfig,
     limit: int | None,
     seed: int | None,
+    default_seed: int | None,
+    task_evidence: TaskEvidence | None,
     retry_unscored_harbor_trials: bool,
-    version: str | None,
     judge_model: ModelConfig | None,
+    task_machine_backend: TaskMachineBackend | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
-    evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
-    runtime_commits = RUNTIME_COMMITS.get(version or "", {})
-    if evalchemy_definitions and (commit := runtime_commits.get("evalchemy")) is not None:
-        raise ValueError(
-            f"{version} requires historical Evalchemy commit {commit}; "
-            "run it from a Marin checkout that predates Evalchemy vendoring"
-        )
-    evalchemy_source_hash = evalchemy_runtime_source_hash() if evalchemy_definitions else ""
-    evalchemy_evaluator_hash = evalchemy_evaluator_source_hash() if evalchemy_definitions else ""
-    evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
+    harbor_runtime = harbor_runtime_descriptor() if harbor_definitions else None
     model_agent_kwargs = harbor_model_agent_kwargs(model)
     requests = [(definition.config_path, model_agent_kwargs) for definition in harbor_definitions]
-    validated_configs = iter(preflight_harbor_configs(requests))
+    validated_configs = iter(
+        preflight_harbor_configs(
+            requests,
+            judge_model=canonical_served_name(judge_model.name) if judge_model is not None else None,
+        )
+    )
 
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
-        if isinstance(definition, EvalchemyDefinition):
-            source = next(evalchemy_sources)
-            config = definition.config_for(source, model, limit)
-            if seed is not None:
-                config = replace(config, seed=seed)
-            secret_env = definition.secret_env_for(config)
+        if isinstance(definition, EvaluationSelection):
+            protocol = resolve_selection(
+                definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
+            )
+            settings = settings_for(
+                definition, protocol, model, limit, seed, default_seed, task_machine_backend, task_evidence
+            )
+            secret_env: dict[str, SecretSpec] = {
+                **definition.run.task_secrets,
+                **({JUDGE_API_KEY: definition.run.judge_api_key} if definition.run.judge is not None else {}),
+            }
+            egress_allow = (
+                (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
+            )
+            egress_allow += tuple(
+                host
+                for source in selected_sources(protocol)
+                if source.config is not None
+                for host in download_hosts(source.config.recipe)
+            )
+            if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
+                secret_env[DAYTONA_API_KEY] = DAYTONA_SECRET_ENV[DAYTONA_API_KEY]
+                egress_allow = (*egress_allow, *DAYTONA_EGRESS)
             resolved.append(
                 (
                     name,
                     _ResolvedDefinition(
-                        record_ref=definition.record_ref_for(config),
-                        runtime_descriptor=evalchemy_runtime_descriptor(config.runtime.extras, evalchemy_source_hash),
-                        cache_runtime_descriptor=evalchemy_runtime_descriptor(
-                            config.runtime.extras, evalchemy_evaluator_hash
+                        record_ref=record_ref_for(
+                            definition, protocol, settings, agent_ref_for(protocol, model, settings)
                         ),
-                        executor=EvalchemyExecutor(config),
+                        runtime_descriptor="taskspec:" + EVALUATION_EXECUTION_REVISION,
+                        cache_runtime_descriptor="taskspec:" + EVALUATION_EXECUTION_REVISION,
+                        executor=None,
                         endpoint_route=EndpointRoute.DIRECT,
-                        secret_env=dict(secret_env),
+                        secret_env=secret_env,
+                        egress_allow=egress_allow,
                     ),
                 )
             )
@@ -274,23 +352,23 @@ def _resolve_definitions(
 
         config: ValidatedHarborConfig = next(validated_configs)
         validate_harbor_dataset_source(config)
-        runtime_task_limit = definition.max_eval_instances if limit is None else limit
         resolved.append(
             (
                 name,
                 _ResolvedDefinition(
-                    record_ref=definition.record_ref_for(config, runtime_task_limit),
-                    runtime_descriptor=harbor_runtime_descriptor(),
-                    cache_runtime_descriptor=harbor_runtime_descriptor(),
+                    record_ref=definition.record_ref_for(config, limit),
+                    runtime_descriptor=harbor_runtime,
+                    cache_runtime_descriptor=harbor_runtime,
                     executor=definition.executor_for(
                         config,
                         model,
-                        runtime_task_limit,
+                        limit,
                         retry_unscored_harbor_trials,
                         judge_model,
                     ),
                     endpoint_route=EndpointRoute.CAPABILITY,
                     secret_env=dict(definition.secret_env_for(config)),
+                    egress_allow=definition.egress_allow_for(config),
                 ),
             )
         )
@@ -344,6 +422,16 @@ def build_evaluation_batch(
     if spec.instances > 1 and spec.model.serve.pipeline_parallel_size > 1:
         raise ValueError("pipeline parallelism requires one serving instance")
     model = spec.model
+    requested_definitions = _evaluation_definitions(spec)
+    has_curated_definitions = any(isinstance(definition, EvaluationSelection) for _, definition in requested_definitions)
+    if spec.task_evidence is not None and not has_curated_definitions:
+        raise ValueError("--task-evidence applies only to curated evaluations")
+    if spec.version in RUNTIME_COMMITS and has_curated_definitions:
+        raise ValueError(
+            f"{spec.version} requires its historical Evalchemy checkout; curated runs need a new cohort label"
+        )
+    if has_curated_definitions:
+        model = pinned_model(model)
     source_model_config = ModelConfigRef.model_validate(asdict(model))
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
     if spec.federated_cluster is not None:
@@ -351,20 +439,33 @@ def build_evaluation_batch(
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     judge = _resolve_hosted_judge(spec, accelerator)
-    requested_definitions = _evaluation_definitions(spec)
+    model_format = PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
+    # An agent's token budgets and run identity come from the window the server runs, which the checkpoint can clamp.
     if model.serve.max_model_len is not None and any(
-        isinstance(definition, HarborDefinition) for _, definition in requested_definitions
+        isinstance(definition, HarborDefinition)
+        or (isinstance(definition, EvaluationSelection) and runs_agent(resolve_selection(definition, model_format)))
+        for _, definition in requested_definitions
     ):
         model = replace(model, serve=resolved_serve_config(model))
+    seeded = supports_request_seed(accelerator.platform, model.serve.backend)
+    if not seeded and has_curated_definitions and spec.seed is None:
+        logger.info("TPU vLLM rejects seeded sampling; runs without an explicit seed are unseeded")
     definitions = _resolve_definitions(
         requested_definitions,
         model,
         spec.limit,
         spec.seed,
+        DEFAULT_RUN_SEED if seeded else None,
+        spec.task_evidence,
         spec.retry_unscored_harbor_trials,
-        spec.version,
         judge.model if judge is not None else None,
+        spec.task_machine_backend,
     )
+    if spec.task_machine_backend is not None and not any(
+        definition.record_ref.curated is not None and definition.record_ref.curated.settings.task_machine is not None
+        for _, definition in definitions
+    ):
+        raise ValueError("--task-machine-backend requires a curated evaluation that runs on task machines")
     if spec.retry_unscored_harbor_trials and spec.resume_results_path is None:
         raise ValueError("--retry-unscored-harbor-trials requires --resume-results-path")
     if spec.resume_results_path is not None:
@@ -372,6 +473,11 @@ def build_evaluation_batch(
             raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
         if "://" not in spec.resume_results_path:
             raise ValueError("--resume-results-path must be an object-store path")
+        if spec.policy_finalization is not None and not _is_catalogued_results_path(spec.resume_results_path):
+            raise ValueError(
+                f"policy --resume-results-path {spec.resume_results_path!r} is not a run's results directory "
+                f"that EvalDash catalogs; use <root>/<run_id>/results under one of {POLICY_RECORDS_PREFIXES}"
+            )
         validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.resume_identity)
     model_ref = ModelRef(
         name=model.name,
@@ -387,29 +493,72 @@ def build_evaluation_batch(
         )
         if violations:
             raise ValueError(f"{spec.version} pre-submit check failed for {name}: {'; '.join(violations)}")
-    if judge is not None and any(isinstance(definition.executor, EvalchemyExecutor) for _, definition in definitions):
-        raise ValueError("--judge-model serves Harbor verifiers only; remove it or drop the Evalchemy evaluations")
+    if judge is not None and any(definition.record_ref.curated is not None for _, definition in definitions):
+        raise ValueError("--judge-model serves Harbor verifiers only; configure judges in the evaluation run settings")
     records_prefix = records_prefix_for(accelerator, spec)
     group_id = spec.run_id or _group_id(model.name, spec.cache_key)
     created_at = datetime.now(UTC).isoformat()
+    if spec.policy_finalization is not None:
+        definitions = tuple(
+            (
+                (
+                    name,
+                    replace(
+                        definition,
+                        secret_env={key: value for key, value in definition.secret_env.items() if key != JUDGE_API_KEY},
+                    ),
+                )
+                if requires_policy_judge(definition.record_ref)
+                else (name, definition)
+            )
+            for name, definition in definitions
+        )
     secret_env: dict[str, SecretSpec] = {}
     for _, definition in definitions:
         for name, spec_value in definition.secret_env.items():
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
+    policy_judge = None
+    if spec.policy_finalization is not None and any(
+        requires_policy_judge(definition.record_ref) for _, definition in definitions
+    ):
+        policy_judge = _resolve_hosted_judge(
+            replace(spec, judge_model=spec.policy_finalization.judge, judge_accelerator="H100x8"), accelerator
+        )
     evaluations: list[Evaluation] = []
     for eval_key, definition in definitions:
+        reference = definition.record_ref
+        if spec.policy_finalization is not None:
+            reference = policy_reference(reference, spec.policy_finalization)
+        executor = definition.executor
+        if reference.curated is not None:
+            selection = next(item for name, item in requested_definitions if name == eval_key)
+            assert isinstance(selection, EvaluationSelection)
+            executor = partial(
+                _execute_curated,
+                model,
+                reference,
+                selection.run.judge_endpoint,
+                tuple(selection.run.task_secrets),
+                spec.policy_finalization,
+                policy_judge.accelerator if policy_judge is not None else None,
+                spec.priority_band,
+            )
+        assert executor is not None
+        definition = replace(definition, record_ref=reference)
         cache_key = json.dumps(
             {
                 "pipeline": spec.cache_key or group_id,
                 "model": _model_identity(model_ref),
                 "evaluation": _evaluation_identity(definition.record_ref),
-                "runtime": definition.cache_runtime_descriptor if spec.cache_key is not None else None,
+                **(
+                    {"runtime": definition.cache_runtime_descriptor}
+                    if definition.cache_runtime_descriptor is not None
+                    else {}
+                ),
                 "judge": (
-                    ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
-                    if judge is not None
-                    else None
+                    _judge_identity(ModelConfigRef.model_validate(asdict(judge.model))) if judge is not None else None
                 ),
                 "policy": spec.version,
             },
@@ -426,7 +575,7 @@ def build_evaluation_batch(
                     eval_ref=definition.record_ref,
                     eval_runtime=definition.runtime_descriptor,
                 ),
-                executor=definition.executor,
+                executor=executor,
                 endpoint_route=definition.endpoint_route,
                 secret_env_keys=tuple(definition.secret_env),
             )
@@ -438,6 +587,7 @@ def build_evaluation_batch(
         user=user,
         version=spec.version,
         description=spec.description,
+        rl_attempt=spec.rl_attempt,
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,
@@ -450,7 +600,9 @@ def build_evaluation_batch(
         max_concurrent=spec.max_concurrent,
         instances=spec.instances,
         judge=judge,
+        prepared_judges=(policy_judge,) if policy_judge is not None else (),
         secret_env=secret_env,
+        egress_allow=tuple(dict.fromkeys(rule for _, definition in definitions for rule in definition.egress_allow)),
         source_model_config=source_model_config,
     )
 
@@ -488,7 +640,7 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             source_config=batch.source_model_config,
         )
     )
-    judge = None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model))
+    judge = _judge_identity(None if batch.judge is None else ModelConfigRef.model_validate(asdict(batch.judge.model)))
     records = sorted(
         (
             record
@@ -496,7 +648,9 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
             if record.group_id == batch.group_id
             and record.version == batch.version
             and _model_identity(record.model) == model
-            and (record.judge.model.source_config or record.judge.model.config if record.judge is not None else None)
+            and _judge_identity(
+                record.judge.model.source_config or record.judge.model.config if record.judge is not None else None
+            )
             == judge
         ),
         key=lambda record: (record.status is RunStatus.SUCCEEDED, record.created_at),
@@ -505,7 +659,13 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     evaluations = []
     for evaluation in batch.evaluations:
         prior = next(
-            (record for record in records if _same_evaluation(record.evaluation, evaluation.identity.eval_ref)),
+            (
+                record
+                for record in records
+                if record.run_id == evaluation.identity.run_id
+                and _same_evaluation(record.evaluation, evaluation.identity.eval_ref)
+                and record.provenance.eval_runtime == evaluation.identity.eval_runtime
+            ),
             None,
         )
         if prior is not None:
@@ -517,16 +677,77 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     return replace(batch, evaluations=tuple(evaluations))
 
 
-def run_evaluation_group(batch: EvaluationBatch) -> None:
-    """Run the group's evaluation steps under one shared-inference ownership lock."""
-    configure_coreweave_s3()
-    step = StepSpec(
+def _execute_curated(
+    model: ModelConfig,
+    reference: EvalRef,
+    judge_endpoint: str | None,
+    task_secrets: tuple[str, ...],
+    policy: PolicyFinalization | None,
+    judge_accelerator: AcceleratorChoice | None,
+    priority: int,
+    session: RemoteInferenceSession,
+    output_dir: str,
+    env_vars: Mapping[str, str],
+    *,
+    backend_state: Callable[[], InferenceBackendState],
+    judge: RemoteInferenceSession | None = None,
+) -> EvaluationOutcome:
+    """Construct the evaluator after its regional corpus dependencies have finished."""
+    assert reference.curated is not None and reference.curated.selection is not None
+    datasets = tuple(step.lower().output_path for step in corpus_steps(reference.curated.selection, CampaignRuntime()))
+    source = DatasetEvaluator(
+        datasets,
+        model,
+        reference.curated.settings,
+        judge_endpoint,
+        agent=reference.curated.agent,
+        task_secrets=task_secrets,
+    )
+    executor = source if policy is None else policy_executor(source, reference, policy, judge_accelerator, priority)
+    return executor(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
+
+
+def evaluation_group_step(batch: EvaluationBatch, runtime: CampaignRuntime) -> StepSpec:
+    """Bind complete corpus dependencies before the evaluation receives resolved roots."""
+    dependencies_by_name = {}
+    for evaluation in batch.evaluations:
+        reference = evaluation.identity.eval_ref.curated
+        if reference is None:
+            continue
+        if reference.selection is None:
+            raise ValueError("New evaluation launches require an explicit benchmark selection")
+        for step in corpus_steps(reference.selection, runtime):
+            dependencies_by_name[corpus_key(step)] = step.lower()
+    dependencies = list(dependencies_by_name.values())
+    return StepSpec(
         name=f"eval-group/{batch.model.name}",
         output_path_prefix=prefix_join(batch.records_prefix, f"groups/{batch.group_id}"),
         fn=partial(run_evaluation_steps, batch, partial(build_evaluation_steps, batch)),
+        deps=dependencies,
         hash_attrs={"run_ids": tuple(evaluation.identity.run_id for evaluation in batch.evaluations)},
     )
-    StepRunner().run((step,), max_concurrent=1)
+
+
+def run_evaluation_group(batch: EvaluationBatch) -> None:
+    """Materialize artifact dependencies, then execute against their pinned corpus roots."""
+    configure_coreweave_s3()
+    runtime = CampaignRuntime()
+    step = evaluation_group_step(batch, runtime)
+    with ExitStack() as stack:
+        if step.deps:
+            context = stack.enter_context(
+                ZephyrContext(
+                    client=current_client(),
+                    max_workers=4,
+                    resources=ResourceConfig(cpu=2, ram="8g"),
+                    coordinator_resources=ResourceConfig(cpu=2, ram="8g"),
+                    chunk_storage_prefix=prefix_join(batch.records_prefix, f"groups/{batch.group_id}/chunks"),
+                    max_concurrent_pipelines=2,
+                    name="evaluation-corpora",
+                )
+            )
+            stack.enter_context(runtime.activate(context))
+        StepRunner().run((step,), max_concurrent=1)
 
 
 def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
@@ -543,6 +764,7 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
     elif batch.accelerator.region:
         constraints = [region_constraint([batch.accelerator.region])]
     launch_env = env_vars_from_keys(EVAL_ENV_KEYS)
+    launch_env.pop("MARIN_PREFIX", None)
     for name, spec in sorted(batch.secret_env.items()):
         launch_env[name] = resolve_secret_spec(spec).value
     job = client.submit(
@@ -550,7 +772,14 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
         name=f"eval-{batch.group_id}-{uuid.uuid4().hex[:8]}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
         environment=EnvironmentSpec(env_vars=launch_env),
+        # Child grader workers can inherit this profile, but cannot elevate a default parent.
+        container_profile=(
+            job_pb2.CONTAINER_PROFILE_PRIVILEGED
+            if any(evaluation.identity.eval_ref.curated is not None for evaluation in batch.evaluations)
+            else job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+        ),
         constraints=constraints,
+        egress_allow=batch.egress_allow,
         max_retries_failure=0,
         priority_band=batch.priority_band,
     )

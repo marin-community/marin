@@ -24,6 +24,7 @@ from experiments.post_training.task_curation.tests.local_grader import (
     with_verifier_file,
 )
 from experiments.post_training.task_curation.tests.test_reasoning_gym import GENERATED_ROW, RECIPES
+from experiments.post_training.task_curation.tests.time_intervals_entries import time_intervals_entry
 
 pytestmark = [pytest.mark.docker, pytest.mark.timeout(300)]
 
@@ -68,12 +69,25 @@ def test_generated_grade_refuses_a_recorded_entry_the_generator_does_not_produce
     assert result.diagnostics is not None and "Regenerated entry differs" in result.diagnostics["stderr"]
 
 
+def test_generated_grade_scores_a_time_only_entry_recorded_on_another_day(machines):
+    recorded = time_intervals_entry(2, day="2026-11-04")
+    task, answer = generated_task("time_intervals", 2, metadata=recorded["metadata"])
+    result = grade(task, reply(f"Answer: {answer}"), machines, GRADING_MEMORY_MB)
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
+
+
 def test_generated_grade_fails_rather_than_scoring_when_generate_cannot_import(machines):
     task, answer = generated_task("gsm_symbolic", 23)
     broken = inline_resource("generate.py", b"import package_missing_from_the_grader_image\n")
     result = grade(with_verifier_file(task, broken), reply(f"Answer: {answer}"), machines, GRADING_MEMORY_MB)
     assert result.status == Outcome.INFRA_ERROR
     assert result.diagnostics is not None and result.diagnostics["exit_code"] != 0
+
+
+def test_generated_prime_factorization_prose_scores_zero(machines):
+    task, _ = generated_task("prime_factorization", 0)
+    result = grade(task, reply("I need to find the prime factorization of 835."), machines, GRADING_MEMORY_MB)
+    assert (result.status, result.reward) == (Outcome.GRADED, 0.0), result
 
 
 def test_tasktrove_archive_grader_scores_with_the_images_reasoning_gym(machines):

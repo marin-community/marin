@@ -14,6 +14,7 @@ from finestore.rl.curation import (
     CURRENT,
     INVENTORY,
     ITEMS,
+    MAX_UNAVAILABLE_JUDGMENT_SHARE,
     POPULATIONS,
     SNAPSHOTS,
     AdmissionCounts,
@@ -27,6 +28,7 @@ from finestore.rl.curation import (
     ControlCounts,
     ControlSummary,
     CurationCatalog,
+    CurationMode,
     CurationSummary,
     CurrentCatalog,
     JudgmentStatus,
@@ -34,6 +36,7 @@ from finestore.rl.curation import (
     register_catalog,
     validate_items,
 )
+from finestore.rl.source_identity import canonical_source_id
 from finestore.store import DataStore
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.filesystem.storage_path import StoragePath
@@ -57,7 +60,7 @@ def curation_summary(manifest: dict[str, Any]) -> CurationSummary:
         )
     return CurationSummary(
         status=manifest["status"],
-        mode=manifest["mode"],
+        mode=CurationMode(manifest["mode"]),
         **{
             key: manifest.get(key)
             for key in (
@@ -93,6 +96,9 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
     packets = {row["task_id"]: row for path in inputs.packet_paths for row in load_parquet(path)}
     grades = [row for path in judgments.grade_paths for row in load_parquet(path)]
     validate_coverage(inputs.sample, grades)
+    unavailable = sum(row["status"] != JudgmentStatus.REVIEWED for row in grades)
+    if grades and unavailable / len(grades) > MAX_UNAVAILABLE_JUDGMENT_SHARE:
+        raise ValueError(f"Assessment has {unavailable} unavailable judgments above the allowed share")
     if set(packets) != {row.task_id for row in inputs.sample}:
         raise ValueError("Packet records do not match the selected assessment sample")
     key = attempt.pipeline_key
@@ -102,8 +108,6 @@ def publish_assessment(store: DataStore, catalog: CurationCatalog, attempt: Asse
         packet = packets[grade["task_id"]]
         evidence = json.loads(packet["packet_json"])
         status = JudgmentStatus(grade["status"])
-        if status != JudgmentStatus.REVIEWED:
-            raise ValueError(f"Completed assessment has unavailable judgment: {grade['task_id']}")
         uri = store.write_object(
             f"{prefix}/tasks/{grade['task_id']}.json",
             json.dumps(evidence, ensure_ascii=False, allow_nan=False).encode(),
@@ -188,17 +192,34 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
             attempts = list(catalog.attempts(run_id))
             if len(attempts) != run["source_count"]:
                 raise ValueError("Assessment attempts do not cover the terminal campaign")
-            selected = {row.source_id: row for row in attempts}
+            selected = {canonical_source_id(row.source_id): row for row in attempts}
             if len(selected) != len(attempts) or None in selected or not set(selected).issubset(by_id):
                 raise ValueError("Campaign sources must be unique members of the catalog inventory")
             pointer = catalog.view.point(CURRENT, name="latest")
-            previous = {row.id: row for row in catalog.sources(pointer["snapshot_id"])} if pointer else {}
+            # Persisted rows may carry historical IDs; the generated identity reconciles them,
+            # and a row already stored under its generated identity wins over its alias row.
+            previous: dict[str, SnapshotSource] = {}
+            for row in catalog.sources(pointer["snapshot_id"]) if pointer else []:
+                key = canonical_source_id(row.id)
+                if key not in previous or row.id == key:
+                    if row.id != key:
+                        # A row matched through its alias publishes under its generated identity,
+                        # so a renamed source keeps one row and its carried assessment joins by key.
+                        row = row.model_copy(
+                            update={"id": key, "declaration": row.declaration.model_copy(update={"id": key})}
+                        )
+                    previous[key] = row
             if run["started_at"] is None:
                 raise ValueError(f"Campaign {run_id} has no start time")
             started = datetime.fromisoformat(run["started_at"])
+            starts: dict[str, datetime] = {}
+            for source_id, prior_start in published_source_starts(catalog).items():
+                key = canonical_source_id(source_id)
+                if key not in starts or prior_start > starts[key]:
+                    starts[key] = prior_start
             superseded = {
                 source_id
-                for source_id, prior_start in published_source_starts(catalog).items()
+                for source_id, prior_start in starts.items()
                 if source_id in selected and source_id in previous and started < prior_start
             }
             declarations.extend(row.declaration for source_id, row in previous.items() if source_id not in by_id)
@@ -213,7 +234,23 @@ def publish_catalog(root: str, run_id: str, sources: Iterable[RlDataSource]) -> 
                         reason = "; ".join(
                             part for part in (reason, f"Ignored superseded attempt from campaign {run_id}") if part
                         )
-                    rows.append(prior.model_copy(update={"snapshot_id": run_id, "reason": reason}))
+                    update = {"snapshot_id": run_id, "reason": reason}
+                    # No assessment pins an inventory-only declaration, so the code's current one wins.
+                    if attempt is None and declaration.pipeline is None and prior.declaration.pipeline is None:
+                        update["declaration"] = declaration
+                    elif declaration.id in by_id:
+                        # The verdict and its measurement describe runtime cost, not what the pinned
+                        # assessment graded, so an unselected source picks up the current measurement.
+                        update["declaration"] = prior.declaration.model_copy(
+                            update={
+                                "daytona_safety": declaration.daytona_safety,
+                                "daytona_snapshot_count": declaration.daytona_snapshot_count,
+                                "daytona_count_basis": declaration.daytona_count_basis,
+                                "daytona_snapshot_threshold": declaration.daytona_snapshot_threshold,
+                                "oracle_validation": declaration.oracle_validation,
+                            }
+                        )
+                    rows.append(prior.model_copy(update=update))
                     continue
                 unchanged = (
                     prior is not None

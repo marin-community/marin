@@ -14,6 +14,7 @@ from typing import Callable, Literal, TypeAlias
 import jax
 import jax.numpy as jnp
 
+from haliax.jax_utils import GpuFamily, gpu_family
 from haliax.partitioning import ResourceAxis
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,7 @@ def _triton_ragged_dot_kernel(
                 a = plgpu.load(a_ref.at[span_m, span_k])
                 b = plgpu.load(b_ref.at[span_k, pl.ds(0, b_ref.shape[1])])
             dtype = jnp.result_type(a, b)
-            return acc + pl.dot(a.astype(dtype), b.astype(dtype))
+            return acc + plgpu.dot(a.astype(dtype), b.astype(dtype))
 
         num_k_blocks = pl.cdiv(k, block_k)
         acc = jax.lax.fori_loop(0, num_k_blocks, body, acc)
@@ -239,7 +240,7 @@ def _triton_ragged_contracting_dim_dot_kernel(
         a = plgpu.load(a_ref.at[span_k], mask=mask, other=other)
         b = plgpu.load(b_ref.at[span_k], mask=mask, other=other)
         dtype = jnp.result_type(a, b)
-        return acc + pl.dot(a.astype(dtype).T, b.astype(dtype))
+        return acc + plgpu.dot(a.astype(dtype).T, b.astype(dtype))
 
     num_k_blocks = jnp.maximum(pl.cdiv(jnp.int32(hi - lo), jnp.int32(block_k)), jnp.int32(1))
     acc = jnp.zeros((block_m, out_ref.shape[1]), dtype=jnp.float32)
@@ -357,33 +358,6 @@ class TritonBlockConfig:
         )
 
 
-class _GpuFamily(StrEnum):
-    AMD_INSTINCT = "amd_instinct"
-    # Data-center Blackwell: sm_100 and sm_103 (B200, GB200, B300).
-    NVIDIA_BLACKWELL = "nvidia_blackwell"
-    # sm_90 (H100, H200, GH200).
-    NVIDIA_HOPPER = "nvidia_hopper"
-    # Any other GPU, or no GPU (the CPU interpreter). Earlier NVIDIA GPUs such as A100 and consumer
-    # Blackwell (sm_120) have too little shared memory per block for the Hopper and Blackwell configs.
-    OTHER = "other"
-
-
-def _gpu_family() -> _GpuFamily:
-    if jax.default_backend() != "gpu":
-        return _GpuFamily.OTHER
-    device = jax.devices("gpu")[0]
-    if "Instinct" in device.device_kind:
-        return _GpuFamily.AMD_INSTINCT
-    if "NVIDIA" not in device.device_kind:
-        return _GpuFamily.OTHER
-    major = device.compute_capability.split(".")[0]
-    if major == "9":
-        return _GpuFamily.NVIDIA_HOPPER
-    if major == "10":
-        return _GpuFamily.NVIDIA_BLACKWELL
-    return _GpuFamily.OTHER
-
-
 # Tile-map blocks for GPU families without a tuned entry below, such as A100, L4 and consumer Blackwell, which
 # run the tile-map kernels only under implementation="triton_tile_map". Swept on H100 among configs whose operand
 # stages fit in 99 KiB of shared memory, the per-block limit of sm_86, sm_89 and sm_120.
@@ -398,10 +372,10 @@ _TILE_MAP_GENERIC_CONFIGS: dict[RaggedLayout, TritonBlockConfig] = {
         block_m=128, block_n=128, block_k=32, num_warps=4, num_stages=3, num_xcds=1, group_m=8
     ),
 }
-_TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
+_TILE_MAP_CONFIGS: dict[GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
     # Swept on MI350X (gfx950) at the June (G=32, K and N of 1280-2560) and Mixtral-like (G=8, 4096x14336)
     # expert shapes; see lib/levanter/scripts/bench/bench_ragged_dot_triton.py.
-    _GpuFamily.AMD_INSTINCT: {
+    GpuFamily.AMD_INSTINCT: {
         RaggedLayout.FWD: TritonBlockConfig(
             block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=2, num_xcds=1, group_m=2
         ),
@@ -413,7 +387,7 @@ _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
         ),
     },
     # Swept on H100 and GB200 at the same shapes.
-    _GpuFamily.NVIDIA_HOPPER: {
+    GpuFamily.NVIDIA_HOPPER: {
         RaggedLayout.FWD: TritonBlockConfig(
             block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=4, num_xcds=1, group_m=8
         ),
@@ -424,7 +398,7 @@ _TILE_MAP_CONFIGS: dict[_GpuFamily, dict[RaggedLayout, TritonBlockConfig]] = {
             block_m=128, block_n=256, block_k=64, num_warps=8, num_stages=3, num_xcds=1, group_m=8
         ),
     },
-    _GpuFamily.NVIDIA_BLACKWELL: dict.fromkeys(
+    GpuFamily.NVIDIA_BLACKWELL: dict.fromkeys(
         RaggedLayout,
         TritonBlockConfig(block_m=256, block_n=256, block_k=64, num_warps=8, num_stages=3, num_xcds=1, group_m=8),
     ),
@@ -439,9 +413,9 @@ _HOPPER_DRHS_FEW_ROWS_CONFIG = TritonBlockConfig(
 
 def _tile_map_block_config(layout: RaggedLayout, m: int, k: int, n: int, num_groups: int) -> TritonBlockConfig:
     """Device-dependent block config for one layout, fitted to ``m x k x n`` (rows x contraction x columns)."""
-    family = _gpu_family()
+    family = gpu_family()
     if (
-        family == _GpuFamily.NVIDIA_HOPPER
+        family == GpuFamily.NVIDIA_HOPPER
         and layout == RaggedLayout.DRHS
         and k < _HOPPER_DRHS_FEW_ROWS_PER_GROUP * num_groups
     ):
@@ -585,12 +559,12 @@ def _tile_map_row_kernel(
                     None if col_mask is None else col_mask[:, None], None if k_mask is None else k_mask[None, :]
                 )
                 b = _masked_load(b_ref.at[group, col_span, k_span], b_mask)
-                return acc + pl.dot(a, b, trans_b=True)
+                return acc + plgpu.dot(a, b, trans_b=True)
             b_mask = _and_masks(
                 None if k_mask is None else k_mask[:, None], None if col_mask is None else col_mask[None, :]
             )
             b = _masked_load(b_ref.at[group, k_span, col_span], b_mask)
-            return acc + pl.dot(a, b)
+            return acc + plgpu.dot(a, b)
 
         acc = jax.lax.fori_loop(0, pl.cdiv(k, block_k), body, jnp.zeros((block_m, block_n), jnp.float32))
         plgpu.store(out_ref.at[row_span, col_span], acc.astype(out_ref.dtype), mask=store_mask)
@@ -671,7 +645,7 @@ def _tile_map_contracting_kernel(
         r_mask = (start_r + jnp.arange(block_k) < hi)[:, None] if mask_rows else None
         a = _masked_load(a_ref.at[r_span, m_span], _and_masks(r_mask, None if m_mask is None else m_mask[None, :]))
         b = _masked_load(b_ref.at[r_span, n_span], _and_masks(r_mask, None if n_mask is None else n_mask[None, :]))
-        return acc + pl.dot(a, b, trans_a=True)
+        return acc + plgpu.dot(a, b, trans_a=True)
 
     # Every row block but the last is full. An empty group runs one fully masked block and stores zeros.
     num_r_blocks = jnp.maximum(pl.cdiv(hi - lo, block_k), 1)
@@ -744,11 +718,11 @@ _TRITON_KERNELS: dict[TritonKernelFamily, Callable[[jax.Array, jax.Array, jax.Ar
     TritonKernelFamily.TILE_MAP: _tile_map_pallas_call,
 }
 # GPU families that run the tile-map kernels; any other GPU runs the group-grid kernels.
-_TILE_MAP_GPU_FAMILIES = frozenset({_GpuFamily.AMD_INSTINCT, _GpuFamily.NVIDIA_HOPPER, _GpuFamily.NVIDIA_BLACKWELL})
+_TILE_MAP_GPU_FAMILIES = frozenset({GpuFamily.AMD_INSTINCT, GpuFamily.NVIDIA_HOPPER, GpuFamily.NVIDIA_BLACKWELL})
 
 
 def _triton_kernel_family() -> TritonKernelFamily:
-    if _gpu_family() in _TILE_MAP_GPU_FAMILIES:
+    if gpu_family() in _TILE_MAP_GPU_FAMILIES:
         return TritonKernelFamily.TILE_MAP
     return TritonKernelFamily.GROUP_GRID
 

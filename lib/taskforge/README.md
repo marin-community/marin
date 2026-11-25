@@ -1,253 +1,220 @@
-# Taskforge
+# taskforge
 
-Taskforge turns task ideas into TaskCompendium `TaskSpec`s with a model's help. It is the
-`marin-taskforge` member of the repository's uv workspace.
+`taskforge` builds verified tasks from proposals. One agentic **author** session writes a `TaskSpec`
+and its controls, **validation** runs solver trials, control replays and adversarial review
+against the lowered task, and a pure **review** rule turns that evidence into accept, modify or
+abandon. Every effect (model call, shell command, file read, grade) is recorded in an event log,
+so a crashed workpiece resumes by replay: model calls come back from the log, commands are
+re-executed on a fresh machine.
 
-## Package layout
+This file covers how to run it.
 
-```
-src/taskforge/
-  stage_coordinator/           workpiece_machine.py: Stage, Exit, TRANSITIONS, `transition`, `derive_state`;
-                               event_log.py: WorkpieceEventLog, InMemoryEventLog, WorkpieceEventStore,
-                               JsonEventStore;
-                               stage_functions.py: the stage Protocols and `StageFunctions`;
-                               coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
-  agentic/                     agent.py: `generate_tasks`, one managed agent that makes tasks for an idea;
-                               tools.py: the agent's Taskforge tools; gate.py: the acceptance rule;
-                               config.py, prompts.py, parallel.py (web search), example_build.py
-  capability.py                CapabilityIdea, the input of task generation, and its prompt record
-  content_hash.py              canonical JSON and its sha256 digests
-  ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
-  llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
-                               output, ledger recording, agent loop, web tools, the
-                               RolloutEngine model
-  stage20_triage/              verdict.py: TriageDecision and `accept`
-  stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
-                               the program manifest;
-                               loader.py: `load_program_source`, the plain loader of a program's source
-  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
-                               step_store.py: step keys, memos, the memo store and `memoized`;
-                               run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
-  stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
-```
+## Layout
 
-Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
-proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
-stage later without renumbering. A stage imports from lower-numbered stages and from the shared
-modules (`capability`, `content_hash`, `ledger`, `llm`), and the shared modules import no stage.
-The coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It may
-import any stage and shared module, and `tests/test_imports.py` refuses an import of it from any
-other package, along with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
-and step over JSONL ledgers.
+| path | what |
+|---|---|
+| `src/taskforge/effects/` | effect types, the event log, replay, observers, `Hold`/`Restart`/`Transient` |
+| `src/taskforge/resources/` | executors: inference (per-role waiting backend), environments, grading, rollouts, the round-owned verifier machine |
+| `src/taskforge/harness/` | the agentic loop and its tools (`shell`, `read_file`, `write_file`, `grade`, `submit`, `validate`, `report`, `finish`, web) |
+| `src/taskforge/stages/` | `author`, `validate`, `review`; the review rules; prompt summaries |
+| `src/taskforge/model/` | frozen data: proposal, workpiece, task spec, verdicts, decisions |
+| `src/taskforge/llm/` | the GLM transport kept from the previous Taskforge: client, policy, structured output, wire helpers |
+| `src/taskforge/policy/` | the policy record: `defaults/policy.json` and `defaults/prompts/<role>/*.md` |
+| `src/taskforge/lowering.py` | `TaskSpec` → `TaskRolloutSpec` for the host; the only place that chooses machines |
+| `src/taskforge/arms.py` | the S and T transition tables |
+| `src/taskforge/coordinator.py` | stage → exit → edge loop, budgets, bounded stage replay |
+| `src/taskforge/driver.py` | CLI: runs a shard of proposals, publishes to S3, resumes |
+| `src/taskforge/wiring.py` | builds resources and config from the policy for a host |
+| `experiments/taskforge/run_taskforge.py` | submits one Iris driver job per shard |
 
-## Model calls
+## The two arms
 
-`llm.recording` records every model call as an `LLM_CALL` span under a `CallLedger` (ledger, workpiece,
-round, step), with tokens, finish reason and the call's attempt record (`attempts`,
-`attempts_<outcome>` counts, non-200 `http_statuses`, `wall_time`). `recorded_complete` and
-`recorded_structured` wrap one call each; `run_agent` and `GlmRolloutModel` record through
-`llm_call_span`, so a rollout's 429s, retries and holds reach the ledger.
+Both arms run the same stages; they differ in one transition table.
 
-```
-run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
-        |                                     |
-        +---------> llm_call_span <-----------+
-                    (record: CallLedger)
-                      |              |
-                      v              v
-          GlmClient.complete,     span(LLM_CALL) -> Ledger.record(LedgerEntry)
-          retries and holds                          |-> JsonlLedger   <root>/<workpiece_id>.jsonl
-                      |                              '-> FinelogLedger taskforge.ledger (under Iris)
-                      v
-          GLM-5.3 router: POST /v1/chat/completions (streamed)
-```
+- **S, separate sessions.** author → submit → validate → review. On *modify*, a new author
+  conversation starts, seeded with the findings and the previous submission's files.
+- **T, validate as a tool.** The author's tool set gains `validate`. Calling it suspends the
+  session, runs the validate stage, and returns a compact summary as the tool's reply; the full
+  result is written to `.validation/<n>.json` in the workspace. Submit then goes through review
+  as in S.
 
-`llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
-own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
-`reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
-`Machine`, and `llm.web` adds Parallel search and extract. The client sends the policy's whole
-`max_tokens` with every turn, so a prompt plus that budget beyond the context window raises
-`ContextExhausted`, which ends the loop with `AgentStop.CONTEXT`; long loops set a smaller
-`max_tokens`.
+On every author entry, including revision rounds, the workspace holds the proposal, the previous
+submission's `task.json`, `controls.json` and resources, and any validation results. A caller can add
+its own files, such as reference data, with `TaskforgeConfig.workspace` (a `WorkspaceHydration`; the
+default adds none). Only the author sees them; a file reaches solvers or graders only through the task.
 
-`llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
-the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
-and the call's usage with empty token ids; the rollout model requests neither token ids nor logprobs,
-and refuses a request that carries them (a `ModelRequest.continuation` or pinned prompt ids).
-Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage against the attempt's
-token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
-so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
-one rollout.
+## Running on the cluster
 
-## Agentic generation
+Everything runs as Iris jobs on `cw-rno2a`. The entry point is the launcher, which submits one
+driver job per shard; each driver works through its share of the proposals with `--concurrency`
+workpieces in flight, one shellbox Iris sandbox per machine.
 
-`agentic.agent.generate_tasks(idea, n, config)` makes up to n tasks for one idea with one managed
-agent, in place of the stages. The agent works in a shell with Python, taskcompendium and verifyit,
-and no network: a bubblewrap `LocalMachineFactory`, which needs the privileged container profile on
-Iris. Its tools do only what the shell cannot:
+### Credentials
 
-- `grade`: grade a control answer with the task's grader.
-- `rollout`: run solver or adversary rollouts on machines of `AgenticConfig.solver_factory`: ShellSim, or
-  bubblewrap (`--solver-backend local`), where a task sets `command_semantics` to `linux_process`.
-- `web_search`, `web_fetch`: search and read the web with Parallel.
-- `submit`: accept a task when its evidence satisfies the `Gate` and a blind review accepts it.
-- `finish`: end the session with a report.
+Export these in the same shell as the launch (never commit or print them):
 
-The checks of `submit` are in `agentic/tools.py`. The driver is
-`experiments/post_training/capability_driven_envs/generate_tasks_agentic.py`.
+| variable | used for |
+|---|---|
+| `CW_KEY_ID`, `CW_KEY_SECRET` | your personal CoreWeave object-storage key: reading proposals, publishing outputs |
+| `GLM_API_KEY` | the interactive-tier model token: author, solver and adversary model calls through the relay |
+| `GLM_RELAY_JOB` | the Iris relay job that tunnels to the model routers: endpoint resolution; one relay serves both `glm-5.3` and `deepseek-v4.1-flash` |
+| `PARALLEL_API_KEY` | the author's web tools (optional) |
 
-## The build DAG
+`GLM_BASE_URL` may replace `GLM_RELAY_JOB` for a direct endpoint; set exactly one. The launcher
+passes the four keys as `--secret NAME env:NAME`, so their values stay off the `iris job run`
+command line; the driver reads them from Iris secret files.
 
-An author writes a build program as `async def` steps decorated with `@rl_env_build_step`, each
-returning a value of its annotated type. The final step returns a `TaskSpec` and carries
-`@rl_env_build_sink` in place of `@rl_env_build_step`. The author passes the steps, and the sink as
-the keyword `sink`, to `rl_env_build_program`. That call orders the steps so each runs after its
-inputs, puts the sink last, and refuses a step whose output reaches neither another step nor the
-sink. A step receives an `RLEnvBuildContext` (workpiece id, model, sampling policy) as its first
-parameter. The decorator reads the step's inputs from the parameters after it, and the runner
-passes each one by name: another step's output, or the caller's proposal for a parameter called
-`proposal`. `tests/stage40_build_with_program/test_run.py` builds this toy program, abridged here:
+### Inputs
 
-```python
-@rl_env_build_step
-async def numbers(context: RLEnvBuildContext) -> TaskResource:
-    return inline_file("workspace/numbers.txt", b"6 7\n")
+- **Proposals**: a sample file such as
+  `s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json` (192
+  proposals, ranked; wave 1 is ranks 0–31). Each entry points at a proposal JSON whose header
+  carries `environment` (`reasoning`, `shellsim`, `container`). The driver skips environments not
+  in `proposals.environments` (default: reasoning and shellsim) and prints `SKIP <id>: environment=container`.
+- **Policy overlay**: a JSON object of `key: value` pairs layered over
+  `src/taskforge/policy/defaults/policy.json`, stored on S3. The pilots use
+  `{"adversary.roster": ["adversary"]}` because the default roster is empty.
+- **Ranks**: `--ranks 0,1,2` selects proposals by rank; no trailing comma (BSD `seq -s,` adds
+  one, strip it with `sed 's/,$//'`).
 
+### Launch
 
-@rl_env_build_step
-async def grader(context: RLEnvBuildContext) -> GraderPackage:
-    return verifyit_package(NumericSpec(expected="42", tolerance_abs=0.0, tolerance_rel=0.0))
-
-
-@rl_env_build_sink
-async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, proposal: dict) -> TaskSpec:
-    return TaskSpec(...)  # the prompt from proposal["task"], numbers as a worker resource, grader.grader
-
-
-PROGRAM = rl_env_build_program(numbers, grader, sink=task)
-```
-
-`run_build` runs the program and writes `draft/task.json` and `draft/provenance.json`. The second
-file lists every step, the sink last, with the stored memo of its output and whether this build hit
-or missed the cache for it. The memo files in the store carry no status, because the store writes
-a memo only on a miss.
-
-Each step's output is memoized under a key built from `SDK_VERSION`, a source digest, the content
-digest of each input, and a digest of the model and its sampling policy. The decorator computes the
-source digest over the step's own source text and everything the step reaches in its own module:
-the helpers it calls, the constants it reads, the classes in its return annotation at any depth,
-and what those classes reach in turn. Names bound by imports stay out; a library type such as
-`TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
-Because inputs enter the key by content, a step that reruns and returns the same output leaves its
-consumers cached.
-
-## The stage machine
-
-`run_workpiece` runs a workpiece through the stages with the functions a caller passes in
-`StageFunctions`. Each stage returns an event with an exit, and `TRANSITIONS` in
-`stage_coordinator/workpiece_machine.py` gives the next stage:
-
-| stage    | event           | exit      | next     |
-|----------|-----------------|-----------|----------|
-| triage   | `TRIAGED`       | accept    | author   |
-| triage   | `TRIAGED`       | reject    | done     |
-| author   | `AUTHORED`      | authored  | build    |
-| author   | `AUTHOR_FAILED` | revise    | author   |
-| author   | `AUTHOR_FAILED` | reject    | done     |
-| build    | `BUILT`         | built     | validate |
-| build    | `BUILD_FAILED`  | revise    | author   |
-| build    | `BUILD_FAILED`  | reject    | done     |
-| validate | `VALIDATED`     | validated | review   |
-| review   | `DECIDED`       | accept    | done     |
-| review   | `DECIDED`       | reject    | done     |
-| review   | `DECIDED`       | retry     | validate |
-| review   | `DECIDED`       | abandon   | done     |
-| review   | `DECIDED`       | modify    | author   |
-
-From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
-raising an exception closes it as failed. `WorkpieceBudget` bounds the build and author failures a
-workpiece may revise after and the review retries it may follow. The coordinator spends the budget
-when it records the event, choosing revise or reject, retry or abandon. A build error costs a
-revision, except `BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the
-workpiece at the build stage. An author call raising `StructuredOutputError` costs a revision from
-the same budget. Its structured reply stayed invalid through the repair turns, as when the output
-limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE, ...)`. Any other
-author error fails the workpiece at the author stage.
-
-The author returns an `AuthoredProgram`, the program with the Python source it came from. The
-coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
-workpiece's build and author failures so far, and the build stage loads the program from that file
-with `StageFunctions.load_program`, so the author runs once per revision. Each author call writes a
-new `authored/<k>/`, so a relaunch resuming at build finds the program its `AUTHORED` event records
-even when a killed process re-authored the workpiece after the last save. A program defined in
-Python, as `static_author` returns, has no source, and the build stage asks the author for it again.
-
-The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
-digest. A relaunch of the workpiece with another proposal, budget or model digest raises
-`ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
-
-A run root holds:
-
-```
-workpieces/<workpiece_id>/events.json
-workpieces/<workpiece_id>/rounds/<n>/
-    authored/<k>/program.json      the manifest of the program authored after k build and author failures
-    authored/<k>/program.py        its source, when the author returned it
-    draft/                         task.json, provenance.json
-    build-failures/<k>.txt         the k-th build or author failure: its step and program line, then its traceback
-    validation.json                the summary returned by validate
-    decision.json                  the decision returned by review
-store/                             the step store: blobs/, workpieces/<workpiece_id>/steps/
-```
-
-While a workpiece runs, its events stay in the caller's `WorkpieceEventLog`, and `run_workpiece`
-writes `events.json` once, as the last file, when the workpiece reaches a terminal. On the next
-`run_workpiece` with an empty log, the coordinator loads `events.json` back into the log and folds
-it. An accepted or rejected workpiece then returns its terminal without calling a stage or writing a
-byte. A retry with the caller's own log after a failed save of `events.json` writes the file and
-returns. An abandoned workpiece goes back to validation with its retries reset, and a failed one
-resumes at the stage that raised, with the step store serving the build steps already run. A build
-failure in the program's own code spends a revision and sends the workpiece back to the author, and
-so does an author call whose structured reply stays invalid after its repairs
-(`StructuredOutputError`). The workpiece fails in place instead, with its revisions unspent, when:
-
-- the build host fails (`BuildInfrastructureFailure`), and the relaunch builds the same program
-  again;
-- the model is unavailable (`ModelUnavailable`), at the author or the build stage;
-- storage fails, or a blob or memo is missing or corrupt (`OSError`, with `StoreCorruption` for a
-  corrupt one).
-
-The relaunch then resumes at the stage that raised.
-
-A process killed mid-workpiece leaves `events.json` as the workpiece's last terminal wrote it, or
-leaves none, so the next run starts again from that terminal or from triage, and the step store
-serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
-planned with the ledger.
-
-## Testing
+From the repository root (`uv` needs the workspace `pyproject.toml`):
 
 ```bash
-uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/pyproject.toml \
-    lib/taskforge/tests experiments/post_training/capability_driven_envs/tests
-cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
+export CW_KEY_ID=... CW_KEY_SECRET=... GLM_API_KEY=... PARALLEL_API_KEY=...
+export GLM_RELAY_JOB=/<user>/<relay-job>
+ROOT=s3://marin-us-east-02a/marin/forge/pilot-<date>
+uv run --frozen fsutil cp policy.json $ROOT/policy.json
+for arm in S T; do
+  uv run --frozen experiments/taskforge/run_taskforge.py \
+    --proposals s3://marin-us-east-02a/marin/taskforge/acceptance-measure/20261103/sample.json \
+    --ranks "$(seq -s, 0 31 | sed 's/,$//')" --arm $arm \
+    --output $ROOT/$arm --policy $ROOT/policy.json \
+    --job-prefix forge-pilot-<date>-$(echo $arm | tr A-Z a-z) \
+    --drivers 7 --concurrency 4 --cpu 8 --memory 32GB --disk 100GB
+done
 ```
 
-`tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a two-step toy program.
+Each proposal maps to `int(sha256(str(proposal_key)), 16) % 4096`; drivers process their
+half-open `--bucket-range a:b` in manifest order. The launcher splits buckets evenly
+across `--drivers N`; `--driver-range a:b` launches only those driver indices. To replace
+drivers 24–31 of a 32-driver fleet with 16 drivers, cancel them, then launch with
+`--drivers 64 --driver-range 48:64` and a new job prefix. This covers the same 3072:4096
+bucket span without changing the other drivers, output paths, or resume behavior.
+Keep `--buckets 4096` fixed across relaunches. The launcher passes `--max-retries 3`,
+`--sync-package marin-taskforge`, pins the build-parallelism variables to `--cpu`, and leaves jobs
+preemptible; a preempted driver resumes from its published checkpoints. Job names are
+`/<user>/<prefix>-<driver-index>`.
 
-Live tests carry `@pytest.mark.live_glm`. The default marker expression excludes them, and they
-skip with a reason when their inputs are missing. They call GLM-5.3's high pool through the router
-port-forward:
+The driver prints every policy value it resolves next to the declared one (`POLICY key
+declared=… resolved=…`) and the model each role uses (`MODEL role=author model=… endpoint=…`).
+Read those lines first when a run looks wrong.
+
+### Watching
+
+`iris job logs` works only while a federated job is running, and `job list` is dominated by
+the sandbox child jobs, so watch drivers by name:
 
 ```bash
-KUBECONFIG=<open-athena kubeconfig> kubectl -n open-athena port-forward svc/glm53-router 18000:8000 &
-export TASKFORGE_GLM_BASE_URL=http://127.0.0.1:18000/v1
-export GLM_HIGH_TOKEN=<high-pool bearer token>
-uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/pyproject.toml \
-    lib/taskforge/tests -m live_glm
+uv run --frozen iris --cluster=marin job describe /<user>/forge-pilot-<date>-s-0 | grep '^State:'
+uv run --frozen iris --cluster=marin job logs /<user>/forge-pilot-<date>-s-0 --max-lines 400
 ```
 
-`-m live_glm` replaces the default marker expression. The agent live tests also take
-`TASKFORGE_PARALLEL_KEY_FILE`, a file with a `PARALLEL_KEY=...` line. Live checks write raw evidence
-(request without the bearer token, full response, wall time) under `$TASKFORGE_EVIDENCE_DIR`, or
-`taskforge-evidence/` in the system temp directory, outside the checkout.
+Sandboxes are child jobs named `/<user>/<driver>/shellbox-<id>`; `job describe` on one shows
+why it died (`OOMKilled`, preempted, did not start).
+
+### Outputs
+
+Each workpiece publishes to `<output>/<capability>/<slot>/`:
+
+| file | contents |
+|---|---|
+| `events.jsonl` | the full effect log: every request, result, tool call, retry, scope; uploaded after 25 events or 60 s, whichever comes first |
+| `workpiece.json` | the frozen workpiece: proposal, submission, evidence per round, decisions, terminal |
+| `status.json` | `terminal` (`accepted`, `abandoned`, `held`, or `null` while running) and when the upload started |
+
+A driver restarted against the same output resumes each workpiece from these files and prints
+`SKIP <id>: published terminal=<state>` for every published terminal, `held` included. Held
+workpieces are resumed only when the launch passes `--resume-held`; use it under a new job prefix
+after an infrastructure outage (sandbox admission, a provider gap longer than
+`provider.unavailable_wait`). Model calls replay from the event log; shell commands are
+re-executed on fresh machines, so a resumed author session takes minutes before new events appear.
+Replay reuses recorded model results only while the re-executed commands return the output that
+was recorded; after the first difference, the remaining model calls run again.
+Cancelling a driver sends SIGTERM to each workpiece process, which exits without a final snapshot:
+its `status.json` keeps `terminal: null`, and the next launch resumes it without `--resume-held`.
+
+While a driver is working on a workpiece, its `status.json` reads `terminal: null` with
+`upload_started_at`; the hub's `job describe` for a finished federated driver can keep saying
+`running` indefinitely, so judge progress by these files and by the driver's pods, not by job state.
+
+Run `uv run --frozen python -m taskforge.driver report <output-root> [--since-hours N]`
+with the storage credentials above. It reads published snapshots and event parts concurrently,
+then prints terminal/reason counts, accepted/hour over 1/6/24 hours, tokens by role,
+stage durations, and consecutive-event latency proxies. Replayed results do not add token
+spend or latency samples. Solver usage comes from recorded rollout steps; other roles follow
+their scopes. Missing stage scopes (currently review) print `n/a`. Percentiles use nearest rank.
+`--since-hours` includes workpieces active in that window and filters metric events by time;
+acceptance windows are clipped to it, with rates divided by the clipped duration. Acceptance
+uses the terminal decision timestamp, not file upload time. Empty roots and unreadable artifacts
+fail instead of silently producing an incomplete tally.
+
+## What the policy controls
+
+The keys in `defaults/policy.json`, by group. Override any of them in the overlay.
+
+- **Models**: `author.model` (DeepSeek V4.1 Flash), `solver.model` and `adversary.model` (GLM-5.3),
+  each with `<role>.context_tokens`. There is no output cap; the prompt limit is the model's window.
+- **Review band**: `band.low`/`band.high` on the solver pass rate; `solver.k` trials. A task
+  that is *too easy* gets one hardening round and is then accepted with `accepted_with: too_easy`,
+  reverting to the earlier submission if the hardening broke something.
+- **Budgets**: `budget.max_modify_rounds`, `budget.max_validation_retries`.
+- **Adversary**: `adversary.roster` (names of adversary harnesses; empty by default),
+  `adversary.image`. A finding is a demonstrated claim with a candidate and an expected grade;
+  the review counts only claims the grader confirms, re-graded on a fresh machine. An adversary
+  whose context window or output budget runs out before it reports is `exhausted`: the task can
+  still be accepted, and the Accept's reasons say the search budget ran out, not that it validated the task.
+- **Sandboxes**: `author.image`, `author.workdir`, `sandbox.memory_mb`, `grader.timeout`,
+  `solver.*` timeouts (the turn and attempt timeouts are raised to cover `provider.unavailable_wait`).
+- **Provider**: `provider.unavailable_wait` (a busy provider is waited out, with
+  `provider.backoff_*`), `provider.stall_timeout`, `provider.max_connections`.
+- **Tools**: `tools.output_chars`; longer output is saved to `.tool-output/<digest>.txt` in the
+  workspace and the model gets the head plus the path.
+
+Prompts live in `defaults/prompts/<role>/`; the author's system prompt renders the live
+`TaskSpec` and control schemas, and the adversary's user prompt renders the task without file
+payloads (they are in the workdir).
+
+## Environments
+
+Lowering accepts three task environments: none (the solver answers in the conversation),
+ShellSim, and the one pinned python container (`GRADER_BASE_IMAGE`). Any other image is refused
+at the author's `validate`/`submit` with a message naming the fix. The author and adversary
+always work in the pinned container with the task's resources hydrated.
+
+## Running locally
+
+Only the tests run locally; the pipeline does not.
+
+```bash
+uv run --frozen --package marin-taskforge --group test pytest lib/taskforge/tests -q -p no:cacheprovider
+cd lib/taskforge && uv run --frozen pyrefly check
+```
+
+`tests/test_end_to_end.py` drives both arms through fakes (inference, environments, grading);
+`tests/resources/` covers each executor. Any change that touches the sandbox backend must also
+run on `cw-rno2a` before it is relaunched into a pilot: the fakes have passed while the real
+backend failed three times.
+
+## Known limits
+
+- `container` proposals are skipped until image support exists beyond the pinned image.
+- Bubblewrap cannot run unprivileged in an Iris Kubernetes task (#10692); the verifier machine
+  is a long-lived shellbox Iris sandbox.
+- A cancelled driver publishes no final snapshot for its in-flight workpieces; the next launch
+  resumes them from their last checkpoint (see Outputs).
+- S3 output roots (`marin/forge/...`), Iris job prefixes (`forge-pilot-*`), sandbox paths
+  (`.forge-candidates/`, `/tmp/forge-hydration-*`) and the event-log encoding markers
+  (`__forge_*__`) keep the `forge` name of the pilot runs. Event logs name events by module
+  path, so logs written by the `forge` pilots do not replay under `taskforge`.

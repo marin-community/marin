@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 
 import click
 import pyarrow.parquet as pq
+from evalrecords.records import list_records
 from finestore.eval import (
     ARCHIVE_SAMPLES_TABLE,
     ARCHIVE_STEPS_TABLE,
@@ -44,13 +45,12 @@ from finestore.eval import (
 )
 from finestore.reader import ReadView
 from marin.evaluation.harbor.trajectory import archive_trajectory, trajectory_step_rows
-from marin.evaluation.records import list_records
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.archive_backup import legacy_archive_prefix
-from experiments.evaluation.migrations.samples_v4 import preserve_and_replace_samples
+from experiments.evaluation.migrations.samples_v4 import backup_and_drop_samples
 
 logger = logging.getLogger(__name__)
 
@@ -202,16 +202,17 @@ def _legacy_sample_inventory(files: Iterable[LegacySampleFile]) -> tuple[int, di
     return rows, samples
 
 
-def _replace_stale_samples(results_path: str) -> None:
+def _drop_stale_samples(results_path: str) -> None:
     """Clear a samples table written under an older contract, preserving it outside the run first.
 
     The legacy parquets this migration reads reproduce every row of the table, agentic ones included,
     so it may replace a table outright where an lm-eval export refuses. Rows written under a narrower
     primary key would otherwise survive beside the new ones as duplicates.
     """
-    stored_version = ReadView(results_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    reader = ReadView(results_path)
+    stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is not None and stored_version != SCHEMA_VERSION:
-        preserve_and_replace_samples(results_path, stored_version)
+        backup_and_drop_samples(reader, stored_version)
 
 
 def migrate_run(
@@ -222,7 +223,7 @@ def migrate_run(
 ) -> MigrationCounts:
     """Backfill one run's legacy sample parquets into its finestore archive. Safe to re-run."""
     sample_count = step_count = trajectory_count = missing_trajectory_count = 0
-    _replace_stale_samples(results_path)
+    _drop_stale_samples(results_path)
     # Archive shards are named ``{seq}-{uid}.parquet`` under per-table subdirs, so the legacy
     # ``samples_*.parquet`` filter below never picks them up: a re-run reads only legacy sources.
     with EvaluationStore.open(results_path, writer_id=writer_id) as store:

@@ -3,20 +3,18 @@
 
 """Admission for the two published evaluation cohorts."""
 
+import hashlib
+import json
 from dataclasses import asdict
 
-from marin.evaluation import eval_policy
-from marin.evaluation.eval_policy import (
-    HARBOR_COMMIT,
+from evalrecords.eval_policy import (
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
     policy_violations,
-    runtime_violations,
 )
-from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.model_identity import comparison_model_name, model_config_digest
-from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
 
 
 def _model(generation_kwargs: dict[str, bool | None] | None = None) -> ModelRef:
@@ -76,26 +74,22 @@ def test_legacy_policy_label_is_not_verified():
     assert policy_violations("eval-policy-updated", _model(), _math500(None))
 
 
-def test_runtime_pin_is_selected_by_cohort(monkeypatch):
-    monkeypatch.setattr(
-        eval_policy,
-        "RUNTIME_COMMITS",
-        {
-            SEPTEMBER_16_VERSION: {"evalchemy": "older", "harbor": HARBOR_COMMIT},
-            SEPTEMBER_24_VERSION: {"evalchemy": "newer", "harbor": HARBOR_COMMIT},
-        },
-    )
-    evaluation = _math500(True)
-
-    assert runtime_violations(SEPTEMBER_16_VERSION, evaluation, "older") == ()
-    assert runtime_violations(SEPTEMBER_24_VERSION, evaluation, "newer") == ()
-    assert runtime_violations(SEPTEMBER_16_VERSION, evaluation, "newer")
+def test_unset_nccl_symmetric_memory_is_omitted_from_recorded_config():
+    # Records written before this setting existed have no such key. An unset value must serialize the
+    # same way, or the config digests stored in those records stop verifying.
+    config = _model().config
+    assert config is not None
+    assert "vllm_use_nccl_symm_mem" not in config.model_dump(mode="json")["serve"]
 
 
-def test_model_configurations_have_distinct_comparison_identities():
-    first = _model({"enable_thinking": False})
-    second = _model({"enable_thinking": True})
-    assert comparison_model_name(first) != comparison_model_name(second)
-    assert comparison_model_name(first) == comparison_model_name(
-        first.model_copy(update={"config_digest": model_config_digest(first.config)})
-    )
+def test_policy_accepts_historical_model_config_digest_without_request_deadline():
+    record = _model().model_dump(mode="json")
+    record["config"].pop("evaluation_request_timeout")
+    payload = json.dumps(record["config"], sort_keys=True, separators=(",", ":"))
+    record["config_digest"] = hashlib.sha256(payload.encode()).hexdigest()
+    model = ModelRef.model_validate_json(json.dumps(record))
+    evaluation = _math500(None, version=SEPTEMBER_16_VERSION)
+
+    assert policy_violations(SEPTEMBER_16_VERSION, model, evaluation) == ()
+    record["config"]["serve"]["max_model_len"] = 4096
+    assert policy_violations(SEPTEMBER_16_VERSION, ModelRef.model_validate(record), evaluation)

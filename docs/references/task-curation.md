@@ -1,6 +1,6 @@
 # Task curation
 
-Task curation turns pinned RL datasets into TaskSpec parquet files. Each dataset
+Task curation turns pinned training and evaluation datasets into TaskSpec parquet files. Each dataset
 is declared once as an `RlDataSource` under
 [`experiments/post_training/task_curation/datasets/`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/README.md),
 and the catalog
@@ -14,6 +14,14 @@ sources = all_sources()  # stable Atlas ID -> RlDataSource
 ```
 
 Building the catalog performs no downloads, inference or job submission.
+
+[Evaluation tasks](evaluation-tasks.md) use population-preserving publication and
+carry execution protocols beside canonical tasks. Name them explicitly with
+`--source` and `--mode quick`; the default selection contains training sources.
+`experiments.evaluation.preparation.EvaluationCorpusRecipe` binds the recipe,
+protocol, and item builder. Evaluation owns shot selection and prompt preparation;
+shared curation code supplies acquisition and catalog publication. TaskCompendium
+owns reusable source importers and the corpus publisher.
 
 ## Pipeline overview
 
@@ -63,7 +71,7 @@ release and vectors stay in object storage.
 | Shared embedding pass and inference | [embedding.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/embedding.py), [HarrierEmbedder](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/processing/embeddings/harrier.py) |
 | Curriculum anchors, ranking and task joins | [curriculum models](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curriculum/models.py), [alignment.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/alignment.py): `CurriculumVectors`, `TaskMatches`; [task_alignment.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/task_alignment.py): `TaskAlignment` |
 | Full release and compact coverage | [embedding.py](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/embedding.py): release publication; [coverage.py](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/coverage.py); [EmbeddingSpec, AlignmentRelease, CurriculumCoverage](https://github.com/marin-community/marin/blob/main/lib/taskcompendium/src/taskcompendium/pipeline/curriculum/models.py) |
-| Atlas import and serving | [curriculum loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load_curriculum.py), [grade loader](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/load.py), [curriculum API](https://github.com/marin-community/marin/blob/main/infra/marina/applets/rl_data_catalog/server/curriculum.py), [Atlas reference](rl-data-atlas.md) |
+| Atlas import and serving | [curriculum loader](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/load_curriculum.py), [grade loader](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/load.py), [curriculum API](https://github.com/marin-community/marin/blob/main/infra/marina/apps/rl_data_catalog/server/curriculum.py), [Atlas reference](rl-data-atlas.md) |
 
 ## Storage and publication
 
@@ -127,13 +135,13 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin \
 
 `--selection RECIPE.json` appends a terminal `ArtifactStep` to a FULL campaign.
 The implementation is
-[`inventory.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/inventory.py).
-It depends on the recipe's admitted source artifacts and a pinned heldout
-Parquet. Selection reads only `final/*.parquet` from training sources whose
+[`selection.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/selection.py).
+It depends on the recipe's admitted source artifacts and a list of pinned heldout
+inputs. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
-For the current task-to-training recipe, see the [quick RL loop](../recipes/quick-rl-loop.md).
+For the current task-to-training recipe, see the [Snowball RL experiments](../recipes/rl-experiments.md).
 
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:
@@ -147,11 +155,12 @@ this small recipe selects 100 calendar tasks from two admitted sources:
     "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
   },
   "family_limits": {"calendar": 100},
-  "heldout": {
+  "heldout": [{
     "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
     "version": "2026.10.23.1",
-    "rows": 910
-  },
+    "rows": 910,
+    "format": "historical"
+  }],
   "validation_per_family": 20,
   "seed": 20261023
 }
@@ -189,12 +198,118 @@ a shortfall fails before publishing the training files. These rules provide
 exact overlap checks, not semantic decontamination.
 
 The artifact contains `train.parquet`, the per-family evaluation sample in
-`validation.parquet`, the complete exclusion set in `full_validation.parquet`,
-and `summary.json` with the recipe, source paths, eligible/overlap/duplicate/selected
-counts and evaluation IDs. Each Parquet has a `task_spec` JSON column. Source
-TaskSpecs retain their private graders and resources. The historical structural
-heldout tasks use the shared closure converter. SkyRL chooses rollout limits,
-harnesses and verifier backends when it loads these canonical tasks.
+`validation.parquet`, and the complete exclusion set in `full_validation.parquet`.
+These files have a `task_spec` JSON column. `summary.json` records the recipe,
+source paths, eligible/overlap/duplicate/selected counts, evaluation IDs and
+grader-kind counts for each file.
+
+Every training row carries `family`, `aai_category`, `source`, `topic` and
+`difficulty` beside `task_spec`; unknown tags are `untagged`.
+`task_manifest.parquet` uses the shared `finestore.rl.strata.SelectionTaskRow`
+schema for the complete training and heldout pool: task digest, strata, active
+membership, grader metadata and measured difficulty. `summary.json` stores the
+versioned `SelectionDefinition` with its pool and active files. Historical
+upstream pass rates remain measured difficulty values; they are not inferred tags. Historical Nemotron panel tasks use the package
+environment from an admitted task in their matching training component; their
+private grader resources and command stay attached to each task. The historical
+structural heldout tasks use the shared closure converter. SkyRL chooses rollout
+limits, harnesses and verifier backends when it loads these canonical tasks.
+
+### EvalLite
+
+EvalLite is a fixed sample of 1,500 public benchmark tasks that RL runs
+grade on the training job's own machines, with no container image or judge
+service. It draws only from evaluation sources and skips any task that matches
+training data or the 910-task development panel, which tuning looks at. It
+compares checkpoints of one model; it is not a headline benchmark (use
+[`experiments/evaluation`](https://github.com/marin-community/marin/tree/main/experiments/evaluation) for that) and does not
+cover multi-turn agent work or long context.
+
+| family | sources (tasks) | fast subset |
+|---|---|---|
+| scientific_reasoning | MATH500 (500), AIME24 (20) | 35 |
+| general | MMLU-Pro (200), GPQA-Diamond (50) | 17 |
+| competitive_coding | HumanEval+ (164), MBPP+ (111) | 18 |
+| structural | IFEval (150), IFBench (140) | 19 |
+| agents | NeMo next tool call (165) | 11 |
+
+Benchmark tasks come from the catalog's Evalchemy corpora, asked once in chat
+form without examples. An agents task shows a tool-use conversation and asks for
+the next tool call; only the exact function name with exact JSON arguments
+scores 1. It measures tool-call accuracy, not agent ability. The agents part
+stays only while the starting model passes 5%–95% of its answers; the published
+panel measured 19.2%.
+
+To change the panel:
+
+1. Edit the parts of
+   [`recipes/eval-lite.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/eval-lite.json)
+   (`source_id`, `family`, `count`, `fast_counts`) and its `version`. A new source
+   is a `SourceInfo` plus `CurationRecipe(HfSource(...), convert,
+   intended_use=IntendedUse.EVAL)` registered in `sources.py`, as in
+   [`nemo_tool_calls.py`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/datasets/nemo_tool_calls.py).
+   Its tasks need the `eval` tag and an in-process or package grader.
+2. Set `CORPUS_URI` to the converted corpus artifact from the campaign, then build it:
+
+   ```bash
+   uv run --package marin-core --extra cpu python -m experiments.post_training.task_curation.driver \
+     --corpus "$CORPUS_URI" \
+     --eval-lite experiments/post_training/task_curation/recipes/eval-lite.json --run
+   ```
+
+3. Measure the starting model with eight answers per task (temperature 1.0,
+   24,576-token window, at most 8,192 generated tokens), add the result as
+   `pass_rates`, and publish that as the final version. Rows bind a task by the
+   SHA-256 of its TaskSpec, so rows of unchanged tasks can be reused. A separate
+   greedy evaluation must score at least 99% of tasks with zero grading errors.
+
+The artifact contains `full_validation.parquet` (all tasks), `validation.parquet`
+(active subset), `task_manifest.parquet` (the same typed strata and task digests,
+reference-model measurements, membership and retirement reason) and `summary.json`.
+Each version retains its parent's complete TaskSpec pool and adds new tasks;
+retirement changes active membership. The definition records its parent and the
+explicit difficulty bands. Active sampling uses proportional joint source, topic
+and difficulty cells inside the fixed family quotas, with largest remainders and
+seeded ties. Tasks measured as saturated for every declared reference model are
+retired; missing reference evidence does not establish saturation.
+
+### Rebuild a Snowball training selection
+
+`recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
+admitted training sources, with a quota for each source. It excludes the
+development panel (`heldout`) and EvalLite (`exclusions`) by task ID, full
+conversation and whitespace-normalized final user statement, and refuses tasks
+that need a container image or a judge service.
+
+The checked-in recipe names version `2026.11.10.1`, which is not yet published;
+build it before training on it. The published `snowball-100k@2026.11.04.1` was
+built before EvalLite and has no `exclusions`; the panel build excludes it
+instead, and existing Snowball controls use it. Published versions are frozen;
+any recipe change takes a new version.
+
+Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
+`--run`. Use a separate `--artifact-root` for an independent rebuild.
+
+### Train on a Snowball selection
+
+To change the Snowball training tasks, copy `recipes/snowball-100k.json` under a new
+name or version and run a FULL [campaign](#run-a-campaign) with `--selection` set to
+that recipe. Repeat `--source` for each recipe source, using its invocation name from
+[`runnable_sources()`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/sources.py):
+recipe ID `MarinSkyRL:eurus2_code` is `--source eurus2_code`. A recipe's historical
+source IDs resolve through the alias table, so older recipes select the renamed
+sources without edits. To select again from a
+finished campaign, pass its `corpus.json` with `--corpus` as shown in
+[Final task selection](#final-task-selection). Check the source and family counts in
+`summary.json` before training.
+
+Train with `rl --preset data-short --tasks NAME@VERSION`, then data-medium
+(see [Snowball RL experiments](../recipes/rl-experiments.md#change-one-input)). The launcher
+reads `rl-data/task-selection/NAME/VERSION` under `s3://marin-us-east-02a/marin`, the
+driver's default `--artifact-root`. It refuses selections that contain AI-judged tasks,
+and data presets require the default selection's heldout input. Snowball presets do not
+evaluate the selection's `validation.parquet`; held-out comparisons use the
+[EvalLite](../recipes/rl-experiments.md#tasks-and-evaluation).
 
 ## Dataset-owned invocation
 
@@ -282,8 +397,73 @@ ArtifactSteps.
 ## Declarations
 
 An `RlDataSource` has `info`, a typed `config` and an optional `pipeline`.
-`SourceInfo` requires a stable `id`, display `title` and `origin`; it adds family,
-search tags, notes and an optional input-row count. A `SourceReference` groups a
+`SourceInfo` generates `id` and `title` from its upstream identity keys:
+`id` is `<origin>:<upstream_dataset>[/<subset>][@<variant>]` and `title` is
+`<upstream_name> · <subset> · <variant>`, omitting absent parts. `origin` is a
+`SourceOrigin` naming the upstream provider; internal campaigns and pipelines
+belong in `build_path`. Stored records written under historical IDs resolve
+through the alias table (`finestore.rl.source_identity`) where they are read -
+recipes, corpora and catalog joins canonicalize both sides, publication re-keys
+a matched prior row onto its generated identity, and the Atlas load compares a
+selected assessment's source through the same aliases, so historical keys
+select renamed sources. Every source states its `data_restriction` tier
+explicitly; `PRIVATE_ALWAYS` keeps the source's content in its private store
+whatever else changes, and the tier travels with the qualified declaration the
+source's ingestion publishes, not with this catalog row. `current_release`
+pins the exact release consumed for training, separately from the upstream
+provenance URL, and `license_receipt` references the stage-0 license resolution
+that ingest and admission rest on (`RlDataSource.require_license` fails closed
+on it). The `deprecated` tag marks a
+source `Deprecated` in the catalog (overriding `excluded`), and its notes carry
+the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
+visible in the Atlas with its evidence, but it is never admitted to selection and
+its measured Daytona and oracle evidence remains visible even without a pipeline.
+
+Every runnable agentic source declares its ingested `task_format`. New agentic
+sources must ingest TaskCompendium or Harbor task directories; selection rejects
+an agentic source that declares no format, and rejects MarinSkyRL's internal
+blend format unless the source appears in `GRANDFATHERED_MARINSKYRL_SOURCES`, the
+frozen list of Nemotron Ultra components admitted before the requirement. A new
+internal-format source therefore fails at selection instead of shipping.
+`independent_qc` records
+quality control a pinned release performed outside curation, so inventory-only
+pointers surface that evidence in the Atlas. The Daytona verdict is derived, never
+declared: `finestore.rl.curation.daytona_verdict` marks a non-agentic source safe,
+an agentic source with no measured count `unassessed`, and a measured source
+unsafe when its unique environment count exceeds `DAYTONA_SAFE_SNAPSHOT_LIMIT`
+(ten) or when the Daytona backend refuses any task's declared execution
+requirements. The inputs are measurements: `daytona_snapshot_count` holds the
+number of distinct environments the source's own task specs require through the
+production path, `daytona_count_basis` names the rule and payload source, and
+`daytona_execution_failures` counts refused tasks. An unsafe label does not
+remove a source from the catalog; it records that a run would exceed the org's
+limits. [Making a dataset Daytona-safe](https://github.com/marin-community/marin/blob/main/.agents/ops/daytona.md#making-a-dataset-daytona-safe)
+covers the faithful ways to bring one inside the budget.
+
+**Publishing a conversion.** A curation step that converts data publishes the converted
+artifact to the `open-athena` Hugging Face org as a **private** repository: campaign
+datasets stay private until an explicit release, so a card says so and the verification
+reads the upload back through the same login and compares file hashes rather than
+fetching anonymously. The repository name is
+`open-athena/<family>-<format>-<YYYYMMDD>`. The card carries provenance (upstream
+repository and revision, decontamination list), the deferred and excluded counts with
+their reasons, the license, and the research-artifact warning. The Atlas entry for a
+converted dataset points at that repository and its pinned revision, with the upstream
+source recorded as provenance.
+
+Measurement runs that production path rather than reimplementing it
+(`experiments/post_training/task_curation/daytona_identity.py`): each pinned
+task's environment is materialized to a build context, the `MachineSpec` is
+built through Harbor's own task-config mapping
+(`harbor.environments.daytona.machine_spec`), and the name comes from
+`shellbox.backends.daytona.snapshot.snapshot_request_for_spec` — the same
+derivation the Daytona factory uses to name and create snapshots. A task the
+production validation rejects (for example a Dockerfile with `ADD`, which
+Daytona cannot build) counts as a failure and is reported, not treated as safe.
+No Daytona API calls are made. `oracle_validation` separately records how
+execution was qualified; see
+[Sources without oracle solutions](#sources-without-oracle-solutions). A
+`SourceReference` groups a
 name, revision and URL for an inventory dataset. Runnable sources expose their
 pinned input through `config.dataset`. Current grades come from the executed
 assessment records in `finestore.rl.curation.CurationCatalog`.
@@ -333,8 +513,10 @@ two fields: `inputs`, the staged auxiliary sources, and `grader_environment`, th
 
 `HarborHubSource(name, revision, read)` acquires a complete release pinned by
 `sha256:...`. It caches the original task archives as
-`tasks/<task-reference-hash>.tar.gz`, verifies their extracted contents with the
-vendored Harbor runtime, and records the task references in `release.json`.
+`tasks/<task-reference-hash>.tar.gz` and records task references in `release.json`.
+New downloads hash every regular archive member and compare the digest with the
+public Hub record. Cached archives are reused without rehashing. Archives with
+files outside Harbor's hashed task paths fail the check.
 The recipe's `read(StoragePath, ConversionContext)` yields rows from each archive,
 using the same custom-reader interface as HF sources. Acquisition does not
 convert task files or impose a package size cutoff. Dataset-level scoring files
@@ -342,19 +524,29 @@ are not supported.
 
 The existing download cache, sampling, and local-input overrides apply. Retries
 reuse completed archives; use a fresh override directory for a different release
-or task selection. The cache identity includes the release, acquisition code, and
-vendored runtime's source and lock digests. To acquire selected tasks locally,
-inspect the CLI in its isolated environment:
+or task selection. The cache identity includes the release digest. To acquire
+selected tasks locally, inspect the CLI:
 
 ```bash
-uv run --isolated --project vendor/harbor --extra runtime --no-default-groups --frozen \
-  python -m experiments.post_training.task_curation.harbor_hub --help
+uv run python -m experiments.post_training.task_curation.harbor_hub --help
 ```
 
 ## Environments
 
 An `Environment` declares grader build inputs. The converter records agent and
 grader requirements on each TaskSpec; execution selects suitable Shellbox machines.
+
+TaskTrove conversions that request only an assistant response and declare no agent
+environment retain the archived Dockerfile as private oracle evidence. They need
+no agent machine; their grader still uses its declared environment. Environment
+fidelity checks apply to conversions that require an agent machine.
+
+TaskTrove's Python-test sources lower each archived `environment/Dockerfile` onto
+its digest-pinned base. `RUN` steps become setup commands, `WORKDIR` sets the
+working directory, and `ENV` assignments remain in `environment_variables` for
+both setup and later agent commands. An unsupported recipe is refused. Agent
+snapshot counts exclude the separate package-lock grader, which requires the
+local runtime unless its lock is built into an image.
 
 | Field | Meaning |
 |---|---|
@@ -380,7 +572,9 @@ the worker. The TaskTrove competitive-programming
 sources declare `COMPILER_GRADER_PACKAGES`, which adds `build-essential` for
 C++ submissions; the worker image provides it, so they also run in the worker.
 `LEAN_GRADER_PACKAGES` adds the Lean 4 and Mathlib fragment
-`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image.
+`datasets/nemotron_ultra/lean.Dockerfile`, so it runs in a built image, and
+`LEAN_KERNEL_GRADER_PACKAGES` adds `datasets/lean/lean.Dockerfile`, which installs
+Lean, Mathlib and Prime Intellect's proof checker, built likewise.
 Converters declare agent requirements independently. A simulated shell requires
 explicit `SHELL_SIMULATOR` semantics; an absent image does not select simulation.
 Conversation-only tasks need no machine. Memory settings are advisory sizing hints.
@@ -393,11 +587,14 @@ identity; lock-backed worker environments retain their existing identities.
 
 A task's grader is one of three kinds:
 
-- `VerifyitGrader` names a stock verifyit mode. Without an environment it grades
-  in process; with `environment=required_grader_environment(context)` it grades
-  in a fresh machine of the grader's environment. A `judge` grades on the host,
-  through its judge service, also when it declares an environment.
-- `ScriptGrader` runs a command in a fresh machine of the grader's environment. Archived
+- `VerifyitGrader` names a stock verifyit mode. Without a placement it grades
+  in process; with
+  `placement=GraderMachine(environment=required_grader_environment(context))` it
+  grades in a fresh machine of the grader's environment. A `judge` grades on the
+  host, through its judge service, also when it declares a placement.
+- `ScriptGrader` runs a command in the machine its placement selects: a fresh
+  machine of the grader's environment (`GraderMachine`), or the agent's machine
+  after the agent finishes (`AgentMachine`). Archived
   TaskTrove graders keep the archive's `tests/test.sh`, which writes its reward
   to a file (`FileReward`).
 - `NoGrader` records a source evaluator this repository cannot run, with the
@@ -532,6 +729,71 @@ each host. On Iris, they use the executable `/cache/task-curation` mount because
 Build locks and completion markers let concurrent workers reuse finished
 environments; uv retains its configured package cache.
 
+## Sources without oracle solutions
+
+Some sources ship no oracle solution: every row has `has_solution` false, or its
+`solution_binary` is an empty archive. The controls above cannot run there, so
+execution is qualified by three checks that need no oracle. Apply them whenever a
+source is admitted without one, including every rebuilt cohort that inherits a
+native source's missing oracles.
+
+**Payload preservation (offline).** For each rebuilt task, every file the native
+recipe `COPY`s into the workspace must appear in the rebuilt setup payload with
+identical bytes and mode. This catches a rebuild that drops directory sources,
+rewrites fixture data or changes an executable bit. `ADD` recipes have no
+preservation contract and must be deferred by the converter.
+
+**Setup execution (local Docker).** Preservation proves the bytes travel; it does
+not prove the artifact stages them. Run the lowered spec's own
+`environment_requirements.setup_commands` in its declared base image, with its
+resources installed under `/setup_files`, then compare the files it writes at the
+native recipe's `COPY` destinations against the same expectation set. A spec that
+declares no setup commands reports `no_setup_commands` rather than passing: a hook
+the runtime never executes must not count as evidence. Container DNS may need an
+explicit resolver (`--docker-dns 1.1.1.1`); package installation runs for real,
+because the rebuilt setup installs the task's declared dependencies verbatim.
+
+**Empty-submission grading (sandbox).** `no_oracle_liveness` samples tasks by
+base and calls `grade_empty_in_sandbox` on a fresh grading machine. The task
+machine's setup commands do not run in this path; the grader's declared setup
+commands do. A `negative_verdict` requires exit code zero, a reward below one,
+and a positive structured executed-test count (`detail.total`). Numeric reward
+files without execution evidence report `unverified_execution`. Crashes and
+missing exit diagnostics report `verifier_error`, even when a reward is zero.
+
+The offline report records payload preservation and setup execution rates. Its
+verifier results are populated only from an explicit `--liveness` JSONL file. `skipped` is the default
+`oracle_validation` for a source without oracles; a reward-only sample cannot
+establish `verifier_executed`. The Atlas shows the declared value beside the
+catalog, and catalog publication carries it forward.
+
+**Commands.** Run the offline phase over a rebuild output:
+
+```bash
+uv run python -m experiments.post_training.task_curation.no_oracle_qualification \
+    --cohort /path/to/native-tasks.parquet \
+    --rebuild-out /path/to/rebuild-output \
+    --output /path/to/qc-report.json
+```
+
+The report's `summary` prints the offline rates. Run the empty-submission
+sample over lowered tasks with:
+
+```bash
+uv run python -m experiments.post_training.task_curation.no_oracle_liveness \
+    --lowered /path/to/lowered-tasks.parquet \
+    --manifest /path/to/manifest.json \
+    --output /path/to/liveness.jsonl \
+    --sample-per-base 20
+```
+
+Pass the resulting JSONL to the offline command with `--liveness /path/to/liveness.jsonl`
+to combine the receipts. That command rejects duplicate and unknown task IDs.
+
+This phase needs a Daytona credential for image-graded tasks. It records each
+sample's outcome and snapshot name in the JSONL file. Hand snapshot names to an
+operator for cleanup as `.agents/ops/daytona.md` describes.
+
 ## Conversion modes
 
 Each dataset's callable receives `PipelineOptions` with an explicit mode. The
@@ -642,7 +904,7 @@ declaration does nothing. An environment placed in a built image also gets a
 generated Dockerfile: the pinned `iris-task` base, `apt-get install` of `apt`,
 `COPY files/ /`, `ENV` lines for `env`, the `dockerfile` fragment's lines, `uv
 pip sync --require-hashes` of the lock and `verifyit`. The build pushes it
-as `ghcr.io/marin-community/iris-task:task-curation-env-<identity[:16]>` and
+as `ghcr.io/marin-community/rollout-images:task-curation-env-<identity[:16]>` and
 records the digest. An image build needs a `docker login` for ghcr.io; every
 build needs, for a CoreWeave `MARIN_PREFIX`, the `CW_KEY_ID` and
 `CW_KEY_SECRET` pair in the environment. Planning a source whose environment
@@ -653,13 +915,15 @@ Local graders run in bubblewrap sandboxes on the Zephyr worker, each over a
 private root, so the worker pods need Iris's privileged container profile
 (`--container-profile CONTAINER_PROFILE_PRIVILEGED`). On first use, each worker downloads the environment's lock from its artifact and builds a
 self-contained Python environment (a uv-managed CPython 3.12 and a venv) under
-`/tmp/task-curation-env-<identity>`, with `verifyit` and the placed files from
+`~/.cache/marin/task-runtime/task-curation-env-<identity>` on workstations, or
+`/cache/task-curation/task-curation-env-<identity>` when `/cache` is mounted, with `verifyit` and the placed files from
 `files.tar`; the sandbox mounts that directory, the system directories and each
 placed file at its declared path, runs graders with the declared `env`, and
 concurrent graders on one host build it once.
 Image grading requires `--image-backend gvisor` or `--image-backend daytona`.
-The gVisor launcher uses the enclosing Iris job's controller, or `--controller-url`
-outside a job, to create sandbox jobs. Daytona creates remote sandboxes through its API.
+The gvisor backend (Iris SANDBOX jobs) uses the enclosing Iris job's controller, or
+`--controller-url` outside a job, to create sandbox jobs. Daytona creates remote
+sandboxes through its API.
 Neither path requires a Docker daemon in the Zephyr worker. Without an image backend,
 controls can still use package locks through Local or explicit simulator requirements
 through ShellSim. Programmatic callers pass grading machines through `RecipeSettings.machines`.
@@ -761,3 +1025,29 @@ The catalog inherits its output directory's retention policy. A seven-day
 temporary prefix must be promoted or imported before expiry for permanent
 Atlas history. Repeated writes cannot keep old immutable FineStore shards
 alive under object-age lifecycle deletion.
+
+## Curation modes and oversight levels
+
+`CurationSummary.mode` is a `CurationMode`, and it says how much of a source a pass
+examined: `QUICK` (inventory or a spot check), `SAMPLE` (a documented sample executed
+end to end, verifiers included) or `FULL` (every task executed end to end). Only
+`SAMPLE` and `FULL` admit tasks; a `QUICK` summary cannot record admitted counts
+(`CurationSummary` rejects it) and its corpus is not selectable for training.
+
+Every source also declares an `OversightLevel` — `none`, `sample` or `full` — with an
+`OversightEvidence` that points at the campaign, the recipe revision and the
+verification summary behind it. `none` means inventory only: the source is listed but
+not admitted. The level is the weakest review the admission rests on, so a cohort whose
+setup fidelity ran on every task but whose verifier liveness ran on a sample is
+`sample`, not `full`. `independent_qc` stays separate evidence about the upstream
+release and does not raise the level.
+
+### Package-lock graders use the worker's local runtime
+
+A grader that declares `packages_lock` runs in the worker's local bubblewrap
+runtime. It adds no Daytona snapshot identity. The Daytona counter records that
+grader as unsupported on Daytona, independently of the task machine's image.
+A mixed deployment may run the agent on Daytona and the grader locally, but
+that does not qualify both machine slots for Daytona. CalibForge declares an
+image for its grader.
+

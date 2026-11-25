@@ -31,7 +31,6 @@ from skyrl_train.inference_engines.vllm.online_eagle_trainer import (
     capture_rank_directory,
     capture_rank_name,
     per_worker_capture_token_credit,
-    request_id_for_group,
 )
 from skyrl_train.inference_engines.vllm.route_capture import response_routes
 from skyrl_train.io import io
@@ -63,6 +62,7 @@ from skyrl_train.inference_engines.base import (
     NamedWeightsUpdateRequest,
     LORA_DISK_LOAD_NAME,
     LORA_DISK_PATH_KEY,
+    request_id_for_session,
 )
 from skyrl_train.inference_engines.response_topk import select_response_topk
 from skyrl_train.inference_engines.chat_continuation import EXACT_PROMPT_TOKEN_IDS_KEY
@@ -149,13 +149,27 @@ class SkyRLOpenAIServingChat(OpenAIServingChat):
     """Substitute exact prompt token IDs while retaining vLLM's chat response parser."""
 
     async def render_chat_request(self, request):
-        rendered = await super().render_chat_request(request)
         exact_ids = _exact_chat_prompt_token_ids.get()
-        if exact_ids is None or not isinstance(rendered, tuple):
+        if exact_ids is None:
+            return await super().render_chat_request(request)
+        prompt = TokensPrompt(prompt_token_ids=list(exact_ids))
+        request.build_tok_params(self.model_config).apply_post_tokenization(self.renderer.tokenizer, prompt)
+        if prompt["prompt_token_ids"] != exact_ids:
+            raise ValueError("Exact sampled prompt tokens cannot be padded or truncated")
+        # Use the pinned renderer's decode-side token reuse path. Rendering the
+        # messages first can reject their reconstructed tokens before our exact
+        # sampled prefix is substituted, even though that prefix fits the budget.
+        previous_transfer = request.kv_transfer_params
+        request.kv_transfer_params = {**(previous_transfer or {}), "prompt_token_ids": list(exact_ids)}
+        try:
+            rendered = await super().render_chat_request(request)
+        finally:
+            request.kv_transfer_params = previous_transfer
+        if not isinstance(rendered, tuple):
             return rendered
         conversation, engine_inputs = rendered
         if len(engine_inputs) != 1:
-            raise ValueError("Exact OpenCode continuation requires one rendered prompt")
+            raise ValueError("Exact chat continuation requires one rendered prompt")
         return conversation, [TokensPrompt(prompt_token_ids=list(exact_ids))]
 
     async def create_chat_completion_with_exact_prompt(
@@ -450,63 +464,6 @@ class WorkerWrap:
             device=self.device,
         )
 
-    @staticmethod
-    def _apply_fp8_weight_loader_patches(*, fuse_weights: bool = False):
-        """Patch Fp8LinearMethod.process_weights_after_loading to preserve weight_loader.
-
-        Following verl's approach: after FP8 processing creates new Parameter objects,
-        copy custom attributes (weight_loader, output_dim, input_dim, subclass_type)
-        from the original specialized parameter so weight sync can reload weights.
-        """
-        if not fuse_weights:
-            return
-
-        try:
-            from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
-        except ImportError:
-            return
-
-        original_process = Fp8LinearMethod.process_weights_after_loading
-
-        def patched_process(self_method, layer, *args, **kwargs):
-            # Save original param attributes before processing
-            saved_attrs = {}
-            for pname, param in layer.named_parameters():
-                attrs = {}
-                for attr in (
-                    "weight_loader",
-                    "output_dim",
-                    "input_dim",
-                    "_output_dim",
-                    "_input_dim",
-                    "packed_dim",
-                    "packed_factor",
-                    "tp_rank",
-                    "tp_size",
-                    "logical_widths",
-                    "output_sizes",
-                ):
-                    if hasattr(param, attr):
-                        attrs[attr] = getattr(param, attr)
-                attrs["subclass_type"] = type(param)
-                saved_attrs[pname] = attrs
-
-            # Call original process_weights_after_loading
-            result = original_process(layer, *args, **kwargs)
-
-            # Restore attributes on new parameters
-            for pname, param in layer.named_parameters():
-                if pname in saved_attrs:
-                    for attr, value in saved_attrs[pname].items():
-                        try:
-                            setattr(param, attr, value)
-                        except (AttributeError, TypeError):
-                            pass
-
-            return result
-
-        Fp8LinearMethod.process_weights_after_loading = patched_process
-
     def skyrl_begin_weight_reload(self) -> None:
         """RENAMED from ``start_weight_update`` AND NOW WIRED (the #1685 fix).
 
@@ -576,7 +533,7 @@ class WorkerWrap:
         Materializes + runs ``process_weights_after_loading`` over the WHOLE weight
         set exactly once -> re-applies the FlashInfer-CUTLASS ``swap_w13_to_w31`` the
         per-chunk ``model.load_weights`` skips. Must be called after every chunk's
-        ``load_weights`` (and after ``end_weight_update``'s fused flush).
+        ``load_weights``.
         """
         if not getattr(self, "_skyrl_weight_update_active", False):
             raise RuntimeError("skyrl_begin_weight_reload must be called before skyrl_finish_weight_reload.")
@@ -594,197 +551,10 @@ class WorkerWrap:
         if speculative_config is not None and speculative_config.method == "eagle3":
             self.model_runner.refresh_online_eagle_target_owned_weights()
 
-    def begin_weight_update(self) -> None:
-        """Start accumulating weights for batched load_weights call.
-
-        When fused loading is requested, weights are accumulated instead of loaded
-        immediately. Call end_weight_update() to flush and apply them all at once
-        via model.load_weights(), which handles packed module mapping (qkv_proj, gate_up_proj).
-        Weights are stored on CPU to avoid GPU OOM during accumulation.
-        """
-        self._accumulated_weights = []
-
-    def _is_fp8_model(self):
-        """Check if the model uses FP8 quantization."""
-        quant_config = getattr(self.model_runner.model, "quant_config", None)
-        if quant_config is None:
-            return False
-        from vllm.model_executor.layers.quantization.fp8 import Fp8Config
-
-        return isinstance(quant_config, Fp8Config)
-
-    def _quantize_weights_for_fp8(self, weights):
-        """Quantize BF16 weights to FP8 before loading into FP8 model.
-
-        Follows verl's approach: quantize each weight tensor to FP8 with
-        per-tensor scale, then yield (name, fp8_tensor) and (name_scale, scale).
-        Non-linear weights (layernorm, embedding) are passed through as-is.
-        """
-        import torch
-        from vllm._custom_ops import scaled_fp8_quant
-
-        model = self.model_runner.model
-        # Build set of parameter names that are FP8 quantized
-        # These are the linear layer weights (not biases, not layernorms, not embeddings)
-        fp8_param_names = set()
-        for name, module in model.named_modules():
-            from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
-
-            if hasattr(module, "quant_method") and isinstance(module.quant_method, Fp8LinearMethod):
-                for pname, _ in module.named_parameters():
-                    if "weight" in pname and "scale" not in pname:
-                        full_name = f"{name}.{pname}" if name else pname
-                        fp8_param_names.add(full_name)
-
-        for name, tensor in weights:
-            # Check if this weight maps to an FP8-quantized parameter
-            # The name might be "layers.0.self_attn.q_proj.weight" but the
-            # FP8 param is "layers.0.self_attn.qkv_proj.weight"
-            # We need to check the ORIGINAL unfused name against the fused params
-            is_fp8 = False
-            packed_mapping = getattr(model, "packed_modules_mapping", {})
-            # Reverse mapping: q_proj -> qkv_proj, gate_proj -> gate_up_proj
-            reverse_map = {}
-            for fused, originals in packed_mapping.items():
-                for orig in originals:
-                    reverse_map[orig] = fused
-
-            # Try to find the FP8 param name
-            check_name = name
-            parts = name.rsplit(".", 2)
-            if len(parts) >= 2:
-                module_part = parts[-2]  # e.g. "q_proj"
-                if module_part in reverse_map:
-                    check_name = name.replace(module_part, reverse_map[module_part])
-
-            if check_name in fp8_param_names or name in fp8_param_names:
-                is_fp8 = True
-
-            if is_fp8 and tensor.dtype != torch.float8_e4m3fn:
-                # Move to GPU, quantize, move back to CPU
-                gpu_tensor = tensor.to(device="cuda", dtype=torch.bfloat16)
-                fp8_tensor, scale = scaled_fp8_quant(gpu_tensor)
-                yield (name, fp8_tensor.cpu())
-                # Yield the scale with the FUSED param name
-                scale_name = check_name.replace(".weight", ".weight_scale")
-                yield (scale_name, scale.cpu())
-                del gpu_tensor, fp8_tensor
-            else:
-                yield (name, tensor)
-
-    def _restore_param_subclasses(self, model):
-        """Temporarily restore param __class__ to subclass_type for weight loading.
-
-        After process_weights_after_loading, params are plain Parameter but have
-        subclass_type saved. Restoring __class__ makes weight_loader dispatch work.
-        Returns list of (param, original_class) for cleanup.
-        """
-        patched = []
-        for name, param in model.named_parameters():
-            subclass_type = getattr(param, "subclass_type", None)
-            if subclass_type is not None and type(param) is not subclass_type:
-                original_class = type(param)
-                param.__class__ = subclass_type
-                patched.append((param, original_class))
-        return patched
-
-    def _undo_param_subclasses(self, patched):
-        """Undo the temporary __class__ patching."""
-        for param, original_class in patched:
-            param.__class__ = original_class
-
-    def end_weight_update(self) -> None:
-        """Flush accumulated weights via model.load_weights().
-
-        For FP8 models: quantizes BF16 weights to FP8 before loading,
-        following verl's approach. Also temporarily restores param subclass
-        types so weight_loader dispatch works correctly with FP8 params.
-        """
-        import gc
-
-        if hasattr(self, "_accumulated_weights") and self._accumulated_weights:
-            model = self.model_runner.model
-            if self._is_fp8_model():
-                import torch
-                import gc
-                from vllm.model_executor.layers.quantization.fp8 import Fp8LinearMethod
-                from vllm._custom_ops import scaled_fp8_quant
-
-                # Receiver-side FP8 quantization: BF16 weights arrive via NCCL,
-                # fuse stacked params, quantize to FP8, write directly to model.
-                weight_index = {name: tensor for name, tensor in self._accumulated_weights}
-                stacked = [
-                    ("qkv_proj", "q_proj", "q"),
-                    ("qkv_proj", "k_proj", "k"),
-                    ("qkv_proj", "v_proj", "v"),
-                    ("gate_up_proj", "gate_proj", 0),
-                    ("gate_up_proj", "up_proj", 1),
-                ]
-
-                for mname, module in model.named_modules():
-                    if not (hasattr(module, "quant_method") and isinstance(module.quant_method, Fp8LinearMethod)):
-                        continue
-                    param = module.weight
-                    device = param.device
-                    is_stacked = any(mname.endswith(pn) for pn, _, _ in stacked)
-
-                    if is_stacked:
-                        shard_list = []
-                        for param_name, weight_name, shard_id in stacked:
-                            if not mname.endswith(param_name):
-                                continue
-                            src_name = mname.replace(param_name, weight_name) + ".weight"
-                            if src_name in weight_index:
-                                shard_list.append(weight_index[src_name])
-                        if shard_list:
-                            full_bf16 = torch.cat(shard_list, dim=0).to(
-                                device=device, dtype=torch.bfloat16, non_blocking=True
-                            )
-                            torch.cuda.current_stream().synchronize()
-                            fp8_full, scale = scaled_fp8_quant(full_bf16)
-                            param.data.copy_(fp8_full)
-                            if hasattr(module, "weight_scale"):
-                                module.weight_scale.data.copy_(scale.squeeze())
-                            del full_bf16, fp8_full, scale, shard_list
-                    else:
-                        src_name = mname + ".weight"
-                        if src_name in weight_index:
-                            bf16_w = weight_index[src_name].to(device=device, dtype=torch.bfloat16, non_blocking=True)
-                            torch.cuda.current_stream().synchronize()
-                            fp8_w, scale = scaled_fp8_quant(bf16_w)
-                            param.data.copy_(fp8_w)
-                            if hasattr(module, "weight_scale"):
-                                module.weight_scale.data.copy_(scale.squeeze())
-                            del bf16_w, fp8_w, scale
-
-                # Load non-FP8 params (layernorms, embeddings)
-                params_dict = dict(model.named_parameters())
-                for name, tensor in self._accumulated_weights:
-                    if name in params_dict:
-                        param = params_dict[name]
-                        if param.dtype != torch.float8_e4m3fn:
-                            param.data.copy_(tensor.to(device=param.device, dtype=param.dtype))
-
-                del weight_index
-
-                gc.collect()
-                torch.cuda.empty_cache()
-            else:
-                load_weights_into_vllm(model, self._accumulated_weights)
-            self._accumulated_weights.clear()
-            del self._accumulated_weights
-            gc.collect()
-            import torch
-
-            torch.cuda.empty_cache()
-
     def load_weights(self, request: NamedWeightsUpdateRequest) -> None:
         """Load weights using the receiver.
 
         This method is called via collective_rpc from VLLMWeightLoader.
-
-        When fused loading is requested and begin_weight_update() was called,
-        weights are accumulated on CPU instead of loaded immediately.
 
         Args:
             request: Weight update request with names, dtypes, shapes, etc.
@@ -793,16 +563,7 @@ class WorkerWrap:
         for name, tensor in self._weight_receiver.receive_weights(request):
             weight_list.append((name, tensor))
 
-        if hasattr(self, "_accumulated_weights"):
-            # Batched mode: move to CPU and accumulate for later flush
-            for name, tensor in weight_list:
-                self._accumulated_weights.append((name, tensor.cpu()))
-            del weight_list
-        else:
-            # Immediate mode (default): load right away
-            load_weights_into_vllm(self.model_runner.model, weight_list)
-            for weight in weight_list:
-                del weight
+        load_weights_into_vllm(self.model_runner.model, weight_list)
 
     # TODO (sumanthrh): Add destroy process group RPC as a atexit handler to Trainer code.
     def destroy_weights_update_group(self):
@@ -941,100 +702,6 @@ class WorkerWrap:
                 out[name] = entry
             except Exception as e:  # never crash the collective_rpc
                 out[name] = {"found": False, "error": repr(e)}
-        return out
-
-    def read_expert_slots_raw(self, layer_idx: int):
-        """TEST-ONLY (D1/D2 disaggregated-receive diag): return THIS engine worker's
-        RAW per-local-slot FusedMoE expert weights + the engine's OWN expert_map for
-        ``layer_idx``, with NO assumption about global<->local placement.
-
-        Unlike ``read_named_weights`` (which maps a requested HF expert ``gj`` to a slot
-        via ``gj // n_local`` — a CONTIGUOUS-linear assumption that would HIDE a
-        receive-side placement bug), this dumps every local slot's bytes AS-IS plus the
-        engine's authoritative ``_expert_map`` (global->local, -1 if absent). The driver
-        then does a NON-circular cross-expert nearest-match vs the DISK base checkpoint,
-        so a slot carrying the wrong global expert (D2 placement) surfaces as m!=j even
-        though a per-name readback could not see it.
-
-        Returns dict:
-          __ranks__        : {tp_rank, tp_size, ep_rank, ep_size}
-          expert_map       : list[int] length global_num_experts (global->local slot, -1 absent)
-          slot_to_global   : list[int] length local_num_experts (inverse; -1 if ambiguous)
-          local_num_experts, global_num_experts, w13_inter_half (I), placement_strategy
-          slots            : {local_slot -> {"w13": cpu_fp32 [2I,H], "w2": cpu_fp32 [H,I]}}
-        Heavy (full local expert stack as fp32 CPU); call for ONE layer.
-        """
-        import torch as _torch
-
-        model = self.model_runner.model
-        params = dict(model.named_parameters())
-        buffers = dict(model.named_buffers())
-        all_params = {**params, **buffers}
-
-        try:
-            from vllm.distributed import parallel_state as _ps
-
-            tp_rank = _ps.get_tensor_model_parallel_rank()
-            tp_size = _ps.get_tensor_model_parallel_world_size()
-        except Exception:
-            tp_rank, tp_size = 0, 1
-        try:
-            ep_rank = _ps.get_ep_group().rank_in_group
-            ep_size = _ps.get_ep_group().world_size
-        except Exception:
-            ep_rank, ep_size = 0, 1
-
-        out = {"__ranks__": {"tp_rank": tp_rank, "tp_size": tp_size, "ep_rank": ep_rank, "ep_size": ep_size}}
-        prefix = f"model.layers.{layer_idx}.mlp"
-        w13 = all_params.get(f"{prefix}.experts.routed_experts.w13_weight")
-        w2 = all_params.get(f"{prefix}.experts.routed_experts.w2_weight")
-        if w13 is None or w2 is None:
-            cand = [k for k in all_params if k.startswith(f"{prefix}.experts.") and k.endswith("weight")]
-            out["error"] = f"no w13/w2 under {prefix}; candidates={cand}"
-            return out
-
-        # Find the FusedMoE module to read its authoritative expert_map + counts.
-        emap = None
-        local_num = int(w13.shape[0])
-        global_num = None
-        placement = None
-        for mod_name, mod in model.named_modules():
-            routed_experts_name = f"{prefix}.experts.routed_experts"
-            if mod_name == routed_experts_name or mod_name.endswith(routed_experts_name):
-                emap = getattr(mod, "_expert_map", None)
-                if emap is None:
-                    emap = getattr(mod, "expert_map", None)
-                local_num = int(getattr(mod, "local_num_experts", local_num))
-                global_num = getattr(mod, "global_num_experts", None)
-                placement = getattr(mod, "expert_placement_strategy", None)
-                break
-
-        # global->local slot map (the engine's OWN authority on placement).
-        if emap is not None:
-            emap_list = [int(x) for x in emap.detach().cpu().tolist()]
-        else:
-            emap_list = None
-        out["expert_map"] = emap_list
-        out["local_num_experts"] = local_num
-        out["global_num_experts"] = int(global_num) if global_num is not None else None
-        out["placement_strategy"] = str(placement) if placement is not None else None
-        out["w13_inter_half"] = int(w13.shape[1] // 2)
-
-        # Inverse: local slot -> global expert (per the engine's expert_map).
-        slot_to_global = [-1] * local_num
-        if emap_list is not None:
-            for g, loc in enumerate(emap_list):
-                if 0 <= loc < local_num:
-                    slot_to_global[loc] = g
-        out["slot_to_global"] = slot_to_global
-
-        slots = {}
-        for s in range(local_num):
-            slots[s] = {
-                "w13": w13[s].detach().to("cpu", dtype=_torch.float32).contiguous(),
-                "w2": w2[s].detach().to("cpu", dtype=_torch.float32).contiguous(),
-            }
-        out["slots"] = slots
         return out
 
     def report_host(self):
@@ -1600,7 +1267,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         self._validate_rollout_logprob_sampling = wrapper_kwargs.pop(ROLLOUT_LOGPROB_VALIDATION_KEY, False)
         if self._openai_sampling_params:
             logger.warning(
-                f"OpenAI API sampling params overridden: "
+                f"OpenAI API sampling defaults: "
                 f"temperature={self._openai_sampling_params.get('temperature', 1.0)}, "
                 f"top_p={self._openai_sampling_params.get('top_p', 1.0)}, "
                 f"top_k={self._openai_sampling_params.get('top_k', -1)}"
@@ -1736,13 +1403,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         (typical case: vLLM serving_chat ValueError on 32k-token validation).
         Without this, the failed task unwinds Python but its sibling tasks'
         Ray ObjectRefs leak into the entrypoint actor's distributed-refcount
-        state — that's the `reference_count.cc:1619` SIGABRT pattern that's
-        been killing the v3 maxgn09_hint chain links one after another even
-        after the harbor rollback_on_exception hook landed (the hook fires
-        AFTER the trial, but the ObjectRefs leak DURING the generate batch).
-        See agent_logs/2026-05-25_v6a-agrs_507771_moe_combine_stack_pinned.md
-        and project_ray_workercrashed_harbor_rollback.md for the chain of
-        evidence.
+        state and can cause a `reference_count.cc:1619` SIGABRT before a
+        rollout cleanup hook runs.
         """
         prompt_token_ids, sampling_params = self._preprocess_prompts(input_batch)
 
@@ -1759,7 +1421,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             if session_ids is None:
                 request_id = uuid4().hex
             else:
-                request_id = request_id_for_group(session_ids[index])
+                request_id = request_id_for_session(session_ids[index])
             request_ids.append(request_id)
             task = asyncio.create_task(self._collect_outputs(prompt, request_id, row_sampling_params))
             tasks.append(task)
@@ -1858,16 +1520,6 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         # Use the weight loader to coordinate weight transfer
         return await self._weight_loader.load_weights(request)
 
-    async def begin_weight_update(self):
-        """Signal engines to start accumulating weights for batched loading."""
-        engine = self.llm
-        return await engine.collective_rpc("begin_weight_update")
-
-    async def end_weight_update(self):
-        """Flush accumulated weights via model.load_weights()."""
-        engine = self.llm
-        return await engine.collective_rpc("end_weight_update")
-
     async def read_engine_weights(self, hf_names, dump_inventory: bool = False):
         """TEST-ONLY (Stage 6 weight-equality gate): read engine-side weights back
         under the trainer's HF parameter names, gathered across all TP/EP workers.
@@ -1879,13 +1531,6 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         """
         engine = self.llm
         return await engine.collective_rpc("read_named_weights", args=(list(hf_names), dump_inventory))
-
-    async def read_engine_expert_slots_raw(self, layer_idx: int):
-        """TEST-ONLY (D1/D2 diag): per-engine-worker RAW FusedMoE local-slot weights +
-        the engine's own expert_map for ``layer_idx``. Returns List[Dict] (one per
-        engine worker rank). See ``WorkerWrap.read_expert_slots_raw``."""
-        engine = self.llm
-        return await engine.collective_rpc("read_expert_slots_raw", args=(int(layer_idx),))
 
     async def report_engine_hosts(self):
         """TEST-ONLY (disaggregation proof): hostname of every engine TP/EP worker."""
@@ -1941,15 +1586,14 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         body = request_payload.get("json", {})
         headers = request_payload.get("headers", {})
         request_id = headers.get("x-request-id") or uuid4().hex
-        exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
 
-        # Apply configured sampling params from generator config.
-        # Harbor requests may include their own sampling params; we override
-        # with the SkyRL generator config so rollout exploration is consistent.
-        apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+        # Explicit request sampling takes precedence for both training and evaluation.
+        # Requests for rollout logprobs must still match the training distribution.
 
         # 1. Build request
         try:
+            body = apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+            exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
             if endpoint == "/chat/completions":
                 request = ChatCompletionRequest(**body)
             else:
@@ -2071,15 +1715,20 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         generator transport (``num_returns="streaming"``).  Each ``yield``
         produces one ``ObjectRef`` that the caller resolves to the SSE string.
 
-        ``_ensure_token_ids_in_sse_chunk`` is applied per-chunk so that
-        ``provider_specific_fields.token_ids`` is present for harbor's literal
-        accumulator.
+        Each chunk also carries its token IDs in the delta metadata, including
+        chunks with control tokens and empty text.
         """
         body = request_payload.get("json", {})
         headers = request_payload.get("headers", {})
-        exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
 
-        apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+        try:
+            body = apply_openai_sampling(body, self._openai_sampling_params, self._validate_rollout_logprob_sampling)
+        except ValueError as e:
+            err = _build_error_response(str(e), HTTPStatus.BAD_REQUEST.phrase, HTTPStatus.BAD_REQUEST.value)
+            yield f"data: {json.dumps(err)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+        exact_prompt_token_ids = body.pop(EXACT_PROMPT_TOKEN_IDS_KEY, None)
         body["stream"] = True
         body["return_token_ids"] = True  # force vLLM to emit per-chunk token_ids
 

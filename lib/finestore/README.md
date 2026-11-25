@@ -30,11 +30,20 @@ with DataStore.open("gs://bucket/purchases", writer_id="worker-0") as store:
     token = transaction.token
 ```
 
-The transaction buffers its rows and object bytes in memory. Each participating
-table produces one level-zero Parquet shard. FineStore writes every shard and an
-immutable full manifest before it conditionally advances `HEAD`. Until that final
-write succeeds, none of the transaction is visible. A caller should split a
-transaction when its payload would exceed a safe process-memory bound.
+`store.transaction(message=...)`, and the same argument to
+`store.unbounded_transaction()`, records why a change was made and who made it. The
+manifest of the commit the transaction publishes holds them as `commit_info`, with that
+commit's sequence and publication time, and `ReadView.commit_info` returns the record of
+the pinned commit. `author=` defaults to the user who launched the process, as
+`rigging.provenance.launch_user()` resolves it, so a remote Iris worker records the
+submitting user. FineStore stores the author as given and does not verify it.
+On a non-empty archive, a transaction with no writes returns the checked
+commit token without publishing a new commit.
+
+Appends to registered tables and named object writes retain their Arrow buffers
+in memory. Each appended table produces one level-zero Parquet shard. FineStore
+writes every shard and an immutable full manifest before it conditionally advances
+`HEAD`. Until that final write succeeds, none of the transaction is visible.
 
 Ordinary table appends use the same commit path. `store.flush()` atomically publishes
 the currently claimed buffers from all registered tables. `table.flush()` publishes
@@ -46,8 +55,56 @@ A flush uploads each new shard, writes a manifest, and publishes it with one
 compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
 onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
 so commits to one root are serialized; writers that need more aggregate commit
-throughput should write to separate roots. A flush raises `CommitConflict` only after
-losing the compare-and-swap for an hour.
+throughput should write to separate roots. A flush retries compare-and-swap conflicts
+for up to an hour.
+
+## Transactional table changes
+
+A transaction can create, rename, or drop tables. Use a private table to stream
+a rebuild, then rename it into place and write its completion marker:
+
+```python
+from finestore.layout import TableMetadata, TableNameConflict
+
+with store.transaction(base=source_view) as transaction:
+    transaction.require_unchanged("source")
+    table = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+    table.extend(rebuilt_rows)
+    transaction.rename_table("scratch", "results", on_conflict=TableNameConflict.REPLACE)
+    transaction.write_object("build-complete", b"done")
+```
+
+The temporary name is visible inside the transaction. Readers see one final
+namespace after the `HEAD` update. A rename moves the manifest references and
+keeps the shard paths. Renaming to an occupied name raises unless the caller
+sets `TableNameConflict.REPLACE`. Dropping an existing table removes it from
+the final namespace. A created table can be published empty.
+
+Created tables write Arrow batches up to the transaction's byte budget. An
+unbounded transaction uses the store buffer budget for these batches. A single
+row may exceed the budget. The commit checks names changed by DDL and any
+extra names passed to `require_unchanged`. Concurrent content changes fail
+with `CommitConflict`. Physical compaction can proceed while data is staged.
+
+An abandoned transaction can leave unreferenced shards under `data/_staged/`.
+Published tables can reference paths there, so reclamation must account for
+active staging transactions and retained snapshots.
+
+Renaming, dropping, or replacing a previously published table advances its incarnation.
+Append handles registered under an earlier incarnation fail with
+`CommitConflict`. Flush buffered appends before changing a table in the same store.
+After the change, call `store.table(...)` to register a fresh handle. If another
+store changed a registered table, reopen before writing to it. Pinned reads retain
+their earlier view.
+
+The first publication of a table uses the existing manifest format. An
+incarnation change requires the `table-incarnations-v1` manifest feature.
+Upgrade readers such as Marina's EvalDash before writers that drop or replace
+existing tables.
+
+Pass `expected=view.table_version(table)` to `finestore.admin.drop_table` when
+an earlier operation, such as a backup, relied on an exact file set. A drop
+that removes an active table clears the seal.
 
 ## Reads
 
@@ -81,6 +138,15 @@ Each shard records the range of primary keys it holds when the key columns are
 strings and integers. A lookup with `==` on a prefix of the primary key, or `in` on its
 first column, skips shards whose range excludes the value.
 
+Shard metadata also records the minimum and maximum original row commits. Exact
+primary-key lookups and named-object descriptor lookups visit candidates by
+descending maximum row commit. Once a key's winning row is newer than every unread
+candidate, its lookup stops. A compacted file's publication age does not determine its
+rows' precedence. Shards without row-commit bounds use publication as a conservative
+upper bound.
+Table point lookups still read candidate schemas to preserve columns introduced by
+schema evolution; descriptor lookups can skip older files entirely.
+
 ## Named objects and caches
 
 `DataStore.write_object(name, data, metadata)` writes bytes into the reserved `blobs`
@@ -105,6 +171,13 @@ all of an object's parts. File-set materialization streams committed parts into 
 destination file to avoid another complete copy. A transaction's `max_bytes` limit
 still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
 and admits one larger file.
+
+`ReadView.blob_metadata(name)` reads a named object's metadata from the same pinned
+snapshot as its bytes. It returns `None` for an absent object and a dictionary for
+an existing object. `EvaluationStore.add_source_artifacts` commits one attempt's
+native files and their metadata together, including chunked files that exceed the
+normal transaction buffer limit. A caller can publish completion after this method
+returns; a failed transaction publishes none of its files.
 
 Blob descriptor shards use at most 1024 rows per row group; ordinary tables retain
 their 16,384-row limit. Named-object lookups scan descriptors in 64-row batches
@@ -141,11 +214,45 @@ Two adapters build cache behavior on this primitive:
 - `finestore.fileset.FineStoreDirectory` materializes a committed named-object set
   into a local directory and publishes newly created files in payload-bounded batches.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
+  A fetch preserves a regular local file when its bytes match the committed blob;
+  missing or different files are atomically replaced.
 
 Both adapters are caches: failures may be treated as misses by their callers. Cache
 cleanup does not acknowledge persistence or return a commit token. Use
 `DataStore.transaction()` when a write must become visible before the caller continues.
 The core `DataStore` and `ReadView` APIs propagate storage and commit errors.
+
+`PersistentKvCache` appends `/v2` to its supplied root, including roots resolved by
+`for_prefix`. `location()` returns this versioned archive path. Older unversioned
+caches remain untouched; the new cache fills as callers regenerate missing values.
+
+`PersistentKvCache` tolerates expired objects on lifecycle-managed storage. Reads
+exclude confirmed missing shards from their local snapshot and omit incomplete
+chunked values, while retaining healthy hits. An expired schema can be interpreted
+from the cache tables' fixed contracts. Reads never modify storage.
+
+Shard loss advances a cache history floor to the greatest row-commit upper bound
+of the missing shards. Reads ignore rows at or below the floor in both descriptor
+and chunk tables, preventing overwritten values from reappearing. Newer rows remain
+usable, including those sharing a file with older rows. This also invalidates
+unrelated older entries, which are regenerated as cache misses.
+
+Before its first write, then at most daily while writing, each cache writer checks
+the live shards and schemas. It atomically publishes the history floor and removes
+missing or wholly invalidated shard references. It recreates expired schemas and
+refreshes objects older than half the `ttl=Nd` period in the root path.
+S3 and GCS refreshes use server-side copies of the same
+bytes; local storage updates modification times. Shorter TTLs shorten the check
+interval to one quarter of the TTL. A read that encounters a missing shard requests
+another check on the next write. A writer whose maintenance failed because an
+object expired is replaced after repair.
+
+Permission and transport errors do not remove references. These recovery rules
+apply only to the disposable key/value cache; ordinary archives remain strict.
+An idle cache can still expire, and its next write repairs the remaining manifest.
+Recovered caches declare the required `cache-history-floor-v1` feature; readers
+that do not support it reject the archive. The floor persists across subsequent
+writes and compactions, and compaction drops invalidated rows from mixed shards.
 
 ## Compaction
 
@@ -223,13 +330,15 @@ archive retention or reader leases; it is outside the current API.
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
 row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
-object, the current maintainer epoch, and optional seal state. Writers compute shard
-integrity metadata while streaming Parquet, so it does not require another object-store
-read.
+object, the current maintainer epoch, optional seal state, and the `commit_info` of an
+attributed transaction. Writers compute shard integrity metadata while streaming
+Parquet, so it does not require another object-store read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
-commit. A manifest can also name `required_features`; readers reject features they do
-not implement before exposing a view. This lets future optional metadata remain
+commit. Such a writer copies its parent's `commit_info` into the commits it publishes;
+the record names the sequence of the commit it describes, so readers ignore the copy.
+A manifest can also name `required_features`; readers reject features they do not
+implement before exposing a view. This lets future optional metadata remain
 additive while mandatory semantics fail closed without forcing unrelated archives to
 change their format version.
 
@@ -302,3 +411,14 @@ shared by MarinSkyRL producers and Marin's mismatch reports. Tokenizer identity,
 relative updates and absolute trainer steps are typed provenance fields. This
 contract sits next to `finestore.eval` so producers need only `marin-finestore`
 and CPU report readers need no trainer or inference-engine dependencies.
+
+`finestore.rl.run_records` defines numeric metrics keyed by `(attempt_id, step, name)`
+and typed attempt fields keyed by `(attempt_id, field)` in the same store under
+`<export_root>/run-records`. The evaluations table stores scored task rows keyed by
+`(attempt_id, step, evaluation, task_id)`. `update_attempt` commits a writer's supplied fields;
+omitted fields remain stored and explicit null clears a field. Native configuration,
+terminal result, startup information and checkpoint ancestry have separate fields.
+`read_attempt_metrics` joins only that attempt and its known bounded ancestors;
+joined steps expose `metric_attempt_ids` for per-metric attribution. A step reset
+starts a fresh metric history while retaining its checkpoint provenance.
+`attempt_lineage` exposes those bounded attempt records to history and timing readers.

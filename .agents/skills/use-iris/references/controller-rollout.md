@@ -4,6 +4,13 @@ An explicit rollout request authorizes only its named cluster set. Process one c
 
 Never run `iris cluster restart`. A controller restart deploys the current working tree, including uncommitted files, and causes brief control-plane downtime without stopping workers.
 
+For `marin-dev` and `marin`, confirm the operator has the `marinInfra` and
+`marindev` project roles, Token Creator on `iris-controller`, and Service
+Account User on the default Compute service account used by the hub VM.
+Authenticate Docker to GHCR with `write:packages` access before preflight;
+GCP IAM does not grant image push access. See
+`lib/iris/docs/image-push.md#authentication`.
+
 Use the helper for every gate:
 
 ```bash

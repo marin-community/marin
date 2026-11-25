@@ -4,9 +4,8 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-
-from harbor.models.job.config import RetryConfig
-from harbor.models.trial.config import TaskConfig, TrialConfig
+from rigging.task_errors import RetrySettings
+from harbor.models.trial.config import AgentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import AgentInfo, TrialResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.trial.queue import TrialQueue
@@ -16,6 +15,7 @@ from harbor.trial.queue import TrialQueue
 def trial_config():
     """Create a basic trial config for testing."""
     return TrialConfig(
+        agent=AgentConfig(name="pi"),
         task=TaskConfig(path=Path("/test/task")),
         trial_name="test_trial",
         job_id=uuid4(),
@@ -47,35 +47,13 @@ def queue(hooks):
     """Create a TrialQueue instance."""
     return TrialQueue(
         n_concurrent=2,
-        retry_config=RetryConfig(),
+        retry_config=RetrySettings(),
         hooks=hooks,
     )
 
 
 class TestTrialQueue:
     """Tests for TrialQueue."""
-
-    @pytest.mark.unit
-    def test_initialization(self, hooks):
-        """Test TrialQueue initialization."""
-        queue = TrialQueue(
-            n_concurrent=3,
-            retry_config=RetryConfig(max_retries=5),
-            hooks=hooks,
-        )
-
-        assert queue._n_concurrent == 3
-        assert queue._retry_config.max_retries == 5
-        assert queue._semaphore._value == 3
-
-    @pytest.mark.unit
-    def test_initialization_with_defaults(self):
-        """Test TrialQueue initialization with public API defaults."""
-        queue = TrialQueue(n_concurrent=3)
-
-        assert queue._n_concurrent == 3
-        assert queue._retry_config == RetryConfig()
-        assert queue._hooks == {event: [] for event in TrialEvent}
 
     @pytest.mark.unit
     async def test_submit_single_trial(self, queue, trial_config, trial_result):
@@ -91,6 +69,7 @@ class TestTrialQueue:
         """Test submitting multiple trials via gather."""
         configs = [
             TrialConfig(
+                agent=AgentConfig(name="pi"),
                 task=TaskConfig(path=Path(f"/test/task{i}")),
                 trial_name=f"test_trial_{i}",
                 job_id=uuid4(),
@@ -113,6 +92,7 @@ class TestTrialQueue:
         """Test submitting multiple trials via TaskGroup."""
         configs = [
             TrialConfig(
+                agent=AgentConfig(name="pi"),
                 task=TaskConfig(path=Path(f"/test/task{i}")),
                 trial_name=f"test_trial_{i}",
                 job_id=uuid4(),
@@ -154,6 +134,7 @@ class TestTrialQueue:
 
         configs = [
             TrialConfig(
+                agent=AgentConfig(name="pi"),
                 task=TaskConfig(path=Path(f"/test/task{i}")),
                 trial_name=f"test_trial_{i}",
                 job_id=uuid4(),
@@ -230,6 +211,7 @@ class TestTrialQueue:
         """Test that trials execute concurrently."""
         configs = [
             TrialConfig(
+                agent=AgentConfig(name="pi"),
                 task=TaskConfig(path=Path(f"/test/task{i}")),
                 trial_name=f"test_trial_{i}",
                 job_id=uuid4(),

@@ -13,20 +13,24 @@ dependencies = [
     # zstd codec on Python < 3.14; required for reading/writing zstd via fsspec.
     "backports-zstd>=1.0.0; python_version < '3.14'",
     "braceexpand",
-    "datasets<5.0.0",
+    "datasets>=5.0.1,<6",
     "draccus>=0.11.6",
     "fasttext-wheel>=0.9.2",
+    "marin-evalrecords",
     "marin-fray",
     "marin-finestore",
     "marin-iris",
     "marin-rigging[prometheus]",
+    "marin-skyrlrecipe",
+    "marin-rolloutengine",
+    "marin-taskcompendium[pipeline]",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "huggingface-hub",
     "marin-haliax",
-    "jax>=0.9.2,<0.12",
+    "jax>=0.9.2,<0.13",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
     "transformers>=5.5.3,<6.0",
@@ -43,7 +47,7 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
-    "shellsim>=0.1.38",
+    "shellsim>=0.1.39",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",
@@ -68,7 +72,6 @@ test = [
     "pytest-xdist",
     "pytest-timeout",
     "marin-verifyit[math,reasoning-gym,schema]",
-    "marin-taskcompendium[pipeline]",
     "universal-pathlib",
     # for scaling law plotting tests
     "plotly",
@@ -77,7 +80,6 @@ test = [
 ]
 lint = [
     "ruff==0.14.3",
-    "black>=26.3.1",
     "pyrefly>=1.0.0,<1.1.0",
     "types-PyYAML",
     "types-requests",
@@ -86,7 +88,7 @@ lint = [
 ]
 docs = [
     "mkdocs>=1.5.0",
-    "mkdocs-material>=9.5.0",
+    "mkdocs-material>=9.7.7",
     "mkdocstrings>=0.24.0",
     "mkdocstrings-python>=1.7.0",
     "pymdown-extensions>=10.0.0",
@@ -112,6 +114,18 @@ conflicts = [
         { extra = "gpu" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "rocm" },
+        { extra = "gpu" },
+    ],
+    [
+        { extra = "rocm" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "rocm" },
+        { extra = "cpu" },
+    ],
 ]
 
 
@@ -127,7 +141,7 @@ gpu = [
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   # 2.29.3 carries the upstream aarch64 proxy freeOps CAS leak fix, which a Grace host needs.
-  "nvidia-nccl-cu13>=2.29.3; sys_platform == 'linux'",
+  "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
   "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b27,<4.1; sys_platform == 'linux'",
@@ -164,8 +178,8 @@ cpu = [
   "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
-# Vendored Evalchemy runs against a served OpenAI URL from its own locked uv project.
-# See vendor/evalchemy and marin.evaluation.evalchemy.runtime.
+# AMD GPUs: Levanter's ROCm JAX stack.
+rocm = ["marin-levanter[rocm]"]
 
 vizier = [
     "google-vizier[jax]",
@@ -176,6 +190,9 @@ dedup = [
     # kernels transitively (see lib/dupekit/pyproject.toml).
     "marin-dupekit",
 ]
+
+# The Daytona SDK for evaluation workers that run task machines on Daytona.
+daytona = ["marin-shellbox[daytona]"]
 
 datakit = [
     "luxical",

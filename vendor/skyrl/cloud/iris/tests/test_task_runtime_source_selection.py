@@ -1,6 +1,7 @@
 """Behavior tests for runtime source selection inside an Iris GPU task."""
 
 import contextlib
+import json
 import os
 import signal
 import sys
@@ -95,6 +96,8 @@ def _runtime_args(
         ray_spill_backend=task_runtime.RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
         cluster_join_timeout=1,
+        ray_labels={},
+        role_topology=None,
         driver_liveness_timeout=liveness_timeout,
     )
 
@@ -105,7 +108,7 @@ def _isolate_head_runtime(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(task_runtime, "FAILURE_ARTIFACT_TIMEOUT", 2)
     monkeypatch.setattr(task_runtime, "_num_tasks", lambda: 1)
     monkeypatch.setattr(task_runtime, "_own_ip", lambda: "127.0.0.1")
-    monkeypatch.setattr(task_runtime, "ray_start_head", lambda *_args: None)
+    monkeypatch.setattr(task_runtime, "ray_start_head", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(task_runtime, "ray_stop", lambda: None)
     monkeypatch.setattr(task_runtime.signal, "signal", lambda *_args: None)
     monkeypatch.setattr(task_runtime, "training_driver_env", lambda _ifname: {"SKYRL_HOME": str(tmp_path)})
@@ -119,7 +122,7 @@ def _isolate_head_runtime(tmp_path: Path, monkeypatch) -> None:
     )
 
 
-def _run_head_script(args: SimpleNamespace, script: str, monkeypatch) -> int:
+def _run_head_script(args: SimpleNamespace, script: str, monkeypatch, *, trainer_timing_uri: str | None = None) -> int:
     def launch(_config_path, environment):
         # run_head starts the liveness clock when launch returns. Hold the return until the
         # child interpreter has started so its startup time, which is unbounded on a loaded
@@ -142,7 +145,25 @@ def _run_head_script(args: SimpleNamespace, script: str, monkeypatch) -> int:
         return process
 
     monkeypatch.setattr(task_runtime, "launch_training_driver", launch)
-    return task_runtime.run_head(args, Path("/tmp/unused-launch-config.yaml"))
+    return task_runtime.run_head(
+        args, Path("/tmp/unused-launch-config.yaml"), trainer_timing_uri=trainer_timing_uri
+    )
+
+
+def test_head_persists_completed_trainer_timing(tmp_path, monkeypatch) -> None:
+    _isolate_head_runtime(tmp_path, monkeypatch)
+    timing = tmp_path / "trainer_timing.json"
+    output = (
+        "(skyrl_entrypoint pid=124) \x1b[36mskyrl_train.entrypoints.main_base\x1b[0m:"
+        "\x1b[36m_run\x1b[0m:703 - \x1b[32mTraining run completed: "
+        "elapsed_excluding_eval_seconds=203.125\x1b[0m"
+    )
+    script = f"print({output!r})\nprint('task output: Training run completed: elapsed_excluding_eval_seconds=999.000')"
+
+    exit_code = _run_head_script(_runtime_args(tmp_path), script, monkeypatch, trainer_timing_uri=str(timing))
+
+    assert exit_code == 0
+    assert json.loads(timing.read_text()) == {"elapsed_excluding_eval_seconds": 203.125}
 
 
 def test_head_kills_a_silent_driver_and_records_the_stall_reason(tmp_path, monkeypatch) -> None:

@@ -92,7 +92,7 @@ uv run --no-sync python -c 'import jax; assert jax.default_backend() == "gpu", (
 uv run --no-sync python -c 'import torch; assert torch.cuda.is_available(); print(torch.__version__, torch.cuda.get_device_capability())'
 JAX_PLATFORMS=cpu uv run --no-sync python -m experiments.grug.moe_hero_pipeline.pipeline_smoke --help
 uv pip install pytest pytest-timeout pytest-xdist pytest-asyncio==1.4.0
-JAX_PLATFORMS=cpu uv run --no-sync python -m pytest experiments/grug/moe_hero_pipeline/test_pipeline.py experiments/grug/moe_hero_pipeline/test_data.py -q -n 0
+JAX_PLATFORMS=cpu uv run --no-sync python -m pytest experiments/grug/moe_hero_pipeline/test_pipeline*.py experiments/grug/moe_hero_pipeline/test_data.py -q -n 0
 ```
 
 JAX reports CUDA's default backend platform as `gpu`. The explicit `cuda`

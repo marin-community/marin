@@ -14,11 +14,13 @@ import pytest
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
     ConversationTrace,
+    EnvironmentRequirements,
     GradingAttempt,
     ScriptGrader,
     TaskSpec,
     TextMessage,
     VerifyitGrader,
+    grader_environment,
     verifyit_spec,
 )
 from taskcompendium.pipeline.controls import answer_reply, reference_reply
@@ -299,7 +301,7 @@ def test_math_uses_verifyit_in_the_sandbox_and_keeps_source_evidence_and_oracle(
         assert problem in prompt
     grader = task.grader
     assert isinstance(grader, VerifyitGrader)
-    assert grader.environment == fixture_context(RECIPES[name]).grader_environment
+    assert grader_environment(grader) == fixture_context(RECIPES[name]).grader_environment
     verifier = verifier_files(task)
     assert verifier["source/verifier.py"] == files["tests/verifier.py"]
     assert verifier["source/test.sh"] == files["tests/test.sh"]
@@ -501,6 +503,7 @@ def test_tasktrove_retains_source_recipe_and_oracle_without_changing_text_execut
     assert oracle["environment/Dockerfile"] == recipe
     assert oracle["solution/solve.sh"] == solution
     assert task.resources.all == task.resources.worker == ()
+    assert task.environment_requirements == EnvironmentRequirements()
     assert grade_reply(task, answer_reply(task, "B")) == 1.0
 
 

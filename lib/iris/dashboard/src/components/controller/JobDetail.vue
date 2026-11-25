@@ -12,7 +12,7 @@ import {
   type GetJobStatusResponse, type GetTaskStatusResponse, type ListTasksResponse, type ListJobsResponse,
   type EndpointInfo, type ListEndpointsResponse,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor, egressPolicyName, formatEgressRule } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
 import { batchSummarySql } from '@/utils/taskStatus'
@@ -723,6 +723,12 @@ const preemptionsTitle = computed(() =>
   + `Each task retries up to ${maxRetriesPreemption.value}× on preemption.`,
 )
 
+const egressPolicy = computed(() => egressPolicyName(jobRequest.value?.egressPolicy))
+// A job's own rules take effect only under the allowlist.
+const egressRules = computed(() =>
+  egressPolicy.value === 'allowlist' ? (jobRequest.value?.egressAllow ?? []).map(formatEgressRule) : [],
+)
+
 const acceleratorDisplay = computed(() => {
   const j = job.value
   const req = jobRequest.value
@@ -1123,6 +1129,10 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
               {{ bandDisplayName(jobRequest.priorityBand) }}
             </span>
+          </InfoRow>
+          <InfoRow v-if="egressPolicy" label="Egress">
+            <span class="font-mono">{{ egressPolicy }}</span>
+            <span v-if="egressRules.length" class="font-mono text-text-muted"> + {{ egressRules.join(', ') }}</span>
           </InfoRow>
           <InfoRow v-if="multiBackend && job?.backendId" label="Backend">
             <span class="font-mono">{{ job!.backendId }}</span>

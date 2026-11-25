@@ -75,7 +75,7 @@ pub struct TableRuntime {
     object_state_active: AtomicBool,
     /// Per-table retention overrides; `None` fields inherit the cluster-wide
     /// [`CompactionConfig`] caps.
-    pub(super) storage_policy: Mutex<StoragePolicy>,
+    storage_policy: Mutex<StoragePolicy>,
     /// Leveled-compaction tuning: the scheduler reads `check_interval`, the
     /// planner reads `level_targets`/`max_segments_per_level`.
     pub(super) compaction_config: CompactionConfig,
@@ -109,7 +109,9 @@ pub struct TableRuntime {
     /// How this table's specification transition is failing, carried across
     /// maintenance ticks.
     pub(super) migration_block: Mutex<MigrationBlock>,
-    pub(super) last_object_gc: Mutex<Option<Instant>>,
+    /// When the current object-collection interval began: the last collection,
+    /// or the first backlogged visit of a table that has not collected yet.
+    pub(super) object_gc_interval_start: Mutex<Option<Instant>>,
     pub(super) last_orphan_sweep: Mutex<Option<Instant>>,
     /// Latched stop flag the dispatched work checks at the top of each loop
     /// iteration.
@@ -238,7 +240,7 @@ impl TableRuntime {
             layout_tracker: LayoutTracker::default(),
             index_skips: Mutex::new(BackfillSkips::default()),
             migration_block: Mutex::new(MigrationBlock::default()),
-            last_object_gc: Mutex::new(None),
+            object_gc_interval_start: Mutex::new(None),
             last_orphan_sweep: Mutex::new(None),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
@@ -318,6 +320,12 @@ impl TableRuntime {
     /// Swap in a new retention policy (re-register). Picked up next eviction.
     pub fn update_policy(&self, policy: StoragePolicy) {
         *self.storage_policy.lock().unwrap() = policy;
+    }
+
+    /// A copy of the retention policy. The lock is released on return, so a
+    /// caller cannot hold it across eviction's wait for query readers.
+    pub(super) fn storage_policy(&self) -> StoragePolicy {
+        self.storage_policy.lock().unwrap().clone()
     }
 
     /// Swap in the operating policy a new specification resolves to.
@@ -434,6 +442,7 @@ impl TableRuntime {
     /// Only sealed segments appear: queries see flushed data, never the in-RAM
     /// buffer.
     pub fn query_snapshot(&self) -> Result<SegmentSnapshot, StatsError> {
+        let read_started = tokio::time::Instant::now();
         if let Some(snapshot) = self.controller.snapshot() {
             if snapshot
                 .state()
@@ -442,7 +451,7 @@ impl TableRuntime {
                 .unwrap_or(0)
                 > 0
             {
-                return self.object_query_snapshot(&snapshot);
+                return self.object_query_snapshot(&snapshot, read_started);
             }
         }
         Ok(self.segments.snapshot())
@@ -481,14 +490,26 @@ impl TableRuntime {
     fn object_query_snapshot(
         &self,
         snapshot: &TableSnapshot,
+        read_started: tokio::time::Instant,
     ) -> Result<SegmentSnapshot, StatsError> {
         let store = self.controller.object_store().ok_or_else(|| {
             StatsError::Internal(format!("table {:?} has no object store", self.name))
         })?;
         let planned = plan_visible_segments(snapshot, store.as_ref())?;
         let mut view = SegmentSnapshot {
+            read_deadline: Some(
+                read_started
+                    + Duration::from_millis(
+                        snapshot
+                            .state()
+                            .catalog()
+                            .max_query_time_ms
+                            .unwrap_or(crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS),
+                    ),
+            ),
             paths: Vec::with_capacity(planned.len()),
             key_bounds: Default::default(),
+            column_bounds: Default::default(),
             seq_bounds: Default::default(),
             row_counts: Default::default(),
             partitions: Default::default(),
@@ -499,6 +520,10 @@ impl TableRuntime {
         for segment in planned {
             if let Some(bounds) = segment.key_bounds {
                 view.key_bounds.insert(segment.path.clone(), bounds);
+            }
+            if !segment.column_bounds.is_empty() {
+                view.column_bounds
+                    .insert(segment.path.clone(), segment.column_bounds);
             }
             view.seq_bounds
                 .insert(segment.path.clone(), (segment.min_seq, segment.max_seq));
@@ -516,20 +541,6 @@ impl TableRuntime {
             view.paths.push(segment.path);
         }
         Ok(view)
-    }
-
-    /// The maximum query time this table's pinned state promises. `None` for a
-    /// legacy table, whose readable window is the query-visibility lock rather
-    /// than a duration.
-    pub fn snapshot_query_bound(&self) -> Option<Duration> {
-        let snapshot = self.controller.snapshot()?;
-        let catalog = snapshot.state().catalog();
-        if catalog.active_table_spec_version.unwrap_or(0) == 0 {
-            return None;
-        }
-        Some(Duration::from_millis(catalog.max_query_time_ms.unwrap_or(
-            crate::store::table_spec::DEFAULT_MAX_QUERY_TIME_MS,
-        )))
     }
 
     /// Aggregate row/byte/seq stats over sealed segments plus the RAM buffer.
@@ -700,6 +711,12 @@ impl TableRuntime {
         self.buffer.clear_demand();
     }
 
+    /// The live query view's segments.
+    #[cfg(test)]
+    pub fn live_segments(&self) -> Vec<crate::store::types::LocalSegment> {
+        self.segments.segments()
+    }
+
     /// Record flush demand directly. `forced` bypasses the coalescing window the
     /// way a buffer holding a whole segment does.
     #[cfg(test)]
@@ -823,7 +840,10 @@ mod tests {
     use super::*;
 
     use crate::store::segment::discover_segments;
+    use crate::store::table::maintenance::{self, TableWork};
     use crate::store::table::test_tables::*;
+
+    const EVICTION_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Seal the buffer the way the maintenance scheduler would, then wait for the
     /// durability high-water mark. These tests open a runtime directly, so no
@@ -834,6 +854,64 @@ mod tests {
             .await_persisted(target, Duration::from_secs(10))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn policy_update_completes_while_eviction_waits_for_a_reader() {
+        let dir = tempdir();
+        let remote = dir.join("remote");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let table = open_table_remote(
+            "iris.worker",
+            worker_schema(),
+            Some(dir.join("iris.worker")),
+            catalog,
+            remote.to_str().unwrap(),
+            StoragePolicy::default(),
+        );
+        write_one(&table).await;
+        maintenance::run(
+            &table,
+            TableWork::Cycle {
+                force_compact_l0: true,
+            },
+        )
+        .await
+        .unwrap();
+        table.update_policy(StoragePolicy {
+            max_segments: Some(0),
+            ..Default::default()
+        });
+
+        let reader = table.query_visibility.read().await;
+        let eviction = {
+            let table = Arc::clone(&table);
+            tokio::spawn(async move { maintenance::run(&table, TableWork::Eviction).await })
+        };
+        // Tokio rejects new readers once eviction queues its visibility writer.
+        tokio::time::timeout(EVICTION_WAIT_TIMEOUT, async {
+            while table.query_visibility.try_read().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("eviction did not wait for the active reader");
+
+        let mut update = {
+            let table = Arc::clone(&table);
+            tokio::task::spawn_blocking(move || table.update_policy(StoragePolicy::default()))
+        };
+        let updated = tokio::time::timeout(EVICTION_WAIT_TIMEOUT, &mut update).await;
+        // Release the reader before an assertion so a regression cannot hang teardown.
+        drop(reader);
+        eviction.await.unwrap().unwrap();
+        updated
+            .expect("policy update blocked behind eviction")
+            .unwrap();
+
+        assert_eq!(table.stats().segment_count, 0);
+        assert_eq!(remote_files(&remote, "iris.worker").len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]

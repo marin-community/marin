@@ -47,7 +47,9 @@ def test_import_hf_to_lm_saves_model_under_subpath_and_emits_padded_tokenizer():
         hf_dir = os.path.join(tmpdir, "hf")
         export_lm_to_hf.main(
             export_lm_to_hf.ConvertLmConfig(
-                trainer=SimpleNamespace(device_mesh=contextlib.nullcontext(), parameter_axis_mapping={}),
+                trainer=SimpleNamespace(
+                    device_mesh=contextlib.nullcontext(), parameter_axis_mapping={}, field_dtype_overrides={}
+                ),
                 checkpoint_path=levanter_ckpt,
                 checkpoint_subpath="model",
                 output_dir=hf_dir,

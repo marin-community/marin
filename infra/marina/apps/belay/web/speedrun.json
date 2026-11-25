@@ -1,0 +1,8 @@
+{
+ "metric": "Paloma macro loss",
+ "note": "Accepted recipes at the 8-minute d512 budget (480 s of training on 8xH100), final Paloma macro loss from W&B. BPB is shown in tooltips only: the Aug Hero run's is token-weighted, the Oct 20 run's byte-weighted, so the two are not comparable.",
+ "accepted": [
+  {"name": "Marin Aug Hero Arch", "loss": 3.1306, "bpb": 1.298, "bpb_kind": "token-weighted", "steps": 2769, "run": "belay-8min-hero", "color": "--slate"},
+  {"name": "Belay Ckpt Oct 20 2026 (current)", "loss": 3.0441, "bpb": 1.259, "bpb_kind": "byte-weighted", "steps": 3030, "run": "belay-8min-ckpt-oct20", "color": "--rope"}
+ ]
+}

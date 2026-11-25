@@ -86,11 +86,21 @@ For sources with reasoning or tools:
   [terminus.py](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/datakit/download/terminus.py)
   for terminal-agent conversations that encode commands as assistant text.
 
+For Terminus conversations, choose `TerminusParseMode.STRICT` for complete
+source replies or `TerminusParseMode.REPAIR` for supported harness repairs.
+Repair mode joins closed reasoning spans and supplies missing JSON closing
+delimiters. Both modes reject commands inside unfinished reasoning.
+
 The full output contract is enforced in
 [chat_normalize.py](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/datakit/chat_normalize.py).
 To retain extra fields such as reward or teacher, pass them to the document helper,
 extend `CHAT_SCHEMA` with their Arrow fields, and use that schema for both the
 Parquet writer and `normalize_chat_source(output_schema=...)`.
+
+Store source-message training flags as `source_train_turns`. This field is
+provenance; rendering does not apply it as a loss mask. Reasoning and final text
+can become separate output messages, so a training mask must be aligned with
+the rendered output before it is used.
 
 ## 3. Register the source
 

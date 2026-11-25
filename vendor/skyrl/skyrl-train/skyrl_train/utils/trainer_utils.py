@@ -1,6 +1,5 @@
-from collections.abc import Sequence
-from typing import List, Dict, Any, Union, Callable, Optional
-from omegaconf import OmegaConf, DictConfig
+from typing import List, Dict, Union, Callable, Optional
+from omegaconf import DictConfig
 from enum import Enum
 import ray
 from skyrl_train.workers.worker import PPORayActorGroup
@@ -13,9 +12,11 @@ from torch.utils.data import Dataset, Subset
 from skyrl_train.trajectory_runners.trajectory_processing import (
     get_metrics_from_trajectory_batch,
     get_rollout_metrics,
+    task_timing_metrics,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
+from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 from transformers import AutoTokenizer
 from skyrl_train.io import io
 from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
@@ -24,10 +25,14 @@ from skyrl_train.checkpoint_listing import extract_step_from_path, list_checkpoi
 from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
 from skyrl_train.dataset import PromptDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
+from skyrl_train.batch_metrics import consumed_stop_metrics
+from skyrl_train.task_inputs import TrajectoryMetadata
 
 BasicType = Union[int, float, str, bool, type(None)]
 EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
+        GRADING_DURATION_SECONDS,
+        GRADING_FAILURE,
         "exception_type",
         "cause_error_type",
         "operation",
@@ -52,27 +57,20 @@ class ResumeMode(Enum):
         return super()._missing_(value)
 
 
-def get_node_ids(
-    policy_model: PPORayActorGroup, critic_model: Optional[PPORayActorGroup], ref_model: Optional[PPORayActorGroup]
-) -> List[str]:
-    """Get the node ids of the policy, critic, and ref models.
+def get_node_ids(policy_model: PPORayActorGroup, ref_model: Optional[PPORayActorGroup]) -> List[str]:
+    """Get the node ids of the policy and ref models.
 
     Args:
         policy_model: Policy model actor group
-        critic_model: Critic model actor group (Optional)
         ref_model: Ref model actor group (Optional)
     """
     policy_node_ids: List[str] = ray.get(policy_model.async_run_ray_method("pass_through", "get_ray_node_id"))
-    if critic_model is not None:
-        critic_node_ids: List[str] = ray.get(critic_model.async_run_ray_method("pass_through", "get_ray_node_id"))
-    else:
-        critic_node_ids = []
     if ref_model is not None:
         ref_node_ids: List[str] = ray.get(ref_model.async_run_ray_method("pass_through", "get_ray_node_id"))
     else:
         ref_node_ids = []
 
-    unique_node_ids = list(set(policy_node_ids + critic_node_ids + ref_node_ids))
+    unique_node_ids = list(set(policy_node_ids + ref_node_ids))
     return unique_node_ids
 
 
@@ -99,52 +97,6 @@ def run_on_each_node(node_ids: List[str], fn: Callable, *args, **kwargs):
         refs.append(node_task.remote(*args, **kwargs))
 
     return ray.get(refs)
-
-
-def cleanup_old_checkpoints(
-    checkpoint_base_path: str, max_checkpoints: int, protected_steps: set[int] | None = None
-) -> None:
-    """
-    Keep the most recent `max_checkpoints` and protected checkpoints; remove the rest.
-
-    Args:
-        checkpoint_base_path: Base path where checkpoints are stored
-        max_checkpoints: Maximum number of recent checkpoints to keep
-        protected_steps: Additional checkpoint steps retained until external work completes
-    """
-    if max_checkpoints < 0:
-        return
-
-    checkpoint_dirs = list_checkpoint_dirs(checkpoint_base_path)
-
-    if len(checkpoint_dirs) <= max_checkpoints:
-        return
-
-    # Sort by step number (extract number from global_step_N)
-    def extract_step(dirname):
-        try:
-            return int(dirname.split("global_step_")[1])
-        except (IndexError, ValueError):
-            return 0
-
-    checkpoint_dirs.sort(key=extract_step)
-
-    protected_steps = protected_steps or set()
-    recent = set(checkpoint_dirs[-max_checkpoints:]) if max_checkpoints > 0 else set()
-    dirs_to_remove = [
-        directory
-        for directory in checkpoint_dirs
-        if directory not in recent and extract_step(directory) not in protected_steps
-    ]
-
-    for dir_name in dirs_to_remove:
-        full_path = os.path.join(checkpoint_base_path, dir_name)
-        try:
-            io.remove(full_path)
-            step_num = extract_step(dir_name)
-            logger.info(f"Cleaned up old checkpoint: global_step_{step_num} at {full_path}")
-        except Exception as e:
-            logger.warning(f"Failed to remove old checkpoint {full_path}: {e}")
 
 
 def validate_consistency_for_latest_checkpoint(
@@ -175,24 +127,6 @@ def sanitize_data_source(data_source: str) -> str:
     if data_source is None:
         return "unknown"
     return data_source.replace("/", "_")
-
-
-def consumed_stop_metrics(stop_reasons: Sequence[str | None] | None, sequence_count: int) -> dict[str, float]:
-    """Count length stops on admitted sequences; the fraction needs every stop reason."""
-    reasons = [None] * sequence_count if stop_reasons is None else stop_reasons
-    known = sum(reason is not None and reason != "" for reason in reasons)
-    length_stops = sum(reason == "length" for reason in reasons)
-    metrics = {
-        "sequences": float(sequence_count),
-        "length_stop_count": float(length_stops),
-        "known_stop_count": float(known),
-        "unknown_stop_count": float(sequence_count - known),
-    }
-    if sequence_count:
-        metrics["stop_reason_coverage"] = known / sequence_count
-        if known == sequence_count:
-            metrics["length_stop_fraction"] = length_stops / sequence_count
-    return {f"consumed/{name}": value for name, value in metrics.items()}
 
 
 def async_step_metrics(
@@ -244,6 +178,7 @@ def evaluation_response_metrics(trajectory_batch: TrajectoryBatch) -> Dict[str, 
     stops = trajectory_batch.get("stop_reasons")
     metrics = {key.removeprefix("consumed/"): value for key, value in consumed_stop_metrics(stops, count).items()}
     if trajectory_batch.get("env_metrics") is not None:
+        metrics.update(task_timing_metrics(trajectory_batch["env_metrics"]))
         environments = set(trajectory_batch["env_classes"])
         for environment in environments:
             indices = [i for i, name in enumerate(trajectory_batch["env_classes"]) if name == environment]
@@ -332,20 +267,25 @@ def dump_per_dataset_eval_results(
     dump_dir_path: str,
     tokenizer: AutoTokenizer,
     trajectory_batch: TrajectoryBatch,
-    concat_data_sources: List[str],
-    concat_all_envs: List[str],
+    metadata: List[TrajectoryMetadata],
     eval_metrics: Dict[str, float],
     uids: List[str],
+    *,
+    attempt_id: str,
+    step: int,
+    ordinals: List[int],
 ):
     """Dump evaluation results per dataset and overall aggregated results."""
 
     # Prepare common data
     input_prompts = [tokenizer.decode(prompt) for prompt in trajectory_batch["prompt_token_ids"]]
     output_responses = [tokenizer.decode(response) for response in trajectory_batch["response_ids"]]
+    stop_reasons = trajectory_batch.get("stop_reasons") or [None] * len(input_prompts)
 
     # Group indices by data source
     data_source_indices = {}
-    for i, data_source in enumerate(concat_data_sources):
+    for i, row in enumerate(metadata):
+        data_source = row.data_source
         if data_source is None:
             data_source = "unknown"
         if data_source not in data_source_indices:
@@ -362,16 +302,25 @@ def dump_per_dataset_eval_results(
                 verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
                 entry = {
                     "uid": uids[i],
+                    "attempt_id": attempt_id,
+                    "step": step,
+                    "ordinal": ordinals[i],
+                    "is_last_step": (trajectory_batch.get("is_last_step") or [True] * len(input_prompts))[i],
+                    "identity_disposition": "task_spec" if trajectory_batch.get("task_ids") else "preference_input",
+                    "task_id": (trajectory_batch.get("task_ids") or [None] * len(input_prompts))[i],
                     "prompt_token_ids": trajectory_batch["prompt_token_ids"][i],
                     "response_token_ids": trajectory_batch["response_ids"][i],
                     "input_prompt": input_prompts[i],
                     "output_response": output_responses[i],
+                    # The parsed conversation the grader read: tool calls, observations and the final answer.
+                    "messages": (trajectory_batch.get("evidence_messages") or [None] * len(input_prompts))[i],
                     "score": trajectory_batch["rewards"][i],
-                    "stop_reason": trajectory_batch.get("stop_reasons", [None] * len(input_prompts))[i],
+                    "stop_reason": stop_reasons[i],
                     "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
                     "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
                     "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
-                    "env_class": concat_all_envs[i],
+                    "env_class": metadata[i].metric_class,
+                    "subset_id": metadata[i].subset_id,
                     "data_source": data_source,
                     "env_metrics": (trajectory_batch.get("env_metrics") or [{}] * len(input_prompts))[i],
                     # Keep operational categories, not arbitrary verifier references or credentials.
@@ -429,17 +378,3 @@ def build_eval_dataloader(cfg: DictConfig, dataset: PromptDataset) -> StatefulDa
     )
     logger.info(f"Validation set size: {len(dataloader)}")
     return dataloader
-
-
-def get_rope_scaling_config(trainer_cfg: DictConfig) -> dict[str, Any]:
-    if "rope_scaling" not in trainer_cfg:
-        return {}
-    if trainer_cfg.rope_scaling is None:
-        return None
-    return OmegaConf.to_container(trainer_cfg.rope_scaling)
-
-
-def get_rope_theta_config(trainer_cfg: DictConfig) -> int | None:
-    if "rope_theta" not in trainer_cfg:
-        return None
-    return trainer_cfg.rope_theta

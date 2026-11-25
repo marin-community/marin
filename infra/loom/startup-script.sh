@@ -14,6 +14,7 @@ LOOM_PORT="$(meta instance/attributes/loom-port)"
 RUNTIME_DIR=/opt/loom
 COMPOSE_FILE="${RUNTIME_DIR}/docker-compose.yml"
 DOCKER_CONFIG=/etc/docker/daemon.json
+MPTCP_SYSCTL_CONFIG=/etc/sysctl.d/99-loom-mptcp.conf
 HEALTH_URL="http://127.0.0.1:${LOOM_PORT}/api/health"
 STARTUP_SUCCESS=/run/loom-startup-succeeded
 
@@ -23,6 +24,11 @@ if [[ "$LOOM_IMAGE" != *@sha256:* ]]; then
   echo "loom startup-script: Pulumi did not supply an immutable image" >&2
   exit 1
 fi
+
+install -o root -g root -m 0644 /dev/stdin "$MPTCP_SYSCTL_CONFIG" <<'EOF'
+net.mptcp.enabled = 0
+EOF
+sysctl -p "$MPTCP_SYSCTL_CONFIG" >/dev/null
 
 packages=()
 add_apt_repository() {

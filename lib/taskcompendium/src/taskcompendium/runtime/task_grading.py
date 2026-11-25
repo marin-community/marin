@@ -11,11 +11,12 @@ from verifyit.modes.grade_judge import JudgeConnection
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
+    AgentMachine,
     GradingAttempt,
     NoGrader,
     TaskSpec,
+    VerifyitGrader,
     grades_with_judge,
-    require_resolved_environment,
 )
 from taskcompendium.runtime.environment import validate_machine_spec
 from taskcompendium.runtime.grading import grade_in_sandbox
@@ -31,20 +32,22 @@ def grade_task(
 ) -> GradeResult:
     """Grade with an explicit judge connection, in process, or in a fresh grading machine.
 
-    A ``NoGrader`` task is unavailable. Judge and machine failures become infrastructure errors.
+    A ``NoGrader`` task is unavailable. Judge and machine failures become infrastructure errors, as does a
+    grader placed in the agent's machine, which ended with its attempt.
     """
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
-    if grades_with_judge(grader):
+    if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
         return grade_remote_judge_answer(task, attempt, judge_connection)
-    if grader.environment is None:
+    if grader.placement is None:
         return grade_answer(task, attempt)
-    require_resolved_environment(grader.environment)
+    if isinstance(grader.placement, AgentMachine):
+        return GradeResult(Outcome.INFRA_ERROR, None, "Grading in the agent's machine requires the live task machine")
     if machine_factory is None or machine_spec is None:
         return GradeResult(Outcome.INFRA_ERROR, None, "Sandbox grading requires a machine factory and specification")
-    validate_machine_spec(grader.environment, machine_factory, machine_spec)
-    return asyncio.run(sandbox_grade(task, attempt, machine_factory, machine_spec))
+    validate_machine_spec(grader.placement.environment, machine_factory, machine_spec)
+    return asyncio.run(sandbox_grade(task, attempt, machine_factory, machine_spec, judge_connection=judge_connection))
 
 
 async def sandbox_grade(
@@ -54,9 +57,12 @@ async def sandbox_grade(
     machine_spec: MachineSpec,
     *,
     timeout: float | None = None,
+    judge_connection: JudgeConnection | None = None,
 ) -> GradeResult:
     """Run ``grade_in_sandbox``, reporting machine failures as infrastructure errors instead of raising."""
     try:
-        return await grade_in_sandbox(task, attempt, machine_factory, machine_spec, timeout=timeout)
+        return await grade_in_sandbox(
+            task, attempt, machine_factory, machine_spec, timeout=timeout, judge_connection=judge_connection
+        )
     except (RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))

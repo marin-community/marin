@@ -12,16 +12,17 @@ import dataclasses
 
 from fray.types import ResourceConfig
 from levanter.optim.config import AdamConfig
-from levanter.utils.mesh import MeshConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.checkpoints import hf_to_levanter
 from marin.experiment.namespacing import user_owned_name
 from rigging.filesystem.storage_path import prefix_join
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
 from experiments.evaluation.pipeline import EvaluationResult, eval_step
+from experiments.post_training.snowball_sft import snowball_mesh, snowball_resources
 from experiments.sft.launcher import (
     LLAMA3_CHAT_EOS_TOKEN_IDS,
     ArtifactDatasetSpec,
@@ -40,18 +41,6 @@ CONTEXT_LENGTH = 4096
 BATCH_SIZE = 64
 STEPS = 4
 TRAIN_NODES = 4
-
-
-def _gpu_resources(nodes: int) -> ResourceConfig:
-    return ResourceConfig.with_gpu(
-        "H100",
-        count=8,
-        cpu=32,
-        ram="512g",
-        disk="256g",
-        replicas=nodes,
-        preemptible=False,
-    )
 
 
 def _optimizer(learning_rate: float, warmup: int) -> AdamConfig:
@@ -130,17 +119,7 @@ def build_trial(
         chat_template=MARIN_CHAT_TEMPLATE,
         datasets=datasets,
         optimizer=_optimizer(learning_rate, warmup),
-        # Snowball shards parameters over expert x (data, context). Placing context across nodes shards
-        # fp32 weights and Adam moments over all 32 GPUs instead of replicating them on each node.
-        mesh=MeshConfig(
-            axes={"data": 1, "replica": 1, "model": 1, "expert": -1},
-            dcn_axes={"context": TRAIN_NODES},
-            compute_mapping={
-                "batch": ["replica_dcn", "data", "expert"],
-                "position": "context",
-                "vocab": "model",
-            },
-        ),
+        mesh=snowball_mesh(TRAIN_NODES),
         seq_len=CONTEXT_LENGTH,
         pack=False,
         batch_size=BATCH_SIZE,
@@ -148,10 +127,10 @@ def build_trial(
         hf_save_dtype="bfloat16",
         wandb_project="marin_moe_sft",
     )
-    trained = sft_step(spec, _gpu_resources(TRAIN_NODES))
+    trained = sft_step(spec, snowball_resources(TRAIN_NODES))
     baseline: ArtifactStep[EvaluationResult] = eval_step(
         snowball_model(f"{eval_name}-base", HF_MODEL, HF_REVISION),
-        evals,
+        resolve_evaluations(evals),
         version=version,
         submission_cluster=CLUSTER,
         federated_cluster=CLUSTER,
@@ -171,7 +150,7 @@ def trained_eval(trained: ArtifactStep, *, eval_name: str, evals: str, version: 
 
     return eval_step(
         trained_model,
-        evals,
+        resolve_evaluations(evals),
         version=version,
         deps=(trained,),
         resolve_model=resolve_trained_model,

@@ -9,30 +9,44 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import asdict, dataclass, replace
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from finestore.rl.run_records import (
+    AttemptRecord,
+    ExportedPolicy,
+    LaunchReceipt,
+    LaunchResult,
+    LaunchState,
+    read_attempt,
+    write_attempt,
+)
 from iris.client.client import JobFailedError
+from iris.cluster.client.job_info import get_job_info
 from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
+from loguru import logger
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
-from cloud.iris.launch_config import SubmissionMode, load_launch_config
-from marinskyrl.checkpoint_paths import policy_export_path
+from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
+from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
+from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
+from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, policy_export_path, selected_export_checkpoint
 from marinskyrl.hf_model import validate_portable_hf_model_files
+from skyrlrecipe.model_staging import HuggingFaceModelCache
 from marinskyrl.packed_tasks import select_task_references
-from marinskyrl.resource_locator import join_resource_path
+from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import Provenance, launch_provenance
-
-
-class LaunchState(StrEnum):
-    PREPARED = "prepared"
-    SUBMITTED = "submitted"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
+from rigging.provenance import launch_provenance
+from skyrl_train.checkpoint_listing import (
+    best_checkpoint_step,
+    cleanup_old_checkpoints,
+    committed_checkpoint_steps,
+    periodic_checkpoint_steps,
+)
+from skyrl_train.hf_export import protected_hf_export_steps
+from skyrl_train.io import io as checkpoint_io
 
 
 @dataclass(frozen=True)
@@ -42,29 +56,8 @@ class LaunchOutcome:
     job_id: str
     job_state: str
     exit_code: int
-
-
-@dataclass(frozen=True)
-class ExportedPolicy:
-    policy_export_uri: str
-    global_step: int
-    tokenizer_uri: str
-    tokenizer_revision: str
-    checkpoint_root: str
-    terminal_manifest_uri: str
-
-
-@dataclass(frozen=True)
-class LaunchResult:
-    run_id: str
-    attempt_id: str
-    state: LaunchState
-    iris_job_id: str | None
-    iris_job_state: str | None
-    provenance: Provenance
-    runtime_profile: str
-    model: ExportedPolicy | None
-    failure: str | None
+    started_at: str | None = None
+    finished_at: str | None = None
 
 
 class LaunchBackend(Protocol):
@@ -100,25 +93,131 @@ def _prepare_config(config: DictConfig) -> DictConfig:
     OmegaConf.set_struct(prepared, False)
     prepared.inputs.train_data = _prepared_sources(list(config.inputs.train_data))
     prepared.inputs.validation_data = _prepared_sources(list(config.inputs.validation_data))
+    if config.inputs.get("evaluation_data"):
+        prepared.inputs.evaluation_data = {
+            name: _prepared_sources(list(sources)) for name, sources in config.inputs.evaluation_data.items()
+        }
     OmegaConf.set_struct(prepared, True)
     return prepared
 
 
-def _exported_policy(config: DictConfig) -> ExportedPolicy:
+def _prepare_model_caches(config: DictConfig) -> None:
+    models = hugging_face_models(config)
+    speculative = config.skyrl.get("generator", {}).get("speculative_decoding") or {}
+    draft_mapping = speculative.get("model") if config.run.mode != RunMode.CHECKPOINT_EXPORT else None
+    draft = (
+        SpeculatorModelConfig.from_mapping(
+            OmegaConf.to_container(draft_mapping, resolve=True), context="generator.speculative_decoding.model"
+        )
+        if draft_mapping
+        else None
+    )
+    hub_draft = draft is not None and draft.source_kind is SpeculatorModelSourceKind.HUGGING_FACE
+    if not models and not hub_draft:
+        return
+    if get_job_info() is None:
+        raise RuntimeError(
+            "Hugging Face model pre-caching requires an Iris CPU coordinator; run your rl_build_options experiment with --run"
+        )
+    plan = compile_distillation_plan_from_config(config.skyrl)
+    teacher_models = (
+        {teacher.model for teacher in plan.teachers if teacher.source is TeacherSource.LOCAL_INFERENCE}
+        if plan is not None
+        else set()
+    )
+    caches = []
+    for model in models:
+        tokenizer_uri = str(config.inputs.model.tokenizer_uri or "")
+        separate_tokenizer = bool(tokenizer_uri and tokenizer_uri != model.path)
+        policy_only = model.path == str(config.inputs.model.uri) and model not in teacher_models
+        try:
+            uri, manifest = ensure_hugging_face_model_cache(
+                model.path,
+                model.revision,
+                ttl_days=int(config.artifacts.draft_model_cache_ttl_days),
+                source_prefix=str(config.artifacts.checkpoint_root),
+                tokenizer_mode="policy" if policy_only and separate_tokenizer else "embedded",
+            )
+        except UnsupportedHuggingFaceSnapshot as error:
+            logger.warning(
+                "Cannot mirror {}@{}; retaining node-side Hub fallback: {}", model.path, model.revision, error
+            )
+            continue
+        assert manifest.revision is not None
+        caches.append(HuggingFaceModelCache(model.path, model.revision, uri, manifest.identity, manifest.revision))
+    if hub_draft:
+        assert draft is not None and draft.hugging_face_repo_id is not None
+        cached = next(
+            (
+                model
+                for model in caches
+                if model.model_id == draft.hugging_face_repo_id and model.revision == draft.source_identity
+            ),
+            None,
+        )
+        if cached is None:
+            uri, manifest = ensure_hugging_face_model_cache(
+                draft.hugging_face_repo_id,
+                draft.source_identity,
+                ttl_days=int(config.artifacts.draft_model_cache_ttl_days),
+                source_prefix=str(config.artifacts.checkpoint_root),
+                tokenizer_mode="policy",
+            )
+            assert manifest.revision is not None
+            cached = HuggingFaceModelCache(
+                draft.hugging_face_repo_id, draft.source_identity, uri, manifest.identity, manifest.revision
+            )
+            caches.append(cached)
+        config.skyrl.generator.speculative_decoding.model = asdict(SpeculatorModelConfig(cached.uri, cached.identity))
+    config.inputs.hugging_face_models = caches
+
+
+def _exported_policy(config: DictConfig) -> ExportedPolicy | None:
     checkpoint_root = str(config.artifacts.checkpoint_root)
-    global_step = terminal_checkpoint_step(checkpoint_root)
-    policy_uri = policy_export_path(str(config.artifacts.export_root), global_step)
-    root = StoragePath(policy_uri)
-    names = {(directory / name).relative_to(root) for directory, _, files in root.walk() for name in files}
-    validate_portable_hf_model_files(names, policy_uri)
+    selected = selected_export_checkpoint(
+        checkpoint_root, str(config.skyrl.trainer.hf_export_checkpoint), terminal_checkpoint_step(checkpoint_root)
+    )
+    if selected is None:
+        return None
+    policy_uri = selected.initializer_uri
+    if policy_uri is None:
+        policy_uri = policy_export_path(str(config.artifacts.export_root), selected.step)
+        root = StoragePath(policy_uri)
+        names = {(directory / name).relative_to(root) for directory, _, files in root.walk() for name in files}
+        validate_portable_hf_model_files(names, policy_uri)
     return ExportedPolicy(
         policy_export_uri=policy_uri,
-        global_step=global_step,
-        tokenizer_uri=str(config.inputs.model.tokenizer_uri),
-        tokenizer_revision=str(config.inputs.model.tokenizer_revision),
+        global_step=selected.step,
+        tokenizer_uri=config.inputs.model.tokenizer_uri,
+        tokenizer_revision=config.inputs.model.tokenizer_revision,
         checkpoint_root=checkpoint_root,
         terminal_manifest_uri=str(config.artifacts.terminal_manifest_uri),
     )
+
+
+def _retain_terminal_checkpoints(config: DictConfig) -> None:
+    trainer = config.skyrl.trainer
+    if (selection := trainer.get("checkpoint_retention")) is None:
+        return
+    root = str(config.artifacts.checkpoint_root)
+    marker = StoragePath(root) / LATEST_CHECKPOINT_FILE
+    if not marker.exists():
+        return
+    latest = terminal_checkpoint_step(root)
+    best = best_checkpoint_step(root) if selection == "best" else None
+    selected = latest if best is None else best
+    kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest, strict=True)
+    if selected > 0:
+        kept.add(selected)
+    protected = protected_hf_export_steps(root, strict=True)
+    if protected:
+        kept.update(committed_checkpoint_steps(root, latest, strict=True) & protected)
+    if not kept:
+        checkpoint_io.remove(str(marker))
+    elif (newest := max(kept)) != latest:
+        # Publish a retained checkpoint before deleting the former marker target.
+        checkpoint_io.write_bytes_atomic(str(marker), str(newest).encode())
+    cleanup_old_checkpoints(root, 0, kept | protected)
 
 
 def _result(
@@ -135,18 +234,13 @@ def _result(
         state=state,
         iris_job_id=outcome.job_id if outcome else None,
         iris_job_state=outcome.job_state if outcome else None,
-        provenance=launch_provenance(),
+        provenance=asdict(launch_provenance()),
         runtime_profile=str(config.runtime.profile),
         model=model,
         failure=failure,
+        started_at=outcome.started_at if outcome else None,
+        finished_at=outcome.finished_at if outcome else None,
     )
-
-
-def _manifest(config: DictConfig, result: LaunchResult) -> dict[str, Any]:
-    return {
-        "config": OmegaConf.to_container(config, resolve=True),
-        "result": asdict(result),
-    }
 
 
 def _record_failure(
@@ -155,24 +249,46 @@ def _record_failure(
     failure: str,
 ) -> LaunchResult:
     result = _result(config, LaunchState.FAILED, outcome=outcome, failure=failure)
-    attempt_uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
-    write_json(attempt_uri, _manifest(config, result))
+    _write_attempt_receipt(config, result)
     return result
 
 
-def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
+def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchReceipt:
+    export_root = str(config.artifacts.export_root)
+    receipt = LaunchReceipt(config=OmegaConf.to_container(config, resolve=True), result=result)
+    write_attempt(
+        export_root,
+        AttemptRecord(
+            run_id=str(config.run.id),
+            attempt_id=str(config.run.attempt_id),
+            **({"iris_job_id": result.iris_job_id} if result.iris_job_id is not None else {}),
+            result=result,
+        ),
+    )
+    return receipt
+
+
+def execute_launch(
+    config_path: Path, *, backend: LaunchBackend | None = None, forward_env: tuple[str, ...] = ()
+) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
-    terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
-    if StoragePath(terminal_manifest_uri).exists():
-        raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")
+    previous_path = StoragePath(str(config.artifacts.resolved_config_uri))
+    if previous_path.exists():
+        previous = OmegaConf.create(previous_path.read_text())
+        previous = previous.get("config", previous)
+        if previous.inputs.get("starting_checkpoint") != config.inputs.starting_checkpoint:
+            raise ValueError("inputs.starting_checkpoint changed for an existing run; use a new RL artifact version")
+    terminal_receipt_uri = str(config.artifacts.terminal_manifest_uri)
+    if StoragePath(terminal_receipt_uri).exists():
+        raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_receipt_uri}")
 
     if backend is None:
         # The concrete Iris backend imports the training/export stack. Keep it
         # outside the CPU-only config validation and launcher import boundary.
         from cloud.iris.iris_backend import IrisBackend  # noqa: PLC0415
 
-        active_backend: LaunchBackend = IrisBackend()
+        active_backend: LaunchBackend = IrisBackend(forward_env=forward_env)
     else:
         active_backend = backend
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", encoding="utf-8") as resolved_file:
@@ -181,10 +297,28 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
         if config.run.submission == SubmissionMode.PREPARE:
             active_backend.validate(resolved_path)
             return _result(config, LaunchState.PREPARED)
+        _prepare_model_caches(config)
+        OmegaConf.save(config, resolved_file.name, resolve=False)
+        record = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
+        if record is None or record.config is None:
+            write_attempt(
+                str(config.artifacts.export_root),
+                AttemptRecord(
+                    run_id=str(config.run.id),
+                    attempt_id=str(config.run.attempt_id),
+                    config=OmegaConf.to_container(config, resolve=True),
+                ),
+            )
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:
-            outcome = LaunchOutcome(job_id=str(error.job_id), job_state=error.status.state.value, exit_code=1)
+            outcome = LaunchOutcome(
+                job_id=str(error.job_id),
+                job_state=error.status.state.value,
+                exit_code=1,
+                started_at=error.status.started_at.as_formatted_date() if error.status.started_at else None,
+                finished_at=error.status.finished_at.as_formatted_date() if error.status.finished_at else None,
+            )
 
         if outcome.exit_code != 0:
             return _record_failure(config, outcome, f"Iris job reached {outcome.job_state}")
@@ -211,10 +345,13 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
             f"Successful Iris job did not persist resolved config: {config.artifacts.resolved_config_uri}",
         )
     result = _result(config, LaunchState.SUCCEEDED, outcome=outcome, model=model)
-    payload = _manifest(config, result)
-    attempt_uri = join_resource_path(str(config.artifacts.attempts_root), f"{config.run.attempt_id}.json")
-    write_json(attempt_uri, payload)
-    write_json(terminal_manifest_uri, payload)
+    receipt = _write_attempt_receipt(config, result)
+    write_json(terminal_receipt_uri, receipt.model_dump(mode="json"))
+    if config.run.mode == RunMode.TRAIN:
+        try:
+            _retain_terminal_checkpoints(config)
+        except Exception:
+            logger.exception(f"Failed to prune checkpoints for {config.run.id}")
     return result
 
 
@@ -225,14 +362,15 @@ def create_parser() -> argparse.ArgumentParser:
     iris_commands = iris.add_subparsers(dest="action", required=True)
     launch = iris_commands.add_parser("launch")
     launch.add_argument("--config", required=True, type=Path)
+    launch.add_argument("--forward-env", action="append", default=[], metavar="NAME")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
     with contextlib.redirect_stdout(sys.stderr):
-        result = execute_launch(args.config)
-    json.dump(asdict(result), sys.stdout, sort_keys=True)
+        result = execute_launch(args.config, forward_env=tuple(args.forward_env))
+    json.dump(result.model_dump(mode="json"), sys.stdout, sort_keys=True)
     sys.stdout.write("\n")
     return 0 if result.state in {LaunchState.PREPARED, LaunchState.SUBMITTED, LaunchState.SUCCEEDED} else 1
 

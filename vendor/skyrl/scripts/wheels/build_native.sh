@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CPython 3.12, Linux. TE supports x86_64 and aarch64; other recipes target x86_64.
+# CPython 3.12, Linux. FA2 and TE support x86_64 and aarch64.
 package="${1:?usage: build_native.sh PACKAGE BUILD_DIRECTORY}"
 build_dir="$(realpath -m "${2:?usage: build_native.sh PACKAGE BUILD_DIRECTORY}")"
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 source_subdir=.
+requirements="$script_dir/native-cu132.txt"
 python_version=3.12.14
 architecture="$(uname -m)"
 case "$architecture" in
     x86_64) ;;
     aarch64)
-        if [[ "$package" != transformer-engine-torch ]]; then
-            echo "Only transformer-engine-torch is qualified for aarch64 in this script" >&2
+        if [[ "$package" != transformer-engine-torch && "$package" != flash-attn ]]; then
+            echo "Only flash-attn and transformer-engine-torch support aarch64 in this script" >&2
             exit 2
         fi
         ;;
@@ -23,8 +24,15 @@ package_environment=()
 case "$package" in
     flash-attn)
         repository=Dao-AILab/flash-attention
-        source_commit=060c9188beec3a8b62b33a3bfa6d5d2d44975fab
-        package_environment+=(FLASH_ATTENTION_FORCE_BUILD=TRUE FLASH_ATTN_CUDA_ARCHS=90)
+        source_commit=f87af617fab71c29c11e7f9bc74746ae7534a59d
+        requirements="$script_dir/native-cu132-torch214.txt"
+        cuda_arch=90
+        if [[ "$architecture" == aarch64 ]]; then cuda_arch=100; fi
+        package_environment+=(
+            FLASH_ATTENTION_FORCE_BUILD=TRUE
+            "FLASH_ATTN_CUDA_ARCHS=$cuda_arch"
+            FLASH_ATTN_LOCAL_VERSION=marin.cu132torch2141.1
+        )
         ;;
     causal-conv1d)
         repository=Dao-AILab/causal-conv1d
@@ -38,7 +46,8 @@ case "$package" in
         ;;
     transformer-engine-torch)
         repository=NVIDIA/TransformerEngine
-        source_commit=5e52befd5262c06289106338c308079d6adb391f
+        source_commit=7457e47d26d9d02dfb783007335dfbe75e1b90a8
+        requirements="$script_dir/native-cu132-torch214.txt"
         source_subdir=transformer_engine/pytorch
         package_environment+=(NVTE_PYTORCH_FORCE_BUILD=TRUE NVTE_NO_LOCAL_VERSION=1 NVTE_BUILD_MAX_JOBS=1)
         max_jobs=1
@@ -51,7 +60,7 @@ uv venv --allow-existing --python "$python_version" "$build_dir/venv"
 uv pip sync --python "$build_dir/venv/bin/python" \
     --link-mode copy \
     --extra-index-url https://download.pytorch.org/whl/cu132 \
-    --index-strategy unsafe-best-match "$script_dir/native-cu132.txt"
+    --index-strategy unsafe-best-match "$requirements"
 
 if [[ ! -d "$build_dir/source" ]]; then
     git init --quiet "$build_dir/source"
@@ -84,7 +93,7 @@ build_environment=(
 )
 {
     printf 'package=%s\narchitecture=%s\nsource=%s\n' "$package" "$architecture" "$source_commit"
-    sha256sum "$0" "$script_dir/native-cu132.txt"
+    sha256sum "$0" "$requirements"
     git -C "$build_dir/source" submodule status --recursive
     "$virtual_env/bin/python" --version
     uv --version

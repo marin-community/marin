@@ -2,7 +2,9 @@
 
 A shared Cloud SQL for PostgreSQL instance, `marin-metadata`, for Marin's internal metadata:
 Grafana's state (the `grafana` database) and eval run records (the `evals` database). It also
-declares `marin-eval-metadata`, a GCS bucket for eval run records.
+declares `marin-eval-metadata`, a GCS bucket for eval run records. Its `model-feedback/` prefix
+also holds the serve dashboard's model-feedback reports from GCP workers
+(`lib/marin/src/marin/inference/model_feedback.py`).
 
 The instance has a public IP with no authorized networks, so nothing dials it directly.
 Consumers connect through the Cloud SQL connector/auth-proxy — Cloud Run mounts the socket

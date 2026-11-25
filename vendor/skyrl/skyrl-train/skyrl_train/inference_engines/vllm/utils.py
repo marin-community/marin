@@ -1,5 +1,6 @@
-import json
 import errno
+import json
+from collections.abc import Mapping
 from typing import Any, Dict, Protocol
 
 from skyrl_train.config.behavior_logprobs import (
@@ -96,19 +97,7 @@ def pop_vllm_wrapper_kwargs(engine_kwargs: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def ensure_token_ids_in_sse_chunk(sse_chunk: str) -> str:
-    """Copy per-chunk token IDs to harbor's canonical streaming location.
-
-    vLLM 0.20.2 puts delta token IDs flat on the choice at
-    ``choices[0].token_ids`` (sibling to ``delta``, gated by
-    ``return_token_ids=True``).  Harbor's ``_chunk_completion_token_ids``
-    checks ``choices[0].delta.provider_specific_fields.token_ids`` first
-    (canonical streaming path), then falls back to ``choices[0].token_ids``.
-
-    This function copies the flat field into the delta's
-    ``provider_specific_fields`` so harbor finds it on the FIRST path —
-    avoiding edge cases where the fallback misses control-token chunks
-    (empty-delta chunks that still carry token IDs).
-    """
+    """Expose vLLM's choice-level token IDs in the delta, including control-only chunks."""
     if not sse_chunk.startswith("data: "):
         return sse_chunk
     payload = sse_chunk[len("data: ") :]
@@ -134,18 +123,23 @@ def ensure_token_ids_in_sse_chunk(sse_chunk: str) -> str:
 
 
 def apply_openai_sampling(
-    body: Dict[str, Any], sampling_params: Dict[str, Any], validate_rollout_logprob_sampling: bool
-) -> None:
-    """Apply generator sampling overrides and validate training probabilities."""
-    body.update(
-        {
-            "temperature": sampling_params.get("temperature", 1.0),
-            "top_p": sampling_params.get("top_p", 1.0),
-            "top_k": sampling_params.get("top_k", -1),
-            "min_p": sampling_params.get("min_p", 0.0),
-        }
-    )
+    body: Mapping[str, Any], sampling_params: Mapping[str, Any], validate_rollout_logprob_sampling: bool
+) -> dict[str, Any]:
+    """Return a request with sampling defaults and validated training probabilities."""
+    defaults = {
+        "temperature": sampling_params.get("temperature", 1.0),
+        "top_p": sampling_params.get("top_p", 1.0),
+        "top_k": sampling_params.get("top_k", -1),
+        "min_p": sampling_params.get("min_p", 0.0),
+    }
+    resolved_body = dict(body)
+    for key, value in defaults.items():
+        if resolved_body.get(key) is None:
+            resolved_body[key] = value
     # Completion logprobs=0 requests sampled-token probabilities; False disables chat logprobs.
-    logprobs = body.get("logprobs")
+    logprobs = resolved_body.get("logprobs")
     if validate_rollout_logprob_sampling and logprobs is not None and logprobs is not False:
-        validate_behavior_logprob_sampling(body)
+        validate_behavior_logprob_sampling(resolved_body)
+        if resolved_body["temperature"] != defaults["temperature"]:
+            raise ValueError("Behavior-logprob request temperature must match the configured training temperature")
+    return resolved_body

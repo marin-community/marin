@@ -22,17 +22,81 @@ import math
 import re
 from collections import Counter
 from collections.abc import Sequence, Set
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
+from verifyit.grade import Aggregation, InvalidTask, Reward, aggregate_rewards, empty_output_policy, read_output, scored
 from verifyit.modes.extract import extract_boxed
+from verifyit.preparation.text import TextNormalization, TextPolicy, normalize_text, structure_text
 from verifyit.spec import EmptyOutputPolicy, ExactSpec
 
 ITEM_SEPARATOR = re.compile(r"[\n,]")
 MAX_DETAIL_CHARS = 400
 MAX_COLLECTION_ITEMS = 10_000
 MAX_COLLECTION_CHARS = 1_000_000
+
+
+def grade_normalized_aliases(
+    candidate: str,
+    references: Sequence[str],
+    *,
+    empty_output: EmptyOutputPolicy = EmptyOutputPolicy.GRADE,
+    normalization_policy: TextPolicy = TextPolicy.HARNESS_EXACT,
+    **options,
+) -> Reward:
+    """Normalize source text and compare aliases under an explicit empty-output policy.
+
+    ZERO rejects answers that become empty during normalization; GRADE preserves
+    source literal-empty matching. Trusted aliases are validated in either case.
+    """
+    if not isinstance(empty_output, EmptyOutputPolicy):
+        raise InvalidTask("unknown exact empty-output policy")
+    allowed = {"regexes_to_ignore", "ignore_case", "ignore_punctuation", "ignore_numbers"}
+    if unknown := options.keys() - allowed:
+        raise InvalidTask(f"unsupported exact_match options: {sorted(unknown)}")
+    prepared = normalize_text(
+        structure_text(candidate, references),
+        TextNormalization(
+            policy=normalization_policy,
+            regexes_to_ignore=tuple(options.get("regexes_to_ignore") or ()),
+            ignore_case=options.get("ignore_case", False),
+            ignore_punctuation=options.get("ignore_punctuation", False),
+            ignore_numbers=options.get("ignore_numbers", False),
+        ),
+    )
+    value = prepared.candidate
+    normalized_references = prepared.references
+    results = [
+        grade_exact_candidate(
+            ExactSpec(
+                (reference,),
+                ignore_case=False,
+                ignore_whitespace=False,
+                strip_outer_whitespace=False,
+                empty_output=empty_output,
+            ),
+            value,
+        )
+        for reference in normalized_references
+    ]
+    verdict = aggregate_rewards(results, expected_total=len(normalized_references), policy=Aggregation.MAX)
+    return replace(
+        verdict,
+        detail={**verdict.detail, "preparation": {**asdict(prepared.normalization), "empty_output": empty_output}},
+    )
+
+
+def grade_literal_candidate(expected: str, candidate: str) -> Reward:
+    """Compare strings without case or whitespace normalization, including empty strings."""
+    spec = ExactSpec(
+        expected=(expected,),
+        ignore_case=False,
+        ignore_whitespace=False,
+        strip_outer_whitespace=False,
+        empty_output=EmptyOutputPolicy.GRADE,
+    )
+    return grade_exact_candidate(spec, candidate)
 
 
 def _normalize(text: str, spec: ExactSpec) -> str:
@@ -202,41 +266,6 @@ def grade_collection_subset(
     if candidate_count and overlap == candidate_count:
         reward = 1.0 if candidate_count == reference_count else item_credit * candidate_count
     return scored(reward, overlap=overlap, reference_count=reference_count, candidate_count=candidate_count)
-
-
-def grade_collection_precision_interval(
-    reference: Sequence[str] | Set[str],
-    candidate: Sequence[str] | Set[str],
-    *,
-    minimum_percent: float,
-    maximum_percent: float,
-    multiplicity: Literal["set", "multiset"],
-    empty_reference: Literal["zero", "invalid"],
-) -> Reward:
-    """Accept prepared-item precision within inclusive percentage bounds.
-
-    Empty or malformed candidates always score zero, including intervals containing
-    zero. A valid nonempty disjoint candidate has zero precision and can be accepted.
-    """
-    bounds = (minimum_percent, maximum_percent)
-    if (
-        any(type(bound) not in (int, float) or not -math.inf < bound < math.inf for bound in bounds)
-        or minimum_percent > maximum_percent
-    ):
-        raise InvalidTask("precision interval requires finite ordered bounds")
-    counts = _collection_overlap(reference, candidate, multiplicity, empty_reference)
-    if isinstance(counts, Reward):
-        return counts
-    if not counts.candidate_count:
-        return scored(0.0, reason="empty_output")
-    precision_percent = counts.overlap / counts.candidate_count * 100
-    return scored(
-        float(minimum_percent <= precision_percent <= maximum_percent),
-        precision_percent=precision_percent,
-        overlap=counts.overlap,
-        reference_count=counts.reference_count,
-        candidate_count=counts.candidate_count,
-    )
 
 
 def grade(spec: ExactSpec, tests_dir: Path, workspace: Path) -> Reward:

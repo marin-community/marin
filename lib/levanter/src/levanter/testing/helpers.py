@@ -115,6 +115,16 @@ def arrays_only(x):
     return eqx.filter(x, eqx.is_array_like)
 
 
+def assert_grads_finite_and_nonzero(grads) -> None:
+    """Assert every floating-point gradient leaf is finite and has at least one nonzero entry."""
+    grad_leaves = jax.tree_util.tree_leaves_with_path(eqx.filter(grads, eqx.is_inexact_array))
+    assert grad_leaves, "gradient tree has no floating-point leaves"
+    for path, leaf in grad_leaves:
+        name = jax.tree_util.keystr(path)
+        assert np.all(np.isfinite(leaf)), f"non-finite gradient for {name}"
+        assert np.any(leaf != 0), f"all-zero gradient for {name}"
+
+
 def has_torch():
     try:
         import torch  # noqa F401

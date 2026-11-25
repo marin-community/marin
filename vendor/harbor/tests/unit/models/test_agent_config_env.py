@@ -3,7 +3,8 @@ import json
 import pytest
 
 from harbor.models.trial.config import AgentConfig, TrialConfig
-from harbor.models.job.config import JobConfig, RetryConfig
+from harbor.models.job.config import JobConfig
+from rigging.task_errors import RetrySettings
 from harbor.models.job.lock import JobLock, TaskLock, TrialLock
 from harbor.models.trial.config import EnvironmentConfig, VerifierConfig
 
@@ -85,7 +86,7 @@ class TestAgentConfigEnvSerialization:
         ],
         ids=["direct", "federated"],
     )
-    def test_capability_url_survives_job_config_and_lock_round_trip(
+    def test_capability_url_is_redacted_in_persisted_config_and_lock(
         self, tmp_path, endpoint
     ):
         agent = AgentConfig(
@@ -98,7 +99,7 @@ class TestAgentConfigEnvSerialization:
         config_json = JobConfig(agents=[agent]).model_dump_json()
         lock_json = JobLock(
             n_concurrent_trials=1,
-            retry=RetryConfig(),
+            retry=RetrySettings(),
             trials=[
                 TrialLock(
                     task=TaskLock(
@@ -117,10 +118,14 @@ class TestAgentConfigEnvSerialization:
         restored_config = JobConfig.model_validate_json(config_json)
         restored_lock = JobLock.model_validate_json(lock_json)
 
-        assert restored_config.agents[0].kwargs["api_base"] == endpoint
-        assert restored_config.agents[0].env["HARBOR_PI_API_BASE"] == endpoint
-        assert restored_lock.trials[0].agent.kwargs["api_base"] == endpoint
-        assert restored_lock.trials[0].agent.env["HARBOR_PI_API_BASE"] == endpoint
+        redacted = endpoint.replace("scoped-token", "<redacted>")
+        assert "scoped-token" not in config_json + lock_json
+        assert restored_config.agents[0].kwargs["api_base"] == redacted
+        assert restored_config.agents[0].env["HARBOR_PI_API_BASE"] == redacted
+        assert restored_lock.trials[0].agent.kwargs["api_base"] == redacted
+        assert restored_lock.trials[0].agent.env["HARBOR_PI_API_BASE"] == redacted
+        assert agent.kwargs["api_base"] == endpoint
+        assert agent.env["HARBOR_PI_API_BASE"] == endpoint
 
     def test_existing_template_preserved_even_without_host_env(self, monkeypatch):
         monkeypatch.delenv("CUSTOM_SOURCE_VAR", raising=False)

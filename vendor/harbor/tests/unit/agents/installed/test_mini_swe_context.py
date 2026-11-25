@@ -11,9 +11,74 @@ from harbor.environments.base import ExecResult
 from harbor.literal.proxy import LITERAL_LOG_FILENAME
 from harbor.models.agent.context import AgentContext
 from minisweagent.run.mini import app
+from openai import OpenAI
 from openai.resources.chat.completions import Completions
 from openai.types.chat import ChatCompletion
 from typer.testing import CliRunner
+
+
+def test_openai_adapter_accepts_litellm_drop_params_option(monkeypatch):
+    _compacting_model_class(monkeypatch)
+    module = importlib.import_module("mini_swe_model")
+    requests = []
+
+    def completion(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_tool_response().model_dump())
+
+    def client(**kwargs):
+        return OpenAI(
+            http_client=httpx.Client(transport=httpx.MockTransport(completion)),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(module, "OpenAI", client)
+    model = module.OpenAIModel(
+        model_name="hosted_vllm/served-model",
+        api_base="http://model/v1",
+        cost_tracking="ignore_errors",
+        model_kwargs={"drop_params": True, "temperature": 0.25, "max_tokens": 16},
+    )
+    model.query([{"role": "user", "content": "Run echo ready"}])
+    [request] = requests
+    assert request["model"] == "served-model"
+    assert request["temperature"] == 0.25
+    assert request["max_tokens"] == 16
+    assert "drop_params" not in request
+
+
+def test_context_limited_model_retries_unrelated_bad_request(monkeypatch):
+    _compacting_model_class(monkeypatch)
+    module = importlib.import_module("mini_swe_model")
+    responses = iter(
+        (
+            httpx.Response(
+                400,
+                json={"error": {"message": "Context limit reached", "type": "invalid_request_error"}},
+            ),
+            httpx.Response(200, json=_tool_response().model_dump()),
+        )
+    )
+
+    def transport(request):
+        if request.url.path == "/tokenize":
+            return httpx.Response(200, json={"count": 128, "max_model_len": 32768})
+        return next(responses)
+
+    monkeypatch.setattr(
+        httpx.Client, "_transport_for_url", lambda self, url: httpx.MockTransport(transport)
+    )
+    # Exercise normal retry handling without its wall-clock backoff.
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda _: None)
+    model = module.ContextLimitedModel(
+        model_name="hosted_vllm/served-model",
+        api_base="http://model/v1",
+        context_window=32768,
+        max_output_tokens=768,
+        cost_tracking="ignore_errors",
+    )
+    result = model.query([{"role": "user", "content": "Run echo next"}])
+    assert [action["command"] for action in result["extra"]["actions"]] == ["echo next"]
 
 
 def _compacting_model_class(monkeypatch):
@@ -282,14 +347,33 @@ def test_compaction_falls_back_to_bounded_excerpt_when_summary_fails(monkeypatch
         "model_format",
         "max_turns",
         "summarization_threshold_chars",
+        "server_rejection",
     ),
     [
-        (32000, 65536, 16384, 768, True, "openai", None, 256),
-        (16000, 16384, 16384, 384, True, "openai", None, None),
-        (32000, 65536, 128, 128, True, "openai", None, None),
-        (32000, 65536, 16384, 768, False, "openai", None, None),
-        (32000, 65536, 16384, 768, True, "k2_horizon", None, None),
-        (32000, 65536, 16384, 768, True, "openai", 1, None),
+        (32000, 65536, 16384, 768, True, "openai", None, 256, None),
+        (16000, 16384, 16384, 384, True, "openai", None, None, None),
+        (32000, 65536, 128, 128, True, "openai", None, None, None),
+        (32000, 65536, 16384, 768, False, "openai", None, None, None),
+        (32000, 65536, 16384, 768, True, "k2_horizon", None, None, None),
+        (32000, 65536, 16384, 768, True, "openai", 1, None, None),
+        pytest.param(
+            32000, 65536, 16384, 768, True, "openai", None, None,
+            ({"type": "context_length_exceeded", "code": 400}, "ContextLimit"),
+            id="server-type",
+        ),
+        pytest.param(
+            32000, 65536, 16384, 768, True, "openai", None, None,
+            ({"type": "invalid_request_error", "code": "context_length_exceeded"}, "ContextLimit"),
+            id="relay-code",
+        ),
+        pytest.param(
+            32000, 65536, 16384, 768, True, "openai", None, None,
+            (
+                {"type": "generation_stopped", "code": 400, "message": "Generation stopped: budget_reached"},
+                "LimitsExceeded",
+            ),
+            id="engine-budget",
+        ),
     ],
 )
 async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
@@ -303,36 +387,23 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     model_format,
     max_turns,
     summarization_threshold_chars,
+    server_rejection,
 ):
     root = Path(__file__).parents[4] / "src" / "harbor"
     monkeypatch.syspath_prepend(str(root / "agents" / "installed"))
     monkeypatch.syspath_prepend(str(root / "llms"))
+    server_error, expected_status = server_rejection or (
+        None, "LimitsExceeded" if max_turns is not None else "ContextLimit"
+    )
     counts_sequence = [prompt_tokens]
     if summarization_threshold_chars is not None:
         counts_sequence.append(128)
     if max_turns is None:
-        counts_sequence.append(min(32768, server_context))
+        counts_sequence.append(prompt_tokens if server_error else min(32768, server_context))
     counts = iter(counts_sequence)
     tokenized = []
     tokenization_trial_ids = []
     completions = []
-
-    def tokenizer(request):
-        assert str(request.url) == "http://model/tokenize"
-        tokenized.append(json.loads(request.content))
-        tokenization_trial_ids.append(request.headers.get("x-ot-trial-id"))
-        return httpx.Response(
-            200, json={"count": next(counts), "max_model_len": server_context}
-        )
-
-    client_type = httpx.Client
-    monkeypatch.setattr(
-        httpx,
-        "Client",
-        lambda **kwargs: client_type(
-            transport=httpx.MockTransport(tokenizer), **kwargs
-        ),
-    )
 
     def completion(**kwargs):
         completions.append(kwargs)
@@ -382,8 +453,27 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
             },
         )
 
+    def transport(request):
+        payload = json.loads(request.content)
+        if request.url.path == "/tokenize":
+            tokenized.append(payload)
+            tokenization_trial_ids.append(request.headers.get("x-ot-trial-id"))
+            return httpx.Response(
+                200, json={"count": next(counts), "max_model_len": server_context}
+            )
+        assert request.url.path == "/v1/chat/completions"
+        if server_error and completions:
+            return httpx.Response(
+                400,
+                json={"error": {"message": "Context limit reached", **server_error}},
+            )
+        assert "drop_params" not in payload
+        # Keep the real SDK signature and serialization in the tested path.
+        payload["extra_headers"] = dict(request.headers)
+        return httpx.Response(200, json=completion(**payload).model_dump())
+
     monkeypatch.setattr(
-        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+        httpx.Client, "_transport_for_url", lambda self, url: httpx.MockTransport(transport)
     )
     config = tmp_path / "custom.yaml"
     config.write_text(
@@ -431,7 +521,6 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
     agent.populate_context_post_run(context)
 
     saved = json.loads(trajectory.read_text())
-    expected_status = "LimitsExceeded" if max_turns is not None else "ContextLimit"
     assert saved["info"]["exit_status"] == expected_status
     assert saved["messages"][-1]["extra"]["exit_status"] == expected_status
     assistant = next(
@@ -462,6 +551,8 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
             "logprobs": [[-0.2, -0.3]],
         }
     ]
+    if server_error:
+        assert (context.n_input_tokens, context.n_output_tokens) == (prompt_tokens, expected)
     if custom_config:
         assert agent_completions[0]["temperature"] == 0.25
     assert tokenized[0]["messages"] == agent_completions[0]["messages"]

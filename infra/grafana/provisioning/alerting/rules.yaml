@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Critical rules notify operators immediately. Warning rules remain visible in
-# Grafana without sending notifications. The k8s rules read the bridge's
-# /k8s/alerts/* endpoints, which return string label columns plus exactly one
+# Grafana without sending notifications unless explicitly routed. The k8s rules
+# read the bridge's /k8s/alerts/* endpoints, which return string label columns plus exactly one
 # numeric column. Most also always emit at least one row per cluster (explicit
 # zeros when healthy), making their NoData state unreachable by construction;
 # gpu_rack_trays is the exception. Every rule sets execErrState to Alerting so
@@ -21,6 +21,84 @@ deleteRules:
     uid: infra-probe-failed
 
 groups:
+  - orgId: 1
+    name: node-filesystems
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: node-runtime-filesystem-full
+        title: NodeRuntimeFilesystemAlmostFull
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.node }} filesystem {{ $labels.mountpoint }} has less than 5% free space"
+          description: >-
+            A full root or temporary filesystem prevents container runtime execs even
+            when the task-cache disk has space. Inspect filesystem usage and /var/log/runsc.
+            This rule requires the node-agent filesystem gauges; absent or stale samples
+            do not establish disk pressure. Finelog fleet and relay alerts cover query outages.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#coreweave-root-filesystem-full
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH ranked AS (
+                        SELECT cluster, node_name,
+                               json_get(attributes_json, 'node_uid') AS node_uid,
+                               json_get(attributes_json, 'mountpoint') AS mountpoint,
+                               name, value,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY cluster, node_name,
+                                              json_get(attributes_json, 'node_uid'),
+                                              json_get(attributes_json, 'mountpoint'), name
+                                 ORDER BY timestamp_ms DESC, seq DESC
+                               ) AS rank
+                        FROM "telemetry_v1.node_agent"
+                        WHERE service = 'iris-node-agent'
+                          AND name IN ('node_filesystem_available_bytes', 'node_filesystem_total_bytes')
+                          AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '5 minutes') * 1000 AS BIGINT)
+                          AND json_get(attributes_json, 'mountpoint') IN ('/', '/tmp')
+                      )
+                      SELECT cluster, node_name AS node, node_uid, mountpoint,
+                             MAX(CASE WHEN name = 'node_filesystem_available_bytes' THEN value END)
+                               / NULLIF(MAX(CASE WHEN name = 'node_filesystem_total_bytes' THEN value END), 0) AS value
+                      FROM ranked
+                      WHERE rank = 1
+                      GROUP BY cluster, node_name, node_uid, mountpoint
+                      HAVING COUNT(*) = 2
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: node_uid, text: node_uid, type: string }
+                - { selector: mountpoint, text: mountpoint, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [0.05] }
+
   - orgId: 1
     name: k8s-control-plane
     folder: Alerts
@@ -341,6 +419,85 @@ groups:
               conditions:
                 - evaluator: { type: lt, params: [16] }
 
+  # The bridge decides idleness (b200_utilization_alert.py) and reports it as
+  # value 0|1. A, B and D read one endpoint and keep the same labels so that
+  # $values can join them; B and D only feed the summary.
+  - orgId: 1
+    name: b200-capacity
+    folder: Alerts
+    interval: 5m
+    rules:
+      - uid: b200-cluster-underutilized
+        title: B200ClusterUnderutilized
+        condition: C
+        for: 30m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $values.B.Value }}% of {{ $values.D.Value }} Ready B200 GPUs active"
+          dashboard_url: "https://grafana.oa.dev/d/marin-accel?var-cluster={{ $labels.cluster }}"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: B
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: B
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: active_percent, text: value, type: number }
+          - refId: D
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: D
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: ready_gpus, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The marin datasource combines a query-path probe of the GCE hub with the
   # HTTP-readiness state of each CoreWeave finelog Deployment. K8s marks a pod
   # NotReady when /health misses its fifteen-second deadline; the hub reports its
@@ -449,11 +606,11 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.region }}: CoreWeave storage quota exceeded"
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage quota exceeded"
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
         data:
           - refId: A
-            relativeTimeRange: { from: 129600, to: 0 }
+            relativeTimeRange: { from: 302400, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -467,38 +624,160 @@ groups:
                 method: GET
                 params:
                   - key: sql
-                    value: >-
-                      WITH latest_collection AS (
-                        SELECT MAX(collected_at) AS collected_at
+                    value: &coreweave-storage-pressure-sql >-
+                      WITH ranked AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY collected_at, metric, zone, bucket, storage_class
+                          ORDER BY seq DESC
+                        ) AS sample_rank
                         FROM "storage.usage"
                         WHERE provider = 'coreweave'
-                      ), latest AS (
-                        SELECT metric, zone, storage_class, value_bytes
-                        FROM "storage.usage" AS samples
-                        JOIN latest_collection
-                          ON samples.collected_at = latest_collection.collected_at
-                        WHERE provider = 'coreweave'
                           AND metric IN ('used_bytes', 'quota_bytes')
-                      ), usage AS (
-                        SELECT zone, storage_class, SUM(value_bytes) AS usage_bytes
+                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '84 hours'
+                          AND collected_at <= CURRENT_TIMESTAMP
+                      ), snapshots AS (
+                        SELECT collected_at, zone, storage_class,
+                               SUM(value_bytes) FILTER (WHERE metric = 'used_bytes') AS usage_bytes,
+                               MAX(value_bytes) FILTER (WHERE metric = 'quota_bytes') AS quota_bytes,
+                               MIN(observed_at) FILTER (WHERE metric = 'used_bytes') AS observed_at
+                        FROM ranked WHERE sample_rank = 1
+                        GROUP BY collected_at, zone, storage_class
+                      ), observations AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY zone, storage_class, observed_at ORDER BY collected_at DESC
+                        ) AS observation_rank
+                        FROM snapshots
+                      ), history AS (
+                        SELECT * FROM observations
+                        WHERE observation_rank = 1 AND usage_bytes IS NOT NULL
+                      ), latest AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY zone, storage_class ORDER BY collected_at DESC
+                        ) AS collection_rank
+                        FROM history
+                      ), trends AS (
+                        SELECT latest.zone, latest.storage_class, latest.usage_bytes, latest.quota_bytes,
+                               latest.observed_at,
+                               CASE WHEN COUNT(*) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) >= 3 AND latest.observed_at - MIN(history.observed_at) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) >= INTERVAL '8 hours'
+                               THEN REGR_SLOPE(history.usage_bytes, EXTRACT(EPOCH FROM history.observed_at)) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) ELSE 0 END AS short_rate,
+                               CASE WHEN COUNT(*) >= 6
+                                 AND latest.observed_at - MIN(history.observed_at) >= INTERVAL '24 hours'
+                               THEN REGR_SLOPE(history.usage_bytes, EXTRACT(EPOCH FROM history.observed_at))
+                               ELSE 0 END AS daily_rate
                         FROM latest
-                        WHERE metric = 'used_bytes'
-                        GROUP BY zone, storage_class
-                      ), quota AS (
-                        SELECT zone, storage_class, MAX(value_bytes) AS quota_bytes
-                        FROM latest
-                        WHERE metric = 'quota_bytes'
-                        GROUP BY zone, storage_class
+                        JOIN history ON history.zone = latest.zone
+                          AND history.storage_class = latest.storage_class
+                          AND history.observed_at >= latest.observed_at - INTERVAL '72 hours'
+                          AND history.observed_at <= latest.observed_at
+                        WHERE latest.collection_rank = 1 AND latest.quota_bytes > 0
+                          AND latest.collected_at >= CURRENT_TIMESTAMP - INTERVAL '12 hours'
+                          AND latest.observed_at >= CURRENT_TIMESTAMP - INTERVAL '12 hours'
+                        GROUP BY latest.zone, latest.storage_class, latest.usage_bytes,
+                                 latest.quota_bytes, latest.observed_at
                       )
-                      SELECT usage.zone AS region,
-                             usage.usage_bytes / NULLIF(quota.quota_bytes, 0) AS value
-                      FROM usage
-                      JOIN quota
-                        ON quota.zone = usage.zone
-                       AND quota.storage_class = usage.storage_class
+                      SELECT zone AS region, storage_class,
+                             usage_bytes / quota_bytes AS current_value,
+                             (usage_bytes + GREATEST(0, short_rate, daily_rate) * (86400 +
+                               GREATEST(0, EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) - EXTRACT(EPOCH FROM observed_at))
+                             )) / quota_bytes AS value
+                      FROM trends
               columns:
                 - { selector: region, text: region, type: string }
+                - { selector: storage_class, text: storage_class, type: string }
+                - { selector: current_value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1.0] }
+
+      - uid: coreweave-storage-headroom
+        title: CoreWeaveStorageHeadroomLow
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: storage-daily
+          operator_behavior: storage
+        annotations:
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage projected at {{ humanizePercentage $values.A.Value }} of quota"
+          description: >-
+            Projected quota use in 24 hours is {{ humanizePercentage $values.A.Value }}
+            if recent growth continues, with current usage as a floor.
+            Review the Storage dashboard and arrange cleanup or move new writes
+            before the end of the working day. This warning is delivered daily
+            between 15:00 and 16:00 America/Los_Angeles.
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md#coreweave-storage-telemetry
+          related_url: https://cw-s3.oa.dev/?v=time
+          related_label: Size & growth
+          __dashboardUid__: marin-storage
+          __panelId__: "2"
+        data:
+          - &coreweave-storage-pressure-query
+            refId: A
+            relativeTimeRange: { from: 302400, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: *coreweave-storage-pressure-sql
+              columns:
+                - { selector: region, text: region, type: string }
+                - { selector: storage_class, text: storage_class, type: string }
                 - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.8] }
+
+      - uid: coreweave-storage-growth
+        title: CoreWeaveStorageQuotaPredicted
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage may exhaust quota within 24 hours"
+          description: >-
+            Projected quota use in 24 hours is {{ humanizePercentage $values.A.Value }}
+            if recent growth continues. The projection uses the faster positive
+            linear trend over 24 or 72 hours and the current live quota. Review
+            growth and arrange cleanup or move new writes while people are available.
+            Collection gaps and changing write rates limit forecast accuracy.
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md#coreweave-storage-telemetry
+          __dashboardUid__: marin-storage
+          __panelId__: "2"
+        data:
+          - *coreweave-storage-pressure-query
           - refId: C
             datasourceUid: __expr__
             model:
@@ -519,11 +798,11 @@ groups:
           severity: warning
           notification: slack
         annotations:
-          summary: "CoreWeave storage telemetry has not been collected in 24 hours"
+          summary: "CoreWeave storage telemetry has not been collected in 12 hours"
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
         data:
           - refId: A
-            relativeTimeRange: { from: 86400, to: 0 }
+            relativeTimeRange: { from: 43200, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -545,7 +824,7 @@ groups:
                       )
                       SELECT 1 AS value
                       FROM latest
-                      WHERE latest_collected_at < CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                      WHERE latest_collected_at < CURRENT_TIMESTAMP - INTERVAL '12 hours'
               columns:
                 - { selector: value, text: value, type: number }
           - refId: C

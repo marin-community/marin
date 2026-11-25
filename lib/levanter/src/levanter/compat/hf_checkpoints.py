@@ -15,6 +15,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
@@ -39,7 +40,7 @@ from haliax.jax_utils import is_jax_array_like, sync_global_devices
 from haliax.partitioning import ResourceMapping
 from haliax.state_dict import StateDict, from_torch_compatible_state_dict
 from huggingface_hub import HfApi, ModelInfo, hf_hub_download, repo_exists, snapshot_download
-from huggingface_hub.errors import HfHubHTTPError
+from huggingface_hub.errors import HfHubHTTPError, RemoteEntryNotFoundError
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
@@ -49,11 +50,20 @@ from jaxtyping import Array, PRNGKeyArray
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.fsutil.verified_copy import COMPLETION_MANIFEST
 from tqdm_loggable.auto import tqdm
 
+from levanter.model_cache import DEFAULT_COMPLETE_MARKER
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
 from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
+from levanter.compat.hf_generation_config import (
+    GENERATION_CONFIG_FILENAME,
+    GenerationConfigDict,
+    export_generation_config,
+    write_generation_config,
+)
+from levanter.field_dtype_overrides import FieldDtypes, cast_with_field_dtypes, sorted_field_dtypes
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -102,7 +112,7 @@ def _convert_to_hf_url(model_id: str, revision: Optional[str] = None) -> str:
     return f"hf://{model_id}"
 
 
-def _is_hf_model_id(path: str) -> bool:
+def is_hf_model_id(path: str) -> bool:
     """Check if a path looks like a HuggingFace model ID (not a URL or local path)."""
     # If it contains "://", it's already a URL
     if "://" in path:
@@ -122,31 +132,19 @@ SAFE_TENSORS_MODEL = "model.safetensors"
 PYTORCH_WEIGHTS_INDEX_NAME = "pytorch_model.bin.index.json"
 SAFE_TENSORS_INDEX_NAME = "model.safetensors.index.json"
 
-GenerationConfigDict = dict[str, int | list[int]]
-
 
 def build_generation_config(
     tokenizer: "PreTrainedTokenizerBase",
     eos_token_ids: list[int] | None,
 ) -> GenerationConfigDict | None:
-    """Build a validated generation_config dict from explicit EOS token IDs.
-
-    The returned dict is suitable for writing as ``generation_config.json``
-    alongside an HF checkpoint.  It tells inference tools like vLLM which
-    tokens should stop generation (e.g. both ``<|end_of_text|>`` and
-    ``<|eot_id|>`` for chat models).
-
-    Normalization guarantees:
-    - Output ``eos_token_id`` is always sorted and deduplicated.
-    - The tokenizer's own ``eos_token_id`` is auto-added if not already present.
+    """Return a validated generation-config override for explicit EOS token IDs.
 
     Args:
         tokenizer: The tokenizer that will be saved with the checkpoint.
         eos_token_ids: Explicit list of EOS token IDs, or ``None`` to skip.
 
     Returns:
-        A config dict ready for JSON serialization, or ``None`` if
-        *eos_token_ids* is ``None``.
+        A config override, or ``None`` if *eos_token_ids* is ``None``.
 
     Raises:
         ValueError: If the list is empty, contains non-ints, or contains
@@ -165,19 +163,7 @@ def build_generation_config(
         if not (0 <= tid < vocab_size):
             raise ValueError(f"Token ID {tid} out of range [0, {vocab_size})")
 
-    ids = set(eos_token_ids)
-
-    tok_eos = tokenizer.eos_token_id
-    if tok_eos is None:
-        logger.warning("Tokenizer has no eos_token_id; generation config will use only the provided IDs")
-    elif tok_eos not in ids:
-        logger.info("Auto-adding tokenizer eos_token_id=%d to generation config", tok_eos)
-        ids.add(tok_eos)
-
-    gen_config: GenerationConfigDict = {"eos_token_id": sorted(ids)}
-    if tokenizer.bos_token_id is not None:
-        gen_config["bos_token_id"] = tokenizer.bos_token_id
-    return gen_config
+    return {"eos_token_id": sorted(set(eos_token_ids))}
 
 
 def _coerce_to_hf_tokenizer(tokenizer: PreTrainedTokenizerBase | MarinTokenizer) -> PreTrainedTokenizerBase:
@@ -487,12 +473,18 @@ def _load_safetensor_shards(
 # but it means we get to benefit from dead code elimination and other goodness
 @eqx.filter_jit
 def _to_state_dict_with_dtype(
-    model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None
+    model: ModelWithHfSerializationMixin,
+    dtype,
+    subset: tuple[str, ...] | None,
+    field_dtypes: FieldDtypes = (),
 ) -> StateDict:
     """
     Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
-    and optionally subsetting to a given set of keys.
+    and optionally subsetting to a given set of keys. Fields in ``field_dtypes`` are exported in their own dtype.
     """
+    if field_dtypes:
+        model = cast_with_field_dtypes(model, dtype, field_dtypes)
+        dtype = None
     # We don't want to directly use to_torch_compatible_state_dict because it will convert everything to numpy.
     # we don't want to do that here because we want to keep things as jax arrays so we can eval_shape and control
     # sharding
@@ -805,7 +797,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             return self._load_from_remote(id, dtype)
 
         # Convert HF model IDs to hf:// URLs and stream directly
-        if _is_hf_model_id(id):
+        if is_hf_model_id(id):
             hf_url = _convert_to_hf_url(id, rev)
             logger.info(f"Loading from HuggingFace Hub: {hf_url}")
             return self._load_from_remote(hf_url, dtype)
@@ -1038,7 +1030,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # The reference config could not be read: the repo is gated, or the Hub is unreachable
             # (HF outage, or HF_HUB_OFFLINE in CI). Every HF/transformers "can't fetch" error is an
             # OSError subclass. We can still save: `to_hf_config()` already produced a complete config,
-            # so an HF outage never blocks a save. Record `architectures` from the model type (torch-free)
+            # so an HF outage never blocks model config construction. Record `architectures` from the model type (torch-free)
             # so the checkpoint stays loadable.
             warnings.warn(
                 f"Could not load reference HF config from {self.reference_checkpoint!r} ({type(e).__name__});"
@@ -1092,7 +1084,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
         save_feature_extractor: bool = False,
         dtype: Optional[jnp.dtype] = None,
         generation_config: Optional[GenerationConfigDict] = None,
+        generation_config_defaults: Mapping[str, Any] | None = None,
         chat_template: Optional[str] = None,
+        field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1112,8 +1106,15 @@ class HFCheckpointConverter(Generic[LevConfig]):
         This is useful when using custom architectures, as it will allow the model to be loaded without the custom
         architecture code being present (using trust_remote_code=True). "Code" here means anything not stored in LFS.
         If None, will save code for models that aren't in the HF repo.
+        :param generation_config: explicit generation settings. Otherwise, preserves fields from
+        the pinned reference checkpoint's generation config, when present. With a tokenizer, the
+        export adds inferred turn stops.
+        :param generation_config_defaults: caller policy for generation fields missing from the explicit or
+        preserved generation config.
         :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
         (written to both tokenizer_config.json and chat_template.jinja)
+        :param field_dtype_overrides: model attribute name (matched at any depth) to the dtype it is exported in,
+            regardless of dtype
         :param export_host_budget_bytes: target for in-flight host arrays and safetensors serialization buffers.
             Each shard reserves twice its payload size; a shard larger than the target runs alone.
         :param max_concurrent_shards: maximum number of shard writers and uploads on process 0.
@@ -1146,7 +1147,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         else:
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
-        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None)
+        overridden = sorted_field_dtypes(field_dtype_overrides)
+        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None, overridden)
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
@@ -1217,7 +1219,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         save_hf_shards(
             shards,
-            lambda keys: _to_state_dict_with_dtype(model, dtype, keys),
+            lambda keys: _to_state_dict_with_dtype(model, dtype, keys, overridden),
             path,
             export_host_budget_bytes=export_host_budget_bytes,
             max_concurrent_shards=max_concurrent_shards,
@@ -1253,12 +1255,26 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 with open(os.path.join(local_path, "config.json"), "w") as f:
                     json.dump(dict_config, f)
 
-                if generation_config is not None:
-                    logger.info(
-                        "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
+                preserved_generation_config = generation_config
+                if preserved_generation_config is None:
+                    preserved_generation_config = self._load_reference_generation_config()
+                if self.tokenizer is None:
+                    if preserved_generation_config is None:
+                        logger.warning(
+                            "No tokenizer or reference generation config; not writing %s", GENERATION_CONFIG_FILENAME
+                        )
+                    else:
+                        write_generation_config(local_path, preserved_generation_config)
+                else:
+                    shipped_template = chat_template if chat_template is not None else self.tokenizer.chat_template
+                    completed = export_generation_config(
+                        self.tokenizer,
+                        chat_template=shipped_template,
+                        explicit=preserved_generation_config,
+                        sampling_defaults=generation_config_defaults,
                     )
-                    with open(os.path.join(local_path, "generation_config.json"), "w") as f:
-                        json.dump(generation_config, f)
+                    logger.info("Writing %s: %s", GENERATION_CONFIG_FILENAME, completed)
+                    write_generation_config(local_path, completed)
 
                 if index is not None:
                     with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
@@ -1277,6 +1293,28 @@ class HFCheckpointConverter(Generic[LevConfig]):
         run_on_export_writer(save_metadata)
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
+
+    def _load_reference_generation_config(self) -> GenerationConfigDict | None:
+        if self.reference_checkpoint is None:
+            return None
+        repo, revision = self._get_ref(self.reference_checkpoint)
+        if _is_url_like(repo) or os.path.isdir(repo):
+            source = StoragePath(repo) / "generation_config.json"
+            try:
+                contents = source.read_bytes()
+            except FileNotFoundError:
+                return None
+        else:
+            try:
+                source_path = hf_hub_download(repo_id=repo, filename="generation_config.json", revision=revision)
+            except RemoteEntryNotFoundError:
+                return None
+            with open(source_path, "rb") as source_file:
+                contents = source_file.read()
+        config = json.loads(contents)
+        if not isinstance(config, dict):
+            raise ValueError(f"Reference generation config must be a JSON object: {self.reference_checkpoint}")
+        return config
 
     def _save_code_local(self, path):
         if self.reference_checkpoint is None:
@@ -1344,6 +1382,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 "pytorch_model.bin",
                 "pytorch_model-*.bin",
                 "pytorch_model.bin.index.json",
+                COMPLETION_MANIFEST,
+                DEFAULT_COMPLETE_MARKER,
             ]
         )
         if _is_url_like(repo):
@@ -1390,7 +1430,9 @@ def save_hf_checkpoint_callback(
     upload_to_hf: Union[bool, str, RepoRef] = False,
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
+    generation_config_defaults: Mapping[str, Any] | None = None,
     chat_template: Optional[str] = None,
+    field_dtype_overrides: Mapping[str, jnp.dtype] | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1402,6 +1444,7 @@ def save_hf_checkpoint_callback(
     :param upload_to_hf:
     :param chat_template: if given, overrides the tokenizer's chat template in the exported checkpoint
     (written to both tokenizer_config.json and chat_template.jinja)
+    :param field_dtype_overrides: model attribute name to the dtype it is exported in, regardless of save_dtype
     :param hf_upload_kwargs:
     :return:
     """
@@ -1421,7 +1464,9 @@ def save_hf_checkpoint_callback(
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=generation_config,
+            generation_config_defaults=generation_config_defaults,
             chat_template=chat_template,
+            field_dtype_overrides=field_dtype_overrides,
             **my_upload_kwargs,
         )
 

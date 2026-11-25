@@ -45,6 +45,7 @@ def _key_segments(key: str) -> tuple[str, ...]:
 # treats what follows as a path relative to the local prefix, so ``mirror://a/b`` must
 # parse to an empty authority with key ``a/b`` — matching ``parse("mirror://") / "a/b"``.
 _EMPTY_AUTHORITY_SCHEMES: frozenset[str] = frozenset({"mirror"})
+_GCS_SCHEME = "gs"
 
 
 def _parse_parts(value: str) -> tuple[str | None, str, tuple[str, ...], bool]:
@@ -133,14 +134,18 @@ class StoragePath:
             raise ValueError(f"cannot join non-relative path {relative!r} onto {self}")
         return dataclasses.replace(self, segments=self.segments + _key_segments(relative))
 
+    def is_relative_to(self, base: "StoragePath") -> bool:
+        """Return whether this path is under ``base``, including ``base`` itself."""
+        same_root = (self.scheme, self.netloc, self.rooted) == (base.scheme, base.netloc, base.rooted)
+        return same_root and self.segments[: len(base.segments)] == base.segments
+
     def relative_to(self, base: "StoragePath") -> str:
         """The ``/``-joined segments of this path under ``base``.
 
         Structural containment — compares parsed segments, not string prefixes, so a
         doubled separator on either side cannot fork the answer.
         """
-        same_root = (self.scheme, self.netloc, self.rooted) == (base.scheme, base.netloc, base.rooted)
-        if not same_root or self.segments[: len(base.segments)] != base.segments:
+        if not self.is_relative_to(base):
             raise ValueError(f"{self} is not under {base}")
         return "/".join(self.segments[len(base.segments) :])
 
@@ -211,6 +216,29 @@ class StoragePath:
     def mtime(self) -> datetime:
         fs, path = _url_to_fs(str(self))
         return fs.modified(path)
+
+    def refresh_lifetime(self, *, before: datetime | None) -> None:
+        """Refresh an existing file's lifetime when its age timestamp precedes ``before``.
+
+        GCS lifecycle age uses creation time; S3 and local files use modification time.
+        Remote refreshes copy bytes server-side. S3 object metadata is replaced.
+        ``before=None`` only checks existence. Missing files and storage errors propagate.
+        """
+        fs, path = _url_to_fs(str(self))
+        fs.invalidate_cache(path)
+        timestamp = fs.created(path) if self.scheme == _GCS_SCHEME else fs.modified(path)
+        if before is None or timestamp >= before:
+            return
+        if self.is_local:
+            fs.touch(path, truncate=False)
+        elif self.scheme == "s3":
+            # S3 rejects a self-copy unless it changes object metadata.
+            fs.cp_file(path, path, MetadataDirective="REPLACE")
+        elif self.scheme == _GCS_SCHEME:
+            fs.cp_file(path, path)
+        else:
+            raise ValueError(f"lifetime refresh does not support {self.scheme!r}")
+        fs.invalidate_cache(path)
 
     def mkdirs(self, *, exist_ok: bool = True) -> None:
         """Create directories; S3 prefixes require no creation."""

@@ -567,6 +567,20 @@ def test_train_set_last_mile_wraps_to_named(tmp_path):
     assert isinstance(named_example, LmExample)
 
 
+def test_dataset_for_component_rejects_lookahead_on_prebuilt_format():
+    # Prebuilt examples bypass the packer even when pack=True; the window must not be ignored.
+    component = DatasetComponent(format=PrebuiltLmDatasetFormat(), pack=True, pack_lookahead_window=8)
+    with pytest.raises(ValueError):
+        dataset_for_component(
+            component,
+            hax.Axis("position", 8),
+            None,  # type: ignore[arg-type]
+            eos_id=None,
+            block_cross_document_attention=True,
+            remainder="drop",
+        )
+
+
 def test_dataset_for_component_rejects_preference_format():
     component = DatasetComponent(format=PreferenceChatLmDatasetFormat())
     Pos = hax.Axis("position", 8)

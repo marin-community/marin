@@ -55,10 +55,25 @@ class JuneSnowballConfig(SnowballConfig):
         return JuneSnowballLMHeadModel
 
     def training_config(self) -> GrugModelConfig:
+        """The June training config: every Snowball field June's kernels share, from this config.
+
+        Snowball-only runtime settings (numerics options of the Levanter forward) have no June kernel. They pass
+        through only at their defaults; a set one raises, so a run never trains without a setting it asked for.
+        """
+        june_fields = {field.name for field in dataclasses.fields(GrugModelConfig)}
+        unsupported = [
+            field.name
+            for field in dataclasses.fields(SnowballConfig)
+            if field.name not in june_fields
+            and field.name not in ("reference_checkpoint", "tokenizer")
+            and getattr(self, field.name) != field.default
+        ]
+        if unsupported:
+            raise ValueError(f"June's training kernels do not implement {unsupported}")
         fields = {
             field.name: getattr(self, field.name)
             for field in dataclasses.fields(SnowballConfig)
-            if field.name not in ("reference_checkpoint", "tokenizer")
+            if field.name in june_fields
         }
         return GrugModelConfig(**fields, disable_pko=True, disable_long_rope=True, capacity_factor=self.capacity_factor)
 
@@ -128,17 +143,6 @@ class JuneSnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[June
     def from_state_dict(self, state_dict: StateDict, prefix=None):
         transformer = snowball_from_state_dict(cast(SnowballTransformer, self.transformer), state_dict, prefix=prefix)
         return eqx.tree_at(lambda model: model.transformer, self, cast(Transformer, transformer))
-
-
-def june_trainable_filter(model: JuneSnowballLMHeadModel):
-    """Exclude fixed QB routing biases from gradients and optimizer weight decay."""
-    mask = jax.tree.map(lambda _: True, model)
-    assert model.transformer.blocks is not None
-    return eqx.tree_at(
-        lambda tree: tuple(block.mlp.router_bias for block in tree.transformer.blocks),
-        mask,
-        tuple(False for _ in model.transformer.blocks),
-    )
 
 
 class JunePipelineStage(eqx.Module):

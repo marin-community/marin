@@ -48,7 +48,7 @@ watch([selectedTask, correct], () => {
   if (selectedTask.value) refresh()
 })
 
-const FILTERS = computed(() => sampleFilters(data.value?.counts?.ungraded))
+const FILTERS = computed(() => sampleFilters(data.value?.counts))
 
 const total = computed(() => data.value?.total ?? 0)
 const shownFrom = computed(() => (total.value === 0 ? 0 : offset.value + 1))

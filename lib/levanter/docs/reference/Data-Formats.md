@@ -104,6 +104,16 @@ For `supervised` and (raw) `text`, `pack: false` instead selects the continuous-
 layout: documents are concatenated and chunked to the context length rather than being
 kept one per example.
 
+A packed component can also set `pack_lookahead_window` (a component-level field, next to
+`pack`, not a format field). When the next in-order document does not fit, the packer takes
+the first fitting document among up to `pack_lookahead_window` documents starting at that
+one. A window of 1 matches sequential packing when no documents are dropped; lookahead
+skips dropped documents without closing a pack. Skipped pending documents keep their
+relative order. This trades a bounded, local amount of document reordering for less
+padding. It requires a packed text or chat component; setting it on an unpacked or
+prebuilt component raises an error. With a lookahead, packs may hold non-contiguous
+documents.
+
 #### Processing:
 - Requires a `chat_template`:
   - If not supplied in config, will use `tokenizer.chat_template`

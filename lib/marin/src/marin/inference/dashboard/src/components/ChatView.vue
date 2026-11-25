@@ -4,10 +4,12 @@ import {
   fetchToolDefinitions,
   invokeShell,
   invokeTool,
+  invokeWebSearch,
   isAbortError,
   requestCompletion,
 } from '../lib/api'
 import { chatTemplateRequestFields } from '../lib/chat_template'
+import { COMPOSER_HINT, isSendKey } from '../lib/composer_keys'
 import { CHAT_EXAMPLES } from '../lib/examples'
 import type { ChatExample } from '../lib/examples'
 import { modelMessages } from '../lib/python_tools'
@@ -20,6 +22,7 @@ import {
   parseWorkspaceFiles,
 } from '../lib/shell_workspace'
 import { splitThinking } from '../lib/thinking'
+import { WEB_SEARCH_TOOL_DEFINITION, WEB_SEARCH_TOOL_NAME } from '../lib/web_search'
 import { requestDebugData, vllmDebugStreamOptions } from '../lib/vllm_debug'
 import type { VllmRequestDebug } from '../lib/vllm_debug'
 import {
@@ -50,6 +53,7 @@ const props = defineProps<{
   streaming: boolean
   baseUrl?: string
   composerMode?: 'embedded' | 'external'
+  webSearchAvailable?: boolean
 }>()
 
 const emit = defineEmits<{ persist: [] }>()
@@ -75,7 +79,7 @@ watch(
   },
 )
 onUnmounted(stopStreaming)
-defineExpose({ send, stopStreaming })
+defineExpose({ send, stopStreaming, busy })
 
 function stopStreaming() {
   abort?.abort()
@@ -90,11 +94,9 @@ function resizeComposer() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (event.isComposing) return
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    send()
-  }
+  if (!isSendKey(event)) return
+  event.preventDefault()
+  send()
 }
 
 // Follow the stream unless the user scrolled up to read something.
@@ -173,6 +175,12 @@ async function runToolExchange(conversation: Conversation, pythonTools: string, 
       }
       tools.push(BASH_TOOL_DEFINITION)
     }
+    if (conversation.webSearch && props.webSearchAvailable) {
+      if (tools.some((tool) => tool.function.name === WEB_SEARCH_TOOL_NAME)) {
+        throw new Error(`Python tool name ${JSON.stringify(WEB_SEARCH_TOOL_NAME)} is reserved for web search`)
+      }
+      tools.push(WEB_SEARCH_TOOL_DEFINITION)
+    }
     const templateFields = chatTemplateRequestFields(
       conversation.thinkingMode,
       conversation.customInstructions,
@@ -240,6 +248,9 @@ async function executeToolCall(
       const shellResult = await invokeShell(workspaceFiles, workspace.commits, workspace.history, command, signal, props.baseUrl)
       result = shellResult
       if (shellResult.stop_reason === null) workspace.history.push(command)
+    } else if (call.name === WEB_SEARCH_TOOL_NAME) {
+      if (!conversation.webSearch || !props.webSearchAvailable) throw new Error('Web search is not enabled')
+      result = await invokeWebSearch(call.arguments, signal, props.baseUrl)
     } else {
       result = await invokeTool(call.name, pythonTools, call.arguments, signal, props.baseUrl)
     }
@@ -421,6 +432,21 @@ async function complete(
                 enabled
               </span>
             </button>
+            <label
+              v-if="webSearchAvailable"
+              class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted"
+              :class="{ 'text-accent': conversation.webSearch }"
+              title="Give the model a web_search tool backed by Parallel search"
+            >
+              <input
+                v-model="conversation.webSearch"
+                type="checkbox"
+                class="accent-accent"
+                :disabled="busy"
+                @change="persistConversation(conversation)"
+              />
+              Web search
+            </label>
           </div>
           <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
             <label class="flex cursor-pointer items-center gap-2 text-xs font-medium text-text-muted" title="Record and show vLLM timings on each reply">
@@ -462,7 +488,7 @@ async function complete(
             ref="composer"
             v-model="draft"
             rows="1"
-            placeholder="Message… (Enter to send, Shift+Enter for a newline)"
+            :placeholder="`Message…${COMPOSER_HINT}`"
             class="max-h-50 min-h-10 flex-1 resize-none rounded-xl border border-surface-border bg-surface-raised px-3.5 py-2.5 text-[0.925rem] leading-relaxed text-text outline-none transition-colors focus:border-accent"
             @input="resizeComposer"
             @keydown="onKeydown"

@@ -6,11 +6,12 @@ import json
 import pickle
 import socket
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from lib.taskforge.tests.llm.fake_glm import FakeGlm
 
 from taskforge.llm.client import (
     AttemptOutcome,
@@ -36,6 +37,7 @@ from taskforge.llm.policy import (
 )
 
 MESSAGES: list[Message] = [{"role": "user", "content": "hi"}]
+Run = Callable[..., Completion]
 CONTEXT_ERROR = json.dumps(
     {
         "error": {
@@ -79,20 +81,28 @@ def complete(
 
 
 @pytest.fixture
-def run(fake_glm, fast_provider):
-    """Run one ``complete`` of ``MESSAGES`` against ``fake_glm``; keyword arguments override provider fields."""
+def run(fake_glm: FakeGlm, fast_provider: LLMProviderConfig) -> Run:
+    """Run one ``complete`` of ``MESSAGES`` against ``fake_glm``; the keywords override provider fields."""
 
-    def go(policy=LLMPolicy(), **provider_fields) -> Completion:
-        return complete(FixedEndpoint(endpoint(fake_glm.base_url)), replace(fast_provider, **provider_fields), policy)
+    def go(
+        policy: LLMPolicy = LLMPolicy(),
+        max_attempts: int = fast_provider.max_attempts,
+        hold_timeout: float = fast_provider.hold_timeout,
+        stall_timeout: float = fast_provider.stall_timeout,
+    ) -> Completion:
+        provider = replace(
+            fast_provider, max_attempts=max_attempts, hold_timeout=hold_timeout, stall_timeout=stall_timeout
+        )
+        return complete(FixedEndpoint(endpoint(fake_glm.base_url)), provider, policy)
 
     return go
 
 
-def outcomes(completion_or_error) -> list[AttemptOutcome]:
+def outcomes(completion_or_error: Completion | ModelUnavailable) -> list[AttemptOutcome]:
     return [a.outcome for a in completion_or_error.attempts]
 
 
-def test_stream_assembles_content_reasoning_usage_and_chunks(fake_glm, run):
+def test_stream_assembles_content_reasoning_usage_and_chunks(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.stream(content="Hello there", reasoning="thinking", prompt_tokens=12, completion_tokens=7)
     completion = run()
     assert (completion.content, completion.reasoning) == ("Hello there", "thinking")
@@ -109,7 +119,7 @@ def test_stream_assembles_content_reasoning_usage_and_chunks(fake_glm, run):
     assert request["chat_template_kwargs"] == {"reasoning_effort": "high"}
 
 
-def test_request_fields_reach_the_wire(fake_glm, fast_provider):
+def test_request_fields_reach_the_wire(fake_glm: FakeGlm, fast_provider: LLMProviderConfig) -> None:
     tools = [{"type": "function", "function": {"name": "answer", "parameters": {"type": "object"}}}]
     tool_choice = {"type": "function", "function": {"name": "answer"}}
     constraint = {"regex": "[0-9]+"}
@@ -121,7 +131,7 @@ def test_request_fields_reach_the_wire(fake_glm, fast_provider):
     assert request["chat_template_kwargs"] == {"reasoning_effort": "high"}
 
 
-def test_tool_call_deltas_are_joined(fake_glm, run):
+def test_tool_call_deltas_are_joined(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.stream(tool_calls=(("answer", '{"city": "Paris"}'),))
     completion = run()
     assert [(c.name, c.arguments) for c in completion.tool_calls] == [("answer", '{"city": "Paris"}')]
@@ -130,7 +140,9 @@ def test_tool_call_deltas_are_joined(fake_glm, run):
 @pytest.mark.parametrize(
     ("completion_tokens", "finish"), [(64, FinishReason.LENGTH), (63, FinishReason.TOOL_CALLS)], ids=["at", "under"]
 )
-def test_tool_call_reply_that_used_its_whole_budget_is_reported_as_length(fake_glm, run, completion_tokens, finish):
+def test_tool_call_reply_that_used_its_whole_budget_is_reported_as_length(
+    fake_glm: FakeGlm, run: Run, completion_tokens: int, finish: FinishReason
+) -> None:
     fake_glm.stream(
         tool_calls=(("shell", '{"command": "cat <<EOF'),), finish="tool_calls", completion_tokens=completion_tokens
     )
@@ -141,7 +153,7 @@ def test_tool_call_reply_that_used_its_whole_budget_is_reported_as_length(fake_g
     assert json.loads(completion.attempts[0].events[-2])["choices"][0]["finish_reason"] == "tool_calls"
 
 
-def test_retryable_statuses_are_retried_then_succeed(fake_glm, run):
+def test_retryable_statuses_are_retried_then_succeed(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.status(429, "slow down", {"Retry-After": "0"})
     fake_glm.status(503, "unavailable")
     fake_glm.stream(content="ok")
@@ -151,7 +163,7 @@ def test_retryable_statuses_are_retried_then_succeed(fake_glm, run):
     assert [a.http_status for a in completion.attempts] == [429, 503, 200]
 
 
-def test_retry_after_sets_the_minimum_delay(fake_glm, run):
+def test_retry_after_sets_the_minimum_delay(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.status(429, "slow down", {"Retry-After": "0.3"})
     fake_glm.stream(content="ok")
     first, second = run().attempts
@@ -178,8 +190,10 @@ ORPHAN_TOOL_DELTA = json.dumps(
     ],
     ids=["abort", "malformed", "error-event", "orphan-tool-delta"],
 )
-def test_aborted_malformed_or_errored_stream_is_retried(fake_glm, run, stream):
-    fake_glm.stream(**stream)
+def test_aborted_malformed_or_errored_stream_is_retried(fake_glm: FakeGlm, run: Run, stream: dict[str, str]) -> None:
+    fake_glm.stream(
+        content=stream["content"], finish=stream.get("finish", "stop"), raw_payload=stream.get("raw_payload")
+    )
     fake_glm.stream(content="whole")
     completion = run()
     assert completion.content == "whole"
@@ -187,7 +201,7 @@ def test_aborted_malformed_or_errored_stream_is_retried(fake_glm, run, stream):
     assert completion.attempts[1].outcome is AttemptOutcome.COMPLETED
 
 
-def test_exhausted_attempts_raise_unavailable_with_record(fake_glm, run):
+def test_exhausted_attempts_raise_unavailable_with_record(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.status(500, "boom")
     fake_glm.status(502, "boom")
     with pytest.raises(ModelUnavailable) as error:
@@ -195,7 +209,7 @@ def test_exhausted_attempts_raise_unavailable_with_record(fake_glm, run):
     assert outcomes(error.value) == [AttemptOutcome.RETRYABLE_STATUS] * 2
 
 
-def test_client_error_is_not_retried(fake_glm, run):
+def test_client_error_is_not_retried(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.status(401, "bad token")
     with pytest.raises(ModelRequestRejected) as error:
         run()
@@ -205,7 +219,7 @@ def test_client_error_is_not_retried(fake_glm, run):
     assert (attempt.outcome, attempt.http_status) == (AttemptOutcome.REJECTED, 401)
 
 
-def test_route_404_holds_without_counting_an_attempt(fake_glm, run):
+def test_route_404_holds_without_counting_an_attempt(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.status(404, '{"error": "no route for model glm-5.3"}')
     fake_glm.status(404, '{"error": "no route for model glm-5.3"}')
     fake_glm.stream(content="back")
@@ -214,7 +228,9 @@ def test_route_404_holds_without_counting_an_attempt(fake_glm, run):
     assert outcomes(completion) == [AttemptOutcome.ROUTE_MISSING] * 2 + [AttemptOutcome.COMPLETED]
 
 
-def test_route_hold_follows_an_endpoint_that_moved(fake_glm, other_fake_glm, fast_provider):
+def test_route_hold_follows_an_endpoint_that_moved(
+    fake_glm: FakeGlm, other_fake_glm: FakeGlm, fast_provider: LLMProviderConfig
+) -> None:
     fake_glm.status(404, '{"error": "no route for model glm-5.3"}')
     other_fake_glm.stream(content="moved")
     source = MovingEndpoint([endpoint(fake_glm.base_url), endpoint(other_fake_glm.base_url)])
@@ -224,7 +240,9 @@ def test_route_hold_follows_an_endpoint_that_moved(fake_glm, other_fake_glm, fas
     assert (len(fake_glm.requests), len(other_fake_glm.requests)) == (1, 1)
 
 
-def test_refused_connection_is_retried_on_the_current_endpoint(fake_glm, fast_provider):
+def test_refused_connection_is_retried_on_the_current_endpoint(
+    fake_glm: FakeGlm, fast_provider: LLMProviderConfig
+) -> None:
     with socket.create_server(("127.0.0.1", 0)) as closed:
         closed_port = closed.getsockname()[1]
     fake_glm.stream(content="reached")
@@ -234,7 +252,7 @@ def test_refused_connection_is_retried_on_the_current_endpoint(fake_glm, fast_pr
     assert outcomes(completion) == [AttemptOutcome.TRANSPORT_ERROR, AttemptOutcome.COMPLETED]
 
 
-def test_pool_without_workers_holds_until_health_recovers(fake_glm, run):
+def test_pool_without_workers_holds_until_health_recovers(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.health_workers.clear()
     fake_glm.health_workers.extend([{"high": 0}, {"high": 0}, {"high": 0}, {"high": 2}])
     fake_glm.status(502, "upstream gone")
@@ -244,7 +262,7 @@ def test_pool_without_workers_holds_until_health_recovers(fake_glm, run):
     assert fake_glm.health_polls == 4
 
 
-def test_hold_gives_up_after_hold_timeout(fake_glm, run):
+def test_hold_gives_up_after_hold_timeout(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.health_workers.clear()
     fake_glm.health_workers.append({"high": 0, "bulk": 5})
     fake_glm.status(503, "no workers")
@@ -257,7 +275,9 @@ def test_hold_gives_up_after_hold_timeout(fake_glm, run):
     [(500, {"high": 0}), (200, {"bulk": 0})],
     ids=["health-500", "pool-not-reported"],
 )
-def test_failure_counts_an_attempt_unless_health_reports_the_pool_empty(fake_glm, run, health_status, workers):
+def test_failure_counts_an_attempt_unless_health_reports_the_pool_empty(
+    fake_glm: FakeGlm, run: Run, health_status: int, workers: dict[str, int]
+) -> None:
     fake_glm.health_status = health_status
     fake_glm.health_workers.clear()
     fake_glm.health_workers.append(workers)
@@ -266,7 +286,7 @@ def test_failure_counts_an_attempt_unless_health_reports_the_pool_empty(fake_glm
         run(max_attempts=1, hold_timeout=60.0)
 
 
-def test_stall_abandons_attempt_and_retries(fake_glm, run):
+def test_stall_abandons_attempt_and_retries(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.stream(content="never finishes", stall_after_first=True)
     fake_glm.stream(content="second try")
     completion = run(stall_timeout=0.3)
@@ -276,7 +296,7 @@ def test_stall_abandons_attempt_and_retries(fake_glm, run):
     assert len(stalled.events) == 2
 
 
-def test_stream_cut_before_finish_reason_is_retried(fake_glm, run):
+def test_stream_cut_before_finish_reason_is_retried(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.stream(content="cut", finish=None, send_done=False)
     fake_glm.stream(content="whole")
     completion = run()
@@ -284,7 +304,7 @@ def test_stream_cut_before_finish_reason_is_retried(fake_glm, run):
     assert outcomes(completion) == [AttemptOutcome.INCOMPLETE_STREAM, AttemptOutcome.COMPLETED]
 
 
-def test_context_overflow_raises_without_lowering_max_tokens(fake_glm, run):
+def test_context_overflow_raises_without_lowering_max_tokens(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.status(400, CONTEXT_ERROR)
     with pytest.raises(ContextExhausted) as error:
         run()
@@ -293,7 +313,7 @@ def test_context_overflow_raises_without_lowering_max_tokens(fake_glm, run):
     assert [r["max_tokens"] for r in fake_glm.requests] == [GLM_MAX_OUTPUT_TOKENS]
 
 
-def test_length_finish_continues_from_partial_output(fake_glm, run):
+def test_length_finish_continues_from_partial_output(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.stream(content="first half, ", finish="length", completion_tokens=100)
     fake_glm.stream(content="second half.", finish="stop", completion_tokens=40)
     completion = run()
@@ -307,7 +327,7 @@ def test_length_finish_continues_from_partial_output(fake_glm, run):
     ]
 
 
-def test_reply_cut_off_while_reasoning_extends_the_open_reasoning_turn(fake_glm, run):
+def test_reply_cut_off_while_reasoning_extends_the_open_reasoning_turn(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.stream(reasoning="step one, ", finish="length")
     fake_glm.stream(reasoning="step two, ", finish="length")
     fake_glm.stream(reasoning="step three", content="answer, cut", finish="length")
@@ -326,7 +346,7 @@ def test_reply_cut_off_while_reasoning_extends_the_open_reasoning_turn(fake_glm,
     assert "continue_final_message" not in fourth
 
 
-def test_length_with_a_tool_call_is_not_continued(fake_glm, run):
+def test_length_with_a_tool_call_is_not_continued(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.stream(tool_calls=(("answer", '{"city": "Par'),), finish="length")
     completion = run()
     assert completion.finish_reason is FinishReason.LENGTH
@@ -334,7 +354,7 @@ def test_length_with_a_tool_call_is_not_continued(fake_glm, run):
     assert len(fake_glm.requests) == 1
 
 
-def test_continuation_that_no_longer_fits_returns_the_partial_output(fake_glm, run):
+def test_continuation_that_no_longer_fits_returns_the_partial_output(fake_glm: FakeGlm, run: Run) -> None:
     fake_glm.stream(content="long answer", finish="length", prompt_tokens=140_020, completion_tokens=122_124)
     fake_glm.status(400, CONTEXT_ERROR)
     completion = run()
@@ -347,7 +367,7 @@ def test_continuation_that_no_longer_fits_returns_the_partial_output(fake_glm, r
     ]
 
 
-def test_continuations_stop_at_policy_limit(fake_glm, run):
+def test_continuations_stop_at_policy_limit(fake_glm: FakeGlm, run: Run) -> None:
     for part in ("a", "b", "c"):
         fake_glm.stream(content=part, finish="length")
     completion = run(policy=LLMPolicy(max_continuations=2))
@@ -356,7 +376,9 @@ def test_continuations_stop_at_policy_limit(fake_glm, run):
     assert len(fake_glm.requests) == 3
 
 
-def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_provider):
+def test_a_stalled_read_retries_through_a_fresh_connection_pool(
+    fake_glm: FakeGlm, fast_provider: LLMProviderConfig
+) -> None:
     """A silently dead keep-alive socket reads nothing until the stall timeout, and so would
     every other idle connection the pool holds on that path, so the retry goes through a new pool. (The fake server
     speaks HTTP/1.0 and never keeps a connection alive, so the test checks the pool, not the socket.)"""
@@ -376,7 +398,9 @@ def test_a_stalled_read_retries_through_a_fresh_connection_pool(fake_glm, fast_p
     assert replaced_and_closed
 
 
-def test_a_replaced_pool_closes_once_the_calls_still_streaming_on_it_finish(fake_glm, fast_provider):
+def test_a_replaced_pool_closes_once_the_calls_still_streaming_on_it_finish(
+    fake_glm: FakeGlm, fast_provider: LLMProviderConfig
+) -> None:
     """A pool replaced after a stall must not hold its sockets until the client exits, nor cut a call streaming on it."""
     fake_glm.stream(reasoning="slow but steady", content="first", interval=0.2)
     fake_glm.stream(content="never finishes", stall_after_first=True)
@@ -401,7 +425,7 @@ def test_a_replaced_pool_closes_once_the_calls_still_streaming_on_it_finish(fake
     assert closed_after
 
 
-def test_a_pickled_client_completes_in_each_new_event_loop(fake_glm, fast_provider):
+def test_a_pickled_client_completes_in_each_new_event_loop(fake_glm: FakeGlm, fast_provider: LLMProviderConfig) -> None:
     fake_glm.stream(content="first")
     fake_glm.stream(content="second")
     client = pickle.loads(pickle.dumps(GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider)))
@@ -426,7 +450,7 @@ class KeepAliveHealth(BaseHTTPRequestHandler):
         pass
 
 
-def test_the_connection_pool_of_one_client_works_in_each_new_event_loop(fast_provider):
+def test_the_connection_pool_of_one_client_works_in_each_new_event_loop(fast_provider: LLMProviderConfig) -> None:
     with ThreadingHTTPServer(("127.0.0.1", 0), KeepAliveHealth) as server:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -438,3 +462,24 @@ def test_the_connection_pool_of_one_client_works_in_each_new_event_loop(fast_pro
         # A pool that a closed loop opened fails on its kept-alive connection with "Event loop is closed".
         assert [asyncio.run(health()) for _ in range(2)] == [200, 200]
         server.shutdown()
+
+
+def test_endpoint_output_limit_survives_pickling_and_preserves_tool_calls(
+    fake_glm: FakeGlm, fast_provider: LLMProviderConfig
+) -> None:
+    fake_glm.stream(tool_calls=(("answer", '{"value": 1}'),), finish="tool_calls", completion_tokens=200000)
+    client = pickle.loads(
+        pickle.dumps(GlmClient(FixedEndpoint(endpoint(fake_glm.base_url)), fast_provider, limit_output=False))
+    )
+
+    async def call() -> Completion:
+        async with client:
+            return await client.complete(
+                MESSAGES, LLMPolicy(max_tokens=1), {"max_tokens": 2, "max_completion_tokens": 3}
+            )
+
+    result = asyncio.run(call())
+    assert result.finish_reason is FinishReason.TOOL_CALLS
+    assert len(fake_glm.requests) == 1
+    assert "max_tokens" not in fake_glm.requests[0] and "max_completion_tokens" not in fake_glm.requests[0]
+    assert result.attempts[0].max_tokens == 0

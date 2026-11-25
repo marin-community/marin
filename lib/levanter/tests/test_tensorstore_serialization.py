@@ -3,7 +3,10 @@
 
 import asyncio
 import json
+import os
+import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -255,7 +258,6 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)
 
@@ -374,7 +376,7 @@ def test_serialization_stages_all_leaves_before_tensorstore_open_completes(monke
     write_started = threading.Event()
 
     class FakeStore:
-        def write(self, data, *, can_reference_source_data_indefinitely):
+        def write(self, data):
             writes.append(np.array(data, copy=True))
             write_started.set()
             return SimpleNamespace(commit=commit_future)
@@ -451,8 +453,7 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
             self.future.force()
 
     class FakeStore:
-        def write(self, data, *, can_reference_source_data_indefinitely):
-            assert can_reference_source_data_indefinitely
+        def write(self, data):
             writes.append(np.array(data, copy=True))
             return SimpleNamespace(commit=commit_future)
 
@@ -487,6 +488,54 @@ def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypa
     assert not serializer.is_alive()
     assert errors == []
     assert {int(value[0]) for value in writes} == {0, 100}
+
+
+def _ocdbt_version_count(checkpoint_dir) -> int:
+    """Manifest commits since the database was created.
+
+    Old versions move out of the manifest into version tree nodes, so count generations instead
+    of the inline ``versions`` list.
+    """
+    base = ts.KvStore.open({"driver": "file", "path": str(checkpoint_dir)}).result()
+    manifest = ts.ocdbt.dump(base).result()
+    return manifest["versions"][-1]["generation_number"]
+
+
+def test_a_lock_file_save_publishes_one_manifest_version_per_wave(tmp_path):
+    """A save that spills the budget commits once per wave.
+
+    Three waves are four generations: the empty database, then one per wave. A non-atomic
+    transaction would add two generations per wave.
+    """
+    arrays = {f"w{i}": np.full(1024, i, dtype=np.float32) for i in range(6)}
+    one_array = next(iter(arrays.values())).nbytes
+    batched = tmp_path / "batched"
+    batched.mkdir()
+
+    tree_serialize_leaves_tensorstore(
+        str(batched),
+        arrays,
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=one_array * 2, file_io_locking="lockfile"),
+    )
+
+    assert _ocdbt_version_count(batched) == 4
+    restored = tree_deserialize_leaves_tensorstore(
+        str(batched), {name: jnp.zeros_like(value) for name, value in arrays.items()}
+    )
+    for name, value in arrays.items():
+        np.testing.assert_array_equal(np.asarray(restored[name]), value)
+
+
+def test_a_spilling_lock_file_save_of_a_bare_array_restores(tmp_path):
+    """A PyTree that is one array and spills the budget stays at the OCDBT root."""
+    values = np.arange(16, dtype=np.float32)
+    tree_serialize_leaves_tensorstore(
+        str(tmp_path),
+        values,
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=8, file_io_locking="lockfile"),
+    )
+    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), jnp.zeros_like(values))
+    np.testing.assert_array_equal(np.asarray(restored), values)
 
 
 def test_a_save_larger_than_the_staging_budget_rolls_through_it():
@@ -566,6 +615,113 @@ def test_replica_aware_restore_broadcasts_across_processes():
     eight_device_checkpoints.replica_aware_restore_across_processes()
 
 
+def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
+    """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
+    assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
+
+
+def test_ranks_on_opposite_sides_of_the_budget_finish_one_save():
+    """Two processes on different commit paths must both reach the metadata barrier and finish."""
+    results = eight_device_checkpoints.uneven_staged_bytes_save_across_processes()
+    shared = np.arange(eight_device_checkpoints._UNEVEN_SHARED, dtype=np.float32)
+    host = np.arange(eight_device_checkpoints._UNEVEN_HOST, dtype=np.float32)
+    for restored_shared, restored_host in results:
+        np.testing.assert_array_equal(restored_shared, shared)
+        np.testing.assert_array_equal(restored_host, host)
+
+
+def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
+    """A lock file left by a crashed save would otherwise block every later save to that step."""
+    results = eight_device_checkpoints.resave_after_interrupted_save_across_processes()
+
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in results:
+        np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
+
+
+def test_a_multi_process_save_of_a_bare_array_restores():
+    """A PyTree that is one array stores it at the OCDBT root, where the restore looks for it."""
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in eight_device_checkpoints.bare_array_roundtrip_across_processes():
+        np.testing.assert_array_equal(restored, values)
+
+
+def test_a_single_process_save_keeps_default_locking(tmp_path):
+    assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), str(tmp_path)) is None
+    explicit = TensorStoreWriteConfig(file_io_locking="os")
+    assert tensorstore_serialization._file_io_locking(explicit, str(tmp_path)) == "os"
+
+
+def test_the_next_commit_rewrites_the_manifest_the_previous_holder_published(tmp_path):
+    """The next holder reads the file the previous holder published, then replaces it."""
+    manifest = tmp_path / "manifest.ocdbt"
+    manifest.write_text("v0")
+    order = tensorstore_serialization._CommitOrder(str(tmp_path))
+    first_holds = threading.Event()
+    release_first = threading.Event()
+    seen: list[str] = []
+
+    def publish_first() -> None:
+        with order.hold():
+            seen.append(manifest.read_text())
+            manifest.write_text("v1")
+            first_holds.set()
+            assert release_first.wait(5)
+
+    def publish_second() -> None:
+        assert first_holds.wait(5)
+        with order.hold():
+            seen.append(manifest.read_text())
+            manifest.write_text("v2")
+
+    writers = [threading.Thread(target=publish_first), threading.Thread(target=publish_second)]
+    for writer in writers:
+        writer.start()
+    assert first_holds.wait(5)
+    release_first.set()
+    for writer in writers:
+        writer.join(10)
+        assert not writer.is_alive()
+
+    assert seen == ["v0", "v1"]
+    assert manifest.read_text() == "v2"
+
+
+def test_a_live_remote_writer_keeps_its_lock_file(tmp_path):
+    """A lease refreshed by another host means the lock file is still a live commit."""
+    lock = tmp_path / "manifest.ocdbt.__lock"
+    lock.write_text("held")
+    lease_path = tmp_path / tensorstore_serialization._WRITER_LEASE_NAME
+    lease_path.write_text("other-host 1\n")
+    lease = tensorstore_serialization._WriterLease(str(tmp_path))
+
+    assert not lease.try_acquire()
+    assert lock.read_text() == "held"
+    assert lease_path.read_text() == "other-host 1\n"
+
+
+def test_a_stale_writer_lease_loses_its_lock_file(tmp_path):
+    """A remote lease that has not been refreshed is an abandoned save, lock file included."""
+    lock = tmp_path / "manifest.ocdbt.__lock"
+    lock.write_text("held")
+    lease = tensorstore_serialization._WriterLease(str(tmp_path))
+    lease_path = tmp_path / tensorstore_serialization._WRITER_LEASE_NAME
+    lease_path.write_text("other-host 1\n")
+    stale = time.time() - (tensorstore_serialization._WRITER_LEASE_STALE_S + 5)
+    os.utime(lease_path, (stale, stale))
+
+    assert not tensorstore_serialization._writer_lease_is_live(str(lease_path))
+    lease.acquire()
+    try:
+        assert not lock.exists()
+        host, pid = lease_path.read_text().split()
+        assert host == socket.gethostname()
+        assert int(pid) == os.getpid()
+    finally:
+        lease.release()
+    assert not lease_path.exists()
+
+
 def test_checkpoint_written_on_one_mesh_loads_on_another():
     """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
     run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)
@@ -594,6 +750,17 @@ def test_host_arrays_without_a_sharding_roundtrip():
         restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": jnp.zeros(10, dtype=jnp.float32)})
 
     np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
+
+
+def test_bfloat16_checkpoint_preserves_nonzero_payload(tmp_path):
+    # This 2.5 MiB shape reproduces referenced-source writes persisting fill values.
+    shape = (5, 64, 64, 64)
+    source = {"expert": np.full(shape, 0.125, dtype=jnp.bfloat16)}
+
+    tree_serialize_leaves_tensorstore(str(tmp_path), source)
+    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), {"expert": jnp.zeros(shape, dtype=jnp.bfloat16)})
+
+    np.testing.assert_array_equal(np.asarray(restored["expert"]), source["expert"])
 
 
 def test_arrays_with_a_zero_length_axis_roundtrip():

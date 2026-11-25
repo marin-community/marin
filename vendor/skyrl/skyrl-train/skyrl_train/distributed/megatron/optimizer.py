@@ -22,15 +22,67 @@ from collections.abc import Mapping
 import torch
 from megatron.core.optimizer import OptimizerConfig, ParamKey, ParamWithNamePredicate, get_standard_config_overrides
 from megatron.core.optimizer import get_megatron_optimizer as get_megatron_optimizer_native
+from megatron.core.optimizer.cpu_offloading import HybridDeviceOptimizer
 from megatron.core.optimizer.emerging_optimizers import EmergingOptimizerEntry, _EMERGING_OPTIMIZERS
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.utils import get_model_config
-
-from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH, megatron_grug_route
-
+from skyrl_train.config.validation import validate_muonh_geometry, validate_muonh_weight_decay
+from skyrl_train.distributed.megatron.grug_muonh import (
+    MegatronGrugMuonH,
+    megatron_grug_parameter_banks,
+    megatron_grug_route,
+)
 
 _GRUG_MUONH_NAME = "grug_muonh"
 _GRUG_EMERGING_ROUTES = ("grug_muonh_qkv", "grug_muonh_gate_up", "grug_adamh")
+
+
+def _update_fp32_params_by_new_state(self: HybridDeviceOptimizer) -> None:
+    """Copy loaded masters into the fp32 copies of lower-precision parameters.
+
+    Replaces Megatron's version (through 0.19.2), which looks up ``param_to_fp32_param`` for
+    every parameter with state. That map holds only parameters that were not already fp32, and
+    the distributed optimizer passes fp32 main shards only, so every checkpoint load failed
+    with ``KeyError``. An fp32 parameter has no separate copy to update.
+    """
+    if not self.param_update_in_fp32:
+        return
+    for param, state in self.state.items():
+        fp32_param = self.param_to_fp32_param.get(param)
+        if fp32_param is not None:
+            fp32_param.data.copy_(state["master_param"])
+
+
+HybridDeviceOptimizer._update_fp32_params_by_new_state = _update_fp32_params_by_new_state
+
+
+def _register_load_state_dict_hooks(self: HybridDeviceOptimizer) -> None:
+    """Load moments directly onto the device and dtype used by each sub-optimizer."""
+
+    def pre_load(optimizer, state_dict):
+        # MCore 0.18 only substitutes reduced-precision parameters here. FP32 CUDA
+        # shards therefore pull all CPU-offloaded moments onto CUDA during Torch's
+        # load_state_dict cast, before MCore can move them back to CPU.
+        optimizer.state = {optimizer.param_to_inner_param[param]: state for param, state in optimizer.state.items()}
+        for group in optimizer.param_groups:
+            group["params"] = [optimizer.param_to_inner_param[param] for param in group["params"]]
+        return state_dict
+
+    def post_load(optimizer):
+        optimizer.state = {
+            optimizer.inner_param_to_orig_param[param]: state for param, state in optimizer.state.items()
+        }
+        for group in optimizer.param_groups:
+            group["params"] = [optimizer.inner_param_to_orig_param[param] for param in group["params"]]
+        optimizer._init_sub_optimizers()
+        optimizer._sync_hdo_param_groups_to_sub_optimizers()
+        optimizer._sync_hdo_state_to_sub_optimizers()
+
+    self.register_load_state_dict_pre_hook(pre_load)
+    self.register_load_state_dict_post_hook(post_load)
+
+
+HybridDeviceOptimizer._register_load_state_dict_hooks = _register_load_state_dict_hooks
 
 
 def _grug_muonh_extra(optim_config: Mapping) -> dict:
@@ -38,14 +90,23 @@ def _grug_muonh_extra(optim_config: Mapping) -> dict:
     if not isinstance(raw, Mapping):
         raise TypeError("MuonH optimizer_kwargs must be a mapping")
     extra = dict(raw)
-    known = {"adam_lr", "momentum", "nesterov", "backend_steps", "epsilon", "muon_epsilon", "offload_momentum"}
+    known = {
+        "adam_lr",
+        "momentum",
+        "nesterov",
+        "backend_steps",
+        "epsilon",
+        "muon_epsilon",
+        "offload_momentum",
+        "expert_normalization",
+    }
     unknown = sorted(set(extra) - known)
     if unknown:
         raise ValueError(f"Unknown MuonH optimizer_kwargs: {unknown}")
     if "offload_momentum" in extra and not isinstance(extra["offload_momentum"], bool):
         raise TypeError("MuonH offload_momentum must be a bool")
-    if float(optim_config.get("weight_decay", 0.0)) != 0.0:
-        raise ValueError("MuonH requires weight_decay=0")
+    if extra.get("expert_normalization", "per_expert") not in ("per_expert", "all_experts"):
+        raise ValueError("MuonH expert_normalization must be per_expert or all_experts")
     return extra
 
 
@@ -67,13 +128,7 @@ def _register_grug_muonh(optim_config: Mapping) -> None:
 
     def config_to_kwargs(config, model_chunks, pg_collection):
         model_config = get_model_config(model_chunks[0])
-        if model_config.tensor_model_parallel_size != 1:
-            raise ValueError("Grug MuonH fused-matrix updates currently require tensor parallel size 1")
-        expert_tp_size = model_config.expert_tensor_parallel_size
-        if expert_tp_size is None:
-            expert_tp_size = model_config.tensor_model_parallel_size
-        if expert_tp_size != 1:
-            raise ValueError("Grug MuonH whole-matrix updates require expert tensor parallel size 1")
+        validate_muonh_geometry(model_config.tensor_model_parallel_size, model_config.expert_tensor_parallel_size)
         kv_rows = model_config.kv_channels
         query_rows = model_config.num_attention_heads // model_config.num_query_groups * kv_rows
         return {
@@ -86,6 +141,10 @@ def _register_grug_muonh(optim_config: Mapping) -> None:
             "muon_eps": muon_eps,
             "qkv_split_shapes": (query_rows, kv_rows, kv_rows),
             "offload_momentum": extra.get("offload_momentum", False),
+            "parameter_banks": megatron_grug_parameter_banks(model_chunks)
+            if extra.get("expert_normalization", "per_expert") == "all_experts"
+            else {},
+            "expert_parallel_group": pg_collection.ep,
         }
 
     entry = EmergingOptimizerEntry(
@@ -139,8 +198,7 @@ def _init_megatron_optim_config(optim_config: Mapping, optimizer_config_kwargs: 
 
     if _optim_name == _GRUG_MUONH_NAME:
         extra = _grug_muonh_extra(optim_config)
-        if float(optim_args["weight_decay"]) != 0.0:
-            raise ValueError("MuonH requires weight_decay=0, including Megatron overrides")
+        validate_muonh_weight_decay(optim_config, optimizer_config_kwargs)
         if optimizer_config_kwargs.get("use_distributed_optimizer", False):
             raise ValueError("Grug MuonH uses Megatron's full-matrix optimizer path")
         if optim_args.get("optimizer_cpu_offload", False) or optim_args.get("optimizer_offload_fraction", 0.0):
@@ -209,7 +267,8 @@ def get_megatron_optimizer_param_scheduler(
         raise ValueError(f"Unsupported scheduler {scheduler!r} for Megatron; choose one of {sorted(lr_decay_styles)}")
 
     lr_warmup_steps = config.num_warmup_steps
-    if config.get("lr_decay_steps", None) is None:
+    lr_decay_steps = config.get("lr_decay_steps")
+    if lr_decay_steps is None:
         lr_decay_steps = num_training_steps
     if config.get("lr_warmup_steps_ratio", None) is not None and (
         config.get("lr_warmup_steps", None) is None or config.lr_warmup_steps <= 0
@@ -235,10 +294,3 @@ def get_megatron_optimizer_param_scheduler(
     )
 
     return opt_param_scheduler
-
-
-def get_megatron_last_lr(optimizer):
-    """
-    Get the last learning rate from the optimizer parameter scheduler.
-    """
-    return optimizer.param_groups[0]["lr"]

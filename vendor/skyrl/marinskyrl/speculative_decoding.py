@@ -1,4 +1,4 @@
-"""Typed configuration contracts for EAGLE speculative decoding."""
+"""Typed configuration contracts for managed speculative decoding."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ class SpeculativeDecodingMethod(StrEnum):
     """Speculative methods supported by MarinSkyRL's managed lifecycle."""
 
     EAGLE3 = "eagle3"
+    DSPARK = "dspark"
 
 
 class SpeculatorModelSourceKind(StrEnum):
@@ -135,6 +136,10 @@ class SpeculatorModelConfig:
                 f"got {source_uri!r}"
             )
         elif is_cloud_uri(source_uri):
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", source_identity) is None:
+                raise SpeculativeDecodingConfigError(
+                    f"{context}.source_identity: artifact sources require sha256:<64 lowercase hex digits>"
+                )
             parsed = urlsplit(source_uri)
             if not parsed.netloc or not parsed.path.strip("/") or parsed.query or parsed.fragment:
                 raise SpeculativeDecodingConfigError(f"{context}.source_uri is not a complete object-store URI")
@@ -281,9 +286,14 @@ class SpeculativeDecodingConfig:
         try:
             method = SpeculativeDecodingMethod(mapping["method"])
         except (TypeError, ValueError) as error:
-            raise SpeculativeDecodingConfigError(f"{context}.method must be eagle3") from error
+            choices = ", ".join(SpeculativeDecodingMethod)
+            raise SpeculativeDecodingConfigError(f"{context}.method must be one of: {choices}") from error
 
         raw_training = mapping.get("training")
+        if raw_training is not None and method != SpeculativeDecodingMethod.EAGLE3:
+            raise SpeculativeDecodingConfigError(
+                f"{context}.training is supported only for {SpeculativeDecodingMethod.EAGLE3}"
+            )
         training = (
             None
             if raw_training is None
@@ -300,11 +310,14 @@ class SpeculativeDecodingConfig:
 
     def vllm_speculative_config(self) -> dict[str, Any]:
         """Return the serving fields understood by vLLM."""
-        return {
+        config = {
             "method": self.method.value,
             **self.model.vllm_source_config(),
             "num_speculative_tokens": self.num_speculative_tokens,
         }
+        if self.method == SpeculativeDecodingMethod.DSPARK:
+            config.update(draft_sample_method="probabilistic", rejection_sample_method="standard")
+        return config
 
 
 def parse_speculative_decoding_config(

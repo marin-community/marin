@@ -12,23 +12,32 @@ draccus round-trip that carries the ``LmConfig`` from construction to the worker
 from __future__ import annotations
 
 import dataclasses
+import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import draccus
 from fray.types import ResourceConfig
+from levanter.adaptor import AdaptorExportConfig
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
-from marin.execution.lazy import ArtifactStep, materialized_config
+from levanter.trainer import Trainer, TrainerHooks
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
     HfToLevanterConfig,
+    hf_to_levanter,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
-from marin.training.training import LevanterCheckpoint
+from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH, LevanterCheckpoint
 
 from experiments.sft.launcher import (
     ConvertedCheckpointModel,
     DatasetSpec,
     LevanterCheckpointModel,
+    SFTPreset,
     SFTSpec,
     sft_step,
 )
@@ -157,3 +166,85 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     )
     decoded = draccus.decode(LmConfig.get_choice_class(config.model_type), config.model_config_json)
     assert decoded == arch
+
+
+def test_conversion_transports_nested_values_omitted_from_fingerprint(monkeypatch):
+    factor = next(field for field in dataclasses.fields(DefaultRotaryEmbeddingsConfig) if field.name == "factor")
+    monkeypatch.setattr(factor, "metadata", {"fingerprint_omit_value": 1.0})
+    default = LlamaConfig()
+    modified = dataclasses.replace(default, rope=DefaultRotaryEmbeddingsConfig(factor=2.0))
+    for architecture in (default, modified):
+        monkeypatch.setattr(
+            "marin.experiment.checkpoints.resolve_lm_config", lambda *_, architecture=architecture: architecture
+        )
+        handle = hf_to_levanter("fixture/llama", model_type="llama", hf_revision="fixture", version="test-dev")
+        encoded = materialized_config(handle.step, _PREFIX).model_config_json
+        assert encoded["rope"]["factor"] == architecture.rope.factor
+        assert draccus.decode(LlamaConfig, encoded) == architecture
+        fingerprint_rope = json.loads(handle.step.fingerprint_payload())["model_config_json"]["rope"]
+        if architecture is default:
+            assert "factor" not in fingerprint_rope
+        else:
+            assert fingerprint_rope["factor"] == 2.0
+
+
+class _ExportTrainer:
+    add_hook = Trainer.add_hook
+    run_id = "export-regression"
+    config = SimpleNamespace(checkpointer=None, field_dtype_overrides={})
+
+    def __init__(self):
+        self.hooks = TrainerHooks()
+
+
+class _FileConverter:
+    def save_pretrained(self, model, path, *, chat_template, **_kwargs):
+        # Duplicate exports must fail at the write boundary, including the final forced hook.
+        destination = Path(path)
+        destination.mkdir()
+        (destination / "policy.txt").write_text(str(model))
+        (destination / "chat_template.jinja").write_text(chat_template)
+        (destination / "config.json").write_text("{}")
+        (destination / "tokenizer_config.json").write_text("{}")
+
+
+def test_sft_exports_once_at_the_final_update(tmp_path):
+    spec = dataclasses.replace(_spec(ConvertedCheckpointModel(conversion=_fake_conversion())), num_train_steps=3)
+    resources = ResourceConfig.with_cpu()
+    model = SFTPreset("converted", spec, resources).model()
+    config = materialized_config(model.step, str(tmp_path)).train_config
+    export_path = Path(model.step.path(str(tmp_path))) / DEFAULT_HF_CHECKPOINTS_PATH
+    export_path.mkdir(parents=True)
+    trainer = _ExportTrainer()
+    config.adapter.install_export_hooks(
+        trainer=trainer,
+        converter=_FileConverter(),
+        tokenizer=None,
+        export=AdaptorExportConfig(
+            hf_save_path=str(export_path), hf_save_steps=config.hf_save_steps, chat_template=config.hf_save_chat_template
+        ),
+    )
+    for step in range(config.trainer.num_train_steps):
+        info = SimpleNamespace(step=step, next_step=step + 1, eval_model=step)
+        trainer.hooks.run_hooks(info)
+    trainer.hooks.run_hooks(info, force=True)
+    assert {path.name: (path / "policy.txt").read_text() for path in export_path.iterdir()} == {"step-2": "2"}
+    assert (export_path / "step-2" / "chat_template.jinja").read_text() == spec.chat_template
+    context = StepContext.for_run(str(tmp_path / "rl"), str(tmp_path), deps=model.deps())
+    locator = model.resolve(context)
+    assert (locator.uri, locator.tokenizer_uri) == (str(export_path / "step-2"), None)
+    epoch_spec = dataclasses.replace(spec, version="2026.07.18-dev", num_train_steps=None, num_train_epochs=1)
+    epoch_model = SFTPreset("converted-epochs", epoch_spec, resources).model()
+    assert epoch_model.relative_path is None
+
+
+def test_sft_artifacts_with_the_same_version_do_not_share_tracker_history():
+    spec = _spec(ConvertedCheckpointModel(conversion=_fake_conversion()))
+    names = [spec.name, "checkpoints/another-sft", "checkpoints/test/sft", "checkpoints/nested/test-sft"]
+    configs = [
+        materialized_config(
+            sft_step(dataclasses.replace(spec, name=name), ResourceConfig.with_cpu()), _PREFIX
+        ).train_config
+        for name in names
+    ]
+    assert len({config.trainer.id for config in configs}) == len(names)

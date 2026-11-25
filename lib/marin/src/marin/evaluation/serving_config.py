@@ -15,10 +15,10 @@ from types import MappingProxyType
 from fray.types import ResourceConfig, create_environment
 from huggingface_hub import HfApi, hf_hub_download
 from iris.cluster.setup_scripts import default_setup_script
+from iris.cluster.tpu_topology import get_tpu_topology
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
 
-from marin.evaluation.evalchemy.client import EVALCHEMY_REQUEST_TIMEOUT_SECONDS
 from marin.evaluation.hardware import AcceleratorChoice, Platform, serving_geometry
 from marin.evaluation.model_config import ModelConfig, ServeBackend, ServeConfig, has_vllm_option, serve_config_vllm_args
 from marin.inference.config import (
@@ -49,6 +49,7 @@ DEFAULT_SERVE_DISK = "100g"
 _QUIET_VLLM_ARGS = ("--uvicorn-log-level", "warning")
 _VLLM_BATCH_INVARIANT_ENV = "VLLM_BATCH_INVARIANT"
 _VLLM_FLASHINFER_SAMPLER_ENV = "VLLM_USE_FLASHINFER_SAMPLER"
+_VLLM_NCCL_SYMM_MEM_ENV = "VLLM_USE_NCCL_SYMM_MEM"
 _RUNAI_STREAMER_CONCURRENCY_ENV = "RUNAI_STREAMER_CONCURRENCY"
 _RUNAI_STREAMER_S3_REQUEST_TIMEOUT_ENV = "RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"
 _SPECULATIVE_METRIC_FAMILIES = frozenset(
@@ -107,7 +108,7 @@ def _auto_serve_overrides_from_config(
             merged.extend((option, value))
 
     native_max_model_len = text_config.get(_MAX_POSITION_EMBEDDINGS_KEY) or config.get(_MAX_POSITION_EMBEDDINGS_KEY)
-    if isinstance(native_max_model_len, int | float) and max_model_len is not None:
+    if max_model_len is not None and isinstance(native_max_model_len, int | float):
         max_model_len = min(max_model_len, int(native_max_model_len))
     return tuple(merged), max_model_len
 
@@ -235,6 +236,7 @@ def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[
         for setting in (
             serve.vllm_batch_invariant,
             serve.vllm_use_flashinfer_sampler,
+            serve.vllm_use_nccl_symm_mem,
             serve.runai_streamer_concurrency,
             serve.runai_streamer_s3_request_timeout_ms,
         )
@@ -247,6 +249,8 @@ def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[
         environment[_VLLM_BATCH_INVARIANT_ENV] = str(int(serve.vllm_batch_invariant))
     if serve.vllm_use_flashinfer_sampler is not None:
         environment[_VLLM_FLASHINFER_SAMPLER_ENV] = str(int(serve.vllm_use_flashinfer_sampler))
+    if serve.vllm_use_nccl_symm_mem is not None:
+        environment[_VLLM_NCCL_SYMM_MEM_ENV] = str(int(serve.vllm_use_nccl_symm_mem))
     if serve.runai_streamer_concurrency is not None:
         environment[_RUNAI_STREAMER_CONCURRENCY_ENV] = str(serve.runai_streamer_concurrency)
     if serve.runai_streamer_s3_request_timeout_ms is not None:
@@ -264,13 +268,19 @@ def inference_config_for_model(
     api_model: str | None = None,
     instances: int | None = None,
     broker: BrokerConfig | None = None,
-    request_timeout_seconds: float = EVALCHEMY_REQUEST_TIMEOUT_SECONDS,
+    request_timeout_seconds: float | None = None,
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
+    if request_timeout_seconds is None:
+        request_timeout_seconds = model.evaluation_request_timeout
     serve = resolved_serve_config(model)
     resolved_instances = serve.instances if instances is None else instances
     geometry = serving_geometry(serve, accelerator)
-    if broker is None and (geometry is None or geometry.task_count == 1):
+    # Multi-host TPU and multi-node GPU servers are one Iris job with one task per host,
+    # while a broker worker runs one single-task server. Serve those directly; a failed
+    # host stops the whole server, and the evaluator's retries are the recovery.
+    multihost_tpu = accelerator.tpu_type is not None and get_tpu_topology(accelerator.tpu_type).vm_count > 1
+    if broker is None and not multihost_tpu and (geometry is None or geometry.task_count == 1):
         # Keep downstream deadlines beyond the evaluator budget, with time to relay the response.
         broker = BrokerConfig(
             worker=InferenceWorkerConfig(

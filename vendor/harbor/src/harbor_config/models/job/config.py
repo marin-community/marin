@@ -13,6 +13,7 @@ from pydantic import (
     model_validator,
 )
 from upath import UPath
+from rigging.task_errors import RetrySettings
 
 from harbor_config.models.metric.config import MetricConfig
 from harbor_config.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
@@ -23,11 +24,26 @@ from harbor_config.models.trial.config import (
     DEFAULT_TRIAL_CLEANUP_GRACE_SEC,
     EnvironmentConfig,
     TaskConfig,
-    UserAgentConfig,
     VerifierConfig,
 )
 
 HF_DATASET_PREFIX = "hf://"
+
+
+class SotopiaCohortSource(BaseModel):
+    model: str
+    results_path: str
+
+
+class SotopiaCohort(BaseModel):
+    version: str
+    models: list[SotopiaCohortSource]
+
+    @model_validator(mode="after")
+    def unique_models(self):
+        if len(self.models) != len({source.model for source in self.models}):
+            raise ValueError("SOTOPIA cohort contains duplicate models")
+        return self
 
 
 class DatasetConfig(BaseModel):
@@ -280,36 +296,6 @@ class DatasetConfig(BaseModel):
         ]
 
 
-class RetryConfig(BaseModel):
-    max_retries: int = Field(
-        default=0, description="Maximum number of retry attempts", ge=0
-    )
-    include_exceptions: set[str] | None = Field(
-        default=None,
-        description="Exception types to retry on. If None, retries all exceptions.",
-    )
-    exclude_exceptions: set[str] | None = Field(
-        default_factory=lambda: {
-            "AgentTimeoutError",
-            "VerifierTimeoutError",
-            "RewardFileNotFoundError",
-            "RewardFileEmptyError",
-            "VerifierOutputParseError",
-        },
-        description="Exception types to NOT retry on. Takes precedence over "
-        "include_exceptions.",
-    )
-    wait_multiplier: float = Field(
-        default=1.0, description="Multiplier for exponential backoff wait time"
-    )
-    min_wait_sec: float = Field(
-        default=1.0, description="Minimum wait time in seconds between retries"
-    )
-    max_wait_sec: float = Field(
-        default=60.0, description="Maximum wait time in seconds between retries"
-    )
-
-
 _TELEMETRY_FIELD_MAX_LENGTH = 4096
 
 
@@ -383,15 +369,11 @@ class JobConfig(BaseModel):
     )
     telemetry: TelemetryConfig | None = Field(default=None, exclude=True, repr=False)
     archive: ArchiveConfig | None = Field(default=None, repr=False)
-    retry: RetryConfig = Field(default_factory=RetryConfig)
+    retry: RetrySettings = Field(default_factory=RetrySettings)
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     metrics: list[MetricConfig] = Field(default_factory=list)
-    agents: list[AgentConfig] = Field(default_factory=lambda: [AgentConfig()])
-    user_agent: UserAgentConfig | None = Field(
-        default=None,
-        description="Optional simulated-user agent and bridge applied to every trial.",
-    )
+    agents: list[AgentConfig] = Field(min_length=1)
     datasets: list[DatasetConfig] = Field(default_factory=list)
     tasks: list[TaskConfig] = Field(default_factory=list)
     artifacts: list[str | ArtifactConfig] = Field(default_factory=list)

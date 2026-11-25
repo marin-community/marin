@@ -138,7 +138,7 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 32)))
 
     assert fake_cutlass.compiled == ["tile128-bf16", "tile256-bf16", "tile128-bf16"]
-    assert len(ReadView(str(tmp_path)).keys(BlobTables.DESCRIPTORS)) == 3
+    assert len(ReadView(str(tmp_path / "v2")).keys(BlobTables.DESCRIPTORS)) == 3
 
     fake_cutlass.forget_process_state()
     install(_kernel_store(tmp_path))
@@ -175,7 +175,7 @@ def test_a_source_revision_change_invalidates_the_stored_object(fake_cutlass, tm
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
 
     assert fake_cutlass.compiled == ["tile128-bf16", "tile128-bf16"]
-    assert len(ReadView(str(tmp_path)).keys(BlobTables.DESCRIPTORS)) == 2
+    assert len(ReadView(str(tmp_path / "v2")).keys(BlobTables.DESCRIPTORS)) == 2
 
 
 def test_cache_revision_combines_internal_source_and_dependency_lock(monkeypatch):

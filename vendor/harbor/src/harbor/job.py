@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from collections import defaultdict, deque
+from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from uuid import uuid4
@@ -24,9 +25,13 @@ from rich.progress import (
 )
 
 from harbor.metrics.base import BaseMetric
+from harbor.host_capabilities import HostCapabilities
 from harbor.metrics.factory import MetricFactory
 from harbor.metrics.mean import Mean
-from harbor.models.benchmark import BenchmarkMetadata, reward_benchmark_metadata
+from harbor.models.benchmark import (
+    BenchmarkMetadata,
+    reward_benchmark_metadata,
+)
 from harbor.models.dataset.paths import DatasetPaths
 from harbor.environments.factory import EnvironmentFactory
 from harbor.models.job.config import (
@@ -56,6 +61,7 @@ from harbor.models.trial.result import TrialResult
 from harbor.registry.client import RegistryClientFactory
 from harbor.archive import open_archive
 from harbor.telemetry.observer import (
+    TelemetryRuntime,
     bind_telemetry,
     record_job_terminal,
     shutdown_telemetry,
@@ -71,7 +77,6 @@ from harbor.utils.logger import logger
 from harbor.utils.pass_at_k import compute_pass_at_k_by_evals
 from harbor.utils.path_compat import safe_rmtree
 from harbor_config.errors import is_resume_retryable
-
 
 CANCELLED_ERROR_TYPE = "CancelledError"
 
@@ -131,6 +136,8 @@ class Job:
         _metrics: dict[str, list[BaseMetric]] | None = None,
         _task_download_results: dict[TaskIdType, TaskDownloadResult] | None = None,
         _benchmark_metadata: tuple[BenchmarkMetadata, ...] = (),
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
     ):
         """Deprecated. Use ``await Job.create(config)`` instead."""
         if _task_configs is None or _metrics is None:
@@ -140,6 +147,8 @@ class Job:
             )
 
         self.config = config
+        self.host_capabilities = host_capabilities
+        self.guest_environment = dict(guest_environment)
         if config.archive is not None and any(
             str(root).startswith(("s3://", "s3a://"))
             for root in (config.jobs_dir, config.archive.root)
@@ -196,6 +205,8 @@ class Job:
             for index, trial_config in enumerate(self._trial_configs)
         }
         self._trial_queue = TrialQueue(
+            host_capabilities=self.host_capabilities,
+            guest_environment=self.guest_environment,
             n_concurrent=self.config.n_concurrent_trials,
             retry_config=self.config.retry,
             release_trial_payloads_in_memory=(
@@ -208,11 +219,17 @@ class Job:
         self._trial_queue.add_hook(TrialEvent.END, self._on_trial_completed)
 
     @classmethod
-    async def create(cls, config: JobConfig) -> "Job":
+    async def create(
+        cls,
+        config: JobConfig,
+        *,
+        host_capabilities: HostCapabilities = HostCapabilities(),
+        guest_environment: Mapping[str, str] = {},
+    ) -> "Job":
+        EnvironmentFactory.validate_config(config.environment)
         task_configs, benchmark_metadata = await cls._resolve_task_configs_and_metadata(
             config
         )
-        EnvironmentFactory.validate_resource_policies(config.environment)
         metrics = await cls._resolve_metrics(config, task_configs)
 
         task_download_results = await cls._cache_tasks(task_configs)
@@ -223,6 +240,8 @@ class Job:
             _metrics=metrics,
             _task_download_results=task_download_results,
             _benchmark_metadata=benchmark_metadata,
+            host_capabilities=host_capabilities,
+            guest_environment=guest_environment,
         )
 
     def __len__(self):
@@ -385,12 +404,9 @@ class Job:
     ) -> tuple[TrialConfig, TrialResult] | None:
         """Load one on-disk trial's ``(config, result)`` for a resume.
 
-        Returns ``None`` for entries that are not trial dirs, whose
-        ``result.json`` is missing (an interrupted trial), or whose on-disk
-        result is *resume-retryable* (a CancelledError / SandboxBuildFailedError
-        result — see :func:`harbor_config.errors.is_resume_retryable`); the dir is removed
-        so the trial is re-planned and RE-RUN on this resume instead of kept as a
-        terminal result. Runs under a thread pool during the resume scan, so it
+        Returns ``None`` for non-trial directories, missing results, unconfirmed
+        teardown, and retryable failures. Incomplete trial directories are removed
+        before replanning their attempts. Runs under a thread pool during the resume scan, so it
         must not mutate shared ``Job`` state (rmtree is disk I/O, not shared
         state).
         """
@@ -582,7 +598,7 @@ class Job:
             )
 
     @staticmethod
-    async def _resolve_task_configs(config: JobConfig) -> list[TaskConfig]:
+    async def resolve_task_configs(config: JobConfig) -> list[TaskConfig]:
         task_configs, _ = await Job._resolve_task_configs_and_metadata(config)
         return task_configs
 
@@ -635,7 +651,6 @@ class Job:
                 trials_dir=self.job_dir,
                 artifact_authority=self.config.artifact_authority,
                 agent=agent_config,
-                user_agent=self.config.user_agent,
                 timeout_multiplier=self.config.timeout_multiplier,
                 agent_timeout_multiplier=self.config.agent_timeout_multiplier,
                 verifier_timeout_multiplier=self.config.verifier_timeout_multiplier,
@@ -691,20 +706,13 @@ class Job:
 
     @staticmethod
     def _is_resume_retryable_result(trial_result: TrialResult) -> bool:
-        """True if this on-disk trial result should be RE-RUN on a fresh resume.
+        """Return whether a saved trial needs another attempt on resume.
 
-        The canonical retryable set lives in the shared
-        :func:`harbor_config.errors.is_resume_retryable` taxonomy. Kept separate
-        from :meth:`_is_cancelled_result`, which drives cancelled-specific
-        progress bookkeeping (``n_cancelled_trials``); this predicate is only
-        the resume-level "re-run vs keep" decision and defaults to include BOTH
-        CancelledError and SandboxBuildFailedError.
-
-        Also re-runs legacy ``BadRequestError`` results whose payload is the
-        exact context-budget-exhausted signal (see
-        :data:`_BAD_REQUEST_MAX_TOKENS_ZERO_SIGNAL`) — those predate
-        :class:`ContextManagementInfrastructureError` but are the same failure.
+        Incomplete teardown, retryable failures, and historical zero-budget
+        BadRequestError results need a fresh attempt.
         """
+        if trial_result.completion is None or trial_result.finished_at is None:
+            return True
         info = trial_result.exception_info
         if info is None:
             return False
@@ -1061,21 +1069,12 @@ class Job:
             job_uid=self._id,
             job_name=self.config.job_name,
         )
-        if telemetry is not None:
-            hook = trial_hook(telemetry)
-            for event in TrialEvent:
-                self._trial_queue.add_hook(event, hook)
-        archive = open_archive(self.config.archive, trials_dir=self.job_dir)
-        if archive is not None:
-            self._trial_queue.add_hook(TrialEvent.END, archive.on_trial_end)
         try:
-            with bind_telemetry(telemetry):
-                result = await self._run_job()
-                # Finalization adds existing resume results and only the ungraded
-                # attempts that survived into the completed job result.
-                if archive is not None:
-                    await archive.finalize(result.trial_results)
-                    await asyncio.to_thread(archive.seal)
+            if telemetry is not None:
+                hook = trial_hook(telemetry)
+                for event in TrialEvent:
+                    self._trial_queue.add_hook(event, hook)
+            result = await self._run_job_with_archive(telemetry)
         except BaseException as error:
             record_job_terminal(telemetry, error)
             raise
@@ -1083,9 +1082,36 @@ class Job:
             record_job_terminal(telemetry)
             return result
         finally:
+            release = asyncio.create_task(
+                asyncio.to_thread(shutdown_telemetry, telemetry)
+            )
+            cancellation: asyncio.CancelledError | None = None
+            while not release.done():
+                try:
+                    await asyncio.shield(release)
+                except asyncio.CancelledError as error:
+                    cancellation = error
+            release.result()
+            if cancellation is not None:
+                raise cancellation
+
+    async def _run_job_with_archive(
+        self, telemetry: TelemetryRuntime | None
+    ) -> JobResult:
+        archive = open_archive(self.config.archive, trials_dir=self.job_dir)
+        try:
+            if archive is not None:
+                self._trial_queue.add_hook(TrialEvent.END, archive.on_trial_end)
+            with bind_telemetry(telemetry):
+                result = await self._run_job()
+                # Canonical archive rows use the selected results, including resumed trials.
+                if archive is not None:
+                    await archive.finalize(result.trial_results)
+                    await asyncio.to_thread(archive.seal)
+            return result
+        finally:
             if archive is not None:
                 await asyncio.to_thread(archive.close)
-            await asyncio.to_thread(shutdown_telemetry, telemetry)
 
     async def _run_job(self) -> JobResult:
         try:

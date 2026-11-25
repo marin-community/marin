@@ -10,6 +10,8 @@ from types import MappingProxyType
 
 from marin.datakit.chat_render import render_chat_step
 from marin.datakit.download.agenttrove import agenttrove_chat_normalize_steps
+from marin.datakit.download.calibforge_relay import SOURCE_NAME as CALIBFORGE_RELAY_SOURCE
+from marin.datakit.download.calibforge_relay import calibforge_relay_chat_normalize_steps
 from marin.datakit.download.coderforge import coderforge_chat_normalize_steps
 from marin.datakit.download.davinci_dev import davinci_dev_env_native_chat_normalize_steps
 from marin.datakit.download.glm53_compaction import glm53_compaction_chat_normalize_steps
@@ -163,6 +165,7 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     rows: list[_ChatSourceRow] = [
         ("agenttrove", agenttrove_chat_normalize_steps),
         ("agenttrove-glm53-compactions", glm53_compaction_chat_normalize_steps),
+        (CALIBFORGE_RELAY_SOURCE, calibforge_relay_chat_normalize_steps),
         ("wildchat-glm53-format-completions", glm53_format_following_chat_normalize_steps),
         ("coderforge", coderforge_chat_normalize_steps),
         ("davinci-dev/env-native", davinci_dev_env_native_chat_normalize_steps),
@@ -209,6 +212,8 @@ def all_sft_sources() -> dict[str, DatakitChatSource]:
     token_counts["agenttrove-glm53-compactions"] = 0.25
     token_counts["wildchat-glm53-format-completions"] = 0.01
     token_counts["synthetic-misconceptions-conversations"] = 0.002
+    # 09-21-tokenizer count of the relay rows plus a four-bytes-per-token estimate for the Kimi traces.
+    token_counts[CALIBFORGE_RELAY_SOURCE] = 0.32
     return {
         name: DatakitChatSource(
             name=name,

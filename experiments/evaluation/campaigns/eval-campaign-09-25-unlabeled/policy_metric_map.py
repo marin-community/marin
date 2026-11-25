@@ -1,75 +1,56 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Metric names for the October 2026 publication-policy evaluation suite.
+"""Metric contracts for the publication campaign.
 
-``evaluator_metric`` is the spelling declared by Evalchemy or Harbor. ``record_metric``
-is the canonical key consumed by Evaldash. ``published_metric`` identifies the
-machine key behind the score reported for the current publication campaign; it can
-name a subgroup or a separate cohort statistic. Historical records retain their
-recorded benchmark metadata.
-CRUXEval's record metric combines directions while its published metric uses only
-output trials. SOTOPIA's published metric is computed across a model cohort after
-the Harbor reward record is written.
-PIQA's pinned task reports both `acc` and `acc_norm`; evaluator metadata selects
-`acc`, while the publication policy uses the length-normalized `acc_norm`.
+Curated evaluator and record keys use their protocol spelling. Published metrics
+can select a declared subgroup; CRUXEval publishes output-direction accuracy.
+Historical records retain their recorded benchmark metadata.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from types import MappingProxyType
-
-
-class PolicyMechanism(StrEnum):
-    EVALCHEMY = "evalchemy"
-    HARBOR = "harbor"
 
 
 @dataclass(frozen=True)
 class PolicyMetric:
-    mechanism: PolicyMechanism
-    task: str | None
     evaluator_metric: str
     record_metric: str
     published_metric: str
 
 
-def _evalchemy(task: str, evaluator: str, record: str, published: str | None = None) -> PolicyMetric:
-    return PolicyMetric(PolicyMechanism.EVALCHEMY, task, evaluator, record, published or evaluator)
-
-
-def _harbor(published: str = "reward") -> PolicyMetric:
-    return PolicyMetric(PolicyMechanism.HARBOR, None, "reward", "reward", published)
+def _metric(evaluator: str, record: str, published: str | None = None) -> PolicyMetric:
+    return PolicyMetric(evaluator, record, published or evaluator)
 
 
 POLICY_METRICS_2026_10_16: Mapping[str, PolicyMetric] = MappingProxyType(
     {
-        "math500": _evalchemy("MATH500", "accuracy", "accuracy"),
-        "humanevalplus": _evalchemy("HumanEvalPlus", "pass@1", "pass_at_1"),
-        "mbppplus": _evalchemy("MBPPPlus", "pass@1", "pass_at_1"),
-        "olympiadbench": _evalchemy("OlympiadBench", "accuracy_avg", "accuracy"),
-        "gsm8k-0shot": _evalchemy("gsm8k", "exact_match", "accuracy"),
-        "piqa": _evalchemy("piqa", "acc", "accuracy", "acc_norm"),
-        "winogrande": _evalchemy("winogrande", "acc", "accuracy"),
-        "boolq": _evalchemy("boolq", "acc", "accuracy"),
-        "truthfulqa": _evalchemy("truthfulqa_mc2", "acc", "accuracy"),
-        "triviaqa": _evalchemy("triviaqa", "exact_match", "accuracy"),
-        "aime24": _evalchemy("AIME24", "accuracy_avg", "accuracy"),
-        "mmlu-pro": _evalchemy("MMLUPro", "accuracy_avg", "accuracy"),
-        "gpqa-diamond": _evalchemy("GPQADiamond", "accuracy_avg", "accuracy"),
-        "cruxeval": _evalchemy("CruxEval", "pass@1", "pass_at_1", "output_pass@1"),
-        "financebench": _evalchemy("FinanceBench", "accuracy", "accuracy"),
-        "ifbench": _evalchemy("IFBench", "strict_prompt_accuracy", "strict_prompt_accuracy"),
-        "mrcr": _evalchemy("MRCR", "mrcr_accuracy", "mrcr_accuracy"),
-        "nupa": _evalchemy("NUPA5K-Loose", "exact_match", "accuracy"),
-        "swebench-verified": _harbor(),
-        "ot-tblite-recovery": _harbor(),
-        "tb2-recovery": _harbor(),
-        "ds-1000-local": _harbor(),
-        "bfclparity-pi": _harbor(),
-        "bixbench-pi": _harbor(),
-        "tau3-pi": _harbor(),
-        "sotopia-hard": _harbor("length_controlled_overall"),
+        "math500": _metric("accuracy", "accuracy"),
+        "humanevalplus": _metric("accuracy", "accuracy"),
+        "mbppplus": _metric("accuracy", "accuracy"),
+        "olympiadbench": _metric("accuracy", "accuracy"),
+        "gsm8k-0shot": _metric("exact_match,flexible-extract", "exact_match,flexible-extract"),
+        "piqa": _metric("acc_norm,none", "acc_norm,none"),
+        "winogrande": _metric("acc,none", "acc,none"),
+        "boolq": _metric("acc,none", "acc,none"),
+        "truthfulqa": _metric("acc,none", "acc,none"),
+        "triviaqa": _metric("exact_match,strict_answer", "exact_match,strict_answer"),
+        "aime24": _metric("accuracy", "accuracy"),
+        "mmlu-pro": _metric("accuracy", "accuracy"),
+        "gpqa-diamond": _metric("accuracy", "accuracy"),
+        "cruxeval": _metric("accuracy", "accuracy", "direction=output/accuracy"),
+        "financebench": _metric("accuracy", "accuracy"),
+        "ifbench": _metric("strict_prompt_accuracy", "strict_prompt_accuracy"),
+        "mrcr": _metric("accuracy", "accuracy"),
+        "mrcr-32k": _metric("accuracy", "accuracy"),
+        "mrcr-65k": _metric("accuracy", "accuracy"),
+        "nupa": _metric("exact_match", "exact_match"),
+        "swebench-verified": _metric("reward", "reward"),
+        "ot-tblite-recovery": _metric("reward", "reward"),
+        "tb2-recovery": _metric("reward", "reward"),
+        "ds-1000-local": _metric("reward", "reward"),
+        "bfclparity-pi": _metric("reward", "reward"),
+        "bixbench-pi": _metric("reward", "reward"),
     }
 )

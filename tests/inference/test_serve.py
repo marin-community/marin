@@ -84,13 +84,12 @@ from marin.inference.vllm_server import (
     VllmType,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
+from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.routing import Route
-
-from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 @pytest.mark.parametrize(
@@ -131,7 +130,7 @@ def test_resolve_model_path_passthrough(model, ttl_days):
 def test_resolve_model_path_includes_revision_in_cache_key(monkeypatch):
     observed: list[tuple[str, int, str]] = []
 
-    def resolve(model: str, *, cache_ttl_days: int, cache_prefix: str) -> str:
+    def resolve(model: str, *, cache_ttl_days: int, cache_prefix: str, cache_mode) -> str:
         observed.append((model, cache_ttl_days, cache_prefix))
         return "gs://cache/pinned-model"
 
@@ -176,6 +175,7 @@ def test_mirrored_model_keeps_tokenizer_revision_independent(
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -238,6 +238,7 @@ def test_vllm_backend_serves_model_and_tokenizer_revisions_independently(monkeyp
         yield SimpleNamespace(
             model_id="public-model",
             server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -346,6 +347,43 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     assert resolved.model_id == "Qwen/Qwen3-0.6B"
 
 
+@pytest.mark.parametrize("dp_args,rank_count", [((), 4), (("--data-parallel-size", "1"), 1)])
+def test_local_cli_explicit_dp_overrides_native_args(monkeypatch, tmp_path, unused_tcp_port, dp_args, rank_count):
+    monkeypatch.setattr("marin.inference.vllm_backend.vllm_launcher", lambda _: FakeVllmLauncher("serve"))
+
+    def probe_then_stop(_seconds):
+        for rank, status in ((rank_count - 1, 200), (rank_count, 400)):
+            response = requests.post(
+                f"http://127.0.0.1:{unused_tcp_port}/v1/chat/completions",
+                json={"model": "fake-model", "messages": [{"role": "user", "content": "hello"}]},
+                headers={"X-data-parallel-rank": str(rank)},
+                timeout=10,
+            )
+            assert response.status_code == status
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("marin.inference.serve_cli.time", SimpleNamespace(sleep=probe_then_stop))
+    template = tmp_path / "chat.jinja"
+    template.write_text("{{ messages }}")
+    result = CliRunner().invoke(
+        serve_main,
+        [
+            "local",
+            str(tmp_path),
+            "--tensor-parallel-size",
+            "1",
+            "--port",
+            str(unused_tcp_port),
+            "--chat-template",
+            str(template),
+            "--vllm-arg=-dp",
+            "--vllm-arg=4",
+            *dp_args,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
 def test_staged_model_downloads_remote_weights_to_temporary_directory(monkeypatch):
     observed: dict[str, object] = {}
 
@@ -392,6 +430,7 @@ def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
         yield SimpleNamespace(
             model_id="target",
             server_url="http://127.0.0.1:8000/v1",
+            metrics_url="http://127.0.0.1:8000/metrics",
             wait_until_ready=lambda: None,
         )
 
@@ -713,9 +752,10 @@ def test_marin_fork_requires_gpu():
         _plan(vllm_source=VllmSource.MARIN_FORK)  # default tpu path
 
 
-def test_resolve_serving_plan_rejects_multihost_slices():
+def test_resolve_serving_plan_allows_multihost_vllm_but_not_levanter():
+    assert _plan(tpu="v4-32").engine.launcher is VllmLauncherType.TPU
     with pytest.raises(click.ClickException, match="multi-host"):
-        _plan(tpu="v6e-16")
+        _plan(tpu="v6e-16", backend="levanter")
 
 
 def test_resolve_serving_plan_accepts_compatible_tpu_alternatives():
@@ -732,6 +772,7 @@ def test_run_iris_service_registers_without_worker_placement_metadata(monkeypatc
     def prepared_local_inference(*_args, **_kwargs):
         yield SimpleNamespace(
             model=RunningModel(OpenAIEndpoint("http://127.0.0.1:1/v1", model_id)),
+            metrics_url="http://127.0.0.1:1/metrics",
             backend_name="vllm",
             tensor_parallel_size=1,
             chat_template_content="{{ messages }}",
@@ -835,6 +876,7 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
                 wait_until_ready=ready,
                 check_alive=check_alive,
                 server_url="http://127.0.0.1:1/v1",
+                metrics_url="http://127.0.0.1:1/metrics",
             )
         finally:
             events.append("stopped")
@@ -851,7 +893,12 @@ def test_pipeline_service_endpoint_and_shutdown_lifecycle(
         iris=IrisConfig(
             worker_resources=ResourceConfig.with_gpu("H100", count=8, replicas=2),
             worker_environment=create_environment(docker_image="test"),
-            serving_geometry=ServingGeometry(tensor_parallel_size, data_parallel_size, 2, 8),
+            serving_geometry=ServingGeometry(
+                tensor_parallel_size=tensor_parallel_size,
+                data_parallel_size=data_parallel_size,
+                pipeline_parallel_size=2,
+                gpus_per_task=8,
+            ),
             cache_ttl_days=0,
         ),
         endpoint_name="/serve/pipeline",
@@ -939,6 +986,7 @@ def _invoke_iris_serve(monkeypatch, *args: str):
         yield client
 
     services = []
+    monkeypatch.setattr("marin.inference.iris_cli.prepare_hf_models", lambda model, engine, *_a, **_k: (model, engine))
     monkeypatch.setattr("marin.inference.iris_cli.find_project_root", lambda: Path.cwd())
     monkeypatch.setattr("marin.inference.iris_cli.connect_controller", connect)
     monkeypatch.setattr("marin.inference.iris_cli.IrisClient.remote", remote)
@@ -990,6 +1038,22 @@ def test_iris_serve_proxy_timeout_covers_broker_worker_and_lease(monkeypatch):
     assert broker.proxy.request_timeout_seconds == 3600
     assert broker.worker.request_timeout_seconds == 3240
     assert broker.request_lease_timeout_seconds == 3420
+
+
+def test_iris_serve_delivers_secret_without_putting_it_in_the_service_config(monkeypatch):
+    monkeypatch.setenv("TEST_PARALLEL_KEY", "parallel-key")
+
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--secret",
+        "PARALLEL_API_KEY",
+        "env:TEST_PARALLEL_KEY",
+        "--no-wait",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert client.submit.call_args.kwargs["environment"].secrets == {"PARALLEL_API_KEY": "parallel-key"}
+    assert "parallel-key" not in repr(services[0])
 
 
 def test_iris_serve_resolves_additive_metric_families_before_submission(monkeypatch, tmp_path):
@@ -1169,7 +1233,11 @@ def test_dashboard_serves_ui_and_reverse_proxies_streaming_without_tool_catalog(
             assert page.status_code == 200
             assert "marin · serve" in page.text
 
-            assert requests.get(f"{base}/info", timeout=10).json() == dataclasses.asdict(info)
+            assert requests.get(f"{base}/info", timeout=10).json() == {
+                **dataclasses.asdict(info),
+                "web_search": False,
+                "feedback": False,
+            }
             assert requests.get(f"{base}/health", timeout=10).json() == {"status": "ok", "model": "fake-model"}
             assert requests.get(f"{base}/v1/models", timeout=10).json()["data"][0]["id"] == "fake-model"
             assert "vllm:generation_tokens_total 42" in requests.get(f"{base}/metrics", timeout=10).text
@@ -1267,3 +1335,31 @@ def test_dashboard_health_reports_loading_when_upstream_down():
         response = requests.get(f"http://127.0.0.1:{dashboard_port}/health", timeout=10)
     assert response.status_code == 503
     assert response.json()["status"] == "loading"
+
+
+def test_iris_serve_multihost_allocates_one_slice_and_ray_ports(monkeypatch):
+    result, client, services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", "--no-wait")
+    assert result.exit_code == 0, result.output
+    submission = client.submit.call_args.kwargs
+    assert submission["replicas"] == 4
+    assert submission["coscheduling"].group_by == "tpu-name"
+    assert set(submission["ports"]) == {"http", "ray-gcs", "ray-client", "ray-dashboard", "ray-dashboard-agent"}
+    assert services[0].iris.worker_resources.device.variant == "v4-32"
+
+
+@pytest.mark.parametrize("broker_args", [("--instances", "2"), ("--broker",)])
+def test_iris_serve_rejects_brokered_multihost_before_submission(monkeypatch, broker_args):
+    result, client, services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", *broker_args, "--no-wait")
+    assert result.exit_code != 0
+    assert "one instance and no broker" in result.output
+    client.submit.assert_not_called()
+    assert services == []
+
+
+def test_iris_serve_multihost_dry_run_does_not_submit(monkeypatch):
+    result, client, _services, _mint = _invoke_iris_serve(monkeypatch, "--tpu", "v4-32", "--dry-run")
+    assert result.exit_code == 0, result.output
+    client.submit.assert_not_called()
+    # Submission geometry is covered by the adjacent submission test; dry-run
+    # promises no controller allocation rather than a particular display format.
+    client.resolve_endpoint.assert_not_called()

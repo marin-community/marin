@@ -13,23 +13,34 @@ full-resync set-replacement path.
 """
 
 import json
+import threading
 from contextlib import ExitStack
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cluster.bundle import content_id
-from iris.cluster.config import AuthConfig, IrisClusterConfig, resolve_config_secrets, resolve_principal_references
+from iris.cluster.config import (
+    AuthConfig,
+    IrisClusterConfig,
+    PeerConfig,
+    resolve_config_secrets,
+    resolve_principal_references,
+)
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.auth import ControllerAuth, create_controller_auth
-from iris.cluster.controller.federation_store import ControllerFederationStore
+from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.jobs import WORKDIR_FILE_OFFLOAD_THRESHOLD, peer_status
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.federation.manager import FederationManager
+from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.store import HandoffAdmission, HandoffSpec, HandoffState
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, AttemptUid, JobName
+from iris.managed_thread import get_thread_container
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.testing.controller import (
@@ -71,8 +82,9 @@ from iris.testing.federation import (
     make_service as _make_service,
 )
 from iris.testing.transitions import commit_dispatch_updates
+from rigging.filesystem.cross_region import TransferBudgetExceeded
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 _USER = "test-user"
 
@@ -171,6 +183,166 @@ def test_a_federated_job_carries_its_workspace_bundle_to_the_peer(tmp_path, log_
         manager.sync_once()
 
         assert peer_service._bundle_store.get(content_id(blob)) == blob
+
+
+def test_an_unreadable_bundle_delays_only_its_own_handoff(tmp_path, log_client, monkeypatch):
+    """A blob read that fails (here the cross-region budget) keeps that handoff pending
+    for the next pass; the rest of the batch is still delivered."""
+    stuck_blob, ready_blob = b"PK\x03\x04 stuck", b"PK\x03\x04 ready"
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
+        job_ids = {}
+        for name, blob in (("fed-stuck", stuck_blob), ("fed-ready", ready_blob)):
+            request = _cluster_pinned_request(name)
+            request.bundle_blob = blob
+            job_ids[name] = JobName.from_wire(parent_service.launch_job(request, None).job_id)
+
+        store = parent_service._bundle_store
+        read = store.get
+
+        def exhausted_for_stuck(cid: str) -> bytes:
+            if cid == content_id(stuck_blob):
+                raise TransferBudgetExceeded(10 * 1024**3, len(stuck_blob), 10 * 1024**3, cid)
+            return read(cid)
+
+        monkeypatch.setattr(store, "get", exhausted_for_stuck)
+        promote_queued_federation(manager, parent_state)  # promotes, then delivers the batch
+
+        assert _handle(parent_state, job_ids["fed-stuck"]).handoff_state == int(HandoffState.PENDING_HANDOFF)
+        assert _handle(parent_state, job_ids["fed-ready"]).handoff_state == int(HandoffState.HANDED_OFF)
+
+        monkeypatch.setattr(store, "get", read)
+        manager.sync_once()
+
+        assert _handle(parent_state, job_ids["fed-stuck"]).handoff_state == int(HandoffState.HANDED_OFF)
+
+
+def test_a_failed_sync_step_does_not_end_the_peer_sync_loop(tmp_path, log_client):
+    """The per-peer sync thread is never restarted, so an unexpected error in one pass
+    must leave it running for the next."""
+
+    class _FailsOnceConnection(_InProcessPeerConnection):
+        def __init__(self, service):
+            super().__init__(service)
+            self.calls = 0
+            self.recovered = threading.Event()
+
+        def federation_sync(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("unexpected failure in one sync pass")
+            self.recovered.set()
+            return super().federation_sync(request)
+
+    with ExitStack() as stack:
+        parent_service, _ = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _FailsOnceConnection(peer_service)
+        peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
+        manager = FederationManager(
+            [peer],
+            threads=get_thread_container(),
+            store=ControllerFederationStore(parent_service._db),
+            bundles=parent_service._bundle_store,
+            cluster_id="parent",
+            sync_interval=Duration.from_seconds(0.01),
+        )
+        manager.start()
+        stack.callback(manager.stop)
+
+        assert connection.recovered.wait(timeout=5)
+
+
+def _promote_without_delivery(manager, state: ControllerTestState) -> None:
+    """Promote every queued handle to ``PENDING_HANDOFF``, one capped tick at a time, and
+    leave delivery to ``sync_once``."""
+    while True:
+        with state._db.read_snapshot() as tx:
+            promotions = manager.plan_federation(build_queued_candidates(tx))
+        if not promotions:
+            return
+        with state._db.transaction() as cur:
+            confirmed = [p for p in promotions if writes.promote_queued_handoff(cur, p.job_id, p.peer_id)]
+        manager.confirm_promotions(confirmed)
+
+
+def test_handoffs_that_always_fail_do_not_starve_later_ones(tmp_path, log_client, monkeypatch):
+    """Each pass delivers a bounded batch; repeatedly failing handoffs go to the back of it."""
+    broken = [b"PK\x03\x04 broken-1", b"PK\x03\x04 broken-2"]
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(
+            parent_service, _InProcessPeerConnection(peer_service), max_handoffs_per_cycle=len(broken)
+        )
+        job_ids = []
+        for index, blob in enumerate([*broken, b"PK\x03\x04 readable"]):
+            request = _cluster_pinned_request(f"fed-{index}")
+            request.bundle_blob = blob
+            job_ids.append(JobName.from_wire(parent_service.launch_job(request, None).job_id))
+        *broken_ids, readable_id = job_ids
+
+        store = parent_service._bundle_store
+        read = store.get
+        unreadable = {content_id(blob) for blob in broken}
+
+        def fail_broken(cid: str) -> bytes:
+            if cid in unreadable:
+                raise FileNotFoundError(cid)
+            return read(cid)
+
+        monkeypatch.setattr(store, "get", fail_broken)
+        _promote_without_delivery(manager, parent_state)
+        manager.sync_once()
+        manager.sync_once()
+
+        assert _handle(parent_state, readable_id).handoff_state == int(HandoffState.HANDED_OFF)
+        for job_id in broken_ids:
+            assert _handle(parent_state, job_id).handoff_state == int(HandoffState.PENDING_HANDOFF)
+
+
+def test_an_unexpected_heartbeat_error_marks_the_peer_unreachable(tmp_path, log_client):
+    """Placement routes only to reachable peers, so a probe that cannot complete must not
+    leave the last good heartbeat standing."""
+
+    class _AuthFailingConnection(_InProcessPeerConnection):
+        def list_backends(self):
+            raise RuntimeError("could not mint the peer token")
+
+    with ExitStack() as stack:
+        peer_service, _ = _make_service(stack, "peer", tmp_path, log_client)
+        connection = _AuthFailingConnection(peer_service)
+        peer = FederationPeer("cw", PeerConfig(controller_address="http://peer:10000"), connection)
+        peer._heartbeat = replace(peer.heartbeat(), reachable=True)
+
+        with pytest.raises(RuntimeError):
+            peer.probe()
+
+        assert not peer.heartbeat().reachable
+
+
+def test_a_failing_cancel_does_not_stop_status_sync_for_the_peer(tmp_path, log_client):
+    class _CancelFailingConnection(_InProcessPeerConnection):
+        def terminate_job(self, job_id: JobName) -> None:
+            raise RuntimeError("cancel bug")
+
+    with ExitStack() as stack:
+        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
+        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
+        manager = _attach_federation(parent_service, _CancelFailingConnection(peer_service))
+        finished, cancelled = (
+            JobName.from_wire(parent_service.launch_job(_cluster_pinned_request(name), None).job_id)
+            for name in ("fed-finished", "fed-cancelled")
+        )
+        promote_queued_federation(manager, parent_state)
+        parent_service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=cancelled.to_wire()), None)
+        _run_peer_task_to_success(peer_state, finished)
+
+        manager.sync_once()
+
+        assert query_job(parent_state, finished).state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 def test_a_federated_job_carries_its_externalized_workdir_files_to_the_peer(tmp_path, log_client):

@@ -82,16 +82,18 @@ tags embedded in prose remain inline. This preserves custom tags such as
 dashboard.
 
 Choose **Share chat** to store a snapshot in the dashboard process and copy a
-link whose URL fragment contains its 16-character ID. The link length does not
-grow with the transcript. The snapshot includes the title, model name, user and
-assistant message text, and assistant errors. It excludes reasoning, tool calls,
+link whose URL fragment contains its 16-character ID. If the browser denies
+clipboard access, the dashboard shows a selectable link and a **Copy link**
+button. The link length does not grow with the transcript. The snapshot includes
+the title, model name, user and assistant message text, and assistant errors. It
+excludes reasoning, tool calls,
 tool results, the system prompt, custom template instructions, Python tool
 source, shell workspace, and unparsed raw protocol fields. The share operation
 does not redact excluded data that was copied into included message text or an
 error.
 
 The UTF-8 JSON request body for each snapshot is limited to 512 KiB. An
-oversized snapshot is rejected, and the share button reports **Copy failed**.
+oversized snapshot is rejected, and the share button reports **Share failed**.
 The dashboard process retains the newest 128 snapshots in memory. A snapshot is
 unavailable after it is evicted or the serving process restarts. Opening a valid
 link fetches the snapshot from the same dashboard process, saves it in that
@@ -104,6 +106,23 @@ contains the Iris capability token. That token authorizes the routes for one
 requests. The command that mints the URL prints its expiration time. Share chat
 links only with trusted users. The share operation grants the same access as the
 current dashboard URL; it does not narrow or revoke that access.
+
+## Report a poor response
+
+**Report issue** in Chat saves a private report about the active conversation
+to Marin storage. Describe what went wrong, optionally enter your name, and
+choose **Save report**. The browser remembers the name for later reports; the
+server does not verify it. The report contains the description, the name, the
+model and serving settings, and the saved
+conversation, including the system prompt, reasoning, tool calls, and tool
+configuration. Uncheck **Include the conversation** to leave the conversation
+out. The dialog then links to the stored JSON in Filer. Reports from CoreWeave
+workers go to `s3://marin-us-east-02a/marin/model-feedback/`, and reports from
+GCP workers go to `gs://marin-eval-metadata/model-feedback/`, one object per
+report under a `YYYY-MM-DD/` folder. The button appears only for
+`marin-serve iris` jobs. Each serving process accepts up to 256 reports of at
+most 1 MiB each. Saved reports appear in EvalDash's Playground Reports tab after
+its next ingest pass, within about ten minutes.
 
 ## Custom Python tools
 
@@ -146,6 +165,16 @@ source. Pydantic validates arguments before each call and the return value
 afterward. Calls run in isolated ShellSim environments with CPython and NumPy,
 prepared on the first Python-tool invocation or shell command. Guest code has no
 ambient host filesystem, process, network, environment or clock access.
+
+If a call returns `503` with `Dashboard tool runtime preparation failed`, inspect
+the serving task's logs for the underlying package download or cache error.
+ShellSim 0.1.39 uses
+`https://public.oa.dev/shellsim/ports/catalog.json`; 0.1.38 uses
+`shellsim.rjp.io`, which can return HTTP 502. Relaunch the serving job with its
+original `uv run marin-serve iris ...` command from an updated checkout to use
+the current lockfile and catalog. A running dashboard keeps its catalog
+selection for the process lifetime. Transient preparation failures are retried
+on the next tool call.
 
 Within one user turn, each model response that contains one or more calls counts
 as one tool round. **Max tool rounds** in **More settings** controls the number
@@ -207,5 +236,24 @@ worker timeout used for custom Python tools.
 
 After the endpoint becomes ready, `marin-serve iris` prints a capability URL.
 Possession of that URL authorizes inference and simulated Python tool calls.
-It also authorizes ShellSim commands and bounded public GitHub clones. Share
-the URL only with trusted users and treat it as a credential.
+It also authorizes ShellSim commands, bounded public GitHub clones, and, when
+enabled, web searches. Share the URL only with trusted users and treat it as a
+credential.
+
+## Web search
+
+The **Web search** checkbox above the Chat composer adds a `web_search` tool,
+backed by Parallel's search API, to the request's `tools` field. It is shown
+only when the serving job holds the Iris secret `PARALLEL_API_KEY`. The
+dashboard server adds the key to each call, so the browser never receives it.
+Each search is billed to the account that owns the key.
+
+```bash
+uv run marin-serve iris MODEL --cluster marin --secret PARALLEL_API_KEY env:PARALLEL_API_KEY
+```
+
+A custom launcher that calls `build_dashboard_app` directly must submit the same
+secret and pass `web_search=parallel_web_search_from_secret()` from
+`marin.inference.web_search`. In brokered mode, the model worker jobs do not
+receive the key; in direct mode, the model server shares the dashboard's task
+and can read it.

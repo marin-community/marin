@@ -10,6 +10,7 @@ import sys
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import ModuleType
 
@@ -18,20 +19,24 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
 
 from marin.execution.lazy import ArtifactStep, run
 from marin.execution.remote import sanitize_job_name
 from marin.experiment.cli import BuildResult, build_options_with_runner, graph_handles
-from marin.rl.skyrl import IrisSkyRLExecution
+from marin.rl.skyrl import IrisSkyRLExecution, skyrl_execution
 
 _COORDINATOR_CPU = 4
 _COORDINATOR_MEMORY = "16GB"
 _COORDINATOR_DISK = "64GB"
+_COORDINATOR_GRAPH_ENV = "MARIN_RL_COORDINATOR_GRAPH"
 _COORDINATOR_ENV_VARS = (
+    "GIT_COMMIT",
     "DAYTONA_API_KEY",
     "DAYTONA_RL_API_KEY",
     "DAYTONA_EVAL_API_KEY",
@@ -48,6 +53,50 @@ class _IrisSubmissionRoute:
     container_profile: job_pb2.ContainerProfile | None
 
 
+class _CoordinatorRun(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    version: str
+    required_env_vars: tuple[str, ...]
+    forward_env: tuple[str, ...]
+
+
+_COORDINATOR_GRAPH = TypeAdapter(tuple[_CoordinatorRun, ...])
+
+
+def _coordinator_graph(handles: list[ArtifactStep]) -> tuple[_CoordinatorRun, ...]:
+    return tuple(
+        _CoordinatorRun(
+            name=step.name,
+            version=step.version,
+            forward_env=(
+                tuple(sorted(set(step.run.keywords.get("forward_env", ())))) if isinstance(step.run, partial) else ()
+            ),
+            required_env_vars=tuple(sorted(set(execution.required_env_vars))),
+        )
+        for step in graph_handles(handles)
+        if (execution := skyrl_execution(step)) is not None
+    )
+
+
+def validate_coordinator_graph(handles: list[ArtifactStep]) -> None:
+    """Refuse a re-entered graph whose run identities or forwarded environment names differ."""
+    payload = os.environ.get(_COORDINATOR_GRAPH_ENV)
+    if payload is None:
+        raise click.UsageError("submitted RL graph identity is missing from the coordinator")
+    try:
+        submitted = _COORDINATOR_GRAPH.validate_json(payload, strict=True)
+    except ValidationError as error:
+        raise click.UsageError("submitted RL graph identity is malformed") from error
+    rebuilt = _coordinator_graph(handles)
+    if rebuilt != submitted:
+        raise click.UsageError(
+            "coordinator rebuilt a different RL graph: "
+            f"submitted={payload}, rebuilt={_COORDINATOR_GRAPH.dump_json(rebuilt).decode()}"
+        )
+
+
 def _module_name(module: ModuleType) -> str:
     spec = module.__spec__
     if spec is not None and spec.name is not None:
@@ -58,12 +107,7 @@ def _module_name(module: ModuleType) -> str:
 
 
 def _skyrl_executions(handles: list[ArtifactStep]) -> tuple[IrisSkyRLExecution, ...]:
-    executions = {
-        execution
-        for handle in graph_handles(handles)
-        for execution in handle.runtime_args.values()
-        if isinstance(execution, IrisSkyRLExecution)
-    }
+    executions = {execution for handle in graph_handles(handles) if (execution := skyrl_execution(handle)) is not None}
     if not executions:
         raise ValueError("RL experiment did not construct a SkyRL artifact step")
     return tuple(executions)
@@ -97,7 +141,6 @@ def _coordinator_request(
     handles: list[ArtifactStep],
     module_name: str,
     argv: tuple[str, ...],
-    max_concurrent: int,
     workspace: Path,
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
@@ -106,6 +149,7 @@ def _coordinator_request(
     for execution in executions:
         for name in execution.required_env_vars:
             selected_env[name] = env_vars[name]
+    selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
     job_name = sanitize_job_name(f"{terminal.name}-{terminal.version}-coordinator-{uuid.uuid4().hex[:8]}")
@@ -113,7 +157,7 @@ def _coordinator_request(
         name=job_name,
         entrypoint=Entrypoint.from_binary(
             "python",
-            ["-m", module_name, *argv, "--max-concurrent", str(max_concurrent)],
+            ["-m", module_name, *argv],
         ),
         resources=ResourceConfig.with_cpu(
             cpu=_COORDINATOR_CPU,
@@ -131,33 +175,41 @@ def _coordinator_request(
     return route.cluster_config, request
 
 
-def _submit_or_run(
-    module_name: str, handles: list[ArtifactStep], max_concurrent: int, coordinator_env: Mapping[str, str]
-) -> None:
+def submit_or_run(
+    module_name: str,
+    handles: list[ArtifactStep],
+    max_concurrent: int,
+    coordinator_env: Mapping[str, str],
+    *,
+    argv: tuple[str, ...],
+) -> JobName | None:
+    """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
+        if _COORDINATOR_GRAPH_ENV in os.environ:
+            validate_coordinator_graph(handles)
         run(*handles, max_concurrent=max_concurrent)
-        return
+        return None
 
     workspace = find_project_root()
     cluster_config, request = _coordinator_request(
         handles,
         module_name,
-        tuple(sys.argv[1:]),
-        max_concurrent,
+        argv,
         workspace,
         coordinator_env,
     )
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
         handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)
     click.echo(f"submitted RL coordinator {handle.job_id} ({request.name}) via {cluster_config}")
+    return JobName.from_wire(handle.job_id)
 
 
 def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
     """Build and validate an RL graph, then run it in or submit it to Iris."""
-    module = sys.modules[fn.__module__]
-    module_name = _module_name(module)
 
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
-        _submit_or_run(module_name, handles, max_concurrent, os.environ)
+        # Spawn workers import the main module before registering its module spec.
+        module_name = _module_name(sys.modules[fn.__module__])
+        submit_or_run(module_name, handles, max_concurrent, os.environ, argv=tuple(sys.argv[1:]))
 
     return build_options_with_runner(fn, runner)

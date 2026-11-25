@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import itertools
 import json
+import uuid
 from collections.abc import Iterable, Iterator
 
 from finestore.eval import (
@@ -21,103 +23,17 @@ from finestore.eval import (
     ParticipantType,
     RolloutContentType,
     RolloutRecord,
-    SampleKind,
     StepRecord,
     rollouts_schema,
     sample_from_archive_row,
 )
+from finestore.eval_rollouts import participant_type_for_role, rollout_records_from_sample
+from finestore.layout import TableMetadata, TableNameConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore
 
-_ASSISTANT_ROLES = frozenset({"agent", "assistant", "model"})
-_SYSTEM_ROLES = frozenset({"context", "developer", "system"})
 _COMPLETE_OBJECT = f"_marin/rollouts-v{ROLLOUT_SCHEMA_VERSION}-complete.json"
 _SOURCE_TABLES = (ARCHIVE_SAMPLES_TABLE, ARCHIVE_STEPS_TABLE)
-
-
-def _participant(role: str) -> ParticipantType:
-    normalized = role.lower()
-    if normalized in _ASSISTANT_ROLES:
-        return ParticipantType.ASSISTANT
-    if normalized in _SYSTEM_ROLES:
-        return ParticipantType.SYSTEM
-    if normalized == "user":
-        return ParticipantType.USER
-    if normalized == "tool":
-        return ParticipantType.TOOL
-    if normalized == "environment":
-        return ParticipantType.ENVIRONMENT
-    return ParticipantType.OTHER
-
-
-def _sample_output_and_metadata(sample: EvalSample) -> tuple[str, str]:
-    if sample.kind is not SampleKind.MULTIPLE_CHOICE or sample.model_choice is None:
-        return sample.output or "", "{}"
-    choice = (
-        sample.choices[sample.model_choice] if sample.choices and sample.model_choice < len(sample.choices) else None
-    )
-    if choice is None:
-        return "", json.dumps({"choice_index": sample.model_choice})
-    return choice.text, json.dumps({"choice_index": sample.model_choice, "choice_label": choice.label})
-
-
-def rollout_records_from_sample(sample: EvalSample, *, trial_id: str = "") -> list[RolloutRecord]:
-    """Convert one non-agentic evaluated sample into ordered prompt and response parts."""
-    if sample.kind is SampleKind.AGENTIC:
-        return []
-    conversation_type = ConversationType.CHAT if sample.prompt_messages is not None else ConversationType.COMPLETION
-    records = []
-    if sample.prompt_messages is not None:
-        for turn_id, message in enumerate(sample.prompt_messages):
-            records.append(
-                RolloutRecord(
-                    task=sample.task,
-                    doc_id=sample.doc_id,
-                    trial_id=trial_id,
-                    turn_id=turn_id,
-                    part_id=0,
-                    conversation_type=conversation_type,
-                    participant_type=_participant(message.role),
-                    participant_id=message.role,
-                    content_type=RolloutContentType.MESSAGE,
-                    content=message.content,
-                )
-            )
-        response_turn = len(sample.prompt_messages)
-    else:
-        records.append(
-            RolloutRecord(
-                task=sample.task,
-                doc_id=sample.doc_id,
-                trial_id=trial_id,
-                turn_id=0,
-                part_id=0,
-                conversation_type=conversation_type,
-                participant_type=ParticipantType.USER,
-                participant_id="user",
-                content_type=RolloutContentType.MESSAGE,
-                content=sample.prompt_text or "",
-            )
-        )
-        response_turn = 1
-
-    output, metadata_json = _sample_output_and_metadata(sample)
-    records.append(
-        RolloutRecord(
-            task=sample.task,
-            doc_id=sample.doc_id,
-            trial_id=trial_id,
-            turn_id=response_turn,
-            part_id=0,
-            conversation_type=conversation_type,
-            participant_type=ParticipantType.ASSISTANT,
-            participant_id="assistant",
-            content_type=RolloutContentType.MESSAGE,
-            content=output,
-            metadata_json=metadata_json,
-        )
-    )
-    return records
 
 
 def rollout_records_from_steps(steps: Iterable[StepRecord]) -> Iterator[RolloutRecord]:
@@ -127,7 +43,7 @@ def rollout_records_from_steps(steps: Iterable[StepRecord]) -> Iterator[RolloutR
         rollout_key = (step.task, step.doc_id, step.trial_id)
         turn_id = step.step_id if step.step_id is not None else next_turn.get(rollout_key, 0)
         next_turn[rollout_key] = turn_id + 1
-        participant_type = _participant(step.source or "")
+        participant_type = participant_type_for_role(step.source or "")
         participant_id = (
             step.model_name
             if participant_type is ParticipantType.ASSISTANT and step.model_name
@@ -184,19 +100,32 @@ def _step_rows(reader: ReadView) -> Iterator[StepRecord]:
         yield StepRecord(**{name: row.get(name) for name in fields})
 
 
-def _source_snapshot(reader: ReadView) -> dict[str, int]:
-    return {table: reader.max_seq(table) for table in _SOURCE_TABLES}
+def _source_fingerprints(reader: ReadView) -> dict[str, str]:
+    fingerprints = {}
+    for table in _SOURCE_TABLES:
+        version = reader.table_content_version(table)
+        source = {
+            "metadata_path": version.metadata_path,
+            "row_commit_upper_bound": version.row_commit_upper_bound,
+        }
+        # Omit zero values to preserve fingerprints written before these fields existed.
+        if version.incarnation:
+            source["incarnation"] = version.incarnation
+        if version.history_floor:
+            source["history_floor"] = version.history_floor
+        fingerprints[table] = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
+    return fingerprints
 
 
 def normalize_rollouts(root: str, *, writer_id: str) -> None:
     """Idempotently derive the shared ``rollouts`` table from an evaluation archive."""
     reader = ReadView(root)
-    source_snapshot = _source_snapshot(reader)
-    complete = reader.read_blob(_COMPLETE_OBJECT)
-    if complete is not None and json.loads(complete) == {
+    completion = {
         "schema_version": ROLLOUT_SCHEMA_VERSION,
-        "source_max_seq": source_snapshot,
-    }:
+        "source_fingerprints": _source_fingerprints(reader),
+    }
+    complete = reader.read_blob(_COMPLETE_OBJECT)
+    if complete is not None and json.loads(complete) == completion:
         return
     records = itertools.chain(
         (
@@ -206,29 +135,24 @@ def normalize_rollouts(root: str, *, writer_id: str) -> None:
         ),
         rollout_records_from_steps(_step_rows(reader)),
     )
-    first = next(records, None)
-    if first is None:
-        return
-    # The evaluator owns its source tables and their conflict policy; register only our output.
     with DataStore.open(root, writer_id=writer_id) as store:
-        table = store.table(
-            ARCHIVE_ROLLOUTS_TABLE,
-            schema=rollouts_schema(),
-            primary_key=ROLLOUTS_MERGE_KEY,
-            schema_version=ROLLOUT_SCHEMA_VERSION,
-        )
-        table.append(first.model_dump(mode="json"))
-        for record in records:
-            table.append(record.model_dump(mode="json"))
-        store.write_object(
-            _COMPLETE_OBJECT,
-            json.dumps(
-                {
-                    "schema_version": ROLLOUT_SCHEMA_VERSION,
-                    "source_max_seq": source_snapshot,
-                },
-                sort_keys=True,
-            ).encode(),
-            metadata={"content_type": "application/json"},
-        )
+        with store.transaction(base=reader) as transaction:
+            transaction.require_unchanged(*_SOURCE_TABLES)
+            first = next(records, None)
+            if first is None:
+                transaction.drop_table(ARCHIVE_ROLLOUTS_TABLE)
+            else:
+                temporary = f"{ARCHIVE_ROLLOUTS_TABLE}_staging_{uuid.uuid4().hex}"
+                table = transaction.create_table(
+                    temporary,
+                    metadata=TableMetadata(primary_key=ROLLOUTS_MERGE_KEY, schema_version=ROLLOUT_SCHEMA_VERSION),
+                    schema=rollouts_schema(),
+                )
+                table.extend(record.model_dump(mode="json") for record in itertools.chain((first,), records))
+                transaction.rename_table(temporary, ARCHIVE_ROLLOUTS_TABLE, on_conflict=TableNameConflict.REPLACE)
+            transaction.write_object(
+                _COMPLETE_OBJECT,
+                json.dumps(completion, sort_keys=True).encode(),
+                metadata={"content_type": "application/json"},
+            )
         store.seal()

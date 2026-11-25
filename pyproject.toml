@@ -33,11 +33,13 @@ dependencies = [
     # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
+    "marin-skyrlrecipe",
     # marin-marina is the multi-app web kernel (infra/marina), a workspace member so
     # `uv run marina dev` serves the apps from this checkout.
     "marin-marina",
     # top level deps. try to keep these small.
     "watchdog",
+    "tabulate>=0.9.0",
     # Codehealth's weekly review workbench persists into the shared metadata database.
     "cloud-sql-python-connector[pg8000]>=1.9",
     "sqlalchemy>=2",
@@ -54,6 +56,8 @@ dependencies = [
 [project.scripts]
 # Friendly entry point for the grug fast_track scaling ladder: `uv run fast-track ...`.
 fast-track = "experiments.grug.fast_track.launch:main"
+# Data Belay, which tests a Hugging Face dataset on the fast_track dense model: `uv run data-belay ...`.
+data-belay = "experiments.data_belay.__main__:cli"
 
 [project.optional-dependencies]
 # Keep this CUDA stack separate from marin-levanter[gpu] while JaxPP requires
@@ -64,7 +68,7 @@ pipeline = [
     "marin-levanter",
     "jax[cuda13]==0.11.0",
     "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
-    "nvidia-nccl-cu13>=2.31.2; sys_platform == 'linux'",
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
     "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
     "flash-attn-4[cu13]>=4.0.0b28,<4.1; sys_platform == 'linux'",
     "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
@@ -89,8 +93,21 @@ fork-strategy = "fewest"
 # release).
 prerelease = "explicit"
 constraint-dependencies = [
+    "aiohttp>=3.14.4",
+    "fsspec>=2026.6.0",
+    "joserfc>=1.7.6",
+    "multidict>=6.9.1",
+    "oauthlib>=4.0.1",
+    "opentelemetry-api>=1.45.1",
+    "soupsieve>=4.0.0",
+    "urllib3>=2.8.0",
+    "werkzeug>=3.1.9",
     # CVE-2026-111497: reject vulnerable transitive Brotli releases.
     "brotli>=1.2.1",
+    # Reject affected transitive releases while retaining upstream requirements.
+    "dnspython>=2.9.0",
+    "msgpack>=1.2.3",
+    "nltk>=3.10.4",
     # Enable pre-releases for transitive deps that publish no stable release at
     # all. A constraint intersects (rather than replaces) the upstream
     # specifier, so the resolved version still follows whatever requires them;
@@ -99,23 +116,28 @@ constraint-dependencies = [
     "opentelemetry-instrumentation>=0.41b0",
     "opentelemetry-instrumentation-grpc>=0.41b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.59b0",
+    "opentelemetry-exporter-http-transport>=0.66b0",
+    "opentelemetry-exporter-otlp-common>=0.66b0",
     "opentelemetry-util-http>=0.59b0",
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
+    # Torch pins an older NCCL; 2.32.6 fixes NVLSTree buffer corruption.
+    # https://github.com/NVIDIA/nccl/issues/2625
+    "nvidia-nccl-cu12>=2.32.6; sys_platform == 'linux'",
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",
     "antlr4-python3-runtime==4.11",
     "python-multipart>=0.0.27",
     "wheel>=0.46.2",
-    "datasets>=3.1.0,<5.0.0",
+    "datasets>=5.0.1,<6",
     "equinox>=0.11.10",  # Override vizier's pin for modern JAX compatibility
-    "authlib>=1.7.2",
+    "authlib>=1.9.1",
     "cbor2>=6.0.1",
     "click>=8.3.1",
-    "gitpython>=3.1.59",
-    "gradio>=6.14.0",
+    "gitpython>=3.2.1",
+    "gradio>=6.16.0",
     "jupyter-server>=2.18.2",
     "jupyterlab>=4.6.4",
     "lxml>=6.1.0",
@@ -124,14 +146,14 @@ override-dependencies = [
     "notebook>=7.6.3",
     "orjson>=3.11.9",
     "pillow>=13.0.0",
-    "pyasn1>=0.6.3",
+    "pyasn1>=0.6.5",
     "python-dotenv>=1.1.1",
     "ray>=2.55.1",
     "rich>=14.1.0",
-    "setuptools>=82.0.1",
+    "setuptools>=84.1.0",
     "tiktoken>=0.12.0",
-    "tornado>=6.5.8",
-    "virtualenv>=21.14.10",
+    "tornado>=6.6",
+    "virtualenv>=21.14.13",
 ]
 conflicts = [
     # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
@@ -189,6 +211,60 @@ conflicts = [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-fray", group = "fray_tpu_test" },
     ],
+    # The ROCm extras run JAX 0.12; every other accelerator stack and the
+    # test groups below pin an older JAX.
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-core", extra = "gpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-core", extra = "tpu" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-core", extra = "cpu" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-levanter", extra = "gpu" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-levanter", extra = "tpu" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-levanter", extra = "rocm" },
+    ],
+    [
+        { package = "marin-root", extra = "pipeline" },
+        { package = "marin-core", extra = "rocm" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-iris", group = "dev" },
+    ],
+    [
+        { package = "marin-levanter", extra = "rocm" },
+        { package = "marin-iris", group = "test" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-fray", group = "fray_tpu_test" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-iris", group = "dev" },
+    ],
+    [
+        { package = "marin-core", extra = "rocm" },
+        { package = "marin-iris", group = "test" },
+    ],
 ]
 
 [tool.uv.workspace]
@@ -198,6 +274,8 @@ members = [
     "lib/finelog",
     "lib/dupekit",
     "lib/ducky",
+    "lib/skyrlrecipe",
+    "lib/evalrecords",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
@@ -222,7 +300,7 @@ members = [
 #   - lib/dupekit/rust  -> marin-dupekit-native  (module `dupekit_native`)
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
 # experiments/mlx_export is a Mac-only MLX project with its own lock.
-exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "experiments/mlx_export", "vendor/skyrl", "vendor/skyrl/**", "vendor/evalchemy", "vendor/evalchemy/**", "vendor/harbor", "vendor/harbor/**"]
+exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*", "experiments/mlx_export", "vendor/skyrl", "vendor/skyrl/**", "vendor/harbor", "vendor/harbor/**"]
 
 [tool.uv.sources]
 marin-iris = { workspace = true }
@@ -231,6 +309,8 @@ marin-finelog = { workspace = true }
 marin-deploy = { workspace = true }
 marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
+marin-skyrlrecipe = { workspace = true }
+marin-evalrecords = { workspace = true }
 marin-marina = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
@@ -249,6 +329,11 @@ torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
+rocm = { index = "rocm" }
+rocm-sdk-core = { index = "rocm" }
+rocm-sdk-libraries = { index = "rocm" }
+rocm-sdk-device-gfx942 = { index = "rocm" }
+rocm-sdk-device-gfx950 = { index = "rocm" }
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -269,6 +354,12 @@ name = "pytorch-cpu-fallback"
 url = "https://download.pytorch.org/whl/cpu/torch/"
 format = "flat"
 
+# AMD's TheRock ROCm runtime wheels, used only by the `rocm` extras.
+[[tool.uv.index]]
+name = "rocm"
+url = "https://stable.repo.amd.com/rocm/core/whl-next/"
+explicit = true
+
 [tool.iris.bundle]
 include = ["vendor/harbor/src/**/*", "lib/rigging/src/**/*", "lib/finestore/src/**/*"]
 exclude = ["^vendor/harbor/tests(/|$)"]
@@ -283,7 +374,6 @@ extend-exclude = """
 (
     scripts/
     | vendor/skyrl/
-    | vendor/evalchemy/
     | vendor/harbor/
 )
 """
@@ -296,7 +386,7 @@ target-version = "py312"
 # Most of `scripts/**` is excluded until cleaned up, but `scripts/ci/**` and
 # `scripts/cost_manager/**` hold scripts invoked directly by `.github/workflows`
 # and stay under ruff.
-extend-exclude = ["scripts/", "vendor/skyrl/", "vendor/evalchemy/", "vendor/harbor/"]
+extend-exclude = ["scripts/", "vendor/skyrl/", "vendor/harbor/"]
 extend-include = ["scripts/ci/**/*.py", "scripts/cost_manager/**/*.py"]
 
 [tool.ruff.lint]
@@ -367,6 +457,8 @@ project-includes = [
     "lib/iris/src/**/*.py",
     "lib/iris/scripts/**/*.py",
     "lib/ducky/src/**/*.py",
+    "lib/skyrlrecipe/src/**/*.py",
+    "lib/evalrecords/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "lib/verifyit/src/**/*.py",
@@ -393,6 +485,8 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
+    "lib/skyrlrecipe/src",
+    "lib/evalrecords/src",
     "infra/deploy/src",
     "infra/marina/src",
     "infra/marina/apps",
@@ -438,6 +532,9 @@ ignore-missing-imports = [
     "jaxlib.*",
     "kubernetes",
     "kubernetes.*",
+    # The harness grader image installs langdetect; the lint workspace does not.
+    "langdetect",
+    "langdetect.*",
     "librosa",
     "librosa.*",
     "lm_eval",
@@ -470,8 +567,9 @@ ignore-missing-imports = [
 
 # Exclude non-production code from type checking
 project-excludes = [
+    # Vendored IFBench instruction checkers; wrappers remain checked.
+    "lib/taskcompendium/src/taskcompendium/importers/evalchemy/scorers/ifbench/**",
     "vendor/skyrl/**",
-    "vendor/evalchemy/**",
     "vendor/harbor/**",
     "scripts/debug/**",
     "scripts/ferries/**",
@@ -553,6 +651,7 @@ log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 markers = [
     "tpu: include in TPU CI; also run on CPU when supported",
+    "multidevice: exercise multi-device code in TPU CI and CPU CI",
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "integration: mark tests as integration tests that require cluster infrastructure",
     "data_integration: mark tests that require external data fixtures (e.g. HuggingFace datasets)",
@@ -571,6 +670,6 @@ pythonpath = ["."]
 # Docker tests require a local daemon;
 # manual tests are run by hand (e.g. live TPU smokes in a custom container).
 # All but manual are run from dedicated CI workflows. Tests that need a TPU carry
-# @skip_if_no_tpu (tests/test_utils.py) and skip themselves when none is present;
+# @skip_if_no_tpu (tests/vllm/tpu_availability.py) and skip themselves when none is present;
 # the Iris markers also apply when lib/iris test paths are passed from the root.
-addopts = "-p marin.pytest_timeout_guard --session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"
+addopts = "-p infra.ci.pytest_timeout_guard --session-timeout=600 -n auto --dist=worksteal -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' --import-mode=importlib"

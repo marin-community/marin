@@ -13,7 +13,7 @@ from haliax.partitioning import _get_mesh
 from jax import numpy as jnp
 from jax import shard_map
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel
-from jax.sharding import NamedSharding, auto_axes
+from jax.sharding import NamedSharding, PartitionSpec, auto_axes, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -32,8 +32,18 @@ GrugAttentionImplementation = Literal[
     "tpu_splash",
     "gpu_fa4_cute",
     "gpu_fa4_cute_sm100",  # Native forward, one-block backward; opt-in SM100 D128 GQA.
+    "torch_order",  # Torch eager's order: FP32 scores and softmax, normalized weights cast to BF16; materializes S x S.
     "gpu_pallas_triton_flash",  # Pallas-Triton flash kernel with block skipping; for AMD (ROCm) GPUs.
+    "gpu_triton_flash",  # Triton flash kernel with block skipping, through jax_triton; for AMD (ROCm) GPUs.
 ]
+
+ContextAttentionLayout = Literal["zigzag", "contiguous"]
+"""How the FA4 backends assign query rows to context shards.
+
+"zigzag" swaps the late half of each shard's queries with its mirror shard so every shard does equal
+causal work; "contiguous" runs each shard's own rows. Other implementations ignore it.
+"""
+DEFAULT_CONTEXT_ATTENTION_LAYOUT: ContextAttentionLayout = "zigzag"
 
 
 @dataclass(frozen=True)
@@ -56,9 +66,13 @@ class AttentionMask(eqx.Module):
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     sliding_window: int | None = eqx.field(default=None, static=True)
     # Optional precomputed FA4/CuTe per-token metadata (lower_bounds, valid), both [B, S] int32/bool.
-    # When set, ``gpu_fa4_cute_attention`` uses these directly instead of rebuilding from
-    # ``segment_ids``/``sliding_window``. This lets a caller compute the metadata once outside a
+    # When set, ``gpu_fa4_cute_attention`` and the AMD Triton flash kernels use these directly instead of
+    # rebuilding from ``segment_ids``/``sliding_window``, and ``materialize_mask`` (reference attention) also keeps
+    # only keys at or after each query's lower bound. This lets a caller compute the metadata once outside a
     # ``lax.scan`` and select a per-layer sliding window (a static field the scan body cannot vary).
+    # Build them with ``fa4_cute_segment_bounds`` from segment IDs that each form one contiguous run: the AMD
+    # kernels need nondecreasing bounds at most each token's position (invalid tokens counting as their own
+    # position) and do not check it.
     fa4_bounds: tuple[jax.Array, jax.Array] | None = None
 
     @classmethod
@@ -105,7 +119,7 @@ class AttentionMask(eqx.Module):
 
         Shapes:
           - If `segment_ids` is unset, returns `(q_len, k_len)` (broadcastable across batch).
-          - If `segment_ids` is set with per-batch IDs, returns `(batch, q_len, k_len)`.
+          - If `segment_ids` is set with per-batch IDs, or `fa4_bounds` is set, returns `(batch, q_len, k_len)`.
         """
         mask = None
 
@@ -138,6 +152,15 @@ class AttentionMask(eqx.Module):
                 allowed = q_seg[:, :, None] == k_seg[:, None, :]
             else:
                 raise ValueError(f"segment_ids must be 1D or 2D, got ndim={q_seg.ndim}")
+            mask = allowed if mask is None else jnp.logical_and(mask, allowed)
+
+        if self.fa4_bounds is not None:
+            # Inclusive per-query key lower bounds; they carry a per-layer window and document starts.
+            # Padding queries hold a kernel tile-skip hint (up to a ``seq_len`` sentinel) rather than a
+            # bound, which would mask the whole row, so they keep only the other mask terms.
+            lower_bounds, valid = self.fa4_bounds
+            lower_bounds = jnp.where(valid, lower_bounds, 0)
+            allowed = jnp.arange(k_len)[None, None, :] >= lower_bounds[:, :, None]
             mask = allowed if mask is None else jnp.logical_and(mask, allowed)
 
         return mask
@@ -179,11 +202,13 @@ def token_validity_from_attention_mask(
     return jnp.broadcast_to(valid, (batch_size, sequence_length))
 
 
-def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
+def _rotary_cache(
+    seq_len: int, head_dim: int, rope: RotaryConfig, position_ids: jax.Array | None = None
+) -> tuple[jax.Array, jax.Array]:
     half_dim = head_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
-    positions = jnp.arange(seq_len, dtype=jnp.float32)
-    angles = positions[:, None] * inv_freq[None, :]
+    positions = jnp.arange(seq_len, dtype=jnp.float32) if position_ids is None else position_ids.astype(jnp.float32)
+    angles = positions[..., None] * inv_freq
     cos = jnp.cos(angles)
     sin = jnp.sin(angles)
     return cos, sin
@@ -197,10 +222,14 @@ def apply_rotary_embedding(
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
+    position_ids: jax.Array | None = None,
 ) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
-    cos, sin = _rotary_cache(seq_len, head_dim, rope)
-    cos = cos[None, :, None, :]
-    sin = sin[None, :, None, :]
+    """Apply RoPE at consecutive or explicit absolute positions [S] / [B, S]."""
+    cos, sin = _rotary_cache(seq_len, head_dim, rope, position_ids)
+    if cos.ndim == 2:
+        cos, sin = cos[None, ...], sin[None, ...]
+    cos = cos[:, :, None, :]
+    sin = sin[:, :, None, :]
 
     def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
         dtype = x.dtype
@@ -224,6 +253,43 @@ def align_kv_heads(x: Float[Array, "B K Hkv D"], *, num_q_heads: int) -> Float[A
     return tiled.reshape(*x.shape[:2], num_q_heads, x.shape[3])
 
 
+def _explicit_mask(
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+    scores: Float[Array, "B ... Q K"],
+    batch: int,
+) -> Bool[Array, "B 1 Q K"] | Float[Array, "B 1 Q K"] | None:
+    """The mask as a dense [B or 1, 1, Q, K] array broadcast across heads (bool = allowed, float = additive bias)."""
+    if mask is None:
+        return None
+    if isinstance(mask, AttentionMask):
+        explicit = mask.materialize_mask(scores.shape[-2], scores.shape[-1])
+    else:
+        explicit = mask
+    if explicit is None:
+        return None
+    # Standardize dense masks to [B, Q, K] (bool = allowed, float = additive bias).
+    if explicit.ndim == 2:
+        explicit = explicit[None, :, :]
+    if explicit.ndim != 3:
+        raise ValueError(f"explicit mask must have shape [batch, q, k], got shape={explicit.shape}")
+    if explicit.shape[0] not in (1, batch):
+        raise ValueError(f"explicit mask batch dim must be 1 or {batch}, got {explicit.shape[0]}")
+    if explicit.shape[1] != scores.shape[-2] or explicit.shape[2] != scores.shape[-1]:
+        raise ValueError(
+            "explicit mask must match attention shapes: "
+            f"got mask={explicit.shape}, expected [batch,{scores.shape[-2]},{scores.shape[-1]}]"
+        )
+    return explicit[:, None, :, :]  # -> [B, 1, Q, K], broadcast across heads.
+
+
+def _apply_mask(scores: jax.Array, explicit: jax.Array | None) -> jax.Array:
+    if explicit is None:
+        return scores
+    if explicit.dtype == jnp.bool_:
+        return jnp.where(explicit, scores, jnp.array(-1e9, dtype=scores.dtype))
+    return scores + explicit
+
+
 def _reference_attention_math(
     q: Float[Array, "B Q Hq D"],
     k: Float[Array, "B K Hkv D"],
@@ -234,44 +300,24 @@ def _reference_attention_math(
 ) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
-    k = align_kv_heads(k, num_q_heads=num_q_heads)
-    v = align_kv_heads(v, num_q_heads=num_q_heads)
+    num_kv_heads = k.shape[2]
+    if num_q_heads % num_kv_heads != 0 or v.shape[2] != num_kv_heads:
+        raise ValueError("Query heads must form complete groups over matching key/value heads")
+    groups = num_q_heads // num_kv_heads
+    # Keep query groups in the contraction so KV gradients sum before BF16 rounding.
+    q = q.reshape(*q.shape[:2], num_kv_heads, groups, head_dim)
+    scaled_q = q * (1.0 / math.sqrt(head_dim))
+    scores = jnp.einsum("bqhgd,bkhd->bhgqk", scaled_q, k)
 
-    scale = 1.0 / math.sqrt(head_dim)
-    scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
-
-    explicit = None
-    if mask is None:
-        explicit = None
-    elif isinstance(mask, AttentionMask):
-        explicit = mask.materialize_mask(scores.shape[-2], scores.shape[-1])
-    else:
-        explicit = mask
-
+    explicit = _explicit_mask(mask, scores, q.shape[0])
     if explicit is not None:
-        # Standardize dense masks to [B, Q, K] (bool = allowed, float = additive bias).
-        if explicit.ndim == 2:
-            explicit = explicit[None, :, :]
-        if explicit.ndim != 3:
-            raise ValueError(f"explicit mask must have shape [batch, q, k], got shape={explicit.shape}")
-        if explicit.shape[0] not in (1, q.shape[0]):
-            raise ValueError(f"explicit mask batch dim must be 1 or {q.shape[0]}, got {explicit.shape[0]}")
-        if explicit.shape[1] != scores.shape[-2] or explicit.shape[2] != scores.shape[-1]:
-            raise ValueError(
-                "explicit mask must match attention shapes: "
-                f"got mask={explicit.shape}, expected [batch,{scores.shape[-2]},{scores.shape[-1]}]"
-            )
-
-        explicit = explicit[:, None, :, :]  # -> [B, 1, Q, K], broadcast across heads.
-        if explicit.dtype == jnp.bool_:
-            scores = jnp.where(explicit, scores, jnp.array(-1e9, dtype=scores.dtype))
-        else:
-            scores = scores + explicit
+        explicit = explicit[:, :, None, :, :]  # Broadcast across KV heads and query groups.
+    scores = _apply_mask(scores, explicit)
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
-    ctx = jnp.einsum("bhqk,bkhd->bqhd", weights, v)
-    return ctx.astype(v.dtype)
+    ctx = jnp.einsum("bhgqk,bkhd->bqhgd", weights, v)
+    return ctx.reshape(*q.shape[:2], num_q_heads, v.shape[-1]).astype(v.dtype)
 
 
 def reference_attention(
@@ -282,17 +328,55 @@ def reference_attention(
     *,
     logits_dtype: jnp.dtype | None,
 ) -> Float[Array, "B Q Hq D"]:
-    """Reference attention whose output sharding follows ``q``."""
+    """Scale Q in its dtype, optionally cast scores before softmax, and preserve Q sharding."""
     out_sharding = named_sharding_of(q)
     if out_sharding is None:
         return _reference_attention_math(q, k, v, mask, logits_dtype=logits_dtype)
-    # jax 0.11.1 explicit-sharding mode cannot infer layouts for the two contractions
-    # (align_kv_heads drops the head-axis sharding, and a sharded head_dim makes the
-    # score contraction ambiguous), so run the math under Auto axes and pin only the
-    # output to q's sharding.
+    # Explicit axes cannot infer every score contraction layout when heads or
+    # head dimensions are sharded. Run under Auto axes and pin the output layout.
     # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
     wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(_reference_attention_math, out_sharding=out_sharding)
     return wrapped(q, k, v, mask, logits_dtype=logits_dtype)
+
+
+def _torch_order_attention_math(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Torch eager's order (GrugMoE ``_eager_attention``): FP32 scores from the upcast q and k with 1/sqrt(d) applied to
+    q in FP32, a -1e9 fill at masked positions, FP32 softmax, the normalized weights cast to v's dtype, then the PV
+    einsum in that dtype. The FP32 score matmul runs at full FP32 precision (no TF32)."""
+    num_q_heads = q.shape[2]
+    k = align_kv_heads(k, num_q_heads=num_q_heads)
+    v = align_kv_heads(v, num_q_heads=num_q_heads)
+    scores = jnp.einsum(
+        "bqhd,bkhd->bhqk",
+        q.astype(jnp.float32) / math.sqrt(q.shape[-1]),
+        k.astype(jnp.float32),
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    scores = _apply_mask(scores, _explicit_mask(mask, scores, q.shape[0]))
+    weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
+    return jnp.einsum("bhqk,bkhd->bqhd", weights, v)
+
+
+def torch_order_attention(
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
+    """Torch-order attention whose output sharding follows ``q`` (see ``reference_attention``)."""
+    out_sharding = named_sharding_of(q)
+    if out_sharding is None:
+        return _torch_order_attention_math(q, k, v, mask)
+    # pyrefly: ignore[bad-assignment]  # auto_axes's decorator overload erases the wrapped signature
+    wrapped: Callable[..., Float[Array, "B Q Hq D"]] = auto_axes(
+        _torch_order_attention_math, out_sharding=out_sharding
+    )
+    return wrapped(q, k, v, mask)
 
 
 def _tpu_splash_attention(
@@ -301,6 +385,15 @@ def _tpu_splash_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
 ) -> Float[Array, "B Q Hq D"]:
+    if isinstance(mask, AttentionMask) and mask.fa4_bounds is not None:
+        raise NotImplementedError(
+            "TPU Splash attention does not support fa4_bounds; select a static sliding_window mask."
+        )
+
+    # On TPU, keep Splash's backward query scale from folding into the BF16 RoPE multiply.
+    # Changing the rounding order gave ~0.34% relative L2 query gradient error on v4-16.
+    # See https://github.com/dlwh/marin/pull/67 for the paired comparison.
+    q = jax.lax.optimization_barrier(q)
     # Splash attention expects BHSD.
     q_ = jnp.transpose(q, (0, 2, 1, 3))
     k_ = jnp.transpose(k, (0, 2, 1, 3))
@@ -380,6 +473,15 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
+            # Each query shard needs its local document IDs; KV stays gathered with K/V.
+            q_seg_axes = (
+                PartitionSpec(q_pspec[0], q_pspec[2]) if q_segment_ids.ndim == 2 else PartitionSpec(q_pspec[2])
+            )
+            kv_seg_axes = (
+                PartitionSpec(k_pspec[0], k_pspec[2]) if kv_segment_ids.ndim == 2 else PartitionSpec(k_pspec[2])
+            )
+            q_segment_ids = reshard(q_segment_ids, NamedSharding(mesh, q_seg_axes))
+            kv_segment_ids = reshard(kv_segment_ids, NamedSharding(mesh, kv_seg_axes))
             q_seg_sharding = _named_sharding_of(q_segment_ids, label="segment_ids.q")
             kv_seg_sharding = _named_sharding_of(kv_segment_ids, label="segment_ids.kv")
             segment_id_lowering = lower_splash_segment_ids(
@@ -409,11 +511,15 @@ def _tpu_splash_attention(
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
     )
+    # The kernel carries global mask metadata, including query positions; slice it with Q.
+    kernel_sharding = NamedSharding(mesh, PartitionSpec(q_pspec[1], q_pspec[2]))
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+    splash_kernel = reshard(splash_kernel, kernel_specs)
 
     @functools.partial(
         shard_map,
         mesh=mesh,
-        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, None),
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_id_lowering.segment_ids_axes, kernel_specs),
         out_specs=q_pspec,
         check_vma=False,
     )
@@ -437,9 +543,12 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
+    context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT,
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if implementation == "torch_order":
+        return torch_order_attention(q, k, v, mask)
     if implementation == "xla_flash":
         from levanter.grug.attention._xla_flash import xla_flash_attention  # noqa: PLC0415
 
@@ -447,17 +556,23 @@ def attention(
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_attention(q, k, v, mask)
+        return gpu_fa4_cute_attention(q, k, v, mask, context_layout=context_layout)
     if implementation == "gpu_fa4_cute_sm100":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_sm100_attention(q, k, v, mask)
+        return gpu_fa4_cute_sm100_attention(q, k, v, mask, context_layout=context_layout)
     if implementation == "gpu_pallas_triton_flash":
         from levanter.grug.attention._amd_pallas_triton_flash import pallas_triton_flash_attention  # noqa: PLC0415
 
         if not isinstance(mask, AttentionMask):
             raise NotImplementedError("gpu_pallas_triton_flash needs an AttentionMask, not a dense mask or None.")
         return pallas_triton_flash_attention(q, k, v, mask)
+    if implementation == "gpu_triton_flash":
+        from levanter.grug.attention._triton_flash import triton_flash_attention  # noqa: PLC0415
+
+        if not isinstance(mask, AttentionMask):
+            raise NotImplementedError("gpu_triton_flash needs an AttentionMask, not a dense mask or None.")
+        return triton_flash_attention(q, k, v, mask)
     if implementation == "tpu_splash":
         if isinstance(mask, jax.Array):
             raise NotImplementedError("Dense masks are not supported for splash attention.")
@@ -474,6 +589,8 @@ def attention(
 
 __all__ = [
     "AttentionMask",
+    "ContextAttentionLayout",
+    "DEFAULT_CONTEXT_ATTENTION_LAYOUT",
     "GrugAttentionImplementation",
     "RotaryConfig",
     "align_kv_heads",

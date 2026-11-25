@@ -12,9 +12,9 @@ Validate and submit the cache gate first:
 ./launch.sh --phase cache --submit --wait
 ```
 
-After the cache gate passes model serving startup, submit the remaining 25
-benchmarks. Evalchemy shares one model server; each Harbor benchmark gets an
-independent root so slow agentic evaluations do not serialize the others.
+After the cache gate passes model serving startup, submit the remaining 23
+benchmarks. The 17 nonagentic benchmarks share one model server, and the six
+agentic benchmarks share another.
 
 ```bash
 ./launch.sh --phase remaining
@@ -22,5 +22,5 @@ independent root so slow agentic evaluations do not serialize the others.
 ```
 
 The launcher's local config snapshots and every durable result record retain the
-effective inputs and Marin, Harbor, and Evalchemy revisions. These launches do
+effective inputs and Marin revision. These launches do
 not set a policy label.

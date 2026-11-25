@@ -9,7 +9,7 @@ from subprocess import run
 from tempfile import TemporaryDirectory
 
 import yaml
-from marin.evaluation.eval_policy import (
+from evalrecords.eval_policy import (
     POLICIES,
     RUNTIME_COMMITS,
     SEPTEMBER_16_VERSION,
@@ -77,12 +77,6 @@ def launch_policy(
         raise ValueError(
             f"{version} requires historical Evalchemy commit {commit}; "
             "run it from a Marin checkout that predates Evalchemy vendoring"
-        )
-    if any(policy.mechanism == "harbor" for _, policy in evaluations):
-        commit = RUNTIME_COMMITS[version]["harbor"]
-        raise ValueError(
-            f"{version} requires historical Harbor commit {commit}; "
-            "run it from a Marin checkout that predates Harbor vendoring"
         )
     needs_artifact = version == SEPTEMBER_24_VERSION
     if needs_artifact and artifact_dir is None:

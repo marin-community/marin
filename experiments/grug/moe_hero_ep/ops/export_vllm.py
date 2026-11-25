@@ -5,16 +5,14 @@
 
 import gc
 import logging
-import re
-from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass
 
 import draccus
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, _shard_hf_checkpoint
-from levanter.compat.hf_export import HFShardResume, run_on_export_writer, save_hf_shards, write_export_json
+from levanter.compat.hf_export import HFShardResume, run_on_export_writer, save_hf_shards
 from levanter.distributed import DistributedConfig
 from levanter.grug.sharding import compact_grug_mesh
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -22,14 +20,19 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, grugmoe_inference_state_dict
+from experiments.grug.moe_hero_ep.ops.export_metadata import (
+    EXPORT_VERSION,
+    artifact_config,
+    bf16_hf_config,
+    execution_config,
+    prepare_export,
+    split_expert_names,
+    write_export_metadata,
+)
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.weights import restore_weights
 
-MANIFEST_FILENAME = "export-manifest.json"
-REQUEST_FILENAME = "export-request.json"
-INDEX_FILENAME = "model.safetensors.index.json"
-EXPORT_VERSION = 2
-EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
+DEFAULT_EXPORT_HOST_BUDGET_BYTES = 32 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -41,13 +44,8 @@ class ExportConfig:
     source_revision: str
     expert_axis_size: int = 1
     replica_axis_size: int = 1
-
-
-def _split_names(name: str, num_experts: int) -> list[str]:
-    match = EXPERT_BANK.fullmatch(name)
-    if match is None:
-        return [name]
-    return [f"{match[1]}.{i}.{match[2]}.weight" for i in range(num_experts)]
+    export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES
+    max_concurrent_shards: int = 2
 
 
 def export(config: ExportConfig) -> None:
@@ -56,21 +54,18 @@ def export(config: ExportConfig) -> None:
     All JAX processes call this with the same config after distributed initialization.
     A destination belongs to exactly one exporting gang at a time.
     """
-    if re.fullmatch(r"[0-9a-f]{40}", config.source_revision) is None:
-        raise ValueError("source_revision must be a 40-character lowercase hexadecimal Marin commit")
-    root = StoragePath(config.destination)
-    hf_config = config.model.to_hf_config(config.model.vocab_size).to_dict()
-    request = {"export_version": EXPORT_VERSION, "config": draccus.encode(config), "hf_config": hf_config}
+    hf_config = bf16_hf_config(config.model)
+    encoded = draccus.encode(config)
+    request = {
+        "export_version": EXPORT_VERSION,
+        "implementation": "device",
+        "config": artifact_config(encoded),
+        "hf_config": hf_config,
+    }
     export_id = digest(request)
 
-    def prepare():
-        if (root / MANIFEST_FILENAME).exists():
-            raise FileExistsError(f"Export already complete: {root}")
-        if not (root / REQUEST_FILENAME).exists() and root.exists() and root.ls():
-            raise FileExistsError(f"Export requires a fresh destination: {root}")
-        write_export_json(root / REQUEST_FILENAME, request)
-
-    run_on_export_writer(prepare)
+    run_on_export_writer(lambda: prepare_export(config.destination, request))
+    resume = HFShardResume(StoragePath(config.destination), export_id)
     mesh = compact_grug_mesh(expert_axis_size=config.expert_axis_size, replica_axis_size=config.replica_axis_size)
     with jax.set_mesh(mesh):
         model = restore_weights(config.checkpoint, config.metadata_digest, config.model, mesh)
@@ -80,38 +75,31 @@ def export(config: ExportConfig) -> None:
         gc.collect()
         state_dict = grugmoe_inference_state_dict(model)
         shards, _ = _shard_hf_checkpoint(state_dict, max_shard_size=DEFAULT_MAX_SHARD_SIZE)
-        tensor_names = {name: tuple(_split_names(name, config.model.num_experts)) for name in state_dict}
+        tensor_names = {name: split_expert_names(name, config.model.num_experts) for name in state_dict}
         records = save_hf_shards(
             shards,
             lambda keys: {name: state_dict[name] for name in keys},
             config.destination,
-            # One writer stages one planned shard plus serialization buffers.
-            export_host_budget_bytes=1,
-            max_concurrent_shards=1,
-            resume=HFShardResume(root, export_id),
+            export_host_budget_bytes=config.export_host_budget_bytes,
+            max_concurrent_shards=config.max_concurrent_shards,
+            resume=resume,
             tensor_names=tensor_names,
         )
         payload_size = sum(x.size * x.dtype.itemsize for x in state_dict.values())
-        weight_map = {name: record.filename for record in records for name in record.tensor_names}
-
-        def finish():
-            write_export_json(root / "config.json", hf_config)
-            write_export_json(
-                root / INDEX_FILENAME, {"metadata": {"total_size": payload_size}, "weight_map": weight_map}
-            )
-            write_export_json(
-                root / MANIFEST_FILENAME,
+        run_on_export_writer(
+            lambda: write_export_metadata(
+                resume,
+                request,
+                records,
+                payload_size,
                 {
-                    "export_id": export_id,
-                    "created_at": datetime.now(UTC).isoformat(),
-                    "request": request,
-                    "shards": [asdict(record) for record in records],
+                    "executor": "device",
+                    "execution": execution_config(encoded),
                     "mesh": dict(mesh.shape),
                     "process_count": jax.process_count(),
                 },
             )
-
-        run_on_export_writer(finish)
+        )
 
 
 @draccus.wrap()

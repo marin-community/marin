@@ -18,8 +18,8 @@ from scripts.ci.pulumi_rollouts import (
 @pytest.mark.parametrize(
     "changed_path",
     [
-        "lib/finestore/src/finestore/reader.py",
-        "lib/marin/src/marin/evaluation/archive.py",
+        "lib/finestore/src/finestore/rl/rl_progress.py",
+        "lib/evalrecords/src/evalrecords/records.py",
         "lib/iris/src/iris/rpc/controller_connect.py",
         "lib/finelog/src/finelog/rpc/logs_pb2.py",
         "lib/rigging/src/rigging/filesystem/factory.py",
@@ -29,17 +29,19 @@ def test_marina_rollout_tracks_image_inputs(changed_path: str) -> None:
     assert "marina" in {rollout.name for rollout in rollouts_for_paths([changed_path])}
 
 
-def test_marina_rollout_ignores_marin_modules_outside_the_image() -> None:
-    assert "marina" not in {rollout.name for rollout in rollouts_for_paths(["lib/marin/src/marin/training/training.py"])}
+def test_marina_rollout_ignores_marin_core() -> None:
+    assert "marina" not in {
+        rollout.name for rollout in rollouts_for_paths(["lib/marin/src/marin/evaluation/archive.py"])
+    }
 
 
 @pytest.mark.parametrize(
     "changed_path",
     [
         "infra/marina/apps/evaldash/samples.py",
-        "infra/marina/applets/rl_data_catalog/server/app.py",
-        "infra/marina/applets/filer/dist/app.js",
-        "infra/marina/examples/problem-set-applet/applet.toml",
+        "infra/marina/apps/rl_data_catalog/server/app.py",
+        "infra/marina/apps/filer/dist/app.js",
+        "infra/marina/examples/problem-set-app/applet.toml",
         "infra/marina/web/src/components/AppShell.vue",
     ],
 )

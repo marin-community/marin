@@ -4,13 +4,14 @@
 """TaskTrove competitive-programming sources: stdin/stdout programs graded by verifyit ``stdio``.
 
 Code Contests and TACO retain their source image recipes for the actor and its independent grader.
-The remaining sources use the campaign executable image and compiler grader packages. Controls run
-an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an empty submission.
+The remaining sources run in the environment their archives specify, lowered onto a pinned base.
+Controls run an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an
+empty submission.
 """
-
 
 import json
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import Controls, Converter, ImportRejection, IntendedUse, NormalizedTask, RawRow
@@ -23,6 +24,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     INSTRUCTION,
     VERIFIER_DATA,
     TaskFiles,
+    archive_requirements,
     archive_resources,
 )
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.code_contests import convert_code_contests
@@ -50,15 +52,9 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.verif
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.pipeline import (
     CurationRecipe,
-    environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
-
-AGENT_IMAGE = Environment(
-    image="ghcr.io/marin-community/iris-task@sha256:d6af0d198b29650fea0eaccb27d01cb9bbfb0aec9e1d5959a74c2ae055b6f305"
-)
-"""The executable image the agent writes and runs its program in."""
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 EXECUTABLE_CONTROLS = Controls(golden=solve_script)
 
@@ -121,7 +117,7 @@ def stdio_task(row: RawRow, context: ConversionContext, convert: ConvertFn) -> N
     return tasktrove_archive_task(
         row,
         convert=convert,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=archive_requirements(row.data),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
@@ -184,7 +180,7 @@ def convert_competitive_coding_task(row: RawRow, context: ConversionContext) -> 
     return tasktrove_archive_task(
         row,
         convert=convert_competitive_coding,
-        environment=environment_requirements(AGENT_IMAGE),
+        environment=archive_requirements(row.data),
         grader_environment=required_grader_environment(context),
         output_paths=SOLUTION_PATHS,
     )
@@ -226,13 +222,17 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="2",
             grader=None,
             info=SourceInfo(
-                id="Task Trove:DCAgent__code-contests-noblock",
-                title="DCAgent/code-contests-noblock",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="DCAgent__code-contests-noblock",
+                upstream_name="DCAgent/code-contests-noblock",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=8728,
                 notes="Hidden test_data.json, only the first case is shown. Exact-line compare; fine.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
         stdio_source(
@@ -241,9 +241,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             convert_codeforces_task,
             CODEFORCES_RUBRIC,
             info=SourceInfo(
-                id="Task Trove:laion__codeforces-v3",
-                title="laion/codeforces-v3",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__codeforces-v3",
+                upstream_name="laion/codeforces-v3",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=10000,
@@ -251,6 +254,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Keep rows with at least 5 test files; drop the zero-test fallback (currently full "
                     "credit for not crashing)."
                 ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
         stdio_source(
@@ -258,14 +262,19 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             "laion__nemotron-gym-competitive-coding-v2",
             convert_competitive_coding_task,
             COMPETITIVE_CODING_RUBRIC,
+            version="2",
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-competitive-coding-v2",
-                title="laion/nemotron-gym-competitive-coding-v2",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__nemotron-gym-competitive-coding-v2",
+                upstream_name="laion/nemotron-gym-competitive-coding-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="competitive-programming",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=15713,
                 notes="50 hidden stdin/stdout cases per task. Best competitive source in the corpus.",
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
         stdio_source(
@@ -276,9 +285,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             version="2",
             grader=None,
             info=SourceInfo(
-                id="Task Trove:laion__exp_rpt_taco-v2",
-                title="laion/exp_rpt_taco-v2",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__exp_rpt_taco-v2",
+                upstream_name="laion/exp_rpt_taco-v2",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="stdin-stdout",
                 tags=("agentic", "multi-turn", "language:python"),
                 count=10000,
@@ -286,6 +298,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     "Hidden cases plus oracle. Filter to tasks with at least 5 cases and add tolerance-"
                     "aware compare where the prompt promises one."
                 ),
+                task_format=TaskFormat.TASKCOMPENDIUM,
             ),
         ),
     ]

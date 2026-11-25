@@ -7,6 +7,11 @@ import uuid
 from dataclasses import dataclass
 from typing import NoReturn
 
+from shellbox.process_session import (
+    PROCESS_GROUP_ABSENT_EXIT_CODE,
+    PROBE_PROCESS_GROUP_COMMAND,
+)
+
 from harbor.agents.base import encode_model_output
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.environments.base import BaseEnvironment, ExecResult
@@ -14,6 +19,8 @@ from harbor.utils.logger import logger
 
 DEFAULT_BATCH_EXEC_TIMEOUT_MARGIN_SEC = 180.0
 _MAX_CAPTURE_BYTES = 1_000_000
+_FOREGROUND_STOP_TIMEOUT = 5
+_TMUX_COMMAND_TIMEOUT = 30
 _ENTER_KEYS = {"Enter", "C-m", "KPEnter", "C-j", "^M", "^J"}
 
 
@@ -27,6 +34,10 @@ class TmuxCommandError(RuntimeError):
 
 class TmuxBatchProtocolError(RuntimeError):
     """A batched tmux call returned without its response markers."""
+
+
+class TmuxExecTimeoutError(RuntimeError):
+    """A tmux command's sandbox exec did not return before its deadline."""
 
 
 class ModelInitiatedTmuxFailure(NonZeroAgentExitCodeError):
@@ -294,7 +305,9 @@ class TmuxSession:
 
         # Package manager commands with non-interactive flags
         install_commands = {
-            "apt-get": "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tmux",
+            "apt-get": (
+                "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y tmux"
+            ),
             "dnf": "dnf install -y tmux",
             "yum": "yum install -y tmux",
             "apk": "apk add --no-cache tmux",
@@ -492,13 +505,60 @@ class TmuxSession:
         result = re.search(self._ENDS_WITH_NEWLINE_PATTERN, key)
         return result is not None
 
+    async def _exec_bounded(self, command: str, timeout_sec: int) -> ExecResult:
+        try:
+            return await self.environment.exec(
+                command=command, user=self._user, timeout_sec=timeout_sec
+            )
+        except TimeoutError as error:
+            raise TmuxExecTimeoutError(
+                f"{self.environment.session_id}: tmux command did not finish "
+                f"within {timeout_sec} seconds"
+            ) from error
+
     async def is_session_alive(self) -> bool:
         """Check if the tmux session is still alive."""
-        result = await self.environment.exec(
-            command="tmux has-session -t {}".format(self._session_name),
-            user=self._user,
+        result = await self._exec_bounded(
+            "tmux has-session -t {}".format(self._session_name),
+            _TMUX_COMMAND_TIMEOUT,
         )
         return result.return_code == 0
+
+    async def close(self) -> None:
+        """Stop the agent terminal when its owner releases the session."""
+        if not await self.is_session_alive():
+            return
+        result = await self._exec_bounded(
+            f"tmux kill-session -t {shlex.quote(self._session_name)}",
+            _TMUX_COMMAND_TIMEOUT,
+        )
+        if result.return_code != 0 or await self.is_session_alive():
+            raise TmuxCommandError("Cannot stop the agent tmux session")
+
+    async def interrupt(self) -> None:
+        """Stop the terminal's foreground job while preserving prior background jobs."""
+        if not await self.is_session_alive():
+            return
+        # Builtins run in the shell group; external foreground pipelines have
+        # their own group. Interrupt the shell so it discards the pending list.
+        command = (
+            "set -eu; "
+            f"pane_pid=$(tmux display-message -p -t {shlex.quote(self._session_name)} '#{{pane_pid}}'); "
+            'pane_status=$(<"/proc/$pane_pid/stat"); pane_status=${pane_status##*) }; '
+            'read -r state parent shell_group session tty foreground_group remaining <<< "$pane_status"; '
+            'if [ "$foreground_group" -gt 0 ]; then '
+            'kill -INT -- "-$shell_group"; '
+            'if [ "$foreground_group" != "$shell_group" ]; then '
+            'kill -KILL -- "-$foreground_group" 2>/dev/null || true; '
+            "while :; do "
+            f'if /bin/sh -c {shlex.quote(PROBE_PROCESS_GROUP_COMMAND)} probe-group "$foreground_group"; '
+            "then sleep 0.01; "
+            f'else status=$?; [ "$status" -eq {PROCESS_GROUP_ABSENT_EXIT_CODE} ] || exit "$status"; '
+            "break; fi; done; fi; fi"
+        )
+        result = await self._exec_bounded(command, _FOREGROUND_STOP_TIMEOUT)
+        if result.return_code != 0:
+            raise TmuxCommandError("Cannot stop the agent terminal's foreground job")
 
     def _is_executing_command(self, key: str) -> bool:
         return self._is_enter_key(key) or self._ends_with_newline(key)
@@ -741,10 +801,8 @@ class TmuxSession:
         markers = _BatchMarkers.create()
         script = self._build_batch_script(keystroke_batches, markers)
         total_wait = sum(max(0.0, batch.duration_sec) for batch in keystroke_batches)
-        result = await self.environment.exec(
-            command=script,
-            timeout_sec=math.ceil(total_wait + self._batch_exec_timeout_margin_sec),
-            user=self._user,
+        result = await self._exec_bounded(
+            script, math.ceil(total_wait + self._batch_exec_timeout_margin_sec)
         )
         stdout = result.stdout or ""
         sent_index = None
@@ -805,8 +863,9 @@ class TmuxSession:
         return output, True
 
     async def capture_pane(self, capture_entire: bool = False) -> str:
-        result = await self.environment.exec(
-            self._tmux_capture_pane(capture_entire=capture_entire), user=self._user
+        result = await self._exec_bounded(
+            self._tmux_capture_pane(capture_entire=capture_entire),
+            _TMUX_COMMAND_TIMEOUT,
         )
         return result.stdout or ""
 

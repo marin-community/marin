@@ -1,6 +1,9 @@
 import asyncio
 import copy
+import json
+import math
 import os
+import time
 from collections import defaultdict
 from datetime import timedelta
 from enum import StrEnum
@@ -14,12 +17,18 @@ import torch.distributed
 from huggingface_hub import snapshot_download
 from loguru import logger
 from megatron.bridge import AutoBridge
-from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
+from megatron.core.optimizer import DistributedOptimizer
+from megatron.core.optimizer.optimizer import ChainedOptimizer, MixedPrecisionOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
+from megatron.core.transformer.enums import AttnBackend
 from omegaconf import OmegaConf
+from rigging.filesystem.storage_path import prefix_join
+from skyrl_train.batch_invariant import BATCH_INVARIANT_NCCL_ENV
+from skyrl_train.io import io
+from skyrl_train.telemetry import record_event
+from skyrl_train.trainer_memory_profile import preserve_training_state, warm_state_profile
 from skyrl_train.distributed.dispatch import MeshRank
-from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.distributed.megatron.megatron_utils import (
     get_model_config,
@@ -31,7 +40,7 @@ from skyrl_train.distributed.megatron.optimizer import (
     get_megatron_optimizer,
     get_megatron_optimizer_param_scheduler,
 )
-from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state
+from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state, make_prefetch_hook
 from skyrl_train.distributed.utils import init_worker_process_group_with_device
 from skyrl_train.mismatch_probe.modes import TRAINER_MODES
 from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_training_strategy
@@ -45,12 +54,8 @@ from skyrl_train.training_batch import (
 from skyrl_train.utils.metrics import policy_progress_metrics, policy_training_metrics
 from skyrl_train.utils.profiler import Profiler
 from skyrl_train.utils.progress import tqdm
-from skyrl_train.utils.utils import (
-    get_physical_gpu_id,
-    moe_router_replay_requested,
-    str_to_torch_dtype,
-    update_model_config,
-)
+from skyrl_train.utils.utils import get_physical_gpu_id, str_to_torch_dtype, update_model_config
+from skyrl_train.config.driver_validation import moe_router_replay_requested
 from skyrl_train.weight_sync.expert_block.sender import ExpertBlockSender
 from skyrl_train.weight_sync.weight_extractor import validate_weight_sync_mode
 from skyrl_train.workers.grug_validation import GrugValidationSnapshot
@@ -64,7 +69,6 @@ from skyrl_train.workers.megatron.router_replay_install import install_megatron_
 from skyrl_train.workers.megatron.output_projection_layout import install_dpo_batch_major_output_projection
 from skyrl_train.workers.megatron.weight_extractor import BucketedMegatronWeightExtractor, mapping_hf_names
 from skyrl_train.workers.worker import (
-    CriticWorkerBase,
     PolicyWorkerBase,
     RefWorkerBase,
     log_r3_resident_set,
@@ -74,11 +78,18 @@ from transformers import AutoConfig, AutoTokenizer
 
 from marinskyrl.hugging_face_retry import load_hugging_face_with_retry
 from marinskyrl.runtime_options import WeightSyncTransport
+from skyrl_train.training_batch import TrainingInputBatch
 
 
 class _MegatronInitMode(StrEnum):
     TRAINING = "training"
     CHECKPOINT_EXPORT = "checkpoint-export"
+
+
+# Outcome labels shared by the sizing report, its headroom gate and the receipt consumers.
+SIZING_PASSED = "passed"
+SIZING_OOM = "oom"
+SIZING_INSUFFICIENT_HEADROOM = "insufficient_headroom"
 
 
 class MegatronWorker:
@@ -135,9 +146,13 @@ class MegatronWorker:
         override_config_kwargs.update(model_config_kwargs.get("model_config", {}))
         update_model_config(hf_config, override_config_kwargs=override_config_kwargs)
 
-        # if flash_attn is enabled, we use flash attention backend, otherwise fall back to fused attention backend
+        # In this pinned stack, cuDNN BF16 train/eval forwards gave Grug
+        # different log-probs at fixed weights. PPO needs those scores to agree.
+        # Revisit after cuDNN passes test_grug_megatron_train_forward_matches_eval_forward
+        # in the selected profile. This observation does not establish a cuDNN defect.
+        flash_attn = flash_attn or (bf16 and getattr(hf_config, "model_type", None) == GRUG_MOE_MODEL_TYPE)
         transformer_config_kwargs = OmegaConf.to_container(transformer_config_kwargs, resolve=True)
-        transformer_config_kwargs["attention_backend"] = "flash" if flash_attn else "fused"
+        transformer_config_kwargs["attention_backend"] = AttnBackend.flash if flash_attn else AttnBackend.auto
 
         if not self.cfg.trainer.gradient_checkpointing:
             for key in ("recompute_granularity", "recompute_method", "recompute_num_layers"):
@@ -156,11 +171,14 @@ class MegatronWorker:
             expert_model_parallel_size=megatron_config.expert_model_parallel_size,
             expert_tensor_parallel_size=megatron_config.expert_tensor_parallel_size,
             bf16=bf16,
-            attention_backend="flash" if flash_attn else "fused",
         )
+        if self.remote_hf_state is not None:
+            provider.register_pre_wrap_hook(make_prefetch_hook(bridge, self.remote_hf_state.store), prepend=True)
 
         for k, v in transformer_config_kwargs.items():
             setattr(provider, k, v)
+        if hf_config.model_type == GRUG_MOE_MODEL_TYPE:
+            provider.grug_batch_invariant_experts = self.cfg.trainer.algorithm.batch_invariant
         provider.finalize()
 
         self.provider = provider
@@ -186,11 +204,35 @@ class MegatronWorker:
         if ddp_config is not None:
             for k, v in ddp_config.items():
                 setattr(default_ddp_config, k, v)
-        model = self.provider.provide_distributed_model(
-            ddp_config=default_ddp_config, wrap_with_ddp=wrap_with_ddp, bf16=bf16
-        )
+        try:
+            model = self.provider.provide_distributed_model(
+                ddp_config=default_ddp_config, wrap_with_ddp=wrap_with_ddp, bf16=bf16
+            )
+        finally:
+            if self.remote_hf_state is not None:
+                self.remote_hf_state.store.close()
         install_dpo_batch_major_output_projection(model, self.provider, self.cfg.trainer.algorithm.policy_loss_type)
         return model
+
+    def _forward_loaded_logprobs(self, data: TrainingInputBatch) -> torch.Tensor:
+        """Give every pipeline stage the last stage's response logprobs."""
+        scores = self.forward(data)["output"]
+        if self.mesh_rank.pp_size == 1:
+            return scores
+        shape = (data.batch_size, data.metadata["response_length"])
+        device = self.strategy.collective_device()
+        if mpu.is_pipeline_last_stage(ignore_virtual=True):
+            scores = scores.to(device)
+            if scores.dtype != torch.float32 or tuple(scores.shape) != shape:
+                raise ValueError("worker pipeline forward requires float32 response scores with the global width")
+        else:
+            scores = torch.empty(shape, dtype=torch.float32, device=device)
+        torch.distributed.broadcast(
+            scores,
+            src=mpu.get_pipeline_model_parallel_last_rank(),
+            group=mpu.get_pipeline_model_parallel_group(),
+        )
+        return scores.cpu()
 
     def forward(self, data, *, probe_micro_batch_size: int | None = None):
         """
@@ -374,6 +416,27 @@ class MegatronWorker:
 class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        config = self.cfg.trainer.policy.megatron_config
+        channels = config.nccl_max_channels
+        if channels is not None:
+            if (
+                not self.cfg.trainer.algorithm.batch_invariant
+                or config.tensor_model_parallel_size != 1
+                or config.expert_tensor_parallel_size not in (None, 1)
+            ):
+                raise ValueError("nccl_max_channels requires a batch-invariant TP1/ETP1 policy")
+            if not isinstance(channels, int) or isinstance(channels, bool) or channels < 1:
+                raise ValueError("nccl_max_channels must be a positive integer")
+            publication_channels = BATCH_INVARIANT_NCCL_ENV["NCCL_MAX_NCHANNELS"]
+            if os.environ.get("NCCL_MAX_CTAS") is not None:
+                raise ValueError(
+                    "Unset NCCL_MAX_CTAS when using nccl_max_channels so training and weight transfers can use separate limits"
+                )
+            # Training can use more channels. Keep weight publication at vLLM's
+            # limit so sender and receiver use the same broadcast layout.
+            os.environ["NCCL_MAX_NCHANNELS"] = str(channels)
+            self._weight_sync_pg_options = torch.distributed.ProcessGroupNCCL.Options()
+            self._weight_sync_pg_options.config.max_ctas = int(publication_channels)
         self.model: MegatronModelWrapper = None
         self.actor_module: list[nn.Module] = None
         self.scheduler: OptimizerParamScheduler = None
@@ -396,7 +459,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             self.actor_module, self.optimizer, non_blocking, backload_optimizer, backload_model
         )
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
@@ -405,7 +468,9 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         # The guess deadlocks the first collective (weight-init barrier) on unmasked-CVD clusters
         # where every actor sees all GPUs (cw-rno2a); see init_worker_process_group_with_device.
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         # Explicitly wrap torch.distributed.broadcast in torch.no_grad() to avoid a warning in Megatron training where the
@@ -475,10 +540,12 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         torch.distributed.barrier()
 
         if self.remote_hf_state is not None:
+            stats = self.remote_hf_state.store.read_stats
             logger.info(
-                "Loaded Megatron policy weights directly from {} (rank range bytes read: {})",
+                "Loaded Megatron policy weights directly from {} (rank range bytes read: {}; {})",
                 self.cfg.trainer.policy.model.source_uri,
-                self.remote_hf_state.store.bytes_read,
+                stats.bytes_read,
+                stats,
             )
 
         if self._rank == 0:
@@ -518,6 +585,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             logprob_chunk_size=OmegaConf.select(
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             ),
+            output_projection_chunk_size=self.cfg.trainer.policy.megatron_config.get("output_projection_chunk_size"),
         )
         self._maybe_install_router_replay("policy")
 
@@ -551,6 +619,136 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             ),
         )
+
+    def profile_train_memory(self) -> dict:
+        """Exercise the configured optimizer warm at capacity before initial weight publication/rollouts."""
+        config = self.cfg.trainer.policy.megatron_config.memory_profile
+        maximum = config.max_sequence_length
+        if maximum > self.strategy.hf_config.max_position_embeddings:
+            raise ValueError("Trainer sizing maximum exceeds the model's max_position_embeddings")
+        trained = self.cfg.trainer.algorithm.get("max_seq_len")
+        if trained is not None and trained > maximum:
+            raise ValueError("Trainer sizing maximum is below the trained sequence bound trainer.algorithm.max_seq_len")
+        token_counts = sorted(set([*config.valid_token_counts, maximum]))
+        device = torch.cuda.current_device()
+        rng_state = MegatronStrategy.get_rng_state()
+        rng_tracker = get_cuda_rng_tracker()
+        tracker_states = copy.deepcopy(rng_tracker.get_states())
+        modes = [(module, module.training) for chunk in self.actor_module for module in chunk.modules()]
+        reports = []
+        destination = prefix_join(self.cfg.trainer.export_path, f"trainer-sizing/rank-{self._rank}.json")
+
+        def publish():
+            report = {"rank": self._rank, "max_seq_len": maximum, "measurements": reports}
+            io.write_bytes_atomic(destination, (json.dumps(report, sort_keys=True) + "\n").encode())
+            return report
+
+        def step(tokens):
+            generator = torch.Generator().manual_seed(20261020 + mpu.get_data_parallel_rank())
+            batch_size = self.cfg.trainer.micro_train_batch_size_per_gpu
+            sequences = torch.randint(
+                self.strategy.hf_config.vocab_size, (batch_size, tokens), generator=generator, dtype=torch.long
+            ).to(device)
+            attention = torch.ones_like(sequences, dtype=torch.bool)
+            action_shape = (batch_size, tokens - 1)
+            old = torch.full(action_shape, -math.log(self.strategy.hf_config.vocab_size), device=device)
+            advantages = torch.ones(action_shape, device=device)
+            advantages[:, 1::2] = -1
+            micro = MegatronPolicyMicroBatch(
+                sequences=sequences,
+                attention_mask=attention,
+                position_ids=torch.arange(tokens, device=device).expand(batch_size, -1),
+                num_actions=tokens - 1,
+                old_action_log_probs=old,
+                base_action_log_probs=old.clone() if self.cfg.trainer.algorithm.use_kl_loss else None,
+                advantages=advantages,
+                loss_mask=torch.ones(action_shape, device=device),
+                rollout_action_logprobs=old.clone(),
+                response_span_tags=torch.zeros(action_shape, dtype=torch.int8, device=device),
+            )
+            self.model.train()
+            self.optimizer.zero_grad()
+            for chunk in self.actor_module:
+                chunk.zero_grad_buffer()
+            # Fill the real pipeline's activation slots, not just one under-filled PP microbatch.
+            self.model.forward_backward_mini_batch(
+                [micro] * mpu.get_pipeline_model_parallel_world_size(),
+                seq_len=tokens,
+                micro_batch_size=batch_size,
+                temperature=self.scoring_temperature,
+            )
+            result = self.strategy.optimizer_step(self.optimizer, self.model, self.scheduler, name="sizing")
+            if not result.applied:
+                raise RuntimeError("Synthetic trainer sizing did not apply its optimizer update")
+            torch.cuda.synchronize(device)
+
+        def measure(tokens, run, warm_optimizer):
+            torch.cuda.synchronize(device)
+            torch.cuda.empty_cache()
+            free_before, total = torch.cuda.mem_get_info(device)
+            external_before = max(0, total - free_before - torch.cuda.memory_reserved(device))
+            torch.cuda.reset_peak_memory_stats(device)
+            started = time.monotonic()
+            outcome = SIZING_PASSED
+            try:
+                run()
+            except torch.OutOfMemoryError:
+                outcome = SIZING_OOM
+                raise
+            finally:
+                free_after, _ = torch.cuda.mem_get_info(device)
+                allocated = torch.cuda.max_memory_allocated(device)
+                reserved = torch.cuda.max_memory_reserved(device)
+                external_after = max(0, total - free_after - torch.cuda.memory_reserved(device))
+                estimated_used = reserved + max(external_before, external_after)
+                headroom = total - estimated_used
+                report = {
+                    "valid_tokens": tokens,
+                    "warm_optimizer": warm_optimizer,
+                    "seconds": time.monotonic() - started,
+                    "peak_allocated_bytes": allocated,
+                    "peak_reserved_bytes": reserved,
+                    "device_total_bytes": total,
+                    "estimated_headroom_bytes": headroom,
+                    "minimum_headroom_fraction": config.minimum_headroom_fraction,
+                    "outcome": outcome,
+                }
+                if outcome == SIZING_PASSED and headroom < total * config.minimum_headroom_fraction:
+                    report["outcome"] = SIZING_INSUFFICIENT_HEADROOM
+                reports.append(report)
+                record_event("trainer_memory_profile", report, attributes={"rank": str(self._rank)})
+                publish()
+                logger.info("Trainer sizing rank={} {}", self._rank, report)
+            if report["outcome"] != SIZING_PASSED:
+                raise RuntimeError(f"Trainer sizing failed before rollouts: rank={self._rank} {report}")
+            return report
+
+        try:
+            children = self.optimizer.chained_optimizers if isinstance(self.optimizer, ChainedOptimizer) else [self.optimizer]
+            optimizers = [
+                child.optimizer for child in children
+                if not (isinstance(child, DistributedOptimizer) and child.is_stub_optimizer)
+            ]
+            scalers = [
+                child.grad_scaler for child in children
+                if isinstance(child, MixedPrecisionOptimizer) and child.grad_scaler is not None
+            ]
+            master_shards = [parameter for optimizer in optimizers for group in optimizer.param_groups for parameter in group["params"]]
+            with preserve_training_state(
+                [*self.actor_module, *optimizers, *scalers, self.scheduler],
+                optimizer_parameters=master_shards,
+                cuda_devices=[device],
+            ):
+                warm_state_profile(token_counts, step=step, measure=measure)
+        finally:
+            for module, was_training in modes:
+                module.training = was_training
+            MegatronStrategy.load_rng_state(rng_state)
+            rng_tracker.set_states(tracker_states)
+            self.optimizer.zero_grad()
+            for chunk in self.actor_module:
+                chunk.zero_grad_buffer()
+        return publish()
 
     def _ppo_train_impl(self, train_data, timing: PhaseBreakdown) -> "TrainingOutputBatch":
         """Train through Megatron Core's pipeline scheduler."""
@@ -831,23 +1029,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         torch.cuda.empty_cache()
         torch.distributed.barrier()
 
-    def grug_optimizer_route_snapshot(self):
-        """Return this rank and the optimizer route for each named parameter."""
-        if str(self.cfg.trainer.policy.optimizer_config.optimizer).lower() != "muonh":
-            raise ValueError("Optimizer route snapshot requires Grug MuonH")
-        names = {id(parameter): name for chunk in self.actor_module for name, parameter in chunk.named_parameters()}
-        optimizers = (
-            self.optimizer.chained_optimizers if isinstance(self.optimizer, ChainedOptimizer) else [self.optimizer]
-        )
-        routes = {}
-        for wrapped in optimizers:
-            default_route = "grug_muonh" if isinstance(wrapped.optimizer, MegatronGrugMuonH) else "adam"
-            for index, group in enumerate(wrapped.optimizer.param_groups):
-                route = group.get("optimizer", default_route)
-                for parameter in (*wrapped.float16_groups[index], *wrapped.fp32_from_fp32_groups[index]):
-                    routes[names[id(parameter)]] = route
-        return {"rank": torch.distributed.get_rank(), "routes": routes}
-
     def grug_validation_snapshot(self, names=()):
         """Return the calling rank and requested Grug weights in HF layout, gathered on rank 0.
 
@@ -896,10 +1077,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             weights=weights,
         )
 
-    def get_weight_statistics(self):
-        """Compute lightweight statistics for model weights"""
-        raise NotImplementedError()
-
     def _set_pad_token_id(self, pad_token_id):
         # this already gets set in the init_model method
         pass
@@ -917,14 +1094,16 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
     def backload_to_gpu(self, non_blocking=True, **kwargs):
         self.strategy.backload_to_gpu(self.actor_module, None, non_blocking)
 
-    def init_worker_process_group(self):
+    def init_worker_process_group(self, master_addr: str, master_port: int):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
         # Device-pinned NCCL PG init via the shared helper (see init_worker_process_group_with_device) —
         # avoids the ProcessGroupNCCL device-guess collective deadlock on unmasked-CVD clusters (cw-rno2a).
         init_worker_process_group_with_device(
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds)
+            master_addr=master_addr,
+            master_port=master_port,
+            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
         )
 
         self.strategy = MegatronStrategy(
@@ -988,20 +1167,10 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
         )
         self._maybe_install_router_replay("ref")
 
-    def get_weight_statistics(self):
-        """Compute lightweight statistics for model weights"""
-        raise NotImplementedError()
-
     def _set_pad_token_id(self, pad_token_id):
         # this already gets set in the init_model method
         pass
 
 
-class MegatronCriticWorkerBase(MegatronWorker, CriticWorkerBase):
-    def __init__(self, **kwargs):
-        raise NotImplementedError()
-
-
 PolicyWorker = ray.remote(num_gpus=1)(MegatronPolicyWorkerBase)
 RefWorker = ray.remote(num_gpus=1)(MegatronRefWorkerBase)
-CriticWorker = ray.remote(num_gpus=1)(MegatronCriticWorkerBase)

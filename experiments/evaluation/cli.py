@@ -4,8 +4,9 @@
 """Command-line entry point for the eval launcher.
 
 ``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``.
-``launch`` submits runs and optionally waits for their object-store records. Fleet-wide archive
-sweeps are administrative and live in :mod:`experiments.evaluation.migrations.cli`.
+``launch`` submits runs and optionally waits for their object-store records; ``scores`` prints the
+records and derived scores of finished runs. Fleet-wide archive sweeps are administrative and live in
+:mod:`experiments.evaluation.migrations.cli`.
 """
 
 from __future__ import annotations
@@ -14,16 +15,21 @@ import logging
 from pathlib import Path
 
 import click
+from evalrecords.records import RECORD_FILE, TaskEvidence, TaskMachineBackend, read_record
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.runner import EvaluationBatch, wait_and_report
+from marin.evaluation.runner import EvaluationBatch, print_record, wait_and_report
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
+from rigging.secrets import COREWEAVE_SECRET_NAMES, get_secret
 
-from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
+from experiments.evaluation.curated import load_evaluations
+from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import (
     DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
@@ -32,13 +38,14 @@ from experiments.evaluation.launch import (
     prepare_evaluation_batch,
 )
 from experiments.evaluation.models import models
+from experiments.evaluation.policy_finalization import load_policy_finalization
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
+def _resolve_evaluations(evals_arg: str) -> tuple[EvaluationDefinition, ...]:
     try:
-        return resolve_eval_keys(evals_arg)
+        return resolve_evaluations(evals_arg)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
 
@@ -101,6 +108,19 @@ def resolve_judge_model_config(model_key: str | None, config_path: Path | None) 
     )
 
 
+def _require_coreweave_credentials(batch: EvaluationBatch) -> None:
+    """Fail before submission when a CoreWeave target would reject the job for missing storage keys."""
+    if batch.accelerator.target_cluster is None:
+        return
+    missing = [name for name in COREWEAVE_SECRET_NAMES if not get_secret(name)]
+    if missing:
+        raise click.UsageError(
+            f"Target cluster {batch.accelerator.target_cluster} runs on CoreWeave, which requires your own "
+            f"object-storage credentials. Missing: {', '.join(missing)}. Export CW_KEY_ID and CW_KEY_SECRET "
+            "(see lib/iris/docs/secrets.md), or launch on GCP TPU with --platform tpu."
+        )
+
+
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
     geometry = batch.accelerator.geometry
     serving = geometry.label if geometry is not None else "worker-resolved"
@@ -123,9 +143,18 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         eval_ref = evaluation.identity.eval_ref
         tasks = [task.name for task in eval_ref.tasks]
         harbor = eval_ref.harbor
+        curated = eval_ref.curated
         agent_context = ""
         if harbor is not None:
             agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
+        elif curated is not None and curated.agent is not None:
+            assert curated.settings.task_machine is not None
+            agent_context = (
+                f"agent={curated.agent.harness}@{curated.agent.revision}  "
+                f"task_machine={curated.settings.task_machine.backend.value}  "
+                f"max_input_tokens={curated.agent.max_input_tokens}  "
+                f"max_output_tokens={curated.agent.max_output_tokens}  "
+            )
         click.echo(
             f"  eval={eval_ref.name}  location={batch.model.location}  "
             f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
@@ -163,13 +192,13 @@ def cli() -> None:
     "--evals",
     "evals_arg",
     default=None,
-    help="Suite name (e.g. 'smoke') or comma-separated eval keys; defaults to smoke.",
+    help="Suite or comma-separated eval keys; selects document entries with --evaluation-config. Defaults to smoke.",
 )
 @click.option(
-    "--evalchemy-config",
+    "--evaluation-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
-    help="Portable Evalchemy YAML or JSON. Repeatable and additive with --evals and --harbor-config.",
+    help="Benchmark selection document. Repeat to combine entries; --evals selects entries from the combined documents.",
 )
 @click.option(
     "--harbor-config",
@@ -204,7 +233,24 @@ def cli() -> None:
     show_default=True,
     help="Maximum concurrent evaluators sharing inference.",
 )
-@click.option("--seed", type=int, default=None, help="Override the Evalchemy sampling seed for this launch.")
+@click.option(
+    "--seed", type=int, default=None, help="Run seed for curated evaluations. Default: 0, or unseeded on TPU vLLM."
+)
+@click.option(
+    "--task-machine-backend",
+    type=click.Choice([backend.value for backend in TaskMachineBackend]),
+    default=None,
+    help="Run curated agent benchmarks' task machines on this backend. Default: each selection's, else daytona.",
+)
+@click.option(
+    "--task-evidence",
+    type=click.Choice([mode.value for mode in TaskEvidence]),
+    default=None,
+    help=(
+        "What curated attempt evidence keeps of each task: a corpus reference, or a full copy with hidden tests. "
+        "Default: what the benchmark declares, embedded unless it declares reference."
+    ),
+)
 @click.option(
     "--version",
     "version",
@@ -244,14 +290,20 @@ def cli() -> None:
     default=None,
     help="Iris priority band for the orchestrator and serve jobs; defaults to inherit.",
 )
+@click.option(
+    "--policy-finalization-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Frozen judge configuration; enabled by the policy campaign launcher.",
+)
 def launch(
     model: str | None,
     model_config: Path | None,
     judge_model: str | None,
     judge_model_config: Path | None,
     judge_accelerator: str | None,
+    policy_finalization_config: Path | None,
     evals_arg: str | None,
-    evalchemy_config: tuple[Path, ...],
+    evaluation_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
     retry_unscored_harbor_trials: bool,
     platform: str | None,
@@ -260,6 +312,8 @@ def launch(
     max_concurrent: int,
     instances: int,
     seed: int | None,
+    task_machine_backend: str | None,
+    task_evidence: str | None,
     version: str | None,
     description: str | None,
     resume_results_path: str | None,
@@ -274,13 +328,15 @@ def launch(
     selected_model = resolve_model_config(model, model_config)
     selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
-    evalchemy_definitions = [
-        EvalchemyDefinition(
-            name=canonical_served_name(path.stem),
-            config_path=path,
-        )
-        for path in evalchemy_config
-    ]
+    configured = [entry for path in evaluation_config for entry in load_evaluations(path)]
+    if evaluation_config and evals_arg:
+        names = {name.strip() for name in evals_arg.split(",") if name.strip()}
+        unknown = names - {entry.name for entry in configured}
+        if unknown:
+            raise click.BadParameter(
+                f"Unknown configured evaluations: {', '.join(sorted(unknown))}", param_hint="--evals"
+            )
+        configured = [entry for entry in configured if entry.name in names]
     harbor_definitions = [
         HarborDefinition(
             name=canonical_served_name(path.stem),
@@ -288,22 +344,22 @@ def launch(
         )
         for path in harbor_config
     ]
-    evals = (
-        _resolve_eval_keys(evals_arg)
-        if evals_arg is not None
-        else (() if evalchemy_definitions or harbor_definitions else _resolve_eval_keys("smoke"))
-    )
+    evals = tuple(configured) + tuple(harbor_definitions)
+    if not evaluation_config and evals_arg is not None:
+        evals += _resolve_evaluations(evals_arg)
+    if not evals:
+        evals = _resolve_evaluations("smoke")
     spec = LaunchSpec(
         model=selected_model,
         evals=evals,
-        evalchemy_definitions=tuple(evalchemy_definitions),
-        harbor_definitions=tuple(harbor_definitions),
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
         max_concurrent=max_concurrent,
         instances=instances,
         seed=seed,
+        task_machine_backend=TaskMachineBackend(task_machine_backend) if task_machine_backend is not None else None,
+        task_evidence=TaskEvidence(task_evidence) if task_evidence is not None else None,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
@@ -315,6 +371,7 @@ def launch(
         description=description,
         resume_results_path=resume_results_path,
         run_id=run_id,
+        policy_finalization=load_policy_finalization(policy_finalization_config) if policy_finalization_config else None,
     )
     try:
         batch = prepare_evaluation_batch(spec)
@@ -322,8 +379,9 @@ def launch(
         if resume_results_path is not None:
             param_hint = "--resume-results-path"
         else:
-            param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
+            param_hint = "--evaluation-config/--harbor-config" if evaluation_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
+    _require_coreweave_credentials(batch)
     if dry_run:
         _print_plan(spec, batch)
         return
@@ -333,11 +391,27 @@ def launch(
             f"submitted group {group.group_id} ({len(group.evaluations)} evals sharing inference) "
             f"through cluster {EVALUATION_CONTROLLER_CLUSTER!r}"
         )
+        click.echo(f"  job: {group.job.job_id}")
+        click.echo(f"  records: {group.records_prefix}")
         for evaluation in group.evaluations:
             click.echo(f"  {evaluation.run_id}  ({group.model_name} / {evaluation.eval_name})")
         if no_wait:
             return
-        wait_and_report([group])
+        if not wait_and_report([group]):
+            raise click.ClickException("one or more evaluations failed or wrote no record")
+
+
+@cli.command()
+@click.argument("runs", nargs=-1, required=True)
+def scores(runs: tuple[str, ...]) -> None:
+    """Print status, coverage and scores for finished runs.
+
+    Each RUN is a ``record.json`` URI or the run directory that contains it, such as
+    ``gs://marin-eval-metadata/evals/<run_id>``.
+    """
+    configure_coreweave_s3()
+    for run in runs:
+        print_record(read_record(run if run.endswith(RECORD_FILE) else prefix_join(run, RECORD_FILE)))
 
 
 def main() -> None:

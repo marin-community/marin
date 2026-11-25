@@ -1,24 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Score a Nemotron Ultra Reasoning Gym reply with the puzzle task's own scorer and print the reward.
+"""Score a Nemotron Ultra Reasoning Gym reply with the pinned scorer and targeted repairs.
 
-The candidate is the final answer's last ``<answer>`` block, else its last boxed answer, else the whole
-final answer. The grader packages' ``reasoning_gym`` scores it against the row's question, answer and
-metadata; the metadata's ``source_dataset`` names the task.
+The candidate is the final answer's last ``<answer>`` block, last boxed answer, or last Markdown answer
+section, in that order. Otherwise the final answer text is used. The grader packages' ``reasoning_gym``
+scores it against the row's question, answer and metadata; the metadata's ``source_dataset`` names the task.
 """
 
+import contextlib
 import json
 import re
 import sys
 from pathlib import Path
 
-import reasoning_gym
+from verifyit.grade import InvalidTask
 from verifyit.modes.extract import extract_markdown_answer
+from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 
 sys.path.insert(0, "/tests")
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text, last_boxed_answer
+
+CONFIG = Path("/tests/config.json")
+ANSWER = Path("/app/answer.txt")
 
 
 def candidate(reply: str) -> str:
@@ -37,10 +42,23 @@ def candidate(reply: str) -> str:
 
 
 def main() -> None:
-    contract = json.loads(Path("/tests/config.json").read_text())["contract"]
+    contract = json.loads(CONFIG.read_text())["contract"]
     entry = {"question": contract["question"], "answer": contract.get("answer"), "metadata": contract["metadata"]}
-    scorer = reasoning_gym.get_score_answer_fn(contract["metadata"]["source_dataset"])
-    print(float(scorer(candidate(Path("/app/answer.txt").read_text()), entry)))
+    dataset = contract["metadata"]["source_dataset"]
+    answer = candidate(ANSWER.read_text())
+    with contextlib.redirect_stdout(sys.stderr):
+        try:
+            reward = score_reasoning_gym_answer(dataset, entry, answer)
+        except InvalidTask:
+            raise
+        except Exception as error:
+            # Check the reference when available; some datasets have no reference answer.
+            reference = entry["answer"]
+            if reference is not None and not score_reasoning_gym_answer(dataset, entry, reference) > 0:
+                raise ValueError("Reasoning Gym reference answer does not score") from error
+            print(f"Reasoning Gym candidate scorer raised {type(error).__name__}", file=sys.stderr)
+            reward = 0.0
+    print(reward)
 
 
 if __name__ == "__main__":

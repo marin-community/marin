@@ -14,9 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
-from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
-from marin.evaluation.model_identity import comparison_model_name
-from marin.evaluation.records import (
+from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
     EvalchemyRef,
@@ -41,6 +39,7 @@ from marin.evaluation.records import (
     scan_records,
     write_record,
 )
+from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelConfig, ResourceHint, ServeConfig
 
 
 def test_benchmark_metadata_rejects_duplicate_canonical_metric_names():
@@ -258,7 +257,7 @@ def test_scan_records_invalidates_filesystem_listing_cache(tmp_path, monkeypatch
     write_record(_RECORD.model_copy(update={"run_id": "first-run"}), str(evals))
     filesystem = _CachedListingFileSystem()
     monkeypatch.setattr(
-        "marin.evaluation.records.url_to_fs",
+        "evalrecords.records.url_to_fs",
         lambda prefix: (filesystem, prefix),
     )
     initial = scan_records(str(evals))
@@ -282,9 +281,9 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
                     env="daytona",
                     task_limit=2,
                     config_digest="sha256:" + "a" * 64,
-                    harbor_config_commit="b" * 40,
                 ),
-            )
+            ),
+            "provenance": Provenance(git_sha="abc123", launch_host="dev-box"),
         }
     )
 
@@ -299,8 +298,8 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
         "env": "daytona",
         "task_limit": 2,
         "config_digest": "sha256:" + "a" * 64,
-        "harbor_config_commit": "b" * 40,
     }
+    assert raw["provenance"] == {"git_sha": "abc123", "launch_host": "dev-box"}
 
 
 def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
@@ -415,8 +414,8 @@ def test_record_config_mirror_covers_every_launcher_field(mirror, launcher):
     assert not missing, f"{mirror.__name__} does not mirror {launcher.__name__} fields {sorted(missing)}"
 
 
-def test_a_serve_field_the_schema_has_not_learned_remains_in_the_model_identity(tmp_path):
-    """An unknown serving field must not make two configurations look identical."""
+def test_a_serve_field_the_schema_has_not_learned_survives_a_record_round_trip(tmp_path):
+    """An unknown serving field survives a record round trip."""
     configured = _RECORD.model_copy(
         update={
             "model": ModelRef(
@@ -441,4 +440,3 @@ def test_a_serve_field_the_schema_has_not_learned_remains_in_the_model_identity(
     assert record.model.config is not None
     assert record.model.config.serve.tensor_parallel_size is None
     assert record.model.config.serve.future_serve_option == 2
-    assert comparison_model_name(record.model) != comparison_model_name(configured.model)

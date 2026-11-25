@@ -58,6 +58,20 @@ export function sharedChatUrl(currentUrl: string, shareId: string): string {
   return url.toString()
 }
 
+/** Start a clipboard write while the Share chat click still has user activation. */
+export function copySharedChatUrl(url: Promise<string>): Promise<boolean> {
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') return Promise.resolve(false)
+
+  try {
+    const item = new ClipboardItem({
+      'text/plain': url.then((value) => new Blob([value], { type: 'text/plain' })),
+    })
+    return navigator.clipboard.write([item]).then(() => true, () => false)
+  } catch {
+    return Promise.resolve(false)
+  }
+}
+
 export function sharedChatIdFromHash(hash: string): string | null {
   if (!isSharedChatHash(hash)) return null
   const shareId = hash.slice(SHARED_CHAT_PREFIX.length)
@@ -120,6 +134,7 @@ export function conversationFromSharedChat(
     system: '',
     pythonTools: '',
     shellWorkspace: null,
+    webSearch: false,
     thinkingMode,
     customInstructions: '',
     createdAt: timestamp,

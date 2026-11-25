@@ -12,12 +12,12 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 
 Decontamination has four stages that you can run separately:
 
-- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v3.
+- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v6.
 - ``decon-drop`` builds source and global corpus DF filters.
 - ``decon-mark`` marks each selected source from completed Bloom and drop-set stages.
 - ``decon-report`` reads completed marks and writes the validation report.
 
-Run preparation first. This reuses the canonical eval v3 Bloom when it is built::
+Run preparation first. This reuses the canonical eval v6 Bloom when it is built::
 
     python -m experiments.datakit.reference_pipeline \
         --mode full --target decon-drop --sources all \
@@ -60,6 +60,9 @@ Worker fleet: subprocess-compatible stages share one Zephyr coordinator and
 worker group. Steps that require process-local model caches use dedicated
 ``InlineRunner`` contexts. One :class:`PoolConfig` sets the worker count and
 worker and task shapes. ``--max-concurrent`` limits concurrent StepRunner steps.
+:func:`run_reference_steps` starts the shared pool after the normalize steps and
+stops it when the last shared-pool stage succeeds. Thus idle shared workers do
+not hold the hosts that the dedicated pools need.
 
 Public API: :func:`reference_datakit_steps`. Pass ``sources`` (a ``{name:
 normalize_step}`` mapping), a ``quality_model`` dir, and optionally pre-staged
@@ -108,14 +111,19 @@ eval corpus a version tag.
 import argparse
 import logging
 import posixpath
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
+    BestEffortEvalSuite,
     DeconAttributes,
     DropSetSource,
+    RequiredEvalManifest,
+    RequiredEvalSuite,
     all_source_drop_sets_step,
     build_eval_bloom_step,
     decon_step,
@@ -172,6 +180,13 @@ from experiments.datakit.decontam.config import (
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
 )
+from experiments.datakit.decontam.pinned_references import (
+    COVERAGE_MANIFEST,
+    COVERAGE_RELATIVE,
+    COVERAGE_VERSION,
+    reference_catalog,
+    reference_sources_sha256,
+)
 from experiments.datakit.decontam.prepare_eval_corpus import (
     AA_BENCHMARK_NAMES,
     AA_MANIFEST_RELATIVE,
@@ -179,6 +194,9 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
     EVAL_CORPUS_VERSION,
     EVALS_RELATIVE,
     LMH_MANIFEST_RELATIVE,
+    UNCHEATABLE_BENCHMARK_NAMES,
+    UNCHEATABLE_MANIFEST_RELATIVE,
+    required_lmh_tasks,
 )
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
@@ -209,6 +227,9 @@ from experiments.datakit.store.datakit_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+SHARED_POOL_RELEASE_POLL_INTERVAL = 60.0
+"""Seconds between checks for the completion of every shared-pool stage."""
 
 
 # Tokenize: canonical Marin tokenizer. Not scale-sensitive.
@@ -437,11 +458,6 @@ def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
     return sources
 
 
-def default_sources() -> dict[str, StepSpec]:
-    """Every ``all_sources()`` entry, mapped to its normalize StepSpec."""
-    return select_sources(None)
-
-
 def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale, output_prefix: str | None) -> StepSpec:
     return StepSpec(
         name=f"datakit/embed/{name}",
@@ -639,6 +655,9 @@ class DatakitSteps:
     all_steps: list[StepSpec]
     """Every StepSpec the runner needs (shared upstream, per-source, dedup, store)."""
 
+    shared_pool_steps: list[StepSpec]
+    """The steps that execute on the shared Zephyr pool when one is supplied."""
+
 
 @dataclass(frozen=True)
 class DecontaminationSteps:
@@ -649,6 +668,11 @@ class DecontaminationSteps:
     marks: dict[str, StepSpec]
     report: StepSpec
 
+    @property
+    def shared_pool_steps(self) -> list[StepSpec]:
+        """The stages that receive the shared Zephyr context."""
+        return [self.bloom, self.drop_sets, *self.marks.values()]
+
 
 @dataclass(frozen=True)
 class ZephyrDatakitSteps:
@@ -658,6 +682,11 @@ class ZephyrDatakitSteps:
     tokenize: dict[str, StepSpec]
     minhash: dict[str, StepSpec]
     fuzzy_dedup: StepSpec
+
+    @property
+    def shared_pool_steps(self) -> list[StepSpec]:
+        """The stages that receive the shared Zephyr context."""
+        return [self.exact_dedup, *self.tokenize.values(), *self.minhash.values(), self.fuzzy_dedup]
 
 
 def zephyr_datakit_steps(
@@ -784,11 +813,22 @@ def decontamination_steps(
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_manifest_path=f"{eval_root}/{AA_MANIFEST_RELATIVE}",
+        required_eval_suites=(
+            RequiredEvalSuite(f"{eval_root}/{AA_MANIFEST_RELATIVE}", AA_BENCHMARK_NAMES),
+            RequiredEvalSuite(f"{eval_root}/{UNCHEATABLE_MANIFEST_RELATIVE}", UNCHEATABLE_BENCHMARK_NAMES),
+        ),
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
-        required_eval_names=AA_BENCHMARK_NAMES,
-        best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
-        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
+        additional_required_eval_manifests=(
+            RequiredEvalManifest(
+                path=prefix_join(prefix_join(marin_prefix(), COVERAGE_RELATIVE), COVERAGE_MANIFEST),
+                version=COVERAGE_VERSION,
+                names=tuple(source.name for source in reference_catalog()),
+                source_catalog_sha256=reference_sources_sha256(reference_catalog()),
+            ),
+        ),
+        best_effort_eval_suite=BestEffortEvalSuite(
+            f"{eval_root}/{LMH_MANIFEST_RELATIVE}", EVAL_CORPUS_VERSION, required_lmh_tasks()
+        ),
         worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,
@@ -1134,7 +1174,12 @@ def reference_datakit_steps(
     for s in per_source.values():
         all_steps += list(s.values())
     all_steps += [dedup, cluster_plan, cluster_text, verified_dedup, store, *reports]
-    return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
+    return DatakitSteps(
+        sources=sources,
+        output_buckets=store,
+        all_steps=all_steps,
+        shared_pool_steps=zephyr_steps.shared_pool_steps + decontamination.shared_pool_steps,
+    )
 
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
@@ -1155,6 +1200,39 @@ def shared_zephyr_context(scale: PipelineScale, name: str = "datakit-reference")
         max_workers=scale.pool.n_workers,
         stage_runner_factory=SubprocessRunner,
     )
+
+
+def run_reference_steps(steps: DatakitSteps, zephyr_context: ZephyrContext, *, max_concurrent: int) -> None:
+    """Run the reference DAG and hold the shared pool only while its stages need it.
+
+    The shared pool keeps every worker that it gets until it stops. Thus it starts
+    after the normalize steps succeed and stops when every shared-pool stage
+    succeeds. The dedicated normalize, embed, quality, fuzzy-cluster, and store
+    pools then do not wait for hosts that idle shared workers hold.
+    """
+    runner = StepRunner()
+    runner.run(steps.sources.values(), max_concurrent=max_concurrent)
+    stop = threading.Event()
+    with zephyr_context, ThreadPoolExecutor(max_workers=1, thread_name_prefix="datakit-shared-pool-release") as watcher:
+        # A failed watcher leaves the pool to hold its workers until the DAG ends.
+        # ``result()`` sends the error to the caller, so the run does not pass silently.
+        release = watcher.submit(_release_shared_pool, zephyr_context, steps.shared_pool_steps, stop)
+        try:
+            runner.run(steps.all_steps, max_concurrent=max_concurrent)
+        finally:
+            stop.set()
+        release.result()
+
+
+def _release_shared_pool(zephyr_context: ZephyrContext, pool_steps: list[StepSpec], stop: threading.Event) -> None:
+    """Stop the shared pool when every step in ``pool_steps`` has succeeded."""
+    remaining = list(pool_steps)
+    while not stop.wait(SHARED_POOL_RELEASE_POLL_INTERVAL):
+        remaining = [step for step in remaining if not step_is_built(step)]
+        if not remaining:
+            logger.info("All %d shared-pool stages succeeded; stopping the shared Zephyr pool", len(pool_steps))
+            zephyr_context.shutdown()
+            return
 
 
 def quality_model_path() -> str:
@@ -1388,8 +1466,8 @@ def main() -> None:
         if not mark_source_names:
             parser.error("--mark-sources must name at least one source or use 'all'")
 
-    zephyr_context = None if args.target == "decon-report" else shared_zephyr_context(scale)
     if args.target == "all":
+        zephyr_context = shared_zephyr_context(scale)
         result = reference_datakit_steps(
             sources,
             quality_model=args.quality_model,
@@ -1399,15 +1477,17 @@ def main() -> None:
             scale=scale,
             zephyr_context=zephyr_context,
         )
-        target_steps = result.all_steps
-    else:
-        decontamination = decontamination_steps(
-            sources,
-            scale=scale,
-            zephyr_context=zephyr_context,
-            mark_source_names=mark_source_names,
-        )
-        target_steps = _decontamination_target_steps(decontamination, args.target)
+        run_reference_steps(result, zephyr_context, max_concurrent=args.max_concurrent)
+        return
+
+    zephyr_context = None if args.target == "decon-report" else shared_zephyr_context(scale)
+    decontamination = decontamination_steps(
+        sources,
+        scale=scale,
+        zephyr_context=zephyr_context,
+        mark_source_names=mark_source_names,
+    )
+    target_steps = _decontamination_target_steps(decontamination, args.target)
     with zephyr_context if zephyr_context is not None else nullcontext():
         StepRunner().run(target_steps, max_concurrent=args.max_concurrent)
 

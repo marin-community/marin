@@ -55,7 +55,7 @@ pub fn get_string_array(batch: &RecordBatch, name: &str) -> PyResult<Arc<StringA
 
 pub fn hash_array(
     arr: &GenericStringArray<i32>,
-    algo: HashAlgorithm,
+    algo: &HashAlgorithm,
 ) -> PyResult<Arc<StringArray>> {
     let mut builder = StringBuilder::with_capacity(arr.len(), arr.len() * 32);
     for i in 0..arr.len() {

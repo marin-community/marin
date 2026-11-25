@@ -22,6 +22,7 @@ from taskcompendium.convert.answers import unsupported
 from taskcompendium.models import (
     EnvironmentRequirements,
     FileReward,
+    GraderMachine,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -32,12 +33,15 @@ from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportRejection
 from taskcompendium.runtime.resources import inline_resource
 
+from experiments.post_training.task_curation.environment_fidelity import ENVIRONMENT_DOCKERFILE, archive_environment
+
 TASKS_FILE = "tasks.parquet"
 TASKTROVE_REPO = "open-thoughts/TaskTrove"
 
 INSTRUCTION = "instruction.md"
 TASK_TOML = "task.toml"
-DOCKERFILE = "environment/Dockerfile"
+DOCKERFILE = ENVIRONMENT_DOCKERFILE
+"""The archive-relative Dockerfile path; ``environment_fidelity`` owns the layout."""
 TEST_SH = "tests/test.sh"
 VERIFIER_DATA = "tests/verifier_data.json"
 SOLUTION_DIR = "solution/"
@@ -107,6 +111,11 @@ def archive_file(data: Mapping[str, Any], path: str) -> bytes | None:
     return base64.b64decode(value, validate=True) if isinstance(value, str) else None
 
 
+def archive_requirements(data: Mapping[str, Any]) -> EnvironmentRequirements:
+    """The unpacked archive row's own environment, lowered onto its pinned base."""
+    return archive_environment(archive_file(data, DOCKERFILE))
+
+
 def archive_resource(data: Mapping[str, Any], path: str) -> TaskResource:
     """Materialize one archived file while preserving its declared permissions."""
     original = data["file_metadata"][path]
@@ -164,7 +173,7 @@ def archive_script_grader(
         argv=("bash", f"{TESTS_MOUNT}/test.sh"),
         cwd="/",
         env=dict(env or {}),
-        environment=environment,
+        placement=GraderMachine(environment=environment),
         answer_path=answer_path,
         reward=TEST_SH_REWARD,
         timeout=float(tomllib.loads(task_toml.decode())["verifier"]["timeout_sec"]),

@@ -114,7 +114,7 @@ def _fallback_result(
     started_at: datetime,
 ) -> TrialResult:
     task_id = trial_config.task.get_task_id()
-    agent_name = trial_config.agent.name or trial_config.agent.import_path or "unknown"
+    agent_name = trial_config.agent.name or "unknown"
     version = str(trial_config.agent.kwargs.get("version", "unknown"))
     paths = trial_paths(trial_config, attempt)
     return TrialResult(
@@ -163,6 +163,14 @@ def timeout_result(
     )
     secondary = list(result.secondary_exception_info)
     timeout_info = _exception_info(timeout_error)
+    if (
+        type(timeout_error) is TimeoutError
+        and result.has_verifier_rewards
+        and result.completion is not None
+    ):
+        # A completed attempt already has confirmed teardown and durable evidence.
+        result.secondary_exception_info.append(timeout_info)
+        return result
     if result.exception_info is not None and (
         result.exception_info.exception_type != timeout_info.exception_type
         or result.exception_info.exception_message != timeout_info.exception_message
@@ -185,6 +193,7 @@ def exception_result(
 
     error_info = _exception_info(error)
     if isinstance(error, ArtifactPersistenceError):
+        result.verifier_result = None
         if result.exception_info is not None:
             result.secondary_exception_info = [
                 *result.secondary_exception_info,

@@ -13,7 +13,6 @@ sourced from PyTorch:
 from __future__ import annotations
 
 import os
-import socket
 from datetime import timedelta
 from typing import Any, Optional, Union, Tuple
 
@@ -38,7 +37,9 @@ ModelOptimPair = Tuple[nn.Module, Optimizer]
 ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
 
 
-def init_worker_process_group_with_device(timeout_seconds: int, backend: str = "nccl") -> None:
+def init_worker_process_group_with_device(
+    master_addr: str, master_port: int, timeout_seconds: int, backend: str = "nccl"
+) -> None:
     """Pin this actor's CUDA device to its resolved ``LOCAL_RANK`` and create the default
     torch.distributed process group with an explicit ``device_id`` — so ProcessGroupNCCL never
     falls back to *"Guessing device ID based on global rank"*.
@@ -63,8 +64,12 @@ def init_worker_process_group_with_device(timeout_seconds: int, backend: str = "
     ordering, which is what unblocked both clusters (validated 2026-07-20: both progress past the
     weight-init collective into vLLM engine bring-up).
 
+    Exports the given address and port as MASTER_ADDR and MASTER_PORT.
+
     Idempotent: always pins the device; only creates the process group if not already initialized.
     """
+    os.environ["MASTER_ADDR"] = master_addr
+    os.environ["MASTER_PORT"] = str(master_port)
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     torch.cuda.set_device(local_rank)
     # Surface the resolved rank/device + the observed CVD masking (visible_device_count)
@@ -85,12 +90,6 @@ def init_worker_process_group_with_device(timeout_seconds: int, backend: str = "
             timeout=timedelta(seconds=timeout_seconds),
             device_id=torch.device("cuda", local_rank),
         )
-
-
-def get_free_port():
-    with socket.socket() as sock:
-        sock.bind(("", 0))
-        return sock.getsockname()[1]
 
 
 # Copy from pytorch to allow creating multiple main groups.
@@ -188,7 +187,7 @@ def init_custom_process_group(
     # before the engines ``store->get`` it. The default group is restored immediately afterward and
     # is otherwise unchanged; the new group is created device-unbound (as before), so no other path
     # is affected.
-    default_pg = _get_default_group() if torch.distributed.is_initialized() else None
+    default_pg = _get_default_group() if backend == Backend.NCCL and torch.distributed.is_initialized() else None
     saved_bound_device_id = default_pg.bound_device_id if default_pg is not None else None
     if default_pg is not None and saved_bound_device_id is not None:
         default_pg.bound_device_id = None
@@ -210,32 +209,6 @@ def init_custom_process_group(
     _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}
 
     return pg
-
-
-def get_optimizer_grouped_parameters(
-    model,
-    weight_decay,
-    no_decay_name_list=["bias", "layer_norm.weight", "layernorm.weight", "norm.weight", "ln_f.weight"],
-):
-    optimizer_grouped_parameters = [
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if (not any(nd in n for nd in no_decay_name_list) and p.requires_grad)
-            ],
-            "weight_decay": weight_decay,
-        },
-        {
-            "params": [
-                p
-                for n, p in model.named_parameters()
-                if (any(nd in n for nd in no_decay_name_list) and p.requires_grad)
-            ],
-            "weight_decay": 0.0,
-        },
-    ]
-    return optimizer_grouped_parameters
 
 
 class CUDAIPCHandle:

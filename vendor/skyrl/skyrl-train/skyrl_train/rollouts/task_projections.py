@@ -1,8 +1,10 @@
 """Convert common rollout records into whole-trajectory or per-step training data."""
 
+from collections import Counter
 from collections.abc import Sequence
 import copy
 from dataclasses import dataclass, replace
+from typing import Any
 
 import numpy as np
 from omegaconf import DictConfig
@@ -16,13 +18,16 @@ from skyrl_gym.verification import (
 from taskcompendium.grading_result import GradeResult, Outcome
 from skyrl_gym.task_records import grade_skipped, skipped_grade
 from rolloutengine.models import RolloutContractError
-from skyrl_train.rollouts.training_record import TrainingRollout
+from skyrl_train.rollouts.training_record import (
+    REASONING_VIOLATION_TOKEN_METADATA_KEY,
+    TrainingRollout,
+)
 
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.metric_names import TASK_ROLLOUT_METRIC_PREFIX
+from skyrl_train.metric_names import GENERATE_OUTCOME_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX, TASK_TIMING_KEYS
 from skyrl_train.trajectory_runners.trajectory_processing import (
     apply_overlong_filtering,
     get_batch_failure_metrics,
@@ -37,7 +42,7 @@ from skyrl_train.trajectory_runners.types import (
     TrajectoryBatch,
     TaskRequestBatch,
 )
-from skyrl_train.utils.harbor_errors import (
+from skyrl_train.task_error_handling import (
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
     classify_exception_type,
@@ -241,14 +246,19 @@ class WholeTaskProjection:
     runner_config: DictConfig
     tokenizer: PreTrainedTokenizerBase
     error_handling: ErrorHandlingConfig = DEFAULT_ERROR_HANDLING_CONFIG
-    harbor_error_handling: ErrorHandlingConfig | None = None
 
     def project(self, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> TrajectoryBatch:
         required = logprobs_requested(request, self.runner_config)
-        policies = _task_error_policies(request, self.error_handling, self.harbor_error_handling)
         decisions = [
-            _training_decision(rollout, policy, logprobs_required=required)
-            for rollout, policy in zip(rollouts, policies, strict=True)
+            _training_decision(rollout, self.error_handling, logprobs_required=required)
+            for rollout in rollouts
+        ]
+        classes = [row.metadata.metric_class for row in request.rows]
+        metrics = [
+            {key: value for key, value in rollout.metrics.items() if key in TASK_TIMING_KEYS}
+            if environment == TASKCOMPENDIUM_ENVIRONMENT
+            else dict(rollout.metrics)
+            for rollout, environment in zip(rollouts, classes, strict=True)
         ]
         batch = _training_batch(
             rollouts,
@@ -256,8 +266,10 @@ class WholeTaskProjection:
             required,
             self.runner_config,
             self.tokenizer,
-            [row.metadata.metric_class for row in request.rows],
+            classes,
+            metrics,
         )
+        _attach_reasoning_violations(batch, rollouts, ends_attempt=[True] * len(rollouts))
         _merge_task_metrics(batch, rollouts, request)
         return batch
 
@@ -269,23 +281,22 @@ class StepTaskProjection:
     runner_config: DictConfig
     tokenizer: PreTrainedTokenizerBase
     error_handling: ErrorHandlingConfig = DEFAULT_ERROR_HANDLING_CONFIG
-    harbor_error_handling: ErrorHandlingConfig | None = None
 
     def project(self, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> TrajectoryBatch:
         trajectory_ids = request.trajectory_ids
         if trajectory_ids is None:
             raise ValueError("Per-turn training samples require trajectory_ids")
         required = logprobs_requested(request, self.runner_config)
-        policies = _task_error_policies(request, self.error_handling, self.harbor_error_handling)
         samples = []
         decisions = []
         projected_ids = []
         final_steps = []
-        for rollout, policy, trajectory_id in zip(rollouts, policies, trajectory_ids, strict=True):
+        classes = []
+        for rollout, trajectory_id, row in zip(rollouts, trajectory_ids, request.rows, strict=True):
             turns = _step_rollouts(rollout)
             for index, sample in enumerate(turns):
                 last = index == len(turns) - 1
-                decision = _training_decision(sample, policy, logprobs_required=required)
+                decision = _training_decision(sample, self.error_handling, logprobs_required=required)
                 if (
                     not last
                     and not sample.steps[0].transition.done
@@ -301,9 +312,14 @@ class StepTaskProjection:
                 projected_id.step = index
                 projected_ids.append(projected_id)
                 final_steps.append(last)
-        batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, None)
+                classes.append(row.metadata.metric_class)
+        metrics = [
+            {key: value for key, value in sample.metrics.items() if key in TASK_TIMING_KEYS} for sample in samples
+        ]
+        batch = _training_batch(samples, decisions, required, self.runner_config, self.tokenizer, classes, metrics)
         batch["trajectory_ids"] = projected_ids
         batch["is_last_step"] = final_steps
+        _attach_reasoning_violations(batch, samples, ends_attempt=final_steps)
         _merge_task_metrics(batch, rollouts, request)
         return batch
 
@@ -321,7 +337,8 @@ def _training_batch(
     logprobs_required: bool,
     runner_config: DictConfig,
     tokenizer: PreTrainedTokenizerBase,
-    env_metric_classes: Sequence[str] | None,
+    env_metric_classes: Sequence[str],
+    metrics: list[dict[str, Any]],
 ) -> TrajectoryBatch:
     responses = [list(rollout.response_token_ids) or [MASKED_TOKEN_ID] for rollout in rollouts]
     rewards = [decision.reward.to_trainer_reward() for decision in decisions]
@@ -354,6 +371,8 @@ def _training_batch(
         rollout_metrics={},
         rollout_logprobs=logprobs if logprobs_required else None,
         exclude_from_baseline=[not decision.disposition.baseline_eligible for decision in decisions],
+        task_ids=[rollout.task_id for rollout in rollouts],
+        task_outcomes=[rollout.grade.status for rollout in rollouts],
     )
     _attach_reward_channels(batch, decisions)
     _attach_failure_channels(batch, decisions)
@@ -361,15 +380,9 @@ def _training_batch(
     _attach_routed_experts(batch, rollouts)
     _attach_policy_steps(batch, rollouts)
     _attach_span_tags(batch, rollouts)
-    metrics = None
-    if env_metric_classes is not None:
-        metrics = [
-            {} if environment == TASKCOMPENDIUM_ENVIRONMENT else dict(rollout.metrics)
-            for rollout, environment in zip(rollouts, env_metric_classes, strict=True)
-        ]
-        if any(metrics):
-            batch["env_metrics"] = metrics
-            batch["env_classes"] = list(env_metric_classes)
+    if any(metrics):
+        batch["env_metrics"] = metrics
+        batch["env_classes"] = list(env_metric_classes)
     batch["rollout_metrics"] = get_rollout_metrics(responses, rewards, metrics, env_metric_classes, verification)
     return batch
 
@@ -497,17 +510,47 @@ def _attach_span_tags(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout
         batch["response_span_tags"] = [row.tolist() for row in tags]
 
 
-def _task_error_policies(
-    request: TaskRequestBatch, default: ErrorHandlingConfig, harbor: ErrorHandlingConfig | None
-) -> list[ErrorHandlingConfig]:
-    if harbor is None:
-        return [default] * len(request.rows)
-    return [harbor if "harbor" in row.spec.task.tags else default for row in request.rows]
+def _violation_tokens(rollout: TrainingRollout) -> list[int]:
+    """Response positions of the violations located on one marker token in the optimized conversation."""
+    positions = []
+    for step in rollout.steps:
+        token = step.turn.metadata.get(REASONING_VIOLATION_TOKEN_METADATA_KEY)
+        if token is not None:
+            positions.append(step.response_end + 1 - len(step.turn.response_token_ids) + token)
+    return positions
+
+
+def _reasoning_violation_count(rollout: TrainingRollout, ends_attempt: bool) -> int:
+    """Violations in the row's optimized turns, plus, on the row that ends the attempt, those in earlier
+    conversations, which no row optimizes."""
+    count = sum(step.turn.reasoning_violation is not None for step in rollout.steps)
+    if not ends_attempt:
+        return count
+    earlier = rollout.conversations[:-1]
+    return count + sum(
+        step.turn.reasoning_violation is not None for conversation in earlier for step in conversation.steps
+    )
+
+
+def _attach_reasoning_violations(
+    batch: TrajectoryBatch, rows: Sequence[TrainingRollout], ends_attempt: Sequence[bool]
+) -> None:
+    batch["reasoning_span_violations"] = [
+        _reasoning_violation_count(row, last) for row, last in zip(rows, ends_attempt, strict=True)
+    ]
+    batch["reasoning_span_violation_tokens"] = [_violation_tokens(row) for row in rows]
 
 
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:
     """Count task evidence and preserve environment-specific metrics."""
     metrics = batch.get("rollout_metrics") or {}
+    outcomes = Counter(rollout.grade.status for rollout in rollouts)
+    metrics.update(
+        {f"{GENERATE_OUTCOME_METRIC_PREFIX}{outcome.value}": float(outcomes[outcome]) for outcome in Outcome}
+    )
+    metrics[f"{GENERATE_OUTCOME_METRIC_PREFIX}rollout_failure"] = float(
+        sum(rollout.failure is not None for rollout in rollouts)
+    )
     failed = [
         rollout
         for rollout in rollouts
@@ -538,7 +581,8 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
         if environment != TASKCOMPENDIUM_ENVIRONMENT:
             continue
         for key, value in rollout.metrics.items():
-            metrics[key] = metrics.get(key, 0.0) + value
+            if key not in TASK_TIMING_KEYS:
+                metrics[key] = metrics.get(key, 0.0) + value
 
 
 def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
@@ -566,7 +610,10 @@ def _step_rollouts(rollout: TrainingRollout) -> list[TrainingRollout]:
             grade=grade,
             stop_reason=rollout.stop_reason if last else turn.stop_reason,
             steps=(replace(step, response_end=len(turn.response_token_ids) - 1, transition=transition),),
-            metrics=step.transition.metrics,
+            metrics={
+                **step.transition.metrics,
+                **({key: value for key, value in rollout.metrics.items() if key in TASK_TIMING_KEYS} if last else {}),
+            },
         )
         outputs.append(output)
     return outputs

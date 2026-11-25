@@ -1,9 +1,8 @@
 import os
 import math
 import random
-import tempfile
-from contextlib import nullcontext
 from datetime import timedelta
+from functools import partial
 from typing import List, Union, Optional
 from loguru import logger
 
@@ -18,6 +17,7 @@ from skyrl_train.distributed.utils import ModelOrModelOptimPair
 from skyrl_train.io import io
 from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
 import megatron.core.parallel_state as mpu
+from megatron.bridge.models.hf_pretrained.state import SafeTensorsStateSource
 from skyrl_train.distributed.megatron.megatron_utils import (
     offload_megatron_model_to_cpu,
     load_megatron_model_to_gpu,
@@ -50,7 +50,7 @@ from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelSaveStrategyWrapper,
 )
 from transformers import PreTrainedTokenizer
-from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
+from megatron.core.optimizer import Adam, ChainedOptimizer, DistributedOptimizer
 from megatron.core.optimizer.clip_grads import clip_grad_by_total_norm_fp32
 from skyrl_train.distributed.step_policy import (
     NonfiniteStepPolicy,
@@ -93,6 +93,12 @@ def _saved_optimizer_sharding_type(common_state: dict) -> str:
 
 
 _MUONH_CHECKPOINT_RECIPE = "MuonH"
+
+
+def _muonh_checkpoint_recipe(optimizer_config) -> str:
+    if optimizer_config.get("optimizer_kwargs", {}).get("expert_normalization", "per_expert") == "all_experts":
+        return f"{_MUONH_CHECKPOINT_RECIPE}:hero_ep_all_experts"
+    return _MUONH_CHECKPOINT_RECIPE
 
 
 def _muonh_fp32_substates(optimizer_state: dict) -> list[dict]:
@@ -350,7 +356,7 @@ class MegatronStrategy(DistributedStrategy):
             )
             if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
                 _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
-                sharded_state_dict["optimizer_recipe"] = _MUONH_CHECKPOINT_RECIPE
+                sharded_state_dict["optimizer_recipe"] = _muonh_checkpoint_recipe(self.optimizer_config)
                 sharded_state_dict["optimizer_recipe_step"] = _muonh_adamh_step(optimizer)
         if scheduler:
             sharded_state_dict["lr_scheduler"] = scheduler.state_dict()
@@ -435,10 +441,10 @@ class MegatronStrategy(DistributedStrategy):
 
         muonh = self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh"
         model_weights_from_optimizer = False
-        with remote_checkpoint_metadata(ckpt_dir) as read_dir:
+        with remote_checkpoint_metadata(ckpt_dir, optimizer_classes=(optim.AdamW, Adam)) as read_dir:
             if optimizer and load_training_state:
                 common_state = dist_checkpointing.load_common_state_dict(read_dir)
-                if muonh and common_state.get("optimizer_recipe") != _MUONH_CHECKPOINT_RECIPE:
+                if muonh and common_state.get("optimizer_recipe") != _muonh_checkpoint_recipe(self.optimizer_config):
                     raise ValueError("Checkpoint does not contain Grug MuonH optimizer state")
                 if muonh and "optimizer_recipe_step" not in common_state:
                     raise ValueError("Checkpoint does not contain Grug AdamH step state")
@@ -492,6 +498,10 @@ class MegatronStrategy(DistributedStrategy):
             if model_weights_from_optimizer:
                 restore_model_weights_from_optimizer(optimizer, model)
             load_megatron_grads_to_gpu(model)
+            # Restoring a CPU-offloaded optimizer rebuilds its pinned host copies, and PyTorch keeps the
+            # replaced blocks cached for reuse that never comes, so the next save would need that much more host memory.
+            torch.cuda.synchronize()
+            torch.accelerator.memory.empty_host_cache()
             self.log("Loaded optimizer state dict.")
 
         if scheduler and load_training_state:
@@ -523,21 +533,15 @@ class MegatronStrategy(DistributedStrategy):
             io.makedirs(output_dir, exist_ok=True)
         dist.barrier()
 
-        # Every rank exhausts Bridge's collective conversion. Rank zero owns artifact finalization and cloud
-        # publication; local nonzero ranks write directly to the shared directory without publishing a manifest.
+        hf_model_io.save_megatron_hf_model(
+            bridge,
+            model.actor_module,
+            output_dir,
+            rank_zero=rank_zero,
+            local_state_source_type=SafeTensorsStateSource,
+            save_configs=partial(self.save_hf_configs, self.hf_config, tokenizer=tokenizer),
+        )
         if rank_zero:
-            model_dir = hf_model_io.local_hf_model_dir(output_dir)
-        elif io.is_cloud_path(output_dir):
-            model_dir = tempfile.TemporaryDirectory()
-        else:
-            model_dir = nullcontext(output_dir)
-        with model_dir as work_dir:
-            bridge.save_hf_weights(model.actor_module, work_dir)
-            self.log(f"Successfully saved HF safetensors model to {output_dir}")
-
-            # Only rank 0 saves the Huggingface config and tokenizer.
-            if rank_zero:
-                self.save_hf_configs(self.hf_config, work_dir, tokenizer)
-                self.log(f"Successfully saved HF config and tokenizer to {output_dir}")
+            self.log(f"Successfully saved HF model and tokenizer to {output_dir}")
 
         # The Ray caller waits for every rank result; no collective needs to span artifact publication.

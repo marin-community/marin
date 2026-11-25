@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Literal
 
 import click
 import yaml
@@ -16,9 +17,9 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import IrisSkyRLExecution, SkyRLRun, SkyRLSpec, skyrl_step
 from marin.training.training import LevanterCheckpoint
-from mergedeep import merge
+from skyrlrecipe import RecipePatch, sections
 
-from experiments.post_training.iceball_micro import iceball_rl_execution, iceball_rl_spec
+from experiments.post_training.iceball_micro import ICEBALL_RL_RECIPE, iceball_rl_execution, iceball_rl_spec
 
 REPLAY_MODES = ("router_replay", "router_replay_filtered")
 
@@ -30,68 +31,75 @@ class ProbeSettings:
     samples_per_prompt: int
     updates: int
     keep_fraction: float
-    cache_mode: str
+    cache_mode: Literal["off", "on", "both"]
     reuse_probe: str | None
     resume_path: str | None
-    extra_trainer_modes: tuple[str, ...] = ()
+    extra_trainer_modes: tuple[Literal["router_replay", "router_replay_filtered"], ...] = ()
 
 
-def probe_block(settings: ProbeSettings) -> dict:
-    """Render collection and scoring controls for a synchronous Megatron recipe."""
-    block = {
-        "trainer": {
-            "mismatch_probe": {
-                "enabled": True,
-                "prompts": {"count": settings.prompt_count, "samples_per_prompt": settings.samples_per_prompt},
-                "seed": settings.seed,
-                "archive_uri": None,
-                "reuse_probe": settings.reuse_probe,
-                "updates": settings.updates,
-                "extra_trainer_modes": list(settings.extra_trainer_modes),
-                "filtered_replay": {"keep_fraction": settings.keep_fraction},
-                "rescore_prefix_cache": settings.cache_mode,
-            },
-        },
-        "generator": {
-            "enable_prefix_caching": settings.cache_mode != "off",
-            "engine_init_kwargs": {
-                "logprobs_mode": "processed_logprobs",
-                "generation_config": "vllm",
-            },
-            "sampling_params": {
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "top_k": -1,
-                "min_p": 0.0,
-                "repetition_penalty": 1.0,
-                "logprobs": 0,
-            },
-        },
-    }
+def probe_patch(settings: ProbeSettings) -> RecipePatch:
+    """Configure frozen-token collection and scoring for an Iceball probe."""
+    trainer = sections.Trainer(
+        mismatch_probe=sections.MismatchProbe(
+            enabled=True,
+            prompts=sections.Prompts(count=settings.prompt_count, samples_per_prompt=settings.samples_per_prompt),
+            seed=settings.seed,
+            archive_uri=None,
+            reuse_probe=settings.reuse_probe,
+            updates=settings.updates,
+            extra_trainer_modes=settings.extra_trainer_modes,
+            filtered_replay=sections.FilteredReplay(keep_fraction=settings.keep_fraction),
+            rescore_prefix_cache=settings.cache_mode,
+        ),
+    )
     if settings.updates == 0:
-        block["trainer"].update(ckpt_interval=-1, hf_save_interval=-1)
+        trainer = trainer.replace(ckpt_interval=-1, hf_save_interval=-1)
     if settings.extra_trainer_modes:
-        block["trainer"]["policy"] = {"megatron_config": {"moe_router_replay": True}}
-        block["generator"]["engine_init_kwargs"]["enable_return_routed_experts"] = True
+        trainer = trainer.replace(
+            policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(moe_router_replay=True))
+        )
     if settings.resume_path is not None:
-        block["trainer"].update(
+        trainer = trainer.replace(
             resume_mode="from_path", resume_path=settings.resume_path, reset_global_step_on_resume=False
         )
-    return block
-
-
-# Exact-token GSM8K transport renders Iceball's prompts with this template.
-ICEBALL_PROBE_RECIPE = {"generator": {"chat_template": {"source": "name", "name_or_path": "qwen3_with_thinking"}}}
+    return RecipePatch(
+        trainer=trainer,
+        generator=sections.Generator(
+            enable_prefix_caching=settings.cache_mode != "off",
+            engine_init_kwargs={
+                "logprobs_mode": "processed_logprobs",
+                "generation_config": "vllm",
+                **({"enable_return_routed_experts": True} if settings.extra_trainer_modes else {}),
+            },
+            sampling_params=sections.SamplingParams(
+                temperature=1.0,
+                top_p=1.0,
+                top_k=-1,
+                min_p=0.0,
+                repetition_penalty=1.0,
+                logprobs=0,
+            ),
+        ),
+    )
 
 
 def probe_step(spec: SkyRLSpec, execution: IrisSkyRLExecution, settings: ProbeSettings) -> ArtifactStep[SkyRLRun]:
-    """Launch a probe using the model, data, topology and execution of an RL recipe."""
+    """Launch an Iceball probe using its model, data and execution topology."""
+    # Exact-token GSM8K transport renders Iceball prompts with this template.
+    recipe = ICEBALL_RL_RECIPE.merge(
+        RecipePatch(
+            generator=sections.Generator(
+                chat_template=sections.ChatTemplate(source="name", name_or_path="qwen3_with_thinking")
+            )
+        ),
+        probe_patch(settings),
+    )
     name = user_owned_name(f"checkpoints/mismatch-probe/{spec.name.rsplit('/', 1)[-1]}")
     probe_spec = replace(
         spec,
         name=name,
         version=resolve_version(name, None),
-        config_yaml=yaml.safe_dump(merge({}, yaml.safe_load(spec.config_yaml), probe_block(settings)), sort_keys=False),
+        config_yaml=yaml.safe_dump(recipe.to_skyrl(), sort_keys=False),
         retention=replace(spec.retention, temporary_storage_ttl_days=30),
         seed=settings.seed,
     )
@@ -123,8 +131,8 @@ def main(
     samples_per_prompt: int,
     updates: int,
     keep_fraction: float,
-    cache_mode: str,
-    extra_trainer_modes: tuple[str, ...],
+    cache_mode: Literal["off", "on", "both"],
+    extra_trainer_modes: tuple[Literal["router_replay", "router_replay_filtered"], ...],
 ) -> ArtifactStep[SkyRLRun]:
     model = ArtifactStep.adopt(
         user_owned_name("checkpoints/iceball-micro-sft"), input_version, model_uri, kind=LevanterCheckpoint
@@ -144,9 +152,6 @@ def main(
         extra_trainer_modes=extra_trainer_modes,
     )
     spec = iceball_rl_spec(model, data)
-    spec = replace(
-        spec, config_yaml=yaml.safe_dump(merge(yaml.safe_load(spec.config_yaml), ICEBALL_PROBE_RECIPE), sort_keys=False)
-    )
     return probe_step(spec, iceball_rl_execution(), settings)
 
 

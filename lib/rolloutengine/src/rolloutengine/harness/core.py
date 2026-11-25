@@ -15,17 +15,33 @@ from typing import Any, Protocol
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
-from rolloutengine.models import EventSink, ModelTurn, Prompt, RolloutLimits
+from rolloutengine.models import ContextRecovery, EventSink, ModelTurn, Prompt, RolloutLimits
+
+OUTPUT_LIMIT_OPTION_KEYS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+def reply_options_match(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    """Check whether the model options can belong to the same conversation."""
+    return {key: value for key, value in previous.items() if key not in OUTPUT_LIMIT_OPTION_KEYS} == {
+        key: value for key, value in current.items() if key not in OUTPUT_LIMIT_OPTION_KEYS
+    }
 
 
 class HarnessCleanup(Protocol):
-    """The attempt's cleanup scope: it closes resources after the record is committed and graded."""
+    """The attempt's cleanup scope: it stops the agent before grading and releases what grading may use after it.
+
+    Each close runs within ``RolloutLimits.cleanup_timeout``. A failure does not change the recorded turns or the
+    grade. ``Rollout.metrics`` counts it, and ``run_task`` also adds it to the grade diagnostics.
+    """
 
     def push(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
-        """Run ``close`` when the attempt ends, within ``RolloutLimits.cleanup_timeout``.
+        """Run ``close`` when the harness ends, before grading; for example, to stop the agent."""
+        ...
 
-        A failure does not change the recorded turns or the grade. ``Rollout.metrics`` counts it, and
-        ``run_task`` also adds it to the grade diagnostics.
+    def push_after_grading(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
+        """Run ``close`` after grading, before the machines close.
+
+        This is for state that a grader may check, such as the terminal in which the agent left a service running.
         """
         ...
 
@@ -46,6 +62,8 @@ class HarnessContext:
     events: EventSink
     cleanup: HarnessCleanup
     run_id: str
+    begin_turn_budget: Callable[[], None]
+    """Start the total turn deadline after explicit agent setup. By default the first model request starts it."""
 
 
 class ModelSession(Protocol):
@@ -55,7 +73,9 @@ class ModelSession(Protocol):
     nothing, so the harness can send it again. If the harness ends before its next request, the record
     keeps the cancelled request without an answer. When a limit ends the attempt, the next ``start`` or
     ``reply`` raises ``LimitReached``, and the harness lets it propagate. A failed model request raises
-    ``RolloutEnded`` with the model's error as its cause. A harness that catches a refusal and asks again
+    ``RolloutEnded`` with the model's error as its cause. ``ContextWindowExceeded`` rejects only the
+    current request; a harness can shorten its observations or compact and retry under the same limits.
+    A harness that catches a refusal and asks again
     runs until a turn or attempt deadline. Each request after the end of the attempt yields before it
     raises, so a harness that asks again in a loop does not stop other attempts.
     """
@@ -69,12 +89,17 @@ class ModelSession(Protocol):
         ...
 
     async def reply(
-        self, observations: tuple[dict[str, Any], ...], *, token_ids: tuple[int, ...] | None = None
+        self,
+        observations: tuple[dict[str, Any], ...],
+        *,
+        token_ids: tuple[int, ...] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> ModelTurn:
         """Send ``observations`` after the model's last message, and return the next turn.
 
         ``token_ids`` pins the exact tokens of the next prompt. They must start with the tokens served so far:
         under ``TraceMode.EXACT_TOKENS``, other tokens break the token contract before the request is sent.
+        ``options`` supplies the full options for the request. Only the output limits may change.
         """
         ...
 
@@ -97,6 +122,11 @@ class ModelSession(Protocol):
 
 class Harness(Protocol):
     """The agent loop for a task: what the model sees, which tools run, and when the attempt ends."""
+
+    @property
+    def context_recovery(self) -> ContextRecovery:
+        """When the session lets this harness recover from a context rejection during an attempt."""
+        ...
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         """Raise an error if this harness cannot run ``task`` under ``limits``, before any machine starts."""

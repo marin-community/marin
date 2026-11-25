@@ -97,6 +97,8 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                         role="roles/iap.httpsResourceAccessor",
                         members=(
                             "domain:openathena.ai",
+                            # The main-only GitHub deployment identity publishes reviewed app packages.
+                            deploy_account,
                             loom_account,
                             f"serviceAccount:iris-controller@{project}.iam.gserviceaccount.com",
                             "serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com",
@@ -110,6 +112,7 @@ def iam_grants(project: str, principals: Mapping[str, GcpEncryptedMember]) -> Gc
                             principals["human-064"],
                             principals["human-076"],
                             principals["human-054"],
+                            principals["human-038"],
                         ),
                     ),
                 ),

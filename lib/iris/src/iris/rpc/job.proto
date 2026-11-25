@@ -302,6 +302,9 @@ message TaskAttempt {
   // container's own reason. Empty unless the attempt failed.
   string terminal_reason = 13;
   TaskOutputArchive output_archive = 14;
+  // Topology domains selected by the scheduler, keyed by node label. Empty
+  // until assigned or when the backend does not expose topology metadata.
+  map<string, string> topology = 15;
 }
 
 message ResourceUsage {
@@ -571,11 +574,13 @@ message ConstraintList {
   repeated Constraint constraints = 1;
 }
 
-// Coscheduling configuration for multi-host jobs.
-// When set, all tasks in the job must be scheduled atomically onto workers
-// that share the same value for the specified group_by attribute.
+// Admit and retry a multi-host job together at the requested topology level.
 message CoschedulingConfig {
   string group_by = 1;  // Attribute key to group workers by (e.g., "tpu-name")
+  // Partition task ordinals into groups, each confined to one group_by domain.
+  // Empty keeps the existing whole-job or platform-defined sliced placement.
+  // Groups share the job's atomic admission and retry lifecycle.
+  repeated int32 group_sizes = 2;
 }
 
 // ============================================================================
@@ -666,20 +671,22 @@ enum ContainerProfile {
   CONTAINER_PROFILE_DEFAULT = 2;        // status quo: SYS_PTRACE (+SYS_RESOURCE on TPU)
   CONTAINER_PROFILE_DOCKER_ACCESS = 3;  // DEFAULT + host docker socket (build / sibling containers)
   CONTAINER_PROFILE_PRIVILEGED = 4;     // privileged + broad caps (nested runtimes, e.g. gVisor)
-  // Temporary compatibility for running clients: gVisor with the legacy
-  // cluster environment, workspace bundles, caches and CLUSTER egress default.
+  // Temporary compatibility for running clients: the sandbox runtime with the
+  // legacy cluster environment, workspace bundles, caches and CLUSTER egress
+  // default.
   // New clients must use SANDBOX. The controller rollout owner removes this
   // once legacy submitters are upgraded and their profile-5 jobs finish.
   CONTAINER_PROFILE_GVISOR = 5 [deprecated = true];
-  // For model-controlled workloads. Runs the whole container under the gVisor
-  // runtime (docker --runtime=runsc / k8s runtimeClassName=gvisor), so
-  // in-container root gets the docker default cap set (setuid/apt work) while
-  // the intercepted guest kernel isolates the host. The task receives only the
+  // For model-controlled workloads. Runs the whole container under the
+  // cluster's sandbox runtime (docker --runtime=runsc / k8s runtimeClassName
+  // from kubernetes_provider.sandbox_runtime_class), so in-container root gets
+  // the docker default cap set (setuid/apt work) while the sandbox runtime
+  // isolates the host. The task receives only the
   // job's own env_vars and Iris task identity: no cluster task_env or injected
   // secrets, no controller address, no shared node cache mounts, and no
-  // Kubernetes service account token. Its egress policy cannot be CLUSTER. The
-  // job must carry no workspace bundle. CPU-only (runsc cannot pass a GPU/TPU
-  // through). Not elevated.
+  // Kubernetes service account token. Its egress policy cannot be CLUSTER or
+  // ALLOWLIST. The job must carry no workspace bundle. CPU-only (Iris rejects
+  // accelerator requests for this profile). Not elevated.
   CONTAINER_PROFILE_SANDBOX = 6;
 }
 
@@ -687,7 +694,10 @@ enum ContainerProfile {
 // workers, other tasks and the cloud metadata server, and a task under either
 // runs without the Kubernetes log-shipping and output-upload sidecars.
 enum EgressPolicy {
-  // Resolves to INTERNET for a SANDBOX job and CLUSTER for every other profile.
+  // Resolved by the controller that runs the job: INTERNET for a SANDBOX job;
+  // ALLOWLIST on a cluster whose allowlist is the default; CLUSTER otherwise. A
+  // child job inherits its parent's policy and adds the parent's rules to its
+  // own.
   EGRESS_POLICY_UNSPECIFIED = 0;
   // The cluster network: the node's host network where configured, the
   // controller, workers and other tasks. Not allowed for SANDBOX.
@@ -698,6 +708,28 @@ enum EgressPolicy {
   EGRESS_POLICY_INTERNET = 2;
   // No network beyond DNS on Kubernetes; loopback only on Docker workers.
   EGRESS_POLICY_NONE = 3;
+  // The cluster's internal services, and the domains and networks on the
+  // cluster's allowlist and the job's egress_allow rules. Kubernetes denies
+  // everything else. Docker workers refuse DNS lookups of other names but do
+  // not filter connections. A Kubernetes cluster runs the job under CLUSTER
+  // instead when it lacks Cilium, or, on a host-network cluster, when the job
+  // is a GPU job with more than one task, which needs InfiniBand. Not allowed
+  // for SANDBOX.
+  EGRESS_POLICY_ALLOWLIST = 4;
+}
+
+// A destination an ALLOWLIST task may reach beyond the cluster's allowlist.
+message EgressRule {
+  oneof destination {
+    // A DNS name ("api.openai.com") or a pattern whose "*" stands for exactly
+    // one label ("*.openai.com" matches "api.openai.com", not "openai.com" or
+    // "a.b.openai.com").
+    string domain = 1;
+    // An IPv4 or IPv6 network in CIDR notation ("203.0.113.0/24").
+    string cidr = 2;
+  }
+  // TCP ports the rule admits. Empty admits every port and protocol.
+  repeated int32 ports = 3;
 }
 
 // ============================================================================
@@ -716,6 +748,8 @@ message RunTaskRequest {
   string bundle_id = 5;
   ResourceSpecProto resources = 6;
   iris.time.Duration timeout = 7;
+  // Controller-resolved SIGTERM-to-SIGKILL budget, excluding runtime teardown.
+  iris.time.Duration termination_grace = 19;
   repeated string ports = 8;
   int32 attempt_id = 9;
   repeated Constraint constraints = 10; // Original job constraints for child-job inheritance metadata
@@ -756,4 +790,8 @@ message RunTaskRequest {
   // that the task's own Iris client presents to the controller. Empty for a
   // profile that withholds it (SANDBOX) or a controller without a JWT signer.
   string task_token = 17;
+
+  // The job's destinations beyond the cluster allowlist. Workers apply them
+  // only under EGRESS_POLICY_ALLOWLIST.
+  repeated EgressRule egress_allow = 18;
 }

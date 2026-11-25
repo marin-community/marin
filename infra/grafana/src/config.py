@@ -36,6 +36,7 @@ GITHUB_USER_AGENT = "marin-grafana-bridge"
 OPERATOR_BEHAVIOR_LABEL = "operator_behavior"
 DEFAULT_OPERATOR_BEHAVIOR = "default"
 HERO_OPERATOR_BEHAVIOR = "hero"
+STORAGE_OPERATOR_BEHAVIOR = "storage"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -162,6 +163,7 @@ class FerryGroup:
 FERRY_GROUPS: tuple[FerryGroup, ...] = (
     FerryGroup("Canary ferry", (FerryTier(None, "marin-canary-ferry.yaml"),)),
     FerryGroup("CW ferry", (FerryTier(None, "marin-canary-ferry-coreweave.yaml"),)),
+    FerryGroup("Hero canary", (FerryTier(None, "marin-canary-hero-gb200.yaml"),)),
     FerryGroup(
         "Datakit ferry",
         (

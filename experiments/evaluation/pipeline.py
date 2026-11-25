@@ -15,7 +15,11 @@ The step submits an Iris orchestrator job and waits for its records. The launche
 GCS or CoreWeave ``evals`` output root, while the artifact path stores the pipeline cache record. The
 pipeline itself must run where it can reach Iris::
 
-    uv run iris --cluster marin job run -- python -m experiments.evaluation.pipeline
+    uv run iris --cluster marin job run --container-profile CONTAINER_PROFILE_PRIVILEGED \\
+      -- python -m experiments.evaluation.pipeline
+
+Checkpoint pipelines that submit curated evaluations need this same parent profile:
+Iris permits nested grader workers to inherit it, but forbids elevation from a default task.
 
 The demo pipeline below runs the smoke suite for one small model.
 """
@@ -25,16 +29,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from evalrecords.records import RLAttemptRef, read_record, record_path
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import read_record, record_path
 from marin.execution.artifact import Artifact, is_mutable_version
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_runner import StepRunner
 
-from experiments.evaluation.evals import resolve_eval_keys
+from experiments.evaluation.evals import EvaluationDefinition, resolve_evaluations
 from experiments.evaluation.launch import (
     DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
@@ -55,7 +59,7 @@ class EvalStepConfig:
     """One pipeline eval's model, eval selection, version, and runtime overrides."""
 
     model: ModelConfig
-    evals: str
+    evals: tuple[EvaluationDefinition, ...]
     limit: int | None
     max_concurrent: int
     artifact_path: str
@@ -64,6 +68,7 @@ class EvalStepConfig:
     federated_cluster: str | None
     version: str
     instances: int = 1
+    rl_attempt: RLAttemptRef | None = None
 
 
 @dataclass(frozen=True)
@@ -72,7 +77,7 @@ class EvalStepFingerprint:
 
     model: ModelConfig
     dependencies: tuple[str, ...]
-    evals: str
+    evals: tuple[EvaluationDefinition, ...]
     limit: int | None
     version: str
 
@@ -87,12 +92,9 @@ class EvaluationResult(Artifact):
 
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
-    keys = resolve_eval_keys(config.evals)
     spec = LaunchSpec(
         model=config.model,
-        evals=keys,
-        evalchemy_definitions=(),
-        harbor_definitions=(),
+        evals=config.evals,
         platform=default_platform(config.model),
         accelerator=config.accelerator,
         limit=config.limit,
@@ -103,6 +105,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         federated_cluster=config.federated_cluster,
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
+        rl_attempt=config.rl_attempt,
         cache_key=None if is_mutable_version(config.version) else config.artifact_path,
     )
     submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
@@ -121,11 +124,12 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
 
 def eval_step(
     model: ModelConfig,
-    evals: str,
+    evals: tuple[EvaluationDefinition, ...],
     *,
     version: str,
     deps: tuple[ArtifactStep, ...] = (),
     resolve_model: Callable[[StepContext], ModelConfig] | None = None,
+    resolve_rl_attempt: Callable[[StepContext], RLAttemptRef | None] | None = None,
     limit: int | None = None,
     max_concurrent: int = DEFAULT_EVAL_CONCURRENCY,
     instances: int = 1,
@@ -133,7 +137,7 @@ def eval_step(
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
 ) -> ArtifactStep[EvaluationResult]:
-    """Evaluate a model with Evalchemy and Harbor.
+    """Evaluate a model with curated TaskSpec corpora and Harbor.
 
     Experiments declare producer dependencies and resolve their paths in ``resolve_model``.
     Checked-in models use ``model`` directly without a producer step.
@@ -162,10 +166,11 @@ def eval_step(
             submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
             federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
+            rl_attempt=resolve_rl_attempt(ctx) if resolve_rl_attempt is not None else None,
         )
 
     return ArtifactStep(
-        name=f"evals/{model.name}/{evals}",
+        name=f"evals/{model.name}/{'-'.join(evaluation.name for evaluation in evals)}",
         version=version,
         artifact_type=EvaluationResult,
         run=run_eval_pipeline_step,
@@ -181,7 +186,7 @@ def eval_step(
 
 
 def main() -> None:
-    step = eval_step(models()["qwen3-1.7b"], "smoke", version="2026.07.19")
+    step = eval_step(models()["qwen3-1.7b"], resolve_evaluations("smoke"), version="2026.07.19")
     StepRunner().run([step.lower()])
 
 

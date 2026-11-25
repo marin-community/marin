@@ -23,6 +23,8 @@ from functools import cache, cached_property
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import tomli
+import tomli_w
 import verifyit
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
@@ -33,9 +35,19 @@ from shellbox.backends.local.python_environment import (
 )
 from shellbox.machine import Backend, HostImage, MachineFactory, MachineSpec, Mount, NetworkPolicy
 
-from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements, require_resolved_environment
+from taskcompendium.models import DEFAULT_WORKSPACE, EnvironmentRequirements
 
-RUNTIME_PACKAGES = (Path(verifyit.__file__).parent,)
+# Compiled extension modules are host-platform artifacts of optimized wheels. Staging ships the
+# pure-Python sources, so the runtime identity, image, and exports stay platform-neutral.
+COMPILED_EXTENSIONS = frozenset({".so", ".pyd"})
+
+# The grader machine installs nothing, so staging ships every package directory the verifyit
+# runtime imports: verifyit itself, the tomllib backport, and the spec writer.
+RUNTIME_PACKAGES = (
+    Path(verifyit.__file__).parent,
+    Path(tomli.__file__).parent,
+    Path(tomli_w.__file__).parent,
+)
 LOCK_FILE = "requirements.lock"
 FILES_ARCHIVE = "files.tar"
 """The environment's placed files, stored beside the lock as a tar of paths relative to ``/``."""
@@ -83,8 +95,12 @@ class ContextFile(BaseModel):
 
 
 def context_paths(root: Path) -> list[Path]:
-    """Every file below ``root`` in path order, skipping bytecode caches."""
-    return sorted(path for path in root.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
+    """Every file below ``root`` in path order, skipping bytecode caches and compiled extensions."""
+    return sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix not in COMPILED_EXTENSIONS
+    )
 
 
 def _file_mode(path: Path) -> str:
@@ -115,9 +131,9 @@ FILES_DIRECTORY = "files"
 
 
 def _runtime_parent() -> Path:
-    """Use a mounted node cache for executable environments; local hosts keep the /tmp default."""
+    """Reuse the mounted node cache or the workstation's persistent runtime cache."""
     cache = Path("/cache")
-    return cache / "task-curation" if cache.is_mount() else Path("/tmp")
+    return cache / "task-curation" if cache.is_mount() else Path.home() / ".cache/marin/task-runtime"
 
 
 def extract_files(archive: bytes, directory: Path) -> None:
@@ -208,7 +224,11 @@ class LocalRuntime:
         # A built image copies each runtime package into its runtime directory and puts that on sys.path.
         runtime = self.root / RUNTIME_DIRECTORY
         for package in RUNTIME_PACKAGES:
-            shutil.copytree(package, runtime / package.name, ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copytree(
+                package,
+                runtime / package.name,
+                ignore=shutil.ignore_patterns("__pycache__", "*.so", "*.pyd"),
+            )
         purelib = subprocess.run(
             [python, "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
             check=True,
@@ -249,7 +269,6 @@ class LocalGraderMachines:
 
     def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
         """Return an unprepared bubblewrap spec; ``memory_mb`` is advisory."""
-        require_resolved_environment(environment)
         if environment.packages_lock is None and environment.package_spec is None:
             raise ValueError("A local grader requires a package spec or packages lock")
         spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE)

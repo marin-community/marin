@@ -73,6 +73,7 @@ from levanter.checkpoint import (
     load_checkpoint_or_initialize,
 )
 from levanter.config import JsonAtom
+from levanter.field_dtype_overrides import check_field_dtype_overrides, with_field_dtype_overrides
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
@@ -341,8 +342,8 @@ class Trainer:
 
     @property
     def mp(self) -> jmp.Policy:
-        """Returns the mixed precision policy"""
-        return self.config.mp
+        """Returns the mixed precision policy, with ``field_dtype_overrides`` applied"""
+        return self.config.precision_policy
 
     @property
     def num_train_steps(self) -> int:
@@ -475,6 +476,7 @@ class Trainer:
 
         def init_state_and_model(model_init, training_key):
             model = model_init()
+            check_field_dtype_overrides(model, self.config.field_dtype_overrides)
             # only force trainable params to param precision. Other params are cast to compute precision
             state = TrainerState.init(
                 self.optimizer,
@@ -688,7 +690,6 @@ class Trainer:
 
             @eqx.filter_jit
             def eval_loss(model, *batch, **batch_kwargs):
-                model = self.mp.cast_to_compute(model)
                 return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
@@ -875,6 +876,13 @@ def _initialize_global_tracker(config, run_id):
 class TrainerConfig:
     seed: int = 0  # random seed
     mp: jmp.Policy = jmp.get_policy("f32")  # mixed precision policy
+    field_dtype_overrides: dict[str, jnp.dtype] = field(default_factory=dict)
+    """Model attribute name, matched at any depth (e.g. ``router_bias``), to the floating dtype it keeps.
+
+    ``mp`` casts an overridden field only to its own dtype: in the trainer state and the compute view, on HF load in
+    train_lm, train_dpo and lora_lm, and in HF exports. The eval and sampling entry points still load HF checkpoints in
+    the compute dtype. In YAML: ``field_dtype_overrides: {router_bias: float32}``.
+    """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
 
@@ -906,6 +914,11 @@ class TrainerConfig:
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
     because JAX disallows using named `PartitionSpec`s under `AxisType.Auto`/`AxisType.Manual` meshes.
     """
+
+    @property
+    def precision_policy(self) -> jmp.Policy:
+        """``mp`` with ``field_dtype_overrides`` applied."""
+        return with_field_dtype_overrides(self.mp, self.field_dtype_overrides)
 
     @property
     def batch_axis_name(self) -> str | None:

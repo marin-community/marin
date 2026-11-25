@@ -17,20 +17,23 @@ from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
     IrisSkyRLExecution,
+    SkyRLPolicyModel,
     SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
-    _materialize_role_plan_config,
     skyrl_step,
 )
+from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe.declared import DatabaseRegistrationCallback, EvaluationCallback
 
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.models import qwen2_5_0_5b_instruct
 from experiments.post_training.cat_count_canary.data import TRAIN_FILENAME, VALIDATION_FILENAME, cat_count_data_step
-from experiments.post_training.cat_count_canary.launcher import role_plan, training_config
-from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
+from experiments.post_training.cat_count_canary.launcher import role_plan, training_config, with_role_plan
+from experiments.post_training.skyrl_evaluation import evaluate_model
 
 CLUSTER = "cw-rno2a"
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -85,26 +88,34 @@ def build_smoke(version: str) -> Smoke:
             train_ns=TRAIN_COUNTS,
             checkpoint=True,
             export=True,
-            settings=(f"trainer.max_steps={max_steps}", "trainer.logger=console", "trainer.update_epochs_per_batch=1"),
         )
-        _materialize_role_plan_config(config, plan)
-        config["generator"]["gpu_memory_utilization"] = 0.4
-        config["trajectory_runner"] = {
-            "max_concurrent_tasks": 4,
-            "rollout_workers": {"num_workers": 2, "cpus_per_worker": 2},
-        }
-        config["trainer"]["callbacks"] = [
-            callback for callback in config["trainer"]["callbacks"] if callback["type"] != "database_registration"
-        ]
-        for callback in config["trainer"]["callbacks"]:
-            if callback["type"] == "evaluation":
-                callback["additional_evaluations"] = {}
-                callback["metric_groups"] = {}
+        config = with_role_plan(config, plan)
+        callbacks = tuple(
+            (
+                callback.replace(additional_evaluations={}, metric_groups={})
+                if isinstance(callback, EvaluationCallback)
+                else callback
+            )
+            for callback in config.trainer.callbacks
+            if not isinstance(callback, DatabaseRegistrationCallback)
+        )
+        config = config.merge(
+            RecipePatch(
+                generator=sections.Generator(gpu_memory_utilization=0.4),
+                trajectory_runner=sections.TrajectoryRunner(
+                    max_concurrent_tasks=4,
+                    rollout_workers=sections.RolloutWorkers(num_workers=2, cpus_per_worker=2),
+                ),
+                trainer=sections.Trainer(
+                    max_steps=max_steps, logger="console", update_epochs_per_batch=1, callbacks=callbacks
+                ),
+            )
+        )
         return skyrl_step(
             SkyRLSpec(
                 name=user_owned_name(f"checkpoints/skyrl-port-smoke/{name}"),
                 version=version,
-                config_yaml=yaml.safe_dump(config),
+                config_yaml=yaml.safe_dump(config.to_skyrl()),
                 model=ArtifactHfModel(
                     step=qwen2_5_0_5b_instruct,
                     relative_path="",
@@ -141,19 +152,17 @@ def build_smoke(version: str) -> Smoke:
         )
 
     resume = replace(resume, build_config=resume_config, deps=(*resume.deps, train))
-    evaluate = skyrl_eval_step(
-        resume,
+    evaluate = evaluate_model(
+        SkyRLPolicyModel(resume),
         ModelConfig(
             name="skyrl-port-smoke",
-            location=SKYRL_POLICY_LOCATION,
-            tokenizer=MODEL,
-            tokenizer_revision=MODEL_REVISION,
+            location="",
             apply_chat_template=True,
             resource_hint=ResourceHint(gpu={"H100": 1}),
             serve=ServeConfig(tensor_parallel_size=1, max_model_len=4096, max_num_seqs=16),
             generation=GenerationConfig(max_gen_toks=256),
         ),
-        "gsm8k-smoke",
+        resolve_evaluations("gsm8k-smoke"),
         version=version,
         accelerator="H100x1",
         submission_cluster=CLUSTER,

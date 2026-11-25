@@ -535,20 +535,30 @@ WorkerStatusMap = dict[str, WorkerStatus]
 class CoschedulingConfig:
     """Configuration for coscheduling job tasks together.
 
-    Coscheduling ensures that all tasks of a job are scheduled on workers
-    that share a common attribute value. This is essential for multi-host
-    TPU jobs where all workers must belong to the same TPU pod.
+    Placement follows the backend's rule for ``group_by``. ``group_sizes``
+    partitions task ordinals into contiguous groups, each placed in one domain.
+    Groups share admission, retries and cancellation. Explicit groups require
+    the Kubernetes backend and a required topology level.
 
     Example:
         >>> # Schedule all tasks on workers from the same TPU pod
         >>> CoschedulingConfig(group_by="tpu-name")
+        >>> # Eight hosts in one NVLink domain, sixteen in another if needed
+        >>> CoschedulingConfig(group_by="nvlink.domain", group_sizes=(8, 16))
     """
 
     group_by: str
+    group_sizes: tuple[int, ...] = ()
+
+    def validate(self, replicas: int) -> None:
+        if not self.group_by:
+            raise ValueError("coscheduling requires a non-empty group_by")
+        if self.group_sizes and (any(size <= 0 for size in self.group_sizes) or sum(self.group_sizes) != replicas):
+            raise ValueError("coscheduling group_sizes must be positive and sum to replicas")
 
     def to_proto(self) -> job_pb2.CoschedulingConfig:
         """Convert to protobuf representation."""
-        return job_pb2.CoschedulingConfig(group_by=self.group_by)
+        return job_pb2.CoschedulingConfig(group_by=self.group_by, group_sizes=self.group_sizes)
 
 
 def tpu_device(variant: str, count: int | None = None) -> job_pb2.DeviceConfig:
@@ -733,6 +743,8 @@ class EnvironmentSpec:
     Default environment variables (automatically set if not overridden):
     - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - DO_NOT_TRACK, VLLM_NO_USAGE_STATS, RAY_USAGE_STATS_ENABLED and
+      WANDB_ERROR_REPORTING opt out of library telemetry sent to vendors
     - NCCL_DEBUG: "WARN" for GPU jobs (preserves errors without INFO log volume)
     - MARIN_PROVENANCE: the launch's ``rigging.provenance.Provenance`` as JSON, captured
       at submission (or forwarded from this process's own env when re-submitting inside
@@ -771,6 +783,13 @@ class EnvironmentSpec:
         default_env_vars = {
             "HF_DATASETS_TRUST_REMOTE_CODE": "1",
             "TOKENIZERS_PARALLELISM": "false",
+            # Opt out of telemetry that libraries send to their vendors: usage
+            # stats from vLLM and Ray, Hugging Face Hub and other tools that honor
+            # DO_NOT_TRACK, and W&B's own crash reports. W&B run logging is unaffected.
+            "DO_NOT_TRACK": "1",
+            "VLLM_NO_USAGE_STATS": "1",
+            "RAY_USAGE_STATS_ENABLED": "0",
+            "WANDB_ERROR_REPORTING": "false",
             # Launch provenance: a task running from a git-less bundle inherits the
             # submitter's identity via Provenance.capture(); transitive, since a task
             # re-submitting captures this same env value.

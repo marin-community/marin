@@ -7,8 +7,8 @@ The first pair holds the current compiled TP2/DP1 serve path and 73,728-token se
 ```bash
 uv run python -m experiments.evaluation.cli launch \
   --model-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/model-tp2-dp1-low.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/humanevalplus.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/math500.yaml \
+  --evaluation-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evaluations.yaml \
+  --evals humanevalplus,math500 \
   --federated_cluster cw-rno2a --priority interactive --no-wait \
   --description 'Unlabeled K2 screen: compiled TP2/DP1, low reasoning on thinking-off tasks'
 ```
@@ -20,7 +20,7 @@ After a serving arm recovers on the full cheap benchmarks, screen it against
 among the 30 tasks K2 solved in the September 24 Terminal-Bench archive; all
 ten are present in the new dataset at ref 6. It uses one trial per task to
 limit diagnostic cost. The release benchmark remains the unfiltered,
-three-trial `harbor-configs/tb2-recovery.yaml`; do not report the diagnostic
+three-trial `tb2-recovery` evaluation; do not report the diagnostic
 subset as a policy score.
 
 The second Terminal-Bench isolation pair uses those same ten tasks. Run
@@ -94,7 +94,7 @@ K2-specific 8k output-cap exception.
 The campaign's default K2 config uses the same tested TP2/DP1 serving setup
 with 73,728 served tokens for the full single-turn Evalchemy budgets. The
 `campaign.yaml` override selects `model-recommended-tb2.yaml` with the
-canonical three-trial `harbor-configs/tb2-recovery.yaml`. The TB2 config
+canonical three-trial `tb2-recovery` evaluation. The TB2 config
 differs from the scored 9/10 diagnostic
 model config only in its `thinking_off_template_kwargs` (`low` rather than
 `high`), which Terminal-Bench does not request; its effective agent reasoning

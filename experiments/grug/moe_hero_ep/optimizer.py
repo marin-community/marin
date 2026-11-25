@@ -73,29 +73,34 @@ def _scale_invariant_hyperball_updates(
             return None
         if not hasattr(param, "ndim"):
             return update
+        # Run the step and re-projection in float32 so BF16 parameter-space norms
+        # round identically to post-step norms, and use sum-of-squares plus a
+        # same-layout reshard so sharded reductions do not over-count (issue #8073).
+        param_f32 = param.astype(jnp.float32)
+        update_f32 = update.astype(jnp.float32)
         if param.ndim == 2:
-            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
-            # sum-of-squares in float32 plus a same-layout reshard of the intermediate reduces correctly.
-            param_norm = jnp.sqrt(jnp.sum(jnp.square(param.astype(jnp.float32))))
-            update_norm = jnp.sqrt(jnp.sum(jnp.square(update.astype(jnp.float32))))
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param_f32)))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update_f32)))
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param = _pin_sharding(new_param, param)
-            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
-            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
-
-        if path.endswith((".expert_mlp.w_gate", ".expert_mlp.w_up", ".expert_mlp.w_down")):
-            # Pipeline blocks have [experts, in, out]; the scanned EP model adds
-            # a leading layer axis. Normalize the same expert bank in both layouts.
-            bank_dims = 3 if expert_normalization == ExpertNormalization.ALL_EXPERTS else 2
-            axes = tuple(range(param.ndim - bank_dims, param.ndim))
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param)))
         else:
-            axes = tuple(range(1, param.ndim))
-        param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
-        update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-        new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
-        new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+            if path.endswith((".expert_mlp.w_gate", ".expert_mlp.w_up", ".expert_mlp.w_down")):
+                # Pipeline blocks have [experts, in, out]; the scanned EP model adds
+                # a leading layer axis. Normalize the same expert bank in both layouts.
+                bank_dims = 3 if expert_normalization == ExpertNormalization.ALL_EXPERTS else 2
+                axes = tuple(range(param.ndim - bank_dims, param.ndim))
+            else:
+                axes = tuple(range(1, param.ndim))
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param_f32), axis=axes, keepdims=True))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update_f32), axis=axes, keepdims=True))
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+        # Ratio form: equal norms give a ratio of exactly 1.0, so a zero raw step
+        # yields an exactly zero update without a special case.
+        ratio = jnp.maximum(param_norm, 1e-10) / jnp.maximum(new_param_norm, 1e-10)
+        return (new_param * ratio - param_f32).astype(param.dtype)
 
     return jax.tree.map(scale_invariant_update, params, direction_updates, paths, is_leaf=lambda x: x is None)
 
@@ -180,6 +185,25 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
+@dataclass(frozen=True)
+class ScheduleExtension:
+    """Learning rate for training past the end of the schedule.
+
+    From the schedule's floor, ``min_lr_ratio`` of peak, the rate moves linearly to ``final_lr_ratio`` of peak
+    over ``steps`` steps and then stays there. ``final_lr_ratio == min_lr_ratio`` holds the floor. The heuristic,
+    weight decay, and data stages keep the schedule's length, which an extension does not change.
+    """
+
+    steps: int
+    final_lr_ratio: float
+
+    def __post_init__(self):
+        if self.steps <= 0:
+            raise ValueError(f"steps must be positive, got {self.steps}")
+        if self.final_lr_ratio < 0:
+            raise ValueError(f"final_lr_ratio must not be negative, got {self.final_lr_ratio}")
+
+
 @OptimizerConfig.register_subclass("grug_moe_hero_ep_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
@@ -209,6 +233,24 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     use_syrk: bool = True
     gate_router_weight_decay: float = 0.0
     expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS
+    schedule_extension: ScheduleExtension | None = None
+
+    def __post_init__(self):
+        extension = self.schedule_extension
+        if extension is not None and extension.final_lr_ratio > self.min_lr_ratio:
+            raise ValueError(
+                f"final_lr_ratio={extension.final_lr_ratio} would raise the rate above min_lr_ratio={self.min_lr_ratio}"
+            )
+
+    def lr_scheduler(self, num_train_steps, override_lr=None):
+        schedule = super().lr_scheduler(num_train_steps, override_lr)
+        extension = self.schedule_extension
+        if extension is None:
+            return schedule
+        peak = self.learning_rate if override_lr is None else override_lr
+        tail = optax.linear_schedule(peak * self.min_lr_ratio, peak * extension.final_lr_ratio, extension.steps)
+        # The schedule itself still serves `num_train_steps`, so every step through it keeps its exact value.
+        return lambda count: jnp.where(count <= num_train_steps, schedule(count), tail(count - num_train_steps))
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -295,5 +337,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 __all__ = [
     "ExpertNormalization",
     "GrugMoeMuonHConfig",
+    "ScheduleExtension",
     "scale_with_grug_muonh",
 ]

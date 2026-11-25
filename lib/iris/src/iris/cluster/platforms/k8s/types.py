@@ -109,6 +109,12 @@ class K8sResource(Enum):
     # Scheduling v1
     PRIORITY_CLASSES = ("scheduling.k8s.io", "v1", False, "priorityclasses", "PriorityClass")
 
+    # Node v1
+    RUNTIME_CLASSES = ("node.k8s.io", "v1", False, "runtimeclasses", "RuntimeClass")
+
+    # Cilium: egress allowlist policies for EGRESS_POLICY_ALLOWLIST pods.
+    CILIUM_NETWORK_POLICIES = ("cilium.io", "v2", True, "ciliumnetworkpolicies", "CiliumNetworkPolicy")
+
     # CoreWeave custom resources
     NODE_POOLS = ("compute.coreweave.com", "v1alpha1", False, "nodepools", "NodePool")
 

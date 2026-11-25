@@ -3,7 +3,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import numpy as np
 from draccus import PluginRegistry
@@ -12,6 +12,12 @@ from levanter.data._preprocessor import BatchProcessor
 from levanter.tokenizers import MarinTokenizer, chat_template_has_generation_block
 
 from ._batch_tokenizer import BatchTokenizer
+
+
+class TokenSeqDict(TypedDict):
+    input_ids: np.ndarray
+    loss_weights: NotRequired[np.ndarray]
+    valid_tokens: NotRequired[np.ndarray]
 
 
 class LmDatasetFormatBase(PluginRegistry, discover_packages_path="levanter.data.text"):
@@ -69,6 +75,26 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
             chat_template_kwargs_field=self.chat_template_kwargs,
             mask_user_turns=self.mask_user_turns,
         )
+
+
+@LmDatasetFormatBase.register_subclass("serialized_chat")
+@dataclass(frozen=True)
+class SerializedChatLmDatasetFormat(LmDatasetFormatBase):
+    """Assistant-only view of existing rendered-chat token caches.
+
+    The pinned tokenizer must encode the complete assistant header, including its
+    trailing delimiter, as ``assistant_prefix``. This view masks the headers and
+    all non-assistant messages without retokenizing or rewriting the cache.
+    """
+
+    message_start_id: int
+    assistant_prefix: tuple[int, ...]
+    text_key: str = "text"
+
+    def build_preprocessor(
+        self, tokenizer: MarinTokenizer, *, enforce_eos: bool = True, enforce_bos: bool = True
+    ) -> BatchProcessor[dict, dict]:
+        return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=self.text_key)
 
 
 @LmDatasetFormatBase.register_subclass("prebuilt")

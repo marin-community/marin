@@ -143,6 +143,8 @@ class GrugModelConfig:
     them through one ``jax.lax.scan``. Collapses N per-layer subgraphs into one
     scan body so XLA only plans HBM for one iteration's intermediates — needed
     at scale where the unrolled program OOMs at compile time."""
+    scan_unroll: int = 1
+    """Layers per iteration of the stacked-blocks scan. Larger values expose more layers to XLA's scheduler."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
 
     def __post_init__(self) -> None:
@@ -748,6 +750,7 @@ class Transformer(eqx.Module):
                 _scan_layers,
                 hidden,
                 xs=(self.stacked_blocks.stacked, mask_schedule),
+                unroll=cfg.scan_unroll,
             )
             router_metrics = {
                 "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
@@ -824,9 +827,9 @@ def debug_mesh_and_token_pspec(num_devices: int) -> tuple[jax.sharding.AbstractM
         raise ValueError(f"num_devices must be positive, got {num_devices}")
     expert = 2 if num_devices % 2 == 0 else 1
     data = max(1, num_devices // expert)
-    axis_names = ("replica_dcn", "data", "context", "expert", "model")
+    axis_names = ("replica_dcn", "data", "expert", "context", "model")
     mesh = jax.sharding.AbstractMesh(
-        axis_sizes=(1, data, 1, expert, 1),
+        axis_sizes=(1, data, expert, 1, 1),
         axis_names=axis_names,
         axis_types=(jax.sharding.AxisType.Explicit,) * len(axis_names),
     )

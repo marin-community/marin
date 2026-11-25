@@ -1,14 +1,12 @@
 name: "Ops - Egress Report"
 
-# Cross-region egress digest over the trailing 24h, on demand only. The daily
-# schedule was switched off 2026-09-29: Iris task logs stopped landing under
-# gs://marin-us-central2/finelog/marin/log on 2026-09-03, so every scheduled
-# run since 2026-09-15 analysed no log lines and posted "No offenders today."
-# to #internal-discuss. Re-add the schedule once scripts/ops/cross_region.py
-# reads the current task-log location, and point it at a dedicated channel
-# (egress_report.py --channel, scripts/ops/discord.py CHANNELS).
+# Daily cross-region egress digest over the trailing 24h, posted to #gcs-egress.
+# The runner submits the log scan as an Iris job in us-central2 and fetches only
+# its report files.
 
 on:
+  schedule:
+    - cron: '0 14 * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -52,6 +50,6 @@ jobs:
 
       - name: Run egress report
         env:
-          DISCORD_WEBHOOK_INTERNAL_DISCUSS: ${{ secrets.DISCORD_WEBHOOK_INTERNAL_DISCUSS }}
+          DISCORD_WEBHOOK_GCS_EGRESS: ${{ secrets.DISCORD_WEBHOOK_GCS_EGRESS }}
           GH_TOKEN: ${{ secrets.GIST_PAT }}
         run: uv run python scripts/ops/egress_report.py

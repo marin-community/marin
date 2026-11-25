@@ -14,7 +14,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME_PROJECT, HARBOR_SOURCE, HarborErrorTaxonomy
+from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME_PROJECT, HarborErrorTaxonomy
 from marin.evaluation.harbor.runner import HarborTrial, _aggregate, _job_benchmark, _read_trial, _read_trials
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -93,8 +93,10 @@ def runtime_taxonomy() -> HarborErrorTaxonomy:
         "--frozen",
         "python",
         "-c",
-        "import json; from harbor_config.errors import ErrorCategory, errors_by_category; "
-        "print(json.dumps({category.value: sorted(errors_by_category(category)) for category in ErrorCategory}))",
+        "import json; from rigging.task_errors import ErrorCategory, errors_by_category; "
+        "from harbor_config.errors import ERROR_CATEGORIES; "
+        "print(json.dumps({category.value: sorted(errors_by_category(category, categories=ERROR_CATEGORIES)) "
+        "for category in ErrorCategory}))",
     ]
     categories = json.loads(subprocess.check_output(command, text=True))
     return HarborErrorTaxonomy(
@@ -102,7 +104,6 @@ def runtime_taxonomy() -> HarborErrorTaxonomy:
         agent=frozenset(categories["agent"]),
         passthrough=frozenset(categories["passthrough"]),
         undecided=frozenset(categories["unknown"]),
-        commit=HARBOR_SOURCE.commit,
     )
 
 
@@ -127,7 +128,6 @@ def original_aggregate(uri: str, taxonomy: HarborErrorTaxonomy) -> tuple[Aggrega
         {
             "kind": "native_trial_aggregation",
             "job": str(job),
-            "harbor_commit": taxonomy.commit,
             "errors": dict(aggregate.errors),
         },
     )

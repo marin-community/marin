@@ -28,7 +28,13 @@ from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
 from iris.cluster.node_agent import SERVICE_NAME
 from iris.cluster.node_agent.cache_reclaim import run_cache_reclaimer
-from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
+from iris.cluster.node_agent.metrics import (
+    DeviceMetric,
+    FilesystemSample,
+    NodeMetrics,
+    NodeTarget,
+    publish_node_telemetry,
+)
 from iris.cluster.node_agent.storage_health import run_storage_health
 from iris.cluster.node_agent.uv_cache_recovery import run_uv_cache_recovery
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
@@ -71,6 +77,8 @@ _DCGM_NAME_VALUE = "dcgm-exporter"
 # CoreWeave bare-metal nodes mount the NVMe RAID here; the RAM-disk root ("/")
 # is the fallback for a cluster laid out differently.
 _PREFERRED_DISK_MOUNTS = ("/mnt/local", "/")
+# Runtime execs need free space on the root filesystem even when the NVMe cache is empty.
+_RUNTIME_FILESYSTEM_MOUNTS = ("/", "/tmp")
 
 # Interfaces whose byte counters are not real host traffic (loopback, CNI
 # plumbing, container veths). Everything else — physical NICs (enp*, eth*),
@@ -366,6 +374,7 @@ class HostSample:
     net_recv_bytes: int
     net_sent_bytes: int
     boot_time_seconds: int | None
+    filesystems: tuple[FilesystemSample, ...]
 
 
 @dataclass(frozen=True)
@@ -520,6 +529,11 @@ def parse_node_exporter(text: str, *, disk_mounts: tuple[str, ...] = _PREFERRED_
         net_recv_bytes=net_recv,
         net_sent_bytes=net_sent,
         boot_time_seconds=boot_time,
+        filesystems=tuple(
+            FilesystemSample(mountpoint=mount, total_bytes=fs_size[mount], available_bytes=fs_avail[mount])
+            for mount in _RUNTIME_FILESYSTEM_MOUNTS
+            if mount in fs_size and mount in fs_avail
+        ),
     )
 
 
@@ -698,6 +712,7 @@ class NodeStatsScraper:
                 metrics.mem_total_bytes = host.mem_total_bytes
                 metrics.disk_used_bytes = host.disk_used_bytes
                 metrics.disk_total_bytes = host.disk_total_bytes
+                metrics.filesystems = host.filesystems
                 metrics.net_recv_bytes = host.net_recv_bytes
                 metrics.net_sent_bytes = host.net_sent_bytes
             if gpu is not None:

@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.rl.curation import CurationCatalog
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from marin.execution.lazy import run
@@ -38,7 +39,7 @@ from experiments.post_training.task_curation.pipeline import (
     environment_requirements,
     process_rows,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -47,8 +48,6 @@ from experiments.post_training.task_curation.tests.image_builds import (
     install_fake_build_tools,
 )
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
-
-CONTROLLER_URL = "http://controller.invalid"
 
 
 def math500() -> CurationRecipe:
@@ -64,7 +63,13 @@ def catalog(monkeypatch, tmp_path):
             **{
                 name: RlDataSource(
                     pipeline=process_rows,
-                    info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"),
+                    info=SourceInfo(
+                        data_restriction=DataRestriction.OPEN,
+                        upstream_dataset=name,
+                        upstream_name=name,
+                        build_path="test",
+                        origin=SourceOrigin.MARIN,
+                    ),
                     config=pipeline,
                 )
                 for name, pipeline in pipelines.items()
@@ -129,7 +134,8 @@ def test_local_environments_grade_in_the_worker_with_the_runtime_built_from_thei
     install_fake_build_tools(tmp_path, monkeypatch)
     # The factory probes for a working bubblewrap; CI hosts cannot build sandboxes.
     monkeypatch.setattr(
-        "shellbox.backends.local.machine._working_bwrap", lambda candidates, system_directories: Path("/usr/bin/bwrap")
+        "shellbox.backends.local.machine._working_bwrap",
+        lambda candidates, system_directories, mounts, environment: Path("/usr/bin/bwrap"),
     )
     environment = Environment(
         requirements=REQUIREMENTS,
@@ -166,15 +172,12 @@ def test_remote_planning_uses_cw_instead_of_ambient_gcs(tmp_path, catalog, monke
     assert not (tmp_path / "report.json").exists()
 
 
-def test_gvisor_image_backend_requires_a_controller_outside_an_iris_job(tmp_path, catalog, monkeypatch):
+def test_gvisor_image_backend_requires_an_in_cluster_driver(tmp_path, catalog, monkeypatch):
     monkeypatch.setattr("experiments.post_training.task_curation.driver.get_job_info", lambda: None)
     options = [*arguments(tmp_path), "--image-backend", "gvisor"]
     missing = CliRunner().invoke(main, options)
     assert missing.exit_code == 2
     assert not (tmp_path / "report.json").exists()
-    configured = CliRunner().invoke(main, [*options, "--controller-url", CONTROLLER_URL])
-    assert configured.exit_code == 0, configured.output
-    assert len(json.loads(configured.output)["sources"]) == len(catalog) + 1
 
 
 def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypatch):

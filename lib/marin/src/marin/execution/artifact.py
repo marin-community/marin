@@ -289,14 +289,15 @@ def read_record(output_path: str) -> ArtifactRecord | None:
     """The record at ``{output_path}/.artifact.json``, else ``None``.
 
     Falls back to a genuine legacy Ray executor ``.executor_info`` sidecar when no record file is
-    present, so caches built before the record file existed still resolve their config. A
+    present, or when it holds the bare ``null`` an older executor wrote for a step that returned
+    ``None``, so caches built before the record file existed still resolve their config. A
     schedule-time ``StepRunner`` stub (see :data:`STEP_RUNNER_EXECUTOR_VERSION`) is *not* honored:
     it carries no materialized config, so such an output reads back as having no record. A
     corrupt/partial file raises :class:`pydantic.ValidationError`.
     """
     output_path = _resolved(output_path)
     text = _read_text(output_path, RECORD_FILENAME)
-    if text is not None:
+    if text is not None and text.strip() != "null":
         return _parse_record(text)
     executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
     if executor_info is not None:

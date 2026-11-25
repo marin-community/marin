@@ -13,6 +13,10 @@ class AgentDiskFullError(RuntimeError):
     """The sandbox ran out of disk space during agent execution."""
 
 
+class AgentCommandOutputLostError(RuntimeError):
+    """The agent removed a sandbox command's captured output, for example by clearing /tmp."""
+
+
 class VerifierTimeoutError(asyncio.TimeoutError):
     pass
 
@@ -31,6 +35,22 @@ class PhaseCancellationError(RuntimeError):
     """A timed-out trial phase did not terminate during cleanup grace."""
 
     pass
+
+
+class RuntimeServiceError(RuntimeError):
+    """A required trial service failed to start, run, or close."""
+
+
+class RuntimeLogCollectionError(RuntimeError):
+    """Required runtime logs could not be collected before grading."""
+
+
+class EnvironmentSetupError(RuntimeError):
+    """Task-declared initialization failed before actor access."""
+
+
+class EnvironmentStopError(RuntimeError):
+    """Environment teardown failed or exceeded its deadline."""
 
 
 class TrialNotScoredError(Exception):

@@ -85,6 +85,8 @@ serve:
     \ add_generation_prompt -%}\n<|start_header_id|>assistant<|end_header_id|>\n{%\
     \ endif -%}\n\n"
 generation:
+  extra_gen_kwargs:
+    skip_special_tokens: "false"
   max_gen_toks: 16384
 agent:
   agent_kwargs:

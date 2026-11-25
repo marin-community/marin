@@ -1,16 +1,25 @@
 """Model transports used by trajectory runners."""
 
 import asyncio
+import re
 from copy import deepcopy
 from dataclasses import dataclass
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
 import numpy as np
+from transformers import PreTrainedTokenizerBase
+from rolloutengine.harness.core import OUTPUT_LIMIT_OPTION_KEYS
 from rolloutengine.models import RolloutContractError
 
-from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
+from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
+from verifyit.reasoning_markup import (
+    REASONING_DELIMITERS,
+    ReasoningViolation,
+    first_reasoning_violation,
+    reasoning_span_violation,
+)
 
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
@@ -18,6 +27,7 @@ from skyrl_train.inference_engines.base import (
     ChatContinuation,
     InferenceEngineInput,
     InferenceEngineOutput,
+    request_id_for_session,
 )
 from skyrl_train.inference_engines.chat_continuation import (
     CHAT_TOKENIZE_FIELDS,
@@ -39,8 +49,19 @@ from skyrl_train.rollout_observability import rollout_phase
 
 # The per-turn output limit, as the trainer config (`max_generate_length`) and vLLM (`max_tokens`) spell it. Chat
 # requests carry it only as `max_completion_tokens`, which vLLM prefers over `max_tokens`.
-_OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
-_CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
+_SAMPLING_OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
+_CHAT_SAMPLING_EXCLUSIONS = frozenset({*_SAMPLING_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
+
+
+REASONING_VIOLATIONS_KEY = "reasoning_violations"
+REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
+
+# vLLM's Hermes parser serializes tool-call arguments with ensure_ascii=False, so a JSON \u escape for half of
+# a surrogate pair becomes a lone surrogate, which the tokenizer cannot encode when it renders the next turn.
+# vLLM decodes the arguments before the chat template writes them, so an escape in the arguments string does
+# not help: the decoded value must be valid Unicode.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+_REPLACEMENT_CHARACTER = "\ufffd"
 
 
 class ModelClientOutput(InferenceEngineOutput):
@@ -48,6 +69,8 @@ class ModelClientOutput(InferenceEngineOutput):
 
     token_provenance: TokenProvenance
     generation_token_budgets: NotRequired[list[int | None]]
+    reasoning_violations: NotRequired[list[ReasoningViolation | None]]
+    reasoning_violation_tokens: NotRequired[list[int | None]]
 
 
 class ModelClient(Protocol):
@@ -79,7 +102,7 @@ class GenerationBudgetExceededError(ContextLengthExceededError):
 
 
 def _generation_token_budget(
-    request: InferenceEngineInput, prompt_ids: list[int], requested_tokens: list[int]
+    request: InferenceEngineInput, prompt_ids: list[int], options: dict[str, Any]
 ) -> int | None:
     """Return the tightest output cap, or None when uncapped.
 
@@ -89,8 +112,8 @@ def _generation_token_budget(
     if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
         raise GenerationBudgetExceededError(prompt_ids)
     sampling = request.get("sampling_params") or {}
-    configured = [int(sampling[key]) for key in _OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
-    configured.extend(requested_tokens)
+    configured = [int(sampling[key]) for key in _SAMPLING_OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
+    configured.extend(int(value) for key in OUTPUT_LIMIT_OPTION_KEYS if (value := options.get(key)) is not None)
     max_context_length = request.get("max_context_length")
     if max_context_length is not None:
         remaining = max_context_length - len(prompt_ids)
@@ -113,6 +136,40 @@ class _ChatResult:
     generation_token_budget: int | None
     routed_experts: np.ndarray | None = None
     policy_steps: list[int] | None = None
+    reasoning_violation: ReasoningViolation | None = None
+    reasoning_violation_token: int | None = None
+
+
+# Chat-template turn terminators that can differ from the tokenizer's EOS, e.g. Llama-style templates end
+# turns with `<|eot_id|>` while `eos_token` is `<|end_of_text|>`. Other special tokens, such as a template's
+# `<|tool_call_end|>`, can end a reply cut off at the output budget without ending the turn.
+TURN_END_MARKERS = frozenset({"<|eot_id|>", "<|im_end|>"})
+
+
+def _ends_turn(tokenizer: PreTrainedTokenizerBase, response_ids: list[int], stop_reason: str) -> bool:
+    """Whether the response ended its turn with the EOS or a chat template's turn terminator.
+
+    A length stop never ended its turn, even when its last sampled token is a terminator.
+    """
+    if not response_ids or stop_reason == "length":
+        return False
+    return response_ids[-1] in _turn_end_tokens(tokenizer)
+
+
+def _visible_text(tokenizer: PreTrainedTokenizerBase, response_ids: list[int], stop_reason: str, text: str) -> str:
+    """Return ``text`` without its trailing terminator when the turn ended; a length stop keeps all its text."""
+    if not _ends_turn(tokenizer, response_ids, stop_reason):
+        return text
+    return text.removesuffix(tokenizer.decode(response_ids[-1:], skip_special_tokens=False))
+
+
+def _turn_end_tokens(tokenizer: PreTrainedTokenizerBase) -> set[int]:
+    tokens = {tokenizer.eos_token_id}
+    for marker in TURN_END_MARKERS:
+        token_ids = tokenizer.encode(marker, add_special_tokens=False)
+        if len(token_ids) == 1:
+            tokens.add(token_ids[0])
+    return tokens
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -138,6 +195,9 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
         token_provenance=TokenProvenance.ENGINE,
         generation_token_budgets=[result.generation_token_budget for result in results],
     )
+    if any(result.reasoning_violation is not None for result in results):
+        output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
+        output[REASONING_VIOLATION_TOKENS_KEY] = [result.reasoning_violation_token for result in results]
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
         output["behavior_topk_logprobs"] = selected_scores
@@ -146,6 +206,23 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
     if all(result.policy_steps is not None for result in results):
         output["response_policy_steps"] = [result.policy_steps for result in results]
     return output
+
+
+def _replace_lone_surrogates(message: dict[str, Any]) -> dict[str, Any]:
+    """Replace each lone surrogate in the message's tool-call arguments with U+FFFD."""
+    if not message.get("tool_calls"):
+        return message
+    tool_calls = [
+        {
+            **call,
+            "function": {
+                **call["function"],
+                "arguments": _LONE_SURROGATE.sub(_REPLACEMENT_CHARACTER, call["function"]["arguments"]),
+            },
+        }
+        for call in message["tool_calls"]
+    ]
+    return {**message, "tool_calls": tool_calls}
 
 
 async def _render_chat_prompt(
@@ -198,6 +275,40 @@ async def _render_chat_prompt(
     return messages, prompt_ids
 
 
+def _reasoning_marker_tokens(tokenizer: PreTrainedTokenizerBase) -> dict[int, str]:
+    markers = {}
+    for pair in REASONING_DELIMITERS:
+        for marker in pair:
+            token_ids = tokenizer.encode(marker, add_special_tokens=False)
+            if len(token_ids) == 1:
+                markers[token_ids[0]] = marker
+    return markers
+
+
+def _reasoning_violation(
+    tokenizer: PreTrainedTokenizerBase, response_ids: Sequence[int], decoded: str, stop_reason: str
+) -> tuple[ReasoningViolation | None, int | None]:
+    """Classify a reply's reasoning span and locate the token where it goes wrong.
+
+    An unclosed span is located at the last token. The token is ``None`` when the one-token markers are
+    well formed, i.e. the violation is in literal marker text.
+    """
+    # Training keeps the rule that a leading closing marker ends a span the chat template opened.
+    violation = reasoning_span_violation(decoded, stop_reason, prompt_opens_span=True)
+    if violation is None:
+        return None, None
+    markers = _reasoning_marker_tokens(tokenizer)
+    positions = [index for index, token in enumerate(response_ids) if token in markers]
+    error = first_reasoning_violation(
+        [markers[response_ids[index]] for index in positions], stop_reason, prompt_opens_span=True
+    )
+    if error is None:
+        return violation, None
+    if error.marker_index is None:
+        return violation, len(response_ids) - 1
+    return violation, positions[error.marker_index]
+
+
 class DirectModelClient:
     """Delegate model requests to the colocated inference-engine client."""
 
@@ -208,19 +319,20 @@ class DirectModelClient:
         if request.get("chat_completion_params") is not None:
             return await self._generate_chat(request)
         output = await self._client.generate(request)
-        return ModelClientOutput(**output, token_provenance=TokenProvenance.ENGINE)
+        responses = [
+            _visible_text(self._client.tokenizer, response_ids, stop_reason, text)
+            for response_ids, stop_reason, text in zip(
+                output["response_ids"], output["stop_reasons"], output["responses"], strict=True
+            )
+        ]
+        return ModelClientOutput(**{**output, "responses": responses}, token_provenance=TokenProvenance.ENGINE)
 
     async def _generate_assistant_prefix(
         self, request: InferenceEngineInput, messages: list[dict[str, Any]], options: dict[str, Any], session_id: str
     ) -> _ChatResult:
         prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
-        requested_tokens = [
-            int(options[key])
-            for key in ("max_completion_tokens", "max_output_tokens")
-            if options.get(key) is not None
-        ]
-        token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+        token_budget = _generation_token_budget(request, prompt_ids, options)
         if token_budget is not None:
             sampling["max_tokens"] = token_budget
         sampling.pop("max_generate_length", None)
@@ -236,11 +348,12 @@ class DirectModelClient:
         )
         if output.get("prompt_ids") != [prompt_ids]:
             raise RolloutContractError("Assistant prefix inference did not report the rendered prompt token IDs")
-        text = output["responses"][0]
-        message = (output.get("assistant_messages") or [{"role": "assistant", "content": text}])[0]
+        response_ids = output["response_ids"][0]
+        text = _visible_text(self._client.tokenizer, response_ids, output["stop_reasons"][0], output["responses"][0])
+        message = {**(output.get("assistant_messages") or [{"role": "assistant"}])[0], "content": text}
         return _ChatResult(
             prompt_ids,
-            output["response_ids"][0],
+            response_ids,
             None if output.get("response_logprobs") is None else output["response_logprobs"][0],
             None if output.get("student_topk_indices") is None else output["student_topk_indices"][0],
             None if output.get("behavior_topk_logprobs") is None else output["behavior_topk_logprobs"][0],
@@ -253,21 +366,13 @@ class DirectModelClient:
         )
 
     @staticmethod
-    def _chat_options(options: dict[str, Any], sampling_params: dict[str, Any]) -> dict[str, Any]:
+    def _chat_options(options: dict[str, Any]) -> dict[str, Any]:
         result = dict(options)
         result.pop("input", None)
         if not result.get("tools"):
             result.pop("tools", None)
-        if "max_output_tokens" in result:
-            result["max_completion_tokens"] = result.pop("max_output_tokens")
-        for key in _OUTPUT_LIMIT_KEYS:
-            if sampling_params.get(key) is None:
-                continue
-            configured_max = int(sampling_params[key])
-            requested_max = result.get("max_completion_tokens")
-            result["max_completion_tokens"] = (
-                configured_max if requested_max is None else min(configured_max, int(requested_max))
-            )
+        for key in OUTPUT_LIMIT_OPTION_KEYS:
+            result.pop(key, None)
         return result
 
     async def _generate_chat(self, request: InferenceEngineInput) -> ModelClientOutput:
@@ -290,7 +395,15 @@ class DirectModelClient:
                 if continuation is not None:
                     raise ValueError("An initial assistant prefix cannot reuse a sampled chat continuation")
                 return await self._generate_assistant_prefix(request, messages, row_options, session_id)
-            chat_options = self._chat_options(row_options, sampling_params)
+            # Agent relays use the OpenAI client's extra_body convention. The direct client
+            # sends raw vLLM requests and tokenizes that same flattened body.
+            row_options = dict(row_options)
+            extra = row_options.pop("extra_body", {})
+            template = {**row_options.get("chat_template_kwargs", {}), **extra.get("chat_template_kwargs", {})}
+            row_options.update(extra)
+            if template:
+                row_options["chat_template_kwargs"] = template
+            chat_options = self._chat_options(row_options)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {
                 "json": {
@@ -303,15 +416,9 @@ class DirectModelClient:
             }
             with rollout_phase("tokenize"):
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
-            requested_tokens = (
-                [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
-            )
-            token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+            token_budget = _generation_token_budget(request, prompt_ids, row_options)
             if token_budget is not None:
-                # Preserve chat's explicit-null handling when context supplies a budget.
-                chat_options["max_completion_tokens"] = min(
-                    int(chat_options.get("max_completion_tokens", token_budget)), token_budget
-                )
+                chat_options["max_completion_tokens"] = token_budget
 
             body = {
                 "model": self._client.model_name,
@@ -330,7 +437,7 @@ class DirectModelClient:
                 # vLLM may include the sampled token outside the natural top K.
                 body["top_logprobs"] = requested_top_k + 1
                 body["return_tokens_as_token_ids"] = True
-            request_id = uuid4().hex
+            request_id = uuid4().hex if session_id is None else request_id_for_session(session_id)
             headers = {"x-request-id": request_id}
             if session_id is not None:
                 headers[SESSION_ID_HEADER] = str(session_id)
@@ -351,22 +458,25 @@ class DirectModelClient:
             response_ids = choice.get("token_ids")
             if not isinstance(response_ids, list) or not all(isinstance(token, int) for token in response_ids):
                 raise RuntimeError("vLLM chat completion did not return exact token IDs")
-            message = choice["message"]
-            text = message.get("content") or ""
+            tokenizer = self._client.tokenizer
+            stop_reason = choice["finish_reason"]
+            message = _replace_lone_surrogates(choice["message"])
+            text = _visible_text(tokenizer, response_ids, stop_reason, message.get("content") or "")
+            if message.get("content") is not None:
+                message = {**message, "content": text}
             # Some serving configurations omit reasoning parsers and remove
             # special delimiters from content. Exact tokens retain the boundary.
-            tokenizer = self._client.tokenizer
-            semantic_ids = (
-                response_ids[:-1] if response_ids and response_ids[-1] == tokenizer.eos_token_id else response_ids
-            )
-            if len(semantic_ids) != len(response_ids):
-                eos_text = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
-                text = text.removesuffix(eos_text)
-                if message.get("content") is not None:
-                    message = {**message, "content": text}
+            semantic_ids = response_ids[:-1] if _ends_turn(tokenizer, response_ids, stop_reason) else response_ids
             decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
             if any(marker in decoded for pair in REASONING_DELIMITERS for marker in pair):
-                text = final_answer_text(decoded)
+                answer = final_answer_text(decoded)
+                # The answer extractor drops a final `<|eot_id|>`; a length stop keeps the terminator its text kept.
+                unended = len(semantic_ids) == len(response_ids)
+                if unended and response_ids and response_ids[-1] in _turn_end_tokens(tokenizer):
+                    terminator = tokenizer.decode(response_ids[-1:], skip_special_tokens=False)
+                    if text.endswith(terminator):
+                        answer = answer.removesuffix(terminator) + terminator
+                text = answer
                 if not message.get("tool_calls"):
                     message = {**message, "content": text}
             logprob_items = (choice.get("logprobs") or {}).get("content")
@@ -380,17 +490,19 @@ class DirectModelClient:
                 selected = [
                     select_chat_response_topk(item.get("top_logprobs") or [], requested_top_k) for item in logprob_items
                 ]
-            stop_reason = choice["finish_reason"]
             token_budget = chat_options.get("max_completion_tokens")
             if (
                 stop_reason == "tool_calls"
                 and token_budget is not None
                 and len(response_ids) >= token_budget
                 and choice.get("stop_reason") is None
-                and response_ids[-1] != tokenizer.eos_token_id
+                and len(semantic_ids) == len(response_ids)
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"
+            reasoning_violation, reasoning_violation_token = _reasoning_violation(
+                tokenizer, response_ids, decoded, stop_reason
+            )
             return _ChatResult(
                 prompt_ids,
                 response_ids,
@@ -403,6 +515,8 @@ class DirectModelClient:
                 token_budget,
                 _choice_routed_experts(choice, prompt_ids, response_ids),
                 choice.get(CHOICE_POLICY_STEPS_KEY),
+                reasoning_violation,
+                reasoning_violation_token,
             )
 
         results = await asyncio.gather(

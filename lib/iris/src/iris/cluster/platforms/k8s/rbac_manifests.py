@@ -42,6 +42,7 @@ CLUSTER_ROLE_RULES = [
     # The node agent reads its own kubelet's metrics/resource endpoint directly;
     # the kubelet authorizes that read against the nodes/metrics subresource.
     {"apiGroups": [""], "resources": ["nodes/metrics"], "verbs": ["get"]},
+    {"apiGroups": ["node.k8s.io"], "resources": ["runtimeclasses"], "verbs": ["get"]},
     {
         "apiGroups": [""],
         "resources": ["configmaps"],

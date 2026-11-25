@@ -13,11 +13,11 @@ from zephyr.dataset import Dataset
 
 def test_connected_components_happy_path(tmp_path):
     input_data: list[CCInput] = [
-        {"bucket": "bucket_1", "id": "doc_1", "file_idx": 0},
-        {"bucket": "bucket_1", "id": "doc_2", "file_idx": 0},
-        {"bucket": "bucket_2", "id": "doc_2", "file_idx": 0},
-        {"bucket": "bucket_2", "id": "doc_3", "file_idx": 1},
-        {"bucket": "bucket_3", "id": "doc_4", "file_idx": 1},
+        {"bucket": 1, "id": "doc_1", "file_idx": 0},
+        {"bucket": 1, "id": "doc_2", "file_idx": 0},
+        {"bucket": 2, "id": "doc_2", "file_idx": 0},
+        {"bucket": 2, "id": "doc_3", "file_idx": 1},
+        {"bucket": 3, "id": "doc_4", "file_idx": 1},
     ]
 
     ds = Dataset.from_list(input_data)
@@ -36,10 +36,33 @@ def test_connected_components_happy_path(tmp_path):
     assert sorted_components == [["doc_1", "doc_2", "doc_3"], ["doc_4"]]
 
 
+def test_connected_components_extreme_uint64_buckets_link(tmp_path):
+    """Bucket keys spanning the full uint64 range, including above int64 max, link correctly."""
+    chain_buckets = [0, 2**63 - 1, 2**63, 2**64 - 1]
+    input_data: list[CCInput] = []
+    for i, bucket in enumerate(chain_buckets):
+        input_data.append({"bucket": bucket, "id": f"doc_{i}", "file_idx": 0})
+        input_data.append({"bucket": bucket, "id": f"doc_{i + 1}", "file_idx": 0})
+    input_data.append({"bucket": 1, "id": "doc_lone", "file_idx": 0})
+
+    ctx = ZephyrContext(name="test-cc-uint64", max_workers=4)
+    converged, output_path = connected_components(
+        Dataset.from_list(input_data), ctx, output_dir=tmp_path.as_posix(), max_iterations=10
+    )
+    assert converged
+    results = ctx.execute(Dataset.from_list(output_path).load_parquet()).results
+
+    components = defaultdict(list)
+    for r in results:
+        components[r["component_id"]].append(r["record_id"])
+    sorted_components = sorted(sorted(group) for group in components.values())
+    assert sorted_components == [[f"doc_{i}" for i in range(5)], ["doc_lone"]]
+
+
 def test_connected_components_already_converged(tmp_path):
     """Single bucket with a single doc converges in one iteration (no changes)."""
     input_data: list[CCInput] = [
-        {"bucket": "bucket_1", "id": "doc_1", "file_idx": 0},
+        {"bucket": 1, "id": "doc_1", "file_idx": 0},
     ]
 
     ds = Dataset.from_list(input_data)
@@ -64,12 +87,12 @@ def test_connected_components_resume_at_cap_reports_converged(tmp_path):
     """
     # doc_0 - doc_1 - doc_2 - doc_3 path: consecutive docs share one bucket.
     input_data: list[CCInput] = [
-        {"bucket": "b01", "id": "doc_0", "file_idx": 0},
-        {"bucket": "b01", "id": "doc_1", "file_idx": 0},
-        {"bucket": "b12", "id": "doc_1", "file_idx": 0},
-        {"bucket": "b12", "id": "doc_2", "file_idx": 0},
-        {"bucket": "b23", "id": "doc_2", "file_idx": 0},
-        {"bucket": "b23", "id": "doc_3", "file_idx": 0},
+        {"bucket": 1, "id": "doc_0", "file_idx": 0},
+        {"bucket": 1, "id": "doc_1", "file_idx": 0},
+        {"bucket": 2, "id": "doc_1", "file_idx": 0},
+        {"bucket": 2, "id": "doc_2", "file_idx": 0},
+        {"bucket": 3, "id": "doc_2", "file_idx": 0},
+        {"bucket": 3, "id": "doc_3", "file_idx": 0},
     ]
     out_dir = tmp_path.as_posix()
 
@@ -121,7 +144,7 @@ def test_connected_components_capped_run_is_executor_independent(tmp_path):
         members = [f"n_{b}_{k}" for k in range(4)]
         if b > 0:
             members[0] = f"n_{b - 1}_3"  # bridge consecutive buckets into one chain
-        data.extend({"bucket": f"bk_{b}", "id": m, "file_idx": 0} for m in members)
+        data.extend({"bucket": b, "id": m, "file_idx": 0} for m in members)
 
     labels_2 = _labels_at(data, (tmp_path / "w2").as_posix(), max_iterations=2, max_workers=2)
     labels_8 = _labels_at(data, (tmp_path / "w8").as_posix(), max_iterations=2, max_workers=8)

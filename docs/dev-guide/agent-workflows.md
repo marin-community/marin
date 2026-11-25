@@ -23,7 +23,9 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `simplify-code` | Explicitly requested cleanup of a branch or diff | Review findings alone do not authorize edits; publication belongs to `manage-pr` |
 | `file-issue` | Deduplicating and filing an issue | Implementing an assigned issue belongs to `manage-pr` |
 | `use-echo` | Searching prior work and maintaining shared knowledge or incident records | Repository procedures belong in `OPS.md` or `docs/`; search alone does not require a write |
+| `echo-log` | Reading and appending the shared agent work log, one entry per milestone | Search, wiki notes, and incident records belong to `use-echo`; an entry links evidence and does not replace the PR, issue, or report |
 | `research-engineering` | Iterative design and data exploration, experiments, runnable research branches, notebooks, and promotion into Marin | Background research uses experiment records; domain skills own execution and `manage-pr` owns contribution PRs |
+| `press-office` | Editorial triage of landed logbook index records and closed experiment issues for Research Notes | Research engineering owns the evidence record. Publication is a separate editorial decision. |
 | `curate-experiments` | Report-index curation and explicitly requested archive tags and issue breadcrumbs | Archival does not authorize deleting experiment files; scheduled issue summaries use an assigned procedure |
 
 ## Operations and measurement
@@ -37,6 +39,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `run-ferries` | Canary and daily ferry recipes, interpretation, and closure | Uses Iris for execution; CI failure diagnosis follows its diagnosis-only procedure |
 | `ab-test-zephyr` | Controlled Zephyr comparisons with equivalent workloads | Measures stage efficiency and latency; monitoring belongs to Iris |
 | `profile-training` | Training-profile capture and interpretation | Measures bottlenecks; implementation changes use the relevant domain workflow |
+| `audit-grader` | Audits of programmatic checkers, LLM judges, RL rewards, and agent-task verifiers against their task text, with score effects and a blinded error-rate estimate | Recommends admitting the grader, fixing it, or replacing the benchmark; the fix is ordinary implementation, and routine grader changes need no audit |
 
 ## Access and applications
 
@@ -46,7 +49,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `review-grant` | Verifying decrypted identities and roles, obtaining confirmation, and applying the approved change | Never approves or merges before confirmation |
 | `trace-pulumi-diff` | Read-only attribution of pending infrastructure changes | Never applies or refreshes state |
 | `onboard-marin` | Local developer readiness and identification of missing access | Does not grant access or launch compute without the required authorization |
-| `marina-applet` | Marina application build, validation, release, data, and lifecycle | Application releases are separate from Marina runtime deployment |
+| `marina-app` | Marina application build, validation, release, data, and lifecycle | Application releases are separate from Marina runtime deployment |
 
 ## Implementation and publication
 
@@ -54,9 +57,11 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 |---|---|---|
 | `refresh-fork` | External fork refresh and validated adoption | Fork-specific references govern source promotion and release |
 | `add-dataset` | Dataset registration with verified schema and content mapping | Uses existing dataset builders; general graph design belongs to `write-pipeline` |
+| `add-eval` | Curated non-agentic benchmarks, including source pins, prompts, scorers, protocols, reference comparisons, and smoke runs | Follow the [evaluation task reference](../references/evaluation-tasks.md) for curated agent benchmarks. Judge audits belong to `audit-grader`. |
 | `add-pallas-kernel` | Kernel implementation, reference parity, and requested tuning | Uses profiling evidence; does not own production deployment |
 | `change-grug` | Grug variants and promotion into the base template | Launch-only operation and hero cutovers have separate workflows |
 | `launch-rl` | RL artifact recipe, role geometry, validation, and submission | Iris owns execution mechanics; hero management owns production lifecycle |
+| `run-rl` | Choosing, running, and reading RL runner presets and their gate verdicts | New RL launch files and role geometry belong to `launch-rl`; Iris owns job operations |
 | `write-pipeline` | General artifact graph construction and work/workflow placement | Dataset registration and RL recipes use their domain skills |
 | `upload-hf-model` | Model-weight publication with required model-card and license content | Dataset uploads and Hub downloads are outside its scope |
 

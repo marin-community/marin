@@ -37,12 +37,11 @@ from marin.inference.vllm_server import (
     _ProcessGroupStatus,
     _starts_nccl_ras_probe,
 )
+from marin.testing.inference.fake_vllm_server import FakeVllmLauncher
 from prometheus_client.parser import text_string_to_metric_families
 from rigging import telemetry
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper
 from rigging.testing import RecordingTelemetryTransport
-
-from tests.inference.fake_vllm_server import FakeVllmLauncher
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
@@ -521,6 +520,17 @@ def test_serves_when_startup_succeeds():
     with _environment(FakeVllmLauncher("serve")) as environment:
         _wait_until_ready(environment)
         assert environment.model_id == "fake-model"
+
+
+def test_native_launch_forwards_api_key_without_logging_it(tmp_path, caplog):
+    api_key = "synthetic-native-api-key"
+    argv_path = tmp_path / "native-argv.json"
+    caplog.set_level(logging.INFO, logger="marin.inference.vllm_server")
+    with _environment(FakeVllmLauncher("record-args", str(argv_path)), extra_args=["--api-key", api_key]) as environment:
+        _wait_until_ready(environment)
+    argv = json.loads(argv_path.read_text())
+    assert argv[argv.index("--api-key") + 1] == api_key
+    assert api_key not in caplog.text
 
 
 @pytest.mark.parametrize(

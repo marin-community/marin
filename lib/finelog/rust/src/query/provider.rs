@@ -21,43 +21,47 @@
 //! unlinked while referenced, so the scan prunes by the pinned metadata first
 //! and reads selected objects from the cache or backing store.
 
-use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow::array::{ArrayRef, BooleanArray, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::Result as DFResult;
+use datafusion::common::{Column, DFSchema, Result as DFResult, ScalarValue};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
+use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_plan::union::UnionExec;
+use datafusion::physical_optimizer::pruning::{
+    PruningPredicate, PruningPredicateBuilder, PruningStatistics,
+};
 use datafusion::physical_plan::ExecutionPlan;
-use futures::{stream, StreamExt, TryStreamExt};
+use datafusion_datasource::PartitionedFile;
+use datafusion_datasource_parquet::source::ParquetSource;
 
-use crate::errors::StatsError;
 use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
-use crate::store::object_store::{
-    CacheMode, ObjectId, ObjectStore, QueryCacheAdmission, ScanSource,
-};
+use crate::query::indexed_scan::{IndexedParquetSource, ScanInputs, SegmentFile};
+use crate::store::column_bounds::{ColumnBounds, ColumnRange};
+use crate::store::object_store::{ObjectReference, ObjectStore, QueryCacheAdmission};
+use crate::store::schema::IMPLICIT_SEQ_COLUMN;
 use crate::store::table::query_view::SegmentObjectMap;
-
-/// Concurrent exact existence probes for selected uncached source objects.
-const MAX_PARALLEL_SOURCE_PROBES: usize = 32;
 
 /// A live namespace as one DataFusion table.
 ///
-/// Backed by a `ListingTable` over the snapshotted sealed parquet files, or —
-/// when the namespace has no sealed segments — an empty `MemTable` carrying the
-/// registered schema (the typed-empty case).
+/// Object-backed tables plan explicit files from the snapshot. Legacy tables
+/// use a filesystem `ListingTable`; empty tables retain the registered schema.
 #[derive(Debug)]
 pub struct NamespaceProvider {
+    read_deadline: Option<tokio::time::Instant>,
     schema: SchemaRef,
     inner: Inner,
     /// The snapshotted sealed segment paths, retained so scans can locate each
@@ -66,6 +70,9 @@ pub struct NamespaceProvider {
     segment_paths: Vec<String>,
     segment_key_column: Option<String>,
     segment_key_bounds: BTreeMap<String, (String, String)>,
+    /// Bounds of the table's `catalog_bounds` columns, per segment that records
+    /// any. A segment without bounds for a filtered column is always scanned.
+    segment_column_bounds: BTreeMap<String, ColumnBounds>,
     partition_policy: Option<&'static dyn PhysicalPartitionPolicy>,
     segment_partitions: BTreeMap<String, SegmentPartition>,
     /// Exact per-segment `seq` bounds, captured with the path snapshot.
@@ -101,111 +108,41 @@ struct ObjectSources {
 }
 
 impl ObjectSources {
-    /// Fetch exactly the objects `paths` names, plus the artifacts those
-    /// segments advertise.
-    ///
-    /// Resolve the segments `paths` names into what this scan reads: the
-    /// cache file when one exists, otherwise the object's remote URL —
-    /// the query proceeds against the remote while admitted background fills
-    /// materialize the cache for later scans. Reuse and the shared query budget
-    /// gate those fills before the store's fetch semaphore. A source that exists
-    /// nowhere fails the scan: its rows are part of the answer.
-    ///
-    /// Artifacts never block a query. A cached bundle or projection is used; an
-    /// uncached one may be warmed in the background and this scan reads the source
-    /// Parquet — matching the fail-open behavior of a corrupt bundle.
-    async fn resolve(
+    fn reader_factory(
         &self,
         paths: &[String],
-        admission: &QueryCacheAdmission,
-    ) -> DFResult<ResolvedScan> {
-        let external = |error| datafusion::error::DataFusionError::External(Box::new(error));
-        let mut resolved = ResolvedScan::default();
-        let mut remote_sources: Vec<ObjectId> = Vec::new();
-        for path in paths {
-            let Some(objects) = self.segments.get(path) else {
-                continue;
-            };
-            match self
-                .store
-                .scan_source(&objects.source, CacheMode::Query(admission))
-                .await
-                .map_err(external)?
-            {
-                ScanSource::Local(local) => {
-                    resolved.local.push(local.to_string_lossy().into_owned())
-                }
-                ScanSource::Remote(url) => {
-                    resolved.remote.push(url);
-                    remote_sources.push(objects.source.id.clone());
-                }
-            }
-            for reference in objects
+        scope: Arc<super::read_scope::ReadScope>,
+    ) -> DFResult<Arc<super::object_reader::ObjectReaders>> {
+        let mut references = BTreeMap::new();
+        for objects in paths.iter().filter_map(|path| self.segments.get(path)) {
+            let artifacts = objects
                 .artifacts
-                .bundle
-                .iter()
-                .chain(objects.artifacts.projections.values())
-            {
-                let Ok(artifact) = crate::store::object_store::ObjectReference::try_from(reference)
-                else {
-                    continue;
-                };
-                self.store
-                    .scan_source(&artifact, CacheMode::Query(admission))
-                    .await
-                    .map_err(external)?;
+                .projections
+                .values()
+                // Projection references are optional derived state. The opener
+                // validates a selected projection before replacing its source.
+                .filter_map(|reference| ObjectReference::try_from(reference).ok());
+            for reference in std::iter::once(objects.source.clone()).chain(artifacts) {
+                let local = self
+                    .store
+                    .planned_local_path(&reference.id)
+                    .map_err(|error| {
+                        datafusion::error::DataFusionError::External(Box::new(error))
+                    })?;
+                let mut locations = vec![local.to_string_lossy().into_owned()];
+                locations.extend(self.store.remote_scan_url(&reference.id));
+                for location in locations {
+                    let url = ListingTableUrl::parse(location)?;
+                    references.insert(url.prefix().to_string(), reference.clone());
+                }
             }
         }
-        self.verify_remote_sources_exist(&remote_sources)
-            .await
-            .map_err(external)?;
-        Ok(resolved)
+        Ok(Arc::new(super::object_reader::ObjectReaders {
+            scope,
+            store: Arc::clone(&self.store),
+            references,
+        }))
     }
-
-    /// Fail the scan when an uncached source object is gone from the remote.
-    ///
-    /// The listing table treats a URL whose object does not exist as an empty
-    /// listing, which would silently drop that segment's rows from the answer.
-    /// Probe only the objects selected by catalog pruning. Listing the whole
-    /// table makes a bounded tail query scale with historical segment count.
-    async fn verify_remote_sources_exist(
-        &self,
-        remote_sources: &[ObjectId],
-    ) -> Result<(), StatsError> {
-        if remote_sources.is_empty() {
-            return Ok(());
-        }
-        let store = Arc::clone(&self.store);
-        let checked = stream::iter(remote_sources.iter().cloned())
-            .map(move |id| {
-                let store = Arc::clone(&store);
-                async move {
-                    let exists = store.exists(&id).await?;
-                    Ok::<_, StatsError>((id, exists))
-                }
-            })
-            .buffer_unordered(MAX_PARALLEL_SOURCE_PROBES)
-            .try_collect::<Vec<_>>()
-            .await?;
-        let missing: Vec<String> = checked
-            .into_iter()
-            .filter_map(|(id, exists)| (!exists).then_some(id.as_str().to_string()))
-            .collect();
-        if missing.is_empty() {
-            return Ok(());
-        }
-        Err(StatsError::Internal(format!(
-            "scan sources are missing from the remote object store: {missing:?}"
-        )))
-    }
-}
-
-/// The file sets one scan reads: local cache files, and remote URLs for the
-/// objects the cache does not hold yet.
-#[derive(Default)]
-struct ResolvedScan {
-    local: Vec<String>,
-    remote: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -252,6 +189,128 @@ fn view_typed_schema(schema: &SchemaRef) -> SchemaRef {
 }
 
 impl NamespaceProvider {
+    async fn scan_objects(
+        &self,
+        sources: &ObjectSources,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        let paths = self.segment_paths_for_scan(state, filters, limit)?;
+        if paths.is_empty() {
+            return MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
+                .scan(state, projection, filters, limit)
+                .await;
+        }
+        let admission = state
+            .config()
+            .get_extension::<QueryCacheAdmission>()
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Internal(
+                    "query cache admission is missing from SessionConfig".into(),
+                )
+            })?;
+        let scope = state
+            .config()
+            .get_extension::<super::read_scope::ReadScope>()
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Internal(
+                    "read scope is missing from SessionConfig".into(),
+                )
+            })?;
+        scope.constrain(self.read_deadline);
+        scope
+            .candidates
+            .fetch_add(paths.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        let readers = sources.reader_factory(&paths, Arc::clone(&scope))?;
+        let mut exact = crate::query::exact_prune::values_by_column(filters);
+        if let Some(policy) = &self.exact_postings_policy {
+            exact.retain(|column, values| {
+                policy.get(column).is_some_and(|indexed| {
+                    values
+                        .iter()
+                        .all(|value| indexed.binary_search(value).is_ok())
+                })
+            });
+        }
+        let mut required_columns: BTreeSet<_> = projection
+            .map(|columns| {
+                columns
+                    .iter()
+                    .map(|&column| self.schema.field(column).name().clone())
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                self.schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().clone())
+                    .collect()
+            });
+        required_columns.extend(
+            filters
+                .iter()
+                .flat_map(Expr::column_refs)
+                .map(|column| column.name.clone()),
+        );
+        let inputs = Arc::new(ScanInputs {
+            scope,
+            store: Arc::clone(&sources.store),
+            indices: Arc::clone(&self.indices),
+            readers: Arc::clone(&readers),
+            admission,
+            needles: if self.segment_indexes_enabled {
+                crate::query::trigram_prune::substring_needles_by_column(filters)
+            } else {
+                HashMap::new()
+            },
+            key_ranges: crate::query::trigram_prune::string_column_ranges(filters),
+            exact: if self.segment_indexes_enabled {
+                exact
+            } else {
+                HashMap::new()
+            },
+            required_columns,
+        });
+        let mut parquet = ParquetSource::new(Arc::clone(&self.schema))
+            .with_metadata_size_hint(REMOTE_FOOTER_SIZE_HINT)
+            .with_parquet_file_reader_factory(readers);
+        if let Some(predicate) = filters.iter().cloned().reduce(Expr::and) {
+            let schema = DFSchema::try_from(self.schema.as_ref().clone())?;
+            parquet = parquet.with_predicate(state.create_physical_expr(predicate, &schema)?);
+        }
+        let source = Arc::new(IndexedParquetSource::new(Arc::new(parquet), inputs));
+        let partitions = paths.len().min(state.config().target_partitions()).max(1);
+        let mut groups = vec![Vec::new(); partitions];
+        for (index, path) in paths.iter().enumerate() {
+            let objects = sources.segments.get(path).ok_or_else(|| {
+                datafusion::error::DataFusionError::Internal(format!(
+                    "missing object reference for {path}"
+                ))
+            })?;
+            let location = ListingTableUrl::parse(path)?.prefix().to_string();
+            let mut file = PartitionedFile::new(location, objects.source.version.byte_size);
+            file.object_meta.e_tag = objects.source.version.e_tag.clone();
+            file.object_meta.version = objects.source.version.provider_version.clone();
+            file.extensions.insert(SegmentFile {
+                objects: objects.clone(),
+                artifacts: self
+                    .segment_artifacts
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_default(),
+            });
+            groups[index % partitions].push(file);
+        }
+        let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+            .with_file_groups(groups.into_iter().map(FileGroup::new).collect())
+            .with_limit(limit)
+            .with_projection_indices(projection.cloned())?
+            .build();
+        Ok(DataSourceExec::from_data_source(config))
+    }
+
     pub fn segment_paths(&self) -> &[String] {
         &self.segment_paths
     }
@@ -277,40 +336,18 @@ impl NamespaceProvider {
         Ok(Arc::new(ListingTable::try_new(config)?))
     }
 
-    /// A listing table over pre-formed URLs — remote object URLs (`gs://…`)
-    /// resolve against the object store registered at store open; bare paths
-    /// fall through to the local filesystem store.
+    /// The snapshotted segments a scan with `filters` must open.
     ///
-    /// A remote read is round-trip bound, so this shape minimizes requests per
-    /// file: no planning-time statistics pass (execution reads each footer
-    /// once anyway), and a footer size hint so a footer is one ranged GET
-    /// instead of a tail probe plus a second fetch.
-    fn listing_table_for_urls(
-        schema: SchemaRef,
-        urls: impl IntoIterator<Item = String>,
-    ) -> DFResult<Arc<ListingTable>> {
-        let urls: Vec<ListingTableUrl> = urls
-            .into_iter()
-            .map(ListingTableUrl::parse)
-            .collect::<DFResult<Vec<_>>>()?;
-        let format =
-            ParquetFormat::default().with_metadata_size_hint(Some(REMOTE_FOOTER_SIZE_HINT));
-        let options = ListingOptions::new(Arc::new(format))
-            .with_file_extension(".parquet")
-            .with_collect_stat(false);
-        let config = ListingTableConfig::new_with_multi_paths(urls)
-            .with_listing_options(options)
-            .with_schema(schema);
-        Ok(Arc::new(ListingTable::try_new(config)?))
-    }
-
-    fn segment_paths_for_filters(&self, filters: &[Expr]) -> Vec<String> {
-        let int_ranges = crate::query::predicate::int_column_ranges(filters);
+    /// Integer bounds (an Int64 key, `seq`, and the `catalog_bounds` columns)
+    /// go to DataFusion's [`PruningPredicate`]; a segment it cannot rule out,
+    /// including one with no bounds for a filtered column, is kept. String key
+    /// bounds and physical partitions are checked here.
+    fn segment_paths_for_filters(
+        &self,
+        state: &dyn Session,
+        filters: &[Expr],
+    ) -> DFResult<Vec<String>> {
         let string_ranges = crate::query::trigram_prune::string_column_ranges(filters);
-        let int_key_range = self
-            .segment_key_column
-            .as_ref()
-            .and_then(|column| int_ranges.get(column));
         let string_key_range = self
             .segment_key_column
             .as_ref()
@@ -319,38 +356,24 @@ impl NamespaceProvider {
         let partition_candidates = self
             .partition_policy
             .and_then(|policy| policy.partitions_for_exact_values(&exact_values));
-        let seq_range = int_ranges.get("seq");
+        let segment_int_matches = match self.int_bounds_predicate(state, filters)? {
+            Some(predicate) => predicate.prune(&SegmentIntStatistics { provider: self })?,
+            None => vec![true; self.segment_paths.len()],
+        };
         let paths = self
             .segment_paths
             .iter()
-            .filter(|path| {
-                let key_matches =
+            .zip(segment_int_matches)
+            .filter(|(path, int_matches)| {
+                let string_key_matches = string_key_range.is_none_or(|range| {
                     self.segment_key_bounds
                         .get(path.as_str())
                         .is_none_or(|(minimum, maximum)| {
-                            let int_matches = int_key_range.is_none_or(|range| {
-                                let Ok(minimum) = minimum.parse::<i64>() else {
-                                    return true;
-                                };
-                                let Ok(maximum) = maximum.parse::<i64>() else {
-                                    return true;
-                                };
-                                minimum > maximum || range.overlaps(minimum, maximum)
-                            });
-                            let string_matches = string_key_range.is_none_or(|range| {
-                                let minimum = minimum.as_bytes();
-                                let maximum = maximum.as_bytes();
-                                minimum > maximum
-                                    || (range.lo.as_deref().is_none_or(|lower| maximum >= lower)
-                                        && range.hi.as_deref().is_none_or(|upper| minimum <= upper))
-                            });
-                            int_matches && string_matches
-                        });
-                let seq_matches = seq_range.is_none_or(|range| {
-                    self.segment_seq_bounds
-                        .get(path.as_str())
-                        .is_none_or(|&(minimum, maximum)| {
-                            minimum > maximum || range.overlaps(minimum, maximum)
+                            let minimum = minimum.as_bytes();
+                            let maximum = maximum.as_bytes();
+                            minimum > maximum
+                                || (range.lo.as_deref().is_none_or(|lower| maximum >= lower)
+                                    && range.hi.as_deref().is_none_or(|upper| minimum <= upper))
                         })
                 });
                 let partition_matches = partition_candidates.as_ref().is_none_or(|candidates| {
@@ -364,44 +387,90 @@ impl NamespaceProvider {
                                 || candidates.contains(partition)
                         })
                 });
-                key_matches && seq_matches && partition_matches
+                *int_matches && string_key_matches && partition_matches
             })
-            .cloned()
+            .map(|(path, _)| path.clone())
             .collect::<Vec<_>>();
         if paths.len() != self.segment_paths.len() {
             tracing::debug!(
                 segments_total = self.segment_paths.len(),
                 segments_selected = paths.len(),
-                "scoped segment planning to key range, seq range, and physical partitions"
+                "scoped segment planning to integer bounds, key range, and physical partitions"
             );
         }
-        paths
+        Ok(paths)
     }
 
-    fn segment_paths_for_scan(&self, filters: &[Expr], limit: Option<usize>) -> Vec<String> {
-        let paths = self.segment_paths_for_filters(filters);
+    /// A pruning predicate over the segments' integer bounds, or `None` when
+    /// `filters` cannot rule out any segment. Columns without Int64 bounds have
+    /// no statistics here, so a conjunct over them never rules a segment out.
+    fn int_bounds_predicate(
+        &self,
+        state: &dyn Session,
+        filters: &[Expr],
+    ) -> DFResult<Option<PruningPredicate>> {
+        let Some(filter) = conjunction(filters.iter().cloned()) else {
+            return Ok(None);
+        };
+        let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+        let physical = state.create_physical_expr(filter, &df_schema)?;
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&self.schema))
+            .try_build(physical)?;
+        Ok((!predicate.always_true()).then_some(predicate))
+    }
+
+    fn is_int64_column(&self, name: &str) -> bool {
+        self.schema
+            .field_with_name(name)
+            .is_ok_and(|field| *field.data_type() == DataType::Int64)
+    }
+
+    /// `path`'s recorded `(min, max)` for the Int64 `column`, if it has one.
+    fn segment_int_range(&self, path: &str, column: &str) -> Option<(i64, i64)> {
+        let (minimum, maximum) = if column == IMPLICIT_SEQ_COLUMN {
+            *self.segment_seq_bounds.get(path)?
+        } else if self.segment_key_column.as_deref() == Some(column) {
+            let (minimum, maximum) = self.segment_key_bounds.get(path)?;
+            (minimum.parse().ok()?, maximum.parse().ok()?)
+        } else {
+            match *self.segment_column_bounds.get(path)?.get(column)? {
+                ColumnRange::Range { min, max } => (min, max),
+                ColumnRange::Unknown => return None,
+            }
+        };
+        (minimum <= maximum).then_some((minimum, maximum))
+    }
+
+    fn segment_paths_for_scan(
+        &self,
+        state: &dyn Session,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DFResult<Vec<String>> {
+        let paths = self.segment_paths_for_filters(state, filters)?;
         let Some(limit) = limit else {
-            return paths;
+            return Ok(paths);
         };
         if !filters.is_empty() {
-            return paths;
+            return Ok(paths);
         }
         if limit == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let mut rows = 0_u64;
         for (index, path) in paths.iter().enumerate() {
             let Some(&segment_rows) = self.segment_row_counts.get(path) else {
                 // A missing count cannot prove any prefix satisfies the LIMIT.
-                return paths;
+                return Ok(paths);
             };
             rows = rows.saturating_add(segment_rows);
             if rows >= limit as u64 {
-                return paths[..=index].to_vec();
+                return Ok(paths[..=index].to_vec());
             }
         }
-        paths
+        Ok(paths)
     }
 
     /// Build a provider from the registered arrow `schema` and a snapshot of
@@ -420,11 +489,13 @@ impl NamespaceProvider {
         if segment_paths.is_empty() {
             let mem = MemTable::try_new(Arc::clone(&schema), vec![vec![]])?;
             return Ok(NamespaceProvider {
+                read_deadline: None,
                 schema,
                 inner: Inner::Empty(Arc::new(mem)),
                 segment_paths: Vec::new(),
                 segment_key_column: None,
                 segment_key_bounds: BTreeMap::new(),
+                segment_column_bounds: BTreeMap::new(),
                 partition_policy: None,
                 segment_partitions: BTreeMap::new(),
                 segment_seq_bounds: BTreeMap::new(),
@@ -439,11 +510,13 @@ impl NamespaceProvider {
 
         let listing = Self::listing_table(Arc::clone(&schema), segment_paths)?;
         Ok(NamespaceProvider {
+            read_deadline: None,
             schema,
             inner: Inner::Listing(listing),
             segment_paths: segment_paths.to_vec(),
             segment_key_column: None,
             segment_key_bounds: BTreeMap::new(),
+            segment_column_bounds: BTreeMap::new(),
             partition_policy: None,
             segment_partitions: BTreeMap::new(),
             segment_seq_bounds: BTreeMap::new(),
@@ -459,14 +532,18 @@ impl NamespaceProvider {
     /// Attach the immutable objects the planned paths resolve to.
     ///
     /// With these attached the provider's paths need not exist when the plan is
-    /// built: a scan prunes by the pinned table metadata first, then localizes
-    /// only the objects it selected.
+    /// built: planning uses pinned metadata and execution opens selected files
+    /// through the unified object reader.
     pub fn with_object_sources(
         mut self,
         store: Arc<dyn ObjectStore>,
         segments: SegmentObjectMap,
     ) -> Self {
         if !segments.is_empty() {
+            self.indices = Arc::new(
+                self.indices
+                    .with_object_sources(Arc::clone(&store), &segments),
+            );
             self.object_sources = Some(ObjectSources { store, segments });
         }
         self
@@ -484,13 +561,20 @@ impl NamespaceProvider {
         self
     }
 
+    /// Attach the per-segment bounds of the table's `catalog_bounds` columns
+    /// captured with the path snapshot. Paths missing from `bounds`, and columns
+    /// a segment has no bounds for, remain queryable for scan safety.
+    pub fn with_segment_column_bounds(mut self, bounds: BTreeMap<String, ColumnBounds>) -> Self {
+        self.segment_column_bounds = bounds;
+        self
+    }
+
     /// Attach exact per-segment `seq` bounds captured with the path snapshot.
     ///
     /// Segments partition the sequence space disjointly, so a `seq`-bounded
     /// predicate (a forwarder cursor read, a tail query) selects only the
-    /// segments whose range it overlaps — on an object-backed table that is
-    /// the difference between localizing a few tail objects and the whole
-    /// table.
+    /// segments whose range it overlaps. An object-backed scan opens only
+    /// the selected segments.
     pub fn with_segment_seq_bounds(mut self, bounds: BTreeMap<String, (i64, i64)>) -> Self {
         self.segment_seq_bounds = bounds;
         self
@@ -500,6 +584,15 @@ impl NamespaceProvider {
     pub fn with_segment_row_counts(mut self, row_counts: BTreeMap<String, u64>) -> Self {
         self.segment_row_counts = row_counts;
         self
+    }
+
+    pub(crate) fn with_read_deadline(mut self, deadline: Option<tokio::time::Instant>) -> Self {
+        self.read_deadline = deadline;
+        self
+    }
+
+    pub(crate) fn read_deadline(&self) -> Option<tokio::time::Instant> {
+        self.read_deadline
     }
 
     /// Attach hidden physical partitions captured with the path snapshot.
@@ -554,12 +647,55 @@ impl NamespaceProvider {
     }
 }
 
-#[async_trait]
-impl TableProvider for NamespaceProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
+/// Each snapshotted segment's integer bounds, as DataFusion pruning statistics:
+/// one container per segment, in snapshot order. A segment with no range for a
+/// column reports null, which never rules the segment out.
+struct SegmentIntStatistics<'a> {
+    provider: &'a NamespaceProvider,
+}
+
+impl SegmentIntStatistics<'_> {
+    fn bound(&self, column: &Column, pick: fn((i64, i64)) -> i64) -> Option<ArrayRef> {
+        if !self.provider.is_int64_column(&column.name) {
+            return None;
+        }
+        let values = self.provider.segment_paths.iter().map(|path| {
+            self.provider
+                .segment_int_range(path, &column.name)
+                .map(pick)
+        });
+        Some(Arc::new(values.collect::<Int64Array>()))
+    }
+}
+
+impl PruningStatistics for SegmentIntStatistics<'_> {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.bound(column, |(minimum, _)| minimum)
     }
 
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.bound(column, |(_, maximum)| maximum)
+    }
+
+    fn num_containers(&self) -> usize {
+        self.provider.segment_paths.len()
+    }
+
+    fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        None
+    }
+
+    fn row_counts(&self) -> Option<ArrayRef> {
+        None
+    }
+
+    fn contained(&self, _column: &Column, _values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+        None
+    }
+}
+
+#[async_trait]
+impl TableProvider for NamespaceProvider {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
@@ -584,17 +720,18 @@ impl TableProvider for NamespaceProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if let Some(sources) = &self.object_sources {
+            return self
+                .scan_objects(sources, state, projection, filters, limit)
+                .await;
+        }
         match &self.inner {
             Inner::Listing(t) => {
-                // Prune from the pinned table metadata BEFORE any object is
-                // touched. Planning costs nothing for segments the predicate
-                // excluded. Object-backed segments then split by cache state:
-                // cached files scan locally, the rest scan the remote directly
-                // while a background fill warms the cache for the next query.
-                let mut segment_paths = self.segment_paths_for_scan(filters, limit);
+                let mut segment_paths = self.segment_paths_for_scan(state, filters, limit)?;
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
                 let integer_ranges = crate::query::predicate::int_column_ranges(filters);
+                let admission = state.config().get_extension::<QueryCacheAdmission>();
                 if self.segment_indexes_enabled && !needles.is_empty() && !integer_ranges.is_empty()
                 {
                     segment_paths = tokio::task::spawn_blocking(move || {
@@ -625,13 +762,13 @@ impl TableProvider for NamespaceProvider {
                 if self.segment_indexes_enabled && !needles.is_empty() {
                     let indices = Arc::clone(&self.indices);
                     let artifacts = Arc::clone(&self.segment_artifacts);
-                    let early_needles = needles.clone();
-                    let early_key_ranges = key_ranges.clone();
+                    let paths = segment_paths;
+                    let prune_needles = needles.clone();
                     let pruning = tokio::task::spawn_blocking(move || {
                         crate::query::trigram_prune::plan_segments(
-                            &segment_paths,
-                            &early_needles,
-                            &early_key_ranges,
+                            &paths,
+                            &prune_needles,
+                            &key_ranges,
                             &indices,
                             &artifacts,
                         )
@@ -652,43 +789,6 @@ impl TableProvider for NamespaceProvider {
                     MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
                         .scan(state, projection, filters, limit)
                         .await?
-                } else if let Some(sources) = &self.object_sources {
-                    let admission = state
-                        .config()
-                        .get_extension::<QueryCacheAdmission>()
-                        .ok_or_else(|| {
-                            datafusion::error::DataFusionError::Internal(
-                                "query cache admission is missing from SessionConfig".into(),
-                            )
-                        })?;
-                    let resolved = sources.resolve(&segment_paths, &admission).await?;
-                    let mut plans: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
-                    if !resolved.local.is_empty() {
-                        plans.push(
-                            Self::listing_table(Arc::clone(&self.schema), &resolved.local)?
-                                .scan(state, projection, filters, limit)
-                                .await?,
-                        );
-                    }
-                    if !resolved.remote.is_empty() {
-                        plans.push(
-                            Self::listing_table_for_urls(
-                                Arc::clone(&self.schema),
-                                resolved.remote.iter().cloned(),
-                            )?
-                            .scan(state, projection, filters, limit)
-                            .await?,
-                        );
-                    }
-                    match plans.len() {
-                        0 => {
-                            MemTable::try_new(Arc::clone(&self.schema), vec![vec![]])?
-                                .scan(state, projection, filters, limit)
-                                .await?
-                        }
-                        1 => plans.pop().expect("one plan"),
-                        _ => UnionExec::try_new(plans)?,
-                    }
                 } else if segment_paths.len() == self.segment_paths.len() {
                     t.scan(state, projection, filters, limit).await?
                 } else {
@@ -740,8 +840,11 @@ impl TableProvider for NamespaceProvider {
                 let indices = Arc::clone(&self.indices);
                 let artifacts = Arc::clone(&self.segment_artifacts);
                 tokio::task::spawn_blocking(move || {
+                    let _pins = admission;
                     let plan = match trigram_pruning {
-                        Some(pruning) => crate::query::trigram_prune::apply_pruning(plan, &pruning),
+                        Some(pruning) => {
+                            crate::query::trigram_prune::apply_pruning(plan, &pruning, &indices)
+                        }
                         None => plan,
                     };
                     crate::query::exact_prune::apply(
@@ -787,10 +890,27 @@ mod tests {
     use super::*;
     use crate::levanter_metrics_policy::LEVANTER_RUN_PARTITION_POLICY;
     use crate::partition_policy::PhysicalPartitionPolicy;
+    use crate::store::object_store::ObjectId;
     use crate::store::segment::write_segment_to_dir;
 
     fn tempdir(tag: &str) -> std::path::PathBuf {
         crate::test_support::unique_dir(tag)
+    }
+
+    fn planned_paths(provider: &NamespaceProvider, filters: &[Expr]) -> Vec<String> {
+        provider
+            .segment_paths_for_filters(&crate::query::make_ctx().state(), filters)
+            .unwrap()
+    }
+
+    fn scanned_paths(
+        provider: &NamespaceProvider,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Vec<String> {
+        provider
+            .segment_paths_for_scan(&crate::query::make_ctx().state(), filters, limit)
+            .unwrap()
     }
 
     /// Store-form worker arrow schema: seq, worker_id, mem_bytes.
@@ -813,6 +933,306 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    struct ObjectScanFixture {
+        provider: NamespaceProvider,
+        remote: Arc<crate::test_support::FaultInjectingObjectStore>,
+        ids: Vec<ObjectId>,
+        root: std::path::PathBuf,
+    }
+
+    async fn sparse_object_fixture(indexed: bool) -> ObjectScanFixture {
+        let dir = tempdir("lazy_filtered_limit");
+        let remote = crate::test_support::FaultInjectingObjectStore::new(Arc::new(
+            crate::store::object_store::build_remote_object_store(
+                dir.join("remote").to_str().unwrap(),
+            )
+            .unwrap()
+            .unwrap(),
+        ));
+        let store = Arc::new(
+            crate::store::object_store::CachedObjectStore::new(
+                remote.clone(),
+                dir.join("cache"),
+                None,
+            )
+            .unwrap(),
+        );
+        let mut paths = Vec::new();
+        let mut objects = BTreeMap::new();
+        let mut ids = Vec::new();
+        let mut local_artifacts = BTreeMap::new();
+        for index in 0..32 {
+            let id = ObjectId::table("workers", &format!("objects/{index:03}.parquet")).unwrap();
+            let batch = worker_batch(
+                index * 128 + 1,
+                vec![if index == 1 { "inference" } else { "heartbeat" }; 128],
+                (0..128).collect(),
+            );
+            let bytes = crate::store::segment::write_segment(&batch).unwrap();
+            let version = if index < 2 {
+                remote.write(&id, bytes.clone().into()).await.unwrap()
+            } else {
+                // The suffix is deliberately absent. Planning it must cost no
+                // I/O, and satisfying LIMIT must not require opening it all.
+                crate::store::object_store::ObjectVersion {
+                    e_tag: None,
+                    provider_version: None,
+                    byte_size: bytes.len() as u64,
+                    local_value: None,
+                }
+            };
+            let path = store
+                .planned_local_path(&id)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let mut artifacts = crate::store::table_state::ArtifactReferences::default();
+            if indexed && index < 2 {
+                let source_path = dir.join(format!("indexed-{index}.parquet"));
+                std::fs::write(&source_path, &bytes).unwrap();
+                crate::indices::write_segment_index(
+                    &source_path,
+                    &[batch],
+                    &crate::indices::SegmentIndexConfig::from_policies(
+                        ["worker_id"],
+                        &[],
+                        &[],
+                        None,
+                    ),
+                )
+                .unwrap();
+                let built = crate::indices::sidecar_artifacts(&[source_path.to_string_lossy()]);
+                let local = built.values().next().unwrap();
+                let bundle_id =
+                    ObjectId::table("workers", &format!("indices/{index:03}.fidx")).unwrap();
+                let version = remote
+                    .write(
+                        &bundle_id,
+                        bytes::Bytes::from(std::fs::read(local.bundle.as_ref().unwrap()).unwrap()),
+                    )
+                    .await
+                    .unwrap();
+                artifacts.binding = local.binding.clone();
+                artifacts.bundle = Some(
+                    crate::proto::finelog::stats::ObjectRef::default()
+                        .with_object_id(bundle_id.as_str())
+                        .with_byte_size(version.byte_size),
+                );
+                local_artifacts.insert(
+                    path.clone(),
+                    crate::store::table_state::LocalArtifacts {
+                        binding: local.binding.clone(),
+                        bundle: Some(store.planned_local_path(&bundle_id).unwrap()),
+                        projections: BTreeMap::new(),
+                    },
+                );
+            }
+            paths.push(path.clone());
+            ids.push(id.clone());
+            objects.insert(
+                path,
+                crate::store::table::query_view::SegmentObjects {
+                    source: ObjectReference { id, version },
+                    artifacts,
+                },
+            );
+        }
+        let provider = NamespaceProvider::build(
+            worker_arrow(),
+            &paths,
+            crate::indices::test_index_registry(),
+        )
+        .unwrap()
+        .with_segment_artifacts(local_artifacts)
+        .with_object_sources(store, objects);
+        ObjectScanFixture {
+            provider,
+            remote,
+            ids,
+            root: dir,
+        }
+    }
+
+    fn object_scan_context(provider: NamespaceProvider) -> SessionContext {
+        let config = crate::query::make_ctx()
+            .copied_config()
+            .with_target_partitions(1)
+            .with_extension(Arc::new(QueryCacheAdmission::new(0, 0)));
+        let ctx = SessionContext::new_with_config(config);
+        crate::query::udf::register_scalar_udfs(&ctx);
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        ctx
+    }
+
+    #[tokio::test]
+    async fn object_scan_plans_without_reads_and_stops_after_exact_matches() {
+        let ObjectScanFixture {
+            provider,
+            remote,
+            ids,
+            root: dir,
+        } = sparse_object_fixture(false).await;
+        let ctx = object_scan_context(provider);
+        remote.clear_calls();
+        let sql = "SELECT mem_bytes FROM workers WHERE worker_id LIKE '%inference%' AND mem_bytes % 2 = 0 LIMIT 7 OFFSET 3";
+        ctx.sql(&format!("EXPLAIN {sql}"))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::ReadRange)
+            .is_empty());
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::Read)
+            .is_empty());
+        let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        let values: Vec<_> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(values, vec![6, 8, 10, 12, 14, 16, 18]);
+        let read: BTreeSet<_> = remote
+            .keys_for(crate::test_support::ObjectOp::ReadRange)
+            .into_iter()
+            .collect();
+        assert!(read.contains(ids[0].as_str()));
+        assert!(read.contains(ids[1].as_str()));
+        assert!(read
+            .iter()
+            .all(|key| ids[..3].iter().any(|id| id.as_str() == key)));
+        assert!(ctx
+            .sql("SELECT count(*) FROM workers")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn each_file_gets_an_optional_index_budget_after_an_earlier_timeout() {
+        let ObjectScanFixture {
+            provider,
+            remote,
+            ids,
+            root,
+        } = sparse_object_fixture(true).await;
+        // Only two files are candidates; the second source is absent, so its
+        // usable index must still exclude it after the first index times out.
+        let bounds = BTreeMap::from_iter(provider.segment_paths().iter().enumerate().map(
+            |(index, path)| {
+                (
+                    path.clone(),
+                    (index as i64 * 128 + 1, (index as i64 + 1) * 128),
+                )
+            },
+        ));
+        let provider = provider.with_segment_seq_bounds(bounds);
+        remote.delete(&ids[1]).await.unwrap();
+        let first_bundle = ObjectId::table("workers", "indices/000.fidx").unwrap();
+        let second_bundle = ObjectId::table("workers", "indices/001.fidx").unwrap();
+        let gate = crate::test_support::FaultGate::new();
+        remote.arm(crate::test_support::ObjectFault::new(
+            crate::test_support::ObjectOp::ReadRange,
+            crate::test_support::ObjectPattern::EndsWith(first_bundle.as_str().into()),
+            crate::test_support::FaultAction::Park(Arc::clone(&gate)),
+        ));
+        let ctx = object_scan_context(provider);
+        let frame = ctx
+            .sql("SELECT mem_bytes FROM workers WHERE seq <= 256 AND worker_id LIKE '%unicorn%'")
+            .await
+            .unwrap();
+        tokio::time::pause();
+        let query = tokio::spawn(async move { frame.collect().await });
+        gate.entered().await;
+        tokio::time::advance(std::time::Duration::from_millis(501)).await;
+        tokio::time::resume();
+        gate.release();
+        let rows = query.await.unwrap().unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert!(!remote.ranges_for(&ids[0]).is_empty());
+        assert!(!remote.ranges_for(&second_bundle).is_empty());
+        assert!(remote.ranges_for(&ids[1]).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn object_scan_retention_deadline_includes_time_spent_planning() {
+        let ObjectScanFixture {
+            provider,
+            remote,
+            root,
+            ..
+        } = sparse_object_fixture(false).await;
+        let provider = provider.with_read_deadline(Some(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+        ));
+        let ctx = object_scan_context(provider);
+        remote.clear_calls();
+        let plan = ctx
+            .sql("SELECT mem_bytes FROM workers LIMIT 1")
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(2)).await;
+        let error = datafusion::physical_plan::collect(plan, ctx.task_ctx())
+            .await
+            .unwrap_err();
+        assert!(crate::query::is_read_deadline(&error));
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::ReadRange)
+            .is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_parked_object_scan_does_not_block_a_later_read() {
+        let ObjectScanFixture {
+            provider,
+            remote,
+            ids,
+            root,
+        } = sparse_object_fixture(false).await;
+        let gate = crate::test_support::FaultGate::new();
+        remote.arm(crate::test_support::ObjectFault::new(
+            crate::test_support::ObjectOp::ReadRange,
+            crate::test_support::ObjectPattern::EndsWith(ids[0].as_str().to_string()),
+            crate::test_support::FaultAction::Park(Arc::clone(&gate)),
+        ));
+        let ctx = object_scan_context(provider);
+        let frame = ctx
+            .sql("SELECT mem_bytes FROM workers LIMIT 1")
+            .await
+            .unwrap();
+        let query = tokio::spawn(async move { frame.collect().await });
+        gate.entered().await;
+        query.abort();
+        assert!(query.await.unwrap_err().is_cancelled());
+        gate.release();
+        let rows = ctx
+            .sql("SELECT mem_bytes FROM workers LIMIT 1")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -852,10 +1272,113 @@ mod tests {
             );
 
         assert_eq!(
-            provider.segment_paths_for_filters(&[col("run_id").eq(lit("run-a"))]),
+            planned_paths(&provider, &[col("run_id").eq(lit("run-a"))]),
             vec![paths[0].clone(), paths[2].clone(), paths[3].clone()]
         );
-        assert_eq!(provider.segment_paths_for_filters(&[]), paths);
+        assert_eq!(planned_paths(&provider, &[]), paths);
+    }
+
+    #[test]
+    fn a_float_cast_of_a_string_key_never_prunes_by_its_text_bounds() {
+        // A segment holding "1", "10" and "5" has text key bounds ("1", "5"),
+        // which do not bound the numeric value 10 that matches.
+        let paths = vec!["/planned/seg_0.parquet".to_string()];
+        let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
+            .unwrap()
+            .with_segment_key_bounds(
+                "worker_id",
+                BTreeMap::from([(paths[0].clone(), ("1".to_string(), "5".to_string()))]),
+            );
+        let filter =
+            datafusion::logical_expr::cast(col("worker_id"), DataType::Float64).gt(lit(7.5_f64));
+        assert_eq!(planned_paths(&provider, &[filter]), paths);
+    }
+
+    #[test]
+    fn column_bounds_drop_only_segments_whose_recorded_range_misses_the_filter() {
+        let paths: Vec<String> = (0..4)
+            .map(|index| format!("/planned/seg_{index}.parquet"))
+            .collect();
+        let bounds = |range: ColumnRange| ColumnBounds::from([("mem_bytes".to_string(), range)]);
+        let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
+            .unwrap()
+            .with_segment_column_bounds(BTreeMap::from([
+                (paths[0].clone(), bounds(ColumnRange::new(100, 199))),
+                (paths[1].clone(), bounds(ColumnRange::new(200, 299))),
+                // paths[2] has no bounds yet, as before its backfill.
+                (paths[3].clone(), bounds(ColumnRange::Unknown)),
+            ]));
+        let selected = |filters: &[Expr]| {
+            planned_paths(&provider, filters)
+                .into_iter()
+                .map(|path| paths.iter().position(|planned| *planned == path).unwrap())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            selected(&[col("mem_bytes").gt_eq(lit(250_i64))]),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            selected(&[col("mem_bytes")
+                .gt_eq(lit(120_i64))
+                .and(col("mem_bytes").lt_eq(lit(150_i64)))]),
+            vec![0, 2, 3]
+        );
+        // The float comparison that `epoch_ms > extract(epoch from now()) * 1000 - …` folds to.
+        let as_float = || datafusion::logical_expr::cast(col("mem_bytes"), DataType::Float64);
+        assert_eq!(selected(&[as_float().gt(lit(299.5_f64))]), vec![2, 3]);
+        assert_eq!(
+            selected(&[col("mem_bytes").in_list(vec![lit(150_i64), lit(160_i64)], false)]),
+            vec![0, 2, 3]
+        );
+        assert_eq!(
+            selected(&[col("mem_bytes")
+                .lt(lit(150_i64))
+                .or(col("mem_bytes").gt(lit(400_i64)))]),
+            vec![0, 2, 3]
+        );
+        // No filter, or a filter on another column, keeps every segment.
+        assert_eq!(selected(&[]), vec![0, 1, 2, 3]);
+        assert_eq!(
+            selected(&[col("worker_id").eq(lit("w-1"))]),
+            vec![0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn a_segment_without_integer_bounds_is_kept_by_every_filter() {
+        // seg_0 records nothing; seg_1 records an unknown range. Neither may be
+        // ruled out, whatever the filter says about the column.
+        let paths = vec![
+            "/planned/seg_0.parquet".to_string(),
+            "/planned/seg_1.parquet".to_string(),
+        ];
+        let provider = NamespaceProvider::build_with_local_artifacts(worker_arrow(), &paths)
+            .unwrap()
+            .with_segment_column_bounds(BTreeMap::from([(
+                paths[1].clone(),
+                ColumnBounds::from([("mem_bytes".to_string(), ColumnRange::Unknown)]),
+            )]));
+        let mem = || col("mem_bytes");
+        let filters = [
+            mem().gt_eq(lit(250_i64)),
+            mem().lt(lit(i64::MIN + 1)),
+            mem().eq(lit(7_i64)),
+            mem().between(lit(1_i64), lit(2_i64)),
+            mem().in_list(vec![lit(1_i64), lit(2_i64)], false),
+            mem().lt(lit(0_i64)).or(mem().gt(lit(10_i64))),
+            mem().is_null(),
+            datafusion::logical_expr::cast(mem(), DataType::Float64).gt(lit(1e18_f64)),
+            col("seq").gt(lit(5_i64)),
+        ];
+        for filter in filters {
+            assert_eq!(
+                planned_paths(&provider, std::slice::from_ref(&filter)),
+                paths,
+                "{filter}"
+            );
+        }
     }
 
     #[test]
@@ -871,9 +1394,9 @@ mod tests {
                 (paths[2].clone(), 100),
             ]));
 
-        assert!(provider.segment_paths_for_scan(&[], Some(0)).is_empty());
-        assert_eq!(provider.segment_paths_for_scan(&[], Some(100)), paths[..2]);
-        assert_eq!(provider.segment_paths_for_scan(&[], None), paths);
+        assert!(scanned_paths(&provider, &[], Some(0)).is_empty());
+        assert_eq!(scanned_paths(&provider, &[], Some(100)), paths[..2]);
+        assert_eq!(scanned_paths(&provider, &[], None), paths);
     }
 
     #[test]
@@ -888,18 +1411,17 @@ mod tests {
                 (paths[2].clone(), 100),
             ]));
 
-        assert_eq!(provider.segment_paths_for_scan(&[], Some(101)), paths);
+        assert_eq!(scanned_paths(&provider, &[], Some(101)), paths);
         assert_eq!(
-            provider.segment_paths_for_scan(&[col("mem_bytes").gt(lit(0_i64))], Some(1)),
+            scanned_paths(&provider, &[col("mem_bytes").gt(lit(0_i64))], Some(1)),
             paths
         );
     }
 
-    /// A `seq`-bounded predicate selects only the segments whose disjoint seq
-    /// ranges it overlaps — on an object-backed table everything else is never
-    /// localized. A segment without recorded bounds is always selected.
+    /// A `seq`-bounded predicate selects segments with overlapping ranges.
+    /// A segment without recorded bounds is always selected.
     #[tokio::test]
-    async fn a_seq_range_prunes_segments_before_localization() {
+    async fn a_seq_range_selects_overlapping_segments() {
         let schema = worker_arrow();
         let paths: Vec<String> = (0..3)
             .map(|i| format!("/planned/seg_{i}.parquet"))
@@ -916,14 +1438,14 @@ mod tests {
             .gt_eq(lit(150i64))
             .and(col("seq").lt_eq(lit(160i64)));
         assert_eq!(
-            provider.segment_paths_for_filters(&[range]),
+            planned_paths(&provider, &[range]),
             vec![paths[1].clone(), paths[2].clone()]
         );
         assert_eq!(
-            provider.segment_paths_for_filters(&[col("seq").gt(lit(500i64))]),
+            planned_paths(&provider, &[col("seq").gt(lit(500i64))]),
             vec![paths[2].clone()]
         );
-        assert_eq!(provider.segment_paths_for_filters(&[]), paths);
+        assert_eq!(planned_paths(&provider, &[]), paths);
     }
 
     #[tokio::test]
@@ -1039,12 +1561,10 @@ mod tests {
             .await
             .unwrap();
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         let files: Vec<_> = config
@@ -1058,7 +1578,7 @@ mod tests {
             .location
             .as_ref()
             .ends_with(".fidx.workers.parquet"));
-        assert!(files[0].extensions.is_none());
+        assert!(files[0].extensions.is_empty());
 
         ctx.register_table("workers", Arc::new(provider)).unwrap();
         let batches = ctx
@@ -1070,6 +1590,174 @@ mod tests {
             .unwrap();
         assert_eq!(first_column_strings(&batches), vec!["w-2"]);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn remote_projection_reads_and_missing_payload_falls_back_to_source() {
+        let dir = tempdir("remote_projection_fallback");
+        let batch = worker_batch(1, vec!["w-1", "w-2", "w-3"], vec![100, 200, 300]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        crate::indices::write_segment_index(
+            &path,
+            &[batch],
+            &crate::indices::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[crate::indices::exact::ExactIndexConfig {
+                    column: "worker_id".into(),
+                    exact_values: vec!["w-2".into()],
+                    value_counts: false,
+                }],
+                &[crate::store::schema::CoveringProjection::new(
+                    "workers",
+                    "worker_id",
+                    ["w-2"],
+                    ["seq", "worker_id", "mem_bytes"],
+                )],
+                None,
+            ),
+        )
+        .unwrap();
+        let artifacts = crate::indices::sidecar_artifacts(&[path.to_string_lossy()]);
+        let local = artifacts.values().next().unwrap();
+        let remote = crate::test_support::FaultInjectingObjectStore::new(Arc::new(
+            crate::store::object_store::build_remote_object_store(
+                dir.join("remote").to_str().unwrap(),
+            )
+            .unwrap()
+            .unwrap(),
+        ));
+        let store = Arc::new(
+            crate::store::object_store::CachedObjectStore::new(
+                remote.clone(),
+                dir.join("cache"),
+                None,
+            )
+            .unwrap(),
+        );
+        let source_id = ObjectId::table("workers", "objects/source.parquet").unwrap();
+        let bundle_id = ObjectId::table("workers", "indices/source.fidx").unwrap();
+        let projection_id = ObjectId::table("workers", "indices/workers.parquet").unwrap();
+        let mut refs = Vec::new();
+        for (id, artifact) in [
+            (&bundle_id, local.bundle.as_ref().unwrap()),
+            (&projection_id, &local.projections["workers"]),
+        ] {
+            let version = remote
+                .write(id, bytes::Bytes::from(std::fs::read(artifact).unwrap()))
+                .await
+                .unwrap();
+            refs.push(
+                crate::proto::finelog::stats::ObjectRef::default()
+                    .with_object_id(id.as_str())
+                    .with_byte_size(version.byte_size),
+            );
+        }
+        let source = ObjectReference {
+            id: source_id.clone(),
+            version: crate::store::object_store::ObjectVersion {
+                e_tag: None,
+                provider_version: None,
+                local_value: None,
+                byte_size: std::fs::metadata(&path).unwrap().len(),
+            },
+        };
+        let planned = store
+            .planned_local_path(&source_id)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let mut fields = worker_arrow().fields().to_vec();
+        fields.push(Arc::new(Field::new("added", DataType::Int64, true)));
+        let provider = NamespaceProvider::build(
+            Arc::new(ArrowSchema::new(fields)),
+            std::slice::from_ref(&planned),
+            crate::indices::test_index_registry(),
+        )
+        .unwrap()
+        .with_segment_artifacts(BTreeMap::from([(
+            planned.clone(),
+            crate::store::table_state::LocalArtifacts {
+                binding: local.binding.clone(),
+                bundle: Some(store.planned_local_path(&bundle_id).unwrap()),
+                projections: BTreeMap::from([(
+                    "workers".into(),
+                    store.planned_local_path(&projection_id).unwrap(),
+                )]),
+            },
+        )]))
+        .with_object_sources(
+            store,
+            BTreeMap::from([(
+                planned,
+                crate::store::table::query_view::SegmentObjects {
+                    source,
+                    artifacts: crate::store::table_state::ArtifactReferences {
+                        binding: local.binding.clone(),
+                        bundle: Some(refs[0].clone()),
+                        projections: BTreeMap::from([("workers".into(), refs[1].clone())]),
+                    },
+                },
+            )]),
+        );
+        let ctx = object_scan_context(provider);
+        let sql = "SELECT mem_bytes FROM workers WHERE worker_id = 'w-2'";
+        remote.clear_calls();
+        let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            200
+        );
+        assert!(!remote.ranges_for(&projection_id).is_empty());
+        assert!(
+            remote.ranges_for(&source_id).is_empty(),
+            "the required source is deliberately absent"
+        );
+
+        // Keep the projection footer cached while removing its payload. An open
+        // must fall back until it has actually produced a row.
+        remote.delete(&projection_id).await.unwrap();
+        remote
+            .write(
+                &source_id,
+                bytes::Bytes::from(std::fs::read(&path).unwrap()),
+            )
+            .await
+            .unwrap();
+        remote.clear_calls();
+        let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert_eq!(
+            batches[0]
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            200
+        );
+        assert!(!remote.ranges_for(&source_id).is_empty());
+        remote.clear_calls();
+        let batches = ctx
+            .sql("SELECT mem_bytes, added FROM workers WHERE worker_id = 'w-2' AND added IS NULL")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert!(batches[0].column(1).is_null(0));
+        assert!(!remote.ranges_for(&source_id).is_empty());
+        assert!(
+            remote.ranges_for(&projection_id).is_empty(),
+            "a projection must cover residual filter columns"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -1126,12 +1814,10 @@ mod tests {
             .await
             .unwrap();
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         let locations: Vec<&str> = config
@@ -1206,7 +1892,7 @@ mod tests {
             );
 
         assert_eq!(
-            provider.segment_paths_for_filters(&[col("key").eq(lit("/job/b/4"))]),
+            planned_paths(&provider, &[col("key").eq(lit("/job/b/4"))]),
             vec![paths[1].clone(), paths[2].clone()]
         );
     }
@@ -1250,12 +1936,10 @@ mod tests {
         .await
         .unwrap();
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let selected: Vec<_> = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
             .file_groups
@@ -1311,12 +1995,10 @@ mod tests {
             .await
             .unwrap();
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         let locations: Vec<&str> = config
@@ -1409,19 +2091,17 @@ mod tests {
             "header coverage should reject the predicate before reading the corrupt payload"
         );
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         assert!(config
             .file_groups
             .iter()
             .flat_map(|group| group.files())
-            .all(|file| file.extensions.is_none()));
+            .all(|file| file.extensions.is_empty()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1508,19 +2188,17 @@ mod tests {
             "the registered policy should reject the predicate before reading legacy postings"
         );
         let exec = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec");
         let config = exec
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         assert!(config
             .file_groups
             .iter()
             .flat_map(|group| group.files())
-            .all(|file| file.extensions.is_none()));
+            .all(|file| file.extensions.is_empty()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1740,20 +2418,16 @@ mod tests {
         use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 
         let cfg = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec")
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         let mut checked = 0;
         for group in &cfg.file_groups {
             for pf in group.files() {
                 let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .extension::<ParquetAccessPlan>()
                     .expect("trigram access plan attached to the partitioned file");
                 let [RowGroupAccess::Selection(selection)] = ap.inner() else {
                     panic!("expected one row group carrying a row selection: {ap:?}");
@@ -1973,7 +2647,10 @@ mod tests {
         let paths = vec![path.clone()];
         let artifacts = crate::indices::sidecar_artifacts(&paths);
         let indices = crate::indices::test_index_registry();
-        let needles = HashMap::from([("data".to_string(), vec!["DEBUG".to_string()])]);
+        let needles = HashMap::from([(
+            "data".to_string(),
+            crate::query::trigram_prune::SubstringPredicate::Contains(vec!["DEBUG".to_string()]),
+        )]);
         let pruning = crate::query::trigram_prune::plan_segments(
             &paths,
             &needles,
@@ -1990,7 +2667,7 @@ mod tests {
             .with_segment_indexes_enabled(false);
         let ctx = crate::query::make_ctx();
         let source_plan = provider.scan(&ctx.state(), None, &[], None).await.unwrap();
-        let plan = crate::query::trigram_prune::apply_pruning(source_plan, &pruning);
+        let plan = crate::query::trigram_prune::apply_pruning(source_plan, &pruning, &indices);
         assert_prunes_to_span1(&plan, 1);
         let batches = datafusion::physical_plan::collect(plan, ctx.task_ctx())
             .await
@@ -2060,6 +2737,259 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inference_message_alternatives_prune_without_losing_either_branch() {
+        let dir = tempdir("inference_message_alternatives");
+        let path = write_two_span_log_segment(
+            &dir,
+            "data",
+            "idle heartbeat ok",
+            &["model cache hit", "download complete"],
+        );
+        let ctx = crate::query::make_ctx();
+        let provider =
+            NamespaceProvider::build_with_local_artifacts(log_arrow(), std::slice::from_ref(&path))
+                .unwrap();
+        ctx.register_table("logs", Arc::new(provider)).unwrap();
+        let frame = ctx.sql("SELECT data FROM logs WHERE contains(data, 'model cache') OR contains(data, 'download complete') ORDER BY seq").await.unwrap();
+        assert_eq!(
+            first_column_strings(&frame.collect().await.unwrap()),
+            vec!["model cache hit", "download complete"]
+        );
+        // A branch without a usable substring constraint must retain its rows.
+        let rows = ctx
+            .sql(
+                "SELECT data FROM logs WHERE contains(data, 'model cache') OR seq = 1 ORDER BY seq",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&rows),
+            vec!["idle heartbeat ok", "model cache hit"]
+        );
+        let udf = ctx.udf("contains").unwrap();
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf.clone(),
+            vec![col("data"), lit("model cache")],
+        ))
+        .or(Expr::ScalarFunction(ScalarFunction::new_udf(
+            udf,
+            vec![col("data"), lit("download complete")],
+        )));
+        let probe = NamespaceProvider::build_with_local_artifacts(log_arrow(), &[path]).unwrap();
+        let plan = probe
+            .scan(&ctx.state(), None, &[filter], None)
+            .await
+            .unwrap();
+        assert_prunes_to_span1(&plan, 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cold_index_excludes_missing_source_before_open() {
+        let dir = tempdir("cold_index_before_source");
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["ordinary shutdown"]);
+        let artifacts = crate::indices::sidecar_artifacts(std::slice::from_ref(&path));
+        let binding = artifacts[&path].binding.clone();
+        let bundle_path = artifacts[&path].bundle.as_ref().unwrap();
+        let header = crate::indices::format::read_header(bundle_path).unwrap();
+        let mut sections: Vec<_> = header
+            .sections
+            .iter()
+            .map(|section| crate::indices::format::SectionInput {
+                id: section.id.clone(),
+                kind: section.kind,
+                method_version: section.method_version,
+                exactness: section.exactness,
+                coverage: section.coverage.clone(),
+                payload: crate::indices::format::read_section(bundle_path, &header, &section.id)
+                    .unwrap(),
+            })
+            .collect();
+        // A large unrelated section must never be transferred for this query.
+        sections.push(crate::indices::format::SectionInput {
+            id: "trigram:unused".into(),
+            kind: crate::indices::format::SectionKind::TrigramBloom,
+            method_version: 1,
+            exactness: crate::indices::format::Exactness::Lossy,
+            coverage: header.sections[0].coverage.clone(),
+            payload: vec![0; 1024 * 1024],
+        });
+        let bundle_bytes = bytes::Bytes::from(
+            crate::indices::format::serialize(&header.binding, &sections).unwrap(),
+        );
+        let remote = Arc::new(
+            crate::store::object_store::build_remote_object_store(
+                dir.join("remote").to_str().unwrap(),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let remote = crate::test_support::FaultInjectingObjectStore::new(remote);
+        let bundle_id = ObjectId::table("logs", "indices/one.fidx").unwrap();
+        let bundle_version = remote
+            .write(&bundle_id, bundle_bytes.clone())
+            .await
+            .unwrap();
+        let bundle_ref = crate::proto::finelog::stats::ObjectRef::default()
+            .with_object_id(bundle_id.as_str())
+            .with_byte_size(bundle_version.byte_size);
+        let source = ObjectReference {
+            id: ObjectId::table("logs", "objects/one.parquet").unwrap(),
+            version: crate::store::object_store::ObjectVersion {
+                e_tag: None,
+                provider_version: None,
+                byte_size: std::fs::metadata(&path).unwrap().len(),
+                local_value: None,
+            },
+        };
+        // The source is absent; its index must prune it before the opener reads it.
+        let store = Arc::new(
+            crate::store::object_store::CachedObjectStore::new(
+                remote.clone(),
+                dir.join("cache"),
+                None,
+            )
+            .unwrap(),
+        );
+        let planned = store
+            .planned_local_path(&source.id)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let planned_bundle = store.planned_local_path(&bundle_id).unwrap();
+        let provider = NamespaceProvider::build(
+            log_arrow(),
+            std::slice::from_ref(&planned),
+            crate::indices::test_index_registry(),
+        )
+        .unwrap()
+        .with_segment_seq_bounds(BTreeMap::from([(planned.clone(), (1, 16385))]))
+        .with_segment_artifacts(BTreeMap::from([(
+            planned.clone(),
+            crate::store::table_state::LocalArtifacts {
+                binding: binding.clone(),
+                bundle: Some(planned_bundle.clone()),
+                projections: BTreeMap::new(),
+            },
+        )]))
+        .with_object_sources(
+            store.clone(),
+            BTreeMap::from([(
+                planned,
+                crate::store::table::query_view::SegmentObjects {
+                    source: source.clone(),
+                    artifacts: crate::store::table_state::ArtifactReferences {
+                        binding,
+                        bundle: Some(bundle_ref),
+                        projections: BTreeMap::new(),
+                    },
+                },
+            )]),
+        );
+        let mut config = crate::query::make_ctx()
+            .copied_config()
+            .with_extension(Arc::new(QueryCacheAdmission::new(0, 0)));
+        config.options_mut().execution.parquet.pushdown_filters = false;
+        let ctx = datafusion::prelude::SessionContext::new_with_config(config);
+        crate::query::udf::register_scalar_udfs(&ctx);
+        let provider = Arc::new(provider);
+        ctx.register_table("logs", provider.clone()).unwrap();
+        let rows = ctx.sql("SELECT * FROM logs WHERE contains(data, 'model cache') OR contains(data, 'download complete')").await.unwrap().collect().await.unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::Read)
+            .is_empty());
+        let transferred: u64 = remote
+            .ranges_for(&bundle_id)
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum();
+        assert!(transferred > 0 && transferred < bundle_bytes.len() as u64 / 2);
+        provider.indices.invalidate(&planned_bundle);
+        remote.clear_calls();
+        let rows = ctx.sql("SELECT * FROM logs WHERE key LIKE '%/inference-%' AND contains(data, 'ordinary shutdown')").await.unwrap().collect().await.unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        let header = crate::indices::format::parse_header(&bundle_bytes).unwrap();
+        let data = header.section("trigram:data").unwrap();
+        assert!(
+            remote
+                .ranges_for(&bundle_id)
+                .iter()
+                .all(|range| { range.end <= data.offset || range.start >= data.offset + data.len }),
+            "a rejecting key section must avoid reading the data section"
+        );
+        remote
+            .write(
+                &source.id,
+                bytes::Bytes::from(std::fs::read(&path).unwrap()),
+            )
+            .await
+            .unwrap();
+        let filter = Expr::ScalarFunction(ScalarFunction::new_udf(
+            ctx.udf("contains").unwrap(),
+            vec![col("data"), lit("ordinary shutdown")],
+        ));
+        remote.clear_calls();
+        let plan = provider
+            .scan(&ctx.state(), None, &[filter], None)
+            .await
+            .unwrap();
+        assert!(
+            remote
+                .keys_for(crate::test_support::ObjectOp::ReadRange)
+                .is_empty(),
+            "planning must not open the source or its index"
+        );
+        // Collect the raw scan without a residual FilterExec: only the index's
+        // row selection can exclude the 16,384 idle rows here.
+        let rows = datafusion::physical_plan::collect(plan, ctx.task_ctx())
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert!(
+            !store.planned_local_path(&source.id).unwrap().exists(),
+            "zero allowance must keep source scans remote"
+        );
+        drop(ctx);
+        store
+            .write(
+                &source.id,
+                bytes::Bytes::from(std::fs::read(&path).unwrap()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !planned_bundle.exists(),
+            "index range reads must not fill a whole bundle"
+        );
+        remote.clear_calls();
+        let ctx = crate::query::make_ctx();
+        ctx.register_table("logs", provider).unwrap();
+        let rows = ctx
+            .sql("SELECT * FROM logs WHERE seq > 100000 AND contains(data, 'model cache')")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert!(
+            remote
+                .keys_for(crate::test_support::ObjectOp::Read)
+                .is_empty(),
+            "snapshot sequence bounds must exclude the segment without storage reads"
+        );
+        assert!(remote
+            .keys_for(crate::test_support::ObjectOp::ReadRange)
+            .is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn disabled_segment_indexes_ignore_existing_bundle() {
         let dir = tempdir("disabled_segment_indexes");
         let needle = "Bootstrap completed for TPU-xyz";
@@ -2081,18 +3011,16 @@ mod tests {
                 .await
                 .unwrap();
         let config = plan
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("scan returns a parquet DataSourceExec")
             .data_source()
-            .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
         assert!(config
             .file_groups
             .iter()
             .flat_map(|group| group.files())
-            .all(|file| file.extensions.is_none()));
+            .all(|file| file.extensions.is_empty()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2269,16 +3197,15 @@ mod tests {
             .await
             .unwrap();
         // No access-plan extension is attached when there is no contains() filter.
-        let exec = plan.as_any().downcast_ref::<DataSourceExec>().unwrap();
+        let exec = plan.downcast_ref::<DataSourceExec>().unwrap();
         let cfg = exec
             .data_source()
-            .as_any()
             .downcast_ref::<datafusion::datasource::physical_plan::FileScanConfig>()
             .unwrap();
         for group in &cfg.file_groups {
             for pf in group.files() {
                 assert!(
-                    pf.extensions.is_none(),
+                    pf.extensions.is_empty(),
                     "no prune extension on the hot path"
                 );
             }

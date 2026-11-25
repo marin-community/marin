@@ -29,7 +29,7 @@ def normalized_rows():
         tasktrove_row(
             {
                 "instruction.md": b"List /workspace and save output to /output/command_capture.txt.",
-                "environment/Dockerfile": b"FROM debian:bookworm\nWORKDIR /workspace\n",
+                "environment/Dockerfile": b"FROM debian:12-slim\n",
                 "tests/test.sh": b"#!/bin/bash\nexit 1\n",
                 "tests/verifier_data.json": b'{"expected_output": "notes.txt"}',
             }
@@ -58,7 +58,7 @@ def test_export_artifact_preserves_rows_and_verifier_identity(normalized_rows, t
     with (input_root / "normalize/part-00000.parquet").open("wb") as output:
         pq.write_table(pa.Table.from_pylist(rows), output)
     normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(input_root))
-    bound = replace(declaration, info=replace(declaration.info, id="fixture-atlas-id", family="fixture-family"))
+    bound = replace(declaration, info=replace(declaration.info, family="fixture-family"))
     export = harbor_export_step(
         normalized, source=bound, name="tests/export", version="2026.10.09", grader_image=GRADER_IMAGE
     )
@@ -69,7 +69,7 @@ def test_export_artifact_preserves_rows_and_verifier_identity(normalized_rows, t
     manifest = json.loads((UPath(output_root) / "manifest.json").read_text())
     with (UPath(output_root) / "tasks.parquet").open("rb") as exported_file:
         exported = pq.read_table(exported_file).to_pylist()
-    assert manifest["source_id"] == "fixture-atlas-id"
+    assert manifest["source_id"] == bound.info.id
     assert exported[0]["family"] == "fixture-family"
     identity = VerifierPayloadIdentity()
     identity.add(exported[0]["task_binary"])
@@ -77,7 +77,7 @@ def test_export_artifact_preserves_rows_and_verifier_identity(normalized_rows, t
     assert not manifest["runtime_verified"]
 
 
-@pytest.mark.parametrize("field", ["id", "family"])
+@pytest.mark.parametrize("field", ["family", "upstream_dataset"])
 def test_source_metadata_changes_export_fingerprint(field, tmp_path):
     normalized = ArtifactStep.adopt("tests/normalized", "2026.10.09", str(tmp_path / "not-materialized"))
     source = nl2bash.sources()[0]

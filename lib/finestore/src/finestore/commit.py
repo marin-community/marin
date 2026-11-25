@@ -9,6 +9,7 @@ import hashlib
 import threading
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from rigging import telemetry
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
@@ -16,9 +17,13 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from finestore.layout import (
+    CACHE_HISTORY_FLOOR_FEATURE,
     FORMAT_VERSION,
+    INITIAL_TABLE_INCARNATION,
     SUPPORTED_MANIFEST_FEATURES,
+    TABLE_INCARNATIONS_FEATURE,
     ArchiveMetadata,
+    CommitInfo,
     CommitToken,
     FineStoreLayout,
     FormatVersionError,
@@ -27,7 +32,9 @@ from finestore.layout import (
     ManifestTable,
     SealMarker,
     Shard,
+    TableContentVersion,
     TableMetadata,
+    TableVersion,
 )
 
 # A lost compare-and-swap means another writer published, so the retry delay only needs to
@@ -40,8 +47,8 @@ _RETRY_BACKOFF_FACTOR = 2.0
 _RETRY_BACKOFF_JITTER = 0.25
 _COMMIT_RETRY_BUDGET = 60 * 60.0
 _MAX_COMMIT_ATTEMPTS = 100_000
-_SCHEMA_RETRY_BUDGET = 60.0
-_MAX_SCHEMA_ATTEMPTS = 1000
+_CREATE_RETRY_BUDGET = 60.0
+_MAX_CREATE_ATTEMPTS = 1000
 _ROOT_COMMIT_ID = "root"
 
 _COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
@@ -50,6 +57,14 @@ _COMMIT_CONFLICTS = telemetry.counter("finestore_commit_conflicts", unit="{confl
 
 class CommitConflict(RuntimeError):
     """A manifest delta can no longer be applied to the current snapshot."""
+
+
+@dataclass(frozen=True)
+class Attribution:
+    """Who makes a commit and why; its manifest records them as ``commit_info``."""
+
+    author: str
+    message: str
 
 
 @dataclass(frozen=True)
@@ -66,6 +81,7 @@ class TableAddition:
 
     metadata_path: str
     shards: tuple[Shard, ...]
+    incarnation: int
 
 
 @dataclass(frozen=True)
@@ -88,32 +104,62 @@ class CommitDelta:
     additions: dict[str, TableAddition] = field(default_factory=dict)
     replacements: dict[str, TableReplacement] = field(default_factory=dict)
     metadata_updates: dict[str, str] = field(default_factory=dict)
-    removals: frozenset[str] = frozenset()
+    reset_tables: frozenset[str] = frozenset()
+    table_creations: dict[str, ManifestTable] = field(default_factory=dict)
+    table_moves: dict[str, str] = field(default_factory=dict)
+    expected_tables: dict[str, TableVersion] = field(default_factory=dict)
+    expected_contents: dict[str, TableContentVersion] = field(default_factory=dict)
+    expected_incarnations: dict[str, int] | None = None
     required_features: frozenset[str] = frozenset()
     seal_update: SealMarker | ClearSeal | None = None
     # ``expected_epoch`` rejects the commit, without rebasing, once another maintainer has
     # taken over; ``epoch_update`` is how a new maintainer announces itself.
     expected_epoch: int | None = None
     epoch_update: int | None = None
+    cache_history_floor: int = 0
+    attribution: Attribution | None = None
 
 
 def _empty_manifest() -> Manifest:
     return Manifest(commit_id=_ROOT_COMMIT_ID, sequence=0)
 
 
+def _create_or_read(path: str, data: bytes, *, operation: str) -> bytes:
+    """Create the object at ``path`` with ``data`` unless it exists, and return the stored bytes."""
+    obj = conditional_object(path)
+
+    def attempt() -> bytes:
+        existing = obj.read()
+        if existing is not None:
+            return existing.data
+        try:
+            obj.write(data, expected_version=None)
+            return data
+        except ConditionalWriteError:
+            existing = obj.read()
+            if existing is None:
+                # The competing create is still in flight; retry until its object is visible.
+                raise
+            return existing.data
+
+    return retry_with_backoff(
+        attempt,
+        retryable=lambda exc: isinstance(exc, ConditionalWriteError),
+        max_attempts=_MAX_CREATE_ATTEMPTS,
+        max_elapsed=_CREATE_RETRY_BUDGET,
+        backoff=ExponentialBackoff(initial=0.1, maximum=1.0, factor=_RETRY_BACKOFF_FACTOR, jitter=_RETRY_BACKOFF_JITTER),
+        operation=operation,
+    )
+
+
 def initialize_archive(layout: FineStoreLayout) -> ArchiveMetadata:
     """Create the archive marker, or validate the marker already present."""
-    marker = conditional_object(layout.archive_path)
-    existing = marker.read()
-    expected = ArchiveMetadata()
-    if existing is None:
-        try:
-            marker.write(expected.model_dump_json(indent=2).encode(), expected_version=None)
-            return expected
-        except ConditionalWriteError:
-            existing = marker.read()
-            assert existing is not None
-    found = ArchiveMetadata.model_validate_json(existing.data)
+    data = _create_or_read(
+        layout.archive_path,
+        ArchiveMetadata().model_dump_json(indent=2).encode(),
+        operation=f"FineStore archive initialization at {layout.root}",
+    )
+    found = ArchiveMetadata.model_validate_json(data)
     if found.format_version != FORMAT_VERSION:
         raise FormatVersionError(layout.root, found=found.format_version)
     return found
@@ -136,30 +182,9 @@ def write_schema(layout: FineStoreLayout, metadata: TableMetadata) -> str:
     data = metadata.model_dump_json(indent=2).encode()
     schema_id = hashlib.blake2b(data, digest_size=16).hexdigest()
     path = layout.schema_path(schema_id)
-    obj = conditional_object(path)
-
-    def publish() -> str:
-        existing = obj.read()
-        if existing is None:
-            try:
-                obj.write(data, expected_version=None)
-                return path
-            except ConditionalWriteError:
-                existing = obj.read()
-                if existing is None:
-                    raise
-        if existing.data != data:
-            raise ValueError(f"schema digest collision at {path}")
-        return path
-
-    return retry_with_backoff(
-        publish,
-        retryable=lambda exc: isinstance(exc, ConditionalWriteError),
-        max_attempts=_MAX_SCHEMA_ATTEMPTS,
-        max_elapsed=_SCHEMA_RETRY_BUDGET,
-        backoff=ExponentialBackoff(initial=0.1, maximum=1.0, factor=_RETRY_BACKOFF_FACTOR, jitter=_RETRY_BACKOFF_JITTER),
-        operation=f"FineStore schema publication at {path}",
-    )
+    if _create_or_read(path, data, operation=f"FineStore schema publication at {path}") != data:
+        raise ValueError(f"schema digest collision at {path}")
+    return path
 
 
 def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
@@ -196,30 +221,87 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
     return ArchiveSnapshot(manifest=manifest, token=token)
 
 
-def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
+def _commit_info(attribution: Attribution | None, sequence: int) -> CommitInfo | None:
+    if attribution is None:
+        return None
+    return CommitInfo(
+        author=attribution.author,
+        message=attribution.message,
+        sequence=sequence,
+        created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+    )
+
+
+def check_preconditions(base: Manifest, delta: CommitDelta) -> None:
+    """Reject a delta whose guards fail on this manifest."""
     if delta.expected_epoch is not None and base.maintainer_epoch != delta.expected_epoch:
         raise CommitConflict(
             f"maintenance epoch is {base.maintainer_epoch}, commit was prepared under {delta.expected_epoch}"
         )
     if delta.epoch_update is not None and delta.epoch_update <= base.maintainer_epoch:
         raise CommitConflict(f"maintenance epoch {base.maintainer_epoch} already passed {delta.epoch_update}")
-    sequence = base.sequence + 1
+    if delta.expected_incarnations is not None and base.table_incarnations != delta.expected_incarnations:
+        raise CommitConflict("a table was dropped or replaced during sealing")
+    for name, expected in delta.expected_tables.items():
+        if base.table_version(name) != expected:
+            raise CommitConflict(f"table {name!r} changed since the expected snapshot")
+    for name, expected_content in delta.expected_contents.items():
+        current = base.table_content_version(name)
+        # Compaction can tighten a legacy upper bound. Appends always advance it.
+        if (
+            current.incarnation != expected_content.incarnation
+            or current.metadata_path != expected_content.metadata_path
+            or current.history_floor != expected_content.history_floor
+            or current.row_commit_upper_bound > expected_content.row_commit_upper_bound
+        ):
+            raise CommitConflict(f"table {name!r} changed since the expected snapshot")
+
+
+def _published_shards(shards: tuple[Shard, ...], sequence: int) -> tuple[Shard, ...]:
+    return tuple(
+        shard.model_copy(update={"commit_sequence": sequence, "min_row_commit": sequence, "max_row_commit": sequence})
+        for shard in shards
+    )
+
+
+def _append_tables(base: Manifest, additions: dict[str, TableAddition], sequence: int) -> dict[str, ManifestTable]:
     tables = dict(base.tables)
-    for name, addition in delta.additions.items():
+    for name, addition in additions.items():
+        if base.table_incarnations.get(name, INITIAL_TABLE_INCARNATION) != addition.incarnation:
+            raise CommitConflict(f"table {name!r} was dropped or replaced after the writer registered it")
         current = tables.get(name)
         if current is not None and current.metadata_path != addition.metadata_path:
             raise CommitConflict(f"table {name!r} was registered with different metadata")
         prior = current.shards if current is not None else ()
         paths = {shard.path for shard in prior}
-        added = tuple(
-            shard.model_copy(update={"commit_sequence": sequence})
-            for shard in addition.shards
-            if shard.path not in paths
-        )
+        added = _published_shards(tuple(shard for shard in addition.shards if shard.path not in paths), sequence)
         if current is None:
             tables[name] = ManifestTable(metadata_path=addition.metadata_path, shards=added)
         else:
             tables[name] = current.model_copy(update={"shards": prior + added})
+    return tables
+
+
+def _apply_table_ddl(
+    tables: dict[str, ManifestTable], base: Manifest, delta: CommitDelta, sequence: int
+) -> dict[str, int]:
+    incarnations = dict(base.table_incarnations)
+    moved_tables = {destination: tables[source] for destination, source in delta.table_moves.items()}
+    for name in delta.reset_tables:
+        tables.pop(name, None)
+        if name in base.tables or name in incarnations:
+            incarnations[name] = sequence
+    tables.update(moved_tables)
+    for name, table in delta.table_creations.items():
+        tables[name] = table.model_copy(update={"shards": _published_shards(table.shards, sequence)})
+    return incarnations
+
+
+def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
+    check_preconditions(base, delta)
+    sequence = base.sequence + 1
+    tables = _append_tables(base, delta.additions, sequence)
+    incarnations = _apply_table_ddl(tables, base, delta, sequence)
 
     for name, replacement in delta.replacements.items():
         current = tables.get(name)
@@ -238,23 +320,29 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
             raise CommitConflict(f"table {name!r} no longer exists")
         tables[name] = current.model_copy(update={"metadata_path": metadata_path})
 
-    for name in delta.removals:
-        tables.pop(name, None)
-
     sealed = base.sealed
-    if isinstance(delta.seal_update, ClearSeal):
+    if isinstance(delta.seal_update, ClearSeal) or delta.table_creations or delta.reset_tables.intersection(base.tables):
         sealed = None
     elif delta.seal_update is not None:
         sealed = delta.seal_update
+    history_floor = max(base.cache_history_floor, delta.cache_history_floor)
+    required_features = set(base.required_features) | delta.required_features
+    if history_floor:
+        required_features.add(CACHE_HISTORY_FLOOR_FEATURE)
+    if incarnations:
+        required_features.add(TABLE_INCARNATIONS_FEATURE)
     return base.model_copy(
         update={
             "commit_id": uuid.uuid4().hex,
             "parent_commit_id": None if base.commit_id == _ROOT_COMMIT_ID else base.commit_id,
             "sequence": sequence,
-            "required_features": tuple(sorted(set(base.required_features) | delta.required_features)),
+            "required_features": tuple(sorted(required_features)),
+            "cache_history_floor": history_floor,
             "tables": tables,
+            "table_incarnations": incarnations,
             "sealed": sealed,
             "maintainer_epoch": base.maintainer_epoch if delta.epoch_update is None else delta.epoch_update,
+            "commit_info": _commit_info(delta.attribution, sequence),
         }
     )
 
@@ -298,10 +386,18 @@ class CommitCoordinator:
 
             def publish() -> CommitToken:
                 nonlocal current, refresh
+                refreshed = refresh
                 if refresh:
                     current = read_snapshot(self._layout)
                     refresh = False
-                manifest = _apply_delta(current.manifest, delta)
+                try:
+                    manifest = _apply_delta(current.manifest, delta)
+                except CommitConflict:
+                    if refreshed:
+                        raise
+                    # A precondition can fail on the cached manifest without reaching HEAD.
+                    current = read_snapshot(self._layout)
+                    manifest = _apply_delta(current.manifest, delta)
                 manifest_path = self._layout.manifest_path(manifest.commit_id)
                 StoragePath(manifest_path).write_text(manifest.model_dump_json(indent=2))
                 head = HeadMetadata(

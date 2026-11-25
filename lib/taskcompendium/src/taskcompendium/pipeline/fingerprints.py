@@ -9,13 +9,14 @@ from enum import Enum
 from functools import partial
 from typing import Any
 
+from pydantic import BaseModel
 from verifyit.spec import Mode
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import SCHEMA_VERSION, NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import SCHEMA_VERSION, SUBSET_LABEL, NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.models import SourceRecipe
 
-NORMALIZATION_STAGE_REVISION = "11"
+NORMALIZATION_STAGE_REVISION = "12"
 VERIFICATION_STAGE_REVISION = "5"
 REVIEW_STAGE_REVISION = "4"
 
@@ -23,6 +24,20 @@ REVIEW_STAGE_REVISION = "4"
 def _value_identity(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
+    if isinstance(value, BaseModel):
+        kind = type(value)
+        return {
+            "module": kind.__module__,
+            "name": kind.__qualname__,
+            "parameters": value.model_dump(mode="json"),
+        }
+    if is_dataclass(value) and not isinstance(value, type):
+        kind = type(value)
+        return {
+            "module": kind.__module__,
+            "name": kind.__qualname__,
+            "parameters": {field.name: _value_identity(getattr(value, field.name)) for field in fields(value)},
+        }
     if callable(value) and not isinstance(value, type):
         return callable_identity(value)
     if isinstance(value, dict):
@@ -73,7 +88,7 @@ def recipe_code_identity(recipe: SourceRecipe) -> dict[str, str]:
 
 def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
     """Hash public task semantics, optionally including its private reference."""
-    content = task.model_dump(mode="json", exclude={"id", "source"})
+    content = task.model_dump(mode="json", exclude={"id": True, "source": True, "labels": {SUBSET_LABEL}})
     # Oracle scripts are executable witnesses, not task semantics.
     content["resources"]["oracle"] = []
     grader = task.grader

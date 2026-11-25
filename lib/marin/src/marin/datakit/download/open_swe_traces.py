@@ -5,10 +5,13 @@
 
 import json
 from collections import deque
+from collections.abc import Callable
 from types import MappingProxyType
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
 from zephyr.context import ZephyrContext
@@ -77,6 +80,66 @@ OPEN_SWE_TRACES_PARTITIONS = MappingProxyType(
     }
 )
 
+# The exclusion list holds the resolved Qwen3.8 traces with 8 or more assistant turns that reason about the
+# hidden tests, the grader or the upstream fix, and 4 traces that read the upstream fix from the environment.
+QWEN38_SOURCES = frozenset(
+    {
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/scale_swe",
+        "open_swe_traces/v1_2/minisweagent/qwen38_27b/swe_rebench_v2",
+    }
+)
+EXCLUSION_DATASET_ID = "Min-Li/marin-sft-data-audit"
+EXCLUSION_REVISION = "fb186cd8902777e24cb4c433398aaec9af0ecd6b"
+EXCLUSION_FILE = "open_swe/pinned_f967cba3/exclusions.parquet"
+
+# The Qwen3.8-27B mini-swe-agent teacher was prompted with the NeMo-Skills template
+# nemo_skills/prompt/config/eval/swe-bench/mini-swe-agent/swebench.yaml at commit
+# 592ebaec5a80e17a3535623d0f5704d29e13a64f (Apache-2.0), which ends the task message with this
+# section between </CRITICAL> and </instructions>. The export drops it, and every row of both
+# pinned partitions ends with the anchor below.
+TASK_END_TAG = "</instructions>"
+SOLUTION_ORIGINALITY_ANCHOR = "</CRITICAL>\n" + TASK_END_TAG
+SOLUTION_ORIGINALITY_SECTION = "\n".join(
+    (
+        "## Solution Originality",
+        "",
+        "Implement your own original solution to the task.",
+        "As an expert software engineer, your task is to create a novel independent solution based only on the "
+        "current repository state.",
+        "Your approach must be ENTIRELY UNBIASED, making no attempt to access external solutions, hints or "
+        "information in any way.",
+        "Remember that your own implementation is strongly preferred over a copy or modification of an existing "
+        "solution.",
+        "Because you are working independently, you **MUST NOT** attempt to:",
+        "- clone, download files from, install as a package, read pull requests or otherwise access the upstream "
+        "repository,",
+        "- use git commands to access any commits, tags or references outside of the current branch,",
+        "- read previous trajectories, golden patches, test patches or any other hidden information from the "
+        "filesystem,",
+        "- search locally installed packages or caches for upstream code,",
+        "- find loopholes to access external solutions or hidden tests in any other way,",
+        'for ANY reason at all, even if it\'s just "for reference" or to verify your own solution.',
+        "WARNING: If you seek any form of external solutions, hints or information while solving the task,",
+        "your solution will be DISCARDED regardless of its correctness!",
+    )
+)
+
+
+def restore_solution_originality(row: dict) -> dict:
+    """Return the row with the dropped Solution Originality section back in its task message."""
+    messages = row["messages"]
+    task = messages[1]["content"]
+    if task.count(SOLUTION_ORIGINALITY_ANCHOR) != 1 or not task.endswith(SOLUTION_ORIGINALITY_ANCHOR):
+        raise ValueError(f"Task message of {row['trajectory_id']} does not end with the template anchor")
+    restored_task = task.removesuffix(TASK_END_TAG) + "\n" + SOLUTION_ORIGINALITY_SECTION + "\n" + TASK_END_TAG
+    return {**row, "messages": [messages[0], {**messages[1], "content": restored_task}, *messages[2:]]}
+
+
+def excluded_trajectory_ids(exclusion_path: str) -> frozenset[str]:
+    """Load the pinned Qwen3.8 trace exclusions from the downloaded Parquet file."""
+    with open_url(prefix_join(exclusion_path, EXCLUSION_FILE), "rb") as source:
+        return frozenset(pq.read_table(source, columns=["trajectory_id"]).column("trajectory_id").to_pylist())
+
 
 def row_to_chat_doc(row: dict) -> list[dict]:
     messages = row.get("messages")
@@ -110,10 +173,18 @@ def row_to_chat_doc(row: dict) -> list[dict]:
     )
 
 
-def transform_chat(input_path: str, output_path: str) -> None:
+def transform_chat(
+    input_path: str,
+    output_path: str,
+    *,
+    excluded_ids: frozenset[str],
+    repair_row: Callable[[dict], dict],
+) -> None:
     pipeline = (
         Dataset.from_files(prefix_join(input_path, "**/*.parquet"))
         .flat_map(load_parquet_batched)
+        .filter(lambda row: row["trajectory_id"] not in excluded_ids)
+        .map(repair_row)
         .flat_map(row_to_chat_doc)
         .write_parquet(
             prefix_join(output_path, "data-{shard:05d}-of-{total:05d}.parquet"),
@@ -128,11 +199,31 @@ def open_swe_traces_chat_normalize_steps(source_name: str) -> tuple[StepSpec, ..
     """Download one Open-SWE-Traces partition and normalize its structured chat."""
     glob, _ = OPEN_SWE_TRACES_PARTITIONS[source_name]
     raw = download_hf_step(f"raw/{source_name}", hf_dataset_id=HF_DATASET_ID, revision=HF_REVISION, hf_urls_glob=[glob])
+    if source_name in QWEN38_SOURCES:
+        exclusions = download_hf_step(
+            "raw/open-swe-traces-audit-exclusions",
+            hf_dataset_id=EXCLUSION_DATASET_ID,
+            revision=EXCLUSION_REVISION,
+            hf_urls_glob=[EXCLUSION_FILE],
+        )
+        deps = [raw, exclusions]
+
+        def transform(output_path: str) -> None:
+            transform_chat(
+                raw.output_path,
+                output_path,
+                excluded_ids=excluded_trajectory_ids(exclusions.output_path),
+                repair_row=restore_solution_originality,
+            )
+
+    else:
+        deps = [raw]
+
+        def transform(output_path: str) -> None:
+            transform_chat(raw.output_path, output_path, excluded_ids=frozenset(), repair_row=lambda row: row)
+
     processed = StepSpec(
-        name=f"processed-chat/{source_name}",
-        deps=[raw],
-        fn=lambda output_path: transform_chat(raw.output_path, output_path),
-        hash_attrs={"version": TRANSFORM_VERSION},
+        name=f"processed-chat/{source_name}", deps=deps, fn=transform, hash_attrs={"version": TRANSFORM_VERSION}
     )
     return processed, normalize_chat_step(
         name=f"normalized-chat/{source_name}", download=processed, output_schema=SOURCE_CHAT_SCHEMA

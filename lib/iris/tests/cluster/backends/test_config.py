@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 from iris.cluster.backends.k8s.tasks import K8sTaskProvider
-from iris.cluster.composer import make_task_backend
+from iris.cluster.composer import make_backend, make_task_backend
 from iris.cluster.config import (
     ControllerVmConfig,
     CoreweavePlatformConfig,
@@ -40,11 +40,17 @@ from iris.cluster.config import (
     validate_config,
 )
 from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.autoscaler.factory import create_autoscaler
+from iris.cluster.controller.backend import dashboard_backend_descriptor
+from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.platforms.factory import create_provider_bundle
 from iris.cluster.platforms.gcp.service import KNOWN_GCP_ZONES
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import LOCAL_CLUSTER, AcceleratorType, CapacityType, GcpSliceMode
-from iris.testing.k8s import k8s_backend_descriptor
+from iris.rpc import job_pb2
+from iris.testing.k8s import k8s_backend_descriptor, make_batch, make_run_req
 from rigging.timing import Duration
 
 
@@ -1955,3 +1961,60 @@ def test_k8s_backend_uses_canonical_default_task_image():
 
     assert isinstance(backend, K8sTaskProvider)
     assert backend.pods.default_image == "registry.example/iris-task:abc1234"
+
+
+@pytest.mark.parametrize(
+    ("configured_class", "expected_class"),
+    [(None, "gvisor"), ("iris-gvisor-cpu", "iris-gvisor-cpu")],
+)
+def test_k8s_sandbox_pod_uses_cluster_runtime_class(monkeypatch, configured_class, expected_class):
+    kubectl = InMemoryK8sService(namespace="iris")
+    monkeypatch.setattr("iris.cluster.composer.CloudK8sService", lambda **_: kubectl)
+    provider_config = KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq"))
+    if configured_class is not None:
+        provider_config = KubernetesProviderConfig(
+            kueue=KueueConfig(cluster_queue="iris-cq"), sandbox_runtime_class=configured_class
+        )
+    config = IrisClusterConfig(kubernetes_provider=provider_config)
+    backend = make_task_backend(config, descriptor=k8s_backend_descriptor())
+
+    try:
+        request = make_run_req("/alice/sandbox/0")
+        request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+        request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
+        assert backend.sync(make_batch(tasks_to_run=[request])) == []
+        [pod] = kubectl.list_json(K8sResource.PODS)
+        assert pod["spec"]["runtimeClassName"] == expected_class
+    finally:
+        backend.close()
+
+
+@pytest.mark.parametrize("kubernetes", [False, True])
+def test_composed_backend_advertises_image_workdir_only_for_kubernetes(kubernetes, embedded_log_server, tmp_path):
+    config = (
+        IrisClusterConfig(kubernetes_provider=KubernetesProviderConfig(kueue=KueueConfig(cluster_queue="iris-cq")))
+        if kubernetes
+        else IrisClusterConfig(worker_provider=WorkerProviderConfig())
+    )
+    log_stack = build_log_stack(
+        log_service_address=embedded_log_server.address,
+        local_log_dir=tmp_path / "logs",
+        host="127.0.0.1",
+        worker_token_provider=None,
+    )
+    try:
+        backend = make_backend(
+            config,
+            auth=ControllerAuth(),
+            remote_state_dir=str(tmp_path),
+            dry_run=True,
+            log_stack=log_stack,
+        )
+        try:
+            advertised = dashboard_backend_descriptor(backend).capabilities
+            assert ("sandbox-image-workdir" in advertised) is kubernetes
+            assert "sandbox-storage-limit" not in advertised
+        finally:
+            backend.close()
+    finally:
+        log_stack.close()

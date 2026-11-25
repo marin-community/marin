@@ -3,6 +3,8 @@
 
 from levanter.grug.attention._core import (
     AttentionMask as AttentionMask,
+    ContextAttentionLayout as ContextAttentionLayout,
+    DEFAULT_CONTEXT_ATTENTION_LAYOUT as DEFAULT_CONTEXT_ATTENTION_LAYOUT,
     GrugAttentionImplementation as GrugAttentionImplementation,
     RotaryConfig as RotaryConfig,
     align_kv_heads as align_kv_heads,
@@ -14,4 +16,6 @@ from levanter.grug.attention._core import (
 from levanter.grug.attention._fa4_cute import fa4_cute_segment_bounds as fa4_cute_segment_bounds
 from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention as gpu_fa4_cute_attention
 from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention as gpu_fa4_cute_sm100_attention
+from levanter.grug.attention._paged import PagedAttentionImplementation as PagedAttentionImplementation
+from levanter.grug.attention._paged import ragged_paged_attention as ragged_paged_attention
 from levanter.grug.attention._xla_flash import xla_flash_attention as xla_flash_attention

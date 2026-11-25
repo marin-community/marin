@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from zephyr import counters
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ScriptGrader, TaskSpec, VerifyitGrader
+from taskcompendium.models import NoGrader, TaskSpec, grader_environment
 from taskcompendium.pipeline.chat_requests import MAX_DIRECT_CONCURRENT_REQUESTS, ChatClient, chat_output
 from taskcompendium.pipeline.models import ReviewRecord, ReviewRubric, ReviewStatus, ReviewVerdict
 from taskcompendium.pipeline.query_cache import (
@@ -323,12 +323,19 @@ def review_payload(task: TaskSpec) -> dict[str, Any]:
         for resource in group
     ]
     environments = [("actor_build", task.environment_requirements, payload["environment_requirements"])]
-    if isinstance(task.grader, ScriptGrader | VerifyitGrader) and task.grader.environment is not None:
-        environments.append(("grader_build", task.grader.environment, payload["grader"]["environment"]))
+    grader_build = grader_environment(task.grader)
+    if grader_build is not None:
+        environments.append(("grader_build", grader_build, payload["grader"]["placement"]["environment"]))
     for role, environment, projected in environments:
-        if environment.docker_build is not None:
-            resources.extend((role, resource) for resource in environment.docker_build.files)
-            projected["docker_build"] = {"resource_role": role, "status": "unresolved"}
+        builds = [(role, environment.docker_build, projected)]
+        builds += [
+            (f"{role}:{service.name}", service.docker_build, projected_service)
+            for service, projected_service in zip(environment.services, projected.get("services", ()), strict=True)
+        ]
+        for build_role, build, target in builds:
+            if build is not None:
+                resources.extend((build_role, resource) for resource in build.files)
+                target["docker_build"] = {"resource_role": build_role, "status": "unresolved"}
     manifest = []
     text_previews: list[dict[str, Any]] = []
     for role, resource in resources:
@@ -521,7 +528,7 @@ def review_records(output: str, task_ids: Sequence[str]) -> list[ReviewRecord]:
             output,
             task_ids,
             tool_name=TOOL_NAME,
-            validate=ReviewVerdict.model_validate_json,
+            validate=lambda value, _task_id: ReviewVerdict.model_validate_json(value),
             identity_error="Review task ID does not match request",
         )
     ]

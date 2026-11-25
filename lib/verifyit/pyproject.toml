@@ -7,9 +7,10 @@ name = "marin-verifyit"
 version = "0.1.0"
 description = "One grader for TaskTrove Clean tasks: reads tests/verifier.toml, writes /logs/verifier/reward.json."
 readme = "README.md"
-requires-python = ">=3.11"
-# Grading dependencies remain optional.
-dependencies = ["tomli-w>=1.2"]
+requires-python = ">=3.10"
+# Grading dependencies remain optional; pip installs need tomli below 3.11, while the grader
+# staging ships the package directories themselves.
+dependencies = ["tomli-w>=1.2", 'tomli>=2.0.1; python_version < "3.11"']
 
 [project.scripts]
 verifyit = "verifyit.grade:main"
@@ -23,10 +24,16 @@ all = ["marin-verifyit[math,schema,judge,reasoning-gym]"]
 
 [dependency-groups]
 test = [
+    "setuptools",
     "pytest>=8.3.2",
     "pytest-timeout",
     "pytest-xdist",
     "pytest-json-report>=1.5",
+    # The interpreter test copies the host's tomli package directory into the staged runtime.
+    "tomli>=2.0.1",
+    # Editable candidate installs run with --no-build-isolation, so the grading
+    # environment itself must carry the build backend.
+    "setuptools",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -39,4 +46,13 @@ only-include = ["src/verifyit"]
 pythonpath = ["src", "tests", "."]
 timeout = 120
 filterwarnings = ["ignore::DeprecationWarning"]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+markers = [
+    "slow: long-running test",
+    "integration: external service",
+    "data_integration: external data",
+    "cluster: live cluster",
+    "requires_cluster: live cluster",
+    "docker: Docker daemon",
+    "manual: explicit validation",
+]

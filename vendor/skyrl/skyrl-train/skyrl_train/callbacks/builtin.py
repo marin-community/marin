@@ -23,18 +23,26 @@ import contextlib
 import json
 import math
 import os
-from copy import deepcopy
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from skyrlrecipe.declared import PooledCheckpointEvaluation
 
-from skyrl_train.config.callbacks import has_explicit_callbacks, interval_hf_export_enabled
+from skyrl_train.evaluation_profiles import (
+    DEFAULT_EVALUATION_STEPS,
+    validate_evaluation_schedule,
+    EvaluationProfile,
+    evaluation_profile_due,
+    resolve_evaluation_profiles,
+    additional_evaluation_metrics,
+)
+from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_destination_configured
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
-from skyrl_train.inline_harbor_client import collect_harbor
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
@@ -46,8 +54,16 @@ from skyrl_train.inference_observability import (
 )
 
 from skyrl_train.mismatch_probe.callback import MismatchProbeCallback
+from skyrl_train.callbacks.reference_likelihood import ReferenceLikelihoodCallback
 
-from .base import TrainerCallback, TrainerState, TrainerControl, CallbackHandler
+from .base import (
+    CallbackHandler,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    checkpoint_save_allowed,
+    validate_save_after_fraction,
+)
 from .types import (
     CallbackErrorBehavior,
     CHECKPOINT_CALLBACK_TYPE,
@@ -56,7 +72,9 @@ from .types import (
 
 # Registry mapping callback type names to classes
 # This enables YAML-based callback configuration
-CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {}
+CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
+EVALUATION_ATTEMPTED_METRIC = "eval/all/num_attempted"
+EVALUATION_SCORED_METRIC = "eval/all/num_scored"
 
 
 def register_callback(name: str):
@@ -102,11 +120,14 @@ class CheckpointCallback(TrainerCallback):
     Args:
         save_steps: Save a checkpoint every N steps. Set to -1 or 0 to disable.
         save_on_train_end: Whether to save a final checkpoint when training ends.
+        save_after_fraction: Suppress saves before this fraction of planned updates, including early termination.
     """
 
-    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True):
+    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+        validate_save_after_fraction(save_after_fraction)
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
+        self.save_after_fraction = save_after_fraction
 
     def on_step_end(
         self,
@@ -114,7 +135,11 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_steps > 0 and state.global_step % self.save_steps == 0:
+        if (
+            self.save_steps > 0
+            and state.global_step % self.save_steps == 0
+            and checkpoint_save_allowed(state, self.save_after_fraction)
+        ):
             control.should_save = True
         return control
 
@@ -124,7 +149,7 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0:
+        if self.save_on_train_end and self.save_steps > 0 and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save = True
         return control
 
@@ -171,12 +196,6 @@ class DistillationTokenBudgetCallback(TrainerCallback):
 
 
 @dataclass(frozen=True)
-class EvaluationSamplingConfig:
-    sampling_params: Dict[str, Any] | None = None
-    n_samples_per_prompt: int | None = None
-
-
-@dataclass(frozen=True)
 class EvaluationStopConfig:
     minimum: float | None = None
     min_improvement: float | None = None
@@ -195,30 +214,65 @@ class BestCheckpointCallback(TrainerCallback):
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, *, initial_model_uri: str, expected_tasks: int, minimum_scored_tasks: int):
+    def __init__(
+        self,
+        *,
+        initial_model_uri: str,
+        expected_tasks: int,
+        minimum_scored_tasks: int,
+        selection_metric: str = "eval/all/avg_verifier_score",
+        save_after_fraction: float = 0.0,
+        preservation_max_drop: dict[str, float] | None = None,
+    ):
+        validate_save_after_fraction(save_after_fraction)
         self.initial_model_uri = initial_model_uri
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
         self.best_score: float | None = None
+        self.selection_metric = selection_metric
+        self.save_after_fraction = save_after_fraction
+        self.preservation_max_drop = dict(preservation_max_drop or {})
+        if any(not math.isfinite(drop) or drop < 0 for drop in self.preservation_max_drop.values()):
+            raise ValueError("Preservation drops must be finite and nonnegative")
+        self.preservation_baseline: dict[str, float] = {}
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         root = trainer.cfg.trainer.ckpt_path
         best_path = join_resource_path(root, BEST_CHECKPOINT_FILENAME)
         if self.best_score is None and io.exists(best_path):
             with io.open_file(best_path, "r") as stream:
-                self.best_score = json.load(stream)["accuracy"]
-        attempted = metrics["eval/all/num_attempted"]
-        scored = metrics["eval/all/num_scored"]
-        if (
+                saved = json.load(stream)
+                self.best_score = saved["accuracy"]
+                self.preservation_baseline = saved.get("preservation_baseline", {})
+        attempted = metrics[EVALUATION_ATTEMPTED_METRIC]
+        scored = metrics[EVALUATION_SCORED_METRIC]
+        ineligible = (
             attempted != self.expected_tasks
             or scored < self.minimum_scored_tasks
             or not metrics.get("eval/selection_eligible", 1.0)
-        ):
+        )
+        if state.global_step == 0 and self.preservation_max_drop and ineligible:
+            raise ValueError("Preservation-gated selection requires an eligible step-zero evaluation")
+        if ineligible:
             return control
-        score = metrics["eval/all/avg_verifier_score"]
+        if state.global_step == 0:
+            self.preservation_baseline = {key: metrics[key] for key in self.preservation_max_drop}
+            if any(not math.isfinite(value) for value in self.preservation_baseline.values()):
+                raise ValueError("Preservation baseline must be finite")
+        if set(self.preservation_baseline) != set(self.preservation_max_drop):
+            raise ValueError("Preservation-gated selection requires step-zero evaluation or restored baseline")
+        for key, maximum_drop in self.preservation_max_drop.items():
+            value = metrics[key]
+            if not math.isfinite(value):
+                raise ValueError(f"Nonfinite preservation metric: {key}")
+            if value < self.preservation_baseline[key] - maximum_drop:
+                return control
+        score = metrics[self.selection_metric]
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
         if self.best_score is not None and score <= self.best_score:
+            return control
+        if state.global_step and not checkpoint_save_allowed(state, self.save_after_fraction):
             return control
         model_uri = self.initial_model_uri
         model_format = "hf"
@@ -235,70 +289,49 @@ class BestCheckpointCallback(TrainerCallback):
             "scored": scored,
             "model_uri": model_uri,
             "model_format": model_format,
-            "selection": "Highest valid normalized verifier score; keep the earliest checkpoint on ties",
+            "selection": "Highest eligible selected metric; keep the earliest checkpoint on ties",
+            "selection_metric": self.selection_metric,
+            "preservation_baseline": self.preservation_baseline,
+            "preservation_max_drop": self.preservation_max_drop,
+            "save_after_fraction": self.save_after_fraction,
         }
         io.makedirs(root, exist_ok=True)
-        io.write_bytes_atomic(best_path, json.dumps(payload).encode())
+        encoded = json.dumps(payload).encode()
+        io.write_bytes_atomic(best_path, encoded)
+        export_root = trainer.cfg.trainer.export_path
+        io.makedirs(export_root, exist_ok=True)
+        io.write_bytes_atomic(join_resource_path(export_root, BEST_CHECKPOINT_FILENAME), encoded)
         self.best_score = score
         return control
 
 
-@register_callback("harbor_evaluation")
-class HarborEvaluationCallback(TrainerCallback):
-    """Evaluate frozen policy weights through Harbor before checkpoint selection."""
-
-    error_behavior = CallbackErrorBehavior.RAISE
-
-    def __init__(self, *, cohorts: list[dict], timeout: float, minimum_coverage: float, daytona_api_key_env: str):
-        self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
-        self.timeout = timeout
-        self.minimum_coverage = minimum_coverage
-        self.daytona_api_key_env = daytona_api_key_env
-
-    async def collect_evaluation(self, state, *, trainer, pool):
-        client = trainer.inference_engine_client
-        if not client.enable_http_endpoint:
-            raise ValueError("Harbor validation requires generator.enable_http_endpoint")
-        cohorts = deepcopy(self.cohorts)
-        for cohort in cohorts:
-            job = cohort["job"]
-            job["job_name"] = f"step-{state.global_step}-{cohort['name']}"
-            job["jobs_dir"] = join_resource_path(trainer.cfg.trainer.export_path, "inline_harbor")
-            for agent in job["agents"]:
-                agent["model_name"] = f"openai/{trainer.cfg.trainer.export_path}/step-{state.global_step}"
-                agent["model_alias"] = f"openai/{client.model_name}"
-                agent.setdefault("kwargs", {})["api_base"] = (
-                    f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1"
-                )
-        environment = os.environ.copy()
-        environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
-        environment["OPENAI_API_KEY"] = "unused-local-inference"
-        async with asyncio.timeout(self.timeout):
-            results = await collect_harbor(cohorts, pool, environment)
-        return {f"eval/harbor/{name}/{key}": value for name, result in results.items() for key, value in result.items()}
-
-    async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
-        attempted = metrics["eval/all/num_attempted"]
-        scored = metrics["eval/all/num_scored"]
-        reward_sum = metrics["eval/all/avg_verifier_score"] * scored if scored else 0.0
-        metrics["eval/selection_eligible"] = 1.0
-        for cohort in self.cohorts:
-            name = cohort["name"]
-            prefix = f"eval/harbor/{name}/"
-            result = {key.removeprefix(prefix): value for key, value in metrics.items() if key.startswith(prefix)}
-            if result["num_scored"] < self.minimum_coverage * result["num_attempted"]:
-                metrics["eval/selection_eligible"] = 0.0
-                logger.warning("Insufficient inline Harbor scoring coverage for {}: {}", name, result)
-            attempted += result["num_attempted"]
-            scored += result["num_scored"]
-            reward_sum += result["reward_sum"]
-        metrics["eval/all/num_attempted"] = attempted
-        metrics["eval/all/num_scored"] = scored
-        if scored:
-            metrics["eval/all/avg_verifier_score"] = reward_sum / scored
-        else:
-            metrics.pop("eval/all/avg_verifier_score", None)
-        return control
+def pool_checkpoint_scores(metrics: Dict[str, float], policy: PooledCheckpointEvaluation) -> None:
+    """Pool the scores of individual tasks and assess each source against its declared population."""
+    attempted = scored = 0.0
+    reward_sums = []
+    eligible = True
+    sources = {"eval/all": policy.primary, **{f"eval/{name}/all": count for name, count in policy.cohorts.items()}}
+    for prefix, coverage in sources.items():
+        tried = metrics[f"{prefix}/num_attempted"]
+        included = metrics.get(f"{prefix}/num_scored", 0.0)
+        if tried != coverage.expected_tasks or included < coverage.minimum_scored_tasks:
+            eligible = False
+            logger.warning(
+                "Insufficient checkpoint evaluation coverage for {}: {} scored, {} attempted, {} expected",
+                prefix, included, tried, coverage.expected_tasks,
+            )
+        attempted += tried
+        scored += included
+        if included:
+            reward_sums.append(metrics[f"{prefix}/avg_verifier_score"] * included)
+    metrics["eval/selection_eligible"] = float(eligible)
+    metrics[EVALUATION_ATTEMPTED_METRIC] = attempted
+    metrics[EVALUATION_SCORED_METRIC] = scored
+    metrics["eval/all/verifier_score_coverage"] = scored / attempted if attempted else 0.0
+    if scored:
+        metrics["eval/all/avg_verifier_score"] = math.fsum(reward_sums) / scored
+    else:
+        metrics.pop("eval/all/avg_verifier_score", None)
 
 
 @register_callback("evaluation")
@@ -307,59 +340,72 @@ class EvaluationCallback(TrainerCallback):
 
     Args:
         eval_steps: Evaluate every N completed steps; non-positive values disable evaluation.
-        eval_on_train_end: Evaluate the final policy.
+        eval_on_train_end: Evaluate the final policy. A final profile also requests this evaluation.
         eval_before_train: Evaluate the initial policy.
-        additional_evaluations: Named sampling overrides passed to the trainer's evaluator.
+        additional_evaluations: Named sampling, sample count, dataset and schedule overrides.
+            The schedule is every_evaluation or final (the configured last update only).
+            A final profile at an off-periodic last update evaluates the primary dataset too.
+            Resuming at the last update reruns final evaluation. It requires a primary evaluation
+            dataset, and does not run after an early stop.
         metric_groups: Output metric names mapped to source metrics whose mean is reported.
         stop_when: Metrics mapped to minimum scores or gains over the initial evaluation.
+        checkpoint_scores: Pool verifier scores across the primary evaluation and the named cohorts.
     """
 
     error_behavior = CallbackErrorBehavior.RAISE
 
     def __init__(
         self,
-        eval_steps: int = 5,
+        eval_steps: int = DEFAULT_EVALUATION_STEPS,
         eval_on_train_end: bool = True,
         eval_before_train: bool = True,
-        additional_evaluations: Dict[str, Dict[str, Any]] | None = None,
+        additional_evaluations: Dict[str, EvaluationProfile] | None = None,
         metric_groups: Dict[str, List[str]] | None = None,
         stop_when: Dict[str, Dict[str, float]] | None = None,
+        checkpoint_scores: PooledCheckpointEvaluation | None = None,
     ):
         self.eval_steps = eval_steps
         self.eval_on_train_end = eval_on_train_end
         self.eval_before_train = eval_before_train
-        self.additional_evaluations = {
-            name: EvaluationSamplingConfig(**parameters) for name, parameters in (additional_evaluations or {}).items()
-        }
+        self.additional_evaluations = additional_evaluations or {}
+        self.checkpoint_scores = checkpoint_scores
         self.metric_groups = metric_groups or {}
         self.stop_when = {name: EvaluationStopConfig(**value) for name, value in (stop_when or {}).items()}
         self._initial_values: Dict[str, float] = {}
         self._initial_step: int | None = None
-        if any(not name.isidentifier() for name in self.additional_evaluations):
-            raise ValueError("additional evaluation names must be identifiers")
         if any(not keys for keys in self.metric_groups.values()):
             raise ValueError("evaluation metric groups must be nonempty")
+        if checkpoint_scores is not None:
+            for name in checkpoint_scores.cohorts:
+                profile = self.additional_evaluations.get(name)
+                if profile is None or profile.schedule != "every_evaluation" or profile.n_samples_per_prompt != 1:
+                    raise ValueError(f"Checkpoint cohort {name} requires one sample per task at every evaluation")
 
     async def collect_evaluation(self, state, *, trainer, pool):
         metrics = {}
 
-        async def collect(name, parameters):
-            additional = await trainer.eval(
-                val_set_name=name,
-                sampling_params=parameters.sampling_params,
-                n_samples_per_prompt=parameters.n_samples_per_prompt,
-                evaluation_pool=pool,
-            )
-            metrics.update({key.replace("eval/", f"eval/{name}/", 1): value for key, value in additional.items()})
+        async def collect(name, profile):
+            scoring = self.checkpoint_scores
+            timeout = scoring.timeout if scoring is not None and name in scoring.cohorts else None
+            async with asyncio.timeout(timeout):
+                additional = await trainer.eval(
+                    val_set_name=name,
+                    profile=profile,
+                    evaluation_pool=pool,
+                )
+            metrics.update(additional_evaluation_metrics(additional, name))
 
         async with asyncio.TaskGroup() as tasks:
-            for name, parameters in self.additional_evaluations.items():
-                tasks.create_task(collect(name, parameters))
+            for name, profile in self.additional_evaluations.items():
+                if evaluation_profile_due(profile, step=state.global_step, last_step=state.is_last_step):
+                    tasks.create_task(collect(name, profile))
         return metrics
 
     async def on_evaluate_async(
         self, state: TrainerState, control: TrainerControl, *, metrics: Dict[str, float], trainer, **kwargs
     ) -> TrainerControl:
+        if self.checkpoint_scores is not None:
+            pool_checkpoint_scores(metrics, self.checkpoint_scores)
         for name, members in self.metric_groups.items():
             metrics[name] = math.fsum(metrics[member] / len(members) for member in members)
             if not math.isfinite(metrics[name]):
@@ -410,7 +456,12 @@ class EvaluationCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.eval_on_train_end and self.eval_steps > 0:
+        final_due = any(
+            profile.schedule == "final"
+            and evaluation_profile_due(profile, step=state.global_step, last_step=state.is_last_step)
+            for profile in self.additional_evaluations.values()
+        )
+        if (self.eval_on_train_end and self.eval_steps > 0) or final_due:
             control.should_evaluate = True
         return control
 
@@ -418,19 +469,23 @@ class EvaluationCallback(TrainerCallback):
 @register_callback(HF_MODEL_SAVE_CALLBACK_TYPE)
 class HFModelSaveCallback(TrainerCallback):
     """
-    Callback for requesting Hugging Face exports at regular intervals.
+    Callback for requesting Hugging Face exports at the end of training and, optionally, at intervals.
 
     Normal training records a request beside the immutable sharded checkpoint;
     a dedicated export job later converts and optionally publishes that checkpoint.
 
     Args:
-        save_steps: Request an HF export every N steps. Set to -1 or 0 to disable.
+        save_steps: Request an HF export every N steps. Set to -1 or 0 to request only the
+            terminal export.
         save_on_train_end: Whether to request a final HF export when training ends.
+        save_after_fraction: Suppress exports before this fraction of planned updates, including early termination.
     """
 
-    def __init__(self, save_steps: int = -1, save_on_train_end: bool = True):
+    def __init__(self, save_steps: int = -1, save_on_train_end: bool = True, save_after_fraction: float = 0.0):
+        validate_save_after_fraction(save_after_fraction)
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
+        self.save_after_fraction = save_after_fraction
 
     def on_step_end(
         self,
@@ -438,7 +493,11 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_steps > 0 and state.global_step % self.save_steps == 0:
+        if (
+            self.save_steps > 0
+            and state.global_step % self.save_steps == 0
+            and checkpoint_save_allowed(state, self.save_after_fraction)
+        ):
             control.should_save_hf_model = True
         return control
 
@@ -448,7 +507,7 @@ class HFModelSaveCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0:
+        if self.save_on_train_end and checkpoint_save_allowed(state, self.save_after_fraction):
             control.should_save_hf_model = True
         return control
 
@@ -469,7 +528,7 @@ class DatabaseRegistrationCallback(TrainerCallback):
     - Direct env vars: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 
     Args:
-        agent_name: Name of the agent being trained (default: from terminal_bench config or "skyrl")
+        agent_name: Name of the agent being trained. Defaults to TRAINING_AGENT_NAME or "skyrl".
         enabled: Whether registration is enabled (default: True, auto-disabled if no credentials)
     """
 
@@ -558,17 +617,7 @@ class DatabaseRegistrationCallback(TrainerCallback):
             logger.warning("DatabaseRegistrationCallback: No config available, skipping registration")
             return control
 
-        # Determine agent name
-        agent_name = self.agent_name
-        if not agent_name:
-            # Try terminal_bench config
-            tb_cfg = getattr(cfg, "terminal_bench_config", None)
-            if tb_cfg:
-                harbor = getattr(tb_cfg, "harbor", None)
-                if harbor:
-                    agent_name = getattr(harbor, "name", None)
-            if not agent_name:
-                agent_name = os.environ.get("TRAINING_AGENT_NAME", "skyrl")
+        agent_name = self.agent_name or os.environ.get("TRAINING_AGENT_NAME", "skyrl")
 
         # Get model path and dataset info
         policy_cfg = getattr(cfg.trainer, "policy", None)
@@ -930,7 +979,19 @@ class InferenceStatsCallback(TrainerCallback):
                 logger.warning(f"InferenceStatsCallback: {type(sink).__name__} failed", exc_info=True)
 
 
-def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
+def _add_inference_stats_callback(cfg: DictConfig, callbacks: List[TrainerCallback]) -> None:
+    interval = getattr(cfg.generator, "inference_stats_interval", 1)
+    if (
+        cfg.generator.backend == "vllm"
+        and interval > 0
+        and not any(isinstance(callback, InferenceStatsCallback) for callback in callbacks)
+    ):
+        callbacks.append(InferenceStatsCallback(log_every_steps=interval))
+
+
+def create_default_callbacks(
+    cfg: DictConfig, *, evaluation_profiles: Mapping[str, EvaluationProfile] | None = None
+) -> List[TrainerCallback]:
     """
     Create the default set of callbacks based on trainer configuration.
 
@@ -965,7 +1026,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     # Check for new-style explicit callback configuration
     if has_explicit_callbacks(cfg):
         logger.info("Using explicit callback configuration from YAML")
-        callbacks = create_callbacks_from_config(cfg)
+        callbacks = create_callbacks_from_config(cfg, evaluation_profiles=evaluation_profiles)
         token_budget = _configured_distillation_token_budget(cfg)
         configured_budget_callbacks = [
             callback for callback in callbacks if isinstance(callback, DistillationTokenBudgetCallback)
@@ -985,6 +1046,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             callbacks.append(LoggingCallback())
         if cfg.trainer.get("mismatch_probe", {}).get("enabled", False):
             callbacks.append(MismatchProbeCallback(cfg))
+        _add_inference_stats_callback(cfg, callbacks)
         return callbacks
 
     # Fall back to legacy interval-based configuration
@@ -1008,7 +1070,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
         )
 
     # HF model save callback
-    if interval_hf_export_enabled(cfg):
+    if hf_export_destination_configured(cfg):
         callbacks.append(HFModelSaveCallback(save_steps=int(cfg.trainer.hf_save_interval)))
 
     # Reference model update callback
@@ -1019,14 +1081,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     # Database registration callback (auto-enabled, gracefully disabled if no credentials)
     enable_db_registration = getattr(cfg.trainer, "enable_db_registration", True)
     if enable_db_registration:
-        # Get agent name from terminal_bench config if available
-        agent_name = None
-        tb_cfg = getattr(cfg, "terminal_bench_config", None)
-        if tb_cfg:
-            harbor = getattr(tb_cfg, "harbor", None)
-            if harbor:
-                agent_name = getattr(harbor, "name", None)
-        callbacks.append(DatabaseRegistrationCallback(agent_name=agent_name))
+        callbacks.append(DatabaseRegistrationCallback())
 
     # Pre-flight reward gate (default-off)
     gate_cfg = getattr(cfg.trainer, "preflight_gate", None)
@@ -1042,18 +1097,7 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
             )
         )
 
-    # Inference stats callback (enabled when using the vLLM backend). This combines
-    # engine and HTTP bridge stats without relying on Ray log-to-driver forwarding.
-    generator_backend = getattr(cfg.generator, "backend", None)
-    inference_stats_interval = getattr(cfg.generator, "inference_stats_interval", 1)
-    if generator_backend == "vllm" and inference_stats_interval > 0:
-        callbacks.append(
-            InferenceStatsCallback(
-                log_every_steps=inference_stats_interval,
-                log_to_console=True,
-                log_to_tracker=True,
-            )
-        )
+    _add_inference_stats_callback(cfg, callbacks)
 
     token_budget = _configured_distillation_token_budget(cfg)
     if token_budget is not None:
@@ -1151,7 +1195,9 @@ def create_callback_from_config(callback_config: Dict[str, Any]) -> TrainerCallb
         raise ValueError(f"Invalid parameters for callback '{callback_type}': {e}") from e
 
 
-def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
+def create_callbacks_from_config(
+    cfg: DictConfig, *, evaluation_profiles: Mapping[str, EvaluationProfile] | None = None
+) -> List[TrainerCallback]:
     """
     Create callbacks from explicit YAML configuration.
 
@@ -1176,6 +1222,8 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
     if callbacks_config is None:
         return []
 
+    profiles = resolve_evaluation_profiles(cfg) if evaluation_profiles is None else evaluation_profiles
+    validate_evaluation_schedule(cfg, profiles)
     callbacks = []
     for callback_config in callbacks_config:
         # Convert OmegaConf to dict if needed
@@ -1185,6 +1233,14 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             config_dict = callback_config
 
         try:
+            if config_dict.get("type") == "evaluation":
+                config_dict["additional_evaluations"] = {
+                    name: profiles[name] for name in config_dict.get("additional_evaluations") or {}
+                }
+                if (score_pool := config_dict.get("checkpoint_scores")) is not None:
+                    if OmegaConf.is_config(score_pool):
+                        score_pool = OmegaConf.to_container(score_pool, resolve=True)
+                    config_dict["checkpoint_scores"] = PooledCheckpointEvaluation.model_validate(score_pool)
             callback = create_callback_from_config(config_dict)
             callbacks.append(callback)
             logger.debug(f"Created callback: {callback.__class__.__name__}")
@@ -1193,8 +1249,3 @@ def create_callbacks_from_config(cfg: DictConfig) -> List[TrainerCallback]:
             raise
 
     return callbacks
-
-
-def get_available_callback_types() -> List[str]:
-    """Get list of available callback type names for YAML configs."""
-    return list(CALLBACK_REGISTRY.keys())

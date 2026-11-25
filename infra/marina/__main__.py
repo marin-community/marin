@@ -23,6 +23,9 @@ app without a redirect; pages redirect to ``marina.oa.dev/echo/`` or
 holds the named apps. ``applets.marina.oa.dev`` maps to the service but the kernel
 exposes only dynamic applet routes on that host.
 ``public.applets.marina.oa.dev`` maps to the unauthenticated public applet reader.
+Hosts in ``applet_domains`` map to the authenticated service; hosts in
+``public_applet_domains`` map to the public reader, which serves a bound app only while
+its stored mode is public.
 """
 
 from pathlib import Path
@@ -34,8 +37,16 @@ import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
 from iac.gcp.marina import PUBLIC_APPLET_SERVICE
 from marina.database_setup import LOOM_DATABASE_USER
-from marina.host_bindings import normalize_hostname
-from marina.releases import require_current_main
+from marina.host_bindings import (
+    AppletHostAccess,
+    applet_domains_env,
+    applet_host_access,
+    dns_zone_name,
+    domain_mapping_name,
+    host_resource_slug,
+    normalize_hostname,
+)
+from marina.releases import require_release_checkout
 from marina.runtime import JobRunner, load_runtime_config
 
 PROJECT = "hai-gcp-models"
@@ -58,6 +69,8 @@ READER_GROUP = "eng-all@openathena.ai"
 MARINMIRROR_TOKEN_SECRET = "marinmirror-token"
 # Google's shared frontend for Cloud Run domain mappings; vanity CNAMEs point here.
 CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
+# The Cloudflare zone of Marina's own hosts. Its hosts keep first-label resource names.
+PRIMARY_DNS_ZONE = "oa.dev"
 HOST_APPS = {"echo.oa.dev": "echo", "evaldash.oa.dev": "evaldash"}
 MARINA_HOST = "marina.oa.dev"
 APPLET_HOST = "applets.marina.oa.dev"
@@ -123,17 +136,27 @@ def job_template(
     )
 
 
+def host_list(config: pulumi.Config, key: str) -> list[str]:
+    hosts = config.get_object(key) or []
+    if not isinstance(hosts, list) or not all(isinstance(host, str) for host in hosts):
+        raise ValueError(f"marin-marina:{key} must be a list of host names")
+    return [normalize_hostname(host) for host in hosts]
+
+
 def main() -> None:
     if pulumi.get_stack() == "marin-marina" and not pulumi.runtime.is_dry_run():
-        require_current_main(Path(__file__).resolve().parents[2])
+        require_release_checkout(Path(__file__).resolve().parents[2])
     config = pulumi.Config()
     applet_operators = config.get_object("applet_operators") or []
     if not isinstance(applet_operators, list) or not all(isinstance(item, str) for item in applet_operators):
         raise ValueError("marin-marina:applet_operators must be a list of user IDs")
-    applet_domains = config.get_object("applet_domains") or []
-    if not isinstance(applet_domains, list) or not all(isinstance(host, str) for host in applet_domains):
-        raise ValueError("marin-marina:applet_domains must be a list of host names")
-    applet_domains = [normalize_hostname(host) for host in applet_domains]
+    applet_hosts = applet_host_access(host_list(config, "applet_domains"), host_list(config, "public_applet_domains"))
+    applet_domains = applet_domains_env(applet_hosts)
+    dns_zones = config.get_object("dns_zones") or {}
+    if not isinstance(dns_zones, dict) or not all(
+        isinstance(name, str) and isinstance(zone_id, str) for name, zone_id in dns_zones.items()
+    ):
+        raise ValueError("marin-marina:dns_zones must map DNS zone names to Cloudflare zone IDs")
     gcp_provider = gcp.Provider("gcp", project=PROJECT)
     child = pulumi.ResourceOptions(provider=gcp_provider)
 
@@ -278,7 +301,8 @@ def main() -> None:
                 "MARINA_APPLET_ORIGIN": f"https://{APPLET_HOST}",
                 "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
                 "MARINA_APPLET_OPERATORS": ",".join(applet_operators),
-                "MARINA_APPLET_DOMAINS": ",".join(applet_domains),
+                # Public hosts are listed too so operators can bind them through this service.
+                "MARINA_APPLET_DOMAINS": applet_domains[AppletHostAccess.AUTHENTICATED],
                 "MARINA_AGENT_ORIGIN": "https://loom.oa.dev",
                 **DATABASE_ENV,
                 **runner_env,
@@ -339,6 +363,7 @@ def main() -> None:
                             "MARINA_DATA_ROOT": f"gs://{DATA_BUCKET}",
                             "MARINA_PUBLIC_APPLET_ORIGIN": f"https://{PUBLIC_APPLET_HOST}",
                             "MARINA_SURFACE": "public_applets",
+                            "MARINA_APPLET_DOMAINS": applet_domains[AppletHostAccess.PUBLIC],
                             **DATABASE_ENV,
                         }.items()
                     ]
@@ -377,32 +402,50 @@ def main() -> None:
     # Vanity hosts: a Cloud Run domain mapping per host routes it to the service and provisions
     # the managed cert; a DNS-only Cloudflare CNAME points the host at Cloud Run's frontend
     # (a Cloudflare proxy would block cert issuance). Mappings are immutable and carry
-    # server-set metadata, so those fields are ignored. Set marin-marina:dns_zone_id to enable.
-    dns_zone_id = config.get("dns_zone_id")
-    if dns_zone_id:
-        hosts = {
-            MARINA_HOST: (SERVICE, service),
-            APPLET_HOST: (SERVICE, service),
-            PUBLIC_APPLET_HOST: (PUBLIC_APPLET_SERVICE, public_applet_service),
-            **{host: (SERVICE, service) for host in HOST_APPS},
-            **{host: (SERVICE, service) for host in applet_domains},
+    # Vanity hosts: a Cloud Run domain mapping per host routes it to the service and provisions
+    # the managed cert; a DNS-only Cloudflare CNAME points the host at Cloud Run's frontend
+    # (a Cloudflare proxy would block cert issuance). Mappings are immutable and carry
+    # server-set metadata, so those fields and the route are ignored on update. The logical name
+    # carries the surface, so moving a host between applet_domains and public_applet_domains in
+    # one deploy fails with a duplicate mapping instead of silently keeping the old route; move a
+    # host in two deploys: remove, then re-add. Each host's record goes in the most specific zone
+    # of marin-marina:dns_zones that contains it. Set dns_zones to enable.
+    if dns_zones:
+        surfaces = {
+            AppletHostAccess.AUTHENTICATED: (SERVICE, service),
+            AppletHostAccess.PUBLIC: (PUBLIC_APPLET_SERVICE, public_applet_service),
         }
-        for host, (route_name, route_service) in hosts.items():
-            slug = host.split(".")[0]
+        hosts = {
+            MARINA_HOST: AppletHostAccess.AUTHENTICATED,
+            APPLET_HOST: AppletHostAccess.AUTHENTICATED,
+            PUBLIC_APPLET_HOST: AppletHostAccess.PUBLIC,
+            **{host: AppletHostAccess.AUTHENTICATED for host in HOST_APPS},
+            **applet_hosts,
+        }
+        for host, access in hosts.items():
+            route_name, route_service = surfaces[access]
+            zone_name = dns_zone_name(host, dns_zones)
+            slug = host_resource_slug(host, zone_name, PRIMARY_DNS_ZONE)
+            # The public reader's own host predates surface-qualified names; keep its state.
+            aliases = [pulumi.Alias(name=f"{slug}-domain")] if host == PUBLIC_APPLET_HOST else None
             gcp.cloudrun.DomainMapping(
-                f"{slug}-domain",
+                domain_mapping_name(slug, access),
                 name=host,
                 location=REGION,
                 metadata=gcp.cloudrun.DomainMappingMetadataArgs(namespace=PROJECT),
                 spec=gcp.cloudrun.DomainMappingSpecArgs(route_name=route_name),
                 opts=pulumi.ResourceOptions.merge(
                     child,
-                    pulumi.ResourceOptions(depends_on=[route_service], ignore_changes=["metadata", "spec", "statuses"]),
+                    pulumi.ResourceOptions(
+                        depends_on=[route_service],
+                        ignore_changes=["metadata", "spec", "statuses"],
+                        aliases=aliases,
+                    ),
                 ),
             )
             cloudflare.DnsRecord(
                 f"{slug}-dns",
-                zone_id=dns_zone_id,
+                zone_id=dns_zones[zone_name],
                 name=host,
                 type="CNAME",
                 content=CLOUD_RUN_FRONTEND,

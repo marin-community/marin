@@ -4,7 +4,6 @@
 """Tests for worker environment probing."""
 
 import io
-import sys
 
 import iris.cluster.worker.env_probe as env_probe
 import pytest
@@ -351,11 +350,26 @@ def test_worker_id_explicit_config_overrides_slice_id(tmp_path, monkeypatch):
 # --- Network metrics ---
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux-only")
-def test_read_net_dev_bytes_returns_nonzero_on_linux():
+_PROC_NET_DEV = """\
+Inter-|   Receive                                    |  Transmit
+ face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed
+    lo: 9999999 1000 0 0 0 0 0 0 9999999 1000 0 0 0 0 0 0
+  eth0:  123456  100 0 0 0 0 0 0  654321  200 0 0 0 0 0 0
+  eth1:    1000   10 0 0 0 0 0 0    2000   20 0 0 0 0 0 0
+"""
+
+
+def test_read_net_dev_bytes_sums_non_loopback_interfaces(monkeypatch):
+    def fake_open(path, *args, **kwargs):
+        assert path == "/proc/net/dev"
+        return io.StringIO(_PROC_NET_DEV)
+
+    monkeypatch.setattr(env_probe, "open", fake_open, raising=False)
+
     recv, sent = _read_net_dev_bytes()
-    assert recv >= 0
-    assert sent >= 0
+
+    assert recv == 123456 + 1000
+    assert sent == 654321 + 2000
 
 
 def test_host_metrics_collector_network_writes_cumulative_bytes(monkeypatch):

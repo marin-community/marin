@@ -6,15 +6,10 @@ defaults:
   - mismatch_probe@trainer.mismatch_probe: default
 
 data:
-  task_cache_dir: "~/.cache/marinskyrl/tasks"
   train_data: ["${oc.env:HOME}/data/gsm8k/train.parquet"]
   val_data: ["${oc.env:HOME}/data/gsm8k/validation.parquet"]
   shuffle: true
   preference_pair_format: text # text completions or tokenized conversations with assistant masks
-  # Optional task-directory sidechannel for mixed Nemotron Ultra RLVR. The
-  # parquet dataloader remains authoritative; SWE rows resolve their instance ID
-  # against these terminal-bench task roots at rollout time.
-  terminal_bench_data: []
   sampling:
     kind: null # null = seeded passes (data.shuffle); domain-weighted|naive|thompson|learnability|grade-uniform|grade-adaptive|grade-prior
     domain_weights: {} # exact teacher-route mixture in every train_batch_size prompts drawn when kind=domain-weighted
@@ -37,13 +32,17 @@ checkpoint_export:
   step: null
   checkpoint_path: null
   export_root: null
+  # Keep these defaults for rl_gate comparisons against sealed controls.
   hf_hub_repo_id: null
   hf_hub_private: false
   hf_hub_revision: main
   hf_upload_mode: latest
 
 trainer:
-  evaluation_runner: training # task or harbor selects generated validation for offline preference training
+  # Best selection queues only the final export, after the last evaluation.
+  hf_export_checkpoint: latest  # latest or best native checkpoint for HF export
+  batch_builder: driver  # driver, worker
+  evaluation_runner: training # task selects generated validation for offline preference training
   trajectory_selector:
     type: null # null | best_of_n; selection runs after reward postprocessing and before teacher scoring
   # light is the shared default: fatal Python stacks, bounded NCCL flight recording,
@@ -71,7 +70,7 @@ trainer:
     count_step: 1000
   placement:
     # TOPOLOGY-SENSITIVE: the launcher uses this to merge or split physical role bundles, while the runtime also
-    # uses it to choose placement groups, model residency, weight transfer, and Terminal Bench sync/async execution.
+    # uses it to choose placement groups, model residency, and weight transfer.
     # A wrapper must treat this as part of the launch topology, not as a trainer-only optimization.
     colocate_all: true
     # TOPOLOGY-SENSITIVE: when a reference role is active, this decides whether it shares the policy bundle or
@@ -81,10 +80,6 @@ trainer:
     # geometry after launch. Do not override either field without updating the canonical launch topology.
     policy_num_nodes: 1
     policy_num_gpus_per_node: 4
-    # TOPOLOGY-SENSITIVE: trainer.critic.model.path activates this physical role. These values are ignored only
-    # while that path is null; setting the path in a wrapper can therefore increase the requested gang size.
-    critic_num_nodes: 1
-    critic_num_gpus_per_node: 4
     # TOPOLOGY-SENSITIVE: use_kl_loss or use_kl_in_reward activates this physical role. Do not repurpose these
     # values as generic non-policy capacity; they must describe the active reference role and its bundle.
     ref_num_nodes: 1
@@ -119,35 +114,33 @@ trainer:
       source_identity: null
       lora:
           rank: 0
-          alpha: 16
-          dropout: 0
           # Load an existing adapter instead of creating fresh LoRA weights. Its
           # stored PEFT config is authoritative; rank must match for vLLM sync.
           adapter_path: null
-          adapter_revision: null
-          lora_sync_path: "/tmp/skyrl_lora_sync"
-          target_modules: "all-linear"
-          exclude_modules: null
     optimizer_config:
       optimizer: "AdamW"
       lr: 1.0e-6
       adam_betas: [0.9, 0.999]
       weight_decay: 1e-2
       max_grad_norm: 1.0
-      offload_after_step: true
       num_warmup_steps: 0
+      lr_decay_steps: null
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1
-    use_torch_compile: false
     record_memory: false
-    # Limit per-peer NCCL buffers before Megatron policy process-group initialization.
-    # Null preserves NCCL's default; useful when a reference actor shares each GPU.
-    nccl_buffer_size_bytes: null
+    # Pin the standard 4-MiB SIMPLE buffer before process-group initialization.
+    # Smaller buffers can corrupt NVLSTree reductions in NCCL 2.30.7 (https://github.com/marin-community/marin/issues/11649).
+    nccl_buffer_size_bytes: &nccl_standard_buffer_bytes 4194304
   ref:
-    # Colocated Megatron reference workers retain NCCL buffers after model offload.
-    # Reduce their per-peer buffer before process-group initialization; null keeps NCCL's default.
-    nccl_buffer_size_bytes: 262144
+    # Keep the standard buffer even when reference workers share a GPU.
+    # Null delegates sizing to the process environment and NCCL config.
+    # The explicit 4-MiB buffer works around NCCL 2.30.7's NVLSTree chunk exceeding the SIMPLE FIFO slot
+    # (https://github.com/marin-community/marin/issues/11649).
+    # The NVLSTree chunk tuning in NCCL 2.32.6
+    # (https://github.com/NVIDIA/nccl/commit/b89a40883e4868c6bb44610c3c75d4a8b7a40530) is a possible path back to
+    # smaller buffers once an upgrade is validated.
+    nccl_buffer_size_bytes: *nccl_standard_buffer_bytes
     model:
       path: ${trainer.policy.model.path}
       revision: ${trainer.policy.model.revision}
@@ -155,28 +148,6 @@ trainer:
       tokenizer_revision: ${trainer.policy.model.tokenizer_revision}
       source_uri: ${trainer.policy.model.source_uri}
       source_identity: ${trainer.policy.model.source_identity}
-    sequence_parallel_size: 1
-  critic:
-    model:
-      # ROLE-ACTIVATING: a non-null path creates a local critic role. The launcher then claims critic_num_nodes and
-      # the runtime creates critic actors, so a wrapper that sets this also changes the launch topology.
-      path: null
-      lora:
-        rank: 0
-        alpha: 16
-        dropout: 0
-        target_modules: "all-linear"
-        exclude_modules: null
-    optimizer_config:
-      optimizer: "AdamW"
-      lr: 5.0e-6
-      adam_betas: [0.9, 0.999]
-      weight_decay: 1e-2
-      max_grad_norm: 1.0
-      offload_after_step: true
-      num_warmup_steps: 0
-      scheduler: "constant_with_warmup"
-      optimizer_kwargs: {}
     sequence_parallel_size: 1
   algorithm:
     batch_invariant: false
@@ -201,7 +172,6 @@ trainer:
     use_entropy_loss: false
     entropy_loss_coef: 0.01
     advantage_batch_normalize: false
-    value_head_prefix: "value_head"
     policy_loss_type: "regular"
     # FTPOConfig owns the defaults. policy_loss_type=ftpo selects standalone
     # supervision; ftpo.auxiliary_weight adds it to a task-reward policy loss.
@@ -214,22 +184,18 @@ trainer:
     loss_reduction: "token_mean"
     grpo_norm_by_std: true
     rloo_n_filter_zero_reward_groups: true
-    lambd: 1.0
     gamma: 1.0
     eps_clip_low: 0.2
     eps_clip_high: 0.2
     clip_ratio_c: 3.0
     off_policy_correction: null
     off_policy_correction_rules: null
-    tis_splice: true
-    tis_lcs_alert_threshold: 0.005
     enable_token_reward_channel: false
     think_token_weight: 1.0
     sapo:
       tau_pos: 1.0
       tau_neg: 1.05
     
-    value_clip: 0.2
     dynamic_sampling:
       type: null
       max_sample_batches: 30
@@ -265,7 +231,15 @@ trainer:
     # fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout never
     # blocks training, but quick rollouts train more often and at lower staleness.
     batch_policy: full_batch
-    # Cap on prompt groups generating at once; null bounds generation only by staleness.
+    # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
+    # prompt waits until the prompt order offers it again.
+    max_stale_retries: 1
+    # How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
+    # prompt may produce before it sits out 10 training steps. A prompt stays in rotation when one batch needs every
+    # prompt still offered.
+    max_unusable_groups: 3
+    # Cap on prompt groups generating at once. Iris defaults to 1.5 training batches, rounded up.
+    # Elsewhere null bounds generation only by staleness.
     max_in_flight: null
     # Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then
     # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps
@@ -310,7 +284,9 @@ trainer:
   max_ckpts_to_keep: 2
   callbacks: null
   ckpt_interval: 5
-  hf_save_interval: ${trainer.ckpt_interval}
+  # A positive interval also exports intermediate checkpoints, and pruning keeps each
+  # one until its export completes. -1 exports only the terminal checkpoint.
+  hf_save_interval: -1
   export_hf_artifact: false
   hf_upload_mode: latest
   export_path: "${oc.env:HOME}/exports"
@@ -320,7 +296,6 @@ trainer:
   update_epochs_per_batch: 1
   train_batch_size: 1024
   policy_mini_batch_size: 256
-  critic_mini_batch_size: 256
   micro_train_batch_size_per_gpu: 1
   micro_forward_batch_size_per_gpu: ${trainer.micro_train_batch_size_per_gpu}
   update_ref_every_epoch: false
@@ -344,7 +319,6 @@ trainer:
     on_failure: "abort"
   max_prompt_length: 512
   flash_attn: false
-  attn_backend: "auto"
   disable_fast_tokenizer: false
   project_name: "skyrl"
   run_name: "test_run"
@@ -352,6 +326,8 @@ trainer:
   tracker_commit_each_step: true
   dump_data_batch: false
   dump_eval_results: true
+  dump_grader_report: false
+  grader_report_dir: ${trainer.export_path}
   log_level: "INFO"
 
   rope_scaling: null
@@ -381,9 +357,9 @@ generator:
     clear_cache: true
   # How weights reach the engines. "broadcast": trainer rank 0 sends every tensor to every engine.
   # "expert_block": each MoE expert matrix is broadcast from a Megatron rank that holds it to the vLLM
-  # workers that serve it. Needs engines that are not colocated with training, a Grug MoE on the megatron
-  # strategy at TP=1 and ETP=1, local vLLM engines at TP=1 with EP=DP>=1, the NCCL weight-sync backend and
-  # vLLM's TRITON MoE backend.
+  # workers that serve it. Needs a Grug MoE on Megatron at TP=ETP=1, local vLLM engines at TP=1 with
+  # EP=DP>=1, NCCL, and vLLM's TRITON MoE backend. Colocation is limited to one four-GPU node with
+  # policy PP=1 EP=4, one TP=PP=1 DP=EP=4 engine, and expert_block_sync.verify=true.
   weight_sync_transport: "broadcast"
   expert_block_sync:
     timeout_seconds: 600  # For creating the sync groups and for the broadcasts of each sync.
@@ -391,7 +367,6 @@ generator:
   fuse_weights: false
   r3_transport: "decentral"
   r3_dispatch_put_timeout_seconds: 600
-  gdn_backend: "torch"
   weight_transfer_threshold_cuda_ipc_GB: 1.0
   # TOPOLOGY-INPUT: TP and PP determine the node-atomic GPU group for each engine. Their product must fit on one
   # node unless the compiled plan and backend explicitly support a cross-node engine.
@@ -427,8 +402,7 @@ generator:
   weight_sync_pause_timeout_seconds: 30.0
   max_turns: 1
 
-  # Shared Harbor/Gym terminal-error taxonomy. Unknown Gym failures retain the
-  # previous masking behavior; context overflow and timeouts are agent errors.
+  # Mask unknown terminal failures and zero rewards for known agent errors.
   error_handling:
     enable_error_classification: true
     passthrough_exceptions: []
@@ -445,14 +419,15 @@ generator:
 
   engine_init_kwargs: {}
 
-  # Managed EAGLE serving and optional online draft training. vLLM resolves immutable
-  # Hugging Face revisions or streams object-store checkpoints through Run:ai.
+  # Managed speculative decoding with optional online training for EAGLE3.
+  # SkyRL mirrors pinned Hugging Face drafts and streams object-store checkpoints into vLLM through Run:ai.
   speculative_decoding: null
 
   override_existing_update_group: "auto"
   # Objectives that consume rollout logprobs use processed probabilities and
   # require full-distribution, temperature-only sampling.
   sampling_params:
+    ignore_eos: false
     max_generate_length: 1024
     repetition_penalty: 1.0
     temperature: 1.0
@@ -461,8 +436,12 @@ generator:
     top_k: -1
     logprobs: null
     stop: null
+    stop_token_ids: null
+    skip_special_tokens: true
 
   eval_sampling_params:
+    seed: null
+    ignore_eos: false
     max_generate_length: ${generator.sampling_params.max_generate_length}
     repetition_penalty: 1.0
     temperature: 0.0
@@ -471,6 +450,8 @@ generator:
     top_k: -1
     logprobs: null
     stop: null
+    stop_token_ids: null
+    skip_special_tokens: true
 
   eval_n_samples_per_prompt: 1
 
@@ -484,7 +465,7 @@ generator:
       advantage_penalty_per_token: 0.0
       max_advantage_penalty: 0.2
     passthrough:
-      # Subtract from optimization reward when the Harbor taxonomy classifies the terminal exception as PASSTHROUGH.
+      # Subtract from optimization reward for terminal exceptions classified as PASSTHROUGH.
       penalty: 0.0
     non_termination:
       penalty: 0.0
@@ -497,6 +478,12 @@ generator:
       free_tokens: 0
       penalty_per_token: 0.0
       max_penalty: 0.2
+    reasoning_span:
+      # Charged for a malformed reasoning span in any chat turn.
+      penalty: 0.0
+      # `rollout` subtracts it once from the reward. `marker` subtracts it from the loop credit at the token
+      # where each span goes wrong, or charges the reward when a violation has no such token.
+      target: rollout
 
   trajectory_retention:
     enabled: true
@@ -506,6 +493,8 @@ generator:
     phases: [train]
     sample_count_per_step: 1
     sample_fraction: 0.0
+    # null uses sample_fraction for evaluation as well.
+    eval_sample_fraction: null
     always_retain_failures: true
     always_retain_non_terminating: true
     always_retain_loops: true
@@ -521,6 +510,8 @@ generator:
     redact_fields: []
     model_path: ${trainer.policy.model.path}
     model_source_identity: ${trainer.policy.model.source_identity}
+    # Evaluation-only runs have no optimizer step; retain the bound checkpoint provenance.
+    model_checkpoint_step: null
     resume_path: ${trainer.resume_path}
     inference_backend: ${generator.backend}
 
@@ -531,18 +522,22 @@ generator:
 
 environment:
   env_class: "gsm8k"
+  task_sessions:
+    agent_harnesses: {}
 
 trajectory_runner:
   command_timeout: 120
   cleanup_timeout: 30
   shutdown_timeout: 45
-  max_concurrent_tasks: 32
+  # Trajectories each rollout worker runs at once; an evaluation runs at most this many across all workers.
+  max_concurrent_tasks: 1024
+  # Training machine trajectories across the rollout worker pool, with at least one slot per worker.
+  max_concurrent_training_machine_tasks: null
   # One worker pool executes all task families on the trainer's node.
   rollout_workers:
     num_workers: 4
     cpus_per_worker: 8
     executor_threads: 256 # Default thread pool for blocking task operations.
     progress_timeout_seconds: 21600 # fail a worker's requests when none of them completes for this long
-    # Workers start one at a time, this long after the previous one is up, so their imports and tokenizer loads
-    # from a shared filesystem do not overlap; zero starts them all at once.
-    start_interval_seconds: 2.0
+    # Zero starts workers together; a positive interval staggers their imports and tokenizer loads.
+    start_interval_seconds: 0.0

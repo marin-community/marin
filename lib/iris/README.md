@@ -72,6 +72,16 @@ python -m iris.jax.multigpu_main --nproc 8 -- python train.py
 
 The supervisor assigns each child a process index and local device IDs. Iris
 runs the submitted command as given, so callers must add the wrapper themselves.
+Set `termination_grace=Duration.from_seconds(60)` on `IrisClient.submit` or
+Fray's `JobRequest`, or pass `--termination-grace 60` to `iris job run`, to give a
+SIGTERM-aware command time to finish. The controller resolves the default to
+10 seconds, validates a range of 1 to 110 seconds, and persists the effective
+budget across retries and federation. The multi-GPU supervisor waits that long
+before sending SIGKILL; the Kubernetes task Pod and worker stop path allow five
+more seconds for teardown. Iris delivers the resolved budget to the supervisor
+as internal task metadata; application environment variables do not configure it.
+The GCP worker container permits 120 seconds for its own shutdown. A stalled
+command is still force-terminated at the deadline.
 
 ## Architecture
 

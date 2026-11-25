@@ -42,7 +42,8 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import NodeHealthConfig, TaskOutputPolicy
+from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
+from iris.cluster.constraints import AttributeValue, Constraint, evaluate_constraint
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -53,6 +54,7 @@ from iris.cluster.controller.backend import (
     BackendRecoveryResult,
     DeviceCapacity,
     DirectReconcileRequest,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderError,
     ReconcileObservation,
@@ -68,6 +70,7 @@ from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.node_agent.storage_health import reconcile_storage_health
 from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
+    DEFAULT_SANDBOX_RUNTIME_CLASS,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
     NVIDIA_GPU_RESOURCE,
@@ -90,6 +93,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -112,6 +116,7 @@ from iris.cluster.platforms.k8s.types import (
 from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import (
     IRIS_NODE_NAME_ENV,
+    IRIS_WORKER_REGION_ENV,
     OUTPUT_MOUNT,
     TASK_OUTPUT_FINALIZING_STATUS,
     VENV_PATH,
@@ -145,7 +150,9 @@ from iris.cluster.stats.tables import (
     TaskEventSeverity,
     stats_timestamp,
 )
-from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, get_gpu_count
+from iris.cluster.types import AttemptUid, CoschedulingConfig, JobName, WellKnownAttribute, get_gpu_count
+from iris.preemption import SHUTDOWN_MARGIN, resolve_termination_grace
+from iris.resources.limits import ResourceLimitReason
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.proto_display import ADMIN_PRIORITY_BAND_VALUES, priority_band_name, resolve_container_profile
 from iris.time_proto import timestamp_to_proto
@@ -189,6 +196,9 @@ _LABEL_ATTEMPT_ID = IRIS_ATTEMPT_ID_LABEL
 # Collision-resistant hash of the full (unsanitized) task_id; 16 hex chars (64 bits).
 _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
+# Unique per attempt, even when a resubmitted job reuses the task ID and attempt number.
+_LABEL_ATTEMPT_UID = "iris.attempt_uid"
+_SANDBOX_STORAGE_LIMIT_ANNOTATION = "iris.sandbox_storage_limit_bytes"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
@@ -210,7 +220,6 @@ _MAX_POD_NAME_LEN = 63
 # Map well-known Iris constraint keys to their k8s node label keys.
 _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
     "pool": "iris.pool",
-    "region": "iris.region",
 }
 
 # Kubernetes label values: max 63 chars, alphanumeric plus [-_.], must start/end alphanumeric.
@@ -275,6 +284,9 @@ _KUEUE_WORKLOAD_EVICTION_REASON_PREFIX = "WorkloadEvicted"
 # transitions.py owns retries). See .agents/projects/20260529_iris_k8s_gang_admission.md.
 _KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
 _KUEUE_POD_GROUP_TOTAL = "kueue.x-k8s.io/pod-group-total-count"
+_KUEUE_ROLE_HASH = "kueue.x-k8s.io/role-hash"
+# The Pod integration in Kueue v0.18 supports at most ten PodSets per Workload.
+_KUEUE_MAX_POD_SETS = 10
 _KUEUE_QUEUE_NAME = "kueue.x-k8s.io/queue-name"
 _KUEUE_JOB_UID = "kueue.x-k8s.io/job-uid"
 _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
@@ -361,15 +373,26 @@ def _pod_group_name(task_id: JobName, attempt_id: int) -> str:
     return f"iris-pg-{_task_hash(_job_path(task_id))}-{attempt_id}"
 
 
-def _constraints_to_node_selector(
+def _constraints_to_node_placement(
     constraints: Sequence[job_pb2.Constraint],
-) -> dict[str, str]:
-    """Map Iris constraints to k8s nodeSelector entries.
+) -> tuple[dict[str, str], dict]:
+    """Map placement constraints to Kubernetes selectors and required affinity.
 
-    Unknown keys are silently skipped. Known keys require EQ with a value.
+    Unknown keys are silently skipped. Node-selector keys require EQ with a
+    value; NVLink-domain exclusions require a hard NE constraint.
     """
     node_selector: dict[str, str] = {}
+    domain_expressions = []
     for c in constraints:
+        if c.key == COSCHEDULE_NVLINK_DOMAIN:
+            if c.mode != job_pb2.CONSTRAINT_MODE_REQUIRED or c.op != job_pb2.CONSTRAINT_OP_NE:
+                raise PodManifestError("NVLink domain exclusions require a hard NE constraint")
+            if not c.HasField("value") or not c.value.string_value:
+                raise PodManifestError("NVLink domain exclusions require a nonempty domain")
+            domain_expressions.append(
+                {"key": CW_LABEL_NVLINK_DOMAIN, "operator": "NotIn", "values": [c.value.string_value]}
+            )
+            continue
         label_key = _CONSTRAINT_KEY_TO_NODE_LABEL.get(c.key)
         if label_key is None:
             continue
@@ -380,7 +403,29 @@ def _constraints_to_node_selector(
                 f"Unsupported constraint op={c.op} for key={c.key!r}: "
                 f"only CONSTRAINT_OP_EQ is supported for nodeSelector mapping"
             )
-    return node_selector
+    affinity = {}
+    if domain_expressions:
+        affinity = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [{"matchExpressions": domain_expressions}]
+                }
+            }
+        }
+    return node_selector, affinity
+
+
+def _region_constraint_error(constraints: Sequence[job_pb2.Constraint], regions: Sequence[str]) -> str | None:
+    # Iris regions identify the backend, not a Kubernetes node label. CoreWeave
+    # advertises US-EAST-08A while its nodes carry region US-EAST-08.
+    required = [
+        Constraint.from_proto(c)
+        for c in constraints
+        if c.key == WellKnownAttribute.REGION and c.mode != job_pb2.CONSTRAINT_MODE_PREFERRED
+    ]
+    if not required or any(all(evaluate_constraint(AttributeValue(region), c) for c in required) for region in regions):
+        return None
+    return f"Region constraints do not match Kubernetes backend regions {sorted(regions)}"
 
 
 def _task_hash(task_id: str) -> str:
@@ -484,10 +529,21 @@ def _lookup_pod(
     return candidates[0], None
 
 
+def _sandbox_image_owns_workdir(run_req: job_pb2.RunTaskRequest) -> bool:
+    return (
+        run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+        and not run_req.bundle_id
+        and not run_req.entrypoint.workdir_files
+        and not run_req.entrypoint.workdir_file_refs
+    )
+
+
 def _build_volumes_and_mounts(
     mount_specs: Sequence[MountSpec],
     cache_dir: str,
     shm_limit_bytes: int,
+    *,
+    image_owns_workdir: bool,
 ) -> tuple[list[dict], list[dict]]:
     """Build pod volumes and container volume mounts for ``mount_specs`` plus /dev/shm.
 
@@ -496,6 +552,8 @@ def _build_volumes_and_mounts(
     Workdir, outputs and tmpfs use emptyDir; cache mounts use hostPath under
     cache_dir so they persist across pods on the same node. /dev/shm is
     memory-backed and shares the task container's memory limit when one is set.
+    When ``image_owns_workdir`` is true, omit the workdir volume and mount to
+    preserve the prepared image's files.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -505,6 +563,9 @@ def _build_volumes_and_mounts(
     volumes: list[dict] = []
     mounts: list[dict] = []
     for spec in mount_specs:
+        if image_owns_workdir and spec.kind is MountKind.WORKDIR:
+            # An empty workdir volume would hide the prepared image's /app.
+            continue
         if spec.kind is MountKind.CACHE:
             volumes.append(
                 {
@@ -545,6 +606,7 @@ class PodConfig:
     logship_image: str = ""
     cache_dir: str = DEFAULT_TASK_CACHE_DIR
     service_account: str = ""
+    sandbox_runtime_class: str = DEFAULT_SANDBOX_RUNTIME_CLASS
     host_network: bool = False
     controller_address: str | None = None
     managed_label: str = ""
@@ -562,6 +624,9 @@ class PodConfig:
     # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
     # Iris creates at startup; override via kubernetes_provider.priority_classes.
     priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
+    # Enables EGRESS_POLICY_ALLOWLIST: the cluster's allowlist and whether it is
+    # the default. None rejects ALLOWLIST jobs.
+    egress_allowlist: EgressAllowlistConfig | None = None
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -856,9 +921,47 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
+def _validate_locality_groups(
+    coscheduling: job_pb2.CoschedulingConfig, num_tasks: int, gpu_count: int, config: PodConfig
+) -> None:
+    CoschedulingConfig(coscheduling.group_by, tuple(coscheduling.group_sizes)).validate(num_tasks)
+    if len(coscheduling.group_sizes) > _KUEUE_MAX_POD_SETS:
+        raise PodManifestError(f"Kueue supports at most {_KUEUE_MAX_POD_SETS} coscheduling groups per job")
+    binding = config.kueue_topologies.get(coscheduling.group_by)
+    if binding is None or binding.mode != TopologyMode.REQUIRED:
+        raise PodManifestError("coscheduling group_sizes requires a required topology level")
+    for size in coscheduling.group_sizes:
+        _topology_request_annotations(
+            binding, group_by=coscheduling.group_by, num_tasks=size, gpu_count=gpu_count, task_ref="locality group"
+        )
+
+
+def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
+    """Whether the task pod joins its node's network, when the cluster enables host networking.
+
+    CLUSTER pods do. Legacy GVISOR pods need the CNI-created interface and routes
+    for cluster egress.
+    """
+    if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
+        return False
+    return network is TaskNetwork.CLUSTER
+
+
+def _needs_infiniband(num_tasks: int, device: job_pb2.DeviceConfig) -> bool:
+    """Whether NCCL in a job needs its nodes' InfiniBand devices, which only host networking exposes."""
+    return num_tasks > 1 and get_gpu_count(device) > 0
+
+
+def _needs_task_policy(run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
+    """Whether the pod gets a per-attempt Cilium policy for its job's own egress rules."""
+    return network is TaskNetwork.ALLOWLIST and bool(run_req.egress_allow)
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
+    *,
+    worker_region: str | None,
 ) -> dict:
     """Build a Pod manifest dict from a RunTaskRequest and cluster config."""
     task_id = JobName.from_wire(run_req.task_id)
@@ -874,12 +977,13 @@ def _build_pod_manifest(
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     service_account = config.service_account if isolation.include_service_account else ""
-    # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
-    host_network = (
-        config.host_network
-        and isolation.network is TaskNetwork.CLUSTER
-        and run_req.container_profile != job_pb2.CONTAINER_PROFILE_GVISOR
-    )
+    network = isolation.network
+    if network is TaskNetwork.ALLOWLIST and config.egress_allowlist is None:
+        # Without Cilium nothing enforces the allowlist, so a stored ALLOWLIST job runs on the cluster network.
+        network = TaskNetwork.CLUSTER
+    host_network = _uses_host_network(config, run_req, network)
+
+    termination_grace = resolve_termination_grace(Duration.from_ms(run_req.termination_grace.milliseconds))
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -894,6 +998,7 @@ def _build_pod_manifest(
         constraints=run_req.constraints,
         ports=run_req.ports,
         resources=run_req.resources if run_req.HasField("resources") else None,
+        termination_grace=termination_grace,
     )
     cluster_env = config.task_env if isolation.include_cluster_env else {}
     job_secrets = task_secret_values(run_req.environment)
@@ -903,6 +1008,10 @@ def _build_pod_manifest(
             raise PodManifestError(storage_error)
     job_env = dict(run_req.environment.env_vars)
     combined = {**cluster_env, **job_env, **iris_env}
+    # Location comes from the dispatch backend, never from inherited or user env.
+    combined.pop(IRIS_WORKER_REGION_ENV, None)
+    if worker_region is not None:
+        combined[IRIS_WORKER_REGION_ENV] = worker_region
     if job_secrets:
         combined[SECRETS_DIR_ENV] = str(SECRETS_DIR)
         for name, value in secret_file_environment(job_secrets).items():
@@ -932,12 +1041,15 @@ def _build_pod_manifest(
         limits: dict[str, str] = {}
         requests: dict[str, str] = {}
         if res.cpu_millicores:
-            # CPU as a request only (no limits.cpu) so containers can burst onto
-            # idle node CPU. The scheduler still places by cpu_millicores, and
+            # Ordinary jobs can burst onto idle node CPU. Sandbox jobs use a
+            # hard CPU ceiling so task resource declarations are enforced.
+            # The scheduler still places by cpu_millicores, and
             # under contention CFS shares CPU proportionally to requests. This
             # matches the soft-cap behavior the docker runtime uses for
             # CAPACITY_TYPE_ON_DEMAND workers.
             requests["cpu"] = f"{res.cpu_millicores}m"
+            if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+                limits["cpu"] = requests["cpu"]
         if res.memory_bytes:
             # Memory stays a hard cap — overshoot is fatal, not just slow.
             # Memory-backed emptyDir usage is charged to this same cgroup.
@@ -958,9 +1070,13 @@ def _build_pod_manifest(
         if requests:
             resources.setdefault("requests", {}).update(requests)
         if res.disk_bytes:
-            disk_gi = max(1, res.disk_bytes // (1024**3))
-            resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
-            resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
+            disk_quantity = (
+                str(res.disk_bytes)
+                if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+                else f"{max(1, res.disk_bytes // (1024**3))}Gi"
+            )
+            resources.setdefault("requests", {})["ephemeral-storage"] = disk_quantity
+            resources.setdefault("limits", {})["ephemeral-storage"] = disk_quantity
 
     is_gang = bool(run_req.coscheduling.group_by)
     has_accelerator = gpu_count > 0 or has_tpu
@@ -968,7 +1084,12 @@ def _build_pod_manifest(
     # ResourceSpec.memory defaults to zero, so low-level accelerator requests may omit it.
     if not shm_limit_bytes and has_accelerator:
         shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
-    volumes, vol_mounts = _build_volumes_and_mounts(isolation.mounts, cache_dir, shm_limit_bytes=shm_limit_bytes)
+    volumes, vol_mounts = _build_volumes_and_mounts(
+        isolation.mounts,
+        cache_dir,
+        shm_limit_bytes=shm_limit_bytes,
+        image_owns_workdir=_sandbox_image_owns_workdir(run_req),
+    )
 
     container: dict = {
         "name": "task",
@@ -985,7 +1106,9 @@ def _build_pod_manifest(
         # message with the container's own tail log output instead.
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
-    if job_secrets:
+    if job_secrets or _needs_task_policy(run_req, network):
+        # The required volume also holds task startup until the pod's egress
+        # policy exists: the provider writes the Secret after the policy.
         for name in job_secrets:
             validate_secret_name(name)
         volumes.append(
@@ -1013,17 +1136,22 @@ def _build_pod_manifest(
         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
         _LABEL_JOB_ID: job_id,
     }
-    node_selector = _constraints_to_node_selector(run_req.constraints)
+    if run_req.attempt_uid:
+        labels[_LABEL_ATTEMPT_UID] = run_req.attempt_uid
+    node_selector, node_affinity = _constraints_to_node_placement(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
-    if isolation.network is not TaskNetwork.CLUSTER:
-        labels[EGRESS_LABEL] = isolation.network.value
+    if network is not TaskNetwork.CLUSTER:
+        labels[EGRESS_LABEL] = network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
         "labels": labels,
         "annotations": {IRIS_TASK_ID_ANNOTATION: run_req.task_id},
     }
+
+    if run_req.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX and run_req.resources.disk_bytes:
+        metadata["annotations"][_SANDBOX_STORAGE_LIMIT_ANNOTATION] = str(run_req.resources.disk_bytes)
 
     # Every pod is admitted through one Kueue TAS flavor: its accounting and
     # preemption arbitrate all capacity. A pod that bypassed Kueue would hold nodes
@@ -1052,16 +1180,26 @@ def _build_pod_manifest(
                 "kubernetes_provider.kueue.topologies or use a known level."
             )
         labels[_KUEUE_POD_GROUP_NAME] = _pod_group_name(task_id, attempt_id)
-        # Per-pod ordinal within the gang (0..total-1). Kueue's TAS assigns each pod a domain
-        # rank from it; for the sliced level it makes slice membership rank-contiguous.
-        labels[_KUEUE_POD_GROUP_POD_INDEX] = str(task_id.task_index)
+        pod_index = task_id.task_index
+        group_size = run_req.num_tasks
+        if run_req.coscheduling.group_sizes:
+            _validate_locality_groups(run_req.coscheduling, run_req.num_tasks, gpu_count, config)
+            if pod_index is None:
+                raise PodManifestError("Locality groups require a task ordinal")
+            for group_index, group_size in enumerate(run_req.coscheduling.group_sizes):
+                if pod_index < group_size:
+                    # Role hashes separate otherwise identical PodSets. TAS indexes Pods within each set.
+                    metadata["annotations"][_KUEUE_ROLE_HASH] = f"iris-group-{group_index}"
+                    break
+                pod_index -= group_size
+        labels[_KUEUE_POD_GROUP_POD_INDEX] = str(pod_index)
         metadata["annotations"].update(
             {
                 _KUEUE_POD_GROUP_TOTAL: str(run_req.num_tasks),
                 **_topology_request_annotations(
                     topo,
                     group_by=group_by,
-                    num_tasks=run_req.num_tasks,
+                    num_tasks=group_size,
                     gpu_count=gpu_count,
                     task_ref=run_req.task_id,
                 ),
@@ -1087,7 +1225,7 @@ def _build_pod_manifest(
     # pod share its network, so the task can use any route a sidecar has: a
     # finelog route exposes every job's logs, and the uploader needs the env
     # Secret's object-store keys and a route to the object store.
-    sidecars = isolation.network is TaskNetwork.CLUSTER
+    sidecars = isolation.network in (TaskNetwork.CLUSTER, TaskNetwork.ALLOWLIST)
     init_containers: list[dict] = []
     if sidecars:
         init_containers.append(
@@ -1137,10 +1275,10 @@ def _build_pod_manifest(
         **({"securityContext": {"fsGroup": SECRET_GROUP}} if job_secrets else {}),
     }
 
-    # gVisor isolates the whole pod via a node RuntimeClass; the container
-    # securityContext stays at the DEFAULT posture (see _security_context).
+    # The RuntimeClass isolates the pod; the container keeps the DEFAULT
+    # securityContext (see _security_context).
     if run_req.container_profile in (job_pb2.CONTAINER_PROFILE_GVISOR, job_pb2.CONTAINER_PROFILE_SANDBOX):
-        spec["runtimeClassName"] = "gvisor"
+        spec["runtimeClassName"] = config.sandbox_runtime_class
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
         spec["enableServiceLinks"] = False
@@ -1149,6 +1287,8 @@ def _build_pod_manifest(
         node_selector[managed_label] = "true"
     if node_selector:
         spec["nodeSelector"] = node_selector
+    if node_affinity:
+        spec["affinity"] = node_affinity
 
     if gpu_count > 0:
         spec.setdefault("tolerations", []).append(NVIDIA_GPU_TOLERATION)
@@ -1175,6 +1315,9 @@ def _build_pod_manifest(
             (config.task_outputs.finalization_timeout.to_ms() + 999) // 1000 if config.task_outputs is not None else 0
         )
         spec["activeDeadlineSeconds"] = execution_deadline + finalization_grace
+
+    termination_timeout_ms = (termination_grace + SHUTDOWN_MARGIN).to_ms()
+    spec["terminationGracePeriodSeconds"] = (termination_timeout_ms + 999) // 1000
 
     # Stamp the native k8s PriorityClass so the scheduler knows how to preempt/queue this
     # pod relative to others. Dispatch resolves the band from job_config and re-stamps the
@@ -1274,6 +1417,22 @@ def _format_disruption_reason(condition: dict) -> str:
     return reason[:_TERMINAL_REASON_MAX_CHARS]
 
 
+def _disk_limit_exceeded(pod: dict) -> bool:
+    # Only newly opted-in sandbox pods change retry semantics. Existing and
+    # ordinary pods retain their original disruption classification.
+    if _SANDBOX_STORAGE_LIMIT_ANNOTATION not in pod.get("metadata", {}).get("annotations", {}):
+        return False
+    status = pod.get("status", {})
+    if status.get("reason") != "Evicted":
+        return False
+    message = status.get("message", "")
+    # Kubelet's localStorageEviction messages. Node disk pressure also says
+    # "ephemeral-storage", but does not establish that this task exceeded its limit.
+    return message.startswith("Pod ephemeral local storage usage exceeds the total limit of containers") or (
+        message.startswith("Container ") and " exceeded its local ephemeral storage limit" in message
+    )
+
+
 def _pod_failure_state(pod: dict) -> int:
     """Classify a failed pod as PREEMPTED, WORKER_FAILED, or FAILED.
 
@@ -1281,7 +1440,11 @@ def _pod_failure_state(pod: dict) -> int:
     tells a triager whether the control plane took the pod away or the node let
     it die.
     """
-    # Authoritative first: the control plane explicitly disrupted this pod
+    # Exceeding a task storage ceiling charges the failure budget, even when
+    # kubelet also marks the eviction as a disruption.
+    if _disk_limit_exceeded(pod):
+        return job_pb2.TASK_STATE_FAILED
+    # Authoritative next: the control plane explicitly disrupted this pod
     # (preempted/evicted/drained), regardless of how the container exited. This
     # catches a preemption SIGKILLed after the grace period — reason="Error",
     # exit 137 — which the terminated-reason whitelist below misses. A container
@@ -1300,7 +1463,9 @@ def _pod_failure_state(pod: dict) -> int:
     return job_pb2.TASK_STATE_FAILED
 
 
-def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | None = None) -> TaskUpdate:
+def _task_update_from_pod(
+    entry: RunningTaskEntry, pod: dict, workload: dict | None = None, node: dict | None = None
+) -> TaskUpdate:
     """Build a TaskUpdate from a Kubernetes Pod dict.
 
     A control-plane disruption (Kueue preemption, node drain, API eviction) is
@@ -1321,10 +1486,22 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     # update (not only the terminal one) so a later preemption that deletes the pod
     # still leaves the identity persisted.
     metadata = pod.get("metadata", {})
+    spec = pod.get("spec", {})
+    # TAS can pin only the hostname. Read domain values from the assigned Node.
+    annotations = metadata.get("annotations", {})
+    topology_keys = {
+        annotations.get(_KUEUE_REQUIRED_TOPOLOGY),
+        annotations.get(_KUEUE_SLICE_REQUIRED_TOPOLOGY),
+        annotations.get(_KUEUE_PREFERRED_TOPOLOGY),
+        _KUEUE_SINGLE_POD_TOPOLOGY,
+    }
+    node_labels = node.get("metadata", {}).get("labels", {}) if node is not None else {}
+    topology = {key: value for key, value in node_labels.items() if key in topology_keys}
     identity = {
         "pod_name": metadata.get("name") or None,
         "pod_uid": metadata.get("uid") or None,
-        "node_name": pod.get("spec", {}).get("nodeName") or None,
+        "node_name": spec.get("nodeName") or None,
+        "topology": topology or None,
     }
 
     if phase == "Pending":
@@ -1364,7 +1541,7 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
     task_terminated = _task_container_terminated(pod)
     new_state = (
         job_pb2.TASK_STATE_SUCCEEDED
-        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None
+        if task_terminated and exit_code == 0 and _disruption_condition(pod) is None and not _disk_limit_exceeded(pod)
         else _pod_failure_state(pod)
     )
     terminal_reason = _extract_terminal_reason(pod)
@@ -1377,7 +1554,11 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         error=(
             None
             if new_state == job_pb2.TASK_STATE_SUCCEEDED
-            else terminal_reason if new_state == job_pb2.TASK_STATE_PREEMPTED else _extract_error(pod)
+            else (
+                terminal_reason
+                if new_state == job_pb2.TASK_STATE_PREEMPTED or _disk_limit_exceeded(pod)
+                else _extract_error(pod)
+            )
         ),
         status_message="",
         terminal_reason=terminal_reason,
@@ -1399,7 +1580,11 @@ def _extract_exit_code(pod: dict) -> int | None:
 
 def _task_update_after_output_timeout(entry: RunningTaskEntry, pod: dict) -> TaskUpdate:
     exit_code = _extract_exit_code(pod)
-    terminal_phase = "Succeeded" if exit_code == 0 and _disruption_condition(pod) is None else "Failed"
+    terminal_phase = (
+        "Succeeded"
+        if exit_code == 0 and _disruption_condition(pod) is None and not _disk_limit_exceeded(pod)
+        else "Failed"
+    )
     terminal_pod = {**pod, "status": {**pod.get("status", {}), "phase": terminal_phase}}
     update = _task_update_from_pod(entry, terminal_pod)
     return replace(
@@ -1450,10 +1635,12 @@ def _init_container_failure(pod: dict) -> str | None:
 def _extract_terminal_reason(pod: dict) -> str | None:
     """A bounded terminal-cause string for a failed attempt.
 
-    Prefers an authoritative controller disruption condition, then an
-    init-container failure invisible to the task-container extractors, over the
-    task container's own terminal reason.
+    Prefers a task storage-limit eviction, then an authoritative controller
+    disruption condition, then an init-container failure invisible to the
+    task-container extractors, over the task container's own terminal reason.
     """
+    if _disk_limit_exceeded(pod):
+        return f"{ResourceLimitReason.DISK}: {pod['status']['message']}"[:_TERMINAL_REASON_MAX_CHARS]
     condition = _disruption_condition(pod)
     condition_reason = _format_disruption_reason(condition) if condition is not None else None
     reason = condition_reason or _init_container_failure(pod) or _extract_error(pod)
@@ -2523,9 +2710,29 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if error := _region_constraint_error(
+            request.constraints, sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
+        ):
+            return error
+        if request.coscheduling.group_sizes:
+            try:
+                _validate_locality_groups(
+                    request.coscheduling, request.replicas, get_gpu_count(request.resources.device), self.pods
+                )
+            except ValueError as error:
+                return str(error)
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
+
+    def egress_allowlist_mode(self, request: controller_pb2.Controller.LaunchJobRequest) -> EgressAllowlistMode:
+        allowlist = self.pods.egress_allowlist
+        # Pod policy cannot restrict a host-network pod.
+        if allowlist is None or (
+            self.pods.host_network and _needs_infiniband(request.replicas, request.resources.device)
+        ):
+            return EgressAllowlistMode.UNAVAILABLE
+        return EgressAllowlistMode.DEFAULT if allowlist.default else EgressAllowlistMode.OPT_IN
 
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
@@ -2769,7 +2976,10 @@ class K8sTaskProvider:
 
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
-        manifest = _build_pod_manifest(run_req, self.pods)
+        regions = sorted(self.descriptor.advertised_attributes.get(WellKnownAttribute.REGION, ()))
+        if error := _region_constraint_error(run_req.constraints, regions):
+            raise PodManifestError(error)
+        manifest = _build_pod_manifest(run_req, self.pods, worker_region=regions[0] if len(regions) == 1 else None)
 
         task_id_name = JobName.from_wire(run_req.task_id)
         pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)
@@ -2812,6 +3022,19 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
+        network = TaskNetwork(manifest["metadata"]["labels"].get(EGRESS_LABEL, TaskNetwork.CLUSTER.value))
+        task_policy = None
+        if _needs_task_policy(run_req, network):
+            # A stale policy can outlive its pod briefly; selecting on the attempt
+            # UID keeps it from granting its rules to a resubmitted job's pod.
+            assert run_req.attempt_uid, "a job's own egress rules need the attempt UID to select its pod"
+            task_policy = task_policy_manifest(
+                pod_name,
+                self.pods.namespace,
+                {_LABEL_ATTEMPT_UID: run_req.attempt_uid},
+                run_req.egress_allow,
+            )
+
         task_id = run_req.task_id
         if _is_coordinator_task(run_req):
             # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
@@ -2827,35 +3050,45 @@ class K8sTaskProvider:
 
         self.kubectl.apply_json(manifest)
         job_secrets = task_secret_values(run_req.environment)
-        if job_secrets:
-            # Create the Pod first so its UID can own the Secret even if dispatch
-            # is interrupted. The required volume holds task startup until apply.
-            pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
-            if pod is None:
-                raise KubectlError(f"Pod {pod_name} disappeared before credential delivery")
-            self.kubectl.apply_json(
-                {
-                    "apiVersion": "v1",
-                    "kind": "Secret",
-                    "metadata": {
-                        "name": _task_secret_name(pod_name),
-                        "namespace": self.pods.namespace,
-                        "ownerReferences": [
-                            {"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}
-                        ],
-                    },
-                    "type": "Opaque",
-                    "data": {
-                        name: base64.b64encode(value.encode()).decode()
-                        for name, value in secret_file_contents(job_secrets).items()
-                    },
-                }
-            )
+        if job_secrets or task_policy is not None:
+            self._apply_pod_owned_resources(pod_name, task_policy, job_secrets)
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
             task_id,
             run_req.attempt_id,
+        )
+
+    def _apply_pod_owned_resources(self, pod_name: str, task_policy: dict | None, job_secrets: dict[str, str]) -> None:
+        """Apply the Pod's egress policy, if any, and then its Secret, both owned by the Pod.
+
+        Kubernetes deletes them with the Pod however it is removed. The Pod's
+        required Secret volume holds task startup until the Secret exists, and
+        the Secret comes last, so the task's first connections already see the
+        job's egress rules.
+        """
+        pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+        if pod is None:
+            raise KubectlError(f"Pod {pod_name} disappeared before its Secret and policy were applied")
+        owner = [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}]
+        if task_policy is not None:
+            task_policy["metadata"]["ownerReferences"] = owner
+            self.kubectl.apply_json(task_policy)
+        self.kubectl.apply_json(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": _task_secret_name(pod_name),
+                    "namespace": self.pods.namespace,
+                    "ownerReferences": owner,
+                },
+                "type": "Opaque",
+                "data": {
+                    name: base64.b64encode(value.encode()).decode()
+                    for name, value in secret_file_contents(job_secrets).items()
+                },
+            }
         )
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:
@@ -3117,7 +3350,8 @@ class K8sTaskProvider:
                     self._released_output_attempts.add(entry)
                 else:
                     logger.warning("Failed to release task output uploader in pod %s: %s", pod_name, release.stderr)
-            except KubectlError:
+            except Exception:
+                # Output release is best effort; a failed pod must not block the rest of this scan.
                 logger.warning("Failed to release task output uploader in pod %s", pod_name, exc_info=True)
 
         if time.monotonic() - started < policy.finalization_timeout.to_seconds():
@@ -3290,7 +3524,9 @@ class K8sTaskProvider:
                 continue
 
             self._pod_unresolved_counts.pop(entry, None)
-            update = _task_update_from_pod(entry, pod, workload)
+            update = _task_update_from_pod(
+                entry, pod, workload, node=nodes_by_name.get(pod.get("spec", {}).get("nodeName", ""))
+            )
             updates.append(update)
             phase = pod.get("status", {}).get("phase", "")
             if phase == "Running":

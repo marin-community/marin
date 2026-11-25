@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use finelog::read_executor::ReadExecutor;
 use finelog::server::{build_app_with_config, AuthPolicy, ServerConfig};
 use finelog::store::Store;
 use pyo3::exceptions::PyRuntimeError;
@@ -93,7 +94,10 @@ impl EmbeddedServer {
                 _ => AuthPolicy::allow_localhost(),
             };
             let config = ServerConfig::with_debug_admin(debug_admin).with_auth(auth);
-            let app = build_app_with_config(Arc::clone(&store), config);
+            let reads = Arc::new(ReadExecutor::for_process().map_err(|error| {
+                PyRuntimeError::new_err(format!("create read executor: {error}"))
+            })?);
+            let app = build_app_with_config(Arc::clone(&store), config, reads);
             let listener = tokio::net::TcpListener::bind(bind)
                 .await
                 .map_err(|e| PyRuntimeError::new_err(format!("failed to bind {bind}: {e}")))?;

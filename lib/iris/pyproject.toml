@@ -13,7 +13,7 @@ dependencies = [
     # the controller embeds lives in the `controller` extra below.
     "marin-finelog >= 0.2.10",
     # Platform companion wheel containing the Rust-owned public proxy listener.
-    "marin-iris-native>=0.1.15.dev39984932175",
+    "marin-iris-native>=0.1.17.dev44059082845",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
@@ -53,7 +53,7 @@ controller = [
     # wheel. The floor must stay at or above 0.2.46.dev33324331711, which added the
     # catalog parser for list-valued histogram schemas. Older servers cannot
     # reopen catalogs containing COLUMN_TYPE_FLOAT64_LIST or COLUMN_TYPE_INT64_LIST.
-    "marin-finelog-server>=0.2.67.dev39325146809",
+    "marin-finelog-server>=0.2.87.dev45066332650",
 ]
 worker = []
 # Interactive `iris login` against an IAP-fronted cluster (desktop OAuth flow).
@@ -68,7 +68,7 @@ iris-run = "iris.cli.run:run"
 examples = [
     "ipykernel>=7.1.0",
     "jupyter>=1.1.1",
-    "nbconvert>=7.16.6",
+    "nbconvert>=7.17.2",
     "nbformat>=5.10.4",
 ]
 test = [

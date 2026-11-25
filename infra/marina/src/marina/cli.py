@@ -29,7 +29,7 @@ from marina.applets import (
     read_applet_package,
     validate_backend_import,
 )
-from marina.client import DEFAULT_MARINA_URL, MarinaRequestError, marina_request, publish_applet
+from marina.client import DEFAULT_MARINA_URL, MarinaRequestError, applet_origin, marina_request, publish_applet
 from marina.database_setup import ensure_applet_provisioning
 from marina.db import (
     DatabaseSpec,
@@ -44,11 +44,13 @@ from marina.journeys import LOOPBACK, running_kernel
 from marina.local_postgres import docker_database
 from marina.preview import install_preview_sources
 from marina.releases import (
+    DEFAULT_RELEASE_BRANCH,
     RELEASE_METADATA,
     ReleaseSource,
     clean_frontend_build,
     release_source,
-    require_current_main,
+    require_forward_move,
+    require_release_checkout,
     require_tracked_package,
     source_status,
 )
@@ -224,7 +226,7 @@ def _print_validation_report(package: AppletPackage, *, imports_checked: bool, j
 @click.option("--build/--no-build", default=True, help="Run a declared build_command before packaging.")
 @click.option("--json", "json_output", is_flag=True, help="Print the validation report as JSON.")
 def validate(app_dir: Path, build: bool, json_output: bool) -> None:
-    """Validate an applet package and import its backend in the Marina runtime."""
+    """Validate an app package and import its backend in the Marina runtime."""
     _payload, package = _publish_package(app_dir, build=build)
     imports_checked = package.manifest.python_entrypoint is not None or bool(package.manifest.jobs)
     if imports_checked:
@@ -285,13 +287,22 @@ def _serve_local_applet(payload: bytes, *, applet_id: str, mode: AppletMode | No
 @cli.command()
 @click.argument("app_dir", type=click.Path(path_type=Path, file_okay=False, exists=True))
 @click.option("--base-version", type=int, help="Expected live revision; use 0 for the first release.")
-@click.option("--id", "explicit_id", help="Stable UUID for an applet without applet_id in applet.toml.")
+@click.option("--id", "explicit_id", help="Stable UUID for an app without applet_id in applet.toml.")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--mode", type=click.Choice([mode.value for mode in AppletMode]), default=None)
 @click.option("--local", is_flag=True, help="Preview using disposable Postgres and Marina.")
 @click.option("--dry-run", is_flag=True, help="Build and validate without releasing.")
 @click.option(
     "--allow-dirty", is_flag=True, help="Release branch or uncommitted source without verified Git provenance."
+)
+@click.option(
+    "--release-branch",
+    "release_branch",
+    default=None,
+    help=(
+        "Cut the release from a clean checkout landed on this branch (e.g. an"
+        " integration branch) instead of origin main."
+    ),
 )
 @click.option("--json", "json_output", is_flag=True)
 def release(
@@ -303,6 +314,7 @@ def release(
     local: bool,
     dry_run: bool,
     allow_dirty: bool,
+    release_branch: str | None,
     json_output: bool,
 ) -> None:
     """Build and release one application to its declared stable UUID."""
@@ -310,13 +322,18 @@ def release(
         raise click.UsageError("--local cannot be combined with --dry-run")
     if not local and not dry_run and base_version is None:
         raise click.UsageError("Supply --base-version; use 0 for the first release")
+    if allow_dirty and release_branch is not None:
+        raise click.UsageError("--release-branch verifies a landed checkout; it cannot combine with --allow-dirty")
     publishing = not local and not dry_run
     try:
         manifest = parse_applet_manifest((app_dir / APPLET_MANIFEST).read_bytes())
         guarded = publishing and manifest.applet_id is not None and not allow_dirty
+        release_branch_name = release_branch or DEFAULT_RELEASE_BRANCH
         source = release_source(app_dir, manifest.source_paths) if guarded else None
-        if guarded:
-            require_current_main(app_dir)
+        if guarded and source is not None:
+            require_release_checkout(app_dir, branch=release_branch_name)
+            if release_branch_name != DEFAULT_RELEASE_BRANCH:
+                source = replace(source, branch=release_branch_name)
         extra_files = {RELEASE_METADATA: json.dumps(asdict(source)).encode()} if source is not None else None
         build_context = clean_frontend_build(app_dir) if manifest.build_command is not None else nullcontext()
         with build_context:
@@ -352,8 +369,11 @@ def release(
             applet_id = str(uuid4())
         else:
             raise ValueError("Supply --id for updates, or declare applet_id in applet.toml")
-        if guarded and source is not None and require_current_main(app_dir) != source.commit:
-            raise RuntimeError("The checkout changed while building; retry the release.")
+        if guarded and source is not None:
+            if require_release_checkout(app_dir, branch=release_branch_name) != source.commit:
+                raise RuntimeError("The checkout changed while building; retry the release.")
+            if release_branch_name != DEFAULT_RELEASE_BRANCH:
+                _require_forward_release(app_dir, service_url, applet_id, base_version, source)
         result = publish_applet(service_url, payload, applet_id=applet_id, base_version=base_version, mode=mode)
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode(errors="replace").strip() if isinstance(error.stderr, bytes) else error.stderr
@@ -370,7 +390,7 @@ def release(
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--json", "json_output", is_flag=True)
 def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
-    """Compare an applet's live source tree with this checkout's committed source."""
+    """Compare an app's live source tree with this checkout's committed source."""
     try:
         manifest = parse_applet_manifest((app_dir / APPLET_MANIFEST).read_bytes())
         applet_id = manifest.applet_id
@@ -403,26 +423,57 @@ def release_status(app_dir: Path, service_url: str, json_output: bool) -> None:
 
 
 @cli.group()
-def applets() -> None:
-    """Inspect and manage published applets."""
+def apps() -> None:
+    """Inspect and manage released apps."""
+
+
+def _require_forward_release(
+    app_dir: Path,
+    service_url: str,
+    applet_id: str,
+    base_version: int | None,
+    source: ReleaseSource,
+) -> None:
+    """Refuse a release that moves backward along its declared branch.
+
+    The landing check accepts any commit the branch contains, so a stale checkout
+    could republish older source over newer with verified-looking metadata. When
+    the live release declares the same branch, its commit must be an ancestor of
+    this checkout's. A first release or a live record without a declared branch
+    has no forward contract to enforce.
+    """
+    if base_version is None or base_version <= 0 or not source.branch:
+        return
+    try:
+        details = _applet_details(service_url, applet_id)
+        origin = _applet_origin(service_url, details)
+        metadata = marina_request(origin, "GET", f"/a/{applet_id}/v/{base_version}/marina-release.json")
+    except MarinaRequestError as error:
+        if error.status_code != 404:
+            raise
+        return
+    assert isinstance(metadata, dict)
+    live = ReleaseSource(**metadata)
+    if live.branch != source.branch:
+        return
+    require_forward_move(app_dir, branch=source.branch, live_commit=live.commit)
 
 
 def _applet_details(service_url: str, applet_id: str) -> dict[str, object]:
     details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
     if not isinstance(details, dict) or not isinstance(details.get("authenticated_url"), str):
-        raise RuntimeError("Marina returned invalid applet details")
+        raise RuntimeError("Marina returned invalid app details")
     return details
 
 
 def _applet_origin(service_url: str, details: dict[str, object]) -> str:
     assert isinstance(details["authenticated_url"], str)
-    parsed = urlparse(details["authenticated_url"])
-    return f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else service_url.rstrip("/")
+    return applet_origin(service_url, details["authenticated_url"])
 
 
-@applets.group("hosts")
+@apps.group("hosts")
 def applet_hosts() -> None:
-    """Manage vanity hostname bindings as an applet operator; DNS is managed by Pulumi."""
+    """Manage vanity hostname bindings as an app operator; DNS is managed by Pulumi."""
 
 
 @applet_hosts.command("list")
@@ -437,10 +488,10 @@ def list_applet_hosts(service_url: str) -> None:
 
 @applet_hosts.command("bind")
 @click.argument("hostname")
-@click.argument("applet_id", type=click.UUID)
+@click.argument("applet_id", type=click.UUID, metavar="APP_ID")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def bind_applet_host(hostname: str, applet_id: UUID, service_url: str) -> None:
-    """Assign an already-provisioned hostname to an applet."""
+    """Assign an already-provisioned hostname to an app."""
     try:
         result = marina_request(
             service_url, "PUT", f"/api/marina/applet-hosts/{hostname}", json_body={"applet_id": str(applet_id)}
@@ -461,30 +512,30 @@ def unbind_applet_host(hostname: str, service_url: str) -> None:
     click.echo(f"unbound {hostname}")
 
 
-@applets.command("list")
+@apps.command("list")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--json", "json_output", is_flag=True)
 def list_applets(service_url: str, json_output: bool) -> None:
-    """List active applets."""
+    """List active apps."""
     try:
-        result = marina_request(service_url, "GET", "/api/marina/applets")
+        result = marina_request(service_url, "GET", "/api/marina/apps")
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
-    if not isinstance(result, dict) or not isinstance(result.get("applets"), list):
-        raise click.ClickException("Marina returned an invalid applet list")
+    if not isinstance(result, dict) or not isinstance(result.get("apps"), list):
+        raise click.ClickException("Marina returned an invalid app list")
     if json_output:
         click.echo(json.dumps(result, sort_keys=True))
         return
-    for applet in result["applets"]:
-        click.echo(f"{applet['name']}  v{applet['version']}  {applet['mode']}  {applet['title']}  {applet['path']}")
+    for app in result["apps"]:
+        click.echo(f"{app['name']}  v{app['version']}  {app['mode']}  {app['title']}  {app['path']}")
 
 
-@applets.command("versions")
-@click.argument("applet_id")
+@apps.command("versions")
+@click.argument("applet_id", metavar="APP_ID")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 @click.option("--json", "json_output", is_flag=True)
 def list_applet_versions(applet_id: str, service_url: str, json_output: bool) -> None:
-    """List the retained revisions of one applet."""
+    """List the retained revisions of one app."""
     try:
         result = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
     except RuntimeError as error:
@@ -494,7 +545,7 @@ def list_applet_versions(applet_id: str, service_url: str, json_output: bool) ->
         or not isinstance(result.get("current_version"), int)
         or not isinstance(result.get("versions"), list)
     ):
-        raise click.ClickException("Marina returned invalid applet details")
+        raise click.ClickException("Marina returned invalid app details")
     if json_output:
         click.echo(json.dumps(result, sort_keys=True))
         return
@@ -506,16 +557,16 @@ def list_applet_versions(applet_id: str, service_url: str, json_output: bool) ->
         )
 
 
-@applets.command("mode")
-@click.argument("applet_id")
+@apps.command("mode")
+@click.argument("applet_id", metavar="APP_ID")
 @click.argument("mode", type=click.Choice([mode.value for mode in AppletMode]))
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def set_applet_mode(applet_id: str, mode: str, service_url: str) -> None:
-    """Change an applet's access mode without publishing a new revision."""
+    """Change an app's access mode without publishing a new revision."""
     try:
         details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
         if not isinstance(details, dict) or not isinstance(details.get("current_version"), int):
-            raise RuntimeError("Marina returned invalid applet details")
+            raise RuntimeError("Marina returned invalid app details")
         result = marina_request(
             service_url,
             "PUT",
@@ -525,20 +576,20 @@ def set_applet_mode(applet_id: str, mode: str, service_url: str) -> None:
     except RuntimeError as error:
         raise click.ClickException(str(error)) from error
     if not isinstance(result, dict) or not isinstance(result.get("url"), str):
-        raise click.ClickException("Marina returned invalid applet mode details")
+        raise click.ClickException("Marina returned invalid app mode details")
     click.echo(result["url"])
 
 
-@applets.command("rollback")
-@click.argument("applet_id")
+@apps.command("rollback")
+@click.argument("applet_id", metavar="APP_ID")
 @click.argument("version", type=int)
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def rollback_applet(applet_id: str, version: int, service_url: str) -> None:
-    """Move an applet's current URL to a retained revision."""
+    """Move an app's current URL to a retained revision."""
     try:
         details = marina_request(service_url, "GET", f"/api/marina/applets/{applet_id}")
         if not isinstance(details, dict) or not isinstance(details.get("current_version"), int):
-            raise RuntimeError("Marina returned invalid applet details")
+            raise RuntimeError("Marina returned invalid app details")
         marina_request(
             service_url,
             "PUT",
@@ -550,11 +601,11 @@ def rollback_applet(applet_id: str, version: int, service_url: str) -> None:
     click.echo(f"{applet_id} now points to revision {version}")
 
 
-@applets.command("archive")
-@click.argument("applet_id")
+@apps.command("archive")
+@click.argument("applet_id", metavar="APP_ID")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def archive_applet(applet_id: str, service_url: str) -> None:
-    """Hide an applet while preserving its schema and retained revisions."""
+    """Hide an app while preserving its schema and retained revisions."""
     try:
         marina_request(service_url, "DELETE", f"/api/marina/applets/{applet_id}")
     except RuntimeError as error:
@@ -562,13 +613,13 @@ def archive_applet(applet_id: str, service_url: str) -> None:
     click.echo(f"archived {applet_id}")
 
 
-@applets.command("sql")
-@click.argument("applet_id")
+@apps.command("sql")
+@click.argument("applet_id", metavar="APP_ID")
 @click.argument("sql")
 @click.option("--parameters", default="{}", help="JSON object bound to SQL parameters.")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def applet_sql(applet_id: str, sql: str, parameters: str, service_url: str) -> None:
-    """Execute one parameterized statement as an applet's database role."""
+    """Execute one parameterized statement as an app's database role."""
     try:
         values = json.loads(parameters)
         if not isinstance(values, dict):
@@ -585,19 +636,19 @@ def applet_sql(applet_id: str, sql: str, parameters: str, service_url: str) -> N
     click.echo(json.dumps(result, indent=2, sort_keys=True))
 
 
-@applets.group("table")
+@apps.group("table")
 def applet_tables() -> None:
-    """Load local tabular files into an applet schema."""
+    """Load local tabular files into an app schema."""
 
 
 @applet_tables.command("load")
-@click.argument("applet_id")
+@click.argument("applet_id", metavar="APP_ID")
 @click.argument("table_name")
 @click.argument("source", type=click.Path(path_type=Path, dir_okay=False, exists=True))
 @click.option("--replace", is_flag=True, help="Drop and recreate the table before loading.")
 @click.option("--url", "service_url", default=DEFAULT_MARINA_URL, show_default=True)
 def load_applet_table(applet_id: str, table_name: str, source: Path, replace: bool, service_url: str) -> None:
-    """Load JSON, JSONL, CSV, or Parquet rows into an applet table."""
+    """Load JSON, JSONL, CSV, or Parquet rows into an app table."""
     try:
         table = read_table(source)
         schema_sql, inserts = table_statements(table_name, table, replace=replace)

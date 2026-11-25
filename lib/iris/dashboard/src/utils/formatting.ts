@@ -1,4 +1,4 @@
-import type { ProtoTimestamp, TaskAttempt } from '@/types/rpc'
+import type { EgressRule, ProtoTimestamp, TaskAttempt } from '@/types/rpc'
 import { stateToName } from '../types/status.ts'
 
 /** Parse a ProtoTimestamp to epoch milliseconds. */
@@ -254,4 +254,17 @@ export function formatDeviceConfig(device: { tpu?: { variant?: string; topology?
     return s
   }
   return null
+}
+
+/** Display name for an `EGRESS_POLICY_*` enum value, such as `allowlist`. */
+export function egressPolicyName(policy: string | undefined): string | null {
+  return policy ? policy.replace(/^EGRESS_POLICY_/, '').toLowerCase() : null
+}
+
+/** An egress rule in the `DEST[:PORT[,PORT...]]` syntax that `iris job run --egress-allow` accepts. */
+export function formatEgressRule(rule: EgressRule): string {
+  const destination = rule.domain ?? rule.cidr ?? ''
+  if (!rule.ports?.length) return destination
+  const host = destination.includes(':') ? `[${destination}]` : destination
+  return `${host}:${rule.ports.join(',')}`
 }

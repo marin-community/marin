@@ -62,7 +62,8 @@ forwarded from the legacy `telemetry_v1` root can route to service-specific name
 the hub registers each missing destination with its canonical server-owned schema and
 managed storage policy before appending the routed rows. Rows of a table with a
 `cluster` column are stamped with the origin and skipped if they
-already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
+already name another cluster, so relayed rows never loop. A row already named for the
+sender's own `forwarding.cluster` is forwarded like an unnamed one. The cursor is
 durable, so a restart resumes rather than replays.
 
 `telemetry_v1.*` and `levanter.metrics` are server-owned at both ends of federation. A JWT sender's

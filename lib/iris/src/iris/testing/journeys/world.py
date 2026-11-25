@@ -10,7 +10,7 @@ from pathlib import Path
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from rigging.server_auth import VerifiedIdentity, identity_scope
-from rigging.timing import Timestamp
+from rigging.timing import Duration, Timestamp
 
 from iris.cluster.config import PeerConfig
 from iris.cluster.controller.checkpoint import CheckpointResult, download_checkpoint_to_local
@@ -22,6 +22,7 @@ from iris.cluster.log_keys import task_log_key
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
+from iris.testing import observability_rows_check
 from iris.testing.journeys.backend import (
     BackendEvent,
     ScriptedObservation,
@@ -131,6 +132,8 @@ class JourneyWorld:
             federation_peers=self._federation_peers,
         )
         controller.register_backend(backend)
+        # Controller.__init__ attaches its own row tables; check this DB's rows instead.
+        observability_rows_check.install(db)
         return controller, backend
 
     def close(self) -> None:
@@ -187,8 +190,10 @@ class JourneyWorld:
         preemption_retries: int = 0,
         max_task_failures: int | None = None,
         coscheduled: bool = False,
+        locality_groups: tuple[int, ...] = (),
         scheduling_timeout: float | None = None,
         execution_timeout: float | None = None,
+        termination_grace: Duration | None = None,
         required_attributes: dict[str, str] | None = None,
         include_resources: bool = True,
     ) -> JobRef:
@@ -199,8 +204,10 @@ class JourneyWorld:
             preemption_retries=preemption_retries,
             max_task_failures=max_task_failures,
             coscheduled=coscheduled,
+            locality_groups=locality_groups,
             scheduling_timeout=scheduling_timeout,
             execution_timeout=execution_timeout,
+            termination_grace=termination_grace,
             required_attributes=required_attributes,
             include_resources=include_resources,
         )
@@ -213,6 +220,10 @@ class JourneyWorld:
         tasks: int = 1,
         failure_retries: int = 0,
         preemption_retries: int = 0,
+        max_task_failures: int | None = None,
+        scheduling_timeout: float | None = None,
+        execution_timeout: float | None = None,
+        termination_grace: Duration | None = None,
     ) -> JobRef:
         """Submit a child Job under a live parent."""
         child = JobName.from_wire(parent.wire_id).child(name)
@@ -221,6 +232,10 @@ class JourneyWorld:
             tasks=tasks,
             failure_retries=failure_retries,
             preemption_retries=preemption_retries,
+            max_task_failures=max_task_failures,
+            scheduling_timeout=scheduling_timeout,
+            execution_timeout=execution_timeout,
+            termination_grace=termination_grace,
         )
 
     def _launch(
@@ -232,8 +247,10 @@ class JourneyWorld:
         preemption_retries: int,
         max_task_failures: int | None = None,
         coscheduled: bool = False,
+        locality_groups: tuple[int, ...] = (),
         scheduling_timeout: float | None = None,
         execution_timeout: float | None = None,
+        termination_grace: Duration | None = None,
         required_attributes: dict[str, str] | None = None,
         include_resources: bool = True,
     ) -> JobRef:
@@ -253,21 +270,31 @@ class JourneyWorld:
         )
         if include_resources:
             request.resources.CopyFrom(job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3))
-        if coscheduled:
+        if coscheduled or locality_groups:
             request.coscheduling.group_by = "journey.group"
+            request.coscheduling.group_sizes.extend(locality_groups)
         if scheduling_timeout is not None:
             request.scheduling_timeout.milliseconds = int(scheduling_timeout * 1000)
         if execution_timeout is not None:
             request.timeout.milliseconds = int(execution_timeout * 1000)
+        if termination_grace is not None:
+            request.termination_grace.milliseconds = termination_grace.to_ms()
         for key, value in (required_attributes or {}).items():
             constraint = request.constraints.add(key=key, op=job_pb2.CONSTRAINT_OP_EQ)
             constraint.value.string_value = value
         response = self.controller.launch_job(request)
-        ref = JobRef(response.job_id, tasks, coscheduled)
+        ref = JobRef(response.job_id, tasks, coscheduled or bool(locality_groups))
         self._jobs[ref.wire_id] = ref
         self.trace.append(f"submit {ref.wire_id} tasks={tasks}")
         self._check_invariants()
         return ref
+
+    def assign_topology(self, task: TaskRef, topology: dict[str, str], *, attempt_id: int | None = None) -> None:
+        self.backend.queue_observation(
+            task.wire_id,
+            ScriptedObservation(self.task(task).state, attempt_id=attempt_id, topology=topology),
+        )
+        self.trace.append(f"topology {task.wire_id} {topology}")
 
     def succeed(self, task: TaskRef, *, attempt_id: int | None = None) -> None:
         self._observe(task, job_pb2.TASK_STATE_SUCCEEDED, attempt_id=attempt_id)

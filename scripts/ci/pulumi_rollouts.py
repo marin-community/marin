@@ -55,14 +55,14 @@ ROLLOUTS = (
         source_roots=(
             *CLOUD_RUN_SOURCE_ROOTS,
             "config",
+            "lib/evalrecords",
             "lib/finelog",
             "lib/finestore",
             "lib/iris",
-            "lib/marin/src/marin/evaluation",
             "lib/rigging",
         ),
-        # Uploaded packages have their own per-applet release lifecycle.
-        deploy_excluded_roots=("infra/marina/apps", "infra/marina/applets", "infra/marina/examples", "infra/marina/web"),
+        # App packages have their own release lifecycle.
+        deploy_excluded_roots=("infra/marina/apps", "infra/marina/examples", "infra/marina/web"),
         test_path="infra/marina",
         timeout_minutes=90,
     ),

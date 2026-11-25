@@ -31,8 +31,8 @@ from skyrl_train.inference_engines.ray_wrapped_inference_engine import create_ra
 from skyrl_train.inference_engines.vllm_teacher_oracle import (
     VLLMTeacherOracle,
     close_owned_inference_engine,
-    tokenizer_vocabulary_fingerprint,
 )
+from skyrl_train.tokenizer import tokenizer_vocabulary_fingerprint
 from skyrl_train.teacher_oracle import (
     RotatingTeacherOracleOwner,
     TeacherEndpoint,
@@ -174,7 +174,6 @@ async def _start_local_teacher_pool(
     )
     engine_kwargs = inference_engine_kwargs_from_config(
         cfg,
-        tokenizer=teacher_tokenizer,
         role=role,
         engine_init_kwargs=engine_init_kwargs,
     )

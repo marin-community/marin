@@ -44,6 +44,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import TypeDecorator
 
 from iris.cluster.types import LOCAL_CLUSTER, JobName, WorkerId
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 
 WORKER_ATTR_VALUE_TYPE_CHECK = "value_type IN ('str', 'int', 'float')"
 
@@ -294,6 +295,7 @@ job_config_table = Table(
     Column("constraints_json", String),
     Column("has_coscheduling", BoolIntType, nullable=False, server_default="0"),
     Column("coscheduling_group_by", String, nullable=False, server_default=""),
+    Column("coscheduling_group_sizes", JSONList(), nullable=False, server_default="[]"),
     Column("scheduling_timeout_ms", Integer),
     Column("max_task_failures", Integer, nullable=False, server_default="0"),
     Column("entrypoint_json", String, nullable=False, server_default="{}"),
@@ -303,6 +305,7 @@ job_config_table = Table(
     Column("max_retries_failure", Integer, nullable=False, server_default="0"),
     Column("max_retries_preemption", Integer, nullable=False, server_default="100"),
     Column("timeout_ms", Integer),
+    Column("termination_grace_ms", Integer, nullable=False, server_default=str(DEFAULT_TERMINATION_GRACE.to_ms())),
     Column("preemption_policy", Integer, nullable=False, server_default="0"),
     Column("existing_job_policy", Integer, nullable=False, server_default="0"),
     Column("priority_band", Integer, nullable=False, server_default="0"),
@@ -311,6 +314,8 @@ job_config_table = Table(
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
     Column("container_profile", Integer, nullable=False, server_default="0"),
     Column("egress_policy", Integer, nullable=False, server_default="0"),
+    # An ALLOWLIST job's own egress rules, as rule strings (iris.cluster.egress).
+    Column("egress_allow_json", JSONList(), nullable=False, server_default="[]"),
     Index("idx_job_config_name", "name"),
 )
 
@@ -441,6 +446,7 @@ task_attempts_table = Table(
     Column("pod_name", String, nullable=False, server_default=""),
     Column("pod_uid", String, nullable=False, server_default=""),
     Column("node_name", String, nullable=False, server_default=""),
+    Column("topology_json", JSONDict(), nullable=False, server_default="{}"),
     Column("terminal_reason", String, nullable=False, server_default=""),
     PrimaryKeyConstraint("task_id", "attempt_id"),
     Index("idx_task_attempts_worker_task", "worker_id", "task_id", "attempt_id"),

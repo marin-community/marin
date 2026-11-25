@@ -10,9 +10,9 @@
 import { computed, onMounted, onUnmounted, watch } from 'vue'
 import * as Plot from '@observablehq/plot'
 import { RouterLink } from 'vue-router'
-import { formatCoverage, formatInterval, formatScore, formatTimestamp, shortSha } from '@/utils/formatting'
+import { formatInterval, formatScore, formatTimestamp, shortSha } from '@/utils/formatting'
 import { useApi } from '@/composables/useApi'
-import { isPartialCoverage } from '@/utils/panel'
+import { cellCoverageLabel, isPartialCoverage } from '@/utils/panel'
 import { INTERVAL_KIND, type HistoryPoint, type HistoryResponse } from '@/types/api'
 import PlotFigure from '@/components/charts/PlotFigure.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
@@ -87,7 +87,7 @@ const options = computed<Record<string, unknown>>(() => ({
 // completeness is unknown rather than a silent claim that nothing was lost.
 function coverageNote(point: HistoryPoint): string {
   if (point.interval_kind !== INTERVAL_KIND.IDENTIFIED) return 'coverage unreported'
-  return isPartialCoverage(point) ? formatCoverage(point.coverage) : 'complete'
+  return isPartialCoverage(point) ? cellCoverageLabel(point) : 'complete'
 }
 </script>
 

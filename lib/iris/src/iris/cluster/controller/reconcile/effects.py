@@ -69,6 +69,7 @@ class AttemptRowDelta:
     node_name: str | None = None
     terminal_reason: str | None = None
     output_archive: job_pb2.TaskOutputArchive | None = None
+    topology: dict[str, str] | None = None
 
 
 @dataclass
@@ -156,7 +157,15 @@ class ControllerEffects:
     """
 
     tasks: dict[JobName, TaskRowDelta] = field(default_factory=dict)
+    # Tasks whose state, error or exit code differs from the batch's snapshot: the
+    # ones that get an iris.controller_db__tasks row. A delta that only refreshes the pending
+    # reason (status_message) or container_id is not in it.
+    changed_tasks: set[JobName] = field(default_factory=set)
     attempts: dict[tuple[JobName, int], AttemptRowDelta] = field(default_factory=dict)
+    # Attempts whose row a delta changes against the batch's snapshot: the ones that
+    # get an iris.controller_db__task_attempts row. A worker observation repeating
+    # the attempt's current state is not in it.
+    changed_attempts: set[tuple[JobName, int]] = field(default_factory=set)
     jobs: dict[JobName, JobRowDelta] = field(default_factory=dict)
 
     health: WorkerHealthEffect = field(default_factory=WorkerHealthEffect)

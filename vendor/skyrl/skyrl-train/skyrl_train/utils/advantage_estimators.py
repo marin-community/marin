@@ -7,29 +7,67 @@ licensed under Apache 2.0.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Optional, Tuple
+from typing import Optional
 
 import loguru
 import numpy as np
 import torch
-from jaxtyping import Float
 from omegaconf import DictConfig
 
 from marinskyrl.runtime_options import AdvantageEstimator
 from skyrl_train.utils.algorithm_registry import (
     AdvantageEstimatorRegistry,
-    ExactPhysicalGroup,
-    MinimumBaselineEligibleGroup,
-    NoGroupAdvantage,
     register_advantage_estimator,
 )
 from skyrl_train.utils.policy_math import masked_whiten, right_pad_to_match
-from skyrl_train.group_admission import GroupAdvantageInvariant, GroupAdvantageKind
+from skyrl_train.group_admission import BUILTIN_GROUP_ADVANTAGE_CONTRACTS, GroupAdvantageInvariant, GroupAdvantageKind
+from skyrl_train.training_batch import TrainingInputBatch
 
 GRPO_FLAT_REWARD_STD_TOLERANCE = 1e-6
 
 
-@register_advantage_estimator(AdvantageEstimator.UNIFORM, group_contract=NoGroupAdvantage())
+def apply_loop_advantages(data: TrainingInputBatch) -> TrainingInputBatch:
+    """Add masked loop credit to policy advantages."""
+    loop_advantages = data.get("loop_advantages")
+    if loop_advantages is None:
+        return data
+    advantages = data["advantages"]
+    loop_advantages = loop_advantages.to(device=advantages.device, dtype=advantages.dtype)
+    data["advantages"] = advantages + loop_advantages * data["response_mask"]
+    return data
+
+
+def drop_advantage_inputs(data: TrainingInputBatch) -> TrainingInputBatch:
+    """Retain optimizer inputs after advantage estimation and loop credit."""
+    data.pop("rewards")
+    data.pop("loop_advantages", None)
+    data.metadata.pop("uids")
+    return data
+
+
+def batch_advantages(
+    data: TrainingInputBatch, algorithm: DictConfig, *, invariant: GroupAdvantageInvariant
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute batch credit through the configured full-width token estimator."""
+    return compute_advantages_and_returns(
+        token_level_rewards=data["rewards"],
+        response_mask=data["response_mask"],
+        index=data.metadata["uids"],
+        adv_estimator=algorithm.advantage_estimator,
+        config=algorithm,
+        gamma=algorithm.gamma,
+        grpo_norm_by_std=algorithm.grpo_norm_by_std,
+        exclude_from_baseline=data.metadata.get("exclude_from_baseline"),
+        token_level_shaping=data.get("token_level_shaping"),
+        group_advantage_invariant=invariant,
+    )
+
+
+def _register_builtin_advantage_estimator(name: str):
+    return register_advantage_estimator(name, group_contract=BUILTIN_GROUP_ADVANTAGE_CONTRACTS[name])
+
+
+@_register_builtin_advantage_estimator(AdvantageEstimator.UNIFORM)
 def compute_uniform_advantage(
     token_level_rewards: torch.Tensor,
     **kwargs,
@@ -39,7 +77,7 @@ def compute_uniform_advantage(
     return ones, ones
 
 
-@register_advantage_estimator(AdvantageEstimator.REWARD, group_contract=NoGroupAdvantage())
+@_register_builtin_advantage_estimator(AdvantageEstimator.REWARD)
 @torch.no_grad()
 def compute_reward_advantage(
     token_level_rewards: torch.Tensor,
@@ -53,7 +91,7 @@ def compute_reward_advantage(
     return advantages, advantages
 
 
-@register_advantage_estimator(AdvantageEstimator.REINFORCE_PP, group_contract=NoGroupAdvantage())
+@_register_builtin_advantage_estimator(AdvantageEstimator.REINFORCE_PP)
 def compute_reinforce_plus_plus_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -88,7 +126,7 @@ def compute_reinforce_plus_plus_outcome_advantage(
     return advantages, returns
 
 
-@register_advantage_estimator(AdvantageEstimator.RLOO, group_contract=ExactPhysicalGroup())
+@_register_builtin_advantage_estimator(AdvantageEstimator.RLOO)
 def compute_rloo_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -139,7 +177,7 @@ def compute_rloo_outcome_advantage(
     return scores, scores
 
 
-@register_advantage_estimator(AdvantageEstimator.RLOO_N, group_contract=MinimumBaselineEligibleGroup())
+@_register_builtin_advantage_estimator(AdvantageEstimator.RLOO_N)
 def compute_rloo_n_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -293,7 +331,7 @@ def compute_rloo_n_outcome_advantage(
     return scores, scores
 
 
-@register_advantage_estimator("rloo_n_pbs", group_contract=MinimumBaselineEligibleGroup())
+@_register_builtin_advantage_estimator("rloo_n_pbs")
 def compute_rloo_n_pbs_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -307,10 +345,8 @@ def compute_rloo_n_pbs_advantage(
     """Combine RLOO-N outcome advantage with potential-based token shaping.
 
     Combines RLOO-N's per-trajectory outcome advantage (computed exactly as
-    ``compute_rloo_n_outcome_advantage`` — the outcome term reads ``rewards``
-    ONLY and is left bit-for-bit intact) with the per-token potential-based
-    shaping channel ``token_level_shaping`` (the PBS test-delta credit scattered
-    onto the EDIT-token span by ``pbs_shaping.compute_pbs_token_shaping``).
+    ``compute_rloo_n_outcome_advantage``) with the per-token potential-based
+    shaping channel ``token_level_shaping`` supplied by the rollout.
 
     The two signals remain additive and separate:
 
@@ -352,38 +388,7 @@ def compute_rloo_n_pbs_advantage(
     return combined, combined
 
 
-@register_advantage_estimator(AdvantageEstimator.GAE, group_contract=NoGroupAdvantage())
-def compute_gae_advantage_return(
-    token_level_rewards: Float[torch.Tensor, "batch_size seqlen"],
-    values: Float[torch.Tensor, "batch_size seqlen"],
-    response_mask: Float[torch.Tensor, "batch_size seqlen"],
-    gamma: float,
-    lambd: float,
-    **kwargs,
-) -> Tuple[Float[torch.Tensor, "batch_size seqlen"], Float[torch.Tensor, "batch_size seqlen"]]:
-    """
-    Compute advantage and return for GAE.
-
-    Adapted from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py
-    """
-    with torch.no_grad():
-        lastgaelam = 0
-        advantages_reversed = []
-        gen_len = token_level_rewards.shape[-1]
-
-        for t in reversed(range(gen_len)):
-            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = token_level_rewards[:, t] + gamma * nextvalues - values[:, t]
-            lastgaelam = delta + gamma * lambd * lastgaelam
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1], dim=1)
-
-        returns = advantages + values
-        advantages = masked_whiten(advantages, response_mask)
-    return advantages, returns
-
-
-@register_advantage_estimator(AdvantageEstimator.GRPO, group_contract=ExactPhysicalGroup())
+@_register_builtin_advantage_estimator(AdvantageEstimator.GRPO)
 def compute_grpo_outcome_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
@@ -442,10 +447,8 @@ def compute_advantages_and_returns(
     index: np.ndarray,
     adv_estimator: AdvantageEstimator,
     config: DictConfig,
-    values: Optional[torch.Tensor] = None,
     grpo_norm_by_std: bool = True,
     gamma=1.0,
-    lambd=1.0,
     exclude_from_baseline: Optional[np.ndarray] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -455,10 +458,8 @@ def compute_advantages_and_returns(
         token_level_rewards=token_level_rewards,
         response_mask=response_mask,
         index=index,
-        values=values,
         grpo_norm_by_std=grpo_norm_by_std,
         gamma=gamma,
-        lambd=lambd,
         config=config,
         exclude_from_baseline=exclude_from_baseline,
         **kwargs,

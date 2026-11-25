@@ -1,5 +1,7 @@
 from collections.abc import Collection
 from dataclasses import dataclass
+from pathlib import Path
+import errno
 from typing import Dict, Any, Optional, Union
 import random
 import hashlib
@@ -20,7 +22,7 @@ def get_vllm_sampling_params(sampling_params: DictConfig) -> Dict[str, Any]:
     stop_val = sampling_params.get("stop", None)
     vllm_sampling_params = {
         "min_tokens": sampling_params.get("min_tokens", 1),
-        "skip_special_tokens": True,
+        "skip_special_tokens": sampling_params.get("skip_special_tokens", True),
         "include_stop_str_in_output": True,
         "max_tokens": sampling_params.max_generate_length,
         "temperature": sampling_params.temperature,
@@ -40,37 +42,10 @@ def get_vllm_sampling_params(sampling_params: DictConfig) -> Dict[str, Any]:
     return vllm_sampling_params
 
 
-def get_sglang_sampling_params(sampling_params: DictConfig) -> Dict[str, Any]:
-    # `min_tokens` in vllm is equivalent to `min_new_tokens` in sglang. However `min_new_tokens` and
-    # `stop` are not supported when `skip_tokenizer_init` is True, which we need for token-in-token-out.
-    # See this issue for more: https://github.com/sgl-project/sglang/issues/9039#issuecomment-3218331087
-    sglang_sampling_params = {
-        "skip_special_tokens": True,
-        "no_stop_trim": True,  # equivalent to include_stop_str_in_output=True
-        "max_new_tokens": sampling_params.max_generate_length,
-        "temperature": sampling_params.temperature,
-        "top_p": sampling_params.top_p,
-        "top_k": sampling_params.top_k,
-        "min_p": sampling_params.min_p,
-    }
-    # logprobs not supported with sglang for now
-    exclude_keys = ["max_generate_length", "logprobs"]
-    for key, value in sampling_params.items():
-        if key not in sglang_sampling_params and key not in exclude_keys:
-            # Convert OmegaConf ListConfig to regular list if needed
-            if isinstance(value, ListConfig):
-                value = list(value)
-            sglang_sampling_params[key] = value
-    return sglang_sampling_params
-
-
 def get_sampling_params_for_backend(backend: str, sampling_params: DictConfig) -> Dict[str, Any]:
-    if backend == "vllm":
-        return get_vllm_sampling_params(sampling_params)
-    elif backend == "sglang":
-        return get_sglang_sampling_params(sampling_params)
-    else:
+    if backend != "vllm":
         raise ValueError(f"Unsupported generation backend: {backend}")
+    return get_vllm_sampling_params(sampling_params)
 
 
 def hash_with_sha256(x: Union[int, str]) -> int:
@@ -203,49 +178,27 @@ def aggregate_completion_usage_info(
     are still compatible with newer vllm versions can be checked in our GPU tests, where we explicitly
     check the dictionary with `CompletionResponse.model_validate()`.
     """
-    if backend == "vllm":
-        # required fields
-        usage_info = {
-            "prompt_tokens": sum(result["usage"]["prompt_tokens"] for result in results),
-            "total_tokens": sum(result["usage"]["total_tokens"] for result in results),
-        }
-        # optional fields
-        if results[0]["usage"].get("completion_tokens") is not None:
-            usage_info["completion_tokens"] = sum(result["usage"]["completion_tokens"] for result in results)
-        if results[0]["usage"].get("prompt_tokens_details") is not None:
-            if results[0]["usage"]["prompt_tokens_details"].get("cached_tokens") is not None:
-                usage_info["prompt_tokens_details"] = {
-                    "cached_tokens": sum(
-                        result["usage"]["prompt_tokens_details"]["cached_tokens"] for result in results
-                    )
-                }
-        return usage_info
-    elif backend == "sglang":
-        raise NotImplementedError("SGLang is not supported yet")
-    else:
+    if backend != "vllm":
         raise ValueError(f"Unsupported backend: {backend}")
+    usage_info = {
+        "prompt_tokens": sum(result["usage"]["prompt_tokens"] for result in results),
+        "total_tokens": sum(result["usage"]["total_tokens"] for result in results),
+    }
+    # optional fields
+    if results[0]["usage"].get("completion_tokens") is not None:
+        usage_info["completion_tokens"] = sum(result["usage"]["completion_tokens"] for result in results)
+    if results[0]["usage"].get("prompt_tokens_details") is not None:
+        if results[0]["usage"]["prompt_tokens_details"].get("cached_tokens") is not None:
+            usage_info["prompt_tokens_details"] = {
+                "cached_tokens": sum(result["usage"]["prompt_tokens_details"]["cached_tokens"] for result in results)
+            }
+    return usage_info
 
 
-_RENDEZVOUS_PORT_START = 20_000
-_RENDEZVOUS_PORT_STOP = 30_000
-
-
-def _find_available_rendezvous_port(excluded_ports: Collection[int] = ()) -> int:
-    """Choose a listener port outside Linux's default ephemeral client range."""
-
-    excluded = set(excluded_ports)
-    candidates = list(range(_RENDEZVOUS_PORT_START, _RENDEZVOUS_PORT_STOP))
-    random.shuffle(candidates)
-    for port in candidates:
-        if port in excluded:
-            continue
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind(("", port))
-            except OSError:
-                continue
-        return port
-    raise RuntimeError(f"No free rendezvous port in [{_RENDEZVOUS_PORT_START}, {_RENDEZVOUS_PORT_STOP})")
+_RENDEZVOUS_PORT_START = 10_002  # Iris controller and worker RPC use 10000/10001.
+_TCP_PORT_STOP = 65_536
+_EPHEMERAL_PORT_RANGE_PATH = Path("/proc/sys/net/ipv4/ip_local_port_range")
+_RESERVED_PORTS_PATH = Path("/proc/sys/net/ipv4/ip_local_reserved_ports")
 
 
 def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List[str]:
@@ -269,25 +222,50 @@ def get_pg_bundle_node_ips(placement_group, pg_indices: Collection[int]) -> List
 
 
 def _reserve_available_rendezvous_ports(port_count: int, excluded_ports: Collection[int] = ()) -> list[socket.socket]:
+    """Return bound sockets outside kernel ephemeral, reserved, and excluded ports."""
+    ephemeral_start, ephemeral_end = map(int, _EPHEMERAL_PORT_RANGE_PATH.read_text().split())
+    excluded = set(excluded_ports)
+    for span in _RESERVED_PORTS_PATH.read_text().strip().split(","):
+        if not span:
+            continue
+        start, separator, end = span.partition("-")
+        excluded.update(range(int(start), int(end if separator else start) + 1))
+    # Outbound sockets must not take these ports during the vLLM handoff.
+    # Read the actual node range: Iris can lower Linux's default ephemeral floor.
+    candidates = [
+        port
+        for port in range(_RENDEZVOUS_PORT_START, _TCP_PORT_STOP)
+        if not ephemeral_start <= port <= ephemeral_end
+        and port not in excluded
+    ]
+    random.shuffle(candidates)
     sockets: list[socket.socket] = []
-    unavailable_ports = set(excluded_ports)
     try:
-        for _ in range(port_count):
-            port = _find_available_rendezvous_port(unavailable_ports)
+        for port in candidates:
             reserved = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            reserved.bind(("", port))
+            try:
+                reserved.bind(("", port))
+            except OSError as error:
+                reserved.close()
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                continue
             sockets.append(reserved)
-            unavailable_ports.add(port)
+            if len(sockets) == port_count:
+                return sockets
+        raise RuntimeError(
+            f"Cannot reserve {port_count} rendezvous ports outside ephemeral range "
+            f"{ephemeral_start}–{ephemeral_end}, kernel reserved ports, and caller exclusions"
+        )
     except Exception:
         for reserved in sockets:
             reserved.close()
         raise
-    return sockets
 
 
 @ray.remote(num_cpus=0, num_gpus=0)
 class RendezvousPortReservation:
-    """Hold node-local listener ports until the vLLM coordinator starts."""
+    """Hold node-local bound sockets until the vLLM coordinator starts."""
 
     def __init__(self, port_count: int, excluded_ports: Collection[int]):
         self._sockets = _reserve_available_rendezvous_ports(port_count, excluded_ports)

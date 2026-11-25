@@ -10,7 +10,7 @@ from typing import Protocol
 from taskcompendium.models import TaskSpec
 
 from rolloutengine.harness.core import HarnessContext, ModelSession
-from rolloutengine.models import ModelTurn, Prompt, RolloutLimits, Transition
+from rolloutengine.models import ContextRecovery, ModelTurn, Prompt, RolloutLimits, Transition
 
 
 class Episode(Protocol):
@@ -31,6 +31,8 @@ class StepHarness:
     A harness that must reject a task before any machine starts implements ``Harness`` itself,
     and its ``run`` can call this harness's ``run``.
     """
+
+    context_recovery = ContextRecovery.NEVER
 
     open_episode: Callable[[HarnessContext], Episode]
     """Starts one episode per attempt, for example an episode class."""

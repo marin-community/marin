@@ -1,14 +1,16 @@
+import json
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import Any, ClassVar, Literal, NotRequired, TypedDict
-from urllib.parse import urlsplit
+from typing import Annotated, Any, ClassVar, Literal, NotRequired, TypedDict
 from uuid import UUID
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PlainSerializer,
+    SerializationInfo,
     field_serializer,
     field_validator,
     model_validator,
@@ -16,15 +18,25 @@ from pydantic import (
 from shortuuid import ShortUUID
 from upath import UPath
 
-from harbor_config.env import templatize_sensitive_env
+from harbor_config.env import redact_capability_urls, templatize_sensitive_env
 from harbor_config.model_name import split_provider_model_name
-from harbor_config.models.agent.name import AgentName
-from harbor_config.models.bridge import BridgeConfig
 from harbor_config.models.environment_type import EnvironmentType
 from harbor_config.models.task.config import ArtifactConfig, MCPServerConfig, TpuSpec
 from harbor_config.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
 
 DEFAULT_TRIAL_CLEANUP_GRACE_SEC = 30.0
+
+
+def _serialize_environment(
+    env: dict[str, str], info: SerializationInfo
+) -> dict[str, str]:
+    serialized = templatize_sensitive_env(env)
+    return redact_capability_urls(serialized) if info.mode == "json" else serialized
+
+
+EnvironmentVariables = Annotated[
+    dict[str, str], PlainSerializer(_serialize_environment)
+]
 
 
 class ArtifactAuthorityConfig(BaseModel):
@@ -87,7 +99,6 @@ class ResolvedTimeouts(BaseModel):
 
 class AgentConfig(BaseModel):
     name: str | None = None
-    import_path: str | None = None
     model_name: str | None = Field(
         default=None,
         description="Immutable model identity recorded in results and used for resume.",
@@ -97,7 +108,6 @@ class AgentConfig(BaseModel):
         description="Mutable serving name used to route model requests for this run.",
     )
     skills: list[Path] = Field(default_factory=list)
-    mode: Literal["container", "local"] = "container"
     override_timeout_sec: float | None = None
     override_setup_timeout_sec: float | None = None
     max_timeout_sec: float | None = Field(
@@ -108,7 +118,7 @@ class AgentConfig(BaseModel):
         ),
     )
     kwargs: dict[str, Any] = Field(default_factory=dict)
-    env: dict[str, str] = Field(default_factory=dict)
+    env: EnvironmentVariables = Field(default_factory=dict)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     # When True (default; preserves current behavior) the host-side agent logs are
     # re-uploaded BACK into a non-mounted agent environment after the agent phase.
@@ -121,10 +131,22 @@ class AgentConfig(BaseModel):
     # environments ignore this (they use a bind mount, no round-trip).
     upload_agent_logs: bool = True
 
-    @field_serializer("env")
-    @classmethod
-    def _serialize_env(cls, env: dict[str, str]) -> dict[str, str]:
-        return templatize_sensitive_env(env)
+    def identity_fingerprint(self) -> dict[str, Any]:
+        """Retain model and generation settings while excluding serving placement."""
+        dump = self.model_dump(exclude={"model_alias"}, exclude_none=True)
+        if self.model_name is not None:
+            for key in ("api_base", "key", "api_key"):
+                dump["kwargs"].pop(key, None)
+            for key in (
+                "HARBOR_PI_API_BASE",
+                "OPENAI_API_BASE",
+                "OPENAI_BASE_URL",
+                "OPENAI_API_KEY",
+                "TOGETHER_API_KEY",
+                "CUSTOM_API_KEY",
+            ):
+                dump["env"].pop(key, None)
+        return dump
 
     @model_validator(mode="after")
     def require_model_name_for_alias(self):
@@ -142,7 +164,9 @@ class AgentConfig(BaseModel):
 
     @field_serializer("kwargs")
     @classmethod
-    def _serialize_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
+    def _serialize_kwargs(
+        cls, kwargs: dict[str, Any], info: SerializationInfo
+    ) -> dict[str, Any]:
         """Replace non-serializable kwargs on dump.
 
         Some callers (e.g. SkyRL's terminal_bench generator with PRM
@@ -156,7 +180,6 @@ class AgentConfig(BaseModel):
         ``model_dump()`` and JSON dumps succeed. Original values remain on the
         live in-memory instance for the agent factory.
         """
-        import json
 
         def _safe(v: Any) -> Any:
             try:
@@ -165,24 +188,14 @@ class AgentConfig(BaseModel):
             except (TypeError, ValueError):
                 return f"<non-serializable {type(v).__name__}>"
 
-        return {k: _safe(v) for k, v in kwargs.items()}
-
-    @model_validator(mode="after")
-    def set_default_name(self):
-        if self.name is None and self.import_path is None:
-            self.name = AgentName.ORACLE.value
-        return self
-
-
-class UserAgentConfig(AgentConfig):
-    user_persona_path: Path | None = None
-    user_prompt_template_path: Path | None = None
-    bridge: BridgeConfig
+        serialized = {k: _safe(v) for k, v in kwargs.items()}
+        return redact_capability_urls(serialized) if info.mode == "json" else serialized
 
 
 class EnvironmentConfig(BaseModel):
-    type: EnvironmentType | None = None
-    import_path: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    type: EnvironmentType = EnvironmentType.LOCAL
     force_build: bool = False
     delete: bool = True
     cpu_enforcement_policy: ResourceMode = ResourceMode.AUTO
@@ -198,8 +211,7 @@ class EnvironmentConfig(BaseModel):
         description="Deprecated; has no effect.",
     )
     mounts: list[ServiceVolumeConfig] | None = None
-    extra_docker_compose: list[Path] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
+    env: EnvironmentVariables = Field(default_factory=dict)
     kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -255,10 +267,30 @@ class EnvironmentConfig(BaseModel):
         )
         self.mounts = value
 
-    @field_serializer("env")
+    @field_serializer("kwargs", when_used="json")
     @classmethod
-    def _serialize_env(cls, env: dict[str, str]) -> dict[str, str]:
-        return templatize_sensitive_env(env)
+    def _serialize_kwargs(cls, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return redact_capability_urls(kwargs)
+
+    def identity_fingerprint(
+        self, *, candidate_model_identity: str | None, judge_model_identity: str | None
+    ) -> dict[str, Any]:
+        """Compare recorded relay models and settings independently of placement."""
+        dump = self.model_dump()
+        for endpoint_name, model_name in (
+            ("candidate_model_endpoint", "candidate_model_name"),
+            ("model_endpoint", "model_name"),
+        ):
+            identity = (
+                candidate_model_identity
+                if endpoint_name == "candidate_model_endpoint"
+                else judge_model_identity
+            )
+            if identity or self.kwargs.get(model_name):
+                dump["kwargs"].pop(endpoint_name, None)
+                if identity:
+                    dump["kwargs"].pop(model_name, None)
+        return dump
 
     @field_validator("env", mode="before")
     @classmethod
@@ -284,14 +316,13 @@ class EnvironmentConfig(BaseModel):
             return out
         return v
 
-    @model_validator(mode="after")
-    def set_default_type(self):
-        if self.type is None and self.import_path is None:
-            self.type = EnvironmentType.DOCKER
-        return self
-
 
 class VerifierConfig(BaseModel):
+    model_name: str | None = Field(
+        default=None,
+        description="Immutable judge model identity, independent of the verifier's serving alias.",
+        exclude_if=lambda value: value is None,
+    )
     override_timeout_sec: float | None = None
     max_timeout_sec: float | None = Field(
         default=None,
@@ -300,24 +331,19 @@ class VerifierConfig(BaseModel):
             "effective timeout multiplier."
         ),
     )
-    env: dict[str, str] = Field(default_factory=dict)
+    env: EnvironmentVariables = Field(default_factory=dict)
     import_path: str | None = Field(default=None, exclude_if=lambda v: v is None)
     kwargs: dict[str, Any] = Field(default_factory=dict, exclude_if=lambda v: not v)
     disable: bool = False
 
-    @field_serializer("env")
-    @classmethod
-    def _serialize_env(cls, env: dict[str, str]) -> dict[str, str]:
-        return templatize_sensitive_env(env)
-
     def identity_fingerprint(self) -> dict[str, Any]:
-        """Compare judge hosting service and settings without runtime URL routing."""
+        """Compare the recorded judge model and grading settings independently of placement."""
         dump = self.model_dump()
-        base_url = self.env.get("OPENAI_BASE_URL")
-        if base_url and self.env.get("MODEL_NAME"):
-            url = urlsplit(base_url)
-            if url.hostname:
-                dump["env"]["OPENAI_BASE_URL"] = (url.scheme.lower(), url.hostname)
+        if self.model_name or self.env.get("MODEL_NAME"):
+            for key in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "OPENAI_API_KEY"):
+                dump["env"].pop(key, None)
+            if self.model_name:
+                dump["env"].pop("MODEL_NAME", None)
         return dump
 
 
@@ -409,14 +435,7 @@ class TrialConfig(BaseModel):
         ),
     )
     resolved_timeouts: ResolvedTimeouts | None = None
-    agent: AgentConfig = Field(default_factory=AgentConfig)
-    user_agent: UserAgentConfig | None = Field(
-        default=None,
-        description=(
-            "Optional simulated-user agent that communicates with the primary "
-            "agent through its configured bridge."
-        ),
-    )
+    agent: AgentConfig
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     artifacts: list[str | ArtifactConfig] = Field(default_factory=list)
@@ -457,17 +476,9 @@ class TrialConfig(BaseModel):
             other.model_dump(exclude=self.EQUALITY_EXCLUDED_FIELDS)
         )
 
-    # Agent-config keys that describe HOW a trial is SERVED at runtime (which
-    # served-model alias / endpoint / sampling-transport knobs the agent dials)
-    # rather than WHAT the trial IS. They drift across a resume that lands on a
-    # new serve node or after a serve-geometry change (e.g. a `--served-model-name`
-    # alias, an `api_base` rewrite to the live MASTER_ADDR) WITHOUT changing the
-    # task, the prompt, the verifier, or the trial's identity. The resume
-    # reconciliation must ignore these so partial progress survives benign drift.
+    # Agent timeouts are operational overrides. Generation settings remain in
+    # AgentConfig.identity_fingerprint alongside the recorded model identity.
     _SERVING_AGENT_FIELDS: ClassVar[set[str]] = {
-        "model_alias",
-        "kwargs",
-        "env",
         "override_timeout_sec",
         "override_setup_timeout_sec",
         "max_timeout_sec",
@@ -510,6 +521,11 @@ class TrialConfig(BaseModel):
         drift while still rejecting a genuinely different eval.
         """
         dump = self.model_dump(exclude=self._SERVING_TOP_FIELDS)
+        dump["agent"] = self.agent.identity_fingerprint()
+        dump["environment"] = self.environment.identity_fingerprint(
+            candidate_model_identity=self.agent.model_name,
+            judge_model_identity=self.verifier.model_name,
+        )
         dump["verifier"] = self.verifier.identity_fingerprint()
         task = dump.get("task")
         if isinstance(task, dict) and task.get("source") == "hf_dataset":
@@ -540,12 +556,6 @@ class TrialConfig(BaseModel):
     def set_default_trial_name(self):
         if not self.trial_name:
             self.trial_name = self.generate_trial_name()
-        return self
-
-    @model_validator(mode="after")
-    def _validate_user_agent_mode(self):
-        if self.user_agent is not None and self.user_agent.mode != "container":
-            raise ValueError("user_agent requires container mode")
         return self
 
     def generate_trial_name(self):

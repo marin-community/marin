@@ -13,6 +13,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.grader import verifyit_package
@@ -20,6 +21,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     PlainText,
     ResourceGroups,
     TaskSpec,
@@ -47,7 +49,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.conversion.archi
     archive_files,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 SCORER_RUNNERS = {
     "be1931919ee22ef704f565126353e7edec7b864dbd4a36590ab34593dd2004c7": (
@@ -174,7 +176,7 @@ class MathConverter:
                 inline_resource("verifier_data.json", files[VERIFIER_DATA]),
                 inline_resource("source/test.sh", runner),
             ),
-            environment=required_grader_environment(context),
+            placement=GraderMachine(environment=required_grader_environment(context)),
         )
         task = TaskSpec(
             id=row.id,
@@ -229,15 +231,19 @@ SOURCES = (
         convert_tasktrove_math,
         GYM_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-v5",
-            title="laion/nemotron-gym-math-v5",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__nemotron-gym-math-v5",
+            upstream_name="laion/nemotron-gym-math-v5",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=4096,
             notes=(
                 "Strict trailing boxed compare. No oracle to validate against, so run a no-op gate at " "conversion."
             ),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     MathSource(
@@ -246,13 +252,17 @@ SOURCES = (
         convert_openreasoning,
         OPENREASONING_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-openmathreasoning-v2",
-            title="laion/nemotron-gym-math-openmathreasoning-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__nemotron-gym-math-openmathreasoning-v2",
+            upstream_name="laion/nemotron-gym-math-openmathreasoning-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=42636,
             notes=("Most rigorous math verifier in the corpus (scalar/interval/set/tuple/equation), " "oracle present."),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     MathSource(
@@ -261,13 +271,17 @@ SOURCES = (
         convert_tasktrove_math,
         ORACLE_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:SankalpKJ__nemotron-math-oracle-filtered-v2",
-            title="SankalpKJ/nemotron-math-oracle-filtered-v2",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="SankalpKJ__nemotron-math-oracle-filtered-v2",
+            upstream_name="SankalpKJ/nemotron-math-oracle-filtered-v2",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=57777,
             notes=("Scalar sympy compare, hidden gold. Overlaps the other Nemotron math sources; " "subsample."),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     MathSource(
@@ -276,13 +290,17 @@ SOURCES = (
         convert_tasktrove_math,
         PRISM_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemo-prism-math-v3",
-            title="laion/nemo-prism-math-v3",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__nemo-prism-math-v3",
+            upstream_name="laion/nemo-prism-math-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=2404,
             notes="Symbolic exact compare, hidden gold. Add a numeric tolerance path at conversion.",
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
     MathSource(
@@ -291,13 +309,17 @@ SOURCES = (
         convert_tasktrove_math,
         STACK_RUBRIC,
         info=SourceInfo(
-            id="Task Trove:laion__nemotron-gym-math-stack-overflow-v3",
-            title="laion/nemotron-gym-math-stack-overflow-v3",
-            origin="Task Trove",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="laion__nemotron-gym-math-stack-overflow-v3",
+            upstream_name="laion/nemotron-gym-math-stack-overflow-v3",
+            subset=None,
+            build_path="Task Trove",
+            origin=SourceOrigin.TASKTROVE,
             family="math-answer",
             tags=("agentic", "multi-turn"),
             count=110730,
             notes=("Typed sympy comparison with oracle per task. Remove the non-boxed fallback " "extraction."),
+            task_format=TaskFormat.TASKCOMPENDIUM,
         ),
     ),
 )
@@ -312,7 +334,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name=source.name,
                 source=tasktrove_source(source.config),
                 convert=TaskTroveConverter(source.config, source.convert),
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=source.rubric,
                 controls=MATH_CONTROLS,

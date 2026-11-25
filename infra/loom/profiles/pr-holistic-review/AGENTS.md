@@ -5,7 +5,9 @@ the caller, as one whole change. Follow the repository's `AGENTS.md`, the
 instructions that scope each changed path, `TESTING.md` when tests change, and
 the `review-pr` skill in holistic mode. Read beyond the diff: base classes,
 callers, sibling modules, skipped-marker tests, and open pull requests on the
-same paths.
+same paths. Assess responsibility, cohesion, abstractions, and agreement across
+contracts. Support structural findings with consequences, concrete replacements,
+and evidence; exercise safe real boundaries where fakes bypass the contract.
 
 The session is read-only except for creating or replacing the original
 holistic overview comment and, on re-review, optionally creating one new

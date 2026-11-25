@@ -19,7 +19,7 @@ from sqlalchemy import bindparam, func
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from iris.cluster.controller import reads
+from iris.cluster.controller import observability_rows, reads
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import proto_to_json
 from iris.cluster.controller.db import Tx
@@ -127,6 +127,7 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
             and d.pod_uid is None
             and d.node_name is None
             and d.terminal_reason is None
+            and d.topology is None
         ):
             continue
         params.append(
@@ -142,6 +143,7 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
                 "b_pod_uid": d.pod_uid,
                 "b_node_name": d.node_name,
                 "b_terminal_reason": d.terminal_reason,
+                "b_topology": d.topology,
             }
         )
     if not params:
@@ -160,6 +162,7 @@ def _flush_attempts(cur: Tx, deltas: list[AttemptRowDelta]) -> None:
             pod_uid=func.coalesce(bindparam("b_pod_uid"), c.pod_uid),
             node_name=func.coalesce(bindparam("b_node_name"), c.node_name),
             terminal_reason=func.coalesce(bindparam("b_terminal_reason"), c.terminal_reason),
+            topology_json=func.coalesce(bindparam("b_topology", type_=c.topology_json.type), c.topology_json),
         ),
         params,
     )
@@ -266,6 +269,9 @@ def commit_effects(
     _flush_tasks(cur, list(effects.tasks.values()))
     _flush_attempts(cur, list(effects.attempts.values()))
     _flush_jobs(cur, list(effects.jobs.values()))
+    observability_rows.record_task_changes(cur, effects.changed_tasks)
+    observability_rows.record_attempt_changes(cur, effects.changed_attempts)
+    observability_rows.record_job_changes(cur, [d.job_id for d in effects.jobs.values()])
 
     task_events = tuple(effects.task_events)
     task_event_table = cur.task_event_table
