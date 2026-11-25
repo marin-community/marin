@@ -267,6 +267,15 @@ def build_record(
     tracking = attempt_tracking(attempt, launch)
     started, finished = result.started_at, result.finished_at
     index = attempt.index
+    base_commit = index.base_commit if index is not None else None
+    if (
+        base_commit is None
+        and control is not None
+        and provenance.get("branch") == "main"
+        and provenance.get("dirty") is False
+        and provenance.get("base_commit") == control.commit
+    ):
+        base_commit = control.commit
     terminal = result.state.is_terminal
     interrupted = attempt.interruption is not None and not terminal
     measured = (
@@ -294,7 +303,7 @@ def build_record(
         model=index.model if index is not None else launch.model_name or table.model,
         preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
         is_control=True if control or inputs.control else index.is_control if index is not None else None,
-        base_commit=index.base_commit if index is not None else None,
+        base_commit=base_commit,
         base_preset_version=index.base_preset_version if index is not None else None,
         control=control or inputs.control,
         control_preset=preset.control_preset if preset.gated else None,

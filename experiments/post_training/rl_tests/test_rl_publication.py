@@ -272,6 +272,9 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     assert row.evaluation_task_set == baseline.evaluation_task_set
     assert {item.evaluation_score.profile for item in row.evaluations if item.evaluation_score} == {"eval_lite"}
     assert row.gate_result is not None and not row.gate_result.invariants[0].holds
+    assert {
+        item.evaluation_score.step for item in row.evaluations if item.evaluation_score and item.evaluation_score.final
+    } == {preset.updates}
 
     def family_identity(summary):
         return next(
@@ -313,6 +316,7 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
     pq.write_table(pa.Table.from_pylist(samples), source_path)
     changed_tasks = publication.build_record(str(source), preset, table=table, attempt=attempt)
     assert changed_tasks.evaluation_task_set != baseline.evaluation_task_set
+    assert family_identity(changed_tasks) != family_identity(differently_grouped)
     assert changed_tasks.evaluation_protocol_identity == baseline.evaluation_protocol_identity
 
     altered_config = copy.deepcopy(attempt.native.config)
@@ -714,6 +718,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert after["native-0"]["gate_result"] == before["native-0"]["gate_result"]
     for root in controls:
         (root / RUN_INPUTS_FILENAME).unlink()
+    with edit_receipt(controls[0]) as receipt:
+        receipt["result"]["provenance"].update(branch="main", dirty=False, base_commit=pin.commit)
     command = CliRunner().invoke(
         publication.command(table), ["--preset", "data-medium", "--marina-url", "http://localhost"]
     )
@@ -727,6 +733,12 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert len(served_controls) == pin.replicates
     assert sorted(row["control"]["replicate"] for row in served_controls) == list(range(pin.replicates))
     assert all(row["control"]["commit"] == pin.commit for row in served_controls)
+    [main_control] = [row for row in served_controls if row.get("base_commit") is not None]
+    assert (main_control["branch"], main_control["base_commit"], main_control["commit"]) == (
+        "main",
+        pin.commit,
+        pin.commit,
+    )
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )

@@ -23,7 +23,15 @@ def describe(entry_module: str, model: str, preset_name: str) -> dict | None:
     if not entry.__file__ or not Path(entry.__file__).resolve().is_relative_to(Path.cwd()):
         raise ValueError(f"{entry_module} did not load from the archive")
     table = getattr(entry, model.upper(), None)
-    if not isinstance(table, ModelPresets) or table.model != model or preset_name not in table.by_name:
+    if not isinstance(table, ModelPresets) or table.model != model:
+        # Historical entry modules can import the model's table under a local name.
+        tables = {
+            id(value): value
+            for value in vars(entry).values()
+            if isinstance(value, ModelPresets) and value.model == model
+        }
+        table = next(iter(tables.values())) if len(tables) == 1 else None
+    if table is None or preset_name not in table.by_name:
         return None
     configure_coreweave_s3()
     preset = table.by_name[preset_name]
