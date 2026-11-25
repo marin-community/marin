@@ -51,14 +51,14 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
         elif preset.name in ("speed-short", "data-short"):
             invalid = [*arguments, "--init", initializer]
             result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
-            assert result.exit_code == 4, result.output
+            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
     composed = gate.compose_configs(list(launch_paths.values()), validate_driver=True)
     configs = dict(zip(launch_paths, composed, strict=True))
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
 
-    # Published train-long controls can contain retired defaults.
+    # Published train-long controls still contain defaults removed by the TaskSpec migration.
     planned = configs["train-long"]
     recorded = deepcopy(planned)
     recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])

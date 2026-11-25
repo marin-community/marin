@@ -641,8 +641,8 @@ def compare(preset, *args):
     return payload
 
 
-def comparisons(report):
-    return {row["metric"]: row for row in report["comparisons"]}
+def comparisons(report, role=None):
+    return {row["metric"]: row for row in report["comparisons"] if role is None or row["role"] == role}
 
 
 def edit_metrics(root, edit):

@@ -184,6 +184,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 assert (
                     report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
                 ), report
+                if diagnostic == "timeout":
+                    assert "timed out after 120 s" in report["reason"]
         return
     reasons = {
         "stale-default": ("control config differs",),
