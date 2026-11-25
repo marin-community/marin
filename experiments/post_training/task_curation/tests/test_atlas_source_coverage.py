@@ -35,9 +35,15 @@ from finestore.rl.source_identity import canonical_source_id
 from experiments.post_training.task_curation.sources import all_sources
 
 ATLAS_SOURCE_PINS_REPO = "open-athena/atlas-source-pins"
+<<<<<<< HEAD
 ATLAS_SOURCE_PINS_REVISION = "53147ef2354b789879e2b93f7919accdd6a04c84"
 ATLAS_SOURCE_PINS_SHA256 = "f0b0e08bc3e53260142323c3acd29e9da44e5e9ff8f26504d47472fafcec7f26"
 ATLAS_SOURCE_PINS_BYTES = 170943
+=======
+ATLAS_SOURCE_PINS_REVISION = "2e7057ec8d1743aa86ac9157b0aa640d0536c181"
+ATLAS_SOURCE_PINS_SHA256 = "e8b7a43643001294670584f6fc4dc2f2b3222d8389d4a5d7b295dfd11668e90f"
+ATLAS_SOURCE_PINS_BYTES = 131639
+>>>>>>> origin/benfeuer/atlas-admitted-records-1125
 
 
 ATLAS_SOURCE_PINS_REFERENCE = PinnedHfFile(
