@@ -59,12 +59,14 @@ SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-DEFAULT_SELECTION_VERSION = "2026.11.25.1"
+DEFAULT_SELECTION_VERSION = "2026.11.19.1"
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
-DEFAULT_EVAL_LITE_VERSION = "2026.11.25.1"
+DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
 EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
+_CATALOG_TASKS = "snowball-100k@2026.11.25.1"
+_CATALOG_EVAL_LITE = "eval-lite@2026.11.25.1"
 
 _DSPARK = sections.SpeculativeDecoding(
     method="dspark",
@@ -287,7 +289,8 @@ _LEARNING_MEDIUM = _snowball(
 
 
 _TRAIN_LONG = _snowball(
-    held_out_tasks=_DEFAULT_EVAL_LITE,
+    tasks=_CATALOG_TASKS,
+    held_out_tasks=_CATALOG_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
     export="best",
@@ -498,7 +501,8 @@ _PRESETS = (
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),
     _snowball(
-        held_out_tasks=_DEFAULT_EVAL_LITE,
+        tasks=_CATALOG_TASKS,
+        held_out_tasks=_CATALOG_EVAL_LITE,
         name="eval-short",
         checkpoints="none",
         recipe=_GENERATING,

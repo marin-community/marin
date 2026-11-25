@@ -118,7 +118,11 @@ class TaskDataset(PromptDataset):
             )
             stored_identity = extras.get(TASK_EVALUATION_IDENTITY)
             identity = TaskEvaluationIdentity.model_validate_json(stored_identity) if stored_identity else None
-            subset = (identity.strata.source if identity is not None else None) or task_subset(lowered.task)
+            subset = (
+                identity.strata.source
+                if identity is not None and identity.panel_name is not None
+                else task_subset(lowered.task)
+            )
             inputs.append(
                 {
                     "uid": uid,
