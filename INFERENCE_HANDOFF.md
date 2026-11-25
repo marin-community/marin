@@ -8,11 +8,13 @@ At runtime source `634a4baa9c`, the production observer-OFF tiny Snowball
 workload passed two finite updates, exact checkpoint restoration and the original
 five-second native-exit contract on one H100. The latest full-model attempt,
 `2026.11.25.8`, completed one finite, changed update on all four native learner
-processes, then failed the unchanged five-second post-ACK exit wait before
-restore. A separately read 321-byte checkpoint marker records step 1 and policy
+processes, then failed the unchanged five-second wait for process exit after
+shutdown acknowledgment (ACK), before restore. A separately read 321-byte
+checkpoint marker records step 1 and policy
 version 1; checkpoint arrays were not decoded. The shape-cache ownership fix did
-not resolve full-model shutdown. Both Iris jobs failed, all five GPU Pods are
-absent and all coordinator containers are terminal; no hardware remains active.
+not resolve full-model shutdown. The full-model attempt's coordinator and GPU
+jobs both failed. All five GPU Pods are absent and all coordinator containers
+are terminal; no hardware remains active.
 At later source `d4dcbb8cac`, an isolated eight-H100 diagnostic completed
 device-to-host transfer of 201.7 GB across 4,411 independent buffers and exited
 naturally. Shutdown request through process reap took 2.903 seconds under the
@@ -30,7 +32,7 @@ with JAX's backend-cache cleanup. A fresh-process CPU regression checks an exact
 replicated checkpoint round trip, including signed zero, a NaN payload and a
 subnormal, then verifies that cleanup releases the mesh and client. The 82
 checkpoint and TensorStore tests pass. This fix has no GPU checkpoint-restore qualification and
-does not explain R8's first shutdown failure, which occurred before restoration.
+does not explain attempt `2026.11.25.8`'s shutdown failure, which occurred before restoration.
 
 Checkpoint-validation runs now write bounded shutdown-phase records to
 `native-finalization/<pid>/shutdown-phases.jsonl` under the existing debug
@@ -49,17 +51,28 @@ separate log query returned no rows. The head archive verifies source and input
 staging, with no learner receipts. The companion archive is unavailable and
 both Pods are absent. A local control reproduced the failure before process
 creation, then launched and reaped a harmless child with the checkout as its
-working directory. The next two-host diagnostic launcher must set
+working directory. The next diagnostic supplied
 `SKYRL_HOME=/app/vendor/skyrl` inside the container. No learner gate passed in
-this run.
+the first run.
 [Two-host bootstrap failure](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-twohost-20261125-1)
+
+The second two-host diagnostic at `6b76ca614b` started the learner driver, then
+failed its configuration comparison before attaching to Ray or initializing
+the learner. The retained task error and archived driver result agree on this
+boundary. Source review found that the emitted configuration uses
+`<job-prefix>/checkpoints`, while the driver expects `<job-prefix>`; the
+post-staging configuration was not archived, so this leaf difference is
+source-derived. The head archive was fetched and verified; the companion
+archive is unavailable. Both original Pods are absent. This run supplies no
+training, checkpoint, restore, or shutdown qualification.
+[Two-host configuration failure](https://iris.oa.dev/#/job/%2Fdlwh%2Ftiny-real-ray-twohost-20261125-2)
 
 | Gate | Integrated path |
 | --- | --- |
 | Paged inference | Snowball initializes KV pages and runs prefill and decode with GPU and TPU implementations. Tests cover mixed requests, compact short-window KV, and reuse of retained prompt pages. |
 | Versioned installation | The runtime stages and checks candidate arrays before swapping model and version. Pause and version fences invalidate earlier admission and cache state. Both endpoints return the emitting policy identity and reject stale expectations. |
 | OpenAI and binary serving | Both endpoints accept exact prompt IDs and expose generated IDs, finish reasons, policy version, and separate policy and behavior scores. Each can return the Snowball route payload. |
-| Router replay | Capture uses the optimized forward and keeps route rows alongside retained prefixes. The learner can validate the emitted positions, align routes against padded rows, move them during packing, and consume them in differentiable policy scoring. |
+| Router replay | Recorded per-token MoE routing decisions can be replayed during learner scoring. Capture uses the optimized forward and keeps route rows alongside retained prefixes. The learner can validate the emitted positions, align routes against padded rows, move them during packing, and consume them in differentiable policy scoring. |
 | Fixed-input qualification | The benchmark compares learner scoring, prefill and cached decode with fixed weights and input tokens. Report numerical KL separately from the reference-KL penalty used in the RL objective. |
 
 Policy scores are selected-token log probabilities from the model's raw logits.
