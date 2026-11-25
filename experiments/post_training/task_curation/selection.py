@@ -699,6 +699,12 @@ def write_training(
     return counts
 
 
+def _active_selection_row(value: Mapping[str, Any]) -> SelectionTaskRow:
+    task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
+    tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
+    return _selection_row(task, tags, state=MembershipState.ACTIVE)
+
+
 def prepare(config: SelectionConfig) -> None:
     """Publish selected training TaskSpecs and the fixed and complete heldout panels."""
     environments = _grader_environments(config.sources)
@@ -737,11 +743,9 @@ def prepare(config: SelectionConfig) -> None:
             yield from annotations
             for batch in pq.ParquetFile(directory / TRAIN_FILENAME).iter_batches(batch_size=PARQUET_BATCH_ROWS):
                 for value in batch.to_pylist():
-                    task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
-                    tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
-                    row = _selection_row(task, tags, state=MembershipState.ACTIVE)
+                    row = _active_selection_row(value)
                     if row.grader_kind == GraderKind.HARNESS:
-                        harness_datasets.add(task.source.dataset)
+                        harness_datasets.add(row.source)
                     yield row.model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
@@ -824,9 +828,7 @@ def _training_holdout(
             for filename in (TRAIN_FILENAME, VALIDATION_FILENAME):
                 for batch in pq.ParquetFile(directory / filename).iter_batches(batch_size=PARQUET_BATCH_ROWS):
                     for row in batch.to_pylist():
-                        task = TaskSpec.model_validate_json(row[TASK_SPEC_COLUMN])
-                        tags = TaskStrata.model_validate({key: row[key] for key in TaskStrata.model_fields})
-                        yield _selection_row(task, tags, state=MembershipState.ACTIVE).model_dump(mode="json")
+                        yield _active_selection_row(row).model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)
         summary = {

@@ -162,7 +162,11 @@ class SftMixturePlan:
 
     @property
     def decay_steps(self) -> int:
-        return max(2, round(self.steps * SFT_DECAY_FRACTION))
+        return _sft_decay_steps(self.steps)
+
+
+def _sft_decay_steps(updates: int) -> int:
+    return max(2, round(updates * SFT_DECAY_FRACTION))
 
 
 def plan_sft_mixture(stores: Mapping[str, SftStore], *, batch_size: int, replay_fraction: float) -> SftMixturePlan:
@@ -390,7 +394,7 @@ def build_sft_run(
         if stop_after_steps is None:
             raise ValueError("Prepared Mochi SFT data requires an explicit update budget")
         updates = stop_after_steps
-        decay_steps = max(2, round(updates * SFT_DECAY_FRACTION))
+        decay_steps = _sft_decay_steps(updates)
     num_train_steps = start_step + updates
     stop_step = num_train_steps if stop_after_steps is None else start_step + stop_after_steps
     if stop_step > num_train_steps:

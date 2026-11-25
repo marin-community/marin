@@ -73,6 +73,10 @@ class MochiSFT:
         """Bind a versioned LM data manifest while retaining the training recipe."""
         return replace(self, run_id=f"{self.run_id}-mix-{data.mix_fingerprint()}", prepared_data=data)
 
+    def with_steps(self, steps: int, *, version: str) -> "MochiSFT":
+        """Set the SFT update budget and keep its final native checkpoint."""
+        return replace(self, stop_after_steps=steps, checkpoints="final", version=version)
+
     def trained(
         self,
         resources: ResourceConfig,

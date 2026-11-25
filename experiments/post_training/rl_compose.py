@@ -601,7 +601,7 @@ def run_spec(
     profiles = {}
     expected_tasks = 0
     for index, evaluation in enumerate(chosen):
-        evaluation_tasks = evaluation_source(evaluation, selection, default, preset)
+        evaluation_tasks = evaluation_source(evaluation, selection, default, preset, training_source=training_selection)
         if evaluation.training_holdout is not None:
             assert index == 0
             training_selection = evaluation_tasks
@@ -735,10 +735,19 @@ def run_step(
 
 
 def evaluation_source(
-    evaluation: Evaluation, selection: ArtifactStep, default: ArtifactStep, preset: Preset
+    evaluation: Evaluation,
+    selection: ArtifactStep,
+    default: ArtifactStep,
+    preset: Preset,
+    *,
+    training_source: ArtifactStep | None = None,
 ) -> ArtifactStep:
     if evaluation.training_holdout is not None:
-        source = _training_selection(selection, selection_summary(selection), preset.recipe.config.to_skyrl())
+        source = (
+            training_source
+            if training_source is not None
+            else _training_selection(selection, selection_summary(selection), preset.recipe.config.to_skyrl())
+        )
         return curriculum_holdout_step(source, evaluation.training_holdout)
     if evaluation.source == "default":
         return default

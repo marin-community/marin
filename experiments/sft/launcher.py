@@ -663,6 +663,11 @@ class SFTSpec:
         """Replace only the data input and give the changed run its own identity."""
         return replace(self, name=f"{self.name}-mix-{data.mix_fingerprint()}", datasets=(), prepared_data=data)
 
+    def with_steps(self, steps: int, *, version: str) -> SFTSpec:
+        """Set the update budget and run without a total task deadline."""
+        model = replace(self.model, task_timeout_seconds=None) if isinstance(self.model, HFModel) else self.model
+        return replace(self, num_train_steps=steps, num_train_epochs=None, version=version, timeout=None, model=model)
+
     def trained(
         self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
     ) -> ArtifactHfModel:
@@ -686,6 +691,10 @@ class SFTRecipe(Protocol):
     def trained(
         self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None
     ) -> ArtifactHfModel: ...
+
+    def with_data_mix(self, data: PreparedData) -> SFTRecipe: ...
+
+    def with_steps(self, steps: int, *, version: str) -> SFTRecipe: ...
 
 
 @dataclass(frozen=True)
