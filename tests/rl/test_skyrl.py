@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import dataclasses
-import io
 import json
 import os
 import platform
@@ -17,7 +16,6 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import IO
 
 import pytest
 import yaml
@@ -176,6 +174,7 @@ def test_nested_launcher_does_not_inherit_parent_python_environment(
     (project / ".uv-version").write_bytes(
         (Path(__file__).resolve().parents[2] / "vendor/skyrl/.uv-version").read_bytes()
     )
+    (project / ".python-version").write_text(f"{python_version[0]}.{python_version[1]}\n")
     (workspace / ".python-version").write_text("3.12.999\n")
     monkeypatch.setenv("UV_OFFLINE", "1")
     monkeypatch.setenv("UV_NO_INDEX", "1")
@@ -233,28 +232,6 @@ def test_nested_launcher_does_not_inherit_parent_python_environment(
             "VIRTUAL_ENV": str(project / ".venv"),
         },
     }
-
-
-class _FakeLauncherProcess:
-    """A launcher subprocess: its terminal response lands in the caller's file, its logs on stderr."""
-
-    def __init__(self, *, response: str, logs: str = "", returncode: int = 1, stdout: IO[str] | None = None) -> None:
-        if stdout is not None:
-            stdout.write(response)
-        self.stderr = io.StringIO(logs)
-        self.returncode = returncode
-
-    def wait(self) -> int:
-        return self.returncode
-
-    def kill(self) -> None:
-        return None
-
-    def __enter__(self) -> _FakeLauncherProcess:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        return None
 
 
 def _role_plan() -> SkyRLRolePlan:
@@ -882,12 +859,12 @@ def test_run_skyrl_returns_exported_policy_and_records_catalog(monkeypatch: pyte
 
     launch_configs = []
 
-    def fake_popen(command, **_kwargs) -> _FakeLauncherProcess:
+    def fake_launcher(command, **_kwargs) -> subprocess.CompletedProcess[str]:
         config_path = command[command.index("--config") + 1]
         launch_configs.append(yaml.safe_load(Path(config_path).read_text()))
-        return _FakeLauncherProcess(response=json.dumps(response), returncode=0, stdout=_kwargs["stdout"])
+        return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
 
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr("marin.rl.skyrl._run_launcher", fake_launcher)
     catalog_rows = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", catalog_rows.append)
 
@@ -1244,13 +1221,8 @@ def test_run_skyrl_handles_a_missing_hf_export(monkeypatch: pytest.MonkeyPatch, 
     }
 
     monkeypatch.setattr(
-        subprocess,
-        "Popen",
-        lambda _command, **kwargs: _FakeLauncherProcess(
-            response=json.dumps(response),
-            returncode=0,
-            stdout=kwargs["stdout"],
-        ),
+        "marin.rl.skyrl._run_launcher",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, json.dumps(response), ""),
     )
     recorded = []
     monkeypatch.setattr("marin.rl.skyrl.record_rollout_run", recorded.append)
@@ -1332,9 +1304,8 @@ def test_launcher_failure_reports_the_launcher_stderr(monkeypatch: pytest.Monkey
     )
 
     monkeypatch.setattr(
-        subprocess,
-        "Popen",
-        lambda command, **_kwargs: _FakeLauncherProcess(response="", logs="entrypoint must be a registered name\n"),
+        "marin.rl.skyrl._run_launcher",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", "entrypoint must be a registered name\n"),
     )
 
     with pytest.raises(RuntimeError, match="entrypoint must be a registered name"):

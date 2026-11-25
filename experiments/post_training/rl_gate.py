@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import statistics
@@ -16,6 +17,7 @@ from copy import deepcopy
 from dataclasses import dataclass, fields, replace
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
+from time import monotonic
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict
@@ -31,15 +33,17 @@ from marin.rl.skyrl import (
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLSpec,
-    skyrl_cpu_command,
-    skyrl_cpu_environment,
+    prepare_skyrl_cpu_python,
+    run_skyrl_cpu,
     skyrl_execution,
+    skyrl_project_root,
     skyrl_step,
 )
 from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempt
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
+from rigging.redaction import redact_string
 from scipy.stats import t
 from skyrlrecipe.documents import MISSING, get_path, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
@@ -62,6 +66,11 @@ from experiments.post_training.rl_scoring import AAII_WEIGHTS
 GATE_REVISION = "2026.11.13"
 GATE_REPORT_FILENAME = "gate_report.json"
 GATE_MARKDOWN_FILENAME = "gate_report.md"
+_NATIVE_PREPARATION_TIMEOUT = 300
+_NATIVE_CONFIG_MODULE = "cloud.iris.config_cli"
+_NATIVE_ERROR = "native configuration cannot be composed"
+
+logger = logging.getLogger(__name__)
 
 
 REPORTED_PREFIXES = ("async/", "consumed/", "generate/", "loss/", "policy/", "reward/", "startup/", "timing/", "vllm/")
@@ -660,40 +669,73 @@ def _compose_plans(
         return compose_configs(paths)
 
 
-def run_native_json(*command: str, timeout: int = 120):
-    """Run a SkyRL CPU command that returns JSON on stdout."""
-    try:
-        result = subprocess.run(
-            skyrl_cpu_command(*command),
-            capture_output=True,
-            env=skyrl_cpu_environment(),
-            text=True,
-            timeout=timeout,
+def _native_diagnostic(
+    error: OSError | subprocess.CalledProcessError | subprocess.TimeoutExpired, progress: Path | None
+) -> str:
+    phase = progress.read_text().strip() if progress is not None and progress.exists() else ""
+    if isinstance(error, OSError):
+        cause, diagnostic = error.strerror or str(error), ""
+    else:
+        cause = (
+            f"timed out after {error.timeout:g} s"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else f"exited with status {error.returncode}"
         )
-        result.check_returncode()
-        return json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, ValueError) as error:
-        cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
-        if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
-            cause = error.stderr.strip().splitlines()[-1]
-        raise InvalidComparison(f"native configuration cannot be composed: {cause}") from error
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        diagnostic = next((line.strip() for line in reversed(stderr.splitlines()) if line.strip()), "")
+    context = " ".join(part for part in (phase, cause, diagnostic) if part)
+    return redact_string("".join(char for char in context if char.isprintable()))[:400]
+
+
+def _native_config(operation: str, *args: str, checkout: Path | None = None):
+    checkout = checkout or skyrl_project_root()
+    preparation = "Prepare SkyRL CPU environment"
+    started = monotonic()
+    try:
+        interpreter = prepare_skyrl_cpu_python(_NATIVE_PREPARATION_TIMEOUT, project_root=checkout)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        raise InvalidComparison(
+            f"{_NATIVE_ERROR}: {preparation} after {monotonic() - started:.2f} s. {_native_diagnostic(error, None)}"
+        ) from error
+    logger.info("%s took %.2f s", preparation, monotonic() - started)
+    with tempfile.TemporaryDirectory(prefix="skyrl-config-") as directory:
+        progress = Path(directory) / "stage"
+        command = [
+            str(interpreter),
+            "-I",
+            "-m",
+            _NATIVE_CONFIG_MODULE,
+            "--checkout",
+            str(checkout),
+            "--progress-file",
+            str(progress),
+            *args,
+        ]
+        started = monotonic()
+        try:
+            result = run_skyrl_cpu(command, timeout=120)
+            result.check_returncode()
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            raise InvalidComparison(
+                f"{_NATIVE_ERROR}: {operation} after {monotonic() - started:.2f} s. "
+                f"{_native_diagnostic(error, progress)}"
+            ) from error
+        logger.info("%s took %.2f s", operation, monotonic() - started)
+        output = result.stdout.strip()
+        if not output:
+            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
+        try:
+            return json.loads(output)
+        except ValueError as error:
+            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
 
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
-    options = ("--validate-driver",) if validate_driver else ()
-    return run_native_json(
-        "python",
-        "-I",
-        "-m",
-        "cloud.iris.config_cli",
-        "--checkout",
-        str(recipe.REPO_ROOT / "vendor/skyrl"),
-        "compose",
-        *options,
-        "--",
-        *paths,
-    )
+    options = ["--validate-driver"] if validate_driver else []
+    return _native_config("Compose native launch configurations", "compose", *options, "--", *paths)
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
@@ -744,17 +786,13 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 
 @lru_cache(maxsize=16)
-def _schema_defaults(native_project: str, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    return run_native_json(
-        "python",
-        "-I",
-        "-m",
-        "cloud.iris.config_cli",
-        "--checkout",
-        native_project,
-        "schema-defaults",
-        json.dumps(dict(groups)),
+def _schema_defaults(checkout: Path, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
+    defaults = _native_config(
+        "Read native schema defaults", "schema-defaults", json.dumps(dict(groups)), checkout=checkout
     )
+    if not isinstance(defaults, dict):
+        raise InvalidComparison(f"{_NATIVE_ERROR}: schema defaults must be an object")
+    return defaults
 
 
 def _check_control_config(
@@ -766,9 +804,8 @@ def _check_control_config(
     missing = {key for key in differences if key not in observed}
     if missing:
         groups = tuple(sorted(preset.recipe.config.to_skyrl().get("config_groups", {}).items()))
-        defaults = _schema_defaults(
-            str(recipe.REPO_ROOT / "vendor/skyrl"), Provenance.capture(recipe.REPO_ROOT).tree_hash, groups
-        )
+        checkout = skyrl_project_root()
+        defaults = _schema_defaults(checkout, Provenance.capture(checkout).tree_hash, groups)
         for key in missing:
             value = get_path(defaults, key)
             if value is MISSING:
@@ -983,7 +1020,10 @@ def _gate_with_evidence(
         run_attempts = tuple(map(_stored_attempt, paths["run_paths"]))
     control_attempts = tuple(map(_stored_attempt, paths["control_paths"]))
     evidence = [
-        (identity, receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"}) if receipt else None)
+        (
+            identity,
+            receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"}) if receipt is not None else None,
+        )
         for key, receipts in (("run_paths", run_attempts), ("control_paths", control_attempts))
         for identity, receipt in zip(config[key], receipts, strict=True)
     ]

@@ -5,13 +5,9 @@
 
 import argparse
 import json
-import logging
 import sys
 from pathlib import Path
 from types import ModuleType
-
-logger = logging.getLogger(__spec__.name if __spec__ else __name__)
-
 
 def verify_checkout(checkout: Path, *modules: ModuleType) -> None:
     """Require the native modules to come from the selected SkyRL checkout."""
@@ -29,6 +25,7 @@ def main() -> None:
         required=True,
         help="checkout that supplies native modules",
     )
+    parser.add_argument("--progress-file", type=Path, required=True)
     commands = parser.add_subparsers(dest="command", required=True)
     compose = commands.add_parser("compose", help="compose native launch documents")
     compose.add_argument("paths", nargs="*")
@@ -37,9 +34,12 @@ def main() -> None:
     schema.add_argument("groups_json", metavar="groups-json")
     args = parser.parse_args()
 
-    logging.basicConfig(format="%(name)s: %(message)s")
-    logger.setLevel(logging.INFO)
-    logger.info("Import native modules")
+    def stage(message: str) -> None:
+        temporary = args.progress_file.with_suffix(".tmp")
+        temporary.write_text(message)
+        temporary.replace(args.progress_file)
+
+    stage("Import native modules")
     from omegaconf import OmegaConf
 
     import marinskyrl
@@ -54,17 +54,17 @@ def main() -> None:
         configure_coreweave_s3()
         configs = []
         for index, path in enumerate(args.paths, 1):
-            logger.info("Compose document %d/%d", index, len(args.paths))
+            stage(f"Compose document {index}/{len(args.paths)}")
             configs.append(launch_config.load_launch_config(path))
-        logger.info("Convert native configurations")
+        stage("Convert native configurations")
         documents = [OmegaConf.to_container(config, resolve=True) for config in configs]
         if args.validate_driver:
             for index, config in enumerate(configs, 1):
-                logger.info("Validate driver for document %d/%d", index, len(configs))
+                stage(f"Validate driver for document {index}/{len(configs)}")
                 launch_config.validate_launch_driver_config(config)
         print(json.dumps(documents))
     else:
-        logger.info("Read native schema defaults")
+        stage("Read native schema defaults")
         groups = json.loads(args.groups_json)
         config = rl_config_translation.compose_config_groups(groups, config_name="ppo_base_config")
         defaults = OmegaConf.to_container(

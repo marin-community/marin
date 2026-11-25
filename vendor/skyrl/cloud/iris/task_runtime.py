@@ -1354,62 +1354,19 @@ def capture_termination_artifacts(rendezvous_dir: str | None, reason: str) -> No
     """
     if not rendezvous_dir:
         return
-
     task_id = os.environ.get("IRIS_TASK_ID", "unknown").replace("/", "_")
     ts = int(time.time())
-    errors = []
-
-    def run_tool(*argv: str, timeout: int = 7, include_stderr: bool = False) -> str:
-        try:
-            return subprocess.run(
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT if include_stderr else subprocess.DEVNULL,
-                text=True,
-                timeout=timeout,
-            ).stdout
-        except (OSError, subprocess.SubprocessError) as error:
-            errors.append(f"{argv[0]} failed: {type(error).__name__}")
-            return ""
-
-    paths = [
-        path
-        for pattern in ("/tmp/*", "/tmp/ray/session*/logs", "/tmp/ray/session*/*spill*")
-        for path in glob.glob(pattern)
-    ]
-    usage = run_tool("du", "-sk", "--", *paths, timeout=9).splitlines() if paths else []
-    disk = sorted(
-        (line for line in usage if line.partition("\t")[0].isdigit()),
-        key=lambda line: int(line.partition("\t")[0]),
-        reverse=True,
-    )[:25]
-    oom = [
-        line
-        for line in run_tool("dmesg").splitlines()
-        if re.search(r"oom|killed process|out of memory|Xid", line, re.IGNORECASE)
-    ][-10:]
-
-    summary = "\n".join(
-        [
-            f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===",
-            "--- df -h /tmp /dev/shm ---",
-            run_tool("df", "-h", "/tmp", "/dev/shm", include_stderr=True),
-            "--- top /tmp disk usage in KiB (ephemeral-storage eviction cause) ---",
-            "\n".join(disk),
-            "--- nvidia-smi (VRAM OOM cause) ---",
-            run_tool(
-                "nvidia-smi",
-                "--query-gpu=index,memory.used,memory.total,utilization.gpu",
-                "--format=csv",
-                include_stderr=True,
-            ),
-            "--- top RSS procs (host-RAM OOM cause) ---",
-            "\n".join(run_tool("ps", "-eo", "pid,rss,comm", "--sort=-rss").splitlines()[:12]),
-            "--- dmesg OOM/kill tail ---",
-            "\n".join(oom),
-            *errors,
-        ]
-    )
+    summary = f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===\n"
+    try:
+        diagnostics = Path(__file__).with_name("termination_diagnostics.sh")
+        summary += subprocess.run(
+            ["bash", str(diagnostics)], capture_output=True, text=True, errors="replace", timeout=40
+        ).stdout
+    except subprocess.TimeoutExpired as exc:
+        summary += (exc.stdout or b"").decode(errors="replace")
+        summary += "\n<termination diagnostics timed out>\n"
+    except OSError as exc:
+        summary += f"<termination diagnostics failed: {exc}>\n"
     try:
         uri = f"{rendezvous_dir.rstrip('/')}/term_artifacts/{task_id}_{ts}.txt"
         fs, path = fs_and_path(uri)
