@@ -4,7 +4,7 @@
 """Submit the cohort conversion jobs in-region with an exact argv list.
 
 The wave-1 TaskSpec-only conversion jobs run on the cluster that holds the
-cohorts (cw-us-east-02a) at batch priority with the registry upload secret. The
+cohorts (cw-us-east-02a) at interactive priority with the registry upload secret. The
 command follows the intake-conversion launcher's bootstrap: fetch the landed
 script over HTTP, let it download and verify the landed archive, then run the
 conversion release module. The conversion scratch stays on the pod; the private
