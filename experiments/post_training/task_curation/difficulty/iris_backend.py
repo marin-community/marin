@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from finestore.rl.difficulty import Solver
 from iris.client.client import IrisClient
+from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
@@ -47,6 +48,7 @@ class IrisBackend:
     controller_job: JobName
     ledger: str
     serving_pool: str | None = None
+    excluded_cpu_tpu_names: tuple[str, ...] = ()
 
     def jobs(self) -> list[Job]:
         prefix = f"/{self.controller_job.user}/{JOB_NAMESPACE}"
@@ -118,12 +120,15 @@ class IrisBackend:
         ]
         if self.serving_pool is not None:
             command.extend(["--serving-pool", self.serving_pool])
+        campaign = campaign_record(self.ledger)
+        if self.excluded_cpu_tpu_names and campaign is None:
+            raise ValueError("CPU TPU-slice exclusions require a regional TPU campaign")
         job = self.client.submit(
             entrypoint=Entrypoint.from_command(*command),
             name=name,
             resources=(
                 ResourceSpec(cpu=4, memory="12GB", disk="64GB")
-                if campaign_record(self.ledger) is not None
+                if campaign is not None
                 else (
                     ResourceSpec(cpu=16, memory="64GB", disk="256GB")
                     if isinstance(action, AttemptBatch)
@@ -131,6 +136,11 @@ class IrisBackend:
                 )
             ),
             environment=EnvironmentSpec(env_vars={"DAYTONA_API_URL": DAYTONA_API_URL, "DAYTONA_TARGET": DAYTONA_TARGET}),
+            constraints=[
+                Constraint.create(key="tpu-name", op=ConstraintOp.NE, value=name)
+                for name in sorted(set(self.excluded_cpu_tpu_names))
+            ]
+            or None,
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             egress_policy=job_pb2.EGRESS_POLICY_CLUSTER,

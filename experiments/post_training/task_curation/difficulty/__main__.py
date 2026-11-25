@@ -89,6 +89,7 @@ def main() -> None:
             budget.add_argument("--unlimited-gpu-hours", action="store_true")
             command.add_argument("--serving-pool")
             command.add_argument("--exclude-source", action="append", default=[], help="Quarantine this source ID")
+            command.add_argument("--exclude-cpu-tpu-name", action="append", default=[])
     args = parser.parse_args()
     configure_coreweave_s3()
     if args.command == "record-source-repairs":
@@ -127,6 +128,7 @@ def main() -> None:
             args.gpu_hour_budget,
             args.serving_pool,
             excluded_sources=frozenset(args.exclude_source),
+            excluded_cpu_tpu_names=tuple(args.exclude_cpu_tpu_name),
         )
         return
     if bool(args.queue) != bool(args.queue_sha256):
@@ -160,6 +162,7 @@ def main() -> None:
             args.secrets_env,
             args.serving_pool,
             excluded_sources=frozenset(args.exclude_source),
+            excluded_cpu_tpu_names=tuple(args.exclude_cpu_tpu_name),
         )
         return
     if args.command == "plan":

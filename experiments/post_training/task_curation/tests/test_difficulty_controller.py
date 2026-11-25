@@ -22,6 +22,7 @@ from iris.cli.job import run
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
 from iris.cluster.client.remote_client import RemoteClusterClient
+from iris.cluster.constraints import AttributeValue, Constraint, evaluate_constraint
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
@@ -31,7 +32,7 @@ from iris.testing.controller import MockController, make_controller_state
 from rigging.secrets import resolve_secret_spec
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
-from experiments.post_training.task_curation.difficulty import controller
+from experiments.post_training.task_curation.difficulty import controller, iris_backend
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
 from experiments.post_training.task_curation.difficulty.planner import (
     RebuildEnvironmentArtifact,
@@ -114,7 +115,10 @@ def test_controller_resolves_versioned_credentials_before_external_submission(tm
 
 
 @pytest.mark.parametrize("default_parent", [False, True], ids=["controller-launch", "reproduce-default-parent"])
-def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, monkeypatch, default_parent):
+@pytest.mark.parametrize("excluded_cpu_tpu_names", [(), ("blocked-slice",)])
+def test_controller_can_delegate_child_profile_through_iris_client(
+    tmp_path, monkeypatch, default_parent, excluded_cpu_tpu_names
+):
     if not finelog_native_available():
         pytest.skip("finelog native server extension not available")
     with ExitStack() as stack:
@@ -174,10 +178,27 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
             controller, "load_credentials", lambda profile: SimpleNamespace(edge_refresh_token="fixture")
         )
         monkeypatch.setattr(controller, "subprocess", SimpleNamespace(run=scheduler_submit))
+        if excluded_cpu_tpu_names:
+            monkeypatch.setattr(iris_backend, "campaign_record", lambda ledger: {})
         controller.launch_controller(
-            "ledger", "applet", False, frozenset(), "generation", 800, excluded_sources=frozenset()
+            "ledger",
+            "applet",
+            False,
+            frozenset(),
+            "generation",
+            800,
+            excluded_sources=frozenset(),
+            excluded_cpu_tpu_names=excluded_cpu_tpu_names,
         )
-        backend = IrisBackend(client, parent, str(tmp_path / "ledger"))
+        parent_request = service.get_job_status(
+            controller_pb2.Controller.GetJobStatusRequest(job_id=str(parent)), None
+        ).request
+        parent_args = list(parent_request.entrypoint.run_command.argv)
+        if excluded_cpu_tpu_names:
+            assert parent_args[parent_args.index("--exclude-cpu-tpu-name") + 1] == "blocked-slice"
+        else:
+            assert "--exclude-cpu-tpu-name" not in parent_args
+        backend = IrisBackend(client, parent, str(tmp_path / "ledger"), excluded_cpu_tpu_names=excluded_cpu_tpu_names)
         action = RebuildEnvironmentArtifact("s3://fixture/artifact", (), ())
         manifest_path = tmp_path / "ledger/v1/actions" / (action_id(action) + ".json")
         manifest_path.parent.mkdir(parents=True)
@@ -192,6 +213,15 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
             else:
                 child = backend.submit(action, manifest)
                 assert child.startswith(str(parent) + "/difficulty-reconcile-")
+                request = service.get_job_status(
+                    controller_pb2.Controller.GetJobStatusRequest(job_id=child), None
+                ).request
+                exclusions = [Constraint.from_proto(c) for c in request.constraints if c.key == "tpu-name"]
+                assert len(exclusions) == len(excluded_cpu_tpu_names)
+                for constraint in exclusions:
+                    assert not constraint.is_soft
+                    assert not evaluate_constraint(AttributeValue("blocked-slice"), constraint)
+                    assert evaluate_constraint(AttributeValue("healthy-slice"), constraint)
                 assert backend.submit(action, manifest) == child
                 other = IrisBackend(client, parent, str(tmp_path / "other-ledger"))
                 other_manifest = tmp_path / "other-ledger/v1/actions" / manifest_path.name
@@ -212,6 +242,18 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
                 None,
             ).jobs
         assert len(children) == (0 if default_parent else 2)
+
+
+def test_cpu_slice_exclusions_reject_a_nonregional_campaign(tmp_path):
+    client = SimpleNamespace(list_jobs=lambda **kwargs: [])
+    backend = IrisBackend(
+        client,
+        JobName.root("fixture", controller.CONTROLLER_JOB_PREFIX + "generation"),
+        str(tmp_path),
+        excluded_cpu_tpu_names=("blocked-slice",),
+    )
+    with pytest.raises(ValueError, match="regional TPU campaign"):
+        backend.submit(RebuildEnvironmentArtifact("s3://fixture/artifact", (), ()), "manifest")
 
 
 def test_controller_recovers_catalog_connection_failure_before_reconciling(tmp_path, monkeypatch):

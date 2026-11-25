@@ -225,9 +225,12 @@ def main() -> None:
     parser.add_argument("--handover-from", help="Existing controller parent to drain without canceling its children")
     parser.add_argument("--solver", type=Solver, choices=tuple(SHAPES))
     parser.add_argument("--exclude-tpu-name", action="append", default=[])
+    parser.add_argument("--exclude-cpu-tpu-name", action="append", default=[])
     args = parser.parse_args()
     if args.exclude_tpu_name and args.phase not in {"pilot", "full"}:
         parser.error("--exclude-tpu-name applies only to TPU serving rollout")
+    if args.exclude_cpu_tpu_name and args.phase != "controller":
+        parser.error("--exclude-cpu-tpu-name applies only to controller rollout")
     if args.handover_from is not None and args.phase != "controller":
         parser.error("--handover-from applies only to controller rollout")
     if args.solver is not None and args.phase not in {"pilot", "full"}:
@@ -257,6 +260,7 @@ def main() -> None:
             root + "/pools",
             excluded_sources=frozenset(),
             handover_from=args.handover_from,
+            excluded_cpu_tpu_names=tuple(args.exclude_cpu_tpu_name),
         )
         return
     commands = commands_for_phase(

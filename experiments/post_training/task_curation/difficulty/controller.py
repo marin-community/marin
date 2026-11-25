@@ -74,9 +74,10 @@ def run_controller(
     serving_pool: str | None = None,
     *,
     excluded_sources: frozenset[str],
+    excluded_cpu_tpu_names: tuple[str, ...] = (),
 ) -> None:
     context = iris_ctx()
-    backend = IrisBackend(context.client, context.job_id, ledger, serving_pool)
+    backend = IrisBackend(context.client, context.job_id, ledger, serving_pool, excluded_cpu_tpu_names)
     notifications = EscalationLog(ledger)
     policy = CoveragePolicy()
     campaign = campaign_record(ledger)
@@ -212,6 +213,7 @@ def launch_controller(
     *,
     excluded_sources: frozenset[str],
     handover_from: str | None = None,
+    excluded_cpu_tpu_names: tuple[str, ...] = (),
 ) -> None:
     """Submit a controller, optionally handing over without canceling existing children."""
     name = CONTROLLER_JOB_PREFIX + generation[:16]
@@ -293,6 +295,8 @@ def launch_controller(
         command.extend(["--serving-pool", serving_pool])
     for source in sorted(excluded_sources):
         command.extend(["--exclude-source", source])
+    for name in sorted(set(excluded_cpu_tpu_names)):
+        command.extend(["--exclude-cpu-tpu-name", name])
     if once:
         command.append("--once")
     for solver in sorted(providers):
