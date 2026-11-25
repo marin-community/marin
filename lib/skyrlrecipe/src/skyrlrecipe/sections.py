@@ -707,10 +707,21 @@ class ReasoningSpan(Section):
     each span goes wrong, or charges the reward when a violation has no such token."""
 
 
+class Antithrash(Section):
+    enabled: bool = field(False)
+    per_repeat_penalty: int | float = field(0.02)
+    "Subtract once per repeated identical action beyond the first of each maximal run."
+    cap: int | float = field(0.1)
+    "The maximum antithrash charge for one trajectory."
+    applies_to: Literal["all", "correct_only"] = field("all")
+    "`correct_only` charges only trajectories whose outcome has full credit."
+
+
 class TrajectoryRewardShaping(Section):
     schema_version: int = field(2)
     enabled: bool = field(False)
     loop: Loop = Field(default_factory=Loop)
+    antithrash: Antithrash = Field(default_factory=Antithrash)
     passthrough: Passthrough = Field(default_factory=Passthrough)
     non_termination: NonTermination = Field(default_factory=NonTermination)
     overlong: Overlong = Field(default_factory=Overlong)

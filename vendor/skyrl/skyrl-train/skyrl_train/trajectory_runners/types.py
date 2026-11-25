@@ -13,7 +13,9 @@ from collections.abc import Sequence
 from dataclasses import replace
 
 TrainingPhase = Literal["train", "eval"]
-REWARD_SHAPING_COMPONENT_NAMES = ("passthrough", "non_termination", "overlong", "successful_length", "reasoning_span")
+REWARD_SHAPING_COMPONENT_NAMES = (
+    "passthrough", "non_termination", "overlong", "successful_length", "reasoning_span", "antithrash",
+)
 ROUTED_EXPERTS_KEY = "routed_experts"
 RESPONSE_POLICY_STEPS_KEY = "response_policy_steps"
 RESPONSE_SPAN_TAGS_KEY = "response_span_tags"

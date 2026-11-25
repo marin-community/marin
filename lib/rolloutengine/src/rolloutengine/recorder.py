@@ -6,6 +6,7 @@
 import asyncio
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
@@ -20,6 +21,7 @@ from rolloutengine.models import (
     BUDGET_STOP_REASON,
     LENGTH_STOP_REASON,
     MAX_TURNS_STOP_REASON,
+    REPEAT_STALL_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     TRACE_METRIC,
     ContextRecovery,
@@ -49,6 +51,7 @@ from rolloutengine.models import (
     Transition,
     TransitionCompleted,
 )
+from rolloutengine.repetition import ActionPair, detect_stall
 from rolloutengine.trace import _token_trace
 
 ADVANCE_INCOMPLETE = "advance_incomplete"
@@ -213,6 +216,10 @@ class _Recorder:
         self.step_metrics: dict[str, Any] = {}
         self.turn_ended = 0.0
         self.deadlines: _Deadlines | None = None
+        # Completed (action, observation) pairs, newest last, for the repeat-stall stop.
+        self.pairs: deque[ActionPair] = deque(
+            maxlen=self.limits.repeat_stall_batches if self.limits.repeat_stall_batches is not None else 0
+        )
 
     @property
     def has_response(self) -> bool:
@@ -268,6 +275,12 @@ class _Recorder:
             or (self.limits.max_turns is not None and self.turns >= self.limits.max_turns)
         ):
             self._stop_at_limit(observations, token_ids)
+        if self.pairs.maxlen:
+            assert conversation.pending is not None
+            window = [*self.pairs, ActionPair.of(conversation.pending.turn.message, observations)]
+            if detect_stall(window, self.pairs.maxlen):
+                # The grading path still runs: a stall ends the attempt like any other limit.
+                self._stop_at_limit(observations, token_ids, reason=REPEAT_STALL_STOP_REASON)
         served = conversation.trace.prefix
         if token_ids is not None and self.mode == TraceMode.EXACT_TOKENS and token_ids[: len(served)] != served:
             # The harness pinned the wrong tokens, so no model sees this request. As at a limit, the refused
@@ -358,11 +371,15 @@ class _Recorder:
         deadlines = self.deadlines
         return deadlines is None or deadlines.tool.expired() or deadlines.total.expired() or deadlines.attempt_expired()
 
-    def _stop_at_limit(self, observations: tuple[dict[str, Any], ...], token_ids: tuple[int, ...] | None) -> NoReturn:
+    def _stop_at_limit(
+        self, observations: tuple[dict[str, Any], ...], token_ids: tuple[int, ...] | None, *, reason: str | None = None
+    ) -> NoReturn:
         """Refuse the request at a limit, and record the observations as the end of the last turn's step."""
         self._end_step(done=False, observations=observations, token_ids=token_ids, waited=self._waited())
         self._set_tool_deadline(None)
-        if self.stop_reason != LENGTH_STOP_REASON:
+        if reason is not None:
+            self.stop_reason = reason
+        elif self.stop_reason != LENGTH_STOP_REASON:
             self.stop_reason = BUDGET_STOP_REASON if self.budget_reached else MAX_TURNS_STOP_REASON
         self.stopped = True
         raise LimitReached(self.stop_reason)
@@ -476,6 +493,8 @@ class _Recorder:
             return
         transition = Transition(done, observations, token_ids, dict(self.step_metrics), self.step_data)
         conversation.complete(transition)
+        if self.pairs.maxlen:
+            self.pairs.append(ActionPair.of(conversation.steps[-1].turn.message, observations))
         self.events.emit(TransitionCompleted(self.turns - 1, done, observations, waited))
 
     def _waited(self) -> float:

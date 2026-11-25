@@ -341,6 +341,8 @@ class Layout:
     coordinator_timeout_hours: int
     job_timeout_seconds: int
     role_topology: RoleTopologyMode | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
+    """NVLink domains (racks) this layout's placement must avoid, as required NE constraints."""
 
 
 @dataclass(frozen=True)

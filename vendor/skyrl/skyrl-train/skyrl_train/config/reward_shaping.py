@@ -3,6 +3,7 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields
 import math
+from enum import StrEnum
 from typing import Any
 
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyConfig
@@ -10,6 +11,29 @@ from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyConfig
 
 SHAPING_SCHEMA_VERSION = 2
 DEFAULT_ACCEPTED_STOP_REASONS = ("complete", "end_turn", "eos", "stop")
+
+ANTITHRASH_PER_REPEAT_PENALTY = 0.02
+"""The #12264 I3 default charge per repeated identical action, beyond the first of a run."""
+ANTITHRASH_CAP = 0.1
+"""The #12264 I3 default maximum antithrash charge per trajectory."""
+
+
+class AntithrashScope(StrEnum):
+    """Which trajectories the antithrash charge applies to."""
+
+    ALL = "all"
+    CORRECT_ONLY = "correct_only"
+    """Charge only otherwise-correct trajectories: outcomes with full credit."""
+
+
+@dataclass(frozen=True)
+class AntithrashConfig:
+    """A reward penalty for runs of identical consecutive actions in a conversation."""
+
+    enabled: bool = False
+    per_repeat_penalty: float = ANTITHRASH_PER_REPEAT_PENALTY
+    cap: float = ANTITHRASH_CAP
+    applies_to: AntithrashScope = AntithrashScope.ALL
 
 
 @dataclass(frozen=True)
@@ -58,6 +82,7 @@ class TrajectoryRewardShapingConfig:
     schema_version: int = SHAPING_SCHEMA_VERSION
     enabled: bool = False
     loop: LoopCreditConfig = LoopCreditConfig()
+    antithrash: AntithrashConfig = AntithrashConfig()
     passthrough: PassthroughPenaltyConfig = PassthroughPenaltyConfig()
     non_termination: NonTerminationPenaltyConfig = NonTerminationPenaltyConfig()
     overlong: OverlongPenaltyConfig = OverlongPenaltyConfig()
@@ -86,6 +111,11 @@ def parse_trajectory_reward_shaping_config(config: Mapping[str, Any] | None) -> 
     unknown_loop_keys = set(loop).difference(allowed_loop_keys)
     if unknown_loop_keys:
         raise ValueError(f"unknown loop settings: {', '.join(sorted(unknown_loop_keys))}")
+    antithrash = _section(config, "antithrash")
+    allowed_antithrash_keys = {field.name for field in fields(AntithrashConfig)}
+    unknown_antithrash_keys = set(antithrash).difference(allowed_antithrash_keys)
+    if unknown_antithrash_keys:
+        raise ValueError(f"unknown antithrash settings: {', '.join(sorted(unknown_antithrash_keys))}")
     non_termination = _section(config, "non_termination")
     passthrough = _section(config, "passthrough")
     overlong = _section(config, "overlong")
@@ -95,6 +125,11 @@ def parse_trajectory_reward_shaping_config(config: Mapping[str, Any] | None) -> 
     if not isinstance(raw_stop_reasons, Sequence) or isinstance(raw_stop_reasons, (str, bytes)):
         raise ValueError("non_termination.accepted_stop_reasons must be a sequence of strings")
     accepted_stop_reasons = tuple(str(reason).strip().lower() for reason in raw_stop_reasons)
+    raw_scope = antithrash.get("applies_to", defaults.antithrash.applies_to)
+    try:
+        applies_to = AntithrashScope(str(raw_scope))
+    except ValueError as error:
+        raise ValueError(f"antithrash.applies_to must be one of {[scope.value for scope in AntithrashScope]}") from error
     parsed = TrajectoryRewardShapingConfig(
         schema_version=int(config.get("schema_version", defaults.schema_version)),
         enabled=bool(config.get("enabled", defaults.enabled)),
@@ -106,6 +141,14 @@ def parse_trajectory_reward_shaping_config(config: Mapping[str, Any] | None) -> 
                 loop.get("advantage_penalty_per_token", defaults.loop.advantage_penalty_per_token)
             ),
             max_advantage_penalty=float(loop.get("max_advantage_penalty", defaults.loop.max_advantage_penalty)),
+        ),
+        antithrash=AntithrashConfig(
+            enabled=bool(antithrash.get("enabled", defaults.antithrash.enabled)),
+            per_repeat_penalty=float(
+                antithrash.get("per_repeat_penalty", defaults.antithrash.per_repeat_penalty)
+            ),
+            cap=float(antithrash.get("cap", defaults.antithrash.cap)),
+            applies_to=applies_to,
         ),
         passthrough=PassthroughPenaltyConfig(
             penalty=float(passthrough.get("penalty", defaults.passthrough.penalty)),
@@ -157,6 +200,8 @@ def _validate_config(config: TrajectoryRewardShapingConfig) -> None:
     magnitudes = {
         "loop.advantage_penalty_per_token": config.loop.advantage_penalty_per_token,
         "loop.max_advantage_penalty": config.loop.max_advantage_penalty,
+        "antithrash.per_repeat_penalty": config.antithrash.per_repeat_penalty,
+        "antithrash.cap": config.antithrash.cap,
         "passthrough.penalty": config.passthrough.penalty,
         "non_termination.penalty": config.non_termination.penalty,
         "successful_length.penalty_per_token": config.successful_length.penalty_per_token,
@@ -172,3 +217,7 @@ def _validate_config(config: TrajectoryRewardShapingConfig) -> None:
         )
     if config.non_termination.penalty > 0 and not config.non_termination.accepted_stop_reasons:
         raise ValueError("non_termination.accepted_stop_reasons cannot be empty when its penalty is positive")
+    if config.antithrash.enabled and config.antithrash.per_repeat_penalty <= 0:
+        raise ValueError("antithrash.per_repeat_penalty must be positive when antithrash is enabled")
+    if config.antithrash.cap < config.antithrash.per_repeat_penalty:
+        raise ValueError("antithrash.cap must cover at least one per_repeat_penalty")

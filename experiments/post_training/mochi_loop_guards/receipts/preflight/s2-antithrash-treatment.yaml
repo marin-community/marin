@@ -1,0 +1,277 @@
+schema_version: 1
+run:
+  id: preflight-s2-antithrash-treatment-2026.11.25.1
+  attempt_id: afc89f0748b8
+  seed: 20261125
+  mode: train
+  submission: wait
+  export_hf: false
+  model: mochi
+runtime:
+  profile: megatron
+  entrypoint: ''
+  experiments_dir: /app/experiments
+  task_env:
+    NCCL_IB_HCA: ibp
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
+iris:
+  cluster: cw-us-east-08a
+  cluster_config: lib/iris/config/cw-us-east-08a.yaml
+  job_name: preflight-s2-antithrash-treatment-2026.11.25.1-afc89f0748b8
+  wandb_entity: marin-community
+  role_topology: nvlink.domain
+  excluded_nvlink_domains:
+  - dh1-r136-us-east-08a
+  allocation:
+    num_nodes: 15
+    gpus_per_node: 4
+    gpu_variant: GB200
+    cpu: 120
+    memory: 900GB
+    disk: 2TB
+  priority: production
+  max_retries: 0
+  timeout: 259200
+  target_cluster: cw-us-east-08a
+  parent_cluster_config: lib/iris/config/marin.yaml
+  container_profile: CONTAINER_PROFILE_PRIVILEGED
+ray:
+  spill_backend: local
+  spill_dir: /tmp/skyrl-ray-spill
+  rendezvous_dir: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/attempts/rendezvous
+  log_dir: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/attempts/ray-logs
+  rendezvous_timeout: 1800
+  cluster_join_timeout: 1800
+  driver_liveness_timeout: 9000
+artifacts:
+  checkpoint_root: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/checkpoints
+  export_root: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/exports
+  attempts_root: file:///private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/tmp/skyrl/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/attempts
+  resolved_config_uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/resolved-launch.yaml
+  terminal_manifest_uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/preflight-s2-antithrash-treatment/2026.11.25.1/terminal.json
+  resume_checkpoint_count: 2
+inputs:
+  model:
+    uri: s3://marin-us-east-02a/marin/grug/hero-sft-fullab-step393k-v2-hf/2026.11.10/hf
+    identity: grug/hero-sft-fullab-step393k-v2-hf@2026.11.10:4a32bd5a
+    local_path: /tmp/marinskyrl/models/hero-sft-fullab-step393k-v2-hf
+    tokenizer_uri: null
+    tokenizer_revision: null
+    chat_template: null
+  data_kind: parquet
+  train_data:
+  - uri: /private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/selection-root/users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded/2026.11.25.1
+    identity: rl-data/task-selection/users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@2026.11.25.1:3f52f8e6
+    local_path: /tmp/marinskyrl/data/snowball-100k-agentic-ho-excluded
+    relative_path: train.parquet
+    kind: directory
+  validation_data: []
+skyrl:
+  data:
+    shuffle: true
+    kind: parquet
+  trainer:
+    training_metrics: true
+    policy_train_spans: true
+    rollout_spans: true
+    strategy: megatron
+    policy:
+      optimizer_config:
+        optimizer: MuonH
+        lr: 1.0e-05
+        adam_betas:
+        - 0.9
+        - 0.95
+        weight_decay: 0.0
+        max_grad_norm: 0.0
+        optimizer_kwargs:
+          adam_lr: 2.307692307692308e-06
+          momentum: 0.95
+          nesterov: true
+          backend_steps: 5
+          epsilon: 1.0e-08
+          muon_epsilon: 1.0e-08
+          offload_momentum: true
+          expert_normalization: all_experts
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 12
+        context_parallel_size: 4
+        expert_model_parallel_size: 4
+        expert_tensor_parallel_size: 1
+        optimizer_checkpoint_sharding_type: dp_reshardable
+        moe_router_replay: true
+    ref:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 12
+        context_parallel_size: 4
+        expert_model_parallel_size: 4
+        expert_tensor_parallel_size: 1
+    algorithm:
+      advantage_estimator: rloo_n
+      group_advantage_min_size: 2
+      use_kl_loss: false
+      advantage_batch_normalize: false
+      policy_loss_type: regular
+      loss_reduction: token_mean
+      rloo_n_filter_zero_reward_groups: true
+      off_policy_correction: tis
+      group_admission:
+        stall_timeout: 28800
+    rollout_buffer:
+      max_staleness_steps: 3
+      batch_policy: full_batch
+      max_in_flight: 32
+      object_store_root: null
+      groups_per_family:
+        agentic: 16
+        nonagentic: 16
+    gradient_checkpointing: true
+    resume_mode: none
+    callbacks: []
+    ckpt_interval: 0
+    hf_save_interval: -1
+    epochs: 10000
+    max_steps: 8
+    update_epochs_per_batch: 1
+    micro_forward_batch_size_per_gpu: 1
+    use_sample_packing: true
+    offload_optimizer_during_rollouts: false
+    eval_batch_size: 120
+    eval_interval: -1
+    flash_attn: true
+    project_name: marin-mochi-rl
+    logger:
+    - console
+    - records
+    - wandb
+    tracker_commit_each_step: true
+    placement:
+      colocate_all: false
+      colocate_policy_ref: true
+      policy_num_nodes: 12
+      policy_num_gpus_per_node: 4
+      ref_num_nodes: 12
+      ref_num_gpus_per_node: 4
+    train_batch_size: 32
+    policy_mini_batch_size: 32
+    micro_train_batch_size_per_gpu: 1
+  generator:
+    model_dtype: bfloat16
+    run_engines_locally: true
+    backend: vllm
+    vllm_attention_backend: FLASH_ATTN
+    weight_sync_backend: nccl
+    weight_sync_pause:
+      mode: keep
+      clear_cache: true
+    weight_sync_transport: expert_block
+    expert_block_sync:
+      timeout_seconds: 600
+      verify: false
+    max_num_batched_tokens: 8192
+    gpu_memory_utilization: 0.75
+    max_num_seqs: 16
+    chat_template: null
+    chat_template_kwargs:
+      enable_thinking: true
+    engine_init_kwargs:
+      moe_backend: triton
+      enable_auto_tools: true
+      tool_parser: hermes
+      model_loader_extra_config:
+        distributed: false
+        concurrency: 4
+        memory_limit: 8589934592
+      compilation_config:
+        mode: 3
+        cudagraph_mode: PIECEWISE
+        splitting_ops:
+        - vllm::unified_attention_with_output
+        - vllm::unified_kv_cache_update
+        - vllm::grug_moe_short_conv
+    sampling_params:
+      ignore_eos: false
+      temperature: 0.7
+      top_p: 1.0
+      logprobs: 0
+      stop_token_ids:
+      - 128001
+      - 128009
+      skip_special_tokens: false
+    trajectory_reward_shaping:
+      enabled: true
+      antithrash:
+        enabled: true
+        applies_to: correct_only
+      overlong:
+        penalty_scale: 0.0
+      reasoning_span:
+        penalty: 0.1
+        target: marker
+    trajectory_retention:
+      phases:
+      - train
+      - eval
+      sample_count_per_step: 0
+      sample_fraction: 0.1
+      always_retain_failures: false
+      always_retain_non_terminating: false
+      always_retain_loops: false
+      max_bytes_per_step: 67108864
+      max_bytes_per_run: 536870912
+      required: true
+    num_inference_engines: 1
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_data_parallel_size: 12
+    inference_engine_expert_parallel_size: 12
+    n_samples_per_prompt: 8
+  environment:
+    task_sessions:
+      local: {}
+      daytona:
+        api_key_env: DAYTONA_RL_API_KEY
+        ttl_minutes: 240
+      agent_harnesses:
+        pi:
+          version: 0.87.0
+          thinking: high
+          thinking_format: chat-template
+          setup_timeout: 360
+      task_spec:
+        harness_by_dataset:
+          long-loop-smartie-swesmith: pi
+        session:
+          attempt_timeout: 14400
+          total_turn_timeout: 10800
+          model_turn_timeout: 10800
+          verifier_timeout: 900
+        task_machine_by_dataset:
+          long-loop-smartie-swesmith:
+            backend: daytona
+            network: allow
+            cpus: null
+            memory_mb: 4096
+            storage_mb: null
+            gpus: 0
+            user: longloop-agent
+            startup_timeout: 1800.0
+            cleanup_timeout: 120.0
+  trajectory_runner:
+    max_concurrent_training_machine_tasks: 256
+    rollout_workers:
+      num_workers: 32
+      cpus_per_worker: 2
+      start_interval_seconds: 0
+  context_budget:
+    request_window_tokens: 65536
+    max_new_tokens_per_turn: 16384
+    max_turns: 128
+  extra_env:
+    NCCL_IB_HCA: ibp
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    OT_AGENT_RAY_OBJECT_STORE_CAP_GIB: '32'
+  entrypoint: taskcompendium

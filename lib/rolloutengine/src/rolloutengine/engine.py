@@ -22,6 +22,7 @@ from rolloutengine.grading import _grade_rollout
 from rolloutengine.harness.core import Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.models import (
+    ATTEMPT_SECONDS_METRIC,
     GRADING_SECONDS_METRIC,
     SETUP_COMPLETED_METRIC,
     SETUP_SECONDS_METRIC,
@@ -151,7 +152,7 @@ class RolloutEngine:
         finally:
             events.cancel()
         rollout = attempt.recorder.rollout(run_id, attempt.outputs)
-        metrics = {**rollout.metrics, **delivery}
+        metrics = {**rollout.metrics, **delivery, ATTEMPT_SECONDS_METRIC: duration}
         if spec.task_machine is not None:
             metrics[SETUP_COMPLETED_METRIC] = float(attempt.setup_seconds is not None)
         grade = attempt.grade

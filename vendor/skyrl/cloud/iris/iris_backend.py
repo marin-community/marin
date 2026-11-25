@@ -28,7 +28,7 @@ from urllib.parse import unquote, urlparse
 import yaml
 from iris.client.client import Job
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.constraints import Constraint, infer_preemptible_constraint
+from iris.cluster.constraints import Constraint, ConstraintOp, infer_preemptible_constraint
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.types import CoschedulingConfig, ResourceSpec, gpu_device
 from iris.resources.state import JobState
@@ -222,8 +222,15 @@ def _gpu_constraints(
     resources: job_pb2.ResourceSpecProto,
     *,
     replicas: int,
+    excluded_nvlink_domains: tuple[str, ...],
 ) -> list[Constraint]:
     constraints = []
+    # Each exclusion is a required `nvlink.domain NE <domain>` constraint; the Kubernetes
+    # backend translates it to node affinity that keeps the gang off that rack.
+    constraints.extend(
+        Constraint.create(key="nvlink.domain", op=ConstraintOp.NE, value=domain)
+        for domain in excluded_nvlink_domains
+    )
     inferred = infer_preemptible_constraint(resources, replicas, constraints)
     if inferred is not None:
         constraints.append(inferred)
@@ -275,6 +282,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         gpus_per_node=int(allocation["gpus_per_node"]),
         gpu_variant=allocation["gpu_variant"],
         role_topology=derive_launch_topology(raw).role_topology,
+        excluded_nvlink_domains=tuple(iris.get("excluded_nvlink_domains") or ()),
         cpu=float(allocation["cpu"]),
         memory=allocation["memory"],
         disk=allocation["disk"],
@@ -798,6 +806,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     constraints = _gpu_constraints(
         resources_proto,
         replicas=replicas,
+        excluded_nvlink_domains=args.excluded_nvlink_domains,
     )
 
     priority_band = job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{args.priority.upper()}")

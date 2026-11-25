@@ -1,0 +1,50 @@
+{
+  "incidence": {
+    "N": 1,
+    "confirmed": 0,
+    "unassessed": 0,
+    "UB": 0,
+    "passes": 0,
+    "unavailable": 0,
+    "errors": 0,
+    "length_stop": 0,
+    "open_think": 0,
+    "length_p50": 3.0,
+    "length_p90": 3.0,
+    "length_p99": 3.0
+  },
+  "agent": {
+    "loop_trials": 1,
+    "trial_share": 1.0,
+    "trial_share_ub": 1.0,
+    "repeat_turn_share": 0.6666666666666666,
+    "dup_tool_call_frac_median": 0.6666666666666666,
+    "dup_tool_call_frac_p90": 0.6666666666666666,
+    "interrupt_trial_share": null,
+    "interrupt_repeat_share": null,
+    "rule_fires": {
+      "stall": 1,
+      "run8": 0,
+      "frequent": 0,
+      "terminus8": 0,
+      "interrupt": 0,
+      "tail": 0
+    },
+    "rule_tail_overlap": {
+      "stall": 0,
+      "run8": 0,
+      "frequent": 0,
+      "terminus8": 0
+    },
+    "mean_reward": 0.0,
+    "stop_reasons": {
+      "repeat_stall": 1
+    },
+    "cost": {
+      "turns_p50": 3.0,
+      "tokens_p50": 3.0,
+      "wall_seconds_p50": 0.0007072919979691505
+    }
+  },
+  "target_status": "non-target"
+}

@@ -1,0 +1,30 @@
+{
+  "trials": 587,
+  "skipped_no_calls": 0,
+  "suites": {
+    "ID (dev_set_v2)": {
+      "trials": 237,
+      "median": 0.3388888888888889,
+      "p90": 0.6018546365914788,
+      "median_tool_calls": 818.0,
+      "expected_median": 0.339,
+      "matches": true
+    },
+    "SWE-bench Verified": {
+      "trials": 126,
+      "median": 0.20320071189300473,
+      "p90": 0.320350577053632,
+      "median_tool_calls": 2717.5,
+      "expected_median": 0.203,
+      "matches": true
+    },
+    "Terminal-Bench 2": {
+      "trials": 224,
+      "median": 0.3686594202898551,
+      "p90": 0.582835183556886,
+      "median_tool_calls": 1529.0,
+      "expected_median": 0.369,
+      "matches": true
+    }
+  }
+}

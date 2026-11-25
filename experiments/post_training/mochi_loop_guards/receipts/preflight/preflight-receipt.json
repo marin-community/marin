@@ -1,0 +1,145 @@
+{
+  "stages": [
+    {
+      "stage": "s0-baseline",
+      "preset": "s0-baseline",
+      "workload": "Generation",
+      "gpus": 128,
+      "layout": "mochi-guards-generate-128",
+      "excluded_nvlink_domains": [
+        "dh1-r136-us-east-08a"
+      ],
+      "coordinator_timeout_hours": 72,
+      "job_timeout_seconds": 259200,
+      "iris": {
+        "cluster": "cw-us-east-08a",
+        "excluded_nvlink_domains": [
+          "dh1-r136-us-east-08a"
+        ],
+        "priority": "production"
+      },
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s0-baseline.yaml"
+    },
+    {
+      "stage": "s1-stop",
+      "preset": "s1-stop",
+      "workload": "Generation",
+      "gpus": 128,
+      "layout": "mochi-guards-generate-128",
+      "excluded_nvlink_domains": [
+        "dh1-r136-us-east-08a"
+      ],
+      "coordinator_timeout_hours": 72,
+      "job_timeout_seconds": 259200,
+      "iris": {
+        "cluster": "cw-us-east-08a",
+        "excluded_nvlink_domains": [
+          "dh1-r136-us-east-08a"
+        ],
+        "priority": "production"
+      },
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s1-stop.yaml"
+    },
+    {
+      "stage": "s1-rp",
+      "preset": "s1-rp",
+      "workload": "Generation",
+      "gpus": 128,
+      "layout": "mochi-guards-generate-128",
+      "excluded_nvlink_domains": [
+        "dh1-r136-us-east-08a"
+      ],
+      "coordinator_timeout_hours": 72,
+      "job_timeout_seconds": 259200,
+      "iris": {
+        "cluster": "cw-us-east-08a",
+        "excluded_nvlink_domains": [
+          "dh1-r136-us-east-08a"
+        ],
+        "priority": "production"
+      },
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s1-rp.yaml"
+    },
+    {
+      "stage": "s2-antithrash-control",
+      "preset": "s2-antithrash-control",
+      "workload": "Training",
+      "gpus": 60,
+      "layout": "mochi-guards-one-rack",
+      "excluded_nvlink_domains": [
+        "dh1-r136-us-east-08a"
+      ],
+      "coordinator_timeout_hours": 72,
+      "job_timeout_seconds": 259200,
+      "iris": {
+        "cluster": "cw-us-east-08a",
+        "excluded_nvlink_domains": [
+          "dh1-r136-us-east-08a"
+        ],
+        "priority": "production"
+      },
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s2-antithrash-control.yaml"
+    },
+    {
+      "stage": "s2-antithrash-treatment",
+      "preset": "s2-antithrash-treatment",
+      "workload": "Training",
+      "gpus": 60,
+      "layout": "mochi-guards-one-rack",
+      "excluded_nvlink_domains": [
+        "dh1-r136-us-east-08a"
+      ],
+      "coordinator_timeout_hours": 72,
+      "job_timeout_seconds": 259200,
+      "iris": {
+        "cluster": "cw-us-east-08a",
+        "excluded_nvlink_domains": [
+          "dh1-r136-us-east-08a"
+        ],
+        "priority": "production"
+      },
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s2-antithrash-treatment.yaml"
+    },
+    {
+      "stage": "s3-control-panel",
+      "preset": "s3-control-panel",
+      "workload": "Generation",
+      "gpus": 128,
+      "layout": "mochi-guards-generate-128",
+      "excluded_nvlink_domains": [
+        "dh1-r136-us-east-08a"
+      ],
+      "coordinator_timeout_hours": 72,
+      "job_timeout_seconds": 259200,
+      "iris": {
+        "cluster": "cw-us-east-08a",
+        "excluded_nvlink_domains": [
+          "dh1-r136-us-east-08a"
+        ],
+        "priority": "production"
+      },
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s3-control-panel.yaml"
+    },
+    {
+      "stage": "s3-treatment-panel",
+      "preset": "s3-treatment-panel",
+      "workload": "Generation",
+      "gpus": 128,
+      "layout": "mochi-guards-generate-128",
+      "excluded_nvlink_domains": [
+        "dh1-r136-us-east-08a"
+      ],
+      "coordinator_timeout_hours": 72,
+      "job_timeout_seconds": 259200,
+      "iris": {
+        "cluster": "cw-us-east-08a",
+        "excluded_nvlink_domains": [
+          "dh1-r136-us-east-08a"
+        ],
+        "priority": "production"
+      },
+      "launch_yaml": "/private/var/folders/3g/pksxg6gs6l91cs73d4c9pys00000gn/T/opencode/preflight/s3-treatment-panel.yaml"
+    }
+  ],
+  "s2x_export_command": "uv run --project vendor/skyrl python vendor/skyrl/cloud/iris/export_hf_checkpoint.py --ckpt_path s3://marin-us-east-08a/tmp/ttl=3d/mochi-loop-guards/s2-antithrash-treatment --step 8 --launch-config <S2 launch document, resolved at T+32> --cluster cw-us-east-08a --priority production --num-nodes 12 --gpus-per-node 4 --gpu-variant GB200 --export_path s3://marin-us-east-08a/tmp/ttl=3d/mochi-loop-guards/s2-antithrash-treatment/exports --dry-run"
+}

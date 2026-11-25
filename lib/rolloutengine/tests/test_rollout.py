@@ -2843,7 +2843,7 @@ async def test_separate_verifyit_grader_uses_typed_submissions_and_task_resource
     if expected_status == Outcome.INFRA_ERROR:
         assert record.grade.failure == GradingFailure.INVALID_REWARD
     assert {key for key in record.rollout.metrics if key.startswith("timing/")} == (
-        {"timing/grading", "timing/setup"} if expected_reward is not None else set()
+        {"timing/grading", "timing/setup", "timing/attempt"} if expected_reward is not None else {"timing/attempt"}
     )
     if answer_type == AnswerType.FILE:
         assert record.rollout.conversations[-1].loss_mask == (1, 0, 0, 1)
@@ -2938,7 +2938,8 @@ async def test_observer_receives_interrupted_operation_after_grading_completed_t
             rollout_spec(file_task(), machine=machine_runtime(), verifier_machine=machine_runtime())
         )
     assert interrupted.value.operation == RolloutOperation.MODEL
-    assert not any(key.startswith("timing/") for key in interrupted.value.rollout.metrics)
+    assert not any(key.startswith("timing/") for key in interrupted.value.rollout.metrics if key != "timing/attempt")
+    assert interrupted.value.rollout.metrics["timing/attempt"] > 0
     assert observer.payloads() == [
         *shell_turn_payloads(model),
         Graded(Outcome.GRADED, 1.0, None, None, 0.0),
@@ -4133,7 +4134,10 @@ async def test_a_model_failure_in_a_new_conversation_grades_the_earlier_one():
     assert (caught.value.grade.status, caught.value.grade.reward) == (Outcome.GRADED, 1.0)
     first, failed = caught.value.rollout.conversations
     assert (len(first.steps), failed.steps) == (1, ())
-    assert caught.value.rollout.metrics == {"score": 1.0}
+    assert caught.value.rollout.metrics == {
+        "score": 1.0,
+        "timing/attempt": caught.value.rollout.metrics["timing/attempt"],
+    }
 
 
 class RecordsAfterARefusal:

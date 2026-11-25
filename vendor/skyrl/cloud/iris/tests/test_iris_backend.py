@@ -152,3 +152,34 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert "nccl_transport_probe.py --mode gate --gate-coverage all-gpus" in shell
     assert "/interconnect-gate; " in shell
     assert ("--pynccl-init" in shell) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)
+
+
+def test_excluded_nvlink_domains_become_required_ne_constraints():
+    """Each excluded rack reaches Iris as a required `nvlink.domain NE <rack>` constraint."""
+    from iris.cluster.constraints import ConstraintOp
+    from iris.rpc import job_pb2
+
+    from cloud.iris.iris_backend import _gpu_constraints
+
+    constraints = _gpu_constraints(
+        job_pb2.ResourceSpecProto(), replicas=12, excluded_nvlink_domains=("dh1-r136-us-east-08a", "dh1-r137-us-east-08a")
+    )
+    exclusions = [constraint for constraint in constraints if constraint.key == "nvlink.domain"]
+    assert [constraint.values[0].value for constraint in exclusions] == [
+        "dh1-r136-us-east-08a",
+        "dh1-r137-us-east-08a",
+    ]
+    assert all(constraint.op == ConstraintOp.NE for constraint in exclusions)
+
+
+def test_launch_config_carries_excluded_nvlink_domains_into_the_submission_state(tmp_path):
+    from cloud.iris.iris_backend import _iris_submission_state
+
+    from cloud.iris.tests.launch_config_fixtures import raw_launch_config
+
+    raw = raw_launch_config()
+    raw["iris"]["excluded_nvlink_domains"] = ["dh1-r136-us-east-08a"]
+    config_path = tmp_path / "launch.yaml"
+    config_path.write_text(OmegaConf.to_yaml(OmegaConf.create(raw)))
+    args = _iris_submission_state(config_path, load_launch_config(config_path))
+    assert args.excluded_nvlink_domains == ("dh1-r136-us-east-08a",)

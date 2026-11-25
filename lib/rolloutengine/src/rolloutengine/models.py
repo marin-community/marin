@@ -18,14 +18,17 @@ from verifyit.reasoning_markup import ReasoningViolation
 
 GRADING_SECONDS_METRIC = "timing/grading"
 SETUP_SECONDS_METRIC = "timing/setup"
+ATTEMPT_SECONDS_METRIC = "timing/attempt"
 SETUP_COMPLETED_METRIC = "setup_completed"
-TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC)
+TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC, ATTEMPT_SECONDS_METRIC)
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"
 TOTAL_TURN_TIMEOUT_STOP_REASON = "total_turn_timeout"
 BUDGET_STOP_REASON = "budget_reached"
+REPEAT_STALL_STOP_REASON = "repeat_stall"
+"""A ``repeat_stall_batches`` stop: the last identical action and observation batches repeated."""
 
 
 @dataclass(frozen=True)
@@ -520,6 +523,12 @@ class RolloutLimits(BaseModel):
 
     max_turns: int | None = Field(gt=0)
     max_total_tokens: int | None = Field(gt=0)
+    repeat_stall_batches: int | None = Field(default=None, gt=0)
+    """Stop after this many consecutive identical (action batch, observation) pairs.
+
+    ``None`` (the default) disables the stop. Wait-only actions never match, and the
+    attempt still ends through the normal limit path, so its grading runs on the work done.
+    """
     model_turn_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)
     total_turn_timeout: float | None = Field(gt=0)

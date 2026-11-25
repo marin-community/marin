@@ -5,8 +5,15 @@ from typing import Any
 
 import numpy as np
 
+from rolloutengine.repetition import action_identity, repeat_turns, wait_only
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyConfig, ReasoningSpanPenaltyTarget
-from skyrl_train.config.reward_shaping import LoopCreditConfig, OverlongPenaltyConfig, parse_trajectory_reward_shaping_config
+from skyrl_train.config.reward_shaping import (
+    AntithrashConfig,
+    AntithrashScope,
+    LoopCreditConfig,
+    OverlongPenaltyConfig,
+    parse_trajectory_reward_shaping_config,
+)
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.trajectory_runners.types import (
     REWARD_SHAPING_COMPONENT_NAMES,
@@ -184,7 +191,44 @@ def _empty_components() -> RewardShapingComponents:
         "overlong": 0.0,
         "successful_length": 0.0,
         "reasoning_span": 0.0,
+        "antithrash": 0.0,
     }
+
+
+def _full_credit(outcome: float) -> bool:
+    """Whether an outcome carries full credit: the verifier's reward of exactly one."""
+    return outcome >= 1.0
+
+
+def antithrash_repeats(messages: Sequence[Mapping[str, Any]] | None) -> int:
+    """Repeats of identical consecutive actions in one conversation.
+
+    A repeat is one turn beyond the first copy of each maximal run of identical action
+    batches, summed over runs, with the shared identity module. Wait-only turns are
+    transparent: polling between two identical actions neither counts nor breaks a run.
+    """
+    if not messages:
+        return 0
+    identities = [
+        action_identity(message)
+        for message in messages
+        if message.get("role") == "assistant" and not wait_only(message)
+    ]
+    return repeat_turns(identities)
+
+
+def _antithrash_penalty(
+    messages: Sequence[Mapping[str, Any]] | None, outcome: float, config: AntithrashConfig
+) -> float:
+    """The antithrash charge of one trajectory, or zero when its scope does not apply."""
+    if not config.enabled:
+        return 0.0
+    if config.applies_to is AntithrashScope.CORRECT_ONLY and not _full_credit(outcome):
+        return 0.0
+    repeats = antithrash_repeats(messages)
+    if not repeats:
+        return 0.0
+    return -min(config.cap, config.per_repeat_penalty * repeats)
 
 
 def aggregate_reward_shaping_components(
@@ -364,6 +408,12 @@ def reward_shaping_metrics(
             np.mean([values["overlong"] < 0 for values in trajectory_components])
         ),
         f"{SHAPING_METRIC_PREFIX}/reasoning_span_incidence": float(np.mean(reasoning_span_incidence)),
+        f"{SHAPING_METRIC_PREFIX}/antithrash_fired_fraction": float(
+            np.mean([values.get("antithrash", 0.0) < 0 for values in trajectory_components])
+        ),
+        f"{SHAPING_METRIC_PREFIX}/antithrash_mean_penalty": float(
+            np.mean([values.get("antithrash", 0.0) for values in trajectory_components])
+        ),
         f"{SHAPING_METRIC_PREFIX}/response_tokens_mean": float(np.mean(trajectory_lengths)),
         f"{SHAPING_METRIC_PREFIX}/response_tokens_max": float(max(trajectory_lengths, default=0)),
     }
@@ -446,6 +496,9 @@ def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, A
         raise ValueError("exclude_from_baseline must have one entry per trajectory")
 
     reasoning_violations, violation_tokens, _ = _reasoning_span_evidence(output, batch_size)
+    evidence_messages = output.get("evidence_messages") or [None] * batch_size
+    if len(evidence_messages) != batch_size:
+        raise ValueError("evidence messages must have one entry per generated row")
 
     token_penalties = [0.0] * batch_size
     components = [_empty_components() for _ in range(batch_size)]
@@ -486,6 +539,9 @@ def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, A
                 )
             final_components["reasoning_span"] = _charge_reasoning_spans(
                 group, reasoning_violations, violation_tokens, loop_advantages, token_penalties, config.reasoning_span
+            )
+            final_components["antithrash"] = _antithrash_penalty(
+                evidence_messages[final_index], outcomes[final_index], config.antithrash
             )
 
         penalty = sum(sum(components[index].values()) for index in group)

@@ -165,6 +165,8 @@ class IrisConfig:
     container_profile: str | None = None
     # OmegaConf serializes enum names; launch documents use enum values.
     role_topology: str | None = None
+    excluded_nvlink_domains: list[str] = field(default_factory=list)
+    "NVLink domains (racks) the job's placement must avoid, as required NE constraints."
 
 
 @dataclass

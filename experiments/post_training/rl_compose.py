@@ -710,6 +710,7 @@ def run_step(
             required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             role_topology=layout.role_topology,
+            excluded_nvlink_domains=layout.excluded_nvlink_domains,
         ),
         export_hf=preset.export != "none",
     )

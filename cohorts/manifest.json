@@ -1,0 +1,2105 @@
+{
+  "experiment": "mochi-loop-guards (#12264)",
+  "version": "2026.11.25.1",
+  "frozen_at": "2026-11-25T12:22:17+00:00",
+  "checkpoint_baseline": "s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1",
+  "cohorts": {
+    "tb2": {
+      "max_period_tokens": 4096,
+      "budget": 32768,
+      "minimum_occurrences": 8,
+      "tasks": 89,
+      "trials_per_task": 3,
+      "trials": 267,
+      "harness": "terminus-2",
+      "interrupt": true,
+      "task_selection": "pinned-source-order",
+      "source": {
+        "kind": "huggingface-packages",
+        "repo": "DCAgent2/terminal_bench_2",
+        "revision": "693231ec029249e7c91ed2e414bcc9c45d7cd879",
+        "recipe": "terminal-bench-2.0",
+        "agentic_version": "2026.11.17.2",
+        "count": 89
+      },
+      "protocol": {
+        "agent_timeout_seconds": 1800,
+        "verifier_timeout_seconds": 300,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "model_turn_timeout_seconds": 600,
+        "sampling": {
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "max_tokens": 8192,
+          "stop": [],
+          "chat_template_kwargs": {}
+        },
+        "attempt_timeout_seconds": 28800
+      },
+      "rows": [
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:0",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:1",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:2",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:3",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:4",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:5",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:6",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:7",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:8",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:9",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:10",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:11",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:12",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:13",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:14",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:15",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:16",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:17",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:18",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:19",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:20",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:21",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:22",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:23",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:24",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:25",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:26",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:27",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:28",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:29",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:30",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:31",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:32",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:33",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:34",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:35",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:36",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:37",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:38",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:39",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:40",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:41",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:42",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:43",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:44",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:45",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:46",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:47",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:48",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:49",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:50",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:51",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:52",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:53",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:54",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:55",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:56",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:57",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:58",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:59",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:60",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:61",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:62",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:63",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:64",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:65",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:66",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:67",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:68",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:69",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:70",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:71",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:72",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:73",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:74",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:75",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:76",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:77",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:78",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:79",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:80",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:81",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:82",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:83",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:84",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:85",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:86",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:87",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/terminal_bench_2@693231ec029249e7c91ed2e414bcc9c45d7cd879:88",
+          "prompt_hash": null
+        }
+      ]
+    },
+    "tblite": {
+      "max_period_tokens": 4096,
+      "budget": 32768,
+      "minimum_occurrences": 8,
+      "tasks": 100,
+      "trials_per_task": 2,
+      "trials": 200,
+      "harness": "terminus-2",
+      "interrupt": true,
+      "task_selection": "pinned-source-order",
+      "source": {
+        "kind": "huggingface-packages",
+        "repo": "DCAgent/dev_set_v2",
+        "revision": "377118ff3031c934f5a647ae2c425eb74eef3b21",
+        "recipe": "ot-tblite",
+        "agentic_version": "2026.11.17.2",
+        "count": 100
+      },
+      "protocol": {
+        "agent_timeout_seconds": 1800,
+        "verifier_timeout_seconds": 300,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "model_turn_timeout_seconds": 600,
+        "sampling": {
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "max_tokens": 8192,
+          "stop": [],
+          "chat_template_kwargs": {}
+        },
+        "attempt_timeout_seconds": 14400
+      },
+      "rows": [
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:0",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:1",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:2",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:3",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:4",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:5",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:6",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:7",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:8",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:9",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:10",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:11",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:12",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:13",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:14",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:15",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:16",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:17",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:18",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:19",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:20",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:21",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:22",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:23",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:24",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:25",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:26",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:27",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:28",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:29",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:30",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:31",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:32",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:33",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:34",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:35",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:36",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:37",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:38",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:39",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:40",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:41",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:42",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:43",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:44",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:45",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:46",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:47",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:48",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:49",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:50",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:51",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:52",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:53",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:54",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:55",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:56",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:57",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:58",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:59",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:60",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:61",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:62",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:63",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:64",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:65",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:66",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:67",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:68",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:69",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:70",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:71",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:72",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:73",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:74",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:75",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:76",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:77",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:78",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:79",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:80",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:81",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:82",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:83",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:84",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:85",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:86",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:87",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:88",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:89",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:90",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:91",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:92",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:93",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:94",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:95",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:96",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:97",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:98",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent/dev_set_v2@377118ff3031c934f5a647ae2c425eb74eef3b21:99",
+          "prompt_hash": null
+        }
+      ]
+    },
+    "swe100": {
+      "max_period_tokens": 4096,
+      "budget": 32768,
+      "minimum_occurrences": 8,
+      "tasks": 100,
+      "trials_per_task": 1,
+      "trials": 100,
+      "harness": "terminus-2",
+      "interrupt": false,
+      "task_selection": "pinned-source-order",
+      "source": {
+        "kind": "huggingface-packages",
+        "repo": "DCAgent2/swebench-verified-random-100-folders",
+        "revision": "0c553bd6d05d451907afb8db31dba84759ccc993",
+        "recipe": "swebench-verified-100",
+        "agentic_version": "2026.11.17.2",
+        "count": 100
+      },
+      "protocol": {
+        "agent_timeout_seconds": 1800,
+        "verifier_timeout_seconds": 300,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "model_turn_timeout_seconds": 600,
+        "sampling": {
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "max_tokens": 8192,
+          "stop": [],
+          "chat_template_kwargs": {}
+        },
+        "attempt_timeout_seconds": 14400
+      },
+      "rows": [
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:0",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:1",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:2",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:3",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:4",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:5",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:6",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:7",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:8",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:9",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:10",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:11",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:12",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:13",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:14",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:15",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:16",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:17",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:18",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:19",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:20",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:21",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:22",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:23",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:24",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:25",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:26",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:27",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:28",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:29",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:30",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:31",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:32",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:33",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:34",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:35",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:36",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:37",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:38",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:39",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:40",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:41",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:42",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:43",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:44",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:45",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:46",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:47",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:48",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:49",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:50",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:51",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:52",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:53",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:54",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:55",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:56",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:57",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:58",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:59",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:60",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:61",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:62",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:63",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:64",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:65",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:66",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:67",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:68",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:69",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:70",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:71",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:72",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:73",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:74",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:75",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:76",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:77",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:78",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:79",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:80",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:81",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:82",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:83",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:84",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:85",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:86",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:87",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:88",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:89",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:90",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:91",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:92",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:93",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:94",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:95",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:96",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:97",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:98",
+          "prompt_hash": null
+        },
+        {
+          "task_id": "DCAgent2/swebench-verified-random-100-folders@0c553bd6d05d451907afb8db31dba84759ccc993:99",
+          "prompt_hash": null
+        }
+      ]
+    },
+    "swesmith-ho": {
+      "max_period_tokens": 4096,
+      "budget": 32768,
+      "minimum_occurrences": 8,
+      "tasks": 128,
+      "trials_per_task": 2,
+      "trials": 256,
+      "harness": "pi-0.87.0",
+      "interrupt": false,
+      "task_selection": "seeded-hash",
+      "source": {
+        "kind": "task-spec-parquet",
+        "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/swe-verified-task-spec-setup/2026.11.19.1/agentic-train.parquet",
+        "sha256": "ae53e7a3678a3ef05c5364834644d8eefb5bdc258f78f3b4c4d316fa956a0192",
+        "row_count": 5608,
+        "task_spec_column": "task_spec",
+        "dataset": "long-loop-smartie-swesmith",
+        "source_revision": "0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
+        "release_manifest": "s3://marin-us-east-02a/marin/rl-data/inputs/swe-verified-task-spec-setup/2026.11.19.1/manifest.json",
+        "selection_rule": "Seeded-hash ranking: rank rows ascending by hashlib.sha256(f'{seed}:{row_hash}').hexdigest() and keep the first 128, where row_hash is the SHA-256 hex digest of the parquet row's canonical JSON serialization json.dumps(row, sort_keys=True, separators=(',', ':'), default=str).encode().",
+        "seed": 20261125,
+        "selected_rows": 128
+      },
+      "protocol": {
+        "pi_version": "0.87.0",
+        "thinking": "high",
+        "thinking_format": "chat-template",
+        "setup_timeout_seconds": 360,
+        "trial_timeout_seconds": 14400,
+        "agent_timeout_seconds": 10800,
+        "stall_timeout_seconds": 28800,
+        "verifier_timeout_seconds": 900,
+        "memory_mb": 4096,
+        "daytona_ttl_minutes": 240,
+        "max_turns": 128,
+        "task_machine": {
+          "backend": "daytona",
+          "network": "allow",
+          "gpus": 0,
+          "user": "longloop-agent",
+          "startup_timeout_seconds": 1800,
+          "cleanup_timeout_seconds": 120
+        },
+        "dataset": "long-loop-smartie-swesmith",
+        "sampling": "pi-own",
+        "sampling_note": "Pi chooses its own sampling and output limits; the protocol sets none"
+      },
+      "rows": [
+        {
+          "row_hash": "00339d8a67bbfcf7f170e435f5c2c7947504da9ca75fc4b3fa51f57817e488df",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-06512",
+          "index": 538
+        },
+        {
+          "row_hash": "04d85e247547eb158d645d6f65885646ec529b12c5d8c9c7ca2bdb52da7131d1",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-00175",
+          "index": 4627
+        },
+        {
+          "row_hash": "077a761b7a43cb857d8916cd599e486db559e2175817be341b79e965b00679b5",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26519",
+          "index": 1749
+        },
+        {
+          "row_hash": "07cdf18ba60be4324b7ef68e5e4c6c0a3b0c792dd2aab49720d6f51c2274b505",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-18701",
+          "index": 3601
+        },
+        {
+          "row_hash": "07d5fc6f6b943aa0bded0b7bd0a86971e96ec955fa38949d205253aca06cad46",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-13833",
+          "index": 5379
+        },
+        {
+          "row_hash": "0876cabbc6991b95ed00126ff1cd6e6ebc21210544e54c29fea303ba04a02b2f",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27924",
+          "index": 2413
+        },
+        {
+          "row_hash": "09a0aad45fa68d4dd65658363a3a5ac447b514d71b12ab3aa636541e1ad669ca",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26073",
+          "index": 2555
+        },
+        {
+          "row_hash": "0bb427b3eae8669db021f936ebdb0a5f058f1aa206e16b812ffd632ed853386c",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28290",
+          "index": 3090
+        },
+        {
+          "row_hash": "0dd8b2ac7b06d1f7fe616585bdf1dc5eed7a998ffa72c121a2ad2cf3e3b1aaef",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-08068",
+          "index": 1305
+        },
+        {
+          "row_hash": "1033b42115c102bba358129eb3b22ef082fd4533222a6bad8d3f6f9054f2d1e7",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-05331",
+          "index": 10
+        },
+        {
+          "row_hash": "112e08c030988894a07351a197714f76031a5a66bc5915eded42bb14cc3ad6a1",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-00041",
+          "index": 4702
+        },
+        {
+          "row_hash": "122ebf8a203375e74c16e1b9729a7fb4206fd19e5a307ab16f18f35f33c5d882",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07945",
+          "index": 1346
+        },
+        {
+          "row_hash": "15f74747e3b55d6aabe75629c935d797695ea250899a0e780d4b8262b139769a",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-08118",
+          "index": 4001
+        },
+        {
+          "row_hash": "175c1247f3fc3de78a8e818264acf2ad555eafb3fbd5bb5a87c69c96391bffd2",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-18344",
+          "index": 457
+        },
+        {
+          "row_hash": "18ec20d7fb77527280afcb97602fb34a9414929da9b1641b15812d43fc21ddb0",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-14946",
+          "index": 61
+        },
+        {
+          "row_hash": "195441b6c5f5668a6b5555739587e35aa1acd6f1dfc82a480330826453c7d84e",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26238",
+          "index": 1600
+        },
+        {
+          "row_hash": "1b487c567f1fd7cf6661298af0ba960cbe022ba5c2b1ce6211f28b90dd5294a7",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24645",
+          "index": 2256
+        },
+        {
+          "row_hash": "1dfae09b8bc973cebb59db42e44d95f7bb459903c882fa3e885ce9c6b0bac347",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-05946",
+          "index": 1376
+        },
+        {
+          "row_hash": "1e6fcc7db46d1812d95f0b8d33016e606892ec5425f676684de868d220f1d0ba",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-06675",
+          "index": 3891
+        },
+        {
+          "row_hash": "1ef4369e63efba346e48f05d5d53dd6c0e7bea6636027cfee8ec811baf7af7f8",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02383",
+          "index": 5031
+        },
+        {
+          "row_hash": "219984302877d924e21ee6e85c09edc8286458177e0bbf95c19dd2b4de060753",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-18298",
+          "index": 1635
+        },
+        {
+          "row_hash": "253f7feef8b5bd3f4a5048408431cebd7eb877c201967741486383c5268b37ba",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27859",
+          "index": 753
+        },
+        {
+          "row_hash": "259e20bf6fa7017f24a0babcad18af586fad4f1149ad43085328f914ae8afbef",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23351",
+          "index": 5020
+        },
+        {
+          "row_hash": "27297a3e0e00e181339846f826d5f8a26ae3775a1b1ecff6fe20473b0fd1092f",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02008",
+          "index": 159
+        },
+        {
+          "row_hash": "294711512f1b3ca9062018dc3d227f85db70f0b69da162de5212fa1b2bfec82f",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24203",
+          "index": 1896
+        },
+        {
+          "row_hash": "2cd8fbcfeccb43e963cafc83c5750e6b9a037222ddb7b4fa8a519b1e24862407",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28308",
+          "index": 558
+        },
+        {
+          "row_hash": "2e387ad7d7bace217bc79392c9a3792c6efd77364c683c48ae9510b7c001830b",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03601",
+          "index": 1718
+        },
+        {
+          "row_hash": "2e3e8e76c5d078ac7c4cf313a1523ea9857a779d9ae5127e24664b3557c7942e",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-15184",
+          "index": 3130
+        },
+        {
+          "row_hash": "30454185eba14d1ef5049ce187b37562f80391355642fad9dae8a6f25150c776",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-01960",
+          "index": 1900
+        },
+        {
+          "row_hash": "38c920d82abf55675e8b44633e25c53f140dfa25ec7f1a6af94b8e83302391f5",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24661",
+          "index": 3425
+        },
+        {
+          "row_hash": "391eb0772c5a4601e981d72c39542ffb88e92279103b3648a5d087067d7b5093",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-00398",
+          "index": 2908
+        },
+        {
+          "row_hash": "392223136df163e30cd3f4a133c87a42a1501bfc2fb0f7b5f89d5e346b582399",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-05960",
+          "index": 2776
+        },
+        {
+          "row_hash": "3bef35b34219124323f0c7806624fa5cf260cdeb30eb56d43dcb6679c65f3ec0",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23749",
+          "index": 1690
+        },
+        {
+          "row_hash": "3edafd492f443d9edeac0a5848f77188cbb4a90162b1f972567566207968a000",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28364",
+          "index": 5034
+        },
+        {
+          "row_hash": "3f66e27563cbe42cb1f706075076be8bdd89c9981bde60d665197e83e8e1212d",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-18536",
+          "index": 4720
+        },
+        {
+          "row_hash": "41ee9c38a4593b0f6c69802f7801da1bdcd57a596c8c711686a51d48914a1ccc",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26710",
+          "index": 4603
+        },
+        {
+          "row_hash": "42551485ffb81cd52771971529bb7efb5bba5070b2e0fc4b11cb0d2a36d04b9b",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-25824",
+          "index": 4509
+        },
+        {
+          "row_hash": "4384b3622e9eea8a8f1ad7ba6fb9df26d830273f3a3e2ca2cc4fe9b15d140c88",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27194",
+          "index": 27
+        },
+        {
+          "row_hash": "43a15081e404cac16de0e838b53682db984fd5518a7ac4aa3a16dff17202b372",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23106",
+          "index": 1153
+        },
+        {
+          "row_hash": "4457168fa914376de5c311fe9b5f553bfe0205768aad85d7a343132ef145dba9",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26158",
+          "index": 5274
+        },
+        {
+          "row_hash": "457fea4d280fb642c00dfd0e280a835bef9289811dd1e496cf53923ddac5a0d2",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-13608",
+          "index": 4618
+        },
+        {
+          "row_hash": "460a957801035eb72cd65b95dbdefb15c0b97d7b9ad055a4de1dd2609b5b10ed",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-06483",
+          "index": 5523
+        },
+        {
+          "row_hash": "4686306bea4a4088f197f5b9b18094d3f07e2bd88c777778cc9f35a1ccab8b65",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03717",
+          "index": 609
+        },
+        {
+          "row_hash": "4a2d7f35507992e30bc58d35f13f08bb9edce8e4b65fcabf207d6866b44cd93a",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28462",
+          "index": 2480
+        },
+        {
+          "row_hash": "4b3c613fe729a875f00b80bd02d83373efeed1e059aa4b758e0666bc8178e4a7",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27669",
+          "index": 2437
+        },
+        {
+          "row_hash": "4c7ac9c572bdc367fb4fb82273a9ade3237c132a8f221cbf218c9e20d3eb2e40",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-06627",
+          "index": 3694
+        },
+        {
+          "row_hash": "4dbff1d62a7373bbef3bf2264e22f3678946c2327f2efff1b6e95ed148cf19ad",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-12682",
+          "index": 3025
+        },
+        {
+          "row_hash": "54ba70d11eb423b1b9f48c478c1c7fa4928f0b3382e17b2dc788208e2974a484",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-13620",
+          "index": 5454
+        },
+        {
+          "row_hash": "5a40f9fc83a97fc0bda69697998f46babb846bba12d0ea93b255463628f58b1c",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-15036",
+          "index": 289
+        },
+        {
+          "row_hash": "5cfd91a42d2c0cbd42b28cc86cc3a544d024fcfa15414638ac10f18101c28197",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27208",
+          "index": 828
+        },
+        {
+          "row_hash": "5d6bb51ac098e617d0d7c5c72054660417bb72e0c43f3662f35715fc4c312e8d",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02028",
+          "index": 1587
+        },
+        {
+          "row_hash": "671d2bb61d9a86ba21fc8e7010f1937223401d7c5db596572953bba89e9da8bb",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23115",
+          "index": 5233
+        },
+        {
+          "row_hash": "697fe402c8638e3ab1459c3252cdead66ae41e59de8e7bee54e59b3ff9ba8e06",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-14992",
+          "index": 4378
+        },
+        {
+          "row_hash": "69eaf8849bc73f1558666743d16f56bbd17aff09ffad82f18298a280d4cf19b2",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-06602",
+          "index": 743
+        },
+        {
+          "row_hash": "6a93b23eabb3d4f8926c351f79954a855beac30b02b3ba26648a7cde958e005e",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28209",
+          "index": 3650
+        },
+        {
+          "row_hash": "6d537dd1bf1be2760b5d11b3df7e32487cc30b38fb28ecac885410890e3de82b",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-00022",
+          "index": 5262
+        },
+        {
+          "row_hash": "741392942538016e635b884e5a9b47302501985a6c43021c5211c7aec42ade06",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23826",
+          "index": 3497
+        },
+        {
+          "row_hash": "748ec743c5e05f0290a7bfebd63385a8523bf79b8e981016892976565c9cc04d",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28247",
+          "index": 929
+        },
+        {
+          "row_hash": "7851eebdc21c02dc231ae87d1b41012df5b0752b2bc0613773854810937b43a7",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-05793",
+          "index": 899
+        },
+        {
+          "row_hash": "78714f6285b0f490c0bff937470eaf3413412440800c0dd3561599964f362601",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-01947",
+          "index": 4822
+        },
+        {
+          "row_hash": "788aff72797efd6045b76bebf8df5cf17abc710b88a7be1d8f9d5572e9c388fc",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-08035",
+          "index": 2954
+        },
+        {
+          "row_hash": "7b8038b5cf28719f228f4b7aef290f679937209a482245a732a2f056f25fc4ec",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28178",
+          "index": 2710
+        },
+        {
+          "row_hash": "7ddac2bd8c88e0031b992c54904f0c18655f41194700adb21ba2a5ab085e6289",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27346",
+          "index": 798
+        },
+        {
+          "row_hash": "80491c7da6f87b1261cd7b8e434090f3495c5a925a7f28d12ab733b60f1a1ab1",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03121",
+          "index": 211
+        },
+        {
+          "row_hash": "80b9b9fae5a9e1532ebcc84e06d548d844cabdb6bcaeb79fc01ff588e21768b3",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-00021",
+          "index": 1262
+        },
+        {
+          "row_hash": "80cf894c5387ce9cdef32b6f2ea686831228db51887e058747d1a78ed57f460b",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-16366",
+          "index": 355
+        },
+        {
+          "row_hash": "8414e97701cd423d739dd7e8957d498341de259e91f2aaa70964028704a6ee9b",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23288",
+          "index": 216
+        },
+        {
+          "row_hash": "87aebce327d1fbba6a080ce0d019d4ad530d3d25789762ba6d15133f29e13159",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-05841",
+          "index": 5512
+        },
+        {
+          "row_hash": "882185c31f406a023e8885de0dee8be702e40bcdb39185d488f74b5762d8b48f",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-01015",
+          "index": 4186
+        },
+        {
+          "row_hash": "8abeb6b628bd069dd6435655a41d7dcedac71bf849d3079867b9cc79110236f3",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26209",
+          "index": 2126
+        },
+        {
+          "row_hash": "8c07b81ed4d54df82f46313f464c979f66399eb8b92fb92590bd3c604dd9caf7",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07968",
+          "index": 1444
+        },
+        {
+          "row_hash": "8f2900631ac4ee895437925c45e400b62c331ecb8e6510e2f1eed3affe645106",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27727",
+          "index": 4849
+        },
+        {
+          "row_hash": "931f48f071908e65836e6e53aaa8ddd04076d13829fdaecf36841e0c7b9ef606",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-02515",
+          "index": 96
+        },
+        {
+          "row_hash": "959c216d1e5ffd36ac319d08a627d7d35bd856ce24ad1b986be433b3ad2b2b81",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24560",
+          "index": 440
+        },
+        {
+          "row_hash": "9621fb933b424e82f9810fe55de638fb7ec31c229f044749ff4b5487afbf036a",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26345",
+          "index": 1951
+        },
+        {
+          "row_hash": "974925e488432accf265c6a9afc31334995fdd770d4a641b28734a084236aa2b",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23290",
+          "index": 3619
+        },
+        {
+          "row_hash": "9a6851992daca86697ab4edc848041ac11c5bdf2133c37863c88bf6606a46522",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-15160",
+          "index": 3897
+        },
+        {
+          "row_hash": "9ab2f97bfdaa439e996d27836ad0e5d6a65a2241d7047142571930badacb7673",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07816",
+          "index": 3810
+        },
+        {
+          "row_hash": "9e5c4e3245b60d28338effd2b86a91a15ca84eae9da90085bdb2ee593138d299",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-00161",
+          "index": 4870
+        },
+        {
+          "row_hash": "a231a9323cba69046f31078c048c62fc9affe46899b038805ca8cf072225f7db",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26222",
+          "index": 4620
+        },
+        {
+          "row_hash": "a4534d8d2fca82e32e21d2a431a22c1e9ae0098fafeb80e7757137aa9e1f106f",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-01965",
+          "index": 868
+        },
+        {
+          "row_hash": "a49fa2661a27df7787654dbcc27af6d7f6260392c745497a0d868ec186d21b21",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24644",
+          "index": 875
+        },
+        {
+          "row_hash": "a4d0e8f13a058d209835be4b9bd4bdba0000b8e4bcea169be0d4141b8ca1f998",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28677",
+          "index": 1845
+        },
+        {
+          "row_hash": "a5e5c0a9ba0160ce53195ebe92ebf20d17ec74714ef7f95c8ccfa9106be1af53",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27222",
+          "index": 2950
+        },
+        {
+          "row_hash": "a65575fd628de3925d68af6041b0fed31d42b08a40e8e815646cda89666bf68d",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-18512",
+          "index": 664
+        },
+        {
+          "row_hash": "a78f394ab7feff714dbf99681184610d6eb4ea2d54371cfef5d7ffd788b1638e",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-08110",
+          "index": 4212
+        },
+        {
+          "row_hash": "aadca1eaae23b56ff5d651f009a2dd27a789800b3db799c25026fa43c6007147",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23722",
+          "index": 2313
+        },
+        {
+          "row_hash": "ac1a51763fc99b28f00ce4d0a20b3f1a3d113b485401b6972b64409d62919373",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07880",
+          "index": 1408
+        },
+        {
+          "row_hash": "af6d13c8f3030d197f6b39c3b5c4c1e05d79e6c46fbea213f881acadaac6ebaa",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24617",
+          "index": 1862
+        },
+        {
+          "row_hash": "b2eb9e9816bccc1edfd8dd651f786241568ffdf4f9a942f852c4620c81ffd52b",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23369",
+          "index": 1177
+        },
+        {
+          "row_hash": "b39fadf35ec119a6fc95df39331c14ff2f9e0c5294863395864835aba962db4e",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24253",
+          "index": 492
+        },
+        {
+          "row_hash": "b4adeb68dbce3c107da5d9d55b9a452fff1d3a801ef116df47a80317b4294ea4",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-00679",
+          "index": 762
+        },
+        {
+          "row_hash": "b4c543ec0964019c3c0d3385623acaf5654b9e44f59497f7dc3e94e302ce074a",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24437",
+          "index": 521
+        },
+        {
+          "row_hash": "ba59f805aba04053d02ff8879af3d60ba2883c11cd96d19b50f9655f7020be51",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24272",
+          "index": 3907
+        },
+        {
+          "row_hash": "bcaaf7bed0ff60b2f48eb55be747ac4102131002b6d5835daf19c83113fc57c8",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-10705",
+          "index": 806
+        },
+        {
+          "row_hash": "bd6be803ce1fadf26376189d46462d662f47db1a2fcb3dfcf0e9c88ca5d14f75",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-05861",
+          "index": 4872
+        },
+        {
+          "row_hash": "c10164ef87ac38dd4b2daf846bfd97e5b166fe8c89691c685aaa0c433c4f2e81",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-13391",
+          "index": 5074
+        },
+        {
+          "row_hash": "c1748188ec13b78e36e9937d76cb042a27bf1c34f6af774236308361dec497de",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-01896",
+          "index": 4057
+        },
+        {
+          "row_hash": "c1a58e0a2af1fc7951c9496a6a8536ff7098b3eed7e8b9924633cfc3ab297d69",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03596",
+          "index": 4146
+        },
+        {
+          "row_hash": "c6bccbe859d798ee99e8955784e1471dedabda719a28ea6bb7bc3d75af58157e",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-15108",
+          "index": 311
+        },
+        {
+          "row_hash": "c7be0357e545e2b113a5135f4e0fd9501546d4f5d587bfadb874aeacb9238746",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23988",
+          "index": 3066
+        },
+        {
+          "row_hash": "cbe4266e24f146a206af5d5fa88dc47f4e2c13e0e35763d37be90a54745c38cd",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-15212",
+          "index": 4772
+        },
+        {
+          "row_hash": "ccfbde375a0fb73781f6c76e0edc65d0c5d4f04bc34cac6d81b95ed6480a6731",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28159",
+          "index": 5582
+        },
+        {
+          "row_hash": "cdaa53f4eff78b69e6c819a827ca71e791659f567223998a8a02a340eb014bbe",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23312",
+          "index": 5225
+        },
+        {
+          "row_hash": "cdbdfcc6155205c80865dcab826a1f90d1d90066d834f02ba179ca73783e3132",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03707",
+          "index": 3278
+        },
+        {
+          "row_hash": "cfd81a1fd018b1ef50170ac158aab50bee0386ac280f253f6ece35556fee5cd8",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07799",
+          "index": 2518
+        },
+        {
+          "row_hash": "cffc8b00fd9c43b799c8f47f4019241f8bfe4a293818a3a8e184d48adf529c66",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-15113",
+          "index": 713
+        },
+        {
+          "row_hash": "d2711722148e95395e7c3da3d7e51ad1a5fa45be33594d275c71e3c14171b297",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-13703",
+          "index": 419
+        },
+        {
+          "row_hash": "d39ded44fef951442673a28668cfe6fbf8606fc67097c16c0ae9dcfeb04f0dec",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28355",
+          "index": 5163
+        },
+        {
+          "row_hash": "d48685ed29ba60806fa7facf788cb729771c3f2c3480745afc7a1746451e4dea",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26334",
+          "index": 4087
+        },
+        {
+          "row_hash": "d4b1af4d5a0f164b2ddd7103c9acef340beceb9bdeaf9c02a918ec1e0949af25",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27899",
+          "index": 3312
+        },
+        {
+          "row_hash": "d694b09d9c1d82d93022a06e4b27fcd19957c14e883af1c8111ab719d98f8846",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-07961",
+          "index": 2690
+        },
+        {
+          "row_hash": "d95870aaadd9245d43924c73522798b19c9760ff175ba81467dba0a95ced743e",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23807",
+          "index": 3380
+        },
+        {
+          "row_hash": "d9a972a69e6d7476792be7ee863a28f7359fc7035863dcc87d72872b739297e5",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26482",
+          "index": 2671
+        },
+        {
+          "row_hash": "d9d8ccd5809dd1a229bcd3f63c620f8a6111405b318a116724709f0a2eecc90c",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03965",
+          "index": 693
+        },
+        {
+          "row_hash": "dbee6b2570639c646031d5f294ef28a90ba16570940891f134142f9f75f80f9f",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-28188",
+          "index": 3872
+        },
+        {
+          "row_hash": "dc01c8b75456c613efe9d914c7627de381e809b03c15faf265d8f3579f8aebbb",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23830",
+          "index": 2290
+        },
+        {
+          "row_hash": "dd0947256569e77923d53fdd811318c71cb7dc852eb60f68735dfae6df6921d8",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-05317",
+          "index": 2665
+        },
+        {
+          "row_hash": "e3bee0ee242fd8e9a9e159d0ca4076d8f4cddd5c978760e3eba1b0092c5a0524",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-23794",
+          "index": 994
+        },
+        {
+          "row_hash": "e3f1e8e8ca3dcf14fd3d22f1a3c5f5ad33e00da4f9f0e067c8bf37df6cfa2b8f",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-27347",
+          "index": 3231
+        },
+        {
+          "row_hash": "e523917d382f6afe7fc3e4af9465deb8e77b5341fb095d3dbb808fce3e920309",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-15147",
+          "index": 5062
+        },
+        {
+          "row_hash": "ea61f22ebf1781ac15141920d0723add56e24101a1048e99d43cc6a6cd806af4",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-04840",
+          "index": 1375
+        },
+        {
+          "row_hash": "eae4935a984c33b985cd262e3e76371094b2f1ce182202139249395ee7d6f858",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-13866",
+          "index": 3714
+        },
+        {
+          "row_hash": "eb5db53af790ca097625385effd950955c6e6c06e04a510dec26798c5fc6966f",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-24326",
+          "index": 2677
+        },
+        {
+          "row_hash": "eddceb0e5798e20e225dfb53acb1b9ef06e47b0750607299a3e49c13c856612c",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-08041",
+          "index": 4324
+        },
+        {
+          "row_hash": "f0529747dc4edcf05babb1a7ee89a207d8fe1815aa02a3a84b5e26877ccb4892",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-03226",
+          "index": 2147
+        },
+        {
+          "row_hash": "f3e752e8d31a0278372b12c9059c3edee5666d3f47dcc6ba79a37527bb70d0fc",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-26712",
+          "index": 269
+        },
+        {
+          "row_hash": "f9d2227e5af47f9158c4f60ba1f7d094311b19bab0076cad04c05275d768e92d",
+          "task_id": "long-loop-smartie-swesmith:laion__swesmith-oracle-filtered-v2/swesmith-14900",
+          "index": 3861
+        }
+      ]
+    }
+  },
+  "total_trials": 823,
+  "rl_training_exclusions": {
+    "swesmith_ho_row_hashes": [
+      "00339d8a67bbfcf7f170e435f5c2c7947504da9ca75fc4b3fa51f57817e488df",
+      "04d85e247547eb158d645d6f65885646ec529b12c5d8c9c7ca2bdb52da7131d1",
+      "077a761b7a43cb857d8916cd599e486db559e2175817be341b79e965b00679b5",
+      "07cdf18ba60be4324b7ef68e5e4c6c0a3b0c792dd2aab49720d6f51c2274b505",
+      "07d5fc6f6b943aa0bded0b7bd0a86971e96ec955fa38949d205253aca06cad46",
+      "0876cabbc6991b95ed00126ff1cd6e6ebc21210544e54c29fea303ba04a02b2f",
+      "09a0aad45fa68d4dd65658363a3a5ac447b514d71b12ab3aa636541e1ad669ca",
+      "0bb427b3eae8669db021f936ebdb0a5f058f1aa206e16b812ffd632ed853386c",
+      "0dd8b2ac7b06d1f7fe616585bdf1dc5eed7a998ffa72c121a2ad2cf3e3b1aaef",
+      "1033b42115c102bba358129eb3b22ef082fd4533222a6bad8d3f6f9054f2d1e7",
+      "112e08c030988894a07351a197714f76031a5a66bc5915eded42bb14cc3ad6a1",
+      "122ebf8a203375e74c16e1b9729a7fb4206fd19e5a307ab16f18f35f33c5d882",
+      "15f74747e3b55d6aabe75629c935d797695ea250899a0e780d4b8262b139769a",
+      "175c1247f3fc3de78a8e818264acf2ad555eafb3fbd5bb5a87c69c96391bffd2",
+      "18ec20d7fb77527280afcb97602fb34a9414929da9b1641b15812d43fc21ddb0",
+      "195441b6c5f5668a6b5555739587e35aa1acd6f1dfc82a480330826453c7d84e",
+      "1b487c567f1fd7cf6661298af0ba960cbe022ba5c2b1ce6211f28b90dd5294a7",
+      "1dfae09b8bc973cebb59db42e44d95f7bb459903c882fa3e885ce9c6b0bac347",
+      "1e6fcc7db46d1812d95f0b8d33016e606892ec5425f676684de868d220f1d0ba",
+      "1ef4369e63efba346e48f05d5d53dd6c0e7bea6636027cfee8ec811baf7af7f8",
+      "219984302877d924e21ee6e85c09edc8286458177e0bbf95c19dd2b4de060753",
+      "253f7feef8b5bd3f4a5048408431cebd7eb877c201967741486383c5268b37ba",
+      "259e20bf6fa7017f24a0babcad18af586fad4f1149ad43085328f914ae8afbef",
+      "27297a3e0e00e181339846f826d5f8a26ae3775a1b1ecff6fe20473b0fd1092f",
+      "294711512f1b3ca9062018dc3d227f85db70f0b69da162de5212fa1b2bfec82f",
+      "2cd8fbcfeccb43e963cafc83c5750e6b9a037222ddb7b4fa8a519b1e24862407",
+      "2e387ad7d7bace217bc79392c9a3792c6efd77364c683c48ae9510b7c001830b",
+      "2e3e8e76c5d078ac7c4cf313a1523ea9857a779d9ae5127e24664b3557c7942e",
+      "30454185eba14d1ef5049ce187b37562f80391355642fad9dae8a6f25150c776",
+      "38c920d82abf55675e8b44633e25c53f140dfa25ec7f1a6af94b8e83302391f5",
+      "391eb0772c5a4601e981d72c39542ffb88e92279103b3648a5d087067d7b5093",
+      "392223136df163e30cd3f4a133c87a42a1501bfc2fb0f7b5f89d5e346b582399",
+      "3bef35b34219124323f0c7806624fa5cf260cdeb30eb56d43dcb6679c65f3ec0",
+      "3edafd492f443d9edeac0a5848f77188cbb4a90162b1f972567566207968a000",
+      "3f66e27563cbe42cb1f706075076be8bdd89c9981bde60d665197e83e8e1212d",
+      "41ee9c38a4593b0f6c69802f7801da1bdcd57a596c8c711686a51d48914a1ccc",
+      "42551485ffb81cd52771971529bb7efb5bba5070b2e0fc4b11cb0d2a36d04b9b",
+      "4384b3622e9eea8a8f1ad7ba6fb9df26d830273f3a3e2ca2cc4fe9b15d140c88",
+      "43a15081e404cac16de0e838b53682db984fd5518a7ac4aa3a16dff17202b372",
+      "4457168fa914376de5c311fe9b5f553bfe0205768aad85d7a343132ef145dba9",
+      "457fea4d280fb642c00dfd0e280a835bef9289811dd1e496cf53923ddac5a0d2",
+      "460a957801035eb72cd65b95dbdefb15c0b97d7b9ad055a4de1dd2609b5b10ed",
+      "4686306bea4a4088f197f5b9b18094d3f07e2bd88c777778cc9f35a1ccab8b65",
+      "4a2d7f35507992e30bc58d35f13f08bb9edce8e4b65fcabf207d6866b44cd93a",
+      "4b3c613fe729a875f00b80bd02d83373efeed1e059aa4b758e0666bc8178e4a7",
+      "4c7ac9c572bdc367fb4fb82273a9ade3237c132a8f221cbf218c9e20d3eb2e40",
+      "4dbff1d62a7373bbef3bf2264e22f3678946c2327f2efff1b6e95ed148cf19ad",
+      "54ba70d11eb423b1b9f48c478c1c7fa4928f0b3382e17b2dc788208e2974a484",
+      "5a40f9fc83a97fc0bda69697998f46babb846bba12d0ea93b255463628f58b1c",
+      "5cfd91a42d2c0cbd42b28cc86cc3a544d024fcfa15414638ac10f18101c28197",
+      "5d6bb51ac098e617d0d7c5c72054660417bb72e0c43f3662f35715fc4c312e8d",
+      "671d2bb61d9a86ba21fc8e7010f1937223401d7c5db596572953bba89e9da8bb",
+      "697fe402c8638e3ab1459c3252cdead66ae41e59de8e7bee54e59b3ff9ba8e06",
+      "69eaf8849bc73f1558666743d16f56bbd17aff09ffad82f18298a280d4cf19b2",
+      "6a93b23eabb3d4f8926c351f79954a855beac30b02b3ba26648a7cde958e005e",
+      "6d537dd1bf1be2760b5d11b3df7e32487cc30b38fb28ecac885410890e3de82b",
+      "741392942538016e635b884e5a9b47302501985a6c43021c5211c7aec42ade06",
+      "748ec743c5e05f0290a7bfebd63385a8523bf79b8e981016892976565c9cc04d",
+      "7851eebdc21c02dc231ae87d1b41012df5b0752b2bc0613773854810937b43a7",
+      "78714f6285b0f490c0bff937470eaf3413412440800c0dd3561599964f362601",
+      "788aff72797efd6045b76bebf8df5cf17abc710b88a7be1d8f9d5572e9c388fc",
+      "7b8038b5cf28719f228f4b7aef290f679937209a482245a732a2f056f25fc4ec",
+      "7ddac2bd8c88e0031b992c54904f0c18655f41194700adb21ba2a5ab085e6289",
+      "80491c7da6f87b1261cd7b8e434090f3495c5a925a7f28d12ab733b60f1a1ab1",
+      "80b9b9fae5a9e1532ebcc84e06d548d844cabdb6bcaeb79fc01ff588e21768b3",
+      "80cf894c5387ce9cdef32b6f2ea686831228db51887e058747d1a78ed57f460b",
+      "8414e97701cd423d739dd7e8957d498341de259e91f2aaa70964028704a6ee9b",
+      "87aebce327d1fbba6a080ce0d019d4ad530d3d25789762ba6d15133f29e13159",
+      "882185c31f406a023e8885de0dee8be702e40bcdb39185d488f74b5762d8b48f",
+      "8abeb6b628bd069dd6435655a41d7dcedac71bf849d3079867b9cc79110236f3",
+      "8c07b81ed4d54df82f46313f464c979f66399eb8b92fb92590bd3c604dd9caf7",
+      "8f2900631ac4ee895437925c45e400b62c331ecb8e6510e2f1eed3affe645106",
+      "931f48f071908e65836e6e53aaa8ddd04076d13829fdaecf36841e0c7b9ef606",
+      "959c216d1e5ffd36ac319d08a627d7d35bd856ce24ad1b986be433b3ad2b2b81",
+      "9621fb933b424e82f9810fe55de638fb7ec31c229f044749ff4b5487afbf036a",
+      "974925e488432accf265c6a9afc31334995fdd770d4a641b28734a084236aa2b",
+      "9a6851992daca86697ab4edc848041ac11c5bdf2133c37863c88bf6606a46522",
+      "9ab2f97bfdaa439e996d27836ad0e5d6a65a2241d7047142571930badacb7673",
+      "9e5c4e3245b60d28338effd2b86a91a15ca84eae9da90085bdb2ee593138d299",
+      "a231a9323cba69046f31078c048c62fc9affe46899b038805ca8cf072225f7db",
+      "a4534d8d2fca82e32e21d2a431a22c1e9ae0098fafeb80e7757137aa9e1f106f",
+      "a49fa2661a27df7787654dbcc27af6d7f6260392c745497a0d868ec186d21b21",
+      "a4d0e8f13a058d209835be4b9bd4bdba0000b8e4bcea169be0d4141b8ca1f998",
+      "a5e5c0a9ba0160ce53195ebe92ebf20d17ec74714ef7f95c8ccfa9106be1af53",
+      "a65575fd628de3925d68af6041b0fed31d42b08a40e8e815646cda89666bf68d",
+      "a78f394ab7feff714dbf99681184610d6eb4ea2d54371cfef5d7ffd788b1638e",
+      "aadca1eaae23b56ff5d651f009a2dd27a789800b3db799c25026fa43c6007147",
+      "ac1a51763fc99b28f00ce4d0a20b3f1a3d113b485401b6972b64409d62919373",
+      "af6d13c8f3030d197f6b39c3b5c4c1e05d79e6c46fbea213f881acadaac6ebaa",
+      "b2eb9e9816bccc1edfd8dd651f786241568ffdf4f9a942f852c4620c81ffd52b",
+      "b39fadf35ec119a6fc95df39331c14ff2f9e0c5294863395864835aba962db4e",
+      "b4adeb68dbce3c107da5d9d55b9a452fff1d3a801ef116df47a80317b4294ea4",
+      "b4c543ec0964019c3c0d3385623acaf5654b9e44f59497f7dc3e94e302ce074a",
+      "ba59f805aba04053d02ff8879af3d60ba2883c11cd96d19b50f9655f7020be51",
+      "bcaaf7bed0ff60b2f48eb55be747ac4102131002b6d5835daf19c83113fc57c8",
+      "bd6be803ce1fadf26376189d46462d662f47db1a2fcb3dfcf0e9c88ca5d14f75",
+      "c10164ef87ac38dd4b2daf846bfd97e5b166fe8c89691c685aaa0c433c4f2e81",
+      "c1748188ec13b78e36e9937d76cb042a27bf1c34f6af774236308361dec497de",
+      "c1a58e0a2af1fc7951c9496a6a8536ff7098b3eed7e8b9924633cfc3ab297d69",
+      "c6bccbe859d798ee99e8955784e1471dedabda719a28ea6bb7bc3d75af58157e",
+      "c7be0357e545e2b113a5135f4e0fd9501546d4f5d587bfadb874aeacb9238746",
+      "cbe4266e24f146a206af5d5fa88dc47f4e2c13e0e35763d37be90a54745c38cd",
+      "ccfbde375a0fb73781f6c76e0edc65d0c5d4f04bc34cac6d81b95ed6480a6731",
+      "cdaa53f4eff78b69e6c819a827ca71e791659f567223998a8a02a340eb014bbe",
+      "cdbdfcc6155205c80865dcab826a1f90d1d90066d834f02ba179ca73783e3132",
+      "cfd81a1fd018b1ef50170ac158aab50bee0386ac280f253f6ece35556fee5cd8",
+      "cffc8b00fd9c43b799c8f47f4019241f8bfe4a293818a3a8e184d48adf529c66",
+      "d2711722148e95395e7c3da3d7e51ad1a5fa45be33594d275c71e3c14171b297",
+      "d39ded44fef951442673a28668cfe6fbf8606fc67097c16c0ae9dcfeb04f0dec",
+      "d48685ed29ba60806fa7facf788cb729771c3f2c3480745afc7a1746451e4dea",
+      "d4b1af4d5a0f164b2ddd7103c9acef340beceb9bdeaf9c02a918ec1e0949af25",
+      "d694b09d9c1d82d93022a06e4b27fcd19957c14e883af1c8111ab719d98f8846",
+      "d95870aaadd9245d43924c73522798b19c9760ff175ba81467dba0a95ced743e",
+      "d9a972a69e6d7476792be7ee863a28f7359fc7035863dcc87d72872b739297e5",
+      "d9d8ccd5809dd1a229bcd3f63c620f8a6111405b318a116724709f0a2eecc90c",
+      "dbee6b2570639c646031d5f294ef28a90ba16570940891f134142f9f75f80f9f",
+      "dc01c8b75456c613efe9d914c7627de381e809b03c15faf265d8f3579f8aebbb",
+      "dd0947256569e77923d53fdd811318c71cb7dc852eb60f68735dfae6df6921d8",
+      "e3bee0ee242fd8e9a9e159d0ca4076d8f4cddd5c978760e3eba1b0092c5a0524",
+      "e3f1e8e8ca3dcf14fd3d22f1a3c5f5ad33e00da4f9f0e067c8bf37df6cfa2b8f",
+      "e523917d382f6afe7fc3e4af9465deb8e77b5341fb095d3dbb808fce3e920309",
+      "ea61f22ebf1781ac15141920d0723add56e24101a1048e99d43cc6a6cd806af4",
+      "eae4935a984c33b985cd262e3e76371094b2f1ce182202139249395ee7d6f858",
+      "eb5db53af790ca097625385effd950955c6e6c06e04a510dec26798c5fc6966f",
+      "eddceb0e5798e20e225dfb53acb1b9ef06e47b0750607299a3e49c13c856612c",
+      "f0529747dc4edcf05babb1a7ee89a207d8fe1815aa02a3a84b5e26877ccb4892",
+      "f3e752e8d31a0278372b12c9059c3edee5666d3f47dcc6ba79a37527bb70d0fc",
+      "f9d2227e5af47f9158c4f60ba1f7d094311b19bab0076cad04c05275d768e92d"
+    ],
+    "reason": "held-out cohort swesmith-ho; excluded from the I3 training pool"
+  },
+  "unverified_resolutions": {
+    "trajectory_retention_format": "RESOLVED from vendor/skyrl code. `trajectory_retention {phases: [eval], required: true}` writes, under the run's retention output_path (trainer.py appends '/validation' for the eval runner), `schema_v7/archives/phase=eval/step={global_step:08d}|step=eval_only/{sha256(zip)}.zip` plus a `_retention_ledger.json` at the output_path root (trajectory_retention.py:54-59, 1110-1118). Each zip holds `records/{record_id}.json.gz` entries (gzip of canonical JSON) and a `manifest.json` (trajectory_retention.py:511-536). Each record is a TrajectoryRecord schema_version=7 (trajectory_retention.py:53, 206-224) with trajectory identity {instance_id, repetition_id, row_indices, environment_class, environment_extras}, prompt {messages, token_ids}, response {messages, text, token_ids, loss_mask, trainable_spans, step_boundaries[{row_index, prompt_token_ids, token_start, token_end, stop_reason, is_last_step}], stop_reason, generation_limit, loop_spans}, reward {outcome, shaped, components}, disposition {exception_type, error_treatment, server_error}, verifier, verification_result, metrics, provenance {runner, sampling, model_path, model_version_step, ...}. Per-step action/observation text lives in response.messages, populated from the batch's evidence_messages of the final step row (the parsed multi-turn conversation: tool calls, observations, final answer) with the decoded assistant text as fallback (trajectory_retention.py:442-461); step_boundaries gives each step's token span. required:true blocks the run: initialization, re-initialization, and publication failures raise TrajectoryRetentionPublicationError/Timeout (trajectory_retention.py:812-814, 877-885, 891-894) and retain_trajectories re-raises any retention error when required (1140-1145), which exits the rollout worker process. This differs from the dumped_evals JSONL rows (trainer_utils.py:266-352, evaluate.py:77-80 and 345-383): when trainer.dump_eval_results is on, every eval row is dumped flat to `{export_path}/dumped_evals/{attempt_id}/{eval_only|global_step_N_evals}/{data_source}.jsonl` (+ aggregated_results.jsonl) with fields uid, attempt_id, step, ordinal, is_last_step, task_id, prompt_token_ids, response_token_ids, input_prompt, output_response, messages, score, stop_reason, exception_type, error_treatment, server_error, env_class, subset_id, data_source, env_metrics, and a trimmed verification object - no selection, no ledger, no tokens' loss masks or reward shaping. The Micro210 policy pins trajectory_retention {phases: [eval], required: true, eval_sample_fraction: 1.0, sample_count_per_step: 0}, so every eval record is retained via the fraction rule (trajectory_retention.py:642-644) and count sampling is off.",
+    "micro210_tb2_tblite_timeouts": "RESOLVED against the pinned policy.json (hf://datasets/open-athena/micro210-policy@ fa38e3eacc25137c9febe898119f08d65cc5ce88/policy.json; downloaded sha256 8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e5, 121292 bytes, matching experiments/evaluation/micro210_policy.py POLICY_DIGEST/byte_size). The TB2 row is benchmark 'tb2-recovery' and the OT-TBLite row is 'ot-tblite-recovery'; each runs 10 tasks (evaluation.tasks_per_benchmark=10) x 3 attempts (evaluation.attempts_per_selected_task) = 30 attempts. Agent timeout IS 1800 s: evaluation.config.terminal_bench.harbor.eval_timeout_override_sec=1800 and override_timeout_sec=1800, and installed_agent.run_timeout=1800 - equal to CAMPAIGN_JOB.agent_timeout. Verifier timeout is NOT 300 s: harbor.verifier_override_timeout_sec=null, so no verifier override is set and each prepared task keeps its own verifier timeout; the only 300 in the policy is the LLM judge's request_timeout=300.0 (evaluation.judge), not a task verifier. The rows also differ from the campaign TB2 eval protocol elsewhere: harbor.trial_attempt_timeout_sec=10800 (3 h, vs the panel's TERMINAL_BENCH_ATTEMPT_TIMEOUT 28800) and context_budget.request_window_tokens=65536 with max_new_tokens_per_turn=16384, max_turns=1024 (Pi model_info 65536/16384, compaction_reserve_tokens 16384, version 0.87.0, thinking high, thinking_format chat-template, override_setup_timeout_sec 360, n_concurrent_trials=8, max_retries=0). Sampling: generator.eval_sampling_params temperature=0.7, top_p=0.95, stop_token_ids=[128001, 128009], skip_special_tokens=false, eval_n_samples_per_prompt=1. So the DESIGN's 'same settings' claim holds for the agent timeout only.",
+    "swe_smith_screen_469_attempts": "PARTIALLY RESOLVED; the exact storage path cannot be confirmed from the repository or the issues alone. What the receipts establish (issue 11536 comment 6941306305, issue 11723 section 2.3): the screen ran Mochi SFT step 400407 on the same 128 SWE-smith tasks x 8 tries as the Snowball pass-rate screen (run 43604, 'grug-datakit-sft-262k-20261005-ac60d940-r1'), Pi 0.87.0 with the nested edit tool, one DP16 GB200 serve in cw-us-east-08a, 32 concurrent trials, a 900 s agent cap, and no retries; it was value-stopped after the second interim look and cancelled about 06:42Z with 469 of 1,024 attempts recorded; two retained-trace snapshots taken about 15 minutes apart agree exactly; the traces are private and not published. Neither #11723 (body plus 13 comments), #11536 (body plus comments), nor the readout comment names the storage path. The public trace viewer app https://public.applets.marina.oa.dev/a/193c0a18-17c8-4348-9df3-765f3811a5d5/ reads run 'Pass-rate 43604' from temporary storage whose traces expire about 2026-11-28; the app's backing URI is not stated. Best query recipe: (1) read Marina app 193c0a18-17c8-4348-9df3-765f3811a5d5's release metadata/package for its backing storage prefix and list the run's attempt objects there; (2) via evalrecords, scan the record.json prefixes (gs://marin-eval-metadata/evals, s3://marin-us-east-02a/marin/evals, and the legacy runs prefixes; evalrecords/records.py DEFAULT_SCAN_PREFIXES) for a record whose model is the Mochi step-400407 export and whose evaluation is the SWE-smith screen, then read the run store with finestore ReadView(run_root): iter_rows('evaluation_attempts') (ATTEMPTS_TABLE, evalrecords/rollout_attempts.py:11) filtered by dataset/task_id/trial, plus the 'rollouts_v1' archive table (ARCHIVE_ROLLOUTS_TABLE, finestore/eval.py:216) for the request/turn records; (3) if the screen driver retained SkyRL trajectory archives instead, the run's trajectory_retention output_path ledger (_retention_ledger.json) and schema_v7/archives zips hold the per-attempt records. Confirming the path needs cluster or marina-app access, not GPU work."
+  },
+  "manifest_sha256": "562bd617cd6d38369ae1c8d534b2df769888a8eec59d0017578bd001be6ef985"
+}

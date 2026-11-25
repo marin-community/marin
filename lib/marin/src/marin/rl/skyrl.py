@@ -331,7 +331,21 @@ class SkyRLGenerationPlan(_InferenceGeometry):
         return RLEntrypoint.GENERATE.value
 
     @property
+    def uses_expert_parallel_placement(self) -> bool:
+        """Whether rollout uses cross-host, one-GPU expert-parallel workers."""
+        return (
+            self.inference_engine_tensor_parallel_size == 1
+            and self.inference_engine_pipeline_parallel_size == 1
+            and self.inference_engine_expert_parallel_size
+            == self.inference_engine_data_parallel_size
+            > self.gpus_per_node
+        )
+
+    @property
     def num_nodes(self) -> int:
+        if self.uses_expert_parallel_placement:
+            rollout_gpus = self.num_inference_engines * self.engine_gpus
+            return (rollout_gpus + self.gpus_per_node - 1) // self.gpus_per_node
         return _inference_nodes(self)
 
     def config_values(self) -> dict[str, object]:
@@ -345,7 +359,8 @@ class SkyRLGenerationPlan(_InferenceGeometry):
         _validate_inference_geometry(self)
         if self.num_inference_engines <= 0 or self.n_samples_per_prompt <= 0:
             raise ValueError("SkyRL generation engines and samples per prompt must be positive")
-        _validate_engine_fits_node(self, topology)
+        if not self.uses_expert_parallel_placement:
+            _validate_engine_fits_node(self, topology)
         if topology.num_nodes != self.num_nodes:
             raise ValueError("SkyRL generation topology must allocate exactly the inference engine nodes")
         if self.gpus_per_node != topology.gpus_per_node:
@@ -686,6 +701,8 @@ class IrisSkyRLExecution:
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
     role_topology: RoleTopologyMode | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
+    "NVLink domains (racks) the job's placement must avoid, as required NE constraints."
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -1042,16 +1059,17 @@ def _launch_config_yaml(
         if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
             raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
         plan = spec.topology.role_plan
+        generation_only = isinstance(plan, SkyRLGenerationPlan)
         locality = plan_nvlink_roles(
-            policy_gpus=plan.policy_num_nodes * plan.policy_num_gpus_per_node,
+            policy_gpus=0 if generation_only else plan.policy_num_nodes * plan.policy_num_gpus_per_node,
             num_inference_engines=plan.num_inference_engines,
             tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
             pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
             data_parallel_size=plan.inference_engine_data_parallel_size,
             expert_parallel_size=plan.inference_engine_expert_parallel_size,
             inference_backend=cast(str, _declared_config_value(recipe, "generator.backend")),
-            colocate_all=plan.colocate_all,
-            colocate_policy_ref=plan.colocate_policy_ref,
+            colocate_all=False if generation_only else plan.colocate_all,
+            colocate_policy_ref=False if generation_only else plan.colocate_policy_ref,
             gpus_per_node=spec.topology.gpus_per_node,
             max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
         )
@@ -1087,6 +1105,7 @@ def _launch_config_yaml(
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
             "wandb_entity": execution.wandb_entity,
             "role_topology": execution.role_topology.value if execution.role_topology is not None else None,
+            "excluded_nvlink_domains": list(execution.excluded_nvlink_domains),
             "allocation": {
                 "num_nodes": num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,
