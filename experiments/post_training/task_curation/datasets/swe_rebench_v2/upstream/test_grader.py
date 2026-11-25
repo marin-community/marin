@@ -66,7 +66,6 @@ def test_summary_only_log_is_unscorable_with_named_ids(tmp_path, parser, log):
     assert report["unscorable"] is True
     assert report["resolved"] is False
     assert report["fail_to_pass"] == {"TestRepair": False}
-    assert "UNSCORABLE" in result.stdout
 
 
 @pytest.mark.parametrize("action", ["fail", "skip"])

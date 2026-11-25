@@ -41,7 +41,7 @@ def grade(config, test_log):
     results = parse_test_log(test_log)
     expected = {"PASSED": set(fail_to_pass) | set(pass_to_pass)}
     # Package build failures identify no test; they cannot make a log scorable.
-    unscorable = not any(name for names in results.values() for name in names if not name.endswith("::<build>"))
+    unscorable = not any(name for names in results.values() for name in names if not name.endswith(BUILD_ERROR_SUFFIX))
     actual_passed = _actual_passed_aliases(_normalized_passed_names(results["PASSED"]))
 
     def status(names):

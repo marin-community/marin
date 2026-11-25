@@ -30,6 +30,7 @@ class TestStatus(str, Enum):
 ParsedTestLog = Dict[str, TestStatus]
 TestParser = Callable[[str], ParsedTestLog]
 TestResults = Dict[str, Set[str]]
+BUILD_ERROR_SUFFIX = "::<build>"
 
 
 def ansi_escape(text: str) -> str:
@@ -401,7 +402,7 @@ def parse_log_cargo(log: str) -> ParsedTestLog:
         line = ANSI_RE.sub("", raw_line).strip()
         build_failure = CARGO_BUILD_FAILURE_RE.match(line)
         if build_failure:
-            test_status_map[f"{build_failure.group('crate')}::<build>"] = TestStatus.ERROR
+            test_status_map[f"{build_failure.group('crate')}{BUILD_ERROR_SUFFIX}"] = TestStatus.ERROR
             continue
         pending_outcome = _pending_outcome(line)
         if pending_outcome is not None and pending_test_names:
@@ -697,12 +698,12 @@ def _parse_go_json_event(event: dict[str, object]) -> tuple[str, TestStatus] | N
         and isinstance(failed_build, str)
         and failed_build.strip()
     ):
-        return f"{package.strip()}::<build>", TestStatus.ERROR
+        return f"{package.strip()}{BUILD_ERROR_SUFFIX}", TestStatus.ERROR
     return None
 
 
 def parse_log_gotest(log: str) -> ParsedTestLog:
-    """Parse named results from verbose or JSON `go test` output."""
+    """Parse named test results and package build errors from verbose or JSON `go test` output."""
     test_status_map: ParsedTestLog = {}
 
     for line in log.split("\n"):
