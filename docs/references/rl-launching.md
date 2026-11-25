@@ -469,6 +469,11 @@ The graph verifies the prepared Parquet digest and derives a native table withou
 changing row order, repetitions, prompts, or task membership. Package resources
 become native Pi tasks with their own CPU, memory, disk, network, and verifier
 limits. `binding.json` records the source and derived table digests and image pins.
+The launch re-hashes the native table and verifies its frozen source, converter code,
+image pins, and smoke selection before allocation. The evaluation record includes
+the verified `native_sha256`, `native_inputs_uri`, and `smoke_rows`. The production
+native artifact pins its fingerprint; bump `PREPARED_INPUTS_VERSION` and update
+`NATIVE_INPUTS_FINGERPRINT` when the converter or image lock changes.
 The launch uses a generation plan and retains the policy's vLLM startup settings.
 Context overflow and agent timeout retain the verifier verdict; unnamed errors
 are excluded from scored denominators.

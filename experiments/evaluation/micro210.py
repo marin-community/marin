@@ -54,7 +54,8 @@ from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Native task bindings have their own artifact identity alongside the frozen source.
-PREPARED_INPUTS_VERSION = "2026.11.24.1"
+PREPARED_INPUTS_VERSION = "2026.11.24.2"
+NATIVE_INPUTS_FINGERPRINT = "a1adbf11"
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 
@@ -64,7 +65,6 @@ class Micro210Run:
     skyrl: SkyRLRunConfig
     evaluation: Micro210Evaluation
     canonical_launch_sha256: str
-    smoke_rows: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -83,10 +83,23 @@ def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
     return config
 
 
+def native_binding_code_sha256() -> str:
+    sources = (Path(__file__).with_name(name) for name in ("micro210_inputs.py", "micro210_policy.py"))
+    digests = "".join(file_sha256(StoragePath(str(path))) for path in sources)
+    return hashlib.sha256(digests.encode()).hexdigest()
+
+
 def prepare_native_inputs(
-    source: str, destination: str, policy: dict, image_digests: dict[str, str], rows: tuple[int, ...]
+    source: str,
+    destination: str,
+    policy: dict,
+    image_digests: dict[str, str],
+    rows: tuple[int, ...],
+    converter_sha256: str,
 ) -> None:
     """Verify the frozen source before writing its native runtime binding."""
+    if converter_sha256 != native_binding_code_sha256():
+        raise ValueError("Micro210 native converter differs from its artifact binding")
     raw = (StoragePath(source) / policy["evaluation"]["data_relative_path"]).read_bytes()
     if hashlib.sha256(raw).hexdigest() != policy["prepared_rollouts_sha256"]:
         raise ValueError("Canonical Micro210 prepared task bytes changed")
@@ -100,6 +113,7 @@ def prepare_native_inputs(
             json.dumps(
                 {
                     "source_sha256": policy["prepared_rollouts_sha256"],
+                    "converter_sha256": converter_sha256,
                     "native_sha256": file_sha256(StoragePath(str(native))),
                     "image_digests": image_digests,
                     "smoke_rows": rows,
@@ -128,12 +142,33 @@ def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
                 raise ValueError(f"Canonical Micro210 tokenizer has incompatible stop token ID: {token_id}")
 
 
+def verified_native_evaluation(evaluation: Micro210Evaluation, inputs: str) -> Micro210Evaluation:
+    """Verify the table consumed by the launch and bind its identity to the run record."""
+    root = StoragePath(inputs)
+    receipt = json.loads((root / "binding.json").read_text())
+    if receipt["source_sha256"] != evaluation.policy()["prepared_rollouts_sha256"]:
+        raise ValueError("Micro210 native binding has a different frozen source")
+    if tuple(receipt["smoke_rows"]) != evaluation.smoke_rows:
+        raise ValueError("Micro210 native binding has different smoke rows")
+    if receipt["converter_sha256"] != native_binding_code_sha256():
+        raise ValueError("Micro210 native binding has a different converter")
+    if receipt["image_digests"] != json.loads(Path(__file__).with_name("micro210_images.json").read_text()):
+        raise ValueError("Micro210 native binding has different image pins")
+    digest = file_sha256(root / "rollouts.parquet")
+    if digest != receipt["native_sha256"]:
+        raise ValueError("Canonical Micro210 native task bytes changed")
+    return replace(evaluation, native_sha256=digest, native_inputs_uri=inputs)
+
+
 def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     validate_inputs(config.evaluation, PREPARED_INPUTS)
-    (StoragePath(config.evaluation.output_uri) / "canonical-evaluation.json").write_text(
-        json.dumps(asdict(replace(config.evaluation.record(), smoke_rows=config.smoke_rows)), indent=2)
+    document = yaml.safe_load(config.skyrl.launch_config_yaml)
+    native_inputs_uri = document["inputs"]["validation_data"][0]["uri"]
+    evaluation = verified_native_evaluation(config.evaluation, native_inputs_uri)
+    (StoragePath(evaluation.output_uri) / "canonical-evaluation.json").write_text(
+        json.dumps(asdict(evaluation.record()), indent=2)
     )
     evaluation_policy = config.evaluation.policy()["evaluation"]
     judge = draccus.decode(JudgeConfig, evaluation_policy["judge"])
@@ -145,7 +180,10 @@ def micro210_step(
     model: Micro210Model, *, name: str, version: str, smoke: Micro210Smoke | None = None
 ) -> ArtifactStep[SkyRLRun]:
     """Build the canonical evaluation graph for a model and run identity."""
-    binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
+    binding = replace(
+        micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>"),
+        smoke_rows=() if smoke is None else smoke.rows,
+    )
     frozen = binding.policy()
     evaluation_policy = frozen["evaluation"]
     model_artifact = ArtifactStep.adopt(
@@ -164,9 +202,12 @@ def micro210_step(
         destination=OUT,
         policy=frozen,
         image_digests=json.loads(Path(__file__).with_name("micro210_images.json").read_text()),
-        rows=() if smoke is None else smoke.rows,
+        rows=binding.smoke_rows,
+        converter_sha256=native_binding_code_sha256(),
         version=PREPARED_INPUTS_VERSION if smoke is None else version,
     )
+    if smoke is None:
+        inputs = replace(inputs, expected_fingerprint=NATIVE_INPUTS_FINGERPRINT)
     role_policy = evaluation_policy["role_plan"]
     runtime = runtime_policy_config(frozen)
     if smoke is not None:
@@ -224,7 +265,6 @@ def micro210_step(
             replace(run, launch_config_yaml=rendered),
             replace(binding, output_uri=context.output_path),
             hashlib.sha256(rendered.encode()).hexdigest(),
-            () if smoke is None else smoke.rows,
         )
 
     configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)

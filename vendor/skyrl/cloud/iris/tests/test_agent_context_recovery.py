@@ -154,7 +154,7 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
         ScriptedClient(replies),
         {},
         agents=agent_harnesses(agent),
-        shutdown_timeout=5,
+        shutdown_timeout=5, agent_max_retries=1, max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)
@@ -202,7 +202,7 @@ async def test_native_worker_keeps_a_workspace_verdict_without_sampled_tokens(ag
         WaitingClient(),
         {"shellsim": ShellSimMachineFactory()},
         agents=agent_harnesses(agent),
-        shutdown_timeout=5,
+        shutdown_timeout=5, agent_max_retries=1, max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)
@@ -252,7 +252,7 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
         {"shellsim": machines},
         agents=agent_harnesses(agent),
         concurrent_training_machine_tasks=1,
-        shutdown_timeout=5,
+        shutdown_timeout=5, agent_max_retries=1, max_concurrent_agents=None,
     )
     try:
         async with asyncio.timeout(5), asyncio.TaskGroup() as group:
@@ -292,7 +292,7 @@ async def test_micro210_native_error_policy_preserves_verdict_and_excludes_unnam
     request = TaskRequestBatch(rows=(task_input(lowered_task(task, "pi", backend="shellsim")),))
     worker = TaskRolloutWorker(
         worker_config, WholeTaskProjection(worker_config, WorkerTokenizer()), ScriptedClient([sampled_reply()]),
-        {"shellsim": ShellSimMachineFactory()}, agents=agent_harnesses(agent), agent_max_retries=0, shutdown_timeout=5,
+        {"shellsim": ShellSimMachineFactory()}, agents=agent_harnesses(agent),  shutdown_timeout=5, agent_max_retries=0, max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)

@@ -8,6 +8,7 @@ import json
 import pickle
 import tarfile
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -3476,10 +3477,20 @@ async def test_a_judge_task_without_a_connection_uses_the_environment(judge_serv
     ],
 )
 @pytest.mark.parametrize("placement", ["grader", "agent"])
-async def test_script_judge_runs_with_runtime_connection(monkeypatch, source_model, connection, placement):
+@pytest.mark.parametrize("backend", [Backend.DOCKER, Backend.DAYTONA])
+async def test_script_judge_runs_with_runtime_connection(monkeypatch, source_model, connection, placement, backend):
     monkeypatch.setenv(BASE_URL_ENV, "http://judge.invalid/v1")
     monkeypatch.setenv(API_KEY_ENV, "runtime-private-key")
     monkeypatch.setenv(MODEL_ENV, "ambient-must-not-win" if source_model else "fixture-judge")
+
+    @asynccontextmanager
+    async def transport(_machine, **_kwargs):
+        yield
+
+    # Real HTTP forwarding is covered in TaskCompendium; this checks the selected factory's guest environment.
+    monkeypatch.setattr(grading_runtime, "forward_http_posts", transport)
+    expected_key = "machine-local-judge-relay" if backend is Backend.DAYTONA else "runtime-private-key"
+    expected_url = "http://127.0.0.1:8790/v1" if backend is Backend.DAYTONA else "http://judge.invalid/v1"
     source_task = judge_task()
     judge = JudgeSpec(
         references=("12",),
@@ -3489,10 +3500,10 @@ async def test_script_judge_runs_with_runtime_connection(monkeypatch, source_mod
         model=source_model,
     )
     script = (
-        b'test "$VERIFYIT_JUDGE_API_KEY" = runtime-private-key || exit 1\n'
-        b'test "$VERIFYIT_JUDGE_MODEL" = fixture-judge || exit 1\n'
-        b'test "$VERIFYIT_JUDGE_BASE_URL" = http://judge.invalid/v1 || exit 1\n'
-        b"test -f /tests/judge.toml || exit 1\n"
+        f'test "$VERIFYIT_JUDGE_API_KEY" = {expected_key} || exit 1\n'.encode()
+        + b'test "$VERIFYIT_JUDGE_MODEL" = fixture-judge || exit 1\n'
+        + f'test "$VERIFYIT_JUDGE_BASE_URL" = {expected_url} || exit 1\n'.encode()
+        + b"test -f /tests/judge.toml || exit 1\n"
         b'printf \'{"status":"scored","reward":1,"detail":{"model":"fixture-judge"}}\' > /logs/verifier/verdict.json\n'
     )
     task = source_task.model_copy(
@@ -3513,14 +3524,16 @@ async def test_script_judge_runs_with_runtime_connection(monkeypatch, source_mod
             "resources": ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
         }
     )
-    factory = RecordingShellSimFactory()
+    factory = RecordingShellSimFactory(backend=backend)
     spec = rollout_spec(
         task,
-        machine=machine_runtime() if placement == "agent" else None,
-        verifier_machine=machine_runtime() if placement == "grader" else None,
+        machine=machine_runtime(backend="evaluation-machine") if placement == "agent" else None,
+        verifier_machine=machine_runtime(backend="evaluation-machine") if placement == "grader" else None,
         judge_connection=connection,
     )
-    record = await engine(ReplayModel([{"role": "assistant", "content": "twelve"}]), {"local": factory}).run_task(spec)
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "twelve"}]), {"evaluation-machine": factory}
+    ).run_task(spec)
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0), record.grade
     assert len(factory.machines) == 1
     assert "runtime-private-key" not in spec.model_dump_json()

@@ -96,7 +96,7 @@ async def _grade_rollout(
             _verifier_view(machine),
             timeout=spec.limits.verifier_timeout,
             judge_connection=judge,
-            backend=spec.task_machine.backend,
+            backend=factories[spec.task_machine.backend].backend,
         )
     assert isinstance(placement, GraderMachine)
     selection = spec.verifier_machine

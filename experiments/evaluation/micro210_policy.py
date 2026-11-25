@@ -80,6 +80,8 @@ class Micro210Record:
     run_id: str
     output_uri: str
     policy_reference: Micro210PolicyReference
+    native_sha256: str
+    native_inputs_uri: str
     smoke_rows: tuple[int, ...] = ()
 
 
@@ -90,13 +92,27 @@ class Micro210Evaluation:
     model: Micro210Model
     run_id: str
     output_uri: str
+    smoke_rows: tuple[int, ...] = ()
+    native_sha256: str | None = None
+    native_inputs_uri: str | None = None
 
     def policy(self) -> dict:
         return read_micro210_policy(POLICY_REFERENCE)
 
     def record(self) -> Micro210Record:
         self.policy()
-        return Micro210Record(POLICY_REFERENCE.sha256, self.model, self.run_id, self.output_uri, POLICY_REFERENCE)
+        if self.native_sha256 is None or self.native_inputs_uri is None:
+            raise ValueError("Micro210 native inputs must be verified before recording")
+        return Micro210Record(
+            POLICY_REFERENCE.sha256,
+            self.model,
+            self.run_id,
+            self.output_uri,
+            POLICY_REFERENCE,
+            self.native_sha256,
+            self.native_inputs_uri,
+            self.smoke_rows,
+        )
 
 
 def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str) -> Micro210Evaluation:

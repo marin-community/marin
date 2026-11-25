@@ -525,6 +525,8 @@ environment:
   env_class: "gsm8k"
   task_sessions:
     agent_harnesses: {}
+    agent_max_retries: 1
+    max_concurrent_agents: null
 
 trajectory_runner:
   command_timeout: 120

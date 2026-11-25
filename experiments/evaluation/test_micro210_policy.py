@@ -5,17 +5,18 @@ import hashlib
 import json
 import re
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import draccus
 import pytest
 import yaml
-from marin.execution.artifact import read_record
+from marin.execution.artifact import FingerprintMismatchError, read_record
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import PREPARED_INPUTS, micro210_step, run_micro210
+from experiments.evaluation.micro210 import PREPARED_INPUTS, micro210_step, native_binding_code_sha256, run_micro210
 from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
@@ -31,6 +32,7 @@ from tests.rl.micro210_fixture import policy_fixture_reference
 def policy_reference(monkeypatch):
     reference = policy_fixture_reference()
     monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", reference)
+    monkeypatch.setattr("experiments.evaluation.micro210.NATIVE_INPUTS_FINGERPRINT", None)
     return reference
 
 
@@ -81,6 +83,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
         "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
@@ -96,6 +99,23 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             str(tmp_path),
             runtime_args=step.runtime_args,
             deps=step.deps,
+        )
+    )
+    native_inputs_uri = yaml.safe_load(config.skyrl.launch_config_yaml)["inputs"]["validation_data"][0]["uri"]
+    native_root = Path(native_inputs_uri)
+    native_root.mkdir(parents=True)
+    native_bytes = b"native-prepared-task-fixture"
+    native_digest = hashlib.sha256(native_bytes).hexdigest()
+    (native_root / "rollouts.parquet").write_bytes(native_bytes)
+    (native_root / "binding.json").write_text(
+        json.dumps(
+            {
+                "source_sha256": protocol["prepared_rollouts_sha256"],
+                "native_sha256": native_digest,
+                "smoke_rows": [],
+                "converter_sha256": native_binding_code_sha256(),
+                "image_digests": json.loads(Path(__file__).with_name("micro210_images.json").read_text()),
+            }
         )
     )
     submitted = []
@@ -126,6 +146,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     assert all("test-together-key" not in str(value) for value in launch.values())
     record = draccus.decode(Micro210Record, json.loads((output / "canonical-evaluation.json").read_text()))
     assert record.canonical_spec_sha256 == hashlib.sha256(raw).hexdigest()
+    assert record.native_sha256 == native_digest
+    assert record.native_inputs_uri == native_inputs_uri
     assert (
         submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
@@ -143,6 +165,14 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     submitted.clear()
     with pytest.raises(ValueError, match="launch_config_yaml"):
         run_micro210(replace(config, skyrl=replace(config.skyrl, launch_config_yaml=yaml.safe_dump(altered))))
+    assert submitted == []
+    (native_root / "rollouts.parquet").write_bytes(b"changed-native-tasks")
+    with pytest.raises(ValueError, match="native task bytes changed"):
+        run_micro210(config)
+    assert submitted == []
+    (native_root / "rollouts.parquet").write_bytes(native_bytes)
+    with pytest.raises(ValueError, match="different smoke rows"):
+        run_micro210(replace(config, evaluation=replace(config.evaluation, smoke_rows=(1,))))
     assert submitted == []
     manifest_path = model_dir / ".marinskyrl-model-manifest.json"
     manifest_path.write_bytes(b'{"files": ["changed"]}')
@@ -219,3 +249,26 @@ def test_prepared_inputs_adopt_the_pinned_hugging_face_source():
     prepared = native.deps[0]
     assert prepared.adopt_source == PREPARED_INPUTS
     assert re.fullmatch(r"hf://datasets/open-athena/micro210-prepared-tasks@[0-9a-f]{40}", PREPARED_INPUTS)
+
+
+@pytest.mark.parametrize("change", ["image_lock", "converter"])
+def test_native_artifact_pin_rejects_conversion_drift(tmp_path, monkeypatch, change):
+    source = Path(__file__).with_name("micro210.py")
+    for name in ("micro210_images.json", "micro210_inputs.py", "micro210_policy.py"):
+        (tmp_path / name).write_bytes(source.with_name(name).read_bytes())
+    monkeypatch.setattr("experiments.evaluation.micro210.__file__", str(tmp_path / "micro210.py"))
+    model = Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
+    step = micro210_step(model, name="fixture/pinned-binding", version="2026.11.24")
+    native = next(dep for dep in step.deps if dep.name == "evaluation/micro210/native")
+    monkeypatch.setattr("experiments.evaluation.micro210.NATIVE_INPUTS_FINGERPRINT", native.fingerprint())
+    lower(micro210_step(model, name="fixture/pinned-binding", version="2026.11.24"))
+    lock_path = tmp_path / "micro210_images.json"
+    if change == "image_lock":
+        lock = json.loads(lock_path.read_text())
+        lock[next(iter(lock))] = "sha256:" + "f" * 64
+        lock_path.write_text(json.dumps(lock))
+    else:
+        converter = tmp_path / "micro210_inputs.py"
+        converter.write_text(converter.read_text() + "\n# changed converter fixture\n")
+    with pytest.raises(FingerprintMismatchError, match="expected_fingerprint pins"):
+        lower(micro210_step(model, name="fixture/pinned-binding", version="2026.11.24"))

@@ -421,8 +421,8 @@ class TaskRolloutWorker:
         agents: TaskAgentHarnesses | None = None,
         judge_connection: JudgeConnection | None = None,
         task_health_export: str | None = None,
-        agent_max_retries: int = 1,
-        max_concurrent_agents: int | None = None,
+        agent_max_retries: int,
+        max_concurrent_agents: int | None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
@@ -692,9 +692,9 @@ class TaskRolloutWorkerSpec:
             agents=agents,
             judge_connection=judge,
             task_health_export=str(self.config.trainer.export_path) if agents is not None else None,
-            agent_max_retries=int(task_sessions.get("agent_max_retries", 1)),
+            agent_max_retries=int(task_sessions.agent_max_retries),
             max_concurrent_agents=(
                 max(1, int(task_sessions.max_concurrent_agents) // shard.count)
-                if task_sessions.get("max_concurrent_agents") is not None else None
+                if task_sessions.max_concurrent_agents is not None else None
             ),
         )
