@@ -976,6 +976,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     preset_table, recorded_runs, monkeypatch, model, outcome, pr_number
 ):
     early_failure = outcome != "succeeded"
+    real_archive = model == "snowball" and not early_failure
     if model == "mochi":
         table = MOCHI
         preset = table.by_name["train-medium"]
@@ -986,8 +987,9 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         monkeypatch.setattr(snowball, "check_cache", lambda path: True)
     else:
         table = snowball_model.SNOWBALL
+        nominal = table.by_name["train-long"]
         preset = replace(
-            table.by_name["train-long"].with_updates(2),
+            nominal.with_updates(2),
             checkpoints="none",
             export="none",
             checkpoint_every=None,
@@ -1016,7 +1018,9 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     launch = receipt["config"]
     historical_launch = json.loads(json.dumps(launch))
     historical_launch["skyrl"]["trainer"]["max_steps"] += 1
-    historical_version = gate.config_version(historical_launch)
+    historical_version = (
+        gate.config_version(gate.compose_preset(nominal)) if real_archive else gate.config_version(historical_launch)
+    )
     client, job = fake_iris(monkeypatch, "index-coordinator")
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
@@ -1044,7 +1048,8 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
             assert argv[3:] == ["describe", f"experiments.post_training.{model}_rl", model, preset.name]
             assert (kwargs["cwd"] / "vendor/skyrl/cloud/iris/config_cli.py").is_file()
             assert str(kwargs["cwd"]) in kwargs["env"]["PYTHONPATH"]
-            return subprocess.CompletedProcess(argv, 0, json.dumps(historical_launch))
+            if not real_archive:
+                return subprocess.CompletedProcess(argv, 0, json.dumps(historical_launch))
         return subprocess.run(argv, **kwargs)
 
     monkeypatch.setattr(
@@ -1146,6 +1151,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     assert terminal.source_revision == f"base={source_ref} tree=tree-one"
     expected_base = None if outcome == "interrupted" else historical_version
     assert terminal.base_preset_version == expected_base
+    assert terminal.base_commit == (archive_tree if expected_base else None)
     assert terminal.preset_version == gate.config_version(launch) != historical_version
     assert all(row.base_preset_version == expected_base for row in running)
     if expected_base is None:
