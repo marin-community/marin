@@ -17,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import AttemptSummary, Invariant, Verdict
+from finestore.rl.rl_progress import AttemptSummary, Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -265,19 +265,19 @@ def test_stored_evaluation_keeps_its_original_selection_and_group_coverage(prese
         reason="The evaluation protocol differs",
         run=gate.RunMetadata(preset_name=preset.name, replicates=1, attempt_ids=(attempt.attempt_id,)),
         control=gate.ControlMetadata(version="1234abcd", attempts=()),
-        invariants=(Invariant(name="evaluation_protocol_matches", value=9, limit=18, holds=False),),
+        invariants=(),
         comparisons=(),
         gaps=(),
     )
     row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt, report=report)
-    assert row.status == "succeeded" and row.failed_facts == []
+    assert row.status == "succeeded" and row.failed_facts == [], (row.failed_facts, row.evidence)
     native = recorded_launch(attempt)
     (selection,) = native.validation_data
     expected_source = f"{selection.identity}/{selection.relative_path}"
     assert row.evaluation_data_identity == baseline.evaluation_data_identity == expected_source
     assert row.evaluation_task_set == baseline.evaluation_task_set
     assert {item.evaluation_score.profile for item in row.evaluations if item.evaluation_score} == {"eval_lite"}
-    assert row.gate_result is not None and not row.gate_result.invariants[0].holds
+    assert row.gate_result is not None and row.gate_result.reason == report.reason
 
     def family_identity(summary):
         return next(

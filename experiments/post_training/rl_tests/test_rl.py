@@ -724,6 +724,13 @@ def test_submission_exit_codes_and_publication_retries(
         ]
     )
     source = sources[0] if sources else None
+    if source is not None and preset.gated and not control:
+        cohort = cohort_from_fixtures(source)
+        monkeypatch.setattr(snowball, "_base_preset", lambda *_: ("commit-one", cohort.version))
+        built = replace(
+            built,
+            gate=gate.gate_step(preset, built.runs, inputs=built.inputs, cohort=cohort, group_name=built.group_name),
+        )
     if case != "child":
         for index, root in enumerate(sources):
             native = read_attempt(str(root / "exports"), f"native-{index}")
