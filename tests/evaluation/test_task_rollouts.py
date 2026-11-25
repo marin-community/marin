@@ -1872,6 +1872,12 @@ class UserTurnTokenizer(CharacterTokenizer):
     def __init__(self):
         self.template_kwargs = []
 
+    def encode(self, text, *, add_special_tokens=False):
+        # Like a BPE vocabulary, a leading-space letter is one token.
+        if len(text) == 2 and text[0] == " " and text[1].isalpha():
+            return [ord(text[1]) + 1000]
+        return super().encode(text, add_special_tokens=add_special_tokens)
+
     def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, **kwargs):
         assert not tokenize and add_generation_prompt
         self.template_kwargs.append(kwargs)
@@ -1907,8 +1913,8 @@ def rotated_choice_item(task):
     )
 
 
-@pytest.mark.asyncio
-async def test_user_turn_choice_terms_score_rendered_contexts_and_record_folded_choices(tmp_path, run_config):
+@pytest.fixture
+def rotated_corpus(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     (source / "rows.jsonl").write_text(json.dumps({"question": "x"}) + "\n")
@@ -1940,18 +1946,11 @@ async def test_user_turn_choice_terms_score_rendered_contexts_and_record_folded_
             publish_evaluation_corpus(recipe, protocol, rotated_choice_item, context, str(source), corpus)
     finally:
         client.shutdown()
-    tokenizer = UserTurnTokenizer()
-    scorer = TableScorer(
-        {
-            ("<user>x<assistant>", "A"): 0.2,
-            ("<user>x<assistant>", " A"): 0.1,
-            ("<user>y<assistant>", "B"): 0.3,
-            ("<user>x<assistant>", "B"): 0.4,
-            ("<user>y<assistant>", "A"): 0.2,
-        }
-    )
+    return corpus
+
+
+async def run_rotated(corpus, output, run_config, tokenizer, scorer):
     config = run_config.model_copy(update={"chat_template_kwargs": {"enable_thinking": False}})
-    output = str(tmp_path / "results")
     async with openai.AsyncOpenAI(api_key="test", base_url="http://fixture.test/v1") as unused:
         await run_evaluation(
             (corpus,),
@@ -1963,6 +1962,24 @@ async def test_user_turn_choice_terms_score_rendered_contexts_and_record_folded_
             likelihood=scorer,
         )
 
+
+@pytest.mark.asyncio
+async def test_user_turn_choice_terms_score_rendered_contexts_and_record_folded_choices(
+    tmp_path, run_config, rotated_corpus
+):
+    tokenizer = UserTurnTokenizer()
+    scorer = TableScorer(
+        {
+            ("<user>x<assistant>", "A"): 0.2,
+            ("<user>x<assistant>", " A"): 0.1,
+            ("<user>y<assistant>", "B"): 0.3,
+            ("<user>x<assistant>", "B"): 0.4,
+            ("<user>y<assistant>", "A"): 0.2,
+        }
+    )
+    output = str(tmp_path / "results")
+    await run_rotated(rotated_corpus, output, run_config, tokenizer, scorer)
+
     assert {context for context, _ in scorer.calls} == {"<user>x<assistant>", "<user>y<assistant>"}
     assert tokenizer.template_kwargs == [{"enable_thinking": False}] * 5
     (sample,) = [sample_from_archive_row(row) for row in ReadView(output).iter_rows(ARCHIVE_SAMPLES_TABLE)]
@@ -1971,3 +1988,24 @@ async def test_user_turn_choice_terms_score_rendered_contexts_and_record_folded_
     assert sample.model_choice == 0
     assert [choice.loglikelihood for choice in sample.choices] == pytest.approx([math.log(0.09), math.log(0.08)])
     assert sample.prompt_text == "<user>x<assistant>"
+
+
+class SplitSpellingTokenizer(UserTurnTokenizer):
+    def encode(self, text, *, add_special_tokens=False):
+        # Every letter spelling takes two tokens, so no pooled alternative can be scored.
+        return [0, *super().encode(text, add_special_tokens=add_special_tokens)]
+
+
+@pytest.mark.asyncio
+async def test_pooled_terms_without_a_single_token_spelling_are_invalid_and_send_no_requests(
+    tmp_path, run_config, rotated_corpus
+):
+    scorer = TableScorer({})
+    output = str(tmp_path / "results")
+
+    await run_rotated(rotated_corpus, output, run_config, SplitSpellingTokenizer(), scorer)
+
+    assert scorer.calls == []
+    (attempt,) = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert attempt["outcome"] == "invalid_task"
+    assert "encodes as one token" in attempt["error"]

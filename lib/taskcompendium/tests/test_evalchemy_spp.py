@@ -75,7 +75,8 @@ def test_constitution_terms_cancel_a_letter_prior_that_outweighs_content(tmp_pat
         # A strong preference for "A" in every order, a weak one for the gold option, half mass per spelling.
         return math.log(0.5 * (0.6 if letter == "A" else 0.1) * (1.2 if option == "Report it." else 1.0))
 
-    scores = operation.choice_scores([likelihood(r.context, r.continuation) for r in operation.requests])
+    likelihoods = [likelihood(r.context, r.continuation) for r in operation.requests]
+    scores = operation.choice_scores(likelihoods, (True,) * len(operation.requests))
 
     assert max(range(4), key=scores.__getitem__) == 0
 

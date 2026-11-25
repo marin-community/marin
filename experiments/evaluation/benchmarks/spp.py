@@ -8,8 +8,9 @@ log-probabilities after its own chat template; they are meant for chat models. N
 
 ``spp-constitution`` is ConstitutionEval: 678 four-option scenarios whose single gold option follows the SPP
 constitution, from `dlab-spp/constitution-eval` (CC-BY-4.0) at the harness's v1.4 pin. Each option sums the
-log of its first-token letter probability, pooled over the bare and leading-space spellings, across all four cyclic
-option orders. Accuracy is reported overall and by the dataset's difficulty band.
+log of its first-token letter probability, pooled over the bare and leading-space spellings that the served
+tokenizer encodes as one token, across all four cyclic option orders. Accuracy is reported overall and by the
+dataset's difficulty band.
 
 ``spp-airisk`` is the risky-choice rate on AIRiskDilemmas (Chiu et al., 2025), from the audited re-release
 `dlab-spp/airisk_dilemmas` (CC-BY-4.0) with audit-confirmed risk tags. The population is the 1,281 dilemmas of the

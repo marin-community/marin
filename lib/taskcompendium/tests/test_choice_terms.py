@@ -20,8 +20,10 @@ from taskcompendium.evaluation.spec import (
     MetricKind,
     SummaryKind,
     TrialPolicy,
+    UnscorableChoice,
 )
 
+ALL_SINGLE = (True,) * 5
 PROTOCOL = EvaluationProtocol(
     benchmark="terms",
     version="1",
@@ -52,12 +54,28 @@ ROTATED = ChoiceLikelihood(
 def test_pooled_spellings_change_the_selected_choice():
     likelihoods = tuple(map(math.log, (0.2, 0.1, 0.3, 0.4, 0.2)))
 
-    first, second = ROTATED.choice_scores(likelihoods)
+    first, second = ROTATED.choice_scores(likelihoods, ALL_SINGLE)
 
     assert first == pytest.approx(math.log(0.3 * 0.3))
     assert second == pytest.approx(math.log(0.4 * 0.2))
     # Without pooling, option 0 would score log(0.2 * 0.3) and lose to option 1.
-    assert likelihood_metrics(ROTATED, likelihoods, PROTOCOL) == {"acc": 1.0}
+    assert likelihood_metrics(ROTATED, likelihoods, PROTOCOL, single_token=ALL_SINGLE) == {"acc": 1.0}
+
+
+def test_pooling_drops_alternatives_the_tokenizer_splits():
+    # " A" is two tokens on this tokenizer, so option 0 keeps only the bare "A" in the first order.
+    likelihoods = tuple(map(math.log, (0.2, 0.1, 0.3, 0.4, 0.2)))
+    split_space = (True, False, True, True, True)
+
+    first, _ = ROTATED.choice_scores(likelihoods, split_space)
+
+    assert first == pytest.approx(math.log(0.2 * 0.3))
+    assert likelihood_metrics(ROTATED, likelihoods, PROTOCOL, single_token=split_space) == {"acc": 0.0}
+
+
+def test_a_pooled_group_without_a_single_token_alternative_is_unscorable():
+    with pytest.raises(UnscorableChoice, match="encodes as one token"):
+        ROTATED.scored_terms((False, False, True, True, True))
 
 
 def test_counterbalanced_ties_select_the_first_choice():

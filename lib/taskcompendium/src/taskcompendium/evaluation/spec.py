@@ -76,12 +76,18 @@ class LikelihoodContext(StrEnum):
 type ChoiceTerms = tuple[tuple[tuple[int, ...], ...], ...]
 
 
+class UnscorableChoice(ValueError):
+    """A pooled group has no continuation that the run's tokenizer encodes as one token."""
+
+
 class ChoiceLikelihood(EvaluationModel):
     """Score continuations; normalization uses the original choices, before adding the delimiter.
 
     Without ``terms``, request ``i`` scores choice ``i``. With ``terms``, choice ``i`` scores the sum over
     ``terms[i]`` of the log-sum-exp of each group's request likelihoods. Groups pool alternative spellings of
     one answer; summing groups combines prompt variants, such as option orders that cancel a position prior.
+    A group with several requests pools only the alternatives whose continuation the run's tokenizer encodes,
+    by itself, as one token, so it compares next-token probabilities on any tokenizer.
     """
 
     kind: Literal[OperationKind.CHOICE_LIKELIHOOD] = OperationKind.CHOICE_LIKELIHOOD
@@ -112,14 +118,39 @@ class ChoiceLikelihood(EvaluationModel):
             raise ValueError("Choice terms must cover every choice with nonempty groups that use every request")
         return self
 
-    def choice_scores(self, likelihoods: Sequence[float]) -> tuple[float, ...]:
+    def pooled_requests(self) -> frozenset[int]:
+        """Requests in groups that pool several alternatives."""
+        return frozenset(index for choice in self.terms for group in choice if len(group) > 1 for index in group)
+
+    def scored_terms(self, single_token: Sequence[bool] | None) -> ChoiceTerms:
+        """The terms without pooled alternatives whose continuation is not one token under the run's tokenizer."""
+        if not self.pooled_requests():
+            return self.terms
+        if single_token is None or len(single_token) != len(self.requests):
+            raise ValueError("Pooled choice terms require a single-token flag for every request")
+
+        def kept(group: tuple[int, ...]) -> tuple[int, ...]:
+            if len(group) == 1:
+                return group
+            members = tuple(index for index in group if single_token[index])
+            if not members:
+                spellings = [self.requests[index].continuation for index in group]
+                raise UnscorableChoice(f"No pooled continuation in {spellings!r} encodes as one token")
+            return members
+
+        return tuple(tuple(kept(group) for group in choice) for choice in self.terms)
+
+    def choice_scores(
+        self, likelihoods: Sequence[float], single_token: Sequence[bool] | None = None
+    ) -> tuple[float, ...]:
         """Fold per-request log-likelihoods into one score per choice."""
         if len(likelihoods) != len(self.requests):
             raise ValueError("Choice scoring requires one likelihood per request")
         if not self.terms:
             return tuple(likelihoods)
         return tuple(
-            math.fsum(_log_sum_exp([likelihoods[index] for index in group]) for group in choice) for choice in self.terms
+            math.fsum(_log_sum_exp([likelihoods[index] for index in group]) for group in choice)
+            for choice in self.scored_terms(single_token)
         )
 
 

@@ -16,6 +16,7 @@ from taskcompendium.evaluation.corpus import EvaluationCase, EvaluationCorpus, T
 from taskcompendium.evaluation.spec import (
     AgentEpisode,
     ChatGeneration,
+    ChoiceLikelihood,
     CohortOrder,
     CohortPolicy,
     ContextPolicy,
@@ -46,6 +47,19 @@ def user_turn_context(tokenizer: EvaluationTokenizer, text: str, chat_template_k
     if not isinstance(rendered, str):
         raise TypeError("The tokenizer returned token ids for an untokenized chat template")
     return rendered
+
+
+def single_token_flags(operation: ChoiceLikelihood, tokenizer: EvaluationTokenizer | None) -> tuple[bool, ...] | None:
+    """Whether each pooled request's continuation encodes, by itself, as one token; ``None`` when nothing pools."""
+    pooled = operation.pooled_requests()
+    if not pooled:
+        return None
+    if tokenizer is None:
+        raise ValueError("Pooled choice terms require the run's pinned tokenizer")
+    return tuple(
+        index not in pooled or len(tokenizer.encode(request.continuation, add_special_tokens=False)) == 1
+        for index, request in enumerate(operation.requests)
+    )
 
 
 class SelectionStatus(StrEnum):

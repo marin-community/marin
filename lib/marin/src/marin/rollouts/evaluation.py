@@ -75,6 +75,7 @@ from taskcompendium.evaluation.selection import (
     EvaluationTokenizer,
     Selection,
     select_cases,
+    single_token_flags,
     user_turn_context,
     wire_messages,
 )
@@ -94,6 +95,7 @@ from taskcompendium.evaluation.spec import (
     OperationKind,
     PiAgent,
     TextGeneration,
+    UnscorableChoice,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.identity import canonical_sha256
@@ -598,16 +600,20 @@ async def _score_likelihood(
     requests = operation.requests if isinstance(operation, ChoiceLikelihood) else (operation.request,)
     user_turn = isinstance(operation, ChoiceLikelihood) and operation.context_format is LikelihoodContext.USER_TURN
     contexts = _likelihood_contexts(requests, user_turn, tokenizer, chat_template_kwargs)
+    single_token = single_token_flags(operation, tokenizer) if isinstance(operation, ChoiceLikelihood) else None
     results = []
     failure_evidence = None
     permanent_error = None
     outcome = Outcome.GRADED
     error = None
     try:
+        if isinstance(operation, ChoiceLikelihood):
+            # Reject a pooled group with no single-token alternative before sending any request.
+            operation.scored_terms(single_token)
         async with asyncio.timeout(timeout):
             for context, request in zip(contexts, requests, strict=True):
                 results.append(await scorer(context, request.continuation, seed=attempt.seed))
-    except InvalidLikelihoodRequest as failure:
+    except (InvalidLikelihoodRequest, UnscorableChoice) as failure:
         outcome = Outcome.INVALID_TASK
         error = str(failure)
     except (APIError, LikelihoodTransportError, TimeoutError) as failure:
@@ -626,6 +632,7 @@ async def _score_likelihood(
             tuple(result.loglikelihood for result in results),
             protocol,
             is_greedy=tuple(result.is_greedy for result in results),
+            single_token=single_token,
         )
         if outcome is Outcome.GRADED
         else {}
@@ -633,7 +640,7 @@ async def _score_likelihood(
     primary = metrics.get(protocol.primary_metric)
     complete = outcome is Outcome.GRADED and len(results) == len(requests)
     choice_scores = (
-        operation.choice_scores(tuple(result.loglikelihood for result in results))
+        operation.choice_scores(tuple(result.loglikelihood for result in results), single_token)
         if isinstance(operation, ChoiceLikelihood) and complete
         else None
     )

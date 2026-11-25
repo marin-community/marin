@@ -120,7 +120,8 @@ function when you need either; `importers/evalchemy/spp.py` uses both.
   prompt and the run's `chat_template_kwargs`. The corpus stays model-agnostic.
 - `terms` maps several requests to each choice. Choice `i` scores the sum over
   `terms[i]` of the log-sum-exp of each group's request log-likelihoods. A group
-  pools alternative spellings of one answer, such as `"A"` and `" A"`. Summing
+  pools alternative spellings of one answer, such as `"A"` and `" A"`; it keeps
+  only those the run's tokenizer encodes, by itself, as one token. Summing
   groups combines prompt variants, such as every cyclic option order, so a
   fixed preference for one letter or position cancels.
 
