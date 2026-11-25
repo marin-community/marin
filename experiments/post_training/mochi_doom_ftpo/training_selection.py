@@ -18,17 +18,22 @@ from taskcompendium.evaluation.corpus import parquet_rows
 from taskcompendium.models import TaskSpec
 
 from experiments.post_training.mochi_doom_ftpo.cohorts import publish_task_files
-from experiments.post_training.mochi_doom_ftpo.constants import REGIONAL_ROOT, SELECTION_NAME, SELECTION_ROOT, VERSION
+from experiments.post_training.mochi_doom_ftpo.constants import (
+    REGIONAL_ROOT,
+    SELECTION_NAME,
+    SELECTION_ROOT,
+    STRUCT_COMPONENTS,
+    TRAIN_BATCH_SIZE,
+    VERSION,
+)
 from experiments.post_training.mochi_doom_ftpo.grades import full_credit_task
 
 logger = logging.getLogger(__name__)
-BATCH_SIZE = 64
 DOMAIN_POOL_LIMIT = 4000
-STRUCT_COMPONENTS = ("calendar", "closure")
 
 
 def training_groups(statuses: Mapping[str, str]) -> dict[str, int]:
-    """Return 64 per-batch prompt counts, approximating math 2 : each other target 1."""
+    """Return family prompt counts totaling 64, approximating math 2 : each other target 1."""
     if any(status not in ("target", "non-target") for status in statuses.values()):
         raise ValueError("training requires a sealed baseline, including all required reserve evaluations")
     weights = {
@@ -36,9 +41,9 @@ def training_groups(statuses: Mapping[str, str]) -> dict[str, int]:
         **{name: 1 for name, status in statuses.items() if name not in ("math16k", "math32k") and status == "target"},
     }
     total = sum(weights.values())
-    counts = {name: BATCH_SIZE * weight // total for name, weight in weights.items()}
-    order = sorted(weights, key=lambda name: (-(BATCH_SIZE * weights[name] % total), name))
-    for name in order[: BATCH_SIZE - sum(counts.values())]:
+    counts = {name: TRAIN_BATCH_SIZE * weight // total for name, weight in weights.items()}
+    order = sorted(weights, key=lambda name: (-(TRAIN_BATCH_SIZE * weights[name] % total), name))
+    for name in order[: TRAIN_BATCH_SIZE - sum(counts.values())]:
         counts[name] += 1
     return counts
 
@@ -55,7 +60,9 @@ def selected_training(rows: list[dict[str, Any]], groups: Mapping[str, int]) -> 
         if family == "math":
             continue
         if family == "struct32k":
-            component_count = min(DOMAIN_POOL_LIMIT // 2, *(len(pools[name]) for name in STRUCT_COMPONENTS))
+            component_count = min(
+                DOMAIN_POOL_LIMIT // len(STRUCT_COMPONENTS), *(len(pools[name]) for name in STRUCT_COMPONENTS)
+            )
             selected.extend(
                 dict(row, family=family) for name in STRUCT_COMPONENTS for row in pools[name][:component_count]
             )

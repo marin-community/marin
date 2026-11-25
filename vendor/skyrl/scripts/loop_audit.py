@@ -18,9 +18,10 @@ from skyrl_train.config.reward_shaping import LoopCreditConfig
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import tail_loop
 from verifyit.tool_call_markup import THINK_CLOSE, THINK_OPEN
 from skyrlrecipe.cohort_identity import cohort_hash, prompt_hash
+from experiments.post_training.mochi_doom_ftpo.constants import (
+    EXTENDED_PANEL_ROWS, INITIAL_PANEL_ROWS, MINIMUM_LOOP_OCCURRENCES,
+)
 
-INITIAL_PANEL_ROWS = 128
-EXTENDED_PANEL_ROWS = 256
 MINIMUM_TARGET_LOOPS = 10
 
 
@@ -55,7 +56,8 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> I
             raise ValueError(f"multiple generations for cohort task {task_id}; select one evaluation session")
         indexed[task_id] = row
     config = LoopCreditConfig(
-        max_period_tokens=cohort["max_period_tokens"], tail_tokens=cohort["budget"], minimum_occurrences=8
+        max_period_tokens=cohort["max_period_tokens"], tail_tokens=cohort["budget"],
+        minimum_occurrences=MINIMUM_LOOP_OCCURRENCES,
     )
     confirmed = unassessed = passes = unavailable = errors = length_stop = open_think = 0
     lengths = []
@@ -83,10 +85,10 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> I
             confirmed += 1
         verification = row.get("verification") or {}
         status = verification.get("status")
-        grader_error = status == "error" or bool(row.get("exception_type")) or bool(row.get("server_error"))
-        errors += int(grader_error)
-        unavailable += int(not grader_error and (status != "verified" or type(verification.get("passed")) is not bool))
-        passes += int(not damaged and not grader_error and status == "verified" and verification.get("passed") is True)
+        row_error = status == "error" or bool(row.get("exception_type")) or bool(row.get("server_error"))
+        errors += int(row_error)
+        unavailable += int(not row_error and (status != "verified" or type(verification.get("passed")) is not bool))
+        passes += int(not damaged and not row_error and status == "verified" and verification.get("passed") is True)
         if valid_tokens:
             lengths.append(len(tokens))
         at_cap = row.get("stop_reason") in ("length", "max_tokens", "max_length") or (

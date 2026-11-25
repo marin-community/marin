@@ -12,7 +12,7 @@ from taskcompendium.pipeline.models import RawRow
 from transformers import AutoTokenizer
 
 from experiments.post_training.mochi_doom_ftpo.cohorts import prompt_tokens
-from experiments.post_training.mochi_doom_ftpo.launch import config
+from experiments.post_training.mochi_doom_ftpo.launch import generation_config
 from experiments.post_training.task_curation.datasets.skyrl.math import convert_dapo_math
 
 
@@ -37,14 +37,14 @@ def test_cohort_hashing_includes_the_native_answer_format_instruction(gpt2_token
     assert prompt_tokens(task, tokenizer) == tokenizer.encode(expected, add_special_tokens=False)
 
 
-def test_long_single_turn_measurement_reaches_its_token_limit_without_an_inherited_model_deadline():
+def test_audit_runtime_keeps_token_bounds_without_wall_clock_cutoffs():
     defaults = yaml.safe_load(
         (
             Path(__file__).resolve().parents[2]
             / "vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml"
         ).read_text()
     )
-    patch = config(32768, 3e-6, training=False).to_skyrl()
+    patch = generation_config(32768).to_skyrl()
     session = {**defaults["task_spec"]["session"], **patch["environment"]["task_sessions"]["task_spec"]["session"]}
     limits = RolloutLimits.model_validate(
         {name: value for name, value in session.items() if name in RolloutLimits.model_fields}

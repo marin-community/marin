@@ -33,9 +33,17 @@ from experiments.post_training.mochi_doom_ftpo.constants import (
     CORPUS,
     DAPO_REVISION,
     DAPO_ROOT,
+    EXTENDED_PANEL_ROWS,
+    INITIAL_PANEL_ROWS,
+    MATH16K_ROWS,
+    MAX_PROMPT_TOKENS,
+    MINIMUM_LOOP_OCCURRENCES,
+    PILOT_DOMAIN_ROWS,
+    PILOT_MATH_ROWS,
     REGIONAL_ROOT,
     SELECTION_NAME,
     SELECTION_ROOT,
+    STRUCT_COMPONENTS,
     TOKENIZER,
     TOKENIZER_REVISION,
     VERSION,
@@ -106,19 +114,20 @@ def freeze(candidates: list[Candidate]) -> tuple[dict[str, list[Candidate]], lis
     for values in groups.values():
         values.sort(key=lambda row: (row.source_priority, row.prompt_hash))
     original_math = [row for row in groups["math"] if row.original_validation]
-    if len(original_math) != 512:
-        raise ValueError(f"Original math cohort has {len(original_math)} eligible prompts; expected 512")
-    cohorts = {"math16k": original_math, "math32k": original_math[:256]}
+    if len(original_math) != MATH16K_ROWS:
+        raise ValueError(f"Original math cohort has {len(original_math)} eligible prompts; expected {MATH16K_ROWS}")
+    cohorts = {"math16k": original_math, "math32k": original_math[:EXTENDED_PANEL_ROWS]}
     for domain in ("if32k", "code32k", "rgym32k", "mcq32k"):
-        if len(groups[domain]) < 256:
+        if len(groups[domain]) < EXTENDED_PANEL_ROWS:
             raise ValueError(f"{domain} has only {len(groups[domain])} eligible prompts")
-        cohorts[domain] = groups[domain][:256]
-    for domain in ("calendar", "closure"):
-        if len(groups[domain]) < 128:
+        cohorts[domain] = groups[domain][:EXTENDED_PANEL_ROWS]
+    component_rows = EXTENDED_PANEL_ROWS // len(STRUCT_COMPONENTS)
+    for domain in STRUCT_COMPONENTS:
+        if len(groups[domain]) < component_rows:
             raise ValueError(f"{domain} has only {len(groups[domain])} eligible prompts")
-    # Alternate the two components so prefixes preserve the 64:64 and 128:128 balance.
+    # Alternate components so initial and extended cohorts stay balanced.
     cohorts["struct32k"] = [
-        row for pair in zip(groups["calendar"][:128], groups["closure"][:128], strict=True) for row in pair
+        row for pair in zip(*(groups[name][:component_rows] for name in STRUCT_COMPONENTS), strict=True) for row in pair
     ]
     held_hashes = {row.prompt_hash for values in cohorts.values() for row in values}
     held_ids = {row.task.id for values in cohorts.values() for row in values}
@@ -169,10 +178,20 @@ def publish_task_files(
 
 def _publish(root: str, cohorts: dict[str, list[Candidate]], training: list[Candidate], provenance: dict) -> None:
     all_eval = {row.task.id: row for values in cohorts.values() for row in values}
-    initial_panel = [row for domain, values in cohorts.items() if domain != "math16k" for row in values[:128]]
-    reserve = [row for domain, values in cohorts.items() if domain != "math16k" for row in values[128:256]]
-    pilot = cohorts["math16k"][:64] + [
-        row for domain, values in cohorts.items() if domain not in ("math16k", "math32k") for row in values[:16]
+    initial_panel = [
+        row for domain, values in cohorts.items() if domain != "math16k" for row in values[:INITIAL_PANEL_ROWS]
+    ]
+    reserve = [
+        row
+        for domain, values in cohorts.items()
+        if domain != "math16k"
+        for row in values[INITIAL_PANEL_ROWS:EXTENDED_PANEL_ROWS]
+    ]
+    pilot = cohorts["math16k"][:PILOT_MATH_ROWS] + [
+        row
+        for domain, values in cohorts.items()
+        if domain not in ("math16k", "math32k")
+        for row in values[:PILOT_DOMAIN_ROWS]
     ]
     files = {
         "train": training,
@@ -204,11 +223,13 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     configure_coreweave_s3()
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER, revision=TOKENIZER_REVISION)
     selection_recipe = json.loads(args.recipe.read_text())
+    if selection_recipe["version"] != VERSION:
+        raise ValueError("Cohort recipe and publication versions must agree")
     math_sources = {source for source, domain in selection_recipe["sources"].items() if domain == "math"}
     if math_sources != {"MarinSkyRL:dapo_math"}:
         raise ValueError("This campaign requires the recovered, pinned DAPO math split")
+    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER, revision=TOKENIZER_REVISION)
     source_domains = {key: value for key, value in selection_recipe["sources"].items() if value != "math"}
     corpus = json.loads(StoragePath(args.corpus).read_text())
     admitted = json.loads(StoragePath(ADMITTED_SELECTION).read_text())
@@ -236,7 +257,7 @@ def main() -> None:
             counts[f"{domain}/nonprogrammatic"] += 1
             return
         tokens = prompt_tokens(task, tokenizer)
-        if len(tokens) > 2048:
+        if len(tokens) > MAX_PROMPT_TOKENS:
             counts[f"{domain}/over2048"] += 1
             return
         digest = prompt_hash(tokens)
@@ -296,14 +317,14 @@ def main() -> None:
     manifest = {**provenance, "cohorts": {}}
     for domain, values in cohorts.items():
         budget = 16384 if domain == "math16k" else 32768
-        active = values if domain == "math16k" else values[:128]
+        active = values if domain == "math16k" else values[:INITIAL_PANEL_ROWS]
         rows = [{"task_id": row.task.id, "prompt_hash": row.prompt_hash} for row in active]
         reserve = [{"task_id": row.task.id, "prompt_hash": row.prompt_hash} for row in values[len(active) :]]
         manifest["cohorts"][domain] = {
             "rows": rows,
             "reserve": reserve,
             "budget": budget,
-            "max_period_tokens": budget // 8,
+            "max_period_tokens": budget // MINIMUM_LOOP_OCCURRENCES,
             "cohort_hash": cohort_hash(row["prompt_hash"] for row in rows),
         }
     (StoragePath(args.output) / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

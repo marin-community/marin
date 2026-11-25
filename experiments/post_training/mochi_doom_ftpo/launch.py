@@ -15,10 +15,14 @@ from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import mochi_rl, rl
 from experiments.post_training.mochi_doom_ftpo.constants import (
+    MAX_PROMPT_TOKENS,
+    MINIMUM_LOOP_OCCURRENCES,
+    PILOT_MAX_PASS_RATE_DROP,
     REGIONAL_ROOT,
     SELECTION_NAME,
     TOKENIZER,
     TOKENIZER_REVISION,
+    TRAIN_BATCH_SIZE,
     VERSION,
 )
 from experiments.post_training.rl_presets import (
@@ -51,8 +55,8 @@ TRAIN_PLAN = SkyRLRolePlan(
     inference_engine_pipeline_parallel_size=1,
     inference_engine_data_parallel_size=16,
     inference_engine_expert_parallel_size=16,
-    train_batch_size=64,
-    policy_mini_batch_size=64,
+    train_batch_size=TRAIN_BATCH_SIZE,
+    policy_mini_batch_size=TRAIN_BATCH_SIZE,
     micro_train_batch_size_per_gpu=1,
     n_samples_per_prompt=1,
     entrypoint="taskcompendium",
@@ -122,17 +126,18 @@ def evaluation(
     )
 
 
-def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
-    base = mochi_rl._ONE_TURN.merge(
+def rollout_config(budget: int, logprobs: int) -> RecipePatch:
+    """Configure one token-bounded turn with exact-response retention."""
+    return mochi_rl._ONE_TURN.merge(
         RecipePatch(
             context_budget=ContextBudget(
-                request_window_tokens=budget + 2048, max_new_tokens_per_turn=budget, max_turns=1
+                request_window_tokens=budget + MAX_PROMPT_TOKENS, max_new_tokens_per_turn=budget, max_turns=1
             ),
             trainer=sections.Trainer(
                 project_name="mochi-doom-ftpo",
                 use_sample_packing=False,
                 rollout_buffer=sections.RolloutBuffer(
-                    max_staleness_steps=0, batch_policy="full_batch", max_in_flight=64
+                    max_staleness_steps=0, batch_policy="full_batch", max_in_flight=TRAIN_BATCH_SIZE
                 ),
             ),
             environment=sections.Environment(
@@ -149,12 +154,14 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
             generator=sections.Generator(
                 max_num_seqs=64,
                 engine_init_timeout_seconds=7200,
-                sampling_params=sections.SamplingParams(
-                    temperature=0.0, top_p=1.0, top_k=-1, logprobs=32 if training else 0
-                ),
+                sampling_params=sections.SamplingParams(temperature=0.0, top_p=1.0, top_k=-1, logprobs=logprobs),
                 trajectory_reward_shaping=sections.TrajectoryRewardShaping(
                     enabled=False,
-                    loop=sections.Loop(max_period_tokens=budget // 8, tail_tokens=budget, minimum_occurrences=8),
+                    loop=sections.Loop(
+                        max_period_tokens=budget // MINIMUM_LOOP_OCCURRENCES,
+                        tail_tokens=budget,
+                        minimum_occurrences=MINIMUM_LOOP_OCCURRENCES,
+                    ),
                 ),
                 trajectory_retention=mochi_rl.SAMPLED_TRAJECTORIES.replace(
                     sample_fraction=0.0,
@@ -168,16 +175,23 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
             extra_env={"NCCL_MAX_CTAS": "4", "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
         )
     )
-    if not training:
-        return base.merge(
-            RecipePatch(
-                trainer=sections.Trainer(
-                    logger=("console", "records"),
-                    policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(moe_router_replay=False)),
-                    ref=sections.Ref(megatron_config=sections.RefMegatronConfig(moe_router_replay=False)),
-                )
+
+
+def generation_config(budget: int) -> RecipePatch:
+    """Configure saved-model measurement."""
+    return rollout_config(budget, logprobs=0).merge(
+        RecipePatch(
+            trainer=sections.Trainer(
+                logger=("console", "records"),
+                policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(moe_router_replay=False)),
+                ref=sections.Ref(megatron_config=sections.RefMegatronConfig(moe_router_replay=False)),
             )
         )
+    )
+
+
+def training_config(budget: int, lr: float) -> RecipePatch:
+    """Configure FTPO with Mochi's MuonH optimizer and router replay."""
     transformer = {
         "bias_activation_fusion": True,
         "grug_checkpoint_cpu_offload": True,
@@ -185,7 +199,7 @@ def config(budget: int, lr: float, *, training: bool) -> RecipePatch:
         "recompute_method": "uniform",
         "recompute_num_layers": 1,
     }
-    return base.merge(
+    return rollout_config(budget, logprobs=32).merge(
         RecipePatch(
             config_groups=sections.ConfigGroups(algorithm_recipe="ftpo"),
             trainer=sections.Trainer(
@@ -242,7 +256,7 @@ BASELINE = Preset(
     recipe=Recipe(
         layout=BASELINE_LAYOUT,
         fixed_reply_tokens=None,
-        config=config(32768, 3e-6, training=False),
+        config=generation_config(32768),
         training_plan=TRAIN_PLAN,
     ),
     updates=0,
@@ -290,14 +304,20 @@ MATH = replace(
     BASELINE,
     name="doom-math",
     tasks=f"{SELECTION_NAME}-math@{VERSION}",
-    recipe=Recipe(layout=TRAIN_LAYOUT, fixed_reply_tokens=None, config=config(16384, 3e-6, training=True)),
+    recipe=Recipe(layout=TRAIN_LAYOUT, fixed_reply_tokens=None, config=training_config(16384, 3e-6)),
     updates=12,
     measured=range(1, 13),
     checkpoints="best",
     checkpoint_every=3,
     checkpoint_selection_metric="eval/all/ftpo_selection_score",
-    checkpoint_preservation_max_drop={"eval/all/fail_closed_pass_rate": 0.05},
-    additional_callbacks=(FtpoPilotCallback(type="ftpo_pilot", patience_evaluations=2, max_pass_rate_drop=0.05),),
+    checkpoint_preservation_max_drop={"eval/all/fail_closed_pass_rate": PILOT_MAX_PASS_RATE_DROP},
+    additional_callbacks=(
+        FtpoPilotCallback(
+            type="ftpo_pilot",
+            patience_evaluations=2,
+            max_pass_rate_drop=PILOT_MAX_PASS_RATE_DROP,
+        ),
+    ),
     export="best",
     evaluations=(evaluation("pilot", "validation", 16384, every=3, at_start=True),),
 )
@@ -310,7 +330,7 @@ SMOKE = replace(
     checkpoints="latest",
     export="latest",
     additional_callbacks=(),
-    recipe=replace(MATH.recipe, config=config(32768, 3e-6, training=True)),
+    recipe=replace(MATH.recipe, config=training_config(32768, 3e-6)),
     evaluations=(evaluation("pilot", "validation", 32768, every=1, at_start=True),),
 )
 MIXED = replace(MATH, name="doom-mixed", tasks=f"{SELECTION_NAME}@{VERSION}", tasks_input="required")
@@ -324,13 +344,13 @@ LONG = replace(
     tasks_input="required",
     updates=4,
     measured=range(1, 5),
-    recipe=replace(SMOKE.recipe, config=config(32768, 6e-7, training=True)),
+    recipe=replace(SMOKE.recipe, config=training_config(32768, 6e-7)),
 )
 LONG_PP16 = replace(LONG, name="doom-long-pp16", recipe=replace(LONG.recipe, layout=PP16_LAYOUT))
 LONG_16K = replace(
     LONG,
     name="doom-long-16k",
-    recipe=replace(LONG.recipe, config=config(16384, 6e-7, training=True)),
+    recipe=replace(LONG.recipe, config=training_config(16384, 6e-7)),
     evaluations=(evaluation("pilot", "validation", 16384, every=1, at_start=True),),
 )
 EVAL = replace(BASELINE, name="doom-eval", recipe=replace(BASELINE.recipe, layout=EVAL_LAYOUT))
