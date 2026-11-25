@@ -165,10 +165,11 @@ class EffectiveServing:
 
 
 # This standard set includes families consumed by Marin's inference dashboards or needed for
-# basic serving diagnosis: request volume, latency, scheduler pressure, KV-cache use, and
-# preemption. Selection is made per complete Prometheus family and was sized against Marin's
-# pinned GPU and TPU vLLM definitions using representative label cardinalities. Add a family
-# only for a concrete consumer, and recheck that the complete selected scrape fits the limit.
+# basic serving diagnosis: request volume, latency, scheduler pressure, KV-cache use, prefix-cache
+# hit rate (hits / queries, both counted in tokens), and preemption. Selection is made per complete
+# Prometheus family and was sized against Marin's pinned GPU and TPU vLLM definitions using
+# representative label cardinalities. Add a family only for a concrete consumer, and recheck that
+# the complete selected scrape fits the limit.
 STANDARD_VLLM_METRIC_FAMILIES = frozenset(
     {
         "vllm:e2e_request_latency_seconds",
@@ -178,6 +179,8 @@ STANDARD_VLLM_METRIC_FAMILIES = frozenset(
         "vllm:num_preemptions",
         "vllm:num_requests_running",
         "vllm:num_requests_waiting",
+        "vllm:prefix_cache_hits",
+        "vllm:prefix_cache_queries",
         "vllm:prompt_tokens",
         "vllm:request_queue_time_seconds",
         "vllm:request_success",
