@@ -82,8 +82,21 @@ def verify_repo_state(repo_root: Path, inputs: DeclarationInputs) -> str:
     the checkout may sit at that commit or any descendant (pipeline fixes land after
     the plan), because the checkout's HEAD sha cannot appear inside its own plan
     document. Source drift between the pin and the checkout is what the declaration
-    fingerprint checks refuse, not this shape check.
+    fingerprint checks refuse, not this shape check. In the in-region bundle mode
+    (ATLAS_RELEASE_SOURCE_REVISION set), the submitter attests the workspace is a
+    clean snapshot at that revision and the git checks cannot run; the guard's
+    landing-log verification carries the landed attestation.
     """
+    from experiments.post_training.task_curation.release_stages.guard import (  # noqa: PLC0415 — avoids the guard/declarations cycle at module load
+        attested_revision,
+    )
+
+    attested = attested_revision()
+    if attested is not None:
+        # The submitter built the bundle at the plan tip (which contains the pin by
+        # construction, verified pre-submission) and the guard verifies the revision
+        # is landed through the bundled landing log.
+        return attested
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()

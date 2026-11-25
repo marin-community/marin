@@ -223,16 +223,22 @@ def run_backend_validation(
         manifest_ref = seal(f"{inputs.output_root}/backend-census-manifest.json", manifest)
         # The extracting checkout may sit at any descendant of the pinned revision
         # (pipeline fixes land after the plan); state the revision directly instead of
-        # demanding checkout-HEAD equality, and verify the containment here.
-        pinned = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", inputs.source_revision, "HEAD"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
+        # demanding checkout-HEAD equality. In the in-region bundle mode the submitter
+        # attests the containment (the guard verifies the revision is landed).
+        from experiments.post_training.task_curation.release_stages.guard import (  # noqa: PLC0415 — beside its only use
+            attested_revision,
         )
-        if pinned.returncode != 0:
-            raise ValueError(f"checkout HEAD does not contain the plan's pinned revision {inputs.source_revision}")
+
+        if attested_revision() is None:
+            pinned = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", inputs.source_revision, "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if pinned.returncode != 0:
+                raise ValueError(f"checkout HEAD does not contain the plan's pinned revision {inputs.source_revision}")
         receipt = run_validation(
             ValidationInputs(
                 release_id=inputs.release_id,

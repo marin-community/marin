@@ -85,8 +85,24 @@ def _git(repo_root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+ATTESTED_REVISION_ENV = "ATLAS_RELEASE_SOURCE_REVISION"
+
+
+def attested_revision() -> str | None:
+    """The landing revision the submitter attested (the in-region bundle mode).
+
+    The Iris bundle is a copied workspace, not a git checkout, so the run's
+    revision cannot be read from the checkout; the submitter passes it explicitly
+    and the entry point validates it against the plan before setting the variable.
+    """
+    return os.environ.get(ATTESTED_REVISION_ENV) or None
+
+
 def repo_head(repo_root: Path) -> str:
-    """The current checkout's HEAD sha."""
+    """The current checkout's HEAD sha, or the submitter-attested revision."""
+    attested = attested_revision()
+    if attested is not None:
+        return attested
     return _git(repo_root, "rev-parse", "HEAD")
 
 
@@ -133,11 +149,18 @@ def assert_stage_sources_landed(repo_root: Path, package_dir: Path = PACKAGE_DIR
     expected_parent = (repo_root / "experiments/post_training/task_curation").resolve()
     if resolved != expected_parent / "release_stages":
         raise ValueError(
-            "stage sources must live under experiments/post_training/task_curation/release_stages/:" f" {resolved}"
+            f"stage sources must live under experiments/post_training/task_curation/release_stages/: {resolved}"
         )
     head = repo_head(repo_root)
     if sha_in_landing_log(head):
         return
+    if attested_revision() is not None:
+        # The in-region bundle: the landing log travels with the job (ATLAS_PUSH_LOG);
+        # origin/merge-base are unreachable from a copied workspace.
+        raise ValueError(
+            f"the attested revision {head} is not in the landing log"
+            f" ({landing_log_path()}); the submitter must bundle the landing log"
+        )
     tip = atlas_landed_tip(repo_root)
     if not sha_is_ancestor(head, tip, repo_root):
         raise ValueError(

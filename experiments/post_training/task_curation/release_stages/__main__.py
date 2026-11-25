@@ -7,6 +7,11 @@ One command drives the whole release graph (DESIGN.md §1):
 
     atlas-release --version <release-id> --plan <release-plan.json> <mode>
 
+In-region runs (an Iris bundle is a copied workspace, not a git checkout) pass
+``--source-revision <landed-sha>``: the entry point validates it against the plan and
+against the bundled landing log, and every helper that would read the checkout's HEAD
+uses it instead.
+
 Modes:
 
 - ``plan``      — resolve the plan, lower the graph and print every node; I/O-free.
@@ -29,6 +34,7 @@ release configuration, and release-identifying values never appear in stage sour
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -39,8 +45,8 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.step_status import read_step_status
 
+from experiments.post_training.task_curation.release_stages import guard, preflight_slices
 from experiments.post_training.task_curation.release_stages import preflight as preflight_module
-from experiments.post_training.task_curation.release_stages import preflight_slices
 from experiments.post_training.task_curation.release_stages.graph import (
     REPO_ROOT,
     PreflightPolicy,
@@ -62,6 +68,28 @@ def _plan_document(args) -> ReleasePlan:
     if args.version is not None and plan.release_id != args.version:
         raise ValueError(f"the plan binds release {plan.release_id!r}, not {args.version!r}")
     return plan
+
+
+def _attest_revision(args, plan: ReleasePlan) -> None:
+    """Validate and export the submitter-attested revision for the in-region bundle mode."""
+    if getattr(args, "source_revision", None) is None:
+        return
+    revision = args.source_revision
+    if plan.source_revision != revision:
+        import subprocess  # noqa: PLC0415 — the local (git) validation path
+
+        pinned = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", plan.source_revision, revision],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pinned.returncode != 0:
+            raise ValueError(
+                f"the attested revision {revision} does not contain the plan's pinned revision {plan.source_revision}"
+            )
+    os.environ[guard.ATTESTED_REVISION_ENV] = revision
 
 
 def _selected_nodes(graph: ReleaseGraph, stages: list[str] | None) -> list[str]:
@@ -129,6 +157,7 @@ def mode_run(args, *, force_run_failed: bool) -> int:
     """The submission path: guard, per-stage preflight gate, then the lazy graph."""
     configure_coreweave_s3()
     plan = _plan_document(args)
+    _attest_revision(args, plan)
     assert_submission_allowed(REPO_ROOT)
     selection = SliceSelection(source=args.source, max_files=args.max_files)
     policy = PreflightPolicy(ensure=lambda node: ensure_node_preflight(node, plan, selection=selection))
@@ -151,6 +180,7 @@ def mode_status(args) -> int:
     """Per-node artifact and preflight state under the release prefix."""
     configure_coreweave_s3()
     plan = _plan_document(args)
+    _attest_revision(args, plan)
     graph = release_graph(plan)
     landed = repo_head(REPO_ROOT)
     selection = SliceSelection(source=args.source)
@@ -195,6 +225,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--version", required=True, help="The release id the plan must bind")
     parser.add_argument("--plan", required=True, type=Path, help="The release plan document (JSON)")
+    parser.add_argument(
+        "--source-revision",
+        help=(
+            "The landed revision the run's workspace was bundled at (required for run/resume"
+            " from a copied workspace, where the checkout revision cannot be read from git)"
+        ),
+    )
     modes = parser.add_subparsers(dest="mode", required=True)
     modes.add_parser("plan", help="Print the lowered graph; I/O-free")
 
