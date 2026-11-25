@@ -5,8 +5,11 @@
 
 import hashlib
 import json
+import os
+import subprocess
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -172,6 +175,113 @@ class Micro210Run:
     selection: Micro210Selection | None = None
 
 
+EVALDASH_RECORDS_PREFIX = "s3://marin-us-east-02a/marin/evals"
+
+
+def publish_evaldash_on_seal(*, evaluation: Micro210Evaluation, gpu_variant: str, num_nodes: int) -> dict:
+    """Publish one sealed Micro210 row's EvalDash record through the maintained contract.
+
+    Runs at the seal moment (the end of run_micro210, after the native rows exist under
+    the run output's exports/dumped_evals). Publication is best-effort: a failure is
+    reported in the outcome and never fails a sealed run.
+    """
+    record_ref = evaluation.record()
+    policy_record = record_ref.policy_reference
+    policy = read_micro210_policy(policy_record)
+    run_name, _, version_label = evaluation.run_id.partition("@")
+    run_id = f"{run_name}-{version_label}-{policy_record.revision}"
+    # The pin stores the plain digest; the record contract wants the sha256: form.
+    policy_digest = (
+        policy_record.sha256 if policy_record.sha256.startswith("sha256:") else f"sha256:{policy_record.sha256}"
+    )
+    outcome: dict = {"run_id": run_id}
+    # Deferred: the archive/records stack is heavy and every launcher test pays for it.
+    from evalrecords.records import EvalRunRecord, RunStatus  # noqa: PLC0415
+
+    from experiments.post_training.long_loop.eval_archive import publish_evaluation  # noqa: PLC0415
+
+    try:
+        output = StoragePath(evaluation.output_uri)
+        # StoragePath.glob() treats the path itself as a pattern, so the wildcard goes in the path.
+        attempts = sorted(
+            (path for path in (output / "exports/dumped_evals" / "*").glob() if path.isdir()),
+            key=str,
+        )
+        sources = [path / "eval_only" for path in attempts if (path / "eval_only").isdir()]
+        if not sources:
+            outcome.update(published=False, error="no dumped_evals/*/eval_only rows under the run output")
+            return outcome
+        coordinator_job = ""
+        task_id = os.environ.get("IRIS_TASK_ID", "")
+        if task_id:
+            coordinator_job = task_id.rsplit("/", 1)[0]
+        try:
+            git_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30, check=True
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            git_sha = "unknown"
+        record = EvalRunRecord(
+            run_id=run_id,
+            group_id=run_name,
+            created_at=datetime.now(UTC).isoformat(),
+            user=os.environ.get("PUBLISH_USER", "benfeuer"),
+            version=version_label,
+            description=f"Micro210 policy {policy_record.revision} re-evaluation, auto-published on seal",
+            model={
+                "name": run_name,
+                "location": evaluation.model.uri,
+                "backend": "vllm",
+                "config": None,
+                "config_digest": evaluation.model.identity,
+            },
+            judge=None,
+            evaluation={
+                "name": f"Micro210 policy {policy_record.revision}",
+                "mechanism": "skyrl",
+                "source_digest": policy_digest,
+                "tasks": [],
+                "evalchemy": None,
+                "harbor": None,
+                "postprocessing": {
+                    "prepared_inputs_sha256": policy["prepared_rollouts_sha256"],
+                    "sealed_rows": "434",
+                },
+            },
+            hardware={
+                "platform": "coreweave",
+                "accelerator": gpu_variant,
+                "region_or_cluster": evaluation.route.target_cluster,
+                "task_count": num_nodes,
+                "instances": 1,
+            },
+            status=RunStatus.SUCCEEDED,
+            error=None,
+            results_path=f"{EVALDASH_RECORDS_PREFIX}/{run_id}/finestore",
+            metrics={},
+            canonical_metrics={},
+            jobs={"eval": coordinator_job} if coordinator_job else {},
+            log_tails={},
+            provenance={
+                "git_sha": git_sha,
+                "eval_runtime": f"Frozen Micro210 {policy_record.revision}",
+                "launch_host": "Iris",
+            },
+        )
+        record_path = publish_evaluation(source=str(sources[-1]), record=record, records_prefix=EVALDASH_RECORDS_PREFIX)
+        readback = EvalRunRecord.model_validate_json(StoragePath(record_path).read_bytes())
+        outcome.update(
+            published=True,
+            record_path=record_path,
+            metrics_tasks=len(readback.metrics),
+            coverage_tasks=len(readback.coverage or {}),
+        )
+        return outcome
+    except Exception as error:
+        outcome.update(published=False, error=str(error))
+        return outcome
+
+
 def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
     """Bind the remote judge connection without changing installed-agent settings."""
     config = deepcopy(config)
@@ -255,7 +365,14 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     judge = draccus.decode(JudgeConfig, policy["judge"])
     api_key = require_secret(JUDGE_API_KEY)
     validate_judge_availability(judge, api_key)
-    return run_skyrl(config.skyrl, env_vars={JUDGE_API_KEY: api_key, "OPENAI_API_KEY": api_key})
+    run = run_skyrl(config.skyrl, env_vars={JUDGE_API_KEY: api_key, "OPENAI_API_KEY": api_key})
+    evaldash = publish_evaldash_on_seal(
+        evaluation=config.evaluation,
+        gpu_variant=policy["gpu_variant"],
+        num_nodes=policy["role_plan"].get("policy_num_nodes") or policy["role_plan"].get("num_nodes") or 0,
+    )
+    print(f"evaldash: {json.dumps(evaldash)}", flush=True)
+    return run
 
 
 def micro210_step(
