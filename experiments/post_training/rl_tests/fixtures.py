@@ -69,7 +69,6 @@ from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
-    with_current_control_revisions,
     write_training_families,
 )
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
@@ -387,7 +386,9 @@ def evaluation_task_rows(
 
 
 def recorded_runs(selection, tmp_path, monkeypatch, request):
-    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
+    table = snowball_model.SNOWBALL
+    pins = {name: replace(pin, version=recipe.RUN_ARTIFACT_VERSION) for name, pin in table.control_pins.items()}
+    monkeypatch.setattr(snowball_model, "SNOWBALL", replace(table, control_pins=pins))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -484,13 +485,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
     ):
         table = table or snowball_model.SNOWBALL
         preset = table.by_name[preset_name]
-        root = tmp_path / name / preset.revision
+        root = tmp_path / name / recipe.RUN_ARTIFACT_VERSION
         root.mkdir(parents=True, exist_ok=True)
         inputs = inputs or RunInputs(preset_name=preset.name)
         source_root, config = composed(preset, inputs, table.model)
         old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = attempt_id
-        run_id = f"{name}-{preset.revision}"
+        run_id = f"{name}-{recipe.RUN_ARTIFACT_VERSION}"
 
         def relocate(value):
             if isinstance(value, dict):
@@ -519,7 +520,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         write_receipt(root, native)
         write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
-            root, name, preset.revision, fingerprint=fingerprint, global_step=0 if generating else max_steps
+            root, name, recipe.RUN_ARTIFACT_VERSION, fingerprint=fingerprint, global_step=0 if generating else max_steps
         )
         (root / ".executor_status").write_text("SUCCESS")
         stored_metrics = {}

@@ -135,7 +135,8 @@ class AttemptSummary(BaseModel):
     label: Identity
     series: str | None = None
     model: Identity | None = None
-    preset_revision: Identity | None = None
+    preset_version: Identity | None = None
+    is_control: bool = False
     user: Identity | None = None
     branch: str | None = None
     dirty: bool | None = None

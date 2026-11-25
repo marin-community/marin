@@ -87,7 +87,7 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
         run_id="mochi-train-medium-user-1234abcd",
         model="mochi",
         preset="train-medium",
-        preset_revision="rev",
+        preset_version="ver",
         user="user",
         branch="topic",
         source_revision="commit",
@@ -127,7 +127,7 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     assert wandb_arguments["primary"]["tags"] == [
         "model:mochi",
         "preset:train-medium",
-        "revision:rev",
+        "version:ver",
         "user:user",
         "branch:topic",
     ]

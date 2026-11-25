@@ -87,7 +87,8 @@ class RunIndexIdentity(BaseModel):
     run_id: Identity
     model: Identity
     preset: Identity
-    preset_revision: Identity
+    preset_version: Identity
+    is_control: bool = False
     user: Identity
     branch: str | None
     source_revision: Identity
@@ -98,7 +99,7 @@ class RunIndexIdentity(BaseModel):
 
     @property
     def wandb_tags(self) -> list[str]:
-        tags = [f"model:{self.model}", f"preset:{self.preset}", f"revision:{self.preset_revision}", f"user:{self.user}"]
+        tags = [f"model:{self.model}", f"preset:{self.preset}", f"version:{self.preset_version}", f"user:{self.user}"]
         if self.branch is not None:
             tags.append(f"branch:{self.branch}")
         return tags

@@ -33,7 +33,7 @@ from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
 from marin.execution.artifact import is_mutable_version
-from marin.execution.fingerprint import canonical_json, fingerprint_hash
+from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
 from marin.execution.step_runner import check_cache
@@ -513,21 +513,28 @@ def _branch_pr_number(provenance: Provenance) -> int | None:
 
 
 def run_index_identity(
-    launch: dict, preset: presets.Preset, table: presets.ModelPresets, provenance: Provenance, *, user: str
+    launch: dict,
+    preset: presets.Preset,
+    table: presets.ModelPresets,
+    provenance: Provenance,
+    *,
+    user: str,
+    control: bool = False,
 ) -> RunIndexIdentity:
     """Name a composed launch by the gate's normalized comparison configuration."""
-    digest = fingerprint_hash(canonical_json(rl_gate.comparison_config(launch)))
+    version = rl_gate.config_version(launch)
     return RunIndexIdentity(
-        run_id=f"{table.model}-{preset.name}-{user}-{digest}",
+        run_id=f"{table.model}-{preset.name}-{user}-{version}",
         model=table.model,
         preset=preset.name,
-        preset_revision=preset.revision,
+        preset_version=version,
         user=user,
         branch=provenance.branch,
         source_revision=provenance.base_commit or "Unknown",
         tree_hash=provenance.tree_hash,
         dirty=provenance.dirty,
         pr_number=_branch_pr_number(provenance),
+        is_control=control,
     )
 
 
@@ -952,6 +959,7 @@ def command(
         )
         assert run.inputs is not None
         pin_error = None
+        preset_version = None
         if from_launcher and (do_run or plan):
             try:
                 validated = rl_gate.validate_candidate(preset, run.inputs, table=table, control=control)
@@ -964,9 +972,18 @@ def command(
                     if issue is not None:
                         _validate_launch_issue(run, preset, issue)
                     context.meta["rl_training_type"] = validated["runtime"]["training_type"]
-                    context.meta["rl_index"] = run_index_identity(
-                        validated, preset, table, provenance, user=username_segment()
+                    index = run_index_identity(
+                        validated,
+                        preset,
+                        table,
+                        provenance,
+                        user=username_segment(),
+                        control=control,
                     )
+                    context.meta["rl_index"] = index
+                    preset_version = index.preset_version
+                else:
+                    preset_version = rl_gate.config_version(validated)
         model = preset.model
         if (
             table.needs_completed_default_export
@@ -982,16 +999,18 @@ def command(
                 f"{sft_hint} --init NAME@VERSION."
             )
         snapshot = _status(replace(run, gate=rl_gate.completed_gate(run.gate)), preset, stored_only=do_run, issue=issue)
+        if preset_version is not None:
+            snapshot["preset_version"] = preset_version
         if preset.gated and not control:
             try:
-                pin = rl_gate.control_pin(preset, table=table, check_revision=False)
+                pin = rl_gate.control_pin(preset, table=table)
             except InvalidComparison as error:
                 pin_error = pin_error or str(error)
             else:
                 snapshot["control_pin"] = {
                     "commit": pin.commit,
-                    "revision": pin.revision,
-                    "current": pin_error is None and pin.revision == table.by_name[pin.preset].revision,
+                    "version": pin.version,
+                    "current": pin_error is None,
                 }
             if pin_error is not None:
                 snapshot["control_pin_error"] = pin_error

@@ -282,7 +282,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for i in range(2)
     ]
     handles = tuple(
-        ArtifactStep.adopt(f"tests/publication-{i}", preset.revision, str(root), kind=SkyRLRun)
+        ArtifactStep.adopt(f"tests/publication-{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
     )
 
@@ -342,7 +342,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert repeated.urls[str(sources[0])].endswith(f"#run=tests%2Fpublication-0-{preset.revision}&attempt=native-0")
+    assert repeated.urls[str(sources[0])].endswith(
+        f"#run=tests%2Fpublication-0-{recipe.RUN_ARTIFACT_VERSION}&attempt=native-0"
+    )
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
         response = request(origin, method, path, json_body=json_body)
@@ -616,14 +618,9 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     before_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }
-    stale_table = replace(
-        table,
-        presets=tuple(
-            replace(row, revision="2026.11.12.2") if row.name == preset.name else row for row in table.presets
-        ),
-    )
-    with pytest.raises(click.UsageError, match="control"):
-        publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
+    stale_table = replace(table, control_pins={**table.control_pins, pin.preset: replace(pin, version="unavailable")})
+    missing_controls = publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
+    assert not missing_controls.served_records and len(missing_controls.unserved_records) == pin.replicates
     after_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }
