@@ -30,6 +30,9 @@ evaluations:
   abstentionbench:
     benchmark: abstentionbench
     run: *together_judge
+  abstentionbench-thinking:
+    benchmark: abstentionbench-thinking
+    run: *together_judge
   simpleqa-verified:
     benchmark: simpleqa-verified
     run: *together_judge

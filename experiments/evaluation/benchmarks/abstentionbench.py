@@ -5,7 +5,8 @@
 
 Source: a Parquet snapshot of ``facebook/AbstentionBench`` (loader commit af06080), without the gated
 ``gpqa_abstain`` split. License CC-BY-NC-4.0, evaluation only. The reference judge is Llama 3.1 8B
-Instruct; scores are comparable only under the same judge.
+Instruct; scores are comparable only under the same judge. ``abstentionbench-thinking`` samples with the
+think block on; the reference also judges reasoning models on their final answer only.
 """
 
 from taskcompendium.evaluation.spec import (
@@ -22,17 +23,21 @@ from taskcompendium.importers.abstentionbench import SPLITS, abstentionbench_ite
 from taskcompendium.pipeline.inputs import SourceFormat
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
+from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.evaluation.prompt_compilation import evaluation_source
 from experiments.post_training.task_curation.pipeline import HfSource
+from experiments.post_training.task_curation.source import RlDataSource
 
 VERSION = "2026.11.25"
 ABSTENTIONBENCH_REVISION = "693e80c53a7f6aa19db815561b7dc2b3412a02a7"
 ABSTENTIONBENCH_POPULATION = 35855
 
 
-def benchmarks() -> list[EvaluationBenchmark]:
+def abstentionbench_source(*, thinking: bool) -> RlDataSource[EvaluationCorpusRecipe]:
+    """One protocol per thinking mode; the judge sees only the final answer in both."""
+    name = "abstentionbench-thinking" if thinking else "abstentionbench"
     protocol = EvaluationProtocol(
-        benchmark="abstentionbench",
+        benchmark=name,
         requires_judge=True,
         version=VERSION,
         operation=OperationKind.CHAT_GENERATION,
@@ -42,7 +47,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
             top_k=None,
             max_tokens=None,
             stop=(),
-            chat_template_kwargs={"enable_thinking": False},
+            chat_template_kwargs={"enable_thinking": thinking},
         ),
         trials=TrialPolicy(count=1, seed=None),
         metrics=(Metrics.ACCURACY, Metric(name="abstained", kind=MetricKind.BINARY, higher_is_better=False)),
@@ -50,8 +55,8 @@ def benchmarks() -> list[EvaluationBenchmark]:
         summary=SummaryKind.MEAN,
         expected_population=ABSTENTIONBENCH_POPULATION,
     )
-    source = evaluation_source(
-        name="abstentionbench",
+    return evaluation_source(
+        name=name,
         source=HfSource(
             "ymerkli/AbstentionBench",
             ABSTENTIONBENCH_REVISION,
@@ -64,4 +69,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
         item_builder=abstentionbench_item,
         grader=None,
     )
-    return fixed_benchmarks([source], "chat")
+
+
+def benchmarks() -> list[EvaluationBenchmark]:
+    return fixed_benchmarks([abstentionbench_source(thinking=False), abstentionbench_source(thinking=True)], "chat")
