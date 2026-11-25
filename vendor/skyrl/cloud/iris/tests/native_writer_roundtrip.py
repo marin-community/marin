@@ -60,7 +60,7 @@ def main(path: Path) -> None:
     class LocalBackend:
         def launch(self, config_path):
             config = load_launch_config(config_path)
-            if config.run.mode == "train":
+            if config.run.attempt_id == "earlier-failed-attempt":
                 prepared = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
                 assert prepared is not None and prepared.result is None and prepared.index is not None
                 assert prepared.index.run_id == "indexed-native-writers"
@@ -139,6 +139,7 @@ def main(path: Path) -> None:
     assert execute_launch(path, backend=LocalBackend()).state == "failed"
     config.run.attempt_id = current
     config.run.export_hf = True
+    config.run.index = None
     path.write_text(OmegaConf.to_yaml(config))
     result = execute_launch(path, backend=LocalBackend())
     assert result.state == "succeeded", result
