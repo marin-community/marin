@@ -60,7 +60,7 @@ from taskcompendium.submission import (
 
 
 def grade_result(verifier: Spec | None, verdict: Reward) -> GradeResult:
-    """Normalize verifyit outcomes independently of where the verifier ran."""
+    """Normalize Verifyit outcomes, requiring full credit for a pass."""
     if (
         not isinstance(verdict.status, Status)
         or not isinstance(verdict.detail, dict)
@@ -75,8 +75,16 @@ def grade_result(verifier: Spec | None, verdict: Reward) -> GradeResult:
         if isinstance(verifier, NumericSpec) and verdict.detail.get("reason") == "invalid_numeric_candidate":
             if verdict.reward != 0:
                 raise ValueError("Invalid numeric submissions cannot receive a positive reward")
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, verdict.detail.get("error"), verdict.detail)
-        return GradeResult(Outcome.GRADED, float(verdict.reward), verdict.detail.get("error"), verdict.detail)
+            return GradeResult(
+                Outcome.SUBMISSION_FAILURE, 0.0, verdict.detail.get("error"), verdict.detail, passed=False
+            )
+        return GradeResult(
+            Outcome.GRADED,
+            float(verdict.reward),
+            verdict.detail.get("error"),
+            verdict.detail,
+            passed=verdict.reward == 1.0,
+        )
     status = Outcome.INVALID_TASK if verdict.status == Status.INVALID_TASK else Outcome.INFRA_ERROR
     return GradeResult(status, None, verdict.detail.get("error"), verdict.detail)
 

@@ -148,6 +148,8 @@ def test_verifyit_modes_serialize_load_and_grade(mode, spec, answer_type, correc
     wrong_result = grade_answer(loaded, _attempt(loaded, wrong))
     assert (correct_result.status, correct_result.reward) == (Outcome.GRADED, 1.0)
     assert (wrong_result.status, wrong_result.reward) == (Outcome.GRADED, 0.0)
+    assert correct_result.passed is True
+    assert wrong_result.passed is False
 
 
 @pytest.mark.parametrize("content", ['{"answer":"yes","answer":"no"}', '{"answer":"yes","meta":{"x":1,"x":2}}'])

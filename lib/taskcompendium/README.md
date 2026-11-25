@@ -345,6 +345,8 @@ The runtime presents the source turns and function definitions and retains the f
 
 A `VerifyitGrader` without a `placement` grades the extracted answer in process; for a `file` answer with exactly one output path, the answer is the captured file's UTF-8 text, and a missing or undecodable file is a submission failure. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, `structure_closure`, `reasoning_markup`, or `predicted_action`. `reasoning_markup` grades the final assistant message's text, including the text before its function calls, and scores one when its reasoning markup is well formed; the attempt's stop reason excuses a span left open by a length stop. A `VerifyitGrader` with a `placement` runs the verifyit command in that machine, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
 
+Verifyit scores are normalized to [0, 1]. A scored verdict sets `GradeResult.passed` to true only for full credit (1.0); partial credit and incorrect submissions set it to false. Unscored task and infrastructure failures leave it unavailable.
+
 A `ScriptGrader` declares:
 
 | Field | Meaning |
@@ -358,7 +360,7 @@ A `ScriptGrader` declares:
 | `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
 | `timeout` | Deadline in seconds for each grading command (default 600). |
 
-`StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. A `json_metrics` file is a flat object whose `key` holds the score and whose other members, all finite numbers, become the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
+`StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. Its optional `pass_at_least` sets `GradeResult.passed` by comparing the score to that inclusive threshold; without it the pass flag remains unavailable. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. A `json_metrics` file is a flat object whose `key` holds the score and whose other members, all finite numbers, become the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
 
 A grader placement is one of two models in `taskcompendium.models`:
 

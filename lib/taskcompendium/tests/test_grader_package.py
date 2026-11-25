@@ -35,6 +35,7 @@ from taskcompendium.models import (
     ScriptGrader,
     Source,
     StateSubmission,
+    StdoutReward,
     TaskSpec,
     TextMessage,
 )
@@ -162,6 +163,28 @@ def test_script_grader_reads_private_configuration_and_captured_state(value, rew
         passed,
         {"actual": value},
     )
+
+
+@pytest.mark.parametrize("score,passed", [("1", True), ("0.5", False), ("0", False), ("invalid", None)])
+def test_stdout_checker_reports_full_credit_separately_from_partial_reward(score, passed):
+    task = _task(
+        GraderPackage(
+            ScriptGrader(
+                argv=("sh", "-c", f"printf '%s\\n' '{score}'"),
+                placement=GraderMachine(environment=GRADING_ENVIRONMENT),
+                reward=StdoutReward(pass_at_least=1.0),
+            )
+        )
+    )
+    result = grade_task(
+        task,
+        _attempt(task, TextMessage(role="assistant", content="Submitted")),
+        machine_factory=FixtureImageFactory(),
+        machine_spec=GRADING_MACHINE,
+    )
+    assert result.passed is passed
+    assert result.reward == (None if score == "invalid" else float(score))
+    assert result.status is (Outcome.INFRA_ERROR if score == "invalid" else Outcome.GRADED)
 
 
 @pytest.mark.parametrize(

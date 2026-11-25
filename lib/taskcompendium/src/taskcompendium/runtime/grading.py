@@ -46,6 +46,7 @@ from taskcompendium.models import (
     MissingArtifactPolicy,
     RewardFileFormat,
     ScriptGrader,
+    StdoutReward,
     Submission,
     SubmissionFailure,
     TaskSpec,
@@ -350,6 +351,21 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 
 
+def stdout_grade(stdout: bytes, reward: StdoutReward, diagnostics: dict[str, Any]) -> GradeResult:
+    """Read the native stdout score and apply its explicitly declared pass threshold."""
+    lines = [line.strip() for line in stdout.decode(errors="replace").splitlines() if line.strip()]
+    try:
+        value = float(lines[-1])
+    except (IndexError, ValueError):
+        return _infra_error(
+            "The last line of grader stdout must be a finite numeric reward", GradingFailure.INVALID_REWARD, diagnostics
+        )
+    if not math.isfinite(value):
+        return _infra_error("Grader returned a nonfinite reward", GradingFailure.INVALID_REWARD, diagnostics)
+    passed = None if reward.pass_at_least is None else value >= reward.pass_at_least
+    return GradeResult(Outcome.GRADED, value, passed=passed, diagnostics=diagnostics)
+
+
 async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float, env: Mapping[str, str]) -> GradeResult:
     result = await machine.run(
         Command(
@@ -376,16 +392,7 @@ async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float,
         return _infra_error(
             f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
         )
-    lines = [line.strip() for line in result.stdout.decode(errors="replace").splitlines() if line.strip()]
-    try:
-        reward = float(lines[-1])
-    except (IndexError, ValueError):
-        return _infra_error(
-            "The last line of grader stdout must be a finite numeric reward", GradingFailure.INVALID_REWARD, diagnostics
-        )
-    if not math.isfinite(reward):
-        return _infra_error("Grader returned a nonfinite reward", GradingFailure.INVALID_REWARD, diagnostics)
-    return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics)
+    return stdout_grade(result.stdout, grader.reward, diagnostics)
 
 
 async def _verifyit_reward(

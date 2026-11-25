@@ -39,6 +39,13 @@ def test_audit_missing_generation_is_unassessed():
     assert (result.N, result.unassessed, result.unavailable, result.UB) == (1, 1, 1, 1)
 
 
+def test_missing_native_pass_flag_is_unavailable_despite_positive_score():
+    cohort, row = cohort_and_row([1, 2, 3])
+    row["verification"] = {"status": "verified", "score": 1.0, "passed": None}
+    result = audit_cohort(cohort, [row])
+    assert (result.confirmed, result.unassessed, result.passes, result.unavailable, result.errors) == (0, 0, 0, 1, 0)
+
+
 @pytest.mark.parametrize("reserve_loops,expected_status", [(0, "non-target"), (1, "target")])
 def test_sparse_domain_is_decided_on_the_complete_fixed_reserve(reserve_loops, expected_status):
     cohort, example = cohort_and_row([7] * 8)

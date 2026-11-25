@@ -85,7 +85,7 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> I
         status = verification.get("status")
         grader_error = status == "error" or bool(row.get("exception_type")) or bool(row.get("server_error"))
         errors += int(grader_error)
-        unavailable += int(not grader_error and status != "verified")
+        unavailable += int(not grader_error and (status != "verified" or type(verification.get("passed")) is not bool))
         passes += int(not damaged and not grader_error and status == "verified" and verification.get("passed") is True)
         if valid_tokens:
             lengths.append(len(tokens))
