@@ -71,6 +71,23 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert publish(running)["status"] == "running"
     assert publish(sparse) == record
     assert publish(running) == record
+    main_publication = {
+        key: value
+        for key, value in record.items()
+        if key
+        not in {
+            "native_run_id",
+            "preset_version",
+            "is_control",
+            "user",
+            "branch",
+            "dirty",
+            "pr_number",
+            "coordinator_iris_job_id",
+            "elapsed_excluding_eval_seconds",
+        }
+    }
+    assert publish(main_publication).keys() == main_publication.keys()
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
