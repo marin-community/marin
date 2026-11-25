@@ -777,7 +777,6 @@ def _format_completion_choice(
         prefix = prompt if isinstance(prompt, str) else tokenizer.decode(prompt, skip_special_tokens=False)
         choice_text = prefix + choice_text
 
-    # Format logprobs if available
     logprobs = None
     if request.echo and request.logprobs and (generation.tokens or generation.finish_reason != FinishReason.ABORT):
         if generation.echo_token_ids is None or generation.echo_logprobs is None:
@@ -819,21 +818,24 @@ def _format_completion_choice(
     return choice
 
 
+def _completion_prompts(
+    prompt: str | list[str] | list[int] | list[list[int]],
+) -> collections.abc.Sequence[str | list[int]]:
+    if isinstance(prompt, str):
+        return [prompt]
+    if not prompt:
+        raise HTTPException(status_code=400, detail="A completion request needs at least one prompt")
+    if isinstance(prompt[0], int):
+        return [cast(list[int], prompt)]
+    return cast(list[str] | list[list[int]], prompt)
+
+
 async def _create_completion(
     ctx: InferenceContext, request: CompletionRequest, abort_event: threading.Event | None = None
 ) -> Completion:
     """Create a text completion using OpenAI API format."""
     try:
-        prompt = request.prompt
-        prompts: collections.abc.Sequence[str | list[int]]
-        if isinstance(prompt, str):
-            prompts = [prompt]
-        elif not prompt:
-            raise HTTPException(status_code=400, detail="A completion request needs at least one prompt")
-        elif isinstance(prompt[0], int):
-            prompts = [cast(list[int], prompt)]
-        else:
-            prompts = cast(list[str] | list[list[int]], prompt)
+        prompts = _completion_prompts(request.prompt)
 
         stop_tokens = _encode_stop_tokens(request.stop, ctx.tokenizer)
         if request.stop_token_ids:
