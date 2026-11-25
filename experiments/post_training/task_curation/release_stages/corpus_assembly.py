@@ -45,6 +45,9 @@ class CorpusAssemblyInputs:
     census_receipt: ArtifactRef
     output_root: str
     expected_sources: int
+    # The release's fresh populations: write mode assembles only these. The retained
+    # curriculum already covers every other declared source (additions-mode compose).
+    targets: tuple[str, ...]
     # Explicit per-source preparation workers, sized by the graph from StageResources.
     workers: int
     slice_output_root: str | None = None
@@ -55,6 +58,8 @@ class CorpusAssemblyInputs:
             raise ValueError("release_id, source_revision and output_root are required")
         if self.expected_sources <= 0:
             raise ValueError(f"expected_sources must be positive, got {self.expected_sources}")
+        if not self.targets:
+            raise ValueError("targets must name the release's fresh populations")
         if self.workers <= 0:
             raise ValueError(f"workers must be positive, got {self.workers}")
 
@@ -160,6 +165,10 @@ def run_corpus_assembly(
                 raise ValueError("write-mode corpus assembly assembles every row; use dry-run for a slice")
             if len(rows) != inputs.expected_sources:
                 raise ValueError(f"census inputs carry {len(rows)} rows, expected {inputs.expected_sources}")
+            missing = sorted(set(inputs.targets) - {row.source_id for row in rows})
+            if missing:
+                raise ValueError(f"census inputs carry no row for targets: {missing[:5]}")
+            rows = [row for row in rows if row.source_id in inputs.targets]
             output_root = inputs.output_root
         frozen = frozen_sources_for(rows, census_results, sources_fn=sources_fn)
         prepare_sources(frozen, output_root, workers=inputs.workers)

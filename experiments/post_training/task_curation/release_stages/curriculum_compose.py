@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
-from finestore.rl.curation import QualifiedSourceDeclaration
+from finestore.rl.curation import QualifiedSourceDeclaration, normalize_snapshot_declaration
 from fray.types import ResourceConfig
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -45,6 +45,7 @@ from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.local import local_client
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
+from experiments.post_training.task_curation.source_status import pending_stage, receipt_registry_keys
 from infra.marina.apps.rl_data_catalog.confidence import OUTCOMES, confidence_rows
 from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 from infra.marina.apps.rl_data_catalog.server.source_identity import original_source_id
@@ -71,6 +72,8 @@ class CurriculumComposeInputs:
     inputs: ArtifactRef
     output_root: str
     expected_fresh_task_count: int
+    # The plan's planned removals: dropped from the retained curriculum, never carried.
+    removed_sources: tuple[str, ...]
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
@@ -93,6 +96,7 @@ class ComposePlan:
     fresh_coverage: CurriculumCoverage
     fresh_task_count: int
     retained_task_count: int
+    removed_sources: tuple[str, ...]
 
 
 def read_reference(reference: dict) -> dict:
@@ -115,8 +119,30 @@ def read_composition_inputs(inputs: CurriculumComposeInputs) -> dict:
     return document
 
 
-def compose_plan(document: dict, expected_fresh_task_count: int) -> ComposePlan:
-    """Verify every read-side assertion for one additions-mode composition."""
+def read_retained_release(reference: dict) -> AlignmentRelease:
+    """Read the retained release, upgrading earlier-generation inventory declarations.
+
+    A retained release sealed by an earlier cut carries its inventory in that cut's
+    declaration schema (for example the ``qualified-v1`` form with the removed
+    ``name`` field). The maintained snapshot normalizer upgrades each row; a pre-stage
+    Pending row takes its stage from measurement-receipt evidence.
+    """
+    document = read_reference(reference)
+    document["inventory"] = [
+        normalize_snapshot_declaration(
+            row, pending_stage_of=lambda source_id: pending_stage(source_id, receipt_registry_keys())
+        )
+        for row in document["inventory"]
+    ]
+    return AlignmentRelease.model_validate(document)
+
+
+def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources: tuple[str, ...]) -> ComposePlan:
+    """Verify every read-side assertion for one additions-mode composition.
+
+    The plan's removed sources leave the retained curriculum: their release sources,
+    inventory rows, assignments and coverage statistics are not carried.
+    """
     rebound = document.get("rebound")
     if rebound:
         raise ValueError(
@@ -124,7 +150,7 @@ def compose_plan(document: dict, expected_fresh_task_count: int) -> ComposePlan:
             " additions-mode compose cannot rebind a source (the projection pass is not wired in);"
             " resolve the rebound before composing"
         )
-    old = AlignmentRelease.model_validate(read_reference(document["old_release"]))
+    old = read_retained_release(document["old_release"])
     old_coverage = CurriculumCoverage.model_validate(read_reference(document["old_coverage"]))
     fresh = AlignmentRelease.model_validate(read_reference(document["fresh_release"]))
     fresh_coverage = CurriculumCoverage.model_validate(read_reference(document["fresh_coverage"]))
@@ -149,7 +175,16 @@ def compose_plan(document: dict, expected_fresh_task_count: int) -> ComposePlan:
     fresh_task_count = sum(source.task_count for source in fresh.sources)
     if fresh_task_count != expected_fresh_task_count:
         raise ValueError(f"fresh populations carry {fresh_task_count} tasks, expected {expected_fresh_task_count}")
-    old_sources = {source.source_id: source for source in old.sources}
+    removed = frozenset(removed_sources)
+    unknown = sorted(removed - {source.source_id for source in old.sources})
+    if unknown:
+        raise ValueError(f"planned removals are absent from the retained curriculum: {unknown[:5]}")
+    old_sources = {source.source_id: source for source in old.sources if source.source_id not in removed}
+    retained_inventory = [declaration for declaration in old.inventory if declaration.id not in removed]
+    if len(old.inventory) - len(retained_inventory) != len(removed):
+        raise ValueError("planned removals do not each drop exactly one retained inventory row")
+    if not targets.isdisjoint(removed):
+        raise ValueError("a target is also a planned removal")
     if not targets.isdisjoint(old_sources.keys()):
         raise ValueError("fresh populations overlap the retained curriculum; additions mode cannot replace sources")
     for source in fresh.sources:
@@ -176,7 +211,7 @@ def compose_plan(document: dict, expected_fresh_task_count: int) -> ComposePlan:
         changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
         if not changed <= ALLOWED_TARGET_CHANGES:
             raise ValueError(f"current declaration for {sid} changed non-consumer fields: {sorted(changed)}")
-    inventory = list(old.inventory) + [current_inventory[declaration.id] for declaration in fresh.inventory]
+    inventory = retained_inventory + [current_inventory[declaration.id] for declaration in fresh.inventory]
     sources = list(old_sources.values()) + list(fresh.sources)
     return ComposePlan(
         targets=tuple(sorted(targets)),
@@ -187,7 +222,8 @@ def compose_plan(document: dict, expected_fresh_task_count: int) -> ComposePlan:
         fresh_release=fresh,
         fresh_coverage=fresh_coverage,
         fresh_task_count=fresh_task_count,
-        retained_task_count=old.task_count,
+        retained_task_count=sum(source.task_count for source in old_sources.values()),
+        removed_sources=tuple(sorted(removed)),
     )
 
 
@@ -331,7 +367,7 @@ def run_compose(
         inputs.validate()
         configure_coreweave_s3()
         document = read_composition_inputs(inputs)
-        plan = compose_plan(document, inputs.expected_fresh_task_count)
+        plan = compose_plan(document, inputs.expected_fresh_task_count, inputs.removed_sources)
         release = compose_release(plan, document, {"uri": inputs.inputs.uri, "sha256": inputs.inputs.sha256})
         proof: dict[str, Any] = {
             "kind": f"atlas-{inputs.release_id}-{COMPOSE_RECEIPT_SUFFIX}",
@@ -343,6 +379,7 @@ def run_compose(
             "targets": list(plan.targets),
             "fresh_task_count": plan.fresh_task_count,
             "retained_task_count": plan.retained_task_count,
+            "removed_sources": list(plan.removed_sources),
             "composed_task_count": release.task_count,
             "dry_run": dry_run,
             "sql_writes": 0,
@@ -381,7 +418,8 @@ def run_compose(
 def _finish_compose(inputs, plan, document, release, context, root, alert_feeds, mode) -> dict:
     """The write-mode tail: retained pass, coverage recompute, exact unions, seals."""
     old_sources = {source.source_id: source for source in plan.old_release.sources}
-    selected = frozenset(old_sources)
+    removed = frozenset(plan.removed_sources)
+    selected = frozenset(old_sources) - removed
     retained_files = context.execute(
         Dataset.from_list(list(enumerate(plan.old_release.paths))).map(
             partial(
@@ -420,14 +458,21 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
             for level in plan.old_coverage.confidence_levels
         ),
     )
-    expected_statistics = dict(statistics_by_key(plan.old_coverage.paths))
+    # Statistic keys lead with source_id; a removed source's statistics are not carried.
+    expected_statistics = {
+        key: value for key, value in statistics_by_key(plan.old_coverage.paths).items() if key[0] not in removed
+    }
     fresh_statistics = statistics_by_key(plan.fresh_coverage.paths)
     if expected_statistics.keys() & fresh_statistics.keys():
         raise ValueError("retained and fresh coverage statistics overlap")
     expected_statistics.update(fresh_statistics)
     if statistics_by_key(samples.paths) != expected_statistics:
         raise ValueError("recomputed statistics are not the exact retained-plus-fresh union")
-    expected_confidence = dict(statistics_by_key(plan.old_coverage.confidence_paths))
+    expected_confidence = {
+        key: value
+        for key, value in statistics_by_key(plan.old_coverage.confidence_paths).items()
+        if key[0] not in removed
+    }
     fresh_confidence = statistics_by_key(plan.fresh_coverage.confidence_paths)
     if expected_confidence.keys() & fresh_confidence.keys():
         raise ValueError("retained and fresh confidence vectors overlap")
@@ -464,7 +509,8 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
         "inventory_count": len(plan.inventory),
         "task_count": release.task_count,
         "fresh_sources": list(plan.targets),
-        "retained_source_count": len(old_sources),
+        "retained_source_count": len(selected),
+        "removed_sources": sorted(removed),
         "retained_scores_byte_identical": True,
         "non_target_sources_and_inventory_unchanged": True,
         "statistics_exact_union": True,

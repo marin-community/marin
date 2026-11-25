@@ -9,6 +9,7 @@ exercise the same code path the release graph runs, not a parallel mock. The sou
 registry is the injected boundary (the graph resolves the real one at run time).
 """
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -508,6 +509,7 @@ def _corpus_inputs(
         census_receipt=census_receipt,
         output_root=str(tmp_path / "release" / "corpus"),
         expected_sources=1,
+        targets=(SOURCE_ID,),
         slice_output_root=str(tmp_path / "slice" / "corpus"),
         workers=1,
     )
@@ -577,6 +579,7 @@ def test_corpus_assembly_fans_out_with_identical_corpus(tmp_path):
             census_receipt=receipt,
             output_root=str(root / "corpus"),
             expected_sources=1,
+            targets=(SOURCE_ID,),
             workers=workers,
         )
 
@@ -732,6 +735,7 @@ def test_corpus_omits_empty_oracle_sources(tmp_path):
         census_receipt=receipt,
         output_root=str(tmp_path / "release" / "corpus"),
         expected_sources=2,
+        targets=(SOURCE_ID, EMPTY_SOURCE_ID),
         slice_output_root=str(tmp_path / "slice" / "corpus"),
         workers=1,
     )
@@ -745,3 +749,15 @@ def test_corpus_omits_empty_oracle_sources(tmp_path):
     corpus = json.loads((tmp_path / "release" / "corpus" / "corpus.json").read_text())
     assert len(corpus["inventory"]) == 1
     assert sum(row["task_count"] for row in corpus["inventory"]) == 2
+
+    # Write mode assembles only the release's targets, and refuses a target the census lacks.
+    def registry():
+        return {SOURCE_ID: _source_registry(declaration)()[SOURCE_ID], EMPTY_SOURCE_ID: empty_source}
+
+    scoped = dataclasses.replace(inputs, output_root=str(tmp_path / "scoped" / "corpus"), targets=(SOURCE_ID,))
+    proof = corpus_stage.run_corpus_assembly(scoped, dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path))
+    corpus = json.loads((tmp_path / "scoped" / "corpus" / "corpus.json").read_text())
+    assert [row["id"] for row in corpus["inventory"]] == [SOURCE_ID] and proof["tasks"] == 2
+    unknown = dataclasses.replace(inputs, output_root=str(tmp_path / "unknown"), targets=("Marin:not-censused",))
+    with pytest.raises(ValueError, match="carry no row for targets"):
+        corpus_stage.run_corpus_assembly(unknown, dry_run=False, sources_fn=registry, feeds=_feeds(tmp_path))

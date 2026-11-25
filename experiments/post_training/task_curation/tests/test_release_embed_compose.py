@@ -260,6 +260,7 @@ def _compose_inputs(tmp_path: Path, document: dict, expected_tasks: int) -> comp
         inputs=_seal_json(tmp_path, "composition-inputs.json", document),
         output_root=str(tmp_path / "release" / "compose"),
         expected_fresh_task_count=expected_tasks,
+        removed_sources=(),
     )
 
 
@@ -269,15 +270,42 @@ def _feeds(tmp_path: Path) -> tuple[Path, ...]:
 
 def test_compose_plan_accepts_an_additions_manifest(tmp_path):
     document, expected = _composition(tmp_path)
-    plan = compose.compose_plan(document, expected)
+    plan = compose.compose_plan(document, expected, ())
     assert len(plan.targets) == 1
     assert plan.fresh_task_count == 2 and plan.retained_task_count == 3
     assert len(plan.sources) == 2 and len(plan.inventory) == 2
 
 
+def test_compose_plan_drops_planned_removals_from_the_retained_curriculum(tmp_path):
+    """A planned removal never survives into the composed release."""
+    document, expected = _composition(tmp_path)
+    retained_id = _declaration("retained").id
+    plan = compose.compose_plan(document, expected, (retained_id,))
+    assert plan.removed_sources == (retained_id,)
+    assert [source.source_id for source in plan.sources] == list(plan.targets)
+    assert [declaration.id for declaration in plan.inventory] == list(plan.targets)
+    assert plan.retained_task_count == 0
+    release = compose.compose_release(plan, document, {"uri": "/sealed/inputs.json", "sha256": "c" * 64})
+    assert release.task_count == 2 and retained_id not in {source.source_id for source in release.sources}
+    with pytest.raises(ValueError, match="absent from the retained curriculum"):
+        compose.compose_plan(document, expected, ("Marin:never-retained",))
+
+
+def test_compose_plan_reads_an_earlier_generation_retained_inventory(tmp_path):
+    """A retained release sealed in the r39-era declaration form (with the removed name) upgrades."""
+    document, expected = _composition(tmp_path)
+    old_path = tmp_path / "old-release.json"
+    old = json.loads(old_path.read_text())
+    old["inventory"][0]["name"] = "retained-legacy-name"
+    old_path.write_text(json.dumps(old))
+    document["old_release"]["sha256"] = hashlib.sha256(old_path.read_bytes()).hexdigest()
+    plan = compose.compose_plan(document, expected, ())
+    assert plan.retained_task_count == 3 and "name" not in plan.inventory[0].model_dump(mode="json")
+
+
 def test_compose_release_carries_lineage_and_totals(tmp_path):
     document, expected = _composition(tmp_path)
-    plan = compose.compose_plan(document, expected)
+    plan = compose.compose_plan(document, expected, ())
     release = compose.compose_release(plan, document, {"uri": "/sealed/inputs.json", "sha256": "c" * 64})
     assert release.task_count == 5
     assert release.lineage["composition_inputs_uri"] == "/sealed/inputs.json"
@@ -302,7 +330,7 @@ def test_compose_plan_refusals(tmp_path, drift, overlap, param_change, expected_
         tmp_path, drift=drift, overlap=overlap, param_change=param_change, expected_tasks=expected_tasks
     )
     with pytest.raises(ValueError, match=message):
-        compose.compose_plan(document, expected_tasks)
+        compose.compose_plan(document, expected_tasks, ())
 
 
 def test_compose_run_dry_run_writes_nothing(tmp_path):
@@ -324,6 +352,7 @@ def test_compose_run_refuses_bad_inputs_and_alerts(tmp_path):
         inputs=ArtifactRef(uri=document["old_release"]["uri"], sha256="0" * 64),
         output_root=str(tmp_path / "release" / "compose"),
         expected_fresh_task_count=expected,
+        removed_sources=(),
     )
     with pytest.raises(ValueError, match="digest mismatch"):
         compose.run_compose(inputs, dry_run=True, feeds=_feeds(tmp_path))
@@ -335,6 +364,7 @@ def test_compose_run_refuses_bad_inputs_and_alerts(tmp_path):
         inputs=ArtifactRef(uri=str(tmp_path / "missing.json"), sha256="0" * 64),
         output_root=str(tmp_path / "release" / "compose"),
         expected_fresh_task_count=0,
+        removed_sources=(),
     )
     with pytest.raises(ValueError, match="positive"):
         compose.run_compose(empty, dry_run=True, feeds=_feeds(tmp_path))
