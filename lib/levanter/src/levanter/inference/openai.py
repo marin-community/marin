@@ -51,7 +51,7 @@ from levanter.inference.engine import (
     Request,
     TokenSequenceLogprobs,
 )
-from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -120,6 +120,7 @@ class InferenceResponse:
     tokens: List[int]
     prompt_tokens: int
     completion_tokens: int
+    finish_reason: FinishReason
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
@@ -346,7 +347,7 @@ class InferenceContext:
             stop_ids = None
             if req.stop_tokens:
                 width = max(map(len, req.stop_tokens))
-                padded = [seq + [INVALID] * (width - len(seq)) for seq in req.stop_tokens]
+                padded = [[INVALID] * (width - len(seq)) + seq for seq in req.stop_tokens]
                 stop_ids = hax.named(jnp.asarray(padded, dtype=jnp.int32), ("stop_seq", "position"))
 
             # dumb fallback seed if none provided
@@ -402,6 +403,7 @@ class InferenceContext:
                                 logprobs=result_logprobs,
                                 prompt_tokens=len(req.prompt_tokens),
                                 completion_tokens=len(generated_tokens),
+                                finish_reason=result.finish_reasons[output_idx],
                                 request_id=req.request_id,
                                 echo_token_ids=echo_token_ids,
                                 echo_logprobs=echo_logprobs,
@@ -409,17 +411,7 @@ class InferenceContext:
                         )
                         output_idx += 1
                     else:
-                        logger.error(f"Missing output for request {req.request_id}")
-                        req_outputs.append(
-                            InferenceResponse(
-                                text="<error while generating>",
-                                tokens=[],
-                                logprobs=None,
-                                prompt_tokens=0,
-                                completion_tokens=0,
-                                request_id=req.request_id,
-                            )
-                        )
+                        raise RuntimeError(f"Missing output for request {req.request_id}")
 
                 # Set the future result
                 req.future.get_loop().call_soon_threadsafe(req.future.set_result, req_outputs)
@@ -637,7 +629,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     CompletionChoice(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason="stop",
+                        finish_reason="stop" if generation.finish_reason == FinishReason.STOP else "length",
                         logprobs=logprobs,
                     )
                 )
@@ -780,7 +772,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 ChatCompletionChoice(
                     index=i,
                     message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason="stop",
+                    finish_reason="stop" if generation.finish_reason == FinishReason.STOP else "length",
                     logprobs=logprobs,
                 )
             )
@@ -848,7 +840,9 @@ async def _generate_binary(ctx: InferenceContext, request: HttpRequest) -> Respo
     tensors = {PROMPT_TOKEN_IDS: prompt}
     choices = []
     for choice, output in enumerate(outputs):
-        choices.append({"completion_tokens": output.completion_tokens})
+        choices.append(
+            {"completion_tokens": output.completion_tokens, "finish_reason": output.finish_reason.name.lower()}
+        )
         prefix = f"choice.{choice}."
         tensors[prefix + "token_ids"] = np.asarray(output.tokens, dtype=np.int32)
         if output.logprobs is not None:

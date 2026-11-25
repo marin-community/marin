@@ -57,7 +57,10 @@ The inference server is built around a `GenerationService` that encapsulates:
 ### API Design
 - **OpenAI Compatibility**: Follows OpenAI API v1 specification for `/v1/completions` and `/v1/chat/completions`
 - **Request Schema**: Supports `prompt`, `max_tokens`, `temperature`, `stop`, `seed` parameters
-- **Response Schema**: Returns structured responses with `choices`, `usage`, and metadata
+- **Response Schema**: Each choice reports `finish_reason` in OpenAI completion responses
+  and in the metadata from `POST /v1/levanter/generate`. A sampled EOS or a matched stop
+  sequence reports `stop`, including at the token limit. A choice that exhausts its token
+  budget reports `length`.
 - **Error Handling**: Proper HTTP status codes and error messages
 
 ### Performance Considerations
