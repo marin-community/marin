@@ -53,38 +53,33 @@ def main() -> None:
         check=True,
         stdout=subprocess.DEVNULL,
     )
-    # The plan TSV: source_id, slug, context uri, dockerfile — one row per cohort.
-    plan_uri = args.context_root.rstrip("/") + "/plan.tsv"
-    tsv = "\n".join(
-        f"{entry['source_id']}\t{entry['source_id'].partition(':')[2].replace('/', '-').replace('@', '-').lower()}"
-        f"\t{entry['context_uri']}\t{entry['dockerfile']}"
-        for entry in contexts
-    )
-    plan_local = Path("build") / "cohort-build-plan.tsv"
-    plan_local.parent.mkdir(exist_ok=True)
-    plan_local.write_text(tsv)
-    subprocess.run(
-        ["uv", "run", "--no-sync", "fsutil", "cp", str(plan_local), plan_uri],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
+
+    # The build plan is inline: kaniko reads the s3:// context archives directly
+    # (the executor image has no curl/tar and needs none), so the command carries
+    # one executor invocation per cohort with its s3 context and destination.
+    def cohort_tag(entry) -> str:
+        slug = entry["source_id"].partition(":")[2].replace("/", "-").replace("@", "-").lower()
+        return f"{args.tag_prefix}-{slug[:48].rstrip('-')}"
+
+    def cohort_reference(entry) -> str:
+        return f"{PACKAGE}:{cohort_tag(entry)}"
+
+    loop_lines = []
+    for entry in contexts:
+        destination = cohort_reference(entry)
+        digest_binding = f"{entry['source_id']} {destination}@$(cat /tmp/digest.txt)"
+        loop_lines.append(
+            f"/kaniko/executor --context={entry['context_uri']} --dockerfile={entry['dockerfile']} "
+            f"--destination={destination} "
+            "--custom-platform=linux/amd64 --single-snapshot --cache=false --compressed-caching=false "
+            "--reproducible --image-name-with-digest-file=/tmp/digest.txt; "
+            f'echo "{digest_binding}" >> /tmp/bindings.txt; '
+        )
+    command = "set -eu; " + " ".join(loop_lines) + " cat /tmp/bindings.txt"
+    command = "set -eu; " + " ".join(loop_lines) + " cat /tmp/bindings.txt"
 
     environment = {**os.environ, "ATLAS_GHCR_DOCKER_CONFIG": json.dumps({"auths": {"ghcr.io": {"auth": ghcr_auth()}}})}
-    # Per cohort: pull its context archive, build the Dockerfile at its root,
-    # record the digest; the digests aggregate into the bindings manifest.
-    loop = (
-        "while read -r source slug uri dockerfile; do "
-        f'curl -fsSL --retry 5 "$uri" -o /tmp/ctx.tar.gz; '
-        "mkdir -p /tmp/ctx; tar -xzf /tmp/ctx.tar.gz -C /tmp/ctx; "
-        f"/kaniko/executor --context=/tmp/ctx --dockerfile=/tmp/ctx/$dockerfile "
-        f"--destination={PACKAGE}:{args.tag_prefix}-$slug "
-        "--custom-platform=linux/amd64 --single-snapshot --cache=false --compressed-caching=false "
-        "--reproducible --image-name-with-digest-file=/tmp/digest.txt; "
-        f'echo "$source {PACKAGE}:{args.tag_prefix}-$slug@$(cat /tmp/digest.txt)" >> /tmp/bindings.txt; '
-        "done < /tmp/plan.tsv; "
-        "cat /tmp/bindings.txt"
-    )
-    command = "set -eu; " f"curl -fsSL --retry 5 {plan_uri} -o /tmp/plan.tsv; " + loop
+    job_name = args.job_name
     args_list = [
         "uv",
         "run",
