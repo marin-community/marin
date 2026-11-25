@@ -38,6 +38,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training import rl as runner
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_nightly_controls as nightly
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
 from experiments.post_training import snowball_rl as snowball_model
@@ -56,7 +57,7 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
 from experiments.post_training.skyrl_test_support import selection_summary
-from infra.marina.tests.rl_progress_fixtures import grader_report
+from infra.marina.tests.rl_progress_fixtures import grader_report, progress_record
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
 
@@ -206,6 +207,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     if case == "native-composed":
         write_json(report_root / "native-attempt" / "grader_report.json", report)
     attempt = read_stored_skyrl_attempts(str(source))[1]["native-attempt"]
+    attempt = attempt.model_copy(update={"index": None})
     row = publication.build_record(
         str(source),
         table.by_name["data-medium"],
@@ -281,11 +283,67 @@ def test_one_issue_is_reserved_when_publishers_disagree(tmp_path, monkeypatch):
     assert publication.lineage_issue(export_root, None) == winner
 
 
+def test_nightly_fills_only_the_current_main_control_cohort(monkeypatch):
+    launch = {"config": "composed"}
+    monkeypatch.setattr(nightly, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(gate, "compose_preset", lambda preset: launch)
+    monkeypatch.setattr(gate, "config_version", lambda config: "current")
+    branch = SimpleNamespace(branch="main", dirty=False)
+    monkeypatch.setattr(nightly.Provenance, "capture", lambda *_: branch)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["rl_nightly_controls", "--model", "snowball", "--preset", "learning-medium", "--batch", "123-1"],
+    )
+    base = AttemptSummary.model_validate_json(
+        json.dumps(
+            progress_record()
+            | {"model": "snowball", "preset_version": "current", "is_control": True, "dirty": False, "branch": "main"}
+        )
+    )
+    controls = [base.model_copy(update={"run_id": f"control-{i}"}) for i in range(5)]
+    records = [
+        *controls[:3],
+        base.model_copy(update={"run_id": "control-0", "attempt_id": "retry"}),
+        base.model_copy(update={"run_id": "branch-control", "branch": "pull-branch"}),
+        base.model_copy(update={"run_id": "old-control", "preset_version": "old"}),
+        base.model_copy(update={"run_id": "failed-control", "status": "failed"}),
+    ]
+    reads = []
+
+    def read_attempts():
+        reads.append(True)
+        return records
+
+    monkeypatch.setattr(nightly.rl_index, "list_attempts", read_attempts)
+    submissions = []
+
+    def submit(command, *, check):
+        submissions.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(nightly.subprocess, "run", submit)
+
+    assert nightly.main() == 0
+    records.extend(controls[3:])
+    assert nightly.main() == 0
+    branch.branch = "pull-branch"
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    assert nightly.main() == 0
+
+    assert len(reads) == 2
+    assert [command[command.index("--replicates") + 1] for command in submissions] == ["2", "1", "5"]
+    for command in submissions:
+        assert command[1:5] == ["-m", "experiments.post_training.snowball_rl", "--preset", "learning-medium"]
+        assert command[command.index("--control") + 1] == "123-1"
+        assert command[-2:] == ["--run", "--wait"]
+
+
 @pytest.mark.integration
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(
-    preset_table, rl_progress_client, recorded_runs, monkeypatch
+    preset_table, rl_progress_client, recorded_runs, monkeypatch, cache_native_compositions
 ):
+    cache_native_compositions()
     client, request, _ = rl_progress_client
     preset = replace(
         snowball_model.SNOWBALL.by_name["learning-medium"],
@@ -322,12 +380,14 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             service_url="http://localhost",
         )
 
+    cohort = cohort_from_fixtures(sources[1])
+
     def saved_gate(requirements=()):
         report = run(
             gate.gate_step(
                 preset,
                 handles,
-                cohort=cohort_from_fixtures(sources[1]),
+                cohort=cohort,
                 inputs=RunInputs(preset_name=preset.name, requirements=requirements),
             )
         )[0]

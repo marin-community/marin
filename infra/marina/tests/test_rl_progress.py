@@ -11,10 +11,11 @@ from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, pr
 pytestmark = pytest.mark.integration
 
 
-def _projection(record: dict) -> dict:
+def _projection(record: dict, *, main_control: bool = False) -> dict:
     projected = record.copy()
     projected["has_grader_report"] = projected.pop("grader_report", None) is not None
     projected.pop("launch_config", None)
+    projected["is_main_control"] = main_control
     return projected
 
 
@@ -81,7 +82,14 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     publish(failed)
     changed = copy.deepcopy(record)
     changed.update(
-        issue=456, label="corrected label", model="snowball", launch_config={"skyrl": {"trainer": {"max_steps": 25}}}
+        issue=456,
+        label="corrected label",
+        model="snowball",
+        launch_config={"skyrl": {"trainer": {"max_steps": 25}}},
+        branch="main",
+        dirty=False,
+        is_control=True,
+        preset_version="current",
     )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
@@ -168,7 +176,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     )
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-first"] == _projection(changed)
+    assert rows["native-first"] == _projection(changed, main_control=True)
     assert rows["native-second"] == _projection(failed)
     assert rows["unknown"] == _projection(legacy | {"issue": None, "future_fact": "stored"})
     assert len(rows) == 3

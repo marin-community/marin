@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 import click
 from finestore.rl.rl_progress import (
