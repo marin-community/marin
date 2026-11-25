@@ -23,7 +23,7 @@ import yaml
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
-from rigging.secrets import SecretBehavior, resolve_secret_spec
+from rigging.secrets import SecretBehavior, looks_like_credential, resolve_secret_spec
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
@@ -138,6 +138,9 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
 
     if env_flags:
         for item in env_flags:
+            key = item[0].partition("=")[0]
+            if looks_like_credential(key):
+                raise click.UsageError(f"Use --secret to supply credential {key!r}.")
             if len(item) > 2:
                 raise ValueError(f"Too many values for env var: {' '.join(item)}")
             if "=" in item[0]:

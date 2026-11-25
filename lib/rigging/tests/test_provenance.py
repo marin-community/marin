@@ -154,6 +154,17 @@ def test_capture_is_best_effort_outside_a_repo(tmp_path):
     assert p.created_at  # timestamp, captured regardless of git
 
 
+def test_capture_redacts_credential_values_in_recorded_environment_flags(tmp_path, monkeypatch):
+    monkeypatch.delenv("MARIN_PROVENANCE", raising=False)
+    args = ["iris", "job", "run", "-e", "HF_TOKEN", "fixture-credential", "--env-vars", "MODE", "debug"]
+    monkeypatch.setattr("sys.argv", args)
+    record = Provenance.capture(tmp_path)
+
+    assert record.command_line[:5] == tuple(args[:5])
+    assert record.command_line[-3:] == ("--env-vars", "MODE", "debug")
+    assert "fixture-credential" not in record.to_json()
+
+
 def test_capture_tolerates_missing_git_binary(tmp_path, monkeypatch):
     # A bundle image may lack git entirely: subprocess raises FileNotFoundError instead of
     # returning a nonzero exit. capture degrades like being outside a checkout.

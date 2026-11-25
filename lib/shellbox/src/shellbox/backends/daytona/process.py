@@ -11,8 +11,9 @@ from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
-from daytona import DaytonaNotFoundError, SessionExecuteRequest
+from daytona import DaytonaError, DaytonaNotFoundError, SessionExecuteRequest
 from daytona._async.process import AsyncProcess
+from rigging.redaction import redact_string
 
 from shellbox import process_framing
 from shellbox.backends.daytona import bridge
@@ -46,6 +47,18 @@ BRIDGE_SOURCE = (
 # Daytona's SDK can pass bytes of its stdout/stderr stream markers through as
 # output when a marker ends a websocket message. Frames never contain them.
 STREAM_MARKER_BYTES = b"\x01\x02"
+
+
+class DaytonaCleanupError(RuntimeError):
+    """Report session deletion failures with a session ID and provider status."""
+
+    def __init__(self, session_id: str, status_code: int | None):
+        self.session_id = session_id
+        self.status_code = status_code
+        message = f"Daytona delete_session failed for session {session_id}"
+        if status_code is not None:
+            message += f" (HTTP {status_code})"
+        super().__init__(message)
 
 
 class DaytonaProcessSession(StreamProcessSession):
@@ -112,7 +125,8 @@ class DaytonaProcessSession(StreamProcessSession):
             self._stdout_frames.finish()
             self._stderr_lines.finish()
             if self._code is None:
-                raise RuntimeError("Daytona process stream ended without a complete exit frame")
+                diagnostic = redact_string(self.stderr.decode("utf-8", errors="replace"))
+                raise RuntimeError(f"Daytona process stream ended without a complete exit frame; stderr: {diagnostic}")
         except asyncio.CancelledError:
             if self._closing is None:
                 self._error = MachineTerminated("Daytona process stream was interrupted")
@@ -173,6 +187,8 @@ class DaytonaProcessSession(StreamProcessSession):
                     await self._process.delete_session(self.name, request_timeout=INTERRUPT_TIMEOUT)
                 except DaytonaNotFoundError:
                     pass
+                except DaytonaError as error:
+                    raise DaytonaCleanupError(self.name, error.status_code) from None
         except BaseException:
             await self._failed_cleanup()
             raise

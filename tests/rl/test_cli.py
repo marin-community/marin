@@ -109,6 +109,28 @@ def test_coordinator_request_replays_the_experiment_main(tmp_path, monkeypatch) 
         set_job_info(None)
 
 
+def test_coordinator_collects_missing_names_and_delivers_configured_secrets(tmp_path):
+    required = ("MISSING_SETTING", "EMPTY_SETTING", "DAYTONA_API_KEY")
+    execution = dataclasses.replace(_execution(), required_env_vars=required)
+    with pytest.raises(ValueError) as error:
+        _coordinator_request([_step(execution)], "experiments.test_rl", (), tmp_path, {"EMPTY_SETTING": " "})
+    assert all(name in str(error.value) for name in required)
+
+    source = tmp_path / "credential"
+    execution = dataclasses.replace(execution, coordinator_secret_sources=(("DAYTONA_API_KEY", f"file:{source}"),))
+    source.write_text("   ")
+    ordinary_env = {"MISSING_SETTING": "present", "EMPTY_SETTING": "present", "DAYTONA_API_KEY": "fixture-decoy"}
+    with pytest.raises(ValueError, match="DAYTONA_API_KEY"):
+        _coordinator_request([_step(execution)], "experiments.test_rl", (), tmp_path, ordinary_env)
+
+    source.write_text("fixture-coordinator-credential")
+    _, request = _coordinator_request([_step(execution)], "experiments.test_rl", (), tmp_path, ordinary_env)
+    assert request.environment is not None
+    assert request.environment.secrets["DAYTONA_API_KEY"] == "fixture-coordinator-credential"
+    assert "DAYTONA_API_KEY" not in request.environment.env_vars
+    assert request.environment.env_vars["MISSING_SETTING"] == "present"
+
+
 def test_coordinator_request_requires_a_skyrl_step() -> None:
     with pytest.raises(ValueError, match="did not construct a SkyRL artifact step"):
         _coordinator_request(
@@ -158,8 +180,8 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(
 
     if missing_name is not None:
         assert result.exit_code != 0
-        assert isinstance(result.exception, KeyError)
-        assert result.exception.args == (missing_name,)
+        assert isinstance(result.exception, ValueError)
+        assert missing_name in str(result.exception)
         client.submit.assert_not_called()
         return
 

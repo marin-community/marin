@@ -24,6 +24,7 @@ from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from rigging.config_discovery import find_project_root
+from rigging.secrets import SecretResolutionError, resolve_secret_spec
 from rigging.timing import Duration
 
 from marin.execution.lazy import ArtifactStep, run
@@ -145,10 +146,33 @@ def _coordinator_request(
     env_vars: Mapping[str, str],
 ) -> tuple[str, JobRequest]:
     executions = _skyrl_executions(handles)
-    selected_env = {name: env_vars[name] for name in _COORDINATOR_ENV_VARS if name in env_vars}
+    required = {name for execution in executions for name in execution.required_env_vars}
+    sources: dict[str, str] = {}
     for execution in executions:
-        for name in execution.required_env_vars:
-            selected_env[name] = env_vars[name]
+        for name, source in execution.coordinator_secret_sources:
+            if sources.setdefault(name, source) != source:
+                raise ValueError(f"RL coordinator has conflicting sources for secret {name!r}")
+
+    unavailable = {name for name in required - sources.keys() if not env_vars.get(name, "").strip()}
+    secrets = {}
+    for name, source in sources.items():
+        try:
+            value = resolve_secret_spec(source).value
+        except SecretResolutionError:
+            unavailable.add(name)
+            continue
+        if value.strip():
+            secrets[name] = value
+        else:
+            unavailable.add(name)
+    if unavailable:
+        raise ValueError("Missing, empty, or unreadable RL coordinator variables: " + ", ".join(sorted(unavailable)))
+
+    selected_env = {
+        name: env_vars[name]
+        for name in sorted(required.union(_COORDINATOR_ENV_VARS) - secrets.keys())
+        if name in env_vars
+    }
     selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
     route = _submission_route(executions)
     terminal = graph_handles(handles)[-1]
@@ -168,7 +192,7 @@ def _coordinator_request(
                 job_pb2.ContainerProfile.Name(route.container_profile) if route.container_profile is not None else None
             ),
         ),
-        environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
+        environment=create_environment(workspace=str(workspace), env_vars=selected_env, secrets=secrets, extras=["cpu"]),
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
     )

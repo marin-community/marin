@@ -6,6 +6,7 @@
 import itertools
 import math
 import re
+from collections.abc import Sequence
 
 REDACTED_VALUE = "[REDACTED]"
 
@@ -178,6 +179,71 @@ def _redact_key_like_match(match: re.Match[str]) -> str:
 def redact_string(value: str) -> str:
     redacted = PREFIXED_SECRET_RE.sub(REDACTED_VALUE, value)
     return KEY_LIKE_RE.sub(_redact_key_like_match, redacted)
+
+
+# CLI flags on `iris job run` that take a (KEY, VALUE) pair via Click's
+# type=(str, str). Keep in sync with the Click option definition in
+# iris/cli/job.py; see the `-e/--env-vars` option on the `run` command.
+_ENV_VAR_LONG_FLAG = "--env-vars"
+_ENV_VAR_SHORT_FLAG = "-e"
+
+
+def _env_var_flag_key(token: str, next_token: str | None) -> str | None:
+    """Extract the KEY from an env-var flag token, or None if not such a flag.
+
+    Handles all Click syntaxes for a `(str, str)` option:
+      * bare long form: `--env-vars KEY VALUE` → KEY is *next_token*
+      * attached long form: `--env-vars=KEY VALUE` → KEY is embedded
+      * bare short form: `-e KEY VALUE` → KEY is *next_token*
+      * attached short form: `-eKEY VALUE` → KEY is embedded
+    """
+    if token == _ENV_VAR_LONG_FLAG or token == _ENV_VAR_SHORT_FLAG:
+        return next_token
+    if token.startswith(_ENV_VAR_LONG_FLAG + "="):
+        return token[len(_ENV_VAR_LONG_FLAG) + 1 :]
+    if token.startswith(_ENV_VAR_SHORT_FLAG) and len(token) > 2 and not token.startswith("--"):
+        return token[2:]
+    return None
+
+
+def redact_env_argv(argv: Sequence[str]) -> list[str]:
+    """Redact secret-looking values from a captured CLI argv.
+
+    Handles every Click syntax for the `-e`/`--env-vars` tuple option:
+
+      * ``-e KEY VALUE`` / ``--env-vars KEY VALUE`` — bare
+      * ``--env-vars=KEY VALUE`` — attached long form
+      * ``-eKEY VALUE`` — attached short form
+
+    When KEY matches the shared sensitive-key regex, VALUE is replaced with
+    REDACTED_VALUE. Values under benign keys still pass through the shared
+    string redactor so prefixed or high-entropy tokens do not leak.
+    """
+    out = list(argv)
+    n = len(out)
+    i = 0
+    while i < n:
+        tok = out[i]
+        next_tok = out[i + 1] if i + 1 < n else None
+        key = _env_var_flag_key(tok, next_tok)
+        if key is None:
+            i += 1
+            continue
+
+        # Locate the VALUE token. For bare forms KEY is the next token and
+        # VALUE is the one after; for attached forms KEY is embedded and
+        # VALUE is the next token.
+        attached = tok != _ENV_VAR_LONG_FLAG and tok != _ENV_VAR_SHORT_FLAG
+        val_idx = i + 1 if attached else i + 2
+        if val_idx >= n:
+            # Malformed (no VALUE token present); leave argv alone.
+            i += 1
+            continue
+
+        value = out[val_idx]
+        out[val_idx] = REDACTED_VALUE if is_sensitive_key_name(key) else redact_string(value)
+        i = val_idx + 1
+    return out
 
 
 def _redact_string_prefix_only(value: str) -> str:

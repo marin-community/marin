@@ -31,6 +31,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from rigging.redaction import is_sensitive_key_name
+
+looks_like_credential = is_sensitive_key_name
+
 logger = logging.getLogger(__name__)
 
 ENV_SCHEME = "env:"
