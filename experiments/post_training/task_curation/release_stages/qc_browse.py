@@ -527,6 +527,7 @@ def run_qc_browse_copy(
         inputs.validate()
         configure_coreweave_s3()
         control = RetryControl()
+        injected_query = query is not None
         if query is None:
             query = (
                 query_factory()
@@ -554,12 +555,16 @@ def run_qc_browse_copy(
         if inputs.workers == 1:
             results = [_stage_panel(inputs, query, panel, declarations) for panel in plan["panels"]]
         else:
-            if query_factory is None:
+            if injected_query and query_factory is None:
                 raise ValueError(
-                    "the parallel QC-browse copy builds one paced client per worker;"
-                    " provide query_factory (or set workers=1 for a single injected client)"
+                    "a single injected client cannot serve parallel workers;" " provide query_factory (or set workers=1)"
                 )
-            results = _copy_panels(inputs, plan, declarations, control, query_factory, inputs.workers)
+            factory = (
+                query_factory
+                if query_factory is not None
+                else (lambda: open_paced_query(inputs.service_url, inputs.applet_id, control))
+            )
+            results = _copy_panels(inputs, plan, declarations, control, factory, inputs.workers)
         _check_latest_pointer(query, inputs, "after every panel")
         receipt: dict[str, Any] = {
             "kind": f"atlas-{inputs.release_id}-{COMPLETION_SUFFIX}",

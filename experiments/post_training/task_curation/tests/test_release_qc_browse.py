@@ -17,6 +17,7 @@ import threading
 
 import pytest
 
+from experiments.post_training.task_curation.release_stages import qc_browse as qc_browse_module
 from experiments.post_training.task_curation.release_stages import sizing
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.release_stages.qc_browse import (
@@ -620,6 +621,25 @@ def test_copy_refuses_parallel_workers_without_a_factory(tmp_path):
     plan_proof = plan_qc_browse(inputs, query=fake, dry_run=False, feeds=(tmp_path / FEED_NAME,))
     with pytest.raises(ValueError, match="query_factory"):
         run_qc_browse_copy(inputs, plan_proof["plan_ref"], query=fake, feeds=(tmp_path / FEED_NAME,))
+
+
+def test_copy_fans_out_on_the_production_path_without_injections(tmp_path, monkeypatch):
+    """The typed service path builds one paced client per worker and fans out."""
+    panels, declarations = _six_panels()
+    inputs, fake = make_inputs(tmp_path, panels, declarations, expected_panels=6, workers=3)
+    plan_proof = plan_qc_browse(inputs, query=fake, dry_run=False, feeds=(tmp_path / FEED_NAME,))
+    built = []
+    monkeypatch.setattr(
+        qc_browse_module,
+        "open_paced_query",
+        lambda *args, **kwargs: built.append("client") or fake,
+    )
+    proof = run_qc_browse_copy(inputs, plan_proof["plan_ref"], feeds=(tmp_path / FEED_NAME,))
+    assert proof["status"] == "PASS" and proof["source_count"] == 6
+    # One client for the main queries plus one per copy thread, built lazily.
+    assert built == ["client"] * (1 + 3)
+    for table in COPY_TABLES:
+        assert any(row["load_id"] == TARGET for row in fake.tables[table.name])
 
 
 def test_qc_browse_sizing_scales_with_panels():
