@@ -98,8 +98,8 @@ def parse_requirement(text: str) -> Requirement:
 def with_objectives(candidate: RunMeasurements, preset: presets.Preset) -> RunMeasurements:
     values = dict(candidate.values)
     for metric in preset.objectives:
-        if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR:
-            gain = values.get(metric.key.removesuffix("_per_gpu_hour"))
+        if metric.source is not None:
+            gain = values.get(metric.source)
             if gain is not None and candidate.gpu_hours:
                 values[metric.key] = gain / candidate.gpu_hours
     return replace(candidate, values=values)
@@ -777,7 +777,7 @@ def _native_config(operation: str, *args: str, checkout: Path | None = None):
         if not output:
             raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
         try:
-            return json.loads(output.splitlines()[-1])
+            return json.loads(output)
         except ValueError as error:
             raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
@@ -785,7 +785,10 @@ def _native_config(operation: str, *args: str, checkout: Path | None = None):
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     options = ("--validate-driver",) if validate_driver else ()
-    return _native_config(f"Compose {len(paths)} native launch config(s)", "compose", *options, "--", *paths)
+    configs = _native_config("Compose native launch configurations", "compose", *options, "--", *paths)
+    if not isinstance(configs, list) or len(configs) != len(paths) or any(not isinstance(config, dict) for config in configs):
+        raise InvalidComparison(f"{_NATIVE_ERROR}: expected {len(paths)} configuration objects")
+    return configs
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:

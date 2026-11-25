@@ -5,6 +5,8 @@
 
 import hashlib
 import os
+from argparse import Namespace
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -13,9 +15,12 @@ import torch.multiprocessing as mp
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 
+from experiments.post_training import nccl_transport_probe as probe
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
+    WorkerProcess,
     all_to_all_element_count,
+    collect_worker,
     gate_endpoint_name,
     gate_verdict,
     mapped_nccl_libraries,
@@ -181,15 +186,41 @@ def test_publish_gate_report_writes_task_specific_file(tmp_path):
     assert published.read_text() == '{"verdict": "pass"}'
 
 
-def test_worker_result_file_round_trip(tmp_path):
-    """The worker writes atomically and the launcher reads the matching payload."""
+@pytest.mark.parametrize("check_pynccl", [False, True])
+def test_worker_result_file_round_trip(tmp_path, check_pynccl):
+    """Check the worker receipt against the requested transport stages."""
     result_path = tmp_path / "baseline_default_env-rank3.json"
     payload = {"variant": "baseline_default_env", "rank": 3, "world_size": 192, "gpu": "GB200"}
     write_worker_result(result_path, payload)
     assert not list(tmp_path.glob("*.tmp"))
-    parsed, problem = parse_worker_result(result_path, 3, "baseline_default_env", 192)
-    assert parsed == payload
-    assert problem is None
+    log, output = tmp_path / "log", tmp_path / "output"
+    with log.open("wb") as logs, output.open("wb") as results:
+        rank = collect_worker(
+            WorkerProcess(
+                process=SimpleNamespace(wait=lambda **_: 0),
+                variant_name="baseline_default_env",
+                rank=3,
+                world_size=192,
+                started=0,
+                log_path=log,
+                output_path=output,
+                result_path=result_path,
+                log_file=logs,
+                output_file=results,
+                pynccl_requested=check_pynccl,
+            )
+        )
+    assert rank.worker == payload
+    assert rank.passed is not check_pynccl
+    if check_pynccl:
+        assert "pynccl init failed: missing result" in rank.error_tail
+
+
+def test_multinode_gate_refuses_a_task_without_visible_gpus(monkeypatch):
+    monkeypatch.setattr(probe, "get_job_info", lambda: SimpleNamespace(num_tasks=2, task_index=0))
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 0)
+    with pytest.raises(RuntimeError, match="task 0 has no visible GPUs"):
+        probe.run_gate(Namespace(gate_coverage="all-gpus"))
 
 
 def test_parse_worker_result_fails_closed_on_missing_file(tmp_path):

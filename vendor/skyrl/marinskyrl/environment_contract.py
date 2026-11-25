@@ -11,6 +11,7 @@ import re
 import site
 import socket
 import sys
+import tempfile
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -767,11 +768,14 @@ def write_task_runtime(path: Path, profile: str, project: Path) -> None:
             PYTHONPATH=os.pathsep.join(skyrl_source_paths(project)),
             VLLM_USE_V1="1",
         )
-    with path.open("wb") as stream:
+    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete_on_close=False) as stream:
         for name, value in values.items():
             spec = _SPECS_BY_NAME.get(name)
             mode = "prepend" if spec is not None and spec.prepend else "replace"
             stream.write(os.fsencode(f"{mode}:{name}={value}") + b"\0")
+        stream.write(b"complete\0")
+        stream.flush()
+        Path(stream.name).replace(path)
 
 
 def _main(argv: list[str]) -> None:

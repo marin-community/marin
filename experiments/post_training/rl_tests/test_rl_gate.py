@@ -612,11 +612,21 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
         assert result.returncode == 7
         assert "build child ready" in result.stderr
     else:
-        with pytest.raises(subprocess.TimeoutExpired, match="timed out after 2"):
+        with pytest.raises(subprocess.TimeoutExpired, match="timed out after 2") as error:
             run_skyrl_cpu(command, timeout=2)
+        assert b"build child ready" in error.value.stderr
     with lock.open("r+") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
     assert monotonic() < deadline, "native failure waited for the build child to finish"
+
+
+@pytest.mark.timeout(15)
+def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
+    marker = tmp_path / "cancellation"
+    worker = Path(__file__).with_name("native_build_child.py")
+    with pytest.raises(KeyboardInterrupt):
+        run_skyrl_cpu([sys.executable, "-I", str(worker), "interrupt", str(marker)], stream_stderr=True)
+    assert marker.read_text() == "cancelled"
 
 
 @pytest.mark.parametrize(

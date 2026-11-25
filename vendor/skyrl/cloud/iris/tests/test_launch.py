@@ -18,6 +18,8 @@ from iris.cluster.types import JobName
 from omegaconf import OmegaConf
 from safetensors.numpy import save
 
+from skyrl_train.hf_export_schema import ExportFailed
+
 from cloud.iris import export_hf_checkpoint, hf_model_cache, launch, task_runtime
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
@@ -146,6 +148,7 @@ class LocalLaunchBackend:
     outcome: LaunchOutcome = LaunchOutcome("/user/training", "succeeded", 0)
     checkpoint_marker: str | None = "3\n"
     export_step: int = 3
+    export_fails: bool = False
 
     def validate(self, _config_path: Path) -> None:
         raise AssertionError("this lifecycle test submits training")
@@ -168,6 +171,8 @@ class LocalLaunchBackend:
         return supervise_iris_job(SimpleNamespace(job_id=self.outcome.job_id, wait=lambda **_kwargs: status))
 
     def export_terminal_policy(self, config_path: Path) -> None:
+        if self.export_fails:
+            raise ExportFailed("Hub job did not finish")
         config = yaml.safe_load(config_path.read_text())
         checkpoint_root = config["artifacts"]["checkpoint_root"]
         assert (Path(checkpoint_root) / CHECKPOINT_MARKER_FILENAME).read_text().strip() == "3"
@@ -180,17 +185,18 @@ class LocalLaunchBackend:
 
 
 @pytest.mark.parametrize(
-    "export_hf,outcome,own_tokenizer",
+    "export_hf,outcome,own_tokenizer,export_fails",
     [
-        (None, LaunchOutcome("/user/training", "succeeded", 0), False),
-        (True, LaunchOutcome("/user/training", "succeeded", 0), False),
-        (True, LaunchOutcome("/user/training", "succeeded", 0), True),
-        (None, LaunchOutcome("/user/training", "failed", 1), False),
+        (None, LaunchOutcome("/user/training", "succeeded", 0), False, False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), False, False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), True, False),
+        (None, LaunchOutcome("/user/training", "failed", 1), False, False),
+        (True, LaunchOutcome("/user/training", "succeeded", 0), False, True),
     ],
-    ids=["default-native", "explicit-hf", "embedded-tokenizer-hf", "failed-native"],
+    ids=["default-native", "explicit-hf", "embedded-tokenizer-hf", "failed-native", "failed-hub"],
 )
 def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
-    tmp_path: Path, export_hf: bool | None, outcome, own_tokenizer: bool
+    tmp_path: Path, export_hf: bool | None, outcome, own_tokenizer: bool, export_fails: bool
 ):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
@@ -202,7 +208,7 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
         config["inputs"]["model"].update(tokenizer_uri=None, tokenizer_revision=None)
     config["skyrl"]["trainer"].update(max_steps=3, eval_interval=3, ckpt_interval=3)
     path.write_text(yaml.safe_dump(config))
-    backend = LocalLaunchBackend(outcome=outcome)
+    backend = LocalLaunchBackend(outcome=outcome, export_fails=export_fails)
 
     result = execute_launch(path, backend=backend)
     saved = read_attempt(str(tmp_path / "exports"), "attempt-1")
@@ -218,6 +224,11 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
         assert attempt["result"]["failure"] == "Iris job reached failed"
         assert not (tmp_path / "terminal.json").exists()
         assert backend.export_jobs == []
+        return
+    if export_fails:
+        assert result.state is LaunchState.FAILED and attempt["result"]["state"] == "failed"
+        assert attempt["result"]["failure"] == "Terminal policy export failed: Hub job did not finish"
+        assert not (tmp_path / "terminal.json").exists()
         return
     assert result.state is LaunchState.SUCCEEDED
     terminal = json.loads((tmp_path / "terminal.json").read_text())
@@ -267,23 +278,29 @@ class RetentionCase:
     inventory_error: bool = False
 
 
-@pytest.mark.parametrize("case", [
-    pytest.param(RetentionCase((1,), export_hf=True, expected_marker="1"), id="best-after-export"),
-    pytest.param(RetentionCase((1, 2), keep_every=2, expected_marker="2"), id="periodic-newer-than-best"),
-    pytest.param(RetentionCase((1, 3), keep_every=1, missing_rollout_step=2), id="missing-rollout"),
-    pytest.param(RetentionCase((2,), keep_every=2, best_format="hf", expected_marker="2"), id="hf-with-periodic"),
-    pytest.param(RetentionCase((3,), best_format=None), id="no-winner"),
-    pytest.param(RetentionCase((2, 3), retention="latest", keep_every=2, best_format=None), id="latest"),
-    pytest.param(RetentionCase((1, 2, 3, 4), retention=None), id="legacy-config"),
-    pytest.param(RetentionCase((1, 2, 3, 4), job_state="failed"), id="failed"),
-    pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker=None, expected_marker=None), id="no-marker"),
-    pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker="invalid", expected_marker="invalid"), id="unreadable-marker"),
-    pytest.param(RetentionCase((1, 2, 4), pending_exports=(2, 4), expected_marker="2"), id="pending-exports"),
-    pytest.param(
-        RetentionCase((1, 2, 3, 4), keep_every=2, best_format="hf", inventory_error=True),
-        id="checkpoint-storage-error",
-    ),
-])
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(RetentionCase((1,), export_hf=True, expected_marker="1"), id="best-after-export"),
+        pytest.param(RetentionCase((1, 2), keep_every=2, expected_marker="2"), id="periodic-newer-than-best"),
+        pytest.param(RetentionCase((1, 3), keep_every=1, missing_rollout_step=2), id="missing-rollout"),
+        pytest.param(RetentionCase((2,), keep_every=2, best_format="hf", expected_marker="2"), id="hf-with-periodic"),
+        pytest.param(RetentionCase((3,), best_format=None), id="no-winner"),
+        pytest.param(RetentionCase((2, 3), retention="latest", keep_every=2, best_format=None), id="latest"),
+        pytest.param(RetentionCase((1, 2, 3, 4), retention=None), id="legacy-config"),
+        pytest.param(RetentionCase((1, 2, 3, 4), job_state="failed"), id="failed"),
+        pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker=None, expected_marker=None), id="no-marker"),
+        pytest.param(
+            RetentionCase((1, 2, 3, 4), best_format=None, marker="invalid", expected_marker="invalid"),
+            id="unreadable-marker",
+        ),
+        pytest.param(RetentionCase((1, 2, 4), pending_exports=(2, 4), expected_marker="2"), id="pending-exports"),
+        pytest.param(
+            RetentionCase((1, 2, 3, 4), keep_every=2, best_format="hf", inventory_error=True),
+            id="checkpoint-storage-error",
+        ),
+    ],
+)
 def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_checkpoints, case, monkeypatch):
     path, root = completed_run_checkpoints
     config = yaml.safe_load(path.read_text())
@@ -306,9 +323,14 @@ def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_chec
     if case.pending_exports:
         training = load_launch_config(path)
         for step in case.pending_exports:
-            write_hf_export_request(HFExportRequest.from_trainer(
-                training.skyrl.trainer, step=step, checkpoint_root=str(root), export_root=training.artifacts.export_root
-            ))
+            write_hf_export_request(
+                HFExportRequest.from_trainer(
+                    training.skyrl.trainer,
+                    step=step,
+                    checkpoint_root=str(root),
+                    export_root=training.artifacts.export_root,
+                )
+            )
     if case.inventory_error:
         listing = launch.checkpoint_io.list_dir
 
@@ -345,7 +367,12 @@ def test_checkpoint_export_launch_preserves_training_checkpoints(completed_run_c
         training.skyrl.trainer, step=1, checkpoint_root=str(root), export_root=training.artifacts.export_root
     )
     spec = export_hf_checkpoint.ExportJobSpec(
-        request=request, cluster="cw-rno2a", priority="batch", gpu_variant="H100", job_name="export", timeout=7200,
+        request=request,
+        cluster="cw-rno2a",
+        priority="batch",
+        gpu_variant="H100",
+        job_name="export",
+        timeout=7200,
         no_wait=False,
     )
     export_path = tmp_path / "export.yaml"

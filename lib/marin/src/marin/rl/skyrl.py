@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
 import tempfile
 import uuid
-from collections import deque
 from collections.abc import Mapping
 from contextlib import ExitStack, suppress
 from dataclasses import asdict, dataclass, fields, replace
@@ -58,7 +58,8 @@ _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
-_LAUNCHER_DIAGNOSTIC_LINES = 20
+_CPU_DIAGNOSTIC_BYTES = 64 * 1024
+_LAUNCHER_CANCEL_GRACE_SECONDS = 10
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 _BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
@@ -930,48 +931,72 @@ def run_skyrl_cpu(
 ) -> subprocess.CompletedProcess[str]:
     """Run a SkyRL CPU process in its own group and preserve diagnostic output."""
     environment = skyrl_cpu_environment(env_vars)
-    tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
+    tail = b""
     deadline = None if timeout is None else monotonic() + timeout
-    # File-backed streams let the parent observe the wrapper exit even if a build child inherits its descriptors.
     with (
-        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as stdout,
-        tempfile.NamedTemporaryFile("w+", encoding="utf-8", errors="replace") as stderr,
-        open(stderr.name, encoding="utf-8", errors="replace") as diagnostics,
-        subprocess.Popen(command, stdout=stdout, stderr=stderr, env=environment, start_new_session=True) as process,
+        tempfile.TemporaryFile() as stdout,
+        tempfile.TemporaryFile() as stderr,
+        subprocess.Popen(
+            command,
+            stdout=stdout,
+            stderr=subprocess.PIPE if stream_stderr else stderr,
+            env=environment,
+            start_new_session=True,
+        ) as process,
     ):
+        pipe = process.stderr
 
-        def drain_stderr() -> None:
-            for line in diagnostics:
-                if stream_stderr:
-                    sys.stderr.write(line)
-                tail.append(line)
+        def stream_diagnostics(wait: float) -> None:
+            nonlocal tail, pipe
+            if pipe is None:
+                select.select([], [], [], wait)
+            elif select.select([pipe], [], [], wait)[0]:
+                data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
+                if data:
+                    sys.stderr.write(data.decode(errors="replace"))
+                    tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
+                else:
+                    pipe = None
+
+        def diagnostics() -> bytes:
+            if not stream_stderr:
+                stderr.seek(max(0, os.fstat(stderr.fileno()).st_size - _CPU_DIAGNOSTIC_BYTES))
+                return stderr.read()
+            stream_diagnostics(0)
+            return tail
 
         try:
             if stream_stderr:
                 while process.poll() is None:
-                    remaining = 0.25 if deadline is None else max(0.0, min(0.25, deadline - monotonic()))
-                    try:
-                        process.wait(timeout=remaining)
-                    except subprocess.TimeoutExpired:
-                        if deadline is not None and monotonic() >= deadline:
-                            raise subprocess.TimeoutExpired(command, timeout) from None
-                    drain_stderr()
+                    remaining = 0.25 if deadline is None else min(0.25, deadline - monotonic())
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    stream_diagnostics(remaining)
             else:
                 process.wait(timeout=timeout)
         except BaseException as error:
+            if stream_stderr and isinstance(error, KeyboardInterrupt):
+                # The native launcher handles TERM by cancelling its Iris job tree.
+                # A wrapper can exit before that handler does, so monitor the group.
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
+                    cleanup = monotonic() + _LAUNCHER_CANCEL_GRACE_SECONDS
+                    while monotonic() < cleanup:
+                        process.poll()
+                        os.killpg(process.pid, 0)
+                        stream_diagnostics(0.1)
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
             if isinstance(error, subprocess.TimeoutExpired):
-                drain_stderr()
-                error.stderr = "".join(tail).encode()
+                error.stderr = diagnostics()
             raise
         returncode = process.wait()
         if returncode:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-        drain_stderr()
+        output = diagnostics().decode(errors="replace")
         stdout.seek(0)
-        return subprocess.CompletedProcess(command, returncode, stdout.read(), "".join(tail))
+        return subprocess.CompletedProcess(command, returncode, stdout.read().decode(errors="replace"), output)
 
 
 def prepare_skyrl_cpu_python(timeout: float, *, project_root: Path | None = None) -> Path:

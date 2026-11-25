@@ -27,6 +27,8 @@ from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
 from loguru import logger
 
+from skyrl_train.hf_export_schema import ExportFailed
+
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
 from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
@@ -329,7 +331,7 @@ def execute_launch(
         if config.run.export_hf:
             try:
                 active_backend.export_terminal_policy(resolved_path)
-            except (OSError, subprocess.CalledProcessError, ValueError) as error:
+            except (OSError, subprocess.CalledProcessError, ValueError, ExportFailed) as error:
                 return _record_failure(config, outcome, f"Terminal policy export failed: {error}")
 
     model = None

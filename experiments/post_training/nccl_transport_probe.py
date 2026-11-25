@@ -119,6 +119,7 @@ class WorkerProcess:
     result_path: Path
     log_file: IO[bytes]
     output_file: IO[bytes]
+    pynccl_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -269,6 +270,7 @@ def spawn_worker(
         result_path=result_path,
         log_file=log_file,
         output_file=output_file,
+        pynccl_requested=env.get("PROBE_PYNCCL_INIT") == "1",
     )
 
 
@@ -357,14 +359,12 @@ def collect_worker(handle: WorkerProcess) -> RankResult:
     )
     if result_problem:
         lines.append(result_problem)
-    pynccl_failed = bool(
-        payload is not None
-        and isinstance(payload.get("pynccl"), dict)
-        and payload["pynccl"].get("pynccl_init") == "failed"
-    )
+    pynccl = payload.get("pynccl") if payload is not None else None
+    pynccl_state = pynccl.get("pynccl_init") if isinstance(pynccl, dict) else None
+    pynccl_failed = pynccl_state == "failed" or (handle.pynccl_requested and pynccl_state not in ("pass", "skipped"))
     if pynccl_failed:
-        # A failed engine-side communicator init fails the rank closed.
-        lines.append(f"pynccl init failed: {payload['pynccl'].get('error')}")
+        problem = pynccl.get("error") if isinstance(pynccl, dict) else "missing result"
+        lines.append(f"pynccl init failed: {problem}")
     traceback_lines = worker_traceback(lines) if returncode != 0 else []
     tail = lines[-ERROR_TAIL_LINES:]
     error_tail = [*traceback_lines, "--- last output ---", *tail] if traceback_lines else tail
@@ -547,6 +547,8 @@ def run_gate(args: argparse.Namespace) -> None:
         world_size = 2
     else:
         local_gpus = torch.cuda.device_count()
+        if local_gpus < 1:
+            raise RuntimeError(f"transport gate task {task_index} has no visible GPUs")
         world_size = num_tasks * local_gpus
     gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
