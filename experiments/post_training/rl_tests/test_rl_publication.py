@@ -454,9 +454,18 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                 ),
             ),
         )
+    input_record = sources[0] / RUN_INPUTS_FILENAME
+    declared_inputs = RunInputs.model_validate_json(input_record.read_text())
+    sentinel = "fixture-private-setting-value"
+    input_record.write_text(
+        declared_inputs.model_copy(update={"settings": (f'trainer.api_key="{sentinel}"',)}).model_dump_json()
+    )
     first = publish(first_gate)
     assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
     persisted = stored()
+    assert sentinel not in persisted["native-0"]["label"]
+    assert "trainer.api_key=[REDACTED]" in persisted["native-0"]["label"]
+    input_record.write_text(declared_inputs.model_dump_json())
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "eval_lite/aai_category/coding/mean"

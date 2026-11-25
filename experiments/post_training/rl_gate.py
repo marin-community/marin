@@ -975,7 +975,14 @@ class GateTarget(BaseModel):
         self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]
     ) -> str:
         evidence = [
-            (identity, receipt.native.model_dump(mode="json") if receipt is not None else None)
+            (
+                identity,
+                (
+                    receipt.model_dump(mode="json", exclude={"issue", "index", "interruption"})
+                    if receipt is not None
+                    else None
+                ),
+            )
             for identities, receipts in ((self.candidates, candidates), (self.controls, controls))
             for identity, receipt in zip(identities, receipts, strict=True)
         ]
@@ -1064,7 +1071,13 @@ def command(table: ModelPresets) -> click.Command:
             f"checkpoints/{table.namespace}/compare/"
             f"{preset_name}-{fingerprint_hash(canonical_json((source, pin, index)))}"
         )
-        recorded = RunInputs(preset_name=pin.preset) if index is not None else read_run_inputs(source)
+        try:
+            recorded = RunInputs(preset_name=pin.preset) if index is not None else read_run_inputs(source)
+        except FileNotFoundError as error:
+            message = f"Stored RL inputs are unavailable at {source}"
+            if not separator:
+                message += ". Use --candidate NAME@VERSION for a run stored at an earlier artifact version."
+            raise click.BadParameter(message, param_hint="--candidate") from error
         if index is None and recorded.preset_name != preset_name:
             raise InvalidComparison(f"recorded preset is {recorded.preset_name}, not {preset_name}")
         inputs = recorded.model_copy(

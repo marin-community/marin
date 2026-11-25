@@ -30,7 +30,7 @@ from typing import Protocol, cast
 import click
 import yaml
 from finestore.rl.rl_progress import ControlReplicate, Verdict
-from finestore.rl.run_records import AttemptRecord, RunIndexIdentity, write_attempt
+from finestore.rl.run_records import AttemptRecord, RunIndexIdentity
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
@@ -143,15 +143,9 @@ def _run_rl(
     if issue is not None or index is not None:
         rl_publication.reserve_issue(config.output.export_root, issue)
     if index is not None:
-        write_attempt(
-            config.output.export_root,
-            AttemptRecord(
-                run_id=config.run_id,
-                attempt_id=config.attempt_id,
-                index=index,
-            ),
-        )
         launch = yaml.safe_load(config.launch_config_yaml)
+        if "trainer.project_name" in recipe.override_document(inputs.settings):
+            index = index.model_copy(update={"wandb_project": launch["skyrl"]["trainer"]["project_name"]})
         launch["run"]["index"] = index.model_dump(mode="json")
         config = replace(config, launch_config_yaml=yaml.safe_dump(launch, sort_keys=False))
     return run_skyrl(config, forward_env=forward_env)
