@@ -9,6 +9,7 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from levanter.models.llama import LlamaLMHeadModel
@@ -17,10 +18,12 @@ from levanter.testing.model_configs import llama_test_config
 from levanter.trainer import TrainerConfig
 
 try:
+    import grpc
     from fastapi import HTTPException
     from fastapi.testclient import TestClient
     from openai.types import Completion
 
+    from levanter.inference import inference_pb2, inference_pb2_grpc
     from levanter.inference.engine import (
         InferenceEngineConfig,
         score_token_sequence_logprobs,
@@ -62,6 +65,8 @@ def inference_server_config():
             hbm_utilization=0.1,
         ),
         model_name=TEST_MODEL_NAME,
+        host="127.0.0.1",
+        grpc_port=0,
         temperature=0.7,
         seed=42,
     )
@@ -336,7 +341,7 @@ class _FakeCompletionContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: list[int] | None,
+        stop_tokens: list[list[int]] | None,
         seed: int | None,
         future,
         n_generations: int = 1,
@@ -612,3 +617,56 @@ def test_tokens_endpoint(test_client):
         assert all(isinstance(t, int) for t in token_list["tokens"])
 
     print(f"Tokenization results: {result['results']}")
+
+
+def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
+    _, server = test_client
+    prompt = [18, 7, 3, 18]
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+        stub = inference_pb2_grpc.InferenceStub(channel)
+        result = stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt, max_new_tokens=2, temperature=0, seed=17, num_choices=2
+            ),
+            timeout=30,
+        )
+        assert list(result.prompt_token_ids) == prompt
+        assert len(result.choices) == 2
+        for choice in result.choices:
+            assert len(choice.token_ids) == len(choice.behavior_logprobs) == 2
+            assert np.isfinite(choice.behavior_logprobs).all()
+
+        stop = result.choices[0].token_ids[0]
+        other = (stop + 1) % server.inference_context.model.Vocab.size
+        stopped = stub.Generate(
+            inference_pb2.GenerateRequest(
+                prompt_token_ids=prompt,
+                max_new_tokens=2,
+                temperature=0,
+                seed=17,
+                num_choices=2,
+                stop_sequences=[
+                    inference_pb2.TokenSequence(token_ids=[other, other]),
+                    inference_pb2.TokenSequence(token_ids=[stop]),
+                ],
+            ),
+            timeout=30,
+        )
+        assert [list(choice.token_ids) for choice in stopped.choices] == [[stop], [stop]]
+
+        with pytest.raises(grpc.RpcError) as invalid:
+            stub.Generate(
+                inference_pb2.GenerateRequest(prompt_token_ids=prompt, max_new_tokens=TEST_MAX_SEQ_LEN),
+                timeout=30,
+            )
+        assert invalid.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):
+    client, server = test_client
+    stops = ["A"] * (server.config.service.max_stop_seqs + 1)
+    response = client.post(
+        "/v1/completions",
+        json={"model": TEST_MODEL_NAME, "prompt": "A", "max_tokens": 1, "stop": stops},
+    )
+    assert response.status_code == 400
