@@ -37,6 +37,7 @@ from skyrl_train.dynamic_sampling import (
     GroupSelectionPolicy,
     resolve_dynamic_sampling_criteria,
 )
+from skyrl_train.entrypoints.workload_progress import report_workload_progress
 from skyrl_train.grader_reporting import write_grader_report
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
@@ -349,6 +350,7 @@ class TrainingContext:
                     )
             record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
             if admission.admitted:
+                report_workload_progress()
                 admitted = tuple(admission.admitted)
                 groups.extend(admitted)
                 if on_admitted is not None:

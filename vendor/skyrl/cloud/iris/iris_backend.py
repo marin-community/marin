@@ -54,14 +54,7 @@ from marinskyrl.resource_locator import (
 )
 from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.ray_ports import RayPort
-from marinskyrl.environment_contract import (
-    DEBUG_ARTIFACT_DIR_ENV,
-    DEBUG_MODE_ENV,
-    DebugMode,
-    EnvVarManager,
-    EnvVarScope,
-    wandb_launch_environment,
-)
+from marinskyrl.environment_contract import wandb_launch_environment
 from cloud.iris.runtime_environment import (
     CHECKPOINT_EXPORT_ENTRYPOINT,
     IRIS_TASK_IMAGE,
@@ -86,7 +79,6 @@ class RLStoragePaths:
     checkpoint_root: str
     export_root: str
     trajectory_root: str
-    ray_log_root: str
     resume_checkpoint_count: int
 
 
@@ -305,7 +297,6 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         export_root=artifacts["export_root"],
         trajectory_root=trajectory_retention.get("output_path")
         or join_resource_path(artifacts["attempts_root"], "trajectories"),
-        ray_log_root=ray["log_dir"],
         resume_checkpoint_count=args.resume_checkpoints_to_keep,
     )
     return args
@@ -578,25 +569,6 @@ def _load_cluster_config(cluster_config: str) -> dict[str, Any]:
     return loaded
 
 
-def build_debug_launch_env(args: SimpleNamespace) -> dict[str, str]:
-    """Resolve the effective debug preset after the job name and RL config exist."""
-    trainer = args.config.skyrl.get("trainer", {})
-    mode = str(trainer.get("debug_mode", DebugMode.LIGHT.value))
-    try:
-        resolved = DebugMode(mode)
-    except ValueError as error:
-        choices = ", ".join(item.value for item in DebugMode)
-        raise ValueError(f"trainer.debug_mode must be one of: {choices}; got {mode!r}") from error
-    if resolved is DebugMode.OFF:
-        return {}
-    phase_diagnostics = trainer.get("collective_phase_diagnostics") is not False
-    return EnvVarManager.for_debug_launch(
-        mode=resolved,
-        job_name=args.job_name,
-        collective_phase_diagnostics=phase_diagnostics,
-    ).environment_for(EnvVarScope.TASK_RUNTIME)
-
-
 def config_task_environment(config: DictConfig) -> dict[str, str]:
     """Resolve task settings and explicitly named backend secrets at submission."""
     extra = dict(config.runtime.task_env)
@@ -750,7 +722,6 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
         )
         print(f"[rl-iris] Canonical:  {storage_paths.export_root}", flush=True)
         print(f"[rl-iris] Trajectory: {storage_paths.trajectory_root}", flush=True)
-        print(f"[rl-iris] Ray logs:   {storage_paths.ray_log_root}", flush=True)
         print(f"[rl-iris] Ray spill:  {args.ray_spill_backend.value}:{args.ray_spill_dir}", flush=True)
     print(f"[rl-iris] Rendezvous: {args.rendezvous_dir}", flush=True)
     print(f"[rl-iris] Command:    {shlex.join(command)}", flush=True)
@@ -810,13 +781,6 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
     if config_extra_env:
         env_vars.update(config_extra_env)
         print(f"[rl-iris] Config extra_env: {', '.join(sorted(config_extra_env))}", flush=True)
-    debug_env = build_debug_launch_env(args)
-    if debug_env:
-        env_vars.update(debug_env)
-        print(
-            f"[rl-iris] Debug mode {debug_env[DEBUG_MODE_ENV]}: artifacts -> {debug_env[DEBUG_ARTIFACT_DIR_ENV]}",
-            flush=True,
-        )
     env_vars.update(args.launch_config_bundle.task_environment())
     # ── Per-cluster infra-env DEFAULTS (fill-gap belt for cluster-specific footguns) ──────────
     # Some clusters need a specific network/NCCL interface that a cluster-AGNOSTIC RL config

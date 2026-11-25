@@ -12,12 +12,14 @@ from skyrl_gym.task_factories import EpisodeFactory
 from ray.util.placement_group import placement_group, PlacementGroup
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from ray.remote_function import RemoteFunction
+from ray.util.queue import Queue
 
 from omegaconf import OmegaConf, DictConfig
 from pathlib import Path
 import ray
 
 import os
+import json
 import signal
 import time
 from loguru import logger
@@ -31,6 +33,13 @@ from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
 )
+from skyrl_train.entrypoints.workload_progress import (
+    report_to_driver,
+    report_workload_progress,
+    wait_for_workload,
+    workload_progress_queue,
+)
+from marinskyrl.driver_status import DRIVER_PROGRESS_PATH_ENV, DRIVER_TIMING_FILENAME
 from marinskyrl.speculative_decoding import (
     STANDARD_TRAINING_ENTRYPOINT,
     parse_speculative_decoding_config,
@@ -86,12 +95,10 @@ class EntrypointSupervisor:
         if self._termination_signal is None:
             self._termination_signal = signum
 
-    def wait(self, entrypoint_ref: ray.ObjectRef) -> int | None:
-        """Wait for the task, returning ``None`` normally or ``128 + signal`` after termination."""
+    def wait(self, entrypoint_ref: ray.ObjectRef, progress: Queue | None) -> int | None:
+        """Relay progress until completion or return the exit code after termination."""
         while self._termination_signal is None:
-            ready, _ = ray.wait([entrypoint_ref], timeout=1)
-            if ready:
-                ray.get(entrypoint_ref)
+            if wait_for_workload(entrypoint_ref, progress):
                 return None
 
         signum = self._termination_signal
@@ -606,7 +613,7 @@ class BasePPOExp:
 
     def _setup_trainer(self, tracker):
         """Construct the trainer and models with the experiment's active tracker."""
-        logger.info(self.get_cfg_as_str(self.cfg))
+        logger.opt(lazy=True).debug("{}", lambda: self.get_cfg_as_str(self.cfg))
         os.makedirs(self.cfg.trainer.export_path, exist_ok=True)
         os.makedirs(self.cfg.trainer.ckpt_path, exist_ok=True)
 
@@ -682,6 +689,7 @@ class BasePPOExp:
             trainer = None
             try:
                 trainer = self._setup_trainer(tracker)
+                report_workload_progress()
                 asyncio.run(trainer.train())
             finally:
                 # Release GPU actors before a Ray retry can start another attempt.
@@ -691,17 +699,18 @@ class BasePPOExp:
                     except Exception as e:
                         logger.warning(f"Error shutting down trainer: {e}")
 
-        elapsed = time.monotonic() - started
+        elapsed_excluding_eval = time.monotonic() - started - trainer.evaluation_wall_time
         logger.info(
             "Training run completed: elapsed_excluding_eval_seconds={:.3f}",
-            elapsed - trainer.evaluation_wall_time,
+            elapsed_excluding_eval,
         )
+        return elapsed_excluding_eval
 
 
 @ray.remote(num_cpus=1, max_retries=0)
-def skyrl_entrypoint(cfg: DictConfig):
-    exp = BasePPOExp(cfg)
-    exp.run()
+def skyrl_entrypoint(cfg: DictConfig, progress: Queue | None):
+    with report_to_driver(progress):
+        return BasePPOExp(cfg).run()
 
 
 def run_ray_driver(
@@ -738,9 +747,20 @@ def run_ray_driver(
         exit_code = None
         failure: Exception | None = None
         try:
-            exit_code = supervisor.wait(entrypoint.remote(cfg))
-            if exit_code in (None, 0) and operation is EntrypointOperation.TRAIN:
-                logger.info("Training done!")
+            with workload_progress_queue() as progress:
+                result = entrypoint.remote(cfg, progress)
+                exit_code = supervisor.wait(result, progress)
+                if exit_code is None:
+                    elapsed_excluding_eval = ray.get(result)
+                    if operation is EntrypointOperation.TRAIN:
+                        if progress_path := os.environ.get(DRIVER_PROGRESS_PATH_ENV):
+                            try:
+                                Path(progress_path).with_name(DRIVER_TIMING_FILENAME).write_text(
+                                    json.dumps({"elapsed_excluding_eval_seconds": elapsed_excluding_eval})
+                                )
+                            except OSError:
+                                logger.exception("Could not save trainer completion time")
+                        logger.info("Training done!")
         except Exception as e:
             log_exception_as_text(failure_message, e)
             receipt = write_exception_receipt(

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from cloud.iris import task_runtime
+from marinskyrl.driver_status import DRIVER_PROGRESS_PATH_ENV, DRIVER_TIMING_FILENAME
 from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV
 
 pytestmark = pytest.mark.usefixtures("iris_ray_ports")
@@ -38,35 +39,21 @@ def test_training_driver_starts_from_the_immutable_runtime_checkout(monkeypatch)
         "env": environment,
         "cwd": "/app/marinskyrl",
         "start_new_session": True,
-        "stdout": task_runtime.subprocess.PIPE,
-        "stderr": task_runtime.subprocess.STDOUT,
     }
 
 
-def test_head_returns_driver_abort_when_failure_artifact_upload_blocks(tmp_path, monkeypatch) -> None:
-    upload_started = threading.Event()
-    release_upload = threading.Event()
+def test_head_returns_driver_abort_when_failure_diagnostics_block(tmp_path, monkeypatch) -> None:
+    diagnostics_started = threading.Event()
+    release_diagnostics = threading.Event()
 
-    class BlockingWrite:
-        def __enter__(self):
-            upload_started.set()
-            release_upload.wait()
-            return self
+    def block_diagnostics(reason):
+        diagnostics_started.set()
+        release_diagnostics.wait()
 
-        def __exit__(self, *_args):
-            return False
-
-        def write(self, _payload):
-            return None
-
-    class BlockingFilesystem:
-        def open(self, _path, _mode):
-            return BlockingWrite()
-
-    args = _runtime_args(tmp_path, rendezvous_dir="s3://incident/rendezvous")
+    args = _runtime_args(tmp_path)
     _isolate_head_runtime(tmp_path, monkeypatch)
-    monkeypatch.setattr(task_runtime, "FAILURE_ARTIFACT_TIMEOUT", 0.01)
-    monkeypatch.setattr(task_runtime, "fs_and_path", lambda _uri: (BlockingFilesystem(), "incident/report"))
+    monkeypatch.setattr(task_runtime, "FAILURE_DIAGNOSTICS_TIMEOUT", 0.01)
+    monkeypatch.setattr(task_runtime, "log_termination_diagnostics", block_diagnostics)
 
     result = []
 
@@ -76,36 +63,35 @@ def test_head_returns_driver_abort_when_failure_artifact_upload_blocks(tmp_path,
     runtime_thread = threading.Thread(target=run_head)
     runtime_thread.start()
     try:
-        assert upload_started.wait(timeout=5)
+        assert diagnostics_started.wait(timeout=5)
         runtime_thread.join(timeout=1)
         assert result == [128 + signal.SIGABRT]
     finally:
-        release_upload.set()
+        release_diagnostics.set()
         runtime_thread.join(timeout=5)
 
 
 def _runtime_args(
     tmp_path: Path,
     *,
-    liveness_timeout: float = 0,
+    progress_timeout: float = 0,
     rendezvous_dir: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
-        ray_log_dir=None,
         rendezvous_dir=rendezvous_dir,
         ray_spill_backend=task_runtime.RaySpillBackend.LOCAL,
         ray_spill_dir=str(tmp_path / "spill"),
         cluster_join_timeout=1,
         ray_labels={},
         role_topology=None,
-        driver_liveness_timeout=liveness_timeout,
+        driver_progress_timeout=progress_timeout,
     )
 
 
 def _isolate_head_runtime(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv(DEBUG_ARTIFACT_DIR_ENV, str(tmp_path / "debug"))
     monkeypatch.setattr(task_runtime, "DRIVER_WATCHDOG_POLL_INTERVAL", 0.01)
-    monkeypatch.setattr(task_runtime, "FAILURE_ARTIFACT_TIMEOUT", 2)
+    monkeypatch.setattr(task_runtime, "FAILURE_DIAGNOSTICS_TIMEOUT", 2)
     monkeypatch.setattr(task_runtime, "_num_tasks", lambda: 1)
     monkeypatch.setattr(task_runtime, "_own_ip", lambda: "127.0.0.1")
     monkeypatch.setattr(task_runtime, "ray_start_head", lambda *_args, **_kwargs: None)
@@ -134,8 +120,6 @@ def _run_head_script(args: SimpleNamespace, script: str, monkeypatch, *, trainer
                 [sys.executable, "-c", handshake + script],
                 env=environment,
                 start_new_session=True,
-                stdout=task_runtime.subprocess.PIPE,
-                stderr=task_runtime.subprocess.STDOUT,
                 pass_fds=(ready_write,),
             )
         finally:
@@ -153,12 +137,14 @@ def _run_head_script(args: SimpleNamespace, script: str, monkeypatch, *, trainer
 def test_head_persists_completed_trainer_timing(tmp_path, monkeypatch) -> None:
     _isolate_head_runtime(tmp_path, monkeypatch)
     timing = tmp_path / "trainer_timing.json"
-    output = (
-        "(skyrl_entrypoint pid=124) \x1b[36mskyrl_train.entrypoints.main_base\x1b[0m:"
-        "\x1b[36m_run\x1b[0m:703 - \x1b[32mTraining run completed: "
-        "elapsed_excluding_eval_seconds=203.125\x1b[0m"
-    )
-    script = f"print({output!r})\nprint('task output: Training run completed: elapsed_excluding_eval_seconds=999.000')"
+    script = f"""
+import os
+from pathlib import Path
+
+status = Path(os.environ[{DRIVER_PROGRESS_PATH_ENV!r}])
+status.with_name({DRIVER_TIMING_FILENAME!r}).write_text('{{"elapsed_excluding_eval_seconds": 203.125}}')
+print('task output: Training run completed: elapsed_excluding_eval_seconds=999.000')
+"""
 
     exit_code = _run_head_script(_runtime_args(tmp_path), script, monkeypatch, trainer_timing_uri=str(timing))
 
@@ -166,10 +152,8 @@ def test_head_persists_completed_trainer_timing(tmp_path, monkeypatch) -> None:
     assert json.loads(timing.read_text()) == {"elapsed_excluding_eval_seconds": 203.125}
 
 
-def test_head_kills_a_silent_driver_and_records_the_stall_reason(tmp_path, monkeypatch) -> None:
+def test_head_kills_a_stalled_driver_that_keeps_logging(tmp_path, monkeypatch, capfd) -> None:
     _isolate_head_runtime(tmp_path, monkeypatch)
-    rendezvous_dir = tmp_path / "rendezvous"
-    (rendezvous_dir / "term_artifacts").mkdir(parents=True)
     script = """
 import os
 import signal
@@ -177,7 +161,7 @@ import threading
 
 def block_abort(*_args):
     while True:
-        print("[fd-monitor] process is still allocated", flush=True)
+        print("worker still logging", flush=True)
         threading.Event().wait(0.01)
 
 signal.signal(signal.SIGABRT, block_abort)
@@ -186,27 +170,28 @@ os.kill(os.getpid(), signal.SIGABRT)
 """
 
     exit_code = _run_head_script(
-        _runtime_args(tmp_path, liveness_timeout=0.1, rendezvous_dir=str(rendezvous_dir)), script, monkeypatch
+        _runtime_args(tmp_path, progress_timeout=0.1), script, monkeypatch
     )
 
-    artifacts = list((rendezvous_dir / "term_artifacts").glob("*.txt"))
     assert exit_code == task_runtime.DRIVER_STALLED_EXIT_CODE
-    assert len(artifacts) == 1
-    assert "driver stalled" in artifacts[0].read_text()
+    assert "TERMINATION ARTIFACT" in capfd.readouterr().out
 
 
-def test_head_keeps_a_driver_alive_while_it_emits_progress(tmp_path, monkeypatch) -> None:
+def test_head_keeps_a_quiet_driver_alive_while_work_advances(tmp_path, monkeypatch) -> None:
     _isolate_head_runtime(tmp_path, monkeypatch)
     # The driver runs well past the liveness window, but no single silence exceeds it.
-    script = """
+    script = f"""
+import os
+from pathlib import Path
 import threading
 
-for phase in range(6):
-    print(f"completed phase {phase}", flush=True)
+status = Path(os.environ[{DRIVER_PROGRESS_PATH_ENV!r}])
+for _ in range(6):
+    status.touch()
     threading.Event().wait(0.05)
 """
 
-    exit_code = _run_head_script(_runtime_args(tmp_path, liveness_timeout=0.2), script, monkeypatch)
+    exit_code = _run_head_script(_runtime_args(tmp_path, progress_timeout=0.2), script, monkeypatch)
 
     assert exit_code == 0
 
@@ -219,6 +204,6 @@ import threading
 threading.Event().wait(0.1)
 """
 
-    exit_code = _run_head_script(_runtime_args(tmp_path, liveness_timeout=0), script, monkeypatch)
+    exit_code = _run_head_script(_runtime_args(tmp_path, progress_timeout=0), script, monkeypatch)
 
     assert exit_code == 0

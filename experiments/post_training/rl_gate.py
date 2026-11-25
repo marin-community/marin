@@ -547,7 +547,6 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
         ("skyrl.trainer.ckpt_path", "checkpoint_root", ""),
         ("skyrl.trainer.export_path", "export_root", ""),
         ("ray.rendezvous_dir", "attempts_root", "rendezvous"),
-        ("ray.log_dir", "attempts_root", "ray-logs"),
         ("skyrl.generator.trajectory_retention.output_path", "attempts_root", "trajectories"),
     ):
         root = launch["artifacts"][field]

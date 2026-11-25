@@ -1105,10 +1105,9 @@ def _launch_config_yaml(
             "spill_backend": "local",
             "spill_dir": "/tmp/skyrl-ray-spill",
             "rendezvous_dir": prefix_join(output.attempts_root, "rendezvous"),
-            "log_dir": prefix_join(output.attempts_root, "ray-logs"),
             "rendezvous_timeout": 1800,
             "cluster_join_timeout": 1800,
-            "driver_liveness_timeout": 9000,
+            "driver_progress_timeout": 9000,
         },
         "artifacts": {
             **asdict(output),

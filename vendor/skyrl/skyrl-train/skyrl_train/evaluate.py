@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager, nullcontext
 import torch
 from skyrl_train.utils.progress import tqdm
+from skyrl_train.entrypoints.workload_progress import report_workload_progress
 from typing import Dict, List, Protocol
 from loguru import logger
 from collections import defaultdict
@@ -172,6 +173,7 @@ async def _collect_evaluation_rollouts(
             last_request, last_batch = request, batch
 
             accumulator.record(request, batch, uids)
+            report_workload_progress()
             pbar.update(1)
 
         async with asyncio.TaskGroup() as tasks:

@@ -586,6 +586,7 @@ def initialize_ray(cfg: DictConfig):
     # Referenced by fully-qualified name string (importable in every worker via the
     # editable skyrl_train install) so Ray does not have to cloudpickle it.
     ray.init(
+        log_to_driver=os.environ.get("RAY_LOG_TO_STDERR") != "1",
         runtime_env={
             "env_vars": env_vars,
             "worker_process_setup_hook": "skyrl_train.worker_setup.configure_worker_process",

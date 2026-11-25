@@ -343,9 +343,17 @@ or Failed after a primary upload timeout even when training succeeds. Some W&B
 records may remain unuploaded. Other cleanup can still exhaust the existing
 120-second teardown watchdog.
 
-Read SkyRL actor output in the Iris task logs. The runtime also snapshots Ray
-session logs to the run's attempt storage during training and flushes them on
-failure or termination. Successful tasks skip the final Ray log upload.
+Each Ray node writes to its own Iris task's stdout and stderr. Use the job
+logs to see output across the gang. The driver watchdog uses completed
+workload milestones, including admitted rollout groups, completed evaluation
+requests, and optimizer steps. Set `ray.driver_progress_timeout` to the
+maximum allowed time between milestones, in seconds. The default is 9000 and
+`0` disables the watchdog.
+
+SkyRL writes thread stacks, crash receipts, and NCCL flight recorder dumps
+under `skyrl-debug/` in the [Iris attempt archive](https://github.com/marin-community/marin/blob/main/lib/iris/docs/task-outputs.md).
+Termination diagnostics also go to the task log for cases where Iris cannot
+finalize the archive.
 
 Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
 Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`

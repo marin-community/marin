@@ -36,7 +36,6 @@ def raw_launch_config() -> dict[str, Any]:
             "spill_backend": "local",
             "spill_dir": "/tmp/skyrl-ray-spill",
             "rendezvous_dir": "s3://runs/smoke/rendezvous",
-            "log_dir": "s3://runs/smoke/ray-logs",
         },
         "artifacts": {
             "checkpoint_root": "s3://runs/smoke/checkpoints",
