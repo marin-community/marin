@@ -354,8 +354,8 @@ declaration, recorded by the population build for the declaration audit (ruling
 instead of failing the run."""
 
 
-def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
-    """Return configured populations before selecting oracle-filtered private pins."""
+def bind_measured_receipts(sources: list[RlDataSource]) -> list[RlDataSource]:
+    """Bind each source's measurement receipts and retained release, in serving order."""
     actor_receipts = actor_census_receipts()
     lexical_receipts = lexical_measurements()
     retained_receipts = retained_release_receipts()
@@ -363,12 +363,6 @@ def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
     dedup_receipts = read_dedup_receipts(
         Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
     )
-    archived = {
-        source_id: receipt.archived_original
-        for source_id, receipt in oracle_admitted_release_receipts().items()
-        if receipt.archived_original is not None
-    }
-    sources = [source for source in configured_sources() if source.info.id not in archived]
     sources = [bind_actor_census(source, actor_receipts.get(source.info.id)) for source in sources]
     sources = [
         bind_lexical_measurement(source, lexical_receipts.get(source.info.id), source_lexical_use(source))
@@ -384,10 +378,20 @@ def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
         bind_lexical_measurement(source, lexical_receipts.get(source.info.id), source_lexical_use(source))
         for source in sources
     ]
-    sources = [
+    return [
         bind_grading_census(source, grading_receipts[source.info.id]) if source.info.id in grading_receipts else source
         for source in sources
     ]
+
+
+def sources_before_oracle_filtration() -> dict[str, RlDataSource]:
+    """Return configured populations before selecting oracle-filtered private pins."""
+    archived = {
+        source_id: receipt.archived_original
+        for source_id, receipt in oracle_admitted_release_receipts().items()
+        if receipt.archived_original is not None
+    }
+    sources = bind_measured_receipts([source for source in configured_sources() if source.info.id not in archived])
     sources.extend(bind_archived_retained_release(binding) for binding in archived.values())
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):

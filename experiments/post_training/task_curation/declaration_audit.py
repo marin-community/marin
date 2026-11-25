@@ -249,6 +249,7 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
     from experiments.post_training.task_curation.sources import (  # noqa: PLC0415
         PENDING_MEASUREMENT_SOURCES,
         all_sources,
+        bind_measured_receipts,
         configured_sources,
     )
     from experiments.post_training.task_curation.within_source_binding import (  # noqa: PLC0415
@@ -269,6 +270,17 @@ def canonical_layer() -> tuple[CanonicalLayer, dict[str, dict[str, DeclaredPin]]
     # match that pin, and a remediated/retained release published for it stays staged for
     # intake until adoption selects it.
     declared.update(declared_pins(PENDING_MEASUREMENT_SOURCES))
+    # A pending source handed to the next release keeps its verified retained selection,
+    # so its receipts at that selected pin are not orphaned (ruling 2026-11-25). A
+    # retained receipt that does not verify leaves the configured pin selected, and its
+    # receipts still report.
+    retained_ids = set(retained_release_receipts())
+    handed_on = [
+        source
+        for source in PENDING_MEASUREMENT_SOURCES
+        if source.info.id in retained_ids and source.info.id not in selected
+    ]
+    selected.update(selected_pins(bind_measured_receipts(handed_on)))
 
     # An admitted source whose oracle campaign recorded an archived original carries the
     # archived baseline instead of a live declaration: its recorded conversion pin counts as
