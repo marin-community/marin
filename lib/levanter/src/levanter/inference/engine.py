@@ -1294,21 +1294,8 @@ class InferenceEngine:
             if not cancelled:
                 return False
 
-            slots = [slot for slot, (request_id, _) in self.local_map.items() if request_id in cancelled]
-            if slots:
-                mask = np.zeros(self.gen_state.decode_state.max_seqs, dtype=bool)
-                mask[slots] = True
-                decode_state = _abort_slots(self.gen_state.decode_state, jnp.asarray(mask))
-                self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
-                for slot in slots:
-                    del self.local_map[slot]
-                self.free_slots.extend(slots)
-
             pending[:] = [request for request in pending if request.request_id not in cancelled]
-            for request_id in cancelled:
-                for choice in self.results[request_id].values():
-                    if not choice.done:
-                        choice.finish_reason = FinishReason.ABORT
+            self._abort_requests(cancelled)
             publish_finished()
             return True
 
@@ -1355,6 +1342,22 @@ class InferenceEngine:
             decode_iteration += 1
             if generated == 0 and outstanding:
                 raise RuntimeError("Inference made no progress with unfinished requests")
+
+    def _abort_requests(self, cancelled: set[int]) -> None:
+        slots = [slot for slot, (request_id, _) in self.local_map.items() if request_id in cancelled]
+        if slots:
+            mask = np.zeros(self.gen_state.decode_state.max_seqs, dtype=bool)
+            mask[slots] = True
+            decode_state = _abort_slots(self.gen_state.decode_state, jnp.asarray(mask))
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=decode_state)
+            for slot in slots:
+                del self.local_map[slot]
+            self.free_slots.extend(slots)
+
+        for request_id in cancelled:
+            for choice in self.results[request_id].values():
+                if not choice.done:
+                    choice.finish_reason = FinishReason.ABORT
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """

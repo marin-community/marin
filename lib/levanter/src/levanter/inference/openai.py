@@ -17,7 +17,7 @@ import queue
 import threading
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Union
 
@@ -79,6 +79,8 @@ from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import TrainerConfig
 
 logger = logging.getLogger(__name__)
+
+POLICY_MISMATCH = "The requested policy is no longer active"
 
 
 DEFAULT_MODEL_NAME = "levanter"
@@ -151,12 +153,20 @@ class InferenceResponse:
         return "stop" if self.finish_reason == FinishReason.STOP else "length"
 
 
+def _mark_aborted_choice[Choice: CompletionChoice | ChatCompletionChoice](
+    choice: Choice, reason: FinishReason
+) -> Choice:
+    if reason == FinishReason.ABORT:
+        return choice.model_copy(update={"finish_reason": "abort"})
+    return choice
+
+
 class AbortRequest(BaseModel):
     request_ids: list[str] = Field(min_length=1)
 
 
 class PolicyMismatchError(ValueError):
-    """A generate request was queued for a different immutable policy."""
+    """The requested policy ID differs from the active policy ID."""
 
 
 class InferenceBatch(list):
@@ -350,7 +360,8 @@ class InferenceContext:
             disconnect.cancel()
             with self._requests_lock:
                 del self._http_requests[request_id]
-            await asyncio.gather(disconnect, return_exceptions=True)
+            with suppress(asyncio.CancelledError):
+                await disconnect
 
     def abort(self, request_ids: collections.abc.Sequence[str]) -> None:
         """Abort queued or running generation for the supplied HTTP request IDs."""
@@ -366,7 +377,7 @@ class InferenceContext:
 
     def _abort_queued_request(self, request: InferenceRequest) -> None:
         if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
-            self._resolve_request(request, PolicyMismatchError("The requested policy is no longer active"))
+            self._resolve_request(request, PolicyMismatchError(POLICY_MISMATCH))
             return
         self._resolve_request(
             request,
@@ -494,7 +505,7 @@ class InferenceContext:
             if queued is None or request.future.cancelled():
                 continue
             if request.expected_policy_id is not None and request.expected_policy_id != self._policy_id:
-                self._resolve_request(request, PolicyMismatchError("The requested policy is no longer active"))
+                self._resolve_request(request, PolicyMismatchError(POLICY_MISMATCH))
             else:
                 admitted.append(request)
         return admitted
@@ -836,8 +847,7 @@ async def _create_completion(
                         logprobs=logprobs,
                     )
                 )
-                if generation.finish_reason == FinishReason.ABORT:
-                    choices[-1] = choices[-1].model_copy(update={"finish_reason": "abort"})
+                choices[-1] = _mark_aborted_choice(choices[-1], generation.finish_reason)
                 total_completion_tokens += generation.completion_tokens
                 choice_idx += 1
 
@@ -984,8 +994,7 @@ async def _create_chat_completion(
                     logprobs=logprobs,
                 )
             )
-            if generation.finish_reason == FinishReason.ABORT:
-                choices[-1] = choices[-1].model_copy(update={"finish_reason": "abort"})
+            choices[-1] = _mark_aborted_choice(choices[-1], generation.finish_reason)
             total_completion_tokens += generation.completion_tokens
 
         response = ChatCompletion(

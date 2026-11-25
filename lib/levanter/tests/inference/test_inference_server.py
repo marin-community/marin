@@ -3,6 +3,7 @@
 
 import asyncio
 import dataclasses
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -349,7 +350,7 @@ class _FakeCompletionContext:
         self.submitted_requests = 0
 
     @asynccontextmanager
-    async def http_generation(self, request):
+    async def http_generation(self, _request):
         yield Event()
 
     def submit_request(
@@ -1007,3 +1008,34 @@ def test_binary_disconnect_releases_running_generation(gated_binary_server):
     metadata, tensors = decode_frame(next_response.content)
     assert metadata["choices"][0]["finish_reason"] == "length"
     assert tensors["choice.0.token_ids"].tolist() == [3] * 4
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_http_abort_reason_is_serialized_for_queued_completions(gated_binary_server, stream):
+    client, started, release, registered, _, _ = gated_binary_server
+    body = encode_frame(
+        {"max_tokens": 4, "temperature": 0},
+        {PROMPT_TOKEN_IDS: np.array([18, 7, 3, 18], dtype=np.int32)},
+    )
+    completion = {"model": TEST_MODEL_NAME, "prompt": "A B", "temperature": 0, "max_tokens": 2, "stream": stream}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        try:
+            running = pool.submit(client.post, GENERATE_PATH, content=body, headers={"content-type": MEDIA_TYPE})
+            assert started.wait(30)
+            queued = pool.submit(client.post, "/v1/completions", json=completion, headers={"x-request-id": "queued"})
+            assert registered["queued"].wait(5)
+            assert client.post("/abort", json={"request_ids": ["queued"]}).status_code == 200
+            response = queued.result(timeout=5)
+            assert response.status_code == 200, response.text
+            if stream:
+                data = next(
+                    line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: ")
+                )
+                payload = json.loads(data)
+            else:
+                payload = response.json()
+            assert payload["choices"][0]["finish_reason"] == "abort"
+            assert payload["choices"][0]["text"] == ""
+        finally:
+            release.set()
+        assert running.result(timeout=30).status_code == 200
