@@ -2757,9 +2757,8 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   and two four-H100 replicas. The singleton decode repeat achieved 621.18
   output tokens per second, against 590.24 for compiled plain vLLM on the
   same AgentX workload. The reference-blocked RL worker admitted 49.51
-  response tokens per second. The AgentX series establishes the value of
-  the serving changes on its replay. Test the optimized serving stack
-  against the pinned RL policy and request bursts to measure transfer.
+  response tokens per second. The frozen-policy test below measures
+  transfer to the RL request burst.
   [AgentX H100 series][agentx-h100-serving]
 
   The native training sampler sorts the full vocabulary twice even at
@@ -2780,15 +2779,29 @@ JAX_PLATFORMS=cuda JAX_DEFAULT_MATMUL_PRECISION=default \
   greedy outputs and teacher-forced raw scores on the same policy-0
   weights, then vary sampling, tool stopping, and the reply cap separately.
 
-  Start with one eight-H100 serving host and the fixed RL prompts. Hold
-  exact-token continuation, policy stamps, score mode, sampling, and stop
-  rules fixed while toggling route replay. The AgentX singleton path
-  requires replay to be disabled.
-  Start from the route-capable AgentX branch, which already includes the
-  CUDA paged-attention path and binary endpoint. Bring over the verified
-  checkpoint-install helper and require both serving replicas to acknowledge
-  the same immutable policy. Reconcile position and route fields against
-  the selected learner's replay input before evaluating reward.
+  A frozen-policy test on one eight-H100 host served the original 128
+  training requests from 32 prompt groups through two EP4 replicas. Each
+  replica verified all 5,952 original weight shard hashes. The first
+  verification path reached the 500 GiB host limit while copying full
+  JAX arrays to NumPy. Startup memory peaked at 92.7 GiB after changing
+  verification to stage one shard at a time in pageable memory.
+
+  Each replay mode completed 64 groups across two timed bursts. Route
+  capture produced 1,783 output tokens per second and 0.950 groups per
+  second, compared with 1,751 and 0.925 with capture off. The 1.8% token
+  throughput difference was smaller than the spread between repeats.
+  Exact completions matched for 3 and 5 of 128 requests across modes
+  and for 6 and 7 of 128 within each mode. Exact raw-score matches
+  numbered zero in both cross-mode comparisons. Use fixed batches and
+  teacher-forced continuations to isolate score and router differences. The AgentX
+  singleton path requires replay to be disabled.
+
+  The separate 11-prompt tool-stop test kept route capture off. Stopping
+  at the first complete tool call raised correct calls from 0 to 5 and
+  reduced output from 5,632 to 1,912 tokens. Ten responses ended at a
+  complete call. Three preserved the baseline token sequence through
+  the stop. Reconcile position and route fields against the selected
+  learner's replay input before evaluating reward.
   Use plain compiled vLLM for the backend comparison and vLLM with four
   DSpark proposals for the cutover comparison. Gate the Megatron canary on
   the live receiver, verified publication, and invalidation of old caches.
