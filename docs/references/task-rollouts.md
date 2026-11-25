@@ -143,6 +143,21 @@ SkyRL reply text (`responses`, assistant content) never includes a trailing EOS 
 terminator, even with `skip_special_tokens=False`. `response_ids` keep every sampled
 token, including the terminator.
 
+SkyRL's Harbor settings select Daytona image builds with `daytona_provisioning`
+(`snapshot` or `declarative`). `eval_daytona_provisioning` selects evaluation's
+mode separately; when omitted, evaluation uses the training setting. Both
+Shellbox tasks and original Harbor trials use that phase's mode. Declarative
+builds create no persistent snapshot and require an account that permits them.
+Evaluation provisioning overrides also apply when both phases share credentials.
+
+Installed-agent `judge_model` selects the model exposed to original Harbor tasks
+that declare model access. The worker passes its explicit remote-judge connection
+to the host relay; provider credentials stay on the host.
+Task-environment model callers receive runtime relay access; tasks that declare
+model access only for verification retain verifier-only access.
+Verifier model aliases and credential templates are rewritten to the guest relay
+after task-specific bindings are applied, without exposing them to the agent.
+
 ## Harnesses
 
 A harness is the agent loop of a task: what the model sees, which tools run, and when the attempt ends.
@@ -627,6 +642,57 @@ Neither a slow nor a failing observer changes the rollout's record, grade, or de
 Events still queued when the process dies are lost.
 Concurrent attempts deliver to a shared observer concurrently.
 No end event is emitted when a token-contract error or cancellation propagates.
+
+### Finelog observer
+
+`rolloutengine.finelog_observer.FinelogObserver` writes each event to two Finelog tables. It needs the
+`marin-finelog` package, and the caller owns the `LogClient`.
+
+```python
+log = FinelogRolloutLog(client)
+scope = RolloutScope(run_id=run_id, run_attempt_id=run_attempt_id, phase="train", step=step)
+engine = RolloutEngine(machine_factories, harnesses, observer=FinelogObserver(log, scope, content_fraction=1.0))
+await engine.run_task(spec, model, run_id=unique_rollout_id)
+await asyncio.to_thread(log.flush, 60)
+```
+
+| Table | One row for each | Content |
+| --- | --- | --- |
+| `rolloutengine.events` | Event | The scope, the scalar fields of the payload, and the size of the event's content |
+| `rolloutengine.messages` | Message | The message as JSON in `content`, and one `options` row for each conversation |
+
+Every row has the scope: `run_id` and `run_attempt_id` are the `run_id` and `attempt_id` of
+`marin.rollout_runs`, which has the producer, the model, and the job of a run. `phase` and `step` place the task
+attempt in the run. `rollout_id` is the engine's `run_id`, so give each task attempt a unique one.
+
+In the events table, payloads share the columns `duration`, `stop_reason`, `done`, and `error`, so the meaning
+of those follows `event_type`. Other columns name their payload: `tool_call_id` and `tool_name` are the `call_id`
+and `name` of `ToolCallCompleted`, `grade_status` and `grade_failure` the `status` and `failure` of `Graded`,
+`failed_operation` the `operation` of `AttemptEnded`, and `trace_mode` the `trace` of `AttemptStarted`.
+
+To read a transcript, order the message rows of one `rollout_id` by `event_index`, then `message_index`.
+`ConversationStarted` writes every message of the first request, `ModelTurnCompleted` the new assistant message,
+and `TransitionCompleted` the new observations. A harness that starts a new conversation writes its messages
+again.
+
+`content_fraction` is the share of task attempts whose content is written. A hash of `rollout_id` decides, so a
+task attempt has all of its content or none, and the events table has every task attempt. On an event row,
+`content_chars` is the size of the content also when it is not written, `content_captured` says that it was
+written, and `content_rows` how many rows, so a captured event with fewer message rows lost some. A message
+longer than 1 MiB is cut and marked `truncated`.
+
+The messages table repeats content that other stores hold after the fact. The FineStore archive of an evaluation
+has the transcript of each finished attempt, and SkyRL trajectory retention keeps a sample of the trajectories of
+an RL run. This table has the turns of a task attempt while it runs, for every producer, in one place that SQL
+reads across runs. Finelog is telemetry here, and the returned `Rollout` stays the record: a retry can repeat a
+row, so remove duplicates on `(rollout_id, event_index, message_index)`, and rows are lost when the engine's
+event queue or a table's buffer is full, or when the process dies.
+
+Each table buffers its rows in the process, up to 200,000 rows and 64 MiB of events or 128 MiB of messages by
+the client's size estimate. While Finelog is slow or down, a process with both buffers full held 132 MiB of event
+rows and 160 MiB of message rows, and then lost the oldest rows. `FinelogRolloutLog.flush` waits for the buffered
+rows and logs a table whose rows Finelog did not confirm, because they were lost or the wait timed out. It blocks,
+so call it off the event loop, and call it before the client closes.
 
 ## Deadlines and failures
 

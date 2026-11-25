@@ -19,6 +19,10 @@ from verifyit.spec import Constraint, JudgeSpec, parse_spec
 def score(scorer: str, config: dict[str, Any], response: str, judge: JudgeSpec | None = None) -> Reward:
     """Grade ``response`` with the named source scorer; judged scorers require ``judge``."""
     # Scorers load only the dependencies of the selected dataset's environment.
+    if scorer == "pdbthink":
+        from .pdbthink import grade_pdbthink
+
+        return grade_pdbthink(config, response)
     if scorer == "genomeqa":
         from .genomeqa import grade_genomeqa
 
@@ -105,6 +109,10 @@ def score(scorer: str, config: dict[str, Any], response: str, judge: JudgeSpec |
         from .harness_generation import grade_harness_generation_candidate
 
         return grade_harness_generation_candidate(config["profile"], config["references"], response, config["question"])
+    if scorer == "arc_agi":
+        from .arc_agi import grade_arc_agi
+
+        return grade_arc_agi(config["expected"], config["weight"], response)
     if scorer in {"ifeval", "ifbench"}:
         from .instruction_spec import InstructionProfile, InstructionSpec
         from .instructions import grade_source_instructions

@@ -16,6 +16,7 @@ use crate::store::segment::{segment_id, segment_row_group_rows};
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
+use datafusion_datasource::FileExtensions;
 use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 
@@ -470,12 +471,10 @@ fn rewrite_file_groups(
             return file.clone();
         };
         let access = file
-            .extensions
-            .as_ref()
-            .and_then(|extension| extension.downcast_ref::<ParquetAccessPlan>())
+            .extension::<ParquetAccessPlan>()
             .and_then(|existing| intersect_access_plans(existing, additional))
             .unwrap_or_else(|| additional.clone());
-        file.clone().with_extensions(Arc::new(access))
+        crate::query::file_scan::with_only_extension(file, access)
     })
 }
 
@@ -501,7 +500,7 @@ fn rewrite_projection_files(
         projected.range = None;
         projected.statistics = None;
         projected.ordering = None;
-        projected.extensions = None;
+        projected.extensions = FileExtensions::default();
         projected.metadata_size_hint = None;
         projected
     })

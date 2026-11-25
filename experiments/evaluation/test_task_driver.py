@@ -200,6 +200,21 @@ def test_retry_exhaustion_preserves_all_failed_physical_attempts_and_later_grade
     assert len([row for row in terminal if row["outcome"] == "graded"]) == 7
 
 
+def test_in_process_graded_runs_never_build_the_local_sandbox(
+    tmp_path, recovery_corpora, recovery_endpoint, driver_config, monkeypatch
+):
+    recovery_endpoint.failures_remaining = 0
+
+    def unavailable():
+        raise RuntimeError("fixture host has no bubblewrap")
+
+    monkeypatch.setattr(task_worker, "LocalMachineFactory", unavailable)
+    output = str(tmp_path / "results")
+    execute_with_retries(recovery_corpora, output, driver_config, "http://fixture.test/v1", "unused", None)
+    terminal = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [row["outcome"] for row in terminal] == ["graded"] * 8
+
+
 @pytest.mark.parametrize(
     "status,error_type", [(400, openai.BadRequestError), (401, openai.AuthenticationError), (404, openai.NotFoundError)]
 )

@@ -11,6 +11,40 @@ from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
 pytestmark = pytest.mark.integration
 
 
+def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progress_client):
+    client, request = rl_progress_client
+    api = f"/a/{APPLET_ID}/api"
+    record = progress_record()
+    report = {"evaluation": {"eval_lite/0": [{"environment": "script", "success_rate": 0.5}]}}
+    assert client.post(f"{api}/runs", json=record | {"grader_report": report}).status_code == 200
+    assert client.post(f"{api}/runs", json=record | {"attempt_id": "native-second"}).status_code == 200
+    assert client.post(f"{api}/runs", json=record).status_code == 200
+    first, second = client.get(f"{api}/runs").json()["runs"]
+    assert first["has_grader_report"] is True and "grader_report" not in first
+    assert second.get("has_grader_report") is None
+    query = {"run_id": record["run_id"], "attempt_id": record["attempt_id"]}
+    assert client.get(f"{api}/graders", params=query).json() == {"label": record["label"], "report": report}
+    assert client.get(f"{api}/graders", params=query | {"attempt_id": "missing"}).status_code == 404
+
+    # PostgreSQL accepts numeric report values beyond Python's finite float range.
+    # Listing runs must leave these reports in storage instead of decoding them.
+    request(
+        "http://localhost",
+        "POST",
+        f"/a/{APPLET_ID}/query",
+        json_body={
+            "sql": (
+                "UPDATE rl_runs SET record = jsonb_set(record, '{grader_report}', '{\"value\": 1e400}'::jsonb) "
+                "WHERE run_id = :run_id AND attempt_id = :attempt_id"
+            ),
+            "parameters": query,
+        },
+    )
+    listing = client.get(f"{api}/runs").json()
+    assert listing["skipped_records"] == []
+    assert listing["runs"] == [first, second]
+
+
 def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progress_client):
     client, request = rl_progress_client
     query_path = f"/a/{APPLET_ID}/query"
@@ -75,6 +109,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         ("test/legacy", record | {"run_id": "test/legacy", "attempt_id": "bad", "evaluation": None}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
+        ("test/bad-scalar", "unexpected"),
         (
             "test/bad-result",
             record | {"run_id": "test/bad-result", "attempt_id": "bad", "gate_result": {"comparisons": "invalid"}},
@@ -128,6 +163,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert "evaluation: extra_forbidden" in skipped["test/legacy"]
     assert set(skipped) == {
         "test/bad-shape",
+        "test/bad-scalar",
         "test/bad-result",
         "test/huge-extra",
         "test/huge-gate",

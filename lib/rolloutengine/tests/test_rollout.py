@@ -32,7 +32,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 from taskcompendium.grader import verifyit_package
-from taskcompendium.grading_result import GradingFailure, Outcome
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE, GradingFailure, Outcome
 from taskcompendium.models import (
     AgentMachine,
     AnswerCall,
@@ -513,6 +513,8 @@ async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     expected = RolloutOperation.ATTEMPT if deadline == "attempt_timeout" else RolloutOperation.GRADE
     assert caught.value.operation == expected
     assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
+    assert caught.value.grade.diagnostics[GRADING_FAILURE] == GradingFailure.TIMEOUT
+    assert caught.value.grade.diagnostics[GRADING_DURATION_SECONDS] > 0
 
 
 async def test_output_capture_over_the_file_budget_interrupts_grading():
@@ -534,6 +536,7 @@ async def test_output_capture_over_the_file_budget_interrupts_grading():
     assert caught.value.operation == RolloutOperation.GRADE
     assert "file or byte budget" in str(caught.value.__cause__)
     assert caught.value.rollout.outputs == {}
+    assert caught.value.grade.diagnostics[GRADING_FAILURE] == GradingFailure.EXECUTION
     # The grader never starts, so only the task machine exists.
     assert len(factory.machines) == 1
 

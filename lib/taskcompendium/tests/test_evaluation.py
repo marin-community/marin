@@ -14,7 +14,15 @@ from zephyr.context import ZephyrContext
 from zephyr.stage_io import ZephyrWorkerError
 
 from taskcompendium.convert.answers import exact_answer_task, source_defect
-from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, chat_item, evaluation_cases, evaluation_items, task_rows
+from taskcompendium.evaluation.corpus import (
+    MANIFEST_FILENAME,
+    PROTOCOL_FILENAME,
+    chat_item,
+    evaluation_cases,
+    evaluation_items,
+    evaluation_protocol,
+    task_rows,
+)
 from taskcompendium.evaluation.selection import select_cases
 from taskcompendium.evaluation.spec import (
     AgentEpisode,
@@ -38,6 +46,7 @@ from taskcompendium.evaluation.spec import (
     TextGeneration,
     TrialPolicy,
 )
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
@@ -117,6 +126,25 @@ def test_evaluation_publication_retains_duplicate_source_positions_and_detects_c
     (output / manifest.shards[0].items.path).write_bytes(b"changed after publication")
     with pytest.raises(ValueError, match="changed after publication"):
         list(evaluation_cases(str(output)))
+
+
+def test_published_context_policy_without_overflow_keeps_its_corpus_identity(corpus, tmp_path):
+    source, output, recipe, protocol = corpus
+    protocol = protocol.model_copy(update={"context_policy": ContextPolicy()})
+    publish((source, output, recipe, protocol), tmp_path)
+    legacy_protocol = protocol.model_dump(mode="json")
+    legacy_protocol["context_policy"].pop("overflow", None)
+    legacy_hash = canonical_sha256(legacy_protocol)
+    manifest = json.loads((output / MANIFEST_FILENAME).read_text())
+    manifest["protocol_hash"] = legacy_hash
+    (output / MANIFEST_FILENAME).write_text(json.dumps(manifest))
+    (output / PROTOCOL_FILENAME).write_text(json.dumps(legacy_protocol))
+
+    restored, restored_manifest = evaluation_protocol(str(output))
+
+    assert restored.fingerprint == restored_manifest.protocol_hash == legacy_hash
+    assert len(list(evaluation_cases(str(output)))) == 3
+    assert protocol.model_copy(update={"context_policy": ContextPolicy(overflow="error")}).fingerprint != legacy_hash
 
 
 @pytest.mark.parametrize("change", ["rewrite", "reject", "missing"])
@@ -300,6 +328,38 @@ class CharacterTokenizer:
 
     def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, **kwargs):
         return self.encode("".join(message["content"] for message in conversation))
+
+
+def test_strict_context_preflight_yields_nothing_before_an_overflow(corpus, tmp_path):
+    source, output, recipe, protocol = corpus
+    (source / "rows.jsonl").write_text(
+        "\n".join(json.dumps({"prompt": text}) for text in ("short", "x" * 1000, "short")) + "\n"
+    )
+    protocol = protocol.model_copy(update={"context_policy": ContextPolicy(overflow="error")})
+    publish((source, output, recipe, protocol), tmp_path)
+    decisions = select_cases(
+        str(output),
+        protocol,
+        dataset_id="strict",
+        context_window=100,
+        max_tokens=20,
+        limit=None,
+        tokenizer=CharacterTokenizer(),
+    )
+    with pytest.raises(ValueError, match="cannot fit"):
+        next(decisions)
+    selected = list(
+        select_cases(
+            str(output),
+            protocol,
+            dataset_id="smoke",
+            context_window=100,
+            max_tokens=20,
+            limit=1,
+            tokenizer=CharacterTokenizer(),
+        )
+    )
+    assert sum(decision.case is not None for decision in selected) == 1
 
 
 def publish_cohort(corpus, tmp_path, cohort):
