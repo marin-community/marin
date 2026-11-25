@@ -124,6 +124,7 @@ _FLASHINFER_CUBIN_CACHE_SUBDIR = "flashinfer-cubin"
 
 def _flashinfer_cubin_bootstrap(cache_root: str) -> str:
     return f"""\
+import shutil
 import subprocess
 import tempfile
 
@@ -133,19 +134,22 @@ cubin_site = cubin_root / flashinfer_version
 if not cubin_site.is_dir():
     cubin_root.mkdir(parents=True, exist_ok=True)
     staging = tempfile.mkdtemp(dir=cubin_root)
-    subprocess.run(
-        [
-            "uv", "pip", "install", "--no-deps", "--python", sys.executable, "--target", staging,
-            "--find-links", {_FLASHINFER_CUBIN_INDEX!r}, f"flashinfer-cubin=={{flashinfer_version}}",
-        ],
-        check=True,
-    )
     try:
+        subprocess.run(
+            [
+                "uv", "pip", "install", "--no-deps", "--python", sys.executable, "--target", staging,
+                "--find-links", {_FLASHINFER_CUBIN_INDEX!r}, f"flashinfer-cubin=={{flashinfer_version}}",
+            ],
+            check=True,
+        )
         os.rename(staging, cubin_site)
     except OSError:
         # Another task on this node installed the same version first.
         if not cubin_site.is_dir():
             raise
+    finally:
+        # A failed install, or a copy that lost the rename to another task, stays out of the node cache.
+        shutil.rmtree(staging, ignore_errors=True)
 os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (str(cubin_site), os.environ.get("PYTHONPATH"))))
 """
 
