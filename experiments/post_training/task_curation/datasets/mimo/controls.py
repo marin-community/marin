@@ -17,6 +17,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import shutil
 import subprocess
 import tarfile
@@ -28,6 +29,7 @@ from finestore.rl.curation import ContentEvidenceReference
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import get_secret
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.harbor.adapter import declared_execution_limits, write_harbor_task
 from taskcompendium.identity import canonical_sha256, task_spec_sha256
@@ -102,6 +104,18 @@ def trial_package_checksum(directory: Path) -> str:
     return dirhash(str(directory), "sha256")
 
 
+def local_environment_kwargs(workdir: Path) -> dict:
+    """The LOCAL factory options: the trial disk pool and the GHCR pull authfile."""
+    kwargs: dict = {"disk_root": str(workdir / "disk")}
+    authfile = get_secret("GHCR_REGISTRY_AUTHFILE")
+    if authfile:
+        path = Path(tempfile.gettempdir()) / f"mimo-ghcr-authfile-{os.getpid()}.json"
+        path.write_text(authfile)
+        path.chmod(0o600)
+        kwargs["registry_authfile"] = str(path)
+    return kwargs
+
+
 def control_request(
     task: TaskSpec,
     runtime: dict,
@@ -110,13 +124,14 @@ def control_request(
     task_checksum: str,
     source_task_checksum: str,
     output_root: Path,
+    environment_kwargs: dict,
 ) -> dict:
     """One curation_control request: the repaired package with no agent on the LOCAL path."""
     return {
         "trial": {
             "task": {"path": str(package), "source_runtime": runtime},
             "agent": {"name": NOP_AGENT},
-            "environment": {"type": "local"},
+            "environment": {"type": "local", "kwargs": environment_kwargs},
             "trials_dir": str(output_root / "trials"),
             "trial_name": "nop",
         },
@@ -186,9 +201,15 @@ def run_controls(output_root: str, workdir: Path, sample: int, concurrency: int)
     """Run the NoP controls over the seeded release sample and bind every receipt."""
     root = StoragePath(output_root)
     workdir.mkdir(parents=True, exist_ok=True)
+    environment_kwargs = local_environment_kwargs(workdir)
     rows = release_rows(workdir)
     selected = seeded_control_tasks(rows, sample)
-    logger.info("Selected %d control tasks of %d release rows", len(selected), len(rows))
+    logger.info(
+        "Selected %d control tasks of %d release rows; local kwargs: %s",
+        len(selected),
+        len(rows),
+        sorted(environment_kwargs),
+    )
     archive_root = str(root / "archives")
     receipts = {}
     failures = {}
@@ -207,7 +228,14 @@ def run_controls(output_root: str, workdir: Path, sample: int, concurrency: int)
         with tempfile.TemporaryDirectory(prefix="mimo-nop-") as scratch:
             control_root = Path(scratch) / "control"
             request = control_request(
-                task, runtime, package, requirements, task_checksum, source_task_checksum, control_root
+                task,
+                runtime,
+                package,
+                requirements,
+                task_checksum,
+                source_task_checksum,
+                control_root,
+                environment_kwargs,
             )
             return run_control(request, control_root, archive_root)
 
@@ -227,6 +255,7 @@ def run_controls(output_root: str, workdir: Path, sample: int, concurrency: int)
         "release": {"repo": RELEASE_REPO, "revision": RELEASE_REVISION},
         "kind": "nop",
         "backend": "local",
+        "local_kwargs": sorted(environment_kwargs),
         "selected": len(selected),
         "completed": len(receipts),
         "archive_root": archive_root,

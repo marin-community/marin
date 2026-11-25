@@ -127,9 +127,10 @@ def test_control_request_carries_the_nop_agent_and_the_local_path(rows, tmp_path
         task_checksum="c" * 64,
         source_task_checksum="d" * 64,
         output_root=tmp_path / "control",
+        environment_kwargs={"disk_root": str(tmp_path / "disk")},
     )
     assert request["trial"]["agent"] == {"name": "nop"}
-    assert request["trial"]["environment"] == {"type": "local"}
+    assert request["trial"]["environment"] == {"type": "local", "kwargs": {"disk_root": str(tmp_path / "disk")}}
     assert request["trial"]["task"]["source_runtime"] == runtime
     assert request["source"]["task_checksum"] == "c" * 64
     assert request["source"]["source_task_checksum"] == "d" * 64
@@ -144,7 +145,16 @@ def test_run_control_refuses_a_reward_that_does_not_fail_closed(rows, tmp_path, 
     )
     package = tmp_path / "packages" / canonical_sha256(task.id)
     _write(task, package, requirements)
-    request = control_request(task, runtime, package, requirements, "c" * 64, "d" * 64, tmp_path / "control")
+    request = control_request(
+        task,
+        runtime,
+        package,
+        requirements,
+        "c" * 64,
+        "d" * 64,
+        tmp_path / "control",
+        {"disk_root": str(tmp_path / "disk")},
+    )
 
     class FakeReceipt:
         score = 1.0
