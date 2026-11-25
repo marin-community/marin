@@ -21,6 +21,16 @@ export function formatScore(value: number | null | undefined): string {
   return value.toFixed(3)
 }
 
+// A raw metric value at 2 significant digits, in plain decimal notation like the rest of the
+// dashboard (12345 reads 12000, not 1.2e4). Display only; stored values stay exact.
+export function formatValue(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—'
+  if (value === 0) return '0'
+  const magnitude = Math.floor(Math.log10(Math.abs(value)))
+  const rounded = Number(value.toPrecision(2))
+  return rounded.toFixed(Math.max(0, 1 - magnitude))
+}
+
 export function shortSha(sha: string | null | undefined): string {
   if (!sha) return '—'
   return sha.length > 10 ? sha.slice(0, 10) : sha
