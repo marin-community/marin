@@ -9,7 +9,7 @@ from skyrl_gym.verification import VerificationResult
 from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
-from skyrl_train.grader_reporting import GraderStats, grader_report_session, write_grader_report
+from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.io import io
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
@@ -57,9 +57,8 @@ def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_p
         [math_b],
     )
     summary = final.summary()
-    with grader_report_session():
-        write_grader_report(export_path, "25", {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]})
-        write_grader_report(export_path, "25", {"evaluation_duration_seconds": 11.0})
+    write_grader_report(export_path, "25", {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]})
+    write_grader_report(export_path, "25", {"evaluation_duration_seconds": 11.0})
 
     report = json.loads((tmp_path / "grader_report.json").read_text())
     evaluations = report["evaluation"]
