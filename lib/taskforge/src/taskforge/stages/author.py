@@ -21,7 +21,7 @@ from taskforge.model.llm import Message, Role
 from taskforge.model.proposal import render
 from taskforge.model.review import VALIDATION_RESULT, Modify
 from taskforge.model.stage import Exit
-from taskforge.model.workpiece import Conversation, Workpiece
+from taskforge.model.workpiece import Conversation, Generated, Repaired, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy
 from taskforge.resources.bundle import Resources
 from taskforge.resources.env import (
@@ -107,14 +107,16 @@ def install_env(ctx: Context, env: Env) -> None:
 def opening_prompt(workpiece: Workpiece, policy: Policy) -> str:
     """The first user message of a new author session: the proposal to build, or review's findings to repair.
 
-    A workpiece without a proposal holds a task from another source and reaches the author only through a
-    review ``Modify``.
+    A ``Repaired`` workpiece holds a task from another source and reaches the author only through a review
+    ``Modify``.
     """
-    if workpiece.proposal is not None:
-        return policy.prompt("author.user").render(proposal=render(workpiece.proposal))
+    if isinstance(workpiece.origin, Generated):
+        return policy.prompt("author.user").render(proposal=render(workpiece.origin.proposal))
     decision = workpiece.decisions[-1] if workpiece.decisions else None
     if not isinstance(decision, Modify):
-        raise ValueError(f"Workpiece {workpiece.id} has no proposal, so its author session needs review's findings")
+        raise ValueError(
+            f"Workpiece {workpiece.id} repairs a source task, so its author session needs review's findings"
+        )
     return policy.prompt("author.repair").render(kind="review", detail="\n".join(decision.findings))
 
 
@@ -126,7 +128,7 @@ def source_environment(workpiece: Workpiece, policy: Policy) -> EnvironmentRequi
     source's own, ``sandbox.source_images``. A generated task's author always gets ``author.image``.
     """
     submission = workpiece.submission
-    if workpiece.source is None or submission is None:
+    if not isinstance(workpiece.origin, Repaired) or submission is None:
         return None
     environment = submission.task.environment_requirements
     admitted = policy.setting("sandbox.source_images", tuple)
@@ -198,9 +200,8 @@ async def author(ctx: Context, workpiece: Workpiece, config: TaskforgeConfig, re
                 (validation_path(str(workdir), index), VALIDATION_RESULT.dump_json(evidence))
                 for index, evidence in enumerate(workpiece.evidence)
             )
-            proposal = None if workpiece.proposal is None else render(workpiece.proposal)
-            if proposal is not None:
-                writes.append((workdir / "proposal.json", proposal.encode()))
+            if isinstance(workpiece.origin, Generated):
+                writes.append((workdir / "proposal.json", render(workpiece.origin.proposal).encode()))
             await ctx.emit(WriteFiles(tuple(writes)))
             tools = config.tools["author"]
             session = workpiece.session or Conversation(

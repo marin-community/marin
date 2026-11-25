@@ -9,9 +9,9 @@ nested payloads and must replace them; persistence boundaries serialize snapshot
 
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import TypedDict, Unpack
+from typing import Annotated, Literal, TypedDict, Unpack
 
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter
 from taskcompendium.models import TaskSpec
 
 from taskforge.model.content_hash import digest
@@ -38,6 +38,25 @@ class Conversation:
     tool_schemas: tuple[ToolSchema, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class Generated:
+    """A workpiece that builds a new task from ``proposal``."""
+
+    proposal: TaskProposal
+    kind: Literal["generated"] = "generated"
+
+
+@dataclass(frozen=True, slots=True)
+class Repaired:
+    """A workpiece that repairs a task another source wrote; ``source`` keeps it as the source delivered it."""
+
+    source: Submission
+    kind: Literal["repaired"] = "repaired"
+
+
+type Origin = Annotated[Generated | Repaired, Field(discriminator="kind")]
+
+
 class Terminal(StrEnum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
@@ -47,8 +66,7 @@ class Terminal(StrEnum):
 
 class WorkpieceChanges(TypedDict, total=False):
     id: str
-    proposal: TaskProposal | None
-    source: Submission | None
+    origin: Origin
     round: int
     session: Conversation | None
     submission: Submission | None
@@ -63,14 +81,13 @@ class WorkpieceChanges(TypedDict, total=False):
 class Workpiece:
     """A task in progress, started from a proposal or from an existing task in ``submission``.
 
-    A workpiece without a proposal repairs a task another source wrote: it starts at validation, and
-    review's findings open its author sessions. ``source`` keeps that task as the source delivered it,
-    after the author replaces ``submission``.
+    A ``Repaired`` workpiece starts at validation with its source task as ``submission``, and review's
+    findings open its author sessions. Its origin keeps the task as the source delivered it, after the
+    author replaces ``submission``.
     """
 
     id: str
-    proposal: TaskProposal | None = None
-    source: Submission | None = None
+    origin: Origin
     round: int = 0
     session: Conversation | None = None
     submission: Submission | None = None
@@ -81,10 +98,8 @@ class Workpiece:
     accepted_with: BandOutcome | None = None
 
     def __post_init__(self) -> None:
-        if self.proposal is None and self.submission is None:
-            raise ValueError(f"Workpiece {self.id} needs a proposal or an existing task")
-        if self.proposal is not None and self.source is not None:
-            raise ValueError(f"Workpiece {self.id} starts from a proposal or a source task, not both")
+        if isinstance(self.origin, Repaired) and self.submission is None:
+            raise ValueError(f"Workpiece {self.id} repairs a source task, so it starts with that task as its submission")
 
     @property
     def modify_rounds(self) -> int:
@@ -93,7 +108,7 @@ class Workpiece:
         A source task's first modify only opens its first author session, after review measured the task as
         its source wrote it, so it is not charged: a source task gets as many author sessions as a proposal.
         """
-        return self.round - 1 if self.proposal is None and self.round > 0 else self.round
+        return self.round - 1 if isinstance(self.origin, Repaired) and self.round > 0 else self.round
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":
         return replace(self, **changes)

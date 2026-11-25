@@ -58,9 +58,10 @@ chosen arm, with the same band and solver trials as generation. The modify after
 review isn't charged against `budget.max_modify_rounds`, so a source task gets as many author
 sessions as a proposal, and when it asks for missing controls it also reports the measured solve rate.
 
-`workpiece.json` keeps the task as its source delivered it in `source`, beside the latest
-`submission`. A revision that changes the task's `id` or `source` goes back to the author, since
-they join the task to its source. A relaunch whose input file no longer matches the published
+A workpiece's `origin` is `generated`, holding its `proposal`, or `repaired`, holding the task as
+its source delivered it in `source`; `workpiece.json` keeps it beside the latest `submission`. A
+revision that changes the task's `id` or `source` goes back to the author, since they join the
+task to its source. A relaunch whose input file no longer matches the published
 workpiece fails rather than resuming another version's event stream; use a new `--output` for a
 re-converted input.
 
@@ -158,7 +159,7 @@ Each workpiece publishes to `<output>/<capability>/<slot>/`:
 | file | contents |
 |---|---|
 | `events.jsonl` | the full effect log: every request, result, tool call, retry, scope; uploaded after 25 events or 60 s, whichever comes first |
-| `workpiece.json` | the frozen workpiece: proposal, submission, evidence per round, decisions, terminal |
+| `workpiece.json` | the frozen workpiece: origin (proposal or source task), submission, evidence per round, decisions, terminal |
 | `status.json` | `terminal` (`accepted`, `abandoned`, `held`, or `null` while running) and when the upload started |
 
 A driver restarted against the same output resumes each workpiece from these files and prints
@@ -179,7 +180,7 @@ While a driver is working on a workpiece, its `status.json` reads `terminal: nul
 Run `uv run --frozen python -m taskforge.driver report <output-root> [--since-hours N]`
 with the storage credentials above. It reads published snapshots and event parts concurrently,
 computes one `WorkpieceMetrics` row per workpiece (`src/taskforge/metrics.py`), and prints each
-summary for all workpieces and again for each origin (`proposal`, or `source` for a repaired task),
+summary for all workpieces and again for each origin present (`generated` or `repaired`),
 every line prefixed `origin=`. A summary has terminal/reason counts, accepted/hour over 1/6/24 hours,
 accepted tasks without an author session, author sessions per accepted task, `author.image`
 fallbacks, timed-out author and adversary commands, tokens by role in total and per accepted task,

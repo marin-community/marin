@@ -10,11 +10,11 @@ from taskcompendium.grading_result import GradeResult, Outcome
 
 from taskforge.effects.events import Event, Note, Resolved, StageCompleted
 from taskforge.effects.log import JsonlSink, Record, Status
-from taskforge.metrics import Origin, workpiece_metrics
+from taskforge.metrics import workpiece_metrics
 from taskforge.model.proposal import TaskProposal
 from taskforge.model.review import Accept, BandOutcome, Cause, TrialResult, ValidationResult
 from taskforge.model.stage import Stage
-from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Generated, Repaired, Submission, Terminal, Workpiece
 from taskforge.report import report
 from taskforge.resources.env import TIMEOUT_EXIT_CODE, CommandResult, RunCommand
 from taskforge.stages.author import AUTHOR_IMAGE_FALLBACK
@@ -32,7 +32,7 @@ def repaired() -> Workpiece:
     revised = Submission(arithmetic_task().model_copy(update={"instruction": "Add the numbers."}), (), "revised")
     return Workpiece(
         "repaired",
-        source=source,
+        Repaired(source),
         submission=revised,
         round=1,
         evidence=(evidence(source, 1), evidence(revised, 2)),
@@ -60,7 +60,7 @@ def test_source_task_metrics_count_one_session_per_round_and_measure_both_submis
         ]
     )
     metrics = workpiece_metrics(Status(terminal=Terminal.ACCEPTED), repaired(), log, since=-math.inf)
-    assert metrics.origin is Origin.SOURCE
+    assert metrics.origin == "repaired"
     assert (metrics.author_sessions, metrics.author_image_fallbacks, metrics.command_timeouts) == (1, 1, 1)
     assert (metrics.initial_solve_rate, metrics.final_solve_rate) == (0.25, 0.5)
     assert (metrics.started, metrics.finished, metrics.accepted_at) == (100, 190, 190)
@@ -70,11 +70,11 @@ async def test_report_splits_lines_by_origin(tmp_path: Path, proposal: TaskPropo
     untouched = Submission(arithmetic_task(), (), "source task")
     workpieces = {
         "generated": (
-            Workpiece("generated", proposal, submission=untouched, terminal=Terminal.ACCEPTED),
+            Workpiece("generated", Generated(proposal), submission=untouched, terminal=Terminal.ACCEPTED),
             [(0, StageCompleted(Stage.AUTHOR, "", "Submitted", 0))],
         ),
         "untouched": (
-            Workpiece("untouched", source=untouched, submission=untouched, terminal=Terminal.ACCEPTED),
+            Workpiece("untouched", Repaired(untouched), submission=untouched, terminal=Terminal.ACCEPTED),
             [],
         ),
     }
@@ -88,6 +88,6 @@ async def test_report_splits_lines_by_origin(tmp_path: Path, proposal: TaskPropo
     lines = await report(str(tmp_path))
     assert "origin=all workpieces count=2" in lines
     assert "origin=all accepted_without_author count=1" in lines
-    assert "origin=proposal accepted_without_author count=0" in lines
-    assert "origin=source accepted_without_author count=1" in lines
-    assert "origin=source terminal=accepted count=1" in lines
+    assert "origin=generated accepted_without_author count=0" in lines
+    assert "origin=repaired accepted_without_author count=1" in lines
+    assert "origin=repaired terminal=accepted count=1" in lines

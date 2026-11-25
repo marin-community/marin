@@ -14,7 +14,7 @@ from taskforge.effects.log import EventLog
 from taskforge.model.content_hash import digest
 from taskforge.model.review import Incomplete
 from taskforge.model.stage import Exit, Stage
-from taskforge.model.workpiece import Terminal, Workpiece
+from taskforge.model.workpiece import Generated, Terminal, Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.resources.ids import NewId
 from taskforge.stages import STAGES
@@ -52,7 +52,7 @@ async def run_workpiece(
     """
     ctx = Context(log=log)
     wp = seed
-    stage = Stage.AUTHOR if seed.proposal is not None else Stage.VALIDATE
+    stage = Stage.AUTHOR if isinstance(seed.origin, Generated) else Stage.VALIDATE
     config_digest = digest(config.policy)
     interrupted = False
     stage_attempts: dict[tuple[Stage, int], int] = {}

@@ -37,7 +37,7 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import Conversation, Workpiece
+from taskforge.model.workpiece import Conversation, Generated, Repaired, Workpiece
 from taskforge.resources.bundle import Resources
 from taskforge.resources.env import WriteFiles
 from taskforge.resources.execution import close_resource
@@ -163,6 +163,7 @@ async def run_adversary(
         )
     )
     files = (*spec.task.resources.all, *spec.task.resources.worker)
+    proposal = render(workpiece.origin.proposal) if isinstance(workpiece.origin, Generated) else NO_PROPOSAL
     env = await resources.envs.create(host_requirements(requested))
     try:
         async with ctx.scope(f"adversary:{name}"):
@@ -187,7 +188,7 @@ async def run_adversary(
                         Role.USER,
                         config.policy.prompt("adversary.user").render(
                             task=task_manifest(spec.task),
-                            proposal=NO_PROPOSAL if workpiece.proposal is None else render(workpiece.proposal),
+                            proposal=proposal,
                             name=name,
                             workdir=config.policy.setting("author.workdir", str),
                         ),
@@ -239,9 +240,9 @@ def check_source_identity(workpiece: Workpiece) -> None:
     Raises:
         InvalidTaskSpec: the submission's ``id`` or ``source`` differs from the source task's.
     """
-    if workpiece.source is None or workpiece.submission is None:
+    if not isinstance(workpiece.origin, Repaired) or workpiece.submission is None:
         return
-    original, task = workpiece.source.task, workpiece.submission.task
+    original, task = workpiece.origin.source.task, workpiece.submission.task
     if (task.id, task.source) != (original.id, original.source):
         raise InvalidTaskSpec(
             f"A task from another source keeps its id {original.id!r} and its source {original.source}; "

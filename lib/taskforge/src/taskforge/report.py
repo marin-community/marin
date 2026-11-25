@@ -11,7 +11,7 @@ from pydantic import TypeAdapter
 from rigging.filesystem.factory import open_url, url_to_fs
 
 from taskforge.effects.log import JsonlSink, Status
-from taskforge.metrics import GAP_EVENTS, RUNNING, Origin, Role, WorkpieceMetrics, workpiece_metrics
+from taskforge.metrics import GAP_EVENTS, RUNNING, Role, WorkpieceMetrics, workpiece_metrics
 from taskforge.model.llm import Usage
 from taskforge.model.stage import Stage
 from taskforge.model.workpiece import WORKPIECE, Terminal, Workpiece
@@ -97,8 +97,8 @@ async def report(root: str, since_hours: float | None = None) -> tuple[str, ...]
 
     rows = [row for row in await asyncio.gather(*(collect(path) for path in sorted(paths))) if row is not None]
     lines = [f"workpieces={len(rows)} since_hours={since_hours if since_hours is not None else 'all'}"]
-    groups = [(ALL_ORIGINS, rows), *((origin.value, [row for row in rows if row.origin is origin]) for origin in Origin)]
+    origins = sorted({row.origin for row in rows})
+    groups = [(ALL_ORIGINS, rows), *((origin, [row for row in rows if row.origin == origin]) for origin in origins)]
     for name, group in groups:
-        if group or name == ALL_ORIGINS:
-            lines += [f"origin={name} {line}" for line in summary(group, now, cutoff, since_hours)]
+        lines += [f"origin={name} {line}" for line in summary(group, now, cutoff, since_hours)]
     return tuple(lines)

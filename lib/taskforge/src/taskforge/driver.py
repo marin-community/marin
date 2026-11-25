@@ -33,7 +33,7 @@ from taskforge.lowering import check_candidates
 from taskforge.model.controls import CONTROLS, Control
 from taskforge.model.proposal import TASK_PROPOSAL, TaskProposal
 from taskforge.model.review import Incomplete
-from taskforge.model.workpiece import WORKPIECE, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Generated, Repaired, Submission, Terminal, Workpiece
 from taskforge.policy import Policy, load_policy, parse_overlay
 from taskforge.report import report
 from taskforge.resources.sandbox.factories import grading_environment
@@ -164,9 +164,9 @@ def seed(path: str, policy: Policy) -> Workpiece | None:
     if path.endswith(TASK_SUFFIX):
         task = TaskSpec.model_validate_json(text)
         submission = Submission(task, source_controls(path, task), SOURCE_TASK_NOTES)
-        return Workpiece(task.id, submission=submission, source=submission)
+        return Workpiece(task.id, Repaired(submission), submission=submission)
     proposal = TASK_PROPOSAL.validate_json(text)
-    return Workpiece(proposal.header.id, proposal) if eligible(proposal, policy) else None
+    return Workpiece(proposal.header.id, Generated(proposal)) if eligible(proposal, policy) else None
 
 
 def source_controls(task_path: str, task: TaskSpec) -> tuple[Control, ...]:
@@ -192,9 +192,9 @@ def source_images(seed: Workpiece) -> tuple[str, ...]:
     These are the task's and its grader's own images, the pinned image included when the source uses it:
     lowering admits exactly these for the task, so a revision cannot move it onto another image.
     """
-    if seed.proposal is not None or seed.submission is None:
+    if not isinstance(seed.origin, Repaired):
         return ()
-    task = seed.submission.task
+    task = seed.origin.source.task
     grader = grading_environment(task)
     images = {task.environment_requirements.docker_image, None if grader is None else grader.docker_image}
     return tuple(sorted(image for image in images if image is not None))
@@ -212,7 +212,7 @@ def check_seed(published: Path, initial: Workpiece) -> None:
     if not published.exists():
         return
     previous = WORKPIECE.validate_json(published.read_bytes())
-    if (previous.proposal, previous.source) != (initial.proposal, initial.source):
+    if previous.origin != initial.origin:
         raise ValueError(f"{published} was published for another version of this input; use a new --output")
 
 

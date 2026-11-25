@@ -34,13 +34,6 @@ GAP_EVENTS = (RunCommand, WriteFile, InferenceRequest)
 USAGE_FIELDS = tuple(field.name for field in fields(Usage))
 
 
-class Origin(StrEnum):
-    """Where a workpiece's task came from: a proposal, or a task another source wrote, for repair."""
-
-    PROPOSAL = "proposal"
-    SOURCE = "source"
-
-
 class Role(StrEnum):
     AUTHOR = "author"
     SOLVER = "solver"
@@ -53,6 +46,7 @@ class WorkpieceMetrics:
     """One workpiece's outcome, spend and timing.
 
     Attributes:
+        origin: The ``kind`` of the workpiece's origin, ``generated`` or ``repaired``.
         author_sessions: Rounds in which an author session completed. A source task accepted as its
             source wrote it has none.
         author_image_fallbacks: Author sessions that ran in ``author.image`` because the task's own
@@ -71,7 +65,7 @@ class WorkpieceMetrics:
     """
 
     id: str
-    origin: Origin
+    origin: str
     terminal: str
     reasons: tuple[str, ...]
     author_sessions: int
@@ -189,7 +183,7 @@ def workpiece_metrics(
     used = spend(records, since)
     return WorkpieceMetrics(
         id=workpiece.id,
-        origin=Origin.PROPOSAL if workpiece.proposal is not None else Origin.SOURCE,
+        origin=workpiece.origin.kind,
         terminal=str(status.terminal or RUNNING),
         reasons=failure_reasons(status, workpiece),
         author_sessions=len(

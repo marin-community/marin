@@ -58,7 +58,7 @@ from taskforge.model.review import (
     TrialResult,
     ValidationResult,
 )
-from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
+from taskforge.model.workpiece import WORKPIECE, Conversation, Generated, Repaired, Submission, Terminal, Workpiece
 from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.bundle import Resources
@@ -91,7 +91,7 @@ def workpiece(proposal: TaskProposal) -> Workpiece:
         Control(Candidate(reply), RewardBand(Outcome.GRADED, reward_min=lo, reward_max=hi), kind)
         for reply, lo, hi, kind in (("12", 1, None, ControlKind.POSITIVE), ("9", None, 0, ControlKind.NEGATIVE))
     )
-    return Workpiece("test", proposal, submission=Submission(arithmetic_task(), controls, "authored"))
+    return Workpiece("test", Generated(proposal), submission=Submission(arithmetic_task(), controls, "authored"))
 
 
 def config(harness: RecordingHarness | None = None) -> TaskforgeConfig:
@@ -136,8 +136,11 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
         == submission.controls
     )
     assert isinstance(bundle.envs, Environments)
-    assert workpiece.proposal is not None
-    assert bundle.envs.created[0].files[PurePosixPath("/workspace/proposal.json")] == render(workpiece.proposal).encode()
+    assert isinstance(workpiece.origin, Generated)
+    assert (
+        bundle.envs.created[0].files[PurePosixPath("/workspace/proposal.json")]
+        == render(workpiece.origin.proposal).encode()
+    )
     assert bundle.envs.created[0].closed
 
 
@@ -168,9 +171,9 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     await ctx.drain()
     assert harness.session is not None
     assert harness.client is author_client
-    assert workpiece.proposal is not None
+    assert isinstance(workpiece.origin, Generated)
     assert harness.session.messages[-1].content == config(harness).policy.prompt("author.user").render(
-        proposal=render(workpiece.proposal)
+        proposal=render(workpiece.origin.proposal)
     )
     assert isinstance(bundle.envs, Environments)
     assert bundle.envs.created[0].closed
@@ -198,7 +201,7 @@ async def test_source_task_author_works_in_the_tasks_own_environment_when_admitt
     )
     submission = Submission(task, (), "source task")
     source = Workpiece(
-        "source", submission=submission, source=submission, decisions=(Modify(("The task has no controls",)),)
+        "source", Repaired(submission), submission=submission, decisions=(Modify(("The task has no controls",)),)
     )
     harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
     setup = config(harness)
@@ -227,7 +230,7 @@ async def test_validate_returns_a_source_task_whose_id_changed_to_the_author(wor
     assert workpiece.submission is not None
     original = workpiece.submission
     renamed = replace(original, task=original.task.model_copy(update={"id": "renamed"}))
-    source = Workpiece("source", submission=renamed, source=original)
+    source = Workpiece("source", Repaired(original), submission=renamed)
     ctx = Context(log=EventLog())
     result = (await validate(ctx, source, config(), resources(ctx))).result
     await ctx.drain()
@@ -271,7 +274,7 @@ async def test_validate_returns_a_failing_environment_setup_to_the_author(workpi
 async def test_review_reports_no_solve_rate_for_a_source_task_whose_setup_failed(workpiece: Workpiece) -> None:
     assert workpiece.submission is not None
     submission = replace(workpiece.submission, controls=())
-    source = Workpiece("source", submission=submission, source=submission)
+    source = Workpiece("source", Repaired(submission), submission=submission)
     ctx = Context(log=EventLog())
     bundle = Resources(
         Environments(),
@@ -300,7 +303,7 @@ async def test_source_author_works_in_author_image_when_the_task_environment_wil
     environment = requirements(image=image, workdir="/testbed", setup=("git clone https://example.invalid/repo .",))
     task = workpiece.submission.task.model_copy(update={"environment_requirements": environment})
     submission = Submission(task, (), "source task")
-    source = Workpiece("source", submission=submission, source=submission, decisions=(Modify(("no controls",)),))
+    source = Workpiece("source", Repaired(submission), submission=submission, decisions=(Modify(("no controls",)),))
 
     class SourceSetupFails(Environments):
         @override
