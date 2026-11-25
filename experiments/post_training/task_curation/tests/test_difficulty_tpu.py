@@ -199,7 +199,12 @@ def test_all_solver_configs_and_root_commands_fit_reserved_regional_allocation()
             assert "--no-enable-prefix-caching" in model.serve.vllm_extra_args
             assert model.serve.max_model_len == 65536
             arguments = list(config.engine.extra_args)
-            assert int(arguments[arguments.index("--num-gpu-blocks-override") + 1]) == 16384 * shape.data_parallel
+            blocks = int(arguments[arguments.index("--num-gpu-blocks-override") + 1])
+            # The frozen 64K context must fit even after reducing runtime
+            # cache pressure. Hybrid sizing uses 16-token attention pages.
+            assert blocks // shape.data_parallel * 16 >= model.serve.max_model_len
+            assert model.serve.max_num_seqs * shape.data_parallel <= 16
+            assert model.serve.max_num_batched_tokens * shape.data_parallel <= 16384
         assert not any("eager" in argument for argument in config.engine.extra_args)
     # Snowball's 20 Q / 5 KV heads cannot be split across TP8 or TP16.
     assert tpu.SHAPES[Solver.SNOWBALL].tensor_parallel == 1
