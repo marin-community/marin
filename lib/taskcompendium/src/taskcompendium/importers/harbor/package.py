@@ -145,12 +145,17 @@ class JobSettings:
     job's ``override_timeout_sec`` and ``override_storage_mb`` do; ``None`` keeps them. ``agent_install``
     holds Dockerfile instructions, built after the package's own, that install an agent the package's
     image lacks, which Harbor would install at setup.
+
+    A deployment that supplies ``agent_user`` or ``setup_timeout`` must match the corresponding
+    package declarations. The runtime enforces the user and bounds startup, including setup.
     """
 
     agent_timeout: float | None = None
     verifier_timeout: float | None = None
     storage_mb: int | None = None
     agent_install: str | None = None
+    agent_user: str | None = None
+    setup_timeout: float | None = None
 
 
 def _job_config(config: HarborTaskConfig, job: JobSettings) -> HarborTaskConfig:
@@ -269,7 +274,7 @@ def _agent_environment(
         docker_image=main.docker_image,
         docker_build=main.docker_build,
         working_directory=environment.workdir or compose_workdir or main.workdir,
-        setup_commands=(LOG_DIRECTORIES,),
+        setup_commands=(LOG_DIRECTORIES,) + ((environment.setup.command,) if environment.setup else ()),
         environment_variables={**environment.env, **compose_environment, **config.agent.env},
         tool_providers=mcp_providers(environment.mcp_servers, services),
         services=services,
@@ -385,7 +390,7 @@ def lower_package(
     Raises ``UnsupportedHarborFeature`` for packages the TaskSpec cannot represent faithfully, and
     ``ValueError`` when an image reference has no resolved digest.
     """
-    config = _job_config(read_task_config(directory), job)
+    config = _job_config(read_task_config(directory, agent_user=job.agent_user, setup_timeout=job.setup_timeout), job)
     pin = pinner(image_digests)
     sources = _primary_sources(config, directory)
     main = lower_source(sources.main, pin)

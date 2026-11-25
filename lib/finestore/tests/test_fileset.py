@@ -1,11 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from pathlib import Path
+
 import pytest
 from finestore.fileset import FineStoreDirectory, fetch_file_set
 from finestore.layout import BlobColumns, BlobTables
 from finestore.reader import BlobCorruptionError, ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore
+
+_PRESERVED_MTIME_NS = 1_000_000_000
 
 
 def test_file_set_round_trips_nested_files_in_one_level_zero(tmp_path):
@@ -38,7 +43,76 @@ def test_file_set_materializes_chunked_file(tmp_path):
 
     reloaded = tmp_path / "reloaded"
     assert fetch_file_set(root, str(reloaded)) == {"logs/archive.bin"}
-    assert (reloaded / "logs" / "archive.bin").read_bytes() == payload
+    reloaded_path = reloaded / "logs" / "archive.bin"
+    assert reloaded_path.read_bytes() == payload
+    os.utime(reloaded_path, ns=(_PRESERVED_MTIME_NS, _PRESERVED_MTIME_NS))
+    assert fetch_file_set(root, str(reloaded)) == {"logs/archive.bin"}
+    assert reloaded_path.stat().st_mtime_ns == _PRESERVED_MTIME_NS
+
+
+def test_file_set_preserves_matching_files_and_replaces_same_size_difference(tmp_path):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("matching.textproto", b"one")
+        store.write_object("different.textproto", b"two")
+        store.flush()
+
+    local = tmp_path / "local"
+    assert fetch_file_set(root, str(local)) == {"matching.textproto", "different.textproto"}
+    matching = local / "matching.textproto"
+    different = local / "different.textproto"
+    os.utime(matching, ns=(_PRESERVED_MTIME_NS, _PRESERVED_MTIME_NS))
+    different.write_bytes(b"bad")
+
+    assert fetch_file_set(root, str(local)) == {"matching.textproto", "different.textproto"}
+    assert matching.stat().st_mtime_ns == _PRESERVED_MTIME_NS
+    assert different.read_bytes() == b"two"
+
+
+def test_file_set_replaces_matching_symlink(tmp_path):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("entry.textproto", b"cached")
+        store.flush()
+
+    outside = tmp_path / "outside.textproto"
+    outside.write_bytes(b"cached")
+    local = tmp_path / "local"
+    local.mkdir()
+    entry = local / "entry.textproto"
+    entry.symlink_to(outside)
+
+    assert fetch_file_set(root, str(local)) == {"entry.textproto"}
+    assert not entry.is_symlink()
+    assert entry.read_bytes() == b"cached"
+    assert outside.read_bytes() == b"cached"
+
+
+def test_file_set_replaces_unreadable_local_file_and_continues(tmp_path, monkeypatch):
+    root = str(tmp_path / "remote")
+    with DataStore.open(root) as store:
+        store.write_object("a.textproto", b"new")
+        store.write_object("b.textproto", b"next")
+        store.flush()
+
+    local = tmp_path / "local"
+    local.mkdir()
+    blocked = local / "a.textproto"
+    blocked.write_bytes(b"old")
+    original_open = Path.open
+
+    def deny_local_read(path, mode="r", *args, **kwargs):
+        if path == blocked and mode == "rb":
+            raise PermissionError("unreadable cache entry")
+        return original_open(path, mode, *args, **kwargs)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Path, "open", deny_local_read)
+        fetched = fetch_file_set(root, str(local))
+
+    assert fetched == {"a.textproto", "b.textproto"}
+    assert blocked.read_bytes() == b"new"
+    assert (local / "b.textproto").read_bytes() == b"next"
 
 
 def test_file_set_validates_inline_file_size(tmp_path):

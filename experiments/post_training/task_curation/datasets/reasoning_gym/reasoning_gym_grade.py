@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import reasoning_gym
+from verifyit.grade import InvalidTask
 from verifyit.modes.grade_reasoning_gym import score_reasoning_gym_answer
 
 sys.path.insert(0, "/tests")
@@ -55,7 +56,18 @@ def main() -> None:
         entry = regenerated_entry(generation)
         if without_generation_day(encoded(entry)) != without_generation_day(contract["entry"]):
             raise ValueError("Regenerated entry differs from the recorded entry")
-        reward = score_reasoning_gym_answer(generation["task"], entry, candidate(ANSWER.read_text(errors="replace")))
+        answer = candidate(ANSWER.read_text(errors="replace"))
+        try:
+            reward = score_reasoning_gym_answer(generation["task"], entry, answer)
+        except InvalidTask:
+            raise
+        except Exception as error:
+            # Check the reference when available; some datasets have no reference answer.
+            reference = entry["answer"]
+            if reference is not None and not score_reasoning_gym_answer(generation["task"], entry, reference) > 0:
+                raise ValueError("Reasoning Gym reference answer does not score") from error
+            print(f"Reasoning Gym candidate scorer raised {type(error).__name__}", file=sys.stderr)
+            reward = 0.0
     print(reward)
 
 

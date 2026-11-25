@@ -5,12 +5,13 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from shellbox import http_service_guest
@@ -205,3 +206,40 @@ async def serve_http(
             if primary is None:
                 raise
             primary.add_note(f"HTTP service cleanup interrupted or failed ({type(error).__name__})")
+
+
+@asynccontextmanager
+async def forward_http_posts(
+    machine: Machine,
+    *,
+    port: int,
+    upstream: str,
+    routes: Mapping[str, str],
+    headers: Mapping[str, str],
+    timeout: float,
+) -> AsyncIterator[None]:
+    """Forward only the declared POST routes using host-supplied headers."""
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False, headers=headers) as client:
+
+        async def forward(request: HttpRequest) -> HttpResponse:
+            target = routes.get(request.path)
+            if request.method != "POST" or target is None:
+                return HttpResponse(404, b"{}")
+            async with client.stream("POST", upstream.rstrip("/") + target, content=request.body) as response:
+                if not response.is_success:
+                    return HttpResponse(response.status_code, b'{"error":"upstream request failed"}')
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    if len(body) + len(chunk) > MAX_BODY:
+                        return HttpResponse(502, b'{"error":"upstream response exceeded limit"}')
+                    body.extend(chunk)
+                return HttpResponse(response.status_code, bytes(body))
+
+        try:
+            async with asyncio.TaskGroup() as services:
+                async with serve_http(machine, forward, port=port, task_group=services):
+                    yield
+        except BaseExceptionGroup as errors:
+            if len(errors.exceptions) == 1:
+                raise errors.exceptions[0]  # noqa: B904
+            raise
