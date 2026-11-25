@@ -73,7 +73,7 @@ TERMINAL_UNIT_SUFFIX = re.compile(
     rf"(?:{TERMINAL_UNIT_POWER})?(?:\s*(?:/|\\cdot|\\times)\s*{TERMINAL_UNIT_GROUP}(?:{TERMINAL_UNIT_POWER})?)*"
 )
 UNIT_GROUP_CONTENT = re.compile(UNIT_GROUP_CONTENT_PATTERN)
-ORDINAL_SUFFIX = re.compile(r"(?<=\d)\^\{\\text\{(?:st|nd|rd|th)\}\}(?=\s*(?:" + TEXT_GROUP_COMMAND + r"\{|$))")
+ORDINAL_SUFFIX = re.compile(r"^(\s*[0-9]+)\^\{\\text\{(?:st|nd|rd|th)\}\}(?=\s*(?:" + TEXT_GROUP_COMMAND + r"\{|$))")
 
 
 def _math_verify_parse(text: str, extraction_config: Sequence[object] | None = None, **kwargs: Any) -> list:
@@ -121,7 +121,7 @@ def _parse_reference(text: str) -> tuple[list, bool]:
     from math_verify.utils import timeout  # noqa: PLC0415
 
     # Normalization would otherwise leave a dangling exponent before an ordinal text group.
-    value = ORDINAL_SUFFIX.sub("", strip_math_delimiters(text))
+    value = ORDINAL_SUFFIX.sub(r"\1", strip_math_delimiters(text))
     text_groups = list(REFERENCE_TEXT_GROUP.finditer(value))
     strip_units = bool(text_groups)
     symbolic_text_group = False
@@ -136,7 +136,12 @@ def _parse_reference(text: str) -> tuple[list, bool]:
         group_contents = value[text_group.end() : text_group.end() + first_close - 1]
         suffix = value[text_group.end() + first_close :].strip()
         terminal_unit_suffix = TERMINAL_UNIT_SUFFIX.fullmatch(suffix)
-        if suffix and terminal_unit_suffix and not UNIT_GROUP_CONTENT.fullmatch(group_contents):
+        if (
+            suffix
+            and terminal_unit_suffix
+            and not re.fullmatch(TERMINAL_UNIT_POWER, suffix)
+            and not UNIT_GROUP_CONTENT.fullmatch(group_contents)
+        ):
             return [], strip_units
         if suffix and not terminal_unit_suffix:
             prefix = value[: text_group.start()].rstrip()

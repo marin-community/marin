@@ -264,6 +264,27 @@ def test_math_reference_unit_chains_ordinals_and_powers_grade_numeric_value(refe
 
 
 @pytest.mark.parametrize(
+    "reference, candidate, wrong_candidate",
+    [
+        (r"0.33 \, \text{m/s}^2", "0.33", "1.33"),
+        (r"1200 \, \text{kg/m}^3", "1200", "1201"),
+        (r"\frac{39}{5}\mathrm{~}^{2}", "39/5", "40/5"),
+    ],
+)
+def test_math_nonletter_unit_groups_with_bare_powers_grade_numeric_value(reference, candidate, wrong_candidate):
+    spec = MathSpec(expected=reference)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, wrong_candidate).reward == 0.0
+
+
+def test_math_ordinal_after_option_label_preserves_reference_value():
+    reference = r"\textbf{(C)}\ 11^{\text{th}}"
+    spec = MathSpec(expected=reference)
+    assert grade_math.grade_math_candidate(spec, reference).reward == 1.0
+    assert grade_math.grade_math_candidate(spec, r"\textbf{(C)}\ 11").reward == 0.0
+
+
+@pytest.mark.parametrize(
     "reference, candidate, math_type",
     [
         (r"\mathrm{x}+1", r"\mathrm{x}+1", MathType.SCALAR),
