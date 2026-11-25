@@ -371,7 +371,7 @@ class CheckpointCandidate:
 
 @dataclass(frozen=True)
 class ResolvedCheckpoint:
-    """A concrete checkpoint path and its available stored metadata."""
+    """The path returned by checkpoint resolution and any available metadata."""
 
     path: str
     metadata: Mapping[str, Any]
@@ -580,7 +580,14 @@ class Checkpointer:
         ret_dict = self.load_checkpoint({"model": model}, checkpoint_path, axis_mapping=axis_mapping, mesh=mesh)
         return ret_dict["model"]
 
-    def on_step(self, *, tree: PyTree, step: int, force: bool = False, model: object = None):
+    def on_step(
+        self,
+        *,
+        tree: PyTree,
+        step: int,
+        force: bool = False,
+        metadata_provider: CheckpointMetadataProvider | None = None,
+    ):
         step = int(step)
 
         if step == 0:
@@ -661,7 +668,7 @@ class Checkpointer:
                 commit_callback=callback,
                 is_temporary=not save_permanent_ckpt,
                 base_path_override=save_base_path,
-                metadata=model.checkpoint_metadata() if isinstance(model, CheckpointMetadataProvider) else None,
+                metadata=metadata_provider.checkpoint_metadata() if metadata_provider is not None else None,
             )
 
     def _promote_temporary_checkpoint(self, step: int) -> None:
@@ -1188,10 +1195,9 @@ def discover_checkpoint_candidates(
 
 
 def resolve_checkpoint(checkpoint_path: PathLike) -> ResolvedCheckpoint:
-    """Resolve the latest candidate or a direct checkpoint with optional metadata.
+    """Return the latest candidate or the input path with available metadata.
 
-    Present direct metadata is read even when its discovery bookkeeping is unusable;
-    unreadable metadata raises. A metadata-free direct checkpoint returns empty metadata.
+    If no candidate or metadata is found, return the input path with empty metadata.
     """
     checkpoint_path = str(checkpoint_path)
     candidates = discover_checkpoint_candidates(checkpoint_path)

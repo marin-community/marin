@@ -71,8 +71,9 @@ from levanter.checkpoint import (
     Checkpointer,
     CheckpointerConfig,
     CheckpointCandidate,
-    discover_checkpoint_candidates,
+    CheckpointMetadataProvider,
     CheckpointRetention,
+    discover_checkpoint_candidates,
     is_checkpoint_path,
     load_checkpoint_or_initialize,
 )
@@ -815,13 +816,17 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
+            model = info.state.model
             with progress_event_scope(
                 info.emit_event,
                 ProgressEvent.CHECKPOINT_STARTED,
                 ProgressEvent.CHECKPOINT_FINISHED,
             ):
                 checkpointer.on_step(
-                    tree=info.state.saveable_state, step=info.step, force=force, model=info.state.model
+                    tree=info.state.saveable_state,
+                    step=info.step,
+                    force=force,
+                    metadata_provider=model if isinstance(model, CheckpointMetadataProvider) else None,
                 )
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency

@@ -29,7 +29,7 @@ from levanter.testing.devices import use_cpu_devices
 
 from levanter.layers.attention import AttentionMask as NamedAttentionMask
 from levanter.layers.attention import _tpu_splash_attention as named_splash_attention
-from levanter.layers.rotary import DefaultRotaryEmbeddings, DefaultRotaryEmbeddingsConfig
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.layers.rotary_native import apply_rotary
 
 
@@ -295,7 +295,7 @@ def test_splash_rotary_bfloat16_q_gradient_matches_named(cotangent_scale):
         return output, pullback(cotangent)[0]
 
     def named_vjp(q, k, v, cotangent, ids):
-        rotary = DefaultRotaryEmbeddings(D, DefaultRotaryEmbeddingsConfig())
+        rotary = DefaultRotaryEmbeddingsConfig().build(D)
         k = rotary(k, hax.arange(S)).astype(k.dtype).rearrange((B, H, S, D)).rename({"position": "key_position"})
         v = v.rearrange((B, H, S, D)).rename({"position": "key_position"})
         mask = NamedAttentionMask.causal().with_segment_ids(ids)

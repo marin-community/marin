@@ -40,6 +40,7 @@ DEPENDENCIES = {
     "gpqa": ("choices.py",),
     "mmlu_pro": ("choices.py",),
     "zeroeval_mcqa": ("zeroeval.py",),
+    "chembench": ("chembench.py",),
     "lexam_mcq": ("lexam.py",),
     "mrcr": ("long_context.py",),
     "graphwalks": ("long_context.py",),
