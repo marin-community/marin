@@ -28,6 +28,8 @@ NODE_JOBS_MAX_RESULT_ROWS = 250_000
 # A Kubernetes node name or an Iris worker id.
 _NODE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _JOB_KEY = '"cluster", root_job_id, root_submitted_at_ms, job_id, submitted_at_ms'
+# iris.task rows the hub's own cluster writes carry an empty cluster; the controller rows name it.
+_HUB_CLUSTER = "marin"
 
 
 def _validate_node_scope(clusters: tuple[str, ...], node: str) -> None:
@@ -105,7 +107,7 @@ request AS (
 SELECT a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.name AS job_name, a.state,
        a.started_at, a.finished_at, r.res_cpu_millicores / 1000.0 AS cpu_request,
        r.res_memory_bytes AS memory_request_bytes, r.accelerator_kind, r.accelerator_type,
-       r.accelerators_per_task, CAST(NULL AS VARCHAR) AS category
+       r.accelerators_per_task
 FROM attempt a LEFT JOIN job j USING ({_JOB_KEY}) LEFT JOIN request r USING ({_JOB_KEY})
 """
     usage_sql = f"""
@@ -114,7 +116,7 @@ SELECT date_bin(INTERVAL '{bucket_ms} milliseconds', t.ts) AS bucket,
        t.task_id || ':' || CAST(t.attempt_id AS VARCHAR) AS attempt,
        avg(t.cpu_millicores) / 1000.0 AS cpu_cores, avg(t.memory_mb) * 1048576 AS memory_bytes
 FROM "iris.task" t JOIN attempt a
-  ON COALESCE(NULLIF(t."cluster", ''), 'marin') = a."cluster"
+  ON COALESCE(NULLIF(t."cluster", ''), {sql_string(_HUB_CLUSTER)}) = a."cluster"
  AND t.task_id = a.task_id AND t.attempt_id = a.attempt_id
  AND t.ts >= a.started_at AND t.ts <= COALESCE(a.finished_at, to_timestamp_millis({end_ms}))
 WHERE t.ts >= to_timestamp_millis({start_ms}) AND t.ts < to_timestamp_millis({end_ms})
@@ -145,7 +147,7 @@ ORDER BY 1, 2
             "job_activity": job_activity_view,
             "attempts": (
                 "SELECT job_id, job_name, task_id, attempt_id, attempt_uid, state, started_at, finished_at, cpu_request,"
-                " memory_request_bytes, accelerator_kind, accelerator_type, accelerators_per_task, category"
+                " memory_request_bytes, accelerator_kind, accelerator_type, accelerators_per_task"
                 " FROM attempts ORDER BY started_at, attempt_uid"
             ),
             "attempt_usage": "SELECT bucket, attempt, cpu_cores, memory_bytes FROM attempt_usage ORDER BY 1, 2",

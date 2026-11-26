@@ -1488,7 +1488,7 @@
           "id": 13,
           "type": "table",
           "title": "Task attempts on the node",
-          "description": "The attempts behind the job lines: job, request and usage category (empty until job tags are written). An attempt still running from before the range is found only if its newest controller row is at most a day old.",
+          "description": "The attempts behind the job lines: their job and request. An attempt still running from before the range is found only if its newest controller row is at most a day old.",
           "datasource": {
             "type": "yesoreyeram-infinity-datasource",
             "uid": "finelog-marin"
@@ -1600,11 +1600,6 @@
                   "selector": "accelerators_per_task",
                   "text": "accelerators_per_task",
                   "type": "number"
-                },
-                {
-                  "selector": "category",
-                  "text": "category",
-                  "type": "string"
                 }
               ]
             }

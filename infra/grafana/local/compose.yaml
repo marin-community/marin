@@ -16,8 +16,8 @@
 # marin` does, with the IAP token minted from the cached login. The login file is
 # mounted read-only and nothing in this file holds a credential. Only the `marin`
 # hub is served, at most one query is in flight to it, alert rules load but never
-# evaluate, and only the dashboard under development (../dashboards/utilization.json) is
-# provisioned, so opening Grafana cannot fire the other dashboards' queries at the hub.
+# evaluate, and only the dashboard mounted below is provisioned, so opening Grafana cannot
+# fire the other dashboards' queries at the hub. Change that mount to work on another one.
 name: marin-grafana-local
 
 services:
