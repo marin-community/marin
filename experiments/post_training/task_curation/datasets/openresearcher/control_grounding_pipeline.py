@@ -129,18 +129,18 @@ def control_ground_questions(config: ControlGroundingConfig) -> ControlGroundedQ
     local_index(bm25, Path(config.workdir) / "bm25")
     output = StoragePath(config.output_path)
     grounding_config = GroundingConfig(
-        question_receipt=config.question_receipt_uri,
-        question_receipt_sha256=config.question_receipt_sha256,
-        index_receipt=config.bm25_index_uri,
-        index_receipt_sha256=config.bm25_index_sha256,
-        contract_sha256=CONTRACT_SHA256,
-        model_config_sha256=config.model_config_sha256,
-        runtime_freeze_uri=config.runtime_freeze_uri,
-        runtime_freeze_sha256=config.runtime_freeze_sha256,
-        runtime_python=config.runtime_python,
-        workdir=config.workdir,
-        concurrency=config.concurrency,
-        output_path="",
+        config.question_receipt_uri,
+        config.question_receipt_sha256,
+        config.bm25_index_uri,
+        config.bm25_index_sha256,
+        CONTRACT_SHA256,
+        config.model_config_sha256,
+        config.runtime_freeze_uri,
+        config.runtime_freeze_sha256,
+        config.runtime_python,
+        config.workdir,
+        config.concurrency,
+        "",
     )
     endpoint = PinnedLocalJudgeEndpoint(
         LocalJudgeEndpoint(
