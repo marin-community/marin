@@ -101,9 +101,9 @@ def test_source_option_selects_catalog_order_without_changing_identity(tmp_path,
     subset = runner.invoke(main, [*arguments(tmp_path), "--source", "third", "--source", "first"])
     assert full.exit_code == 0, full.output
     assert subset.exit_code == 0, subset.output
-    planned = json.loads(full.output)["sources"]
+    planned = json.loads(full.stdout)["sources"]
     assert len(planned) == 4 and planned[-1]["name"] == "data/rl/numbers"
-    assert json.loads(subset.output)["sources"] == [planned[0], planned[2]]
+    assert json.loads(subset.stdout)["sources"] == [planned[0], planned[2]]
 
     unknown = runner.invoke(main, [*arguments(tmp_path), "--source", "unknown", "--run"])
     assert unknown.exit_code == 2
@@ -265,7 +265,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     runner = CliRunner()
     planned = runner.invoke(main, options)
     assert planned.exit_code == 0, planned.output
-    assert len(json.loads(planned.output)["sources"]) == 1
+    assert len(json.loads(planned.stdout)["sources"]) == 1
     assert not report.exists()
     assert not (tmp_path / "downloads").exists()
     assert not (tmp_path / "artifacts").exists()
