@@ -27,15 +27,17 @@ import hashlib
 import json
 import logging
 import re
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow.parquet as pq
-from finestore.rl.licenses import LicenseReceipt
-from huggingface_hub import hf_hub_download
+from finestore.rl.licenses import LicenseDecision, LicenseEvidence, LicenseReceipt, LicenseSourcePin
+from huggingface_hub import HfApi, hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import task_spec_sha256
@@ -53,10 +55,18 @@ from experiments.post_training.task_curation.harbor_cohort_release import (
     converter_revision,
     publish_conversion,
     release_repo,
-    write_conversion_artifacts,
 )
-from experiments.post_training.task_curation.license_binding import LICENSE_RECEIPT_INDEX, read_license_receipts
-from experiments.post_training.task_curation.license_publication import check_publication
+from experiments.post_training.task_curation.license_binding import (
+    LICENSE_RECEIPT_INDEX,
+    append_license_receipt,
+    read_license_receipts,
+)
+from experiments.post_training.task_curation.license_publication import (
+    check_publication,
+    licensed_dataset_card,
+    prepare_license_publication,
+)
+from experiments.post_training.task_curation.license_resolution import LicenseTarget, resolve_license
 from experiments.post_training.task_curation.publication_gate import require_public_data
 from experiments.post_training.task_curation.registry import RegistryReference, read_registry_document
 from experiments.post_training.task_curation.source import DataRestriction, SourceInfo, SourceOrigin, SourceReference
@@ -81,10 +91,17 @@ MANIFEST_ACCEPT = (
     "application/vnd.oci.image.manifest.v1+json"
 )
 DIGEST_PATTERN = r"sha256:[0-9a-f]{64}"
+RATE_LIMIT_ATTEMPTS = 8
+RATE_LIMIT_MAX_WAIT_SECONDS = 60.0
+_FROM = re.compile(r"\s+")
 
 
 class BasePinRejected(ValueError):
     """A Dockerfile base the registry cannot resolve; the row stays unconverted."""
+
+
+class BasePinMissing(BasePinRejected):
+    """A base image tag that no longer exists upstream: a typed per-task exclusion."""
 
 
 @dataclass(frozen=True)
@@ -115,6 +132,118 @@ class NativeRowConversion:
     input_task_sha256: str
     output_task_sha256: str
     base_pins: tuple[BasePin, ...]
+
+
+def release_receipt(
+    source: NativeConversionSource, release_repo: str, release_revision: str, card_bytes: bytes
+) -> LicenseReceipt:
+    """The release's own license receipt: the card follows the original upstream.
+
+    The repackager rule (rulings/repackager-license-follows-upstream-20261116.md): a
+    repackager's aggregate card is not the tasks' license. The receipt resolves the
+    source's declared original upstream through the checker — never by hand — and
+    carries the source's recorded decisions, so an approved user exception (ruling
+    2026-11-16 for the SWE-Gym and R2E-Gym cohorts) survives the repackaging with its
+    original pin, date and scope. The checker still arbitrates: a source without an
+    exception publishes the same lineage and fails closed on any escalation.
+    """
+    receipt = source.info.license_receipt
+    if receipt is None:
+        raise CohortConversionRejected(f"{source.info.id}: the release publication requires a license receipt")
+    dataset = source.dataset
+    upstream = resolve_license(
+        LicenseTarget(
+            dataset.name,
+            dataset.name,
+            dataset.revision,
+            f"https://huggingface.co/datasets/{dataset.name}/tree/{dataset.revision}",
+        )
+    )
+    if upstream.resolved_source is not None:
+        raise CohortConversionRejected(
+            f"{source.info.id}: the declared upstream {dataset.name}@{dataset.revision[:12]} declares "
+            f"another wrapper source ({upstream.resolved_source.dataset_id}); resolve that pin instead"
+        )
+    primary_card = next(item for item in upstream.evidence if item.kind == "dataset_card")
+    carried = []
+    for decision in receipt.decisions:
+        # The schema binds a decision to its own receipt pin; the exception's lineage
+        # (original pin, date, scope) is recorded in the rationale at the release pin,
+        # per the coordinator's ruling 2026-11-26 that the published card carries it.
+        carried.append(
+            LicenseDecision(
+                kind=decision.kind,
+                approved=decision.approved,
+                who=decision.who,
+                when=datetime.now(UTC).isoformat(),
+                source_id=source.info.id,
+                dataset_id=release_repo,
+                revision=release_revision,
+                scope=list(decision.scope),
+                rationale=(
+                    f"{decision.rationale} Lineage: recorded at {decision.dataset_id}@{decision.revision} "
+                    f"({decision.when}); carried to this release pin by the repackager rule."
+                ),
+                evidence_urls=list(decision.evidence_urls),
+                issue_url=decision.issue_url,
+            )
+        )
+    return LicenseReceipt(
+        source_id=source.info.id,
+        dataset_id=release_repo,
+        revision=release_revision,
+        resolved_at=upstream.resolved_at,
+        resolver_version=upstream.resolver_version,
+        evidence=[*upstream.evidence, _card_evidence(release_repo, release_revision, card_bytes)],
+        bundled_third_party=upstream.bundled_third_party,
+        model_generated_outputs=upstream.model_generated_outputs,
+        decisions=carried,
+        resolved_source=LicenseSourcePin(
+            dataset_id=dataset.name,
+            revision=dataset.revision,
+            url=f"https://huggingface.co/datasets/{dataset.name}/tree/{dataset.revision}",
+            declaration=primary_card,
+        ),
+        wrapper_chain=[],
+    )
+
+
+def _card_evidence(release_repo: str, revision: str, card_bytes: bytes) -> LicenseEvidence:
+    """The release card's own wrapper declaration, quoting its license_source lines."""
+    quoted = [
+        line
+        for line in card_bytes.decode("utf-8").splitlines()
+        if line.startswith(("license_source:", "  dataset_id:", "  revision:", "  url:"))
+    ][:6]
+    if not quoted:
+        raise CohortConversionRejected("The release card declares no license_source to bind")
+    return LicenseEvidence(
+        kind="wrapper_source",
+        url=f"https://huggingface.co/datasets/{release_repo}/resolve/{revision}/README.md",
+        sha256=hashlib.sha256(card_bytes).hexdigest(),
+        license_ids=[],
+        quoted_lines=quoted,
+        restrictive_terms=False,
+        unidentified_third_party_terms=False,
+    )
+
+
+def exception_lineage(receipt: LicenseReceipt) -> str:
+    """The card's human-readable exception record: original pin, date, scope, grant."""
+    lines = []
+    for decision in receipt.decisions:
+        if getattr(decision, "kind", "") != "exception" or not getattr(decision, "approved", False):
+            continue
+        grant = ", ".join(
+            item.license_ids[0] if item.license_ids else "declared upstream"
+            for item in receipt.evidence
+            if item.kind == "dataset_card"
+        )
+        lines.append(
+            f"License exception: {decision.rationale} (decided {decision.when}, scope: "
+            f"{'/'.join(decision.scope)}, upstream grant: {grant})."
+        )
+    return "\n\n".join(lines)
 
 
 def load_inventory_entry(source_id: str) -> dict:
@@ -166,6 +295,76 @@ def _docker_hub_repo(name: str) -> str:
 
 
 _DIGEST_CACHE: dict[str, str] = {}
+_DOCKER_HUB_TOKEN: str | None = None
+
+
+def load_digest_cache(uri: str) -> int:
+    """Seed the in-process digest cache from its durable in-region copy."""
+    from rigging.filesystem.storage_path import StoragePath  # noqa: PLC0415
+
+    path = StoragePath(uri)
+    if not path.exists():
+        return 0
+    stored = json.loads(path.read_text())
+    if not isinstance(stored, dict):
+        raise ValueError(f"The digest cache at {uri} is not an object")
+    _DIGEST_CACHE.update({str(key): str(value) for key, value in stored.items()})
+    return len(_DIGEST_CACHE)
+
+
+def save_digest_cache(uri: str) -> int:
+    """Persist the resolved-digest cache to its in-region copy so a rerun skips resolved tags."""
+    from rigging.filesystem.storage_path import StoragePath  # noqa: PLC0415
+
+    StoragePath(uri).write_text(json.dumps(_DIGEST_CACHE, indent=2, sort_keys=True) + "\n")
+    return len(_DIGEST_CACHE)
+
+
+def _docker_hub_bearer() -> str | None:
+    """The authenticated Docker Hub token, when the runtime mounts one.
+
+    Anonymous pulls carry Docker Hub's low rate limits; an authenticated token
+    raises them. The token is read from the standard mounted-secret or
+    environment names and is never logged.
+    """
+    global _DOCKER_HUB_TOKEN
+    if _DOCKER_HUB_TOKEN is not None:
+        return _DOCKER_HUB_TOKEN
+    from rigging.secrets import get_secret  # noqa: PLC0415
+
+    for name in ("DOCKER_HUB_TOKEN", "DOCKERHUB_TOKEN"):
+        value = get_secret(name)
+        if value:
+            _DOCKER_HUB_TOKEN = value.strip()
+            return _DOCKER_HUB_TOKEN
+    return None
+
+
+def _open_with_rate_limit_retry(request: urllib.request.Request, what: str):
+    """Open a registry URL, retrying bounded on 429 with the server's Retry-After."""
+    last_error: urllib.error.URLError | None = None
+    for attempt in range(RATE_LIMIT_ATTEMPTS):
+        try:
+            return urllib.request.urlopen(request, timeout=60)
+        except urllib.error.HTTPError as error:
+            if error.code != 429:
+                raise
+            delay = error.headers.get("Retry-After")
+            seconds = (
+                float(delay)
+                if delay and delay.replace(".", "", 1).isdigit()
+                else min(2.0**attempt, RATE_LIMIT_MAX_WAIT_SECONDS)
+            )
+            seconds = min(seconds, RATE_LIMIT_MAX_WAIT_SECONDS)
+            LOGGER.warning(
+                "registry rate limited on %s; retry %d/%d in %.0fs", what, attempt + 1, RATE_LIMIT_ATTEMPTS, seconds
+            )
+            last_error = error
+            time.sleep(seconds)
+        except urllib.error.URLError as error:
+            last_error = error
+            raise
+    raise last_error if last_error else RuntimeError(f"registry retry exhausted for {what}")
 
 
 def resolve_base_digest(reference: str) -> str:
@@ -174,7 +373,9 @@ def resolve_base_digest(reference: str) -> str:
     ``registry-1.docker.io`` serves Docker Hub (official images under ``library/``);
     any other host is its own registry with the same v2 API. An already
     digest-pinned reference passes through unchanged. Resolutions cache per
-    process: a cohort's tasks share bases, and the shared registries rate-limit.
+    process (and in the durable cache when one is configured): a cohort's tasks
+    share bases, and the shared registries rate-limit. A mounted Docker Hub token
+    authenticates the requests when the runtime carries one.
     """
     if re.fullmatch(DOCKER_IMAGE_PATTERN, reference):
         return reference
@@ -207,17 +408,26 @@ def _resolve_base_digest(reference: str) -> str:
         f"https://{token_host}/token?service={urllib.parse.quote(token_service)}"
         f"&scope=repository:{urllib.parse.quote(scope_repo)}:pull"
     )
-    with urllib.request.urlopen(token_url, timeout=60) as response:
-        token = json.loads(response.read())["token"]
+    bearer = _docker_hub_bearer()
+    if bearer:
+        token = bearer
+    else:
+        with _open_with_rate_limit_retry(token_url, f"{reference} token") as response:
+            token = json.loads(response.read())["token"]
     request = urllib.request.Request(
         f"https://{registry_host}/v2/{scope_repo}/manifests/{urllib.parse.quote(tag)}",
         headers={"Authorization": f"Bearer {token}", "Accept": MANIFEST_ACCEPT},
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        manifest_digest = response.headers.get("Docker-Content-Digest")
+    try:
+        with _open_with_rate_limit_retry(request, f"{reference} manifest") as response:
+            manifest_digest = response.headers.get("Docker-Content-Digest")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise BasePinMissing(f"The base image {reference} no longer exists upstream") from None
+        raise
     if not manifest_digest or not re.fullmatch(DIGEST_PATTERN, manifest_digest):
         raise BasePinRejected(f"The registry returned no usable manifest digest for {reference}")
-    return f"{name}@{manifest_digest}"
+    return f"{repo}@{manifest_digest}"
 
 
 def pinned_dockerfile(text: str, resolve: Callable[[str], str] = resolve_base_digest) -> tuple[str, tuple[BasePin, ...]]:
@@ -320,13 +530,30 @@ def load_release_population(source: NativeConversionSource, *, limit: int | None
 
 
 def convert_population(source: NativeConversionSource, *, limit: int | None) -> tuple[list[dict], list[dict], dict]:
-    """Convert the recorded population; strict — any rejection or blocker fails the run."""
+    """Convert the recorded population; strict — any rejection or blocker fails the run.
+
+    A base tag that no longer exists upstream is a typed per-task exclusion, never a
+    substitute image (ruling 2026-11-26): the row leaves the converted population with
+    its evidence and the manifest records the exclusion.
+    """
     rows = load_release_population(source, limit=limit)
     converted: list[dict] = []
     receipts: list[dict] = []
+    exclusions: list[dict] = []
     for row in rows:
         task = TaskSpec.model_validate_json(row["task_spec"])
-        outcome = convert_native_source_row(task, input_task_sha256=task_spec_sha256(task))
+        try:
+            outcome = convert_native_source_row(task, input_task_sha256=task_spec_sha256(task))
+        except BasePinMissing as error:
+            exclusions.append(
+                {
+                    "task_id": task.id,
+                    "reason": "base_image_missing",
+                    "detail": str(error),
+                    "input_task_sha256": task_spec_sha256(task),
+                }
+            )
+            continue
         serialized = outcome.task.model_dump_json()
         converted.append(
             {
@@ -345,7 +572,55 @@ def convert_population(source: NativeConversionSource, *, limit: int | None) -> 
                 "base_pins": [{"base": pin.base, "pinned": pin.pinned} for pin in outcome.base_pins],
             }
         )
-    return converted, receipts, {"input_rows": len(rows), "converted_rows": len(converted)}
+    counts = {
+        "input_rows": len(rows),
+        "converted_rows": len(converted),
+        "excluded_rows": len(exclusions),
+    }
+    if counts["converted_rows"] + counts["excluded_rows"] != counts["input_rows"]:
+        raise ValueError("The conversion lost rows: converted plus excluded must cover every input row")
+    return converted, receipts, {**counts, "exclusions": exclusions}
+
+
+def write_native_conversion_artifacts(
+    converted: list[dict], receipts: list[dict], counts: dict, *, output_root: str, source_id: str
+) -> dict:
+    """Write the converted population, receipts, typed exclusions and the manifest.
+
+    Converted plus excluded rows must cover every input row: a silently shrunken
+    population would change the census contract without typed admission evidence.
+    """
+    import pyarrow as pa  # noqa: PLC0415
+    import pyarrow.parquet as pq  # noqa: PLC0415
+
+    from experiments.post_training.task_curation.harbor_cohort_release import TASK_SCHEMA  # noqa: PLC0415
+
+    output = Path(output_root)
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / "tasks.parquet"
+    with pq.ParquetWriter(destination, TASK_SCHEMA) as writer:
+        for start in range(0, len(converted), 32):
+            writer.write_table(pa.Table.from_pylist(converted[start : start + 32], schema=TASK_SCHEMA))
+    receipts_path = output / "conversion-receipts.jsonl"
+    receipts_path.write_text("".join(json.dumps(receipt, sort_keys=True) + "\n" for receipt in receipts))
+    exclusions_path = output / "conversion-exclusions.jsonl"
+    exclusions_path.write_text(
+        "".join(json.dumps(exclusion, sort_keys=True) + "\n" for exclusion in counts.get("exclusions", []))
+    )
+    manifest = {
+        "protocol": CONVERSION_PROTOCOL,
+        "source_id": source_id,
+        "converter": "experiments.post_training.task_curation.native_source_conversion",
+        "task_specs_sha256": file_sha256(StoragePath(str(destination))),
+        "input_rows": counts["input_rows"],
+        "converted_rows": counts["converted_rows"],
+        "excluded_rows": counts["excluded_rows"],
+        "rejections": {"base_image_missing": counts["excluded_rows"]},
+    }
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    if counts["converted_rows"] + counts["excluded_rows"] != counts["input_rows"]:
+        raise ValueError("The conversion lost rows: converted plus excluded must cover every input row")
+    return manifest
 
 
 def main() -> None:
@@ -354,6 +629,11 @@ def main() -> None:
     parser.add_argument("--output-root", required=True, help="The conversion output directory (local scratch).")
     parser.add_argument("--artifact-version", required=True, help="The release repo version suffix.")
     parser.add_argument("--limit", type=int, help="Convert only the first N rows (local validation slices).")
+    parser.add_argument(
+        "--digest-cache",
+        help="The durable in-region digest cache (an s3:// object): resolved FROM-base digests "
+        "persist here so a rerun skips tags it has already resolved.",
+    )
     parser.add_argument(
         "--converter-revision",
         help="The landed revision the conversion runs from; the bootstrap passes the archive revision.",
@@ -365,6 +645,10 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
+    if args.digest_cache:
+        seeded = load_digest_cache(args.digest_cache)
+        LOGGER.info("digest cache seeded with %d resolutions from %s", seeded, args.digest_cache)
+
     entry = load_inventory_entry(args.source_id)
     receipts = read_license_receipts(LICENSE_RECEIPT_INDEX)
     receipt = receipts.get(args.source_id)
@@ -372,7 +656,10 @@ def main() -> None:
     source = conversion_source(entry, receipt)
     require_public_data(source.info.data_restriction, source.info.id, source.dataset.name)
     converted, receipts_out, counts = convert_population(source, limit=args.limit)
-    manifest = write_conversion_artifacts(
+    if args.digest_cache:
+        saved = save_digest_cache(args.digest_cache)
+        LOGGER.info("digest cache persisted %d resolutions to %s", saved, args.digest_cache)
+    manifest = write_native_conversion_artifacts(
         converted, receipts_out, counts, output_root=args.output_root, source_id=source.info.id
     )
     manifest["converter_revision"] = converter_revision(args.converter_revision)
@@ -397,12 +684,43 @@ def main() -> None:
         version=args.artifact_version,
         manifest=manifest,
     )
+    # The repackager rule: the published card follows the original upstream, and an
+    # approved user exception survives the repackaging with its lineage (original
+    # pin, date, scope, upstream grant). The checker still arbitrates the result.
+    api = HfApi()
+    card_path = Path(
+        api.hf_hub_download(outcome.release_repo, "README.md", repo_type="dataset", revision=outcome.release_revision)
+    )
+    bound = release_receipt(source, outcome.release_repo, outcome.release_revision, card_path.read_bytes())
+    index_commit = append_license_receipt(
+        LICENSE_RECEIPT_INDEX,
+        bound,
+        message=f"Bind {source.info.id}'s native TaskSpec conversion release to its original upstream license",
+    )
+    publication = prepare_license_publication(bound, Path(args.output_root), use=source.intended_use.value)
+    body = card_path.read_text(encoding="utf-8").split("---", 2)[-1].strip()
+    lineage = exception_lineage(bound)
+    if lineage:
+        body = f"{body}\n\n{lineage}\n"
+    (Path(args.output_root) / "README.md").write_text(
+        licensed_dataset_card(body, publication, pretty_name="Native Harbor TaskSpec conversion release")
+    )
+    card_commit = api.upload_folder(
+        repo_id=outcome.release_repo,
+        repo_type="dataset",
+        folder_path=args.output_root,
+        allow_patterns=["README.md"],
+        commit_message="Bind the release card to its original upstream license",
+    )
     result = {
         **manifest,
         "release_repo": outcome.release_repo,
-        "release_revision": outcome.release_revision,
+        "release_revision": card_commit.oid,
         "task_specs_sha256": outcome.task_specs_sha256,
-        "license_check": check_publication(source.info.id, outcome.release_repo, outcome.release_revision, "train"),
+        "license_index_commit": index_commit,
+        "license_check": check_publication(
+            source.info.id, outcome.release_repo, card_commit.oid, source.intended_use.value
+        ),
     }
     payload = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.report is not None:

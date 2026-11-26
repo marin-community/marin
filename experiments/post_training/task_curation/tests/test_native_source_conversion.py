@@ -3,8 +3,13 @@
 
 """The native source conversion pins FROM bases and refuses static blockers."""
 
+import urllib.error
+import urllib.request
+from datetime import UTC, datetime
+
 import pytest
-from taskcompendium.identity import task_spec_sha256
+from finestore.rl.licenses import LicenseDecision, LicenseDecisionKind, LicenseEvidence
+from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
@@ -27,6 +32,7 @@ from experiments.post_training.task_curation.harbor_cohort_conversion import Coh
 from experiments.post_training.task_curation.native_source_conversion import (
     BasePin,
     BasePinRejected,
+    conversion_source,
     convert_native_source_row,
     pin_package_dockerfile,
     pinned_dockerfile,
@@ -164,3 +170,171 @@ def test_resolve_base_digest_caches_per_process():
         native_source_conversion._resolve_base_digest = original
         native_source_conversion._DIGEST_CACHE.clear()
     assert calls == ["python:3.9-bookworm", "ubuntu:22.04"]
+
+
+def test_release_receipt_carries_the_exception_lineage(monkeypatch):
+    """The published card follows the original upstream, and an approved user exception
+    survives the repackaging with its original pin, date, scope and upstream grant
+    (repackager rule + coordinator ruling 2026-11-26)."""
+
+    def fake_resolution(target):
+        card = LicenseEvidence(
+            kind="dataset_card",
+            url=f"https://huggingface.co/datasets/{target.dataset_id}/resolve/{target.revision}/README.md",
+            sha256="d" * 64,
+            license_ids=["mit"],
+            quoted_lines=["L3: license: mit"],
+            restrictive_terms=False,
+            unidentified_third_party_terms=False,
+        )
+        return type(
+            "Resolution",
+            (),
+            {
+                "resolved_source": None,
+                "evidence": [card],
+                "resolver_version": "atlas-license-v2",
+                "resolved_at": datetime(2026, 11, 26, tzinfo=UTC).isoformat(),
+                "bundled_third_party": True,
+                "model_generated_outputs": True,
+            },
+        )()
+
+    monkeypatch.setattr(native_source_conversion, "resolve_license", fake_resolution)
+    receipt = type(
+        "Receipt",
+        (),
+        {
+            "decisions": [
+                LicenseDecision(
+                    approved=True,
+                    who="user",
+                    when="2026-11-16T06:37:25-05:00",
+                    source_id="TaskTrove:example",
+                    dataset_id="open-athena/example",
+                    kind=LicenseDecisionKind.EXCEPTION,
+                    rationale="The user approved lifting the standing unverified-origin ban.",
+                    revision="e" * 40,
+                    scope=["train"],
+                    evidence_urls=["https://huggingface.co/datasets/SWE-Gym/SWE-Gym"],
+                    issue_url="https://github.com/marin-community/marin/issues/11497",
+                )
+            ]
+        },
+    )()
+    source = conversion_source(
+        {
+            "id": "TaskTrove:example",
+            "name": "example",
+            "dataset_id": "SWE-Gym/SWE-Gym",
+            "dataset_revision": "e" * 40,
+            "disposition_release": {
+                "repo": "open-athena/example",
+                "revision": "e" * 40,
+                "file_hashes": {"tasks.parquet": "a" * 64},
+            },
+        },
+        receipt,
+    )
+    bound = native_source_conversion.release_receipt(
+        source, "open-athena/example-taskspec-1", "f" * 40, b"---\nlicense_source:\n  dataset_id: SWE-Gym/SWE-Gym\n"
+    )
+    assert [decision.kind for decision in bound.decisions] == [LicenseDecisionKind.EXCEPTION]
+    assert bound.resolved_source.dataset_id == "SWE-Gym/SWE-Gym"
+    assert bound.dataset_id == "open-athena/example-taskspec-1"
+    lineage = native_source_conversion.exception_lineage(bound)
+    assert "2026-11-16" in lineage and "train" in lineage and "mit" in lineage
+
+
+def test_release_receipt_fails_closed_without_a_receipt():
+    source = conversion_source(
+        {
+            "id": "TaskTrove:example",
+            "name": "example",
+            "dataset_id": "SWE-Gym/SWE-Gym",
+            "dataset_revision": "e" * 40,
+            "disposition_release": {
+                "repo": "open-athena/example",
+                "revision": "e" * 40,
+                "file_hashes": {"tasks.parquet": "a" * 64},
+            },
+        },
+        None,
+    )
+    with pytest.raises(CohortConversionRejected):
+        native_source_conversion.release_receipt(source, "open-athena/example-taskspec-1", "f" * 40, b"card")
+
+
+def test_resolve_base_digest_retries_429_honoring_retry_after(monkeypatch):
+    """Docker Hub rate limits are expected at R2E-Gym's scale: the resolver retries
+    bounded on 429 and honors the server's Retry-After (ruling 2026-11-26)."""
+    sleeps = []
+    monkeypatch.setattr(native_source_conversion.time, "sleep", sleeps.append)
+    attempts = []
+
+    class FakeResponse:
+        def __init__(self, headers):
+            self.headers = headers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"token": "t"}'
+
+    def fake_urlopen(request, timeout=None):
+        attempts.append(request)
+        if len(attempts) < 3:
+            url = getattr(request, "full_url", request)
+            raise urllib.error.HTTPError(url, 429, "rate limited", {"Retry-After": "7"}, None)
+        return FakeResponse({"Docker-Content-Digest": "sha256:" + "e" * 64})
+
+    monkeypatch.setattr(native_source_conversion.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(native_source_conversion, "_DOCKER_HUB_TOKEN", None)
+    monkeypatch.setattr(native_source_conversion, "_DIGEST_CACHE", {})
+    pinned = native_source_conversion._resolve_base_digest("namanjain12/orange3_final:deadbeef")
+    assert pinned == "namanjain12/orange3_final@sha256:" + "e" * 64
+    assert len(attempts) == 4  # 2 rate-limited (token + manifest retries interleave), then success
+    assert 7.0 in sleeps
+
+
+def test_a_missing_base_image_is_a_typed_per_task_exclusion(monkeypatch):
+    """A tag that no longer exists upstream excludes its row with evidence — never a
+    substitute image, never a silently shrunken population (ruling 2026-11-26)."""
+    source = conversion_source(
+        {
+            "id": "TaskTrove:example",
+            "name": "example",
+            "dataset_id": "SWE-Gym/SWE-Gym",
+            "dataset_revision": "e" * 40,
+            "disposition_release": {
+                "repo": "open-athena/example",
+                "revision": "e" * 40,
+                "file_hashes": {"tasks.parquet": "a" * 64},
+            },
+        },
+        None,
+    )
+    task = _package(DOCKERFILE)
+    rows = [{"task_spec": task.model_dump_json()}]
+
+    def missing(reference: str) -> str:
+        raise native_source_conversion.BasePinMissing(f"The base image {reference} no longer exists upstream")
+
+    monkeypatch.setattr(native_source_conversion, "load_release_population", lambda source, limit: rows)
+    monkeypatch.setattr(
+        native_source_conversion,
+        "convert_native_source_row",
+        lambda task, input_task_sha256, resolve=None: (_ for _ in ()).throw(
+            native_source_conversion.BasePinMissing("The base image python:3.9-bookworm no longer exists upstream")
+        ),
+    )
+    converted, receipts, counts = native_source_conversion.convert_population(source, limit=None)
+    assert converted == [] and receipts == []
+    assert counts["input_rows"] == 1 and counts["converted_rows"] == 0 and counts["excluded_rows"] == 1
+    assert counts["exclusions"][0]["reason"] == "base_image_missing"
+    assert counts["exclusions"][0]["input_task_sha256"] == canonical_sha256(task.model_dump(mode="json"))
+    assert counts["converted_rows"] + counts["excluded_rows"] == counts["input_rows"]
