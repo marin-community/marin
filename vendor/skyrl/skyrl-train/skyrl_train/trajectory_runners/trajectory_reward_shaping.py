@@ -280,26 +280,22 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     trajectory_lengths = [sum(response_lengths[index] for index in group) for group in groups]
     trajectory_stops = [stop_reasons[group[-1]] for group in groups]
     trajectory_outcomes = [float(outcomes[group[-1]]) for group in groups]
-    trajectory_loop_advantages = [sum(sum(loop_advantages[index]) for index in group) for group in groups]
-    trajectory_loop_token_counts = [
-        sum(sum(value < 0 for value in loop_advantages[index]) for index in group) for group in groups
-    ]
     charged_loop_advantages = [
         value for sample_advantages in loop_advantages for value in sample_advantages if value < 0
     ]
-    loop_incidence = [any(spans[index] for index in group) for group in groups]
     refreshed_metrics = reward_shaping_metrics(
+        groups=groups,
         trajectory_components=trajectory_components,
         shaped_totals=shaped_totals,
         trajectory_lengths=trajectory_lengths,
         trajectory_stops=trajectory_stops,
         trajectory_outcomes=trajectory_outcomes,
-        trajectory_loop_advantages=trajectory_loop_advantages,
-        trajectory_loop_token_counts=trajectory_loop_token_counts,
+        row_loop_advantages=[sum(row) for row in loop_advantages],
+        row_loop_token_counts=[sum(value < 0 for value in row) for row in loop_advantages],
         charged_loop_advantages=charged_loop_advantages,
-        loop_incidence=loop_incidence,
-        reasoning_span_token_penalties=[sum(token_penalties[index] for index in group) for group in groups],
-        reasoning_span_incidence=[any(violations[index] for index in group) for group in groups],
+        row_loop_incidence=[bool(row) for row in spans],
+        row_reasoning_span_penalties=token_penalties,
+        row_reasoning_span_violations=violations,
     )
     metrics = output.get("rollout_metrics") or {}
     stop_reason_prefix = f"{SHAPING_METRIC_PREFIX}/stop_reason/"
@@ -311,24 +307,29 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
 
 def reward_shaping_metrics(
     *,
+    groups: Sequence[Sequence[int]],
     trajectory_components: Sequence[RewardShapingComponents],
     shaped_totals: Sequence[float],
     trajectory_lengths: Sequence[float],
     trajectory_stops: Sequence[str | None],
     trajectory_outcomes: Sequence[float],
-    trajectory_loop_advantages: Sequence[float],
-    trajectory_loop_token_counts: Sequence[float],
+    row_loop_advantages: Sequence[float],
+    row_loop_token_counts: Sequence[int],
     charged_loop_advantages: Sequence[float] | np.ndarray,
-    loop_incidence: Sequence[bool],
-    reasoning_span_token_penalties: Sequence[float],
-    reasoning_span_incidence: Sequence[bool],
+    row_loop_incidence: Sequence[bool],
+    row_reasoning_span_penalties: Sequence[float],
+    row_reasoning_span_violations: Sequence[int],
 ) -> dict[str, float]:
-    """Aggregate trajectory-level shaping scalars and charged token values."""
+    """Aggregate shaping scalars and per-token charges by trajectory."""
     penalties = [sum(values.values()) for values in trajectory_components]
     reasoning_span_penalties = [
-        values.get("reasoning_span", 0.0) + penalty
-        for values, penalty in zip(trajectory_components, reasoning_span_token_penalties)
+        values.get("reasoning_span", 0.0) + sum(row_reasoning_span_penalties[index] for index in group)
+        for values, group in zip(trajectory_components, groups)
     ]
+    reasoning_span_incidence = [any(row_reasoning_span_violations[index] for index in group) for group in groups]
+    loop_incidence = [any(row_loop_incidence[index] for index in group) for group in groups]
+    trajectory_loop_advantages = [sum(row_loop_advantages[index] for index in group) for group in groups]
+    trajectory_loop_token_counts = [sum(row_loop_token_counts[index] for index in group) for group in groups]
     correct_loop_incidence = [
         incidence for incidence, outcome in zip(loop_incidence, trajectory_outcomes) if outcome > 0
     ]

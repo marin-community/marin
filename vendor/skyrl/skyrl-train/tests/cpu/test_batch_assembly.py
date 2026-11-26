@@ -13,7 +13,7 @@ from skyrl_train.config.driver_validation import validate_cfg, worker_batch_refu
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
-from skyrl_train.batch_metrics import reward_metrics, rollout_metrics
+from skyrl_train.batch_metrics import reward_metrics
 from skyrl_train.rollouts.buffer import RowFacts
 
 import torch
@@ -195,7 +195,7 @@ def assert_batch_exact(actual, expected):
     torch.testing.assert_close(actual.routed_experts_tensor(), expected.routed_experts_tensor(), rtol=0, atol=0)
 
 
-def test_row_facts_match_payload_shaping_with_repeated_marker_penalties():
+def test_row_facts_match_payload_shaping_with_repeated_marker_penalties(worker_config):
     config = {
         "enabled": True,
         "loop": {"advantage_penalty_per_token": 0.025},
@@ -222,7 +222,20 @@ def test_row_facts_match_payload_shaping_with_repeated_marker_penalties():
     del batches[-1]["loop_advantages"]
 
     expected = concatenate_trajectory_batches(batches)["rollout_metrics"]
-    actual = rollout_metrics([RowFacts.from_batch(batch) for batch in batches])
+    groups = [
+        AdmittedRollout(
+            index,
+            f"g{index}",
+            0,
+            len(batch["response_ids"]),
+            sum(map(len, batch["response_ids"])),
+            RowFacts.from_batch(batch),
+        )
+        for index, batch in enumerate(batches)
+    ]
+    _, actual = plan_worker_batch(
+        worker_config, groups, global_step=0, dp_size=2, max_staleness_steps=0, num_experts=None
+    )
     shaping = f"{SHAPING_METRIC_PREFIX}/"
     assert {key: value for key, value in actual.items() if key.startswith(shaping)} == {
         key: value for key, value in expected.items() if key.startswith(shaping)

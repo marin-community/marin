@@ -91,21 +91,22 @@ def _facts_shaping_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
     charged = [row for group in facts for row in group.charged_loop_credit_runs]
     charged_counts = [sum(count for _, count in row) for row in charged]
     return reward_shaping_metrics(
+        groups=groups,
         trajectory_components=[aggregate_reward_shaping_components(components, rows) for rows in groups],
         shaped_totals=[totals[rows[-1]] for rows in groups],
         trajectory_outcomes=[outcomes[rows[-1]] for rows in groups],
         trajectory_lengths=[sum(lengths[row] for row in rows) for rows in groups],
         trajectory_stops=[stops[rows[-1]] for rows in groups],
-        loop_incidence=[any(incidence[row] for row in rows) for rows in groups],
-        trajectory_loop_advantages=[sum(loop_credit[row] for row in rows) for rows in groups],
-        trajectory_loop_token_counts=[sum(charged_counts[row] for row in rows) for rows in groups],
+        row_loop_incidence=incidence,
+        row_loop_advantages=loop_credit,
+        row_loop_token_counts=charged_counts,
         charged_loop_advantages=np.fromiter(
             (value for row in charged for charge, count in row for value in repeat(charge, count)),
             dtype=np.float64,
             count=sum(charged_counts),
         ),
-        reasoning_span_token_penalties=[sum(token_penalties[row] for row in rows) for rows in groups],
-        reasoning_span_incidence=[any(violations[row] for row in rows) for rows in groups],
+        row_reasoning_span_penalties=token_penalties,
+        row_reasoning_span_violations=violations,
     )
 
 
