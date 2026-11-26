@@ -351,7 +351,7 @@ def test_compose_release_carries_lineage_and_totals(tmp_path):
         ("task_count", False, None, 2, "changed its census binding or task count"),
         ("display_name", False, None, 2, "changed non-consumer fields"),
         ("insufficient", False, None, 2, "insufficient-context"),
-        (None, True, None, 2, "current target declarations do not cover exactly the fresh inventory"),
+        (None, True, None, 2, "current target declarations do not cover exactly the fresh and rebound inventory"),
         (None, False, "subject_distance", 2, "disagree on subject_distance"),
         (None, False, None, 3, "expected 3"),
     ],
@@ -550,12 +550,15 @@ def test_archived_assignment_counts_cover_planned_removals(tmp_path):
     archived = compose.read_retained_release(document["old_release"]).sources
     retained_id, removed_id = _declaration("retained").id, _declaration("removed").id
     files = [
-        {"counts": [{"source_id": retained_id, "status": "described", "count": 3}]},
-        {"counts": [{"source_id": removed_id, "status": "described", "count": 1}]},
+        {"counts": [{"source_id": retained_id, "status": "ready", "count": 3}]},
+        {"counts": [{"source_id": removed_id, "status": "ready", "count": 1}]},
     ]
     compose.check_archived_assignment_counts(files, archived)
     with pytest.raises(ValueError, match="retained assignment counts disagree"):
         compose.check_archived_assignment_counts(files[:1], archived)
+    files[0]["counts"][0]["status"] = "insufficient_context"
+    with pytest.raises(ValueError, match="readiness differs"):
+        compose.check_archived_assignment_counts(files, archived)
 
 
 def test_confidence_export_binds_the_release_and_coverage_ids(tmp_path):

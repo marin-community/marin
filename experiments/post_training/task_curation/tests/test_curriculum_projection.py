@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.lexical_policy import LexicalInputUse
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.release_stages import curriculum_compose as compose
+from experiments.post_training.task_curation.release_stages import curriculum_load
 from infra.marina.apps.rl_data_catalog.role_projection import CurriculumManifests, ManifestReference
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -105,12 +106,14 @@ def reference(path):
     return ManifestReference(uri=str(path), sha256=file_sha256(StoragePath(str(path))))
 
 
-def public_source(root, declaration, *, public="same-public-instruction", task_hash="old-task", task_id="same-id"):
+def public_source(
+    root, declaration, *, public="same-public-instruction", task_hash="old-task", task_id="same-id", additional_public=()
+):
     root.mkdir()
     manifest = {
         "intended_use": "train",
-        "input_rows": 1,
-        "converted_rows": 1,
+        "input_rows": 1 + len(additional_public),
+        "converted_rows": 1 + len(additional_public),
         "rejections": {},
         "input": {"declaration": declaration.model_dump(mode="json"), "task_spec_scan_sha256": "a" * 64},
     }
@@ -126,8 +129,20 @@ def public_source(root, declaration, *, public="same-public-instruction", task_h
         population="converted",
         public_input=public,
     )
+    rows = [row] + [
+        row.model_copy(
+            update={
+                "task_id": f"{task_id}-extra-{index}",
+                "task_hash": f"{task_hash}-extra-{index}",
+                "content_hash": canonical_sha256(text),
+                "public_input": text,
+            }
+        )
+        for index, text in enumerate(additional_public)
+    ]
     pq.write_table(
-        pa.Table.from_pylist([row.model_dump()], schema=arrow_schema(TaskSemanticInput)), root / "tasks.parquet"
+        pa.Table.from_pylist([r.model_dump() for r in rows], schema=arrow_schema(TaskSemanticInput)),
+        root / "tasks.parquet",
     )
     (root / "public-inputs.json").write_text(
         json.dumps({"source_key": source_key, "stored_stream_sha256": "a" * 64, "paths": [str(root / "tasks.parquet")]})
@@ -137,13 +152,13 @@ def public_source(root, declaration, *, public="same-public-instruction", task_h
         source_key=source_key,
         population="converted",
         intended_use="train",
-        task_count=1,
-        ready_count=1,
+        task_count=len(rows),
+        ready_count=len(rows),
         insufficient_context_count=0,
         basis="matched",
         curation_root=str(root),
-        input_rows=1,
-        converted_rows=1,
+        input_rows=len(rows),
+        converted_rows=len(rows),
     )
     return source, row
 
@@ -610,8 +625,35 @@ def test_retried_assignment_publication_preserves_prior_attempt(tmp_path, archiv
     assert list(load_parquet(first["output"])) == list(load_parquet(retried["output"])) == rows[:2]
 
 
-def test_release_compose_replaces_archived_assignments_with_fresh_alignment(tmp_path, archived):
+@pytest.mark.parametrize("retained_task_id", [None, "same-id", "current-retained-id"])
+def test_release_compose_replaces_archived_assignments_with_fresh_alignment(tmp_path, archived, retained_task_id):
     archive, _declarations, old_rows, manifests = archived
+    rebound = None
+    if retained_task_id is not None:
+        prior = _declarations[2].model_copy(
+            update={"task_count": 2, "within_source_dedup": deduplication_evidence("fixture", "1", "1", 2)}
+        )
+        old_source, _ = public_source(tmp_path / "old-two-tasks", prior, additional_public=("removed instruction",))
+        public = pq.read_table(tmp_path / "old-two-tasks/tasks.parquet").to_pylist()
+        old_rows = old_rows[:2] + [
+            {**old_rows[2], **{key: task[key] for key in ("source_key", "task_id", "task_hash", "content_hash")}}
+            for task in public
+        ]
+        pq.write_table(
+            pa.Table.from_pylist(old_rows, schema=arrow_schema(TaskAlignment)), tmp_path / "archive-assignments.parquet"
+        )
+        archive = archive.model_copy(
+            update={
+                "sources": [*archive.sources[:2], old_source],
+                "inventory": [*archive.inventory[:2], prior],
+                "task_count": 4,
+                "ready_count": 4,
+            }
+        )
+        rebound = declaration("Marin:retired", "2")
+        rebound_source, _ = public_source(
+            tmp_path / "retained-subset", rebound, task_id=retained_task_id, task_hash="current-retained-hash"
+        )
     changed = declaration("Marin:rebound", "2")
     source, _ = public_source(tmp_path / "replacement", changed, task_hash="new-hash", task_id="new-id")
     fresh_rows = [
@@ -671,11 +713,21 @@ def test_release_compose_replaces_archived_assignments_with_fresh_alignment(tmp_
             "fresh_coverage": coverages[1].model_dump(mode="json"),
             "current_target_declarations": {changed.id: changed.model_dump(mode="json")},
         }
+        if rebound is not None:
+            documents["current_target_declarations"][rebound.id] = rebound.model_dump(mode="json")
         inputs_document = {}
         for name, document in documents.items():
             location = tmp_path / f"{name}.json"
             location.write_text(json.dumps(document))
             inputs_document[name] = reference(location).model_dump()
+        if rebound is not None:
+            inputs_document["public_input_rebindings"] = [
+                SourceReplacement(
+                    source_id=rebound.id,
+                    source_manifest=reference(tmp_path / "retained-subset/manifest.json"),
+                    public_inputs=reference(tmp_path / "retained-subset/public-inputs.json"),
+                ).model_dump(mode="json")
+            ]
         inputs_path = tmp_path / "compose-inputs.json"
         inputs_path.write_text(json.dumps(inputs_document))
         proof = compose.run_compose(
@@ -694,9 +746,32 @@ def test_release_compose_replaces_archived_assignments_with_fresh_alignment(tmp_
     release = AlignmentRelease.model_validate_json(Path(proof["release"]["uri"]).read_text())
     rows = [row for path in release.paths for row in pq.read_table(path).to_pylist()]
     assert [row for row in rows if row["source_id"] == changed.id] == fresh_rows
-    assert [row for row in rows if row["source_id"] != changed.id] == [
-        row for row in old_rows if row["source_id"] != changed.id
+    rewritten = {changed.id} | ({rebound.id} if rebound is not None else set())
+    assert [row for row in rows if row["source_id"] not in rewritten] == [
+        row for row in old_rows if row["source_id"] not in rewritten
     ]
-    assert proof["replacement_sources"] == [changed.id]
+    assert proof["replacement_sources"] == sorted(rewritten)
     assert proof["task_count"] == 3
+    if rebound is not None:
+        kept = next(row for row in rows if row["source_id"] == rebound.id)
+        assert (kept["task_id"], kept["task_hash"], kept["source_key"]) == (
+            retained_task_id,
+            "current-retained-hash",
+            rebound_source.source_key,
+        )
+        assert kept["matches"] == old_rows[2]["matches"]
+        assert [row["task_id"] for row in rows if row["source_id"] == rebound.id] == [retained_task_id]
+        identity = proof["public_input_rebindings"][0]
+        mapping = pq.read_table(identity["task_identity_mapping"]["uri"]).to_pylist()
+        assert [(row["old_task_id"], row["new_task_id"]) for row in mapping] == [
+            ("same-id", retained_task_id),
+            ("same-id-extra-0", None),
+        ]
+        curriculum_load.verify_public_input_rebindings(proof)
+        bad_mapping = tmp_path / "duplicate-mapping.parquet"
+        mapping[1]["old_task_id"] = mapping[0]["old_task_id"]
+        pq.write_table(pa.Table.from_pylist(mapping), bad_mapping)
+        identity["task_identity_mapping"] = reference(bad_mapping).model_dump(mode="json")
+        with pytest.raises(ValueError, match="does not cover"):
+            curriculum_load.verify_public_input_rebindings(proof)
     assert pq.read_table(tmp_path / "archive-assignments.parquet").to_pylist() == old_rows

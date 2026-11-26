@@ -41,7 +41,15 @@ from zephyr.runners import SubprocessRunner
 import experiments.post_training.task_curation.release_stages.alerts as alerts
 from experiments.post_training.task_curation.campaign import CampaignRuntime
 from experiments.post_training.task_curation.catalog_identity import canonical_declaration
-from experiments.post_training.task_curation.curriculum_projection import filter_assignment_file, statistics_by_key
+from experiments.post_training.task_curation.curriculum_projection import (
+    SourceReplacement,
+    TaskRebinding,
+    filter_assignment_file,
+    statistics_by_key,
+    task_rebinding,
+    verify_retained_statistics,
+    write_task_identity_mappings,
+)
 from experiments.post_training.task_curation.embedding import COVERAGE_VERSION
 from experiments.post_training.task_curation.local import local_client
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
@@ -98,10 +106,15 @@ class ComposePlan:
     fresh_task_count: int
     retained_task_count: int
     removed_sources: tuple[str, ...]
+    rebindings: tuple[TaskRebinding, ...]
 
     @property
     def replaced_sources(self) -> frozenset[str]:
         return frozenset(self.targets) & {row.source_id for row in self.old_release.sources}
+
+    @property
+    def fresh_replacements(self) -> frozenset[str]:
+        return frozenset(row.source_id for row in self.fresh_release.sources) & self.replaced_sources
 
 
 def read_reference(reference: dict) -> dict:
@@ -149,10 +162,10 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
     inventory rows, assignments and coverage statistics are not carried. Replacement
     sources also leave the retained set; their current alignment supplies every row.
     """
-    rebound = document.get("rebound")
-    if rebound:
+    declared_rebound = document.get("rebound")
+    if declared_rebound:
         raise ValueError(
-            f"the composition manifest declares a rebound of {rebound.get('source_id')!r}, but the maintained"
+            f"the composition manifest declares a rebound of {declared_rebound.get('source_id')!r}, but the maintained"
             " additions-mode compose cannot rebind a source (the projection pass is not wired in);"
             " resolve the rebound before composing"
         )
@@ -177,7 +190,15 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
     ):
         if getattr(old_coverage, key) != getattr(fresh_coverage, key):
             raise ValueError(f"retained and fresh coverages disagree on {key}")
-    targets = frozenset(source.source_id for source in fresh.sources)
+    fresh_targets = frozenset(source.source_id for source in fresh.sources)
+    replacements = [SourceReplacement.model_validate(row) for row in document.get("public_input_rebindings", [])]
+    rebound_ids = {row.source_id for row in replacements}
+    archived_sources = {row.source_id: row for row in old.sources}
+    if len(rebound_ids) != len(replacements) or rebound_ids - archived_sources.keys() or rebound_ids & fresh_targets:
+        raise ValueError("Public-input rebindings must name distinct archived sources without fresh alignment")
+    rebindings = tuple(task_rebinding(archived_sources[row.source_id], row) for row in replacements)
+    rebound = {row.source.source_id: row for row in rebindings}
+    targets = fresh_targets | rebound_ids
     fresh_task_count = sum(source.task_count for source in fresh.sources)
     if fresh_task_count != expected_fresh_task_count:
         raise ValueError(f"fresh populations carry {fresh_task_count} tasks, expected {expected_fresh_task_count}")
@@ -185,9 +206,10 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
     unknown = sorted(removed - {source.source_id for source in old.sources})
     if unknown:
         raise ValueError(f"planned removals are absent from the retained curriculum: {unknown[:5]}")
-    replaced = targets & {source.source_id for source in old.sources}
+    replaced = fresh_targets & archived_sources.keys()
     omitted = removed | replaced
     old_sources = {source.source_id: source for source in old.sources if source.source_id not in omitted}
+    old_sources.update({sid: row.source for sid, row in rebound.items()})
     retained_inventory = [declaration for declaration in old.inventory if declaration.id not in omitted]
     if len(old.inventory) - len(retained_inventory) != len(omitted):
         raise ValueError("planned removals do not each drop exactly one retained inventory row")
@@ -204,9 +226,10 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
         sid: canonical_declaration(QualifiedSourceDeclaration.model_validate(row))
         for sid, row in current_target_declarations.items()
     }
-    if set(current_inventory) != set(fresh_inventory) or set(fresh_inventory) != targets:
-        raise ValueError("the current target declarations do not cover exactly the fresh inventory")
-    for sid, original in fresh_inventory.items():
+    if set(current_inventory) != targets or set(fresh_inventory) != fresh_targets:
+        raise ValueError("the current target declarations do not cover exactly the fresh and rebound inventory")
+    measured_inventory = {**fresh_inventory, **{sid: row.declaration for sid, row in rebound.items()}}
+    for sid, original in measured_inventory.items():
         current = current_inventory[sid]
         before = original.model_dump(mode="json")
         after = current.model_dump(mode="json")
@@ -217,7 +240,8 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
         changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
         if not changed <= ALLOWED_TARGET_CHANGES:
             raise ValueError(f"current declaration for {sid} changed non-consumer fields: {sorted(changed)}")
-    inventory = retained_inventory + [current_inventory[declaration.id] for declaration in fresh.inventory]
+    inventory = [current_inventory[row.id] if row.id in rebound else row for row in retained_inventory]
+    inventory += [current_inventory[declaration.id] for declaration in fresh.inventory]
     sources = list(old_sources.values()) + list(fresh.sources)
     return ComposePlan(
         targets=tuple(sorted(targets)),
@@ -230,6 +254,7 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
         fresh_task_count=fresh_task_count,
         retained_task_count=sum(source.task_count for source in old_sources.values()),
         removed_sources=tuple(sorted(removed)),
+        rebindings=rebindings,
     )
 
 
@@ -435,18 +460,26 @@ def check_archived_assignment_counts(retained_files: list[dict], archived_source
     readback.
     """
     measured: Counter[str] = Counter()
+    statuses: Counter[tuple[str, str]] = Counter()
     for result in retained_files:
         for row in result["counts"]:
             measured[row["source_id"]] += row["count"]
+            statuses[row["source_id"], row["status"]] += row["count"]
     if measured != Counter({source.source_id: source.task_count for source in archived_sources}):
         raise ValueError("retained assignment counts disagree with the retained release sources")
+    for source in archived_sources:
+        if (
+            statuses[source.source_id, "ready"] != source.ready_count
+            or statuses[source.source_id, "insufficient_context"] != source.insufficient_context_count
+        ):
+            raise ValueError(f"Archived assignment readiness differs from its release: {source.source_id}")
 
 
 def _finish_compose(inputs, plan, document, release, context, root, alert_feeds, mode) -> dict:
     """The write-mode tail: retained pass, coverage recompute, exact unions, seals."""
     old_sources = {source.source_id: source for source in plan.old_release.sources}
     removed = frozenset(plan.removed_sources)
-    omitted = removed | plan.replaced_sources
+    omitted = removed | plan.fresh_replacements
     selected = frozenset(old_sources) - omitted
     retained_files = context.execute(
         Dataset.from_list(list(enumerate(plan.old_release.paths))).map(
@@ -455,13 +488,14 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
                 output_root=f"{root}/retained",
                 archived_sources=tuple(plan.old_release.sources),
                 selected_ids=selected,
-                rebindings=(),
+                rebindings=plan.rebindings,
             )
         )
     ).results
     if not all(row["all_retained_values_verified"] for row in retained_files):
         raise ValueError("retained assignment readback diverged")
     check_archived_assignment_counts(retained_files, plan.old_release.sources)
+    task_mappings = write_task_identity_mappings(StoragePath(root), plan.rebindings)
     assignment_paths = [row["output"] for row in retained_files] + list(plan.fresh_release.paths)
     release = release.model_copy(update={"paths": assignment_paths})
     release = AlignmentRelease.model_validate(release.model_dump(mode="json"))
@@ -489,8 +523,8 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
     if expected_statistics.keys() & fresh_statistics.keys():
         raise ValueError("retained and fresh coverage statistics overlap")
     expected_statistics.update(fresh_statistics)
-    if statistics_by_key(samples.paths) != expected_statistics:
-        raise ValueError("recomputed statistics are not the exact retained-plus-fresh union")
+    reduced_counts = {row.source.source_id: len(row.task_ids) for row in plan.rebindings if row.removed_task_ids}
+    verify_retained_statistics(expected_statistics, statistics_by_key(samples.paths), reduced_counts)
     expected_confidence = {
         key: value
         for key, value in statistics_by_key(plan.old_coverage.confidence_paths).items()
@@ -500,8 +534,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
     if expected_confidence.keys() & fresh_confidence.keys():
         raise ValueError("retained and fresh confidence vectors overlap")
     expected_confidence.update(fresh_confidence)
-    if statistics_by_key(samples.confidence_paths) != expected_confidence:
-        raise ValueError("recomputed confidence vectors are not the exact retained-plus-fresh union")
+    verify_retained_statistics(expected_confidence, statistics_by_key(samples.confidence_paths), reduced_counts)
     identity = compose_coverage_identity(plan, release)
     coverage = plan.old_coverage.model_copy(
         update={
@@ -531,20 +564,33 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
         "catalog_source_count": len(plan.inventory),
         "inventory_count": len(plan.inventory),
         "task_count": release.task_count,
-        "fresh_sources": list(plan.targets),
+        "fresh_sources": [row.source_id for row in plan.fresh_release.sources],
         "retained_source_count": len(selected),
         "removed_sources": sorted(removed),
         "replacement_sources": sorted(plan.replaced_sources),
         "retained_scores_byte_identical": True,
         "non_target_sources_and_inventory_unchanged": True,
-        "statistics_exact_union": True,
-        "confidence_vectors_exact_union": True,
+        "statistics_exact_union": not reduced_counts,
+        "confidence_vectors_exact_union": not reduced_counts,
+        "retained_subset_statistics_verified": True,
+        "public_input_rebindings": [
+            {
+                "source_id": row.source.source_id,
+                "task_count": len(row.task_ids),
+                "removed_task_count": len(row.removed_task_ids),
+                "changed_task_id_count": sum(
+                    before != after for before, after in zip(row.task_ids, row.new_task_ids, strict=True)
+                ),
+                "all_public_inputs_unchanged": True,
+                "task_identity_mapping": task_mappings[row.source.source_id].model_dump(mode="json"),
+            }
+            for row in plan.rebindings
+        ],
         "samples_recomputed_from_full_assignments": True,
         # Load-facing handoff keys (curriculum_load.verify_handoff): each flag is earned
-        # by the checks above this seal — the retained readback verified every assignment
-        # value byte for byte, the statistics/confidence unions are exact, and the
-        # additions-mode compose never rewrites task ids or public inputs.
-        "unchanged_scope": "retained_sources",
+        # by the checks above this seal. Unrebound sources retain every value;
+        # verified rebindings have separate mappings and subset checks.
+        "unchanged_scope": "unrebound_retained_sources" if plan.rebindings else "retained_sources",
         "all_retained_assignment_values_verified": all(row["all_retained_values_verified"] for row in retained_files),
         "all_statistics_and_confidence_values_unchanged": True,
         "all_task_ids_unchanged": True,

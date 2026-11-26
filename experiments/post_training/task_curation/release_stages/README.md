@@ -116,9 +116,9 @@ Field notes:
 - `parity_receipt` + `gpu_runtime` decide GPU vs CPU embedding: both set → CUDA
   (a valid parity receipt for the serving runtime is required, BRIEF requirement 4);
   both null → CPU.
-- `rebound_source`/`rebound_tasks` are typed passthroughs. The maintained
-  additions-mode compose refuses a declared rebound (the projection pass is not
-  wired into the compose yet) — resolve the rebound before composing.
+- The singleton `rebound_source`/`rebound_tasks` plan fields are not a proof of
+  reusable alignment. Composition accepts per-source proofs through
+  `public_input_rebindings` in its composition-input manifest, as described below.
 - `slice_output_root` (optional) redirects preflight slice artifacts; the default
   is `<release_root>/preflight-slices`.
 
@@ -323,3 +323,27 @@ rows and coverage vectors before merging the fresh alignment. Assignments and
 statistics for unaffected sources retain their existing values. The handoff
 records replacement source IDs and scopes its unchanged-value evidence to the
 retained sources.
+
+## Compose verified public-input rewrites with fresh alignment
+
+The composition-input manifest can contain `public_input_rebindings`, an array
+of `{source_id, source_manifest, public_inputs}` records. Both manifest fields
+are `{uri, sha256}` references to complete frozen public-input preparation.
+`current_target_declarations` covers the union of these sources and the fresh
+alignment inventory. A source must appear in only one group.
+
+Each rebind proves every current public input against its archived population.
+Stable IDs must preserve their public inputs. Changed IDs require unique public
+content or verified immutable upstream rows. A smaller current population may
+retain an injective subset; all omitted archived IDs are recorded in the identity
+mapping with null new IDs. Mixed-readiness subsets require fresh alignment, since
+the source-level counts alone cannot establish the retained readiness split.
+Changed or ambiguous public content cannot reuse scores.
+
+Composition applies these proofs while reading the archive once, removes obsolete
+assignments, and adds fresh alignment for changed public inputs. It rebuilds
+statistics, confidence and review samples. Unaffected sources and complete
+rebindings preserve their exact statistics; reduced populations must have the
+new denominator and componentwise subset bounds. The loader checks each pinned
+identity mapping against the selected source's task count, unique old/new IDs,
+removal count and changed-ID count before accepting the scoped handoff.

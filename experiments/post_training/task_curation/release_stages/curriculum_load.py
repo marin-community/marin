@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -99,6 +101,7 @@ def verify_handoff(inputs: CurriculumLoadInputs, handoff: dict) -> None:
     )
     if not all(unchanged):
         raise ValueError(f"handoff reports changed composition values: {unchanged}")
+    verify_public_input_rebindings(handoff)
     rebound_matches = handoff["rebound_source"] == inputs.expected_rebound_source and (
         handoff["rebound_tasks"] == inputs.expected_rebound_tasks
     )
@@ -112,6 +115,40 @@ def verify_handoff(inputs: CurriculumLoadInputs, handoff: dict) -> None:
             f"handoff validated {handoff['confidence_validated_rows']} confidence rows,"
             f" expected {inputs.expected_confidence_rows}"
         )
+
+
+def verify_public_input_rebindings(handoff: dict) -> None:
+    """Require complete, digest-bound task identity mappings for scoped rewrites."""
+    rebindings = handoff.get("public_input_rebindings", [])
+    if not rebindings:
+        return
+    if handoff["unchanged_scope"] != "unrebound_retained_sources" or not handoff["retained_subset_statistics_verified"]:
+        raise ValueError("Rebound handoff lacks scoped retention verification")
+    reference = handoff["release"]
+    release = read_ref(ArtifactRef(uri=reference["uri"], sha256=reference["sha256"]))
+    sources = {row["source_id"]: row for row in release["sources"]}
+    seen = set()
+    for binding in rebindings:
+        source_id = binding["source_id"]
+        if source_id in seen or source_id not in sources or not binding["all_public_inputs_unchanged"]:
+            raise ValueError("Rebound handoff repeats, omits or changes a source's public inputs")
+        seen.add(source_id)
+        encoded = manifest_bytes(ManifestReference.model_validate(binding["task_identity_mapping"]))
+        rows = pq.read_table(pa.BufferReader(encoded)).to_pylist()
+        retained = [row for row in rows if row["new_task_id"] is not None]
+        removed = [row for row in rows if row["new_task_id"] is None]
+        if (
+            len(retained) != binding["task_count"]
+            or len(retained) != sources[source_id]["task_count"]
+            or len(removed) != binding["removed_task_count"]
+            or len({row["old_task_id"] for row in rows}) != len(rows)
+            or len({row["new_task_id"] for row in retained}) != len(retained)
+            or any(not row["old_task_sha256"] for row in rows)
+            or any(not row["new_task_sha256"] or not row["public_content_sha256"] for row in retained)
+            or any(row["new_task_sha256"] is not None for row in removed)
+            or sum(row["old_task_id"] != row["new_task_id"] for row in retained) != binding["changed_task_id_count"]
+        ):
+            raise ValueError(f"Rebound task mapping does not cover the selected population: {source_id}")
 
 
 def verify_text_scan(
