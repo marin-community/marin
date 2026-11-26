@@ -29,6 +29,9 @@ MODEL_SOURCES = {
     "status_taxonomy.py": "lib/finestore/src/finestore/rl/status_taxonomy.py",
     "difficulty.py": "lib/finestore/src/finestore/rl/difficulty.py",
     "source_fingerprints.py": "lib/taskcompendium/src/taskcompendium/source_fingerprints.py",
+    # Marina's runtime does not install shellbox; the taxonomy route needs only its
+    # stdlib-only demand vocabulary.
+    "requirements.py": "lib/shellbox/src/shellbox/requirements.py",
 }
 IMPORT_RELOCATIONS = {
     "from finestore.sft import ": "from .bundled.sft import ",
@@ -37,6 +40,7 @@ IMPORT_RELOCATIONS = {
     "from finestore.rl.status_taxonomy import ": "from .bundled.status_taxonomy import ",
     "from finestore.rl.difficulty import ": "from .bundled.difficulty import ",
     "from taskcompendium.source_fingerprints import ": "from .bundled.source_fingerprints import ",
+    "from shellbox.requirements import ": "from .bundled.requirements import ",
 }
 
 RELOCATED_SERVER_FILES = (

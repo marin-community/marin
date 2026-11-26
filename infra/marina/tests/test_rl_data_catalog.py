@@ -2778,7 +2778,13 @@ def test_atlas_packages_resolve_aliases_without_repository_imports(tmp_path, mon
             name.startswith(("experiments.", "infra.marina.apps."))
             or (
                 preview
-                and name in {"finestore.rl.curation", "finestore.rl.difficulty", "taskcompendium.source_fingerprints"}
+                # Marina's runtime lags these modules and installs no shellbox (R40 #52:
+                # the v40 publish failed backend validation on shellbox.requirements).
+                and (
+                    name in {"finestore.rl.curation", "finestore.rl.difficulty", "taskcompendium.source_fingerprints"}
+                    or name == "shellbox"
+                    or name.startswith("shellbox.")
+                )
             )
         ):
             raise ModuleNotFoundError(name)
