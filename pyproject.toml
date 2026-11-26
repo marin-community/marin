@@ -76,7 +76,7 @@ pipeline = [
     "triton>=3.6.0,<3.7; sys_platform == 'linux'",
     # Flash Attention's Python helpers import Torch, but the Grug kernels execute
     # through JAX/CuTe. Keep the pipeline environment on one CUDA runtime.
-    "torch==2.11.0+cpu; sys_platform == 'linux'",
+    "torch==2.13.0+cpu; sys_platform == 'linux'",
 ]
 
 [tool.uv]
@@ -108,6 +108,8 @@ constraint-dependencies = [
     "dnspython>=2.9.0",
     "msgpack>=1.2.3",
     "nltk>=3.10.4",
+    # Opt in to FlashAttention betas across uv splits because its GPU requirements are Linux-only.
+    "flash-attn-4>=4.0.0b27,<4.1",
     # Enable pre-releases for transitive deps that publish no stable release at
     # all. A constraint intersects (rather than replaces) the upstream
     # specifier, so the resolved version still follows whatever requires them;
@@ -124,7 +126,7 @@ constraint-dependencies = [
 override-dependencies = [
     # Torch pins an older NCCL; 2.32.6 fixes NVLSTree buffer corruption.
     # https://github.com/NVIDIA/nccl/issues/2625
-    "nvidia-nccl-cu12>=2.32.6; sys_platform == 'linux'",
+    "nvidia-nccl-cu13>=2.32.6; sys_platform == 'linux'",
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",
@@ -326,6 +328,7 @@ marin-finestore = { workspace = true }
 marin-iac = { workspace = true }
 jaxpp = { git = "https://github.com/NVIDIA/jaxpp.git", rev = "46b8443eed01f54688dd24ae451203a504b1cff8" }
 torch = [{ index = "pytorch-cpu", extra = "pipeline", marker = "sys_platform == 'linux'" }]
+torchcodec = { index = "pytorch-cpu" }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }

@@ -148,34 +148,33 @@ gpu = [
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.
   "jax-triton==0.3.1; sys_platform == 'linux'",
-  # This module imports Triton directly; stay on the tested minor without
-  # forcing an exact patch version.
-  "triton>=3.6.0,<3.7; sys_platform == 'linux'",
-  "torch==2.11.0",
-  "torchvision==0.26.0",
+  # Match the Triton minor required by the CUDA Torch wheels.
+  "triton>=3.7.1,<3.8; sys_platform == 'linux'",
+  "torch==2.13.0",
+  "torchvision==0.28.0",
 ]
 tpu = [
   "jax==0.11.1",
   "jaxlib==0.11.1",
   "libtpu==0.0.46.*",
-  "torch==2.11.0",
+  "torch==2.13.0",
   # Linux x86_64
-  "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchvision==0.28.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
-  "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "torchvision==0.28.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
   # Linux aarch64, macOS arm64: PyPI default wheel
-  "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+  "torchvision==0.28.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 cpu = [
   "jax==0.11.1",
-  "torch==2.11.0",
+  "torch==2.13.0",
   # Linux x86_64
-  "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  "torchvision==0.28.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
   # Windows x86_64 (AMD64)
-  "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  "torchvision==0.28.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
   # Linux aarch64, macOS arm64: PyPI default wheel
-  "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+  "torchvision==0.28.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
 # AMD GPUs: Levanter's ROCm JAX stack.
@@ -215,13 +214,12 @@ torchvision = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
-    # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu132", extra = "gpu", marker = "sys_platform == 'linux'" },
 ]
 resiliparse = { index = "marin-resiliparse" }
 torch = [
-    # PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
-    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    # The CUDA 13.2 wheels meet the B200 cuBLAS minimum.
+    { index = "pytorch-cu132", extra = "gpu", marker = "sys_platform == 'linux'" },
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cpu", extra = "tpu" },
 ]
@@ -232,8 +230,8 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
 

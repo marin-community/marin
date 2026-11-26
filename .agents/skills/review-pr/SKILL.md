@@ -31,9 +31,10 @@ A reviewable Marin pull request:
 
 Report only actionable defects introduced by the pull request. Validate every
 finding against the diff, relevant surrounding code, and applicable
-instructions. Do not report style preferences, speculative failures, harmless
-duplication in `experiments/grug`, or pre-existing problems. If the evidence is
-uncertain, omit the finding.
+instructions. For design findings, evidence can be an obligation the change
+places on real callers or maintainers. Show where they pay that cost and how
+the proposed change removes it. Omit style preferences, speculative failures,
+harmless duplication in `experiments/grug`, and pre-existing problems.
 
 ## Choose the review mode
 
