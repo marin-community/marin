@@ -37,6 +37,7 @@ from skyrl_train.config.rollout_validation import (
     validate_groups_per_family,
 )
 from skyrlrecipe import RLEntrypoint
+from skyrlrecipe.documents import normalize_rollout_buffer_config
 
 from cloud.iris.ray_storage import RaySpillBackend, resolve_ray_spill_target
 from cloud.iris.role_plan import (
@@ -223,6 +224,11 @@ class SkyRLLaunchConfig:
 def compose_launch_config(raw: Mapping[str, Any] | DictConfig) -> DictConfig:
     """Compose a raw mapping into the strict structured launch schema."""
     composed = OmegaConf.merge(OmegaConf.structured(SkyRLLaunchConfig), raw)
+    skyrl = OmegaConf.to_container(composed.skyrl, resolve=False)
+    assert isinstance(skyrl, dict)
+    normalized = normalize_rollout_buffer_config(skyrl)
+    if normalized is not skyrl:
+        composed.skyrl = dict(normalized)
     OmegaConf.to_container(composed, resolve=True, throw_on_missing=True)
     if not composed.inputs.evaluation_data:
         with open_dict(composed.inputs):

@@ -46,7 +46,7 @@ export function hasValues(series, range) {
   return series.data.some((point) => Number.isFinite(point.value) && inRange(point, range));
 }
 
-export function promptOccupancyAtLongestWait(data, range) {
+export function entryOccupancyAtLongestWait(data, range) {
   let longest;
   for (const wait of data) {
     if (inRange(wait, range) && (!longest || wait.value > longest.value)) longest = wait;

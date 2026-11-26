@@ -8,7 +8,7 @@ from skyrl_train.trajectory_runners.types import (
     TrajectoryRequestBatch as TrajectoryRequestBatch,
     TrainingPhase as TrainingPhase,
 )
-from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter
+from skyrl_train.rollouts.buffer import RolloutGroupJob, RolloutWriter
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 
 
@@ -17,7 +17,7 @@ class TrajectoryRunner(Protocol):
 
     async def run(self, input_batch: TrajectoryRequestBatch) -> TrajectoryBatch: ...
 
-    async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
+    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         """Commit a leased prompt group and return its response token count."""
         ...
 

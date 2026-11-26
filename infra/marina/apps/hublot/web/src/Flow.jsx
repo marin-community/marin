@@ -75,7 +75,7 @@ function streamGeometry(edge, sx, sy, tx, ty) {
     const bends = toDispatch ? [[railX, sy]] : [[railX, sy], [railX, ty]];
     return { path: roundedPath([start, ...bends, end]), label: [railX, midY] };
   }
-  if (edge.id === 'prompts' && edge.to[0] === 'rollouts') {
+  if (edge.id === 'entries' && edge.to[0] === 'rollouts') {
     return { path: roundedPath([start, [sx, ty], end]), label: [midX, ty] };
   }
   return { path: roundedPath([start, end]), label: [midX, midY] };

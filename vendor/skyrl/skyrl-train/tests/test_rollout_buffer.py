@@ -21,7 +21,7 @@ async def test_family_leases_fill_batches_reject_wrong_family_and_reopen_slots()
     buffer = RolloutBuffer(
         RolloutBufferConfig(
             batch_size=2,
-            max_in_flight=4,
+            max_outstanding_leases=4,
             max_staleness_steps=1,
             batch_policy=BatchPolicy.FULL_BATCH,
             dynamic_sampling=None,
@@ -30,7 +30,7 @@ async def test_family_leases_fill_batches_reject_wrong_family_and_reopen_slots()
         )
     )
 
-    async def commit(lease: RolloutLease, *, rejected: bool = False, family: str | None = None) -> None:
+    async def submit_group(lease: RolloutLease, *, rejected: bool = False, family: str | None = None) -> None:
         verdict = RolloutVerdict(
             lease.lease_id,
             (AdmissionRejection.FULLY_MASKED,) if rejected else (),
@@ -39,21 +39,22 @@ async def test_family_leases_fill_batches_reject_wrong_family_and_reopen_slots()
             GeneratedWork(2, 2, 20),
         )
         payload = PayloadReference(None if rejected else lease.lease_id)
-        await buffer.commit(lease.lease_id, {"family": family if family is not None else lease.family}, verdict, payload)
+        entry = {"family": family if family is not None else lease.family}
+        await buffer.submit_group(lease.lease_id, entry=entry, verdict=verdict, payload=payload)
 
     async with asyncio.timeout(5):
         await buffer.publish(1)
         first, rejected, *later = [await buffer.acquire_lease() for _ in range(4)]
         assert (first.family, rejected.family) == ("agentic", "math")
         with pytest.raises(ValueError, match="family does not match its rollout lease"):
-            await commit(first, family=rejected.family)
+            await submit_group(first, family=rejected.family)
         others = [first, *later]
         for lease in reversed(others):
-            await commit(lease)
-        await commit(rejected, rejected=True)
+            await submit_group(lease)
+        await submit_group(rejected, rejected=True)
         replacement = await buffer.acquire_lease()
         assert (replacement.batch_id, replacement.family) == (1, rejected.family)
-        await commit(replacement)
+        await submit_group(replacement)
 
         for step in (1, 2):
             if step > 1:

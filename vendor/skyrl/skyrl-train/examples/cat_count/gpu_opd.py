@@ -217,7 +217,7 @@ def opd_config(args: argparse.Namespace) -> DictConfig:
             rollout_buffer=sections.RolloutBuffer(
                 max_staleness_steps=STALENESS,
                 batch_policy="full_batch",
-                max_in_flight=BATCH_SIZE,
+                max_outstanding_leases=BATCH_SIZE,
                 object_store_root=None,
             ),
             callbacks=(

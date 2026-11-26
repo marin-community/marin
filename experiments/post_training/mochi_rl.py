@@ -147,7 +147,7 @@ _TRANSFORMER_KWARGS = {"bias_activation_fusion": True, "grug_checkpoint_cpu_offl
 _THREE_RACK_PATCH = RecipePatch(
     context_budget=ContextBudget(request_window_tokens=262_144, max_new_tokens_per_turn=16_384, max_turns=1),
     trainer=sections.Trainer(
-        rollout_buffer=sections.RolloutBuffer(max_in_flight=128),
+        rollout_buffer=sections.RolloutBuffer(max_outstanding_leases=128),
         policy=sections.Policy(
             megatron_config=sections.PolicyMegatronConfig(transformer_config_kwargs=_TRANSFORMER_KWARGS)
         ),

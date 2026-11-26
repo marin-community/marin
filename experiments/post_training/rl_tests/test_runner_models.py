@@ -94,7 +94,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     assert run.inputs is not None
     config = rl_gate.validate_candidate(preset, run.inputs, table=SNOWBALL)["skyrl"]
     buffer = config["trainer"]["rollout_buffer"]
-    assert (buffer["max_in_flight"], buffer["groups_per_family"]) == (32, {"agentic": 64, "nonagentic": 64})
+    assert (buffer["max_outstanding_leases"], buffer["groups_per_family"]) == (32, {"agentic": 64, "nonagentic": 64})
     (step,) = run.runs
     execution = next(value for value in step.runtime_args.values() if isinstance(value, IrisSkyRLExecution))
     assert set(execution.required_env_vars) == {

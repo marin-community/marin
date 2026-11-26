@@ -351,7 +351,7 @@ def _log_status(peaks: dict | None = None, breakdown: bool = False) -> None:
         if sys_pct >= 85:
             print(
                 "[fd-monitor] Node memory pressure HIGH — consider reducing "
-                "trajectory_runner.max_concurrent_training_machine_tasks or trainer.rollout_buffer.max_in_flight",
+                "trajectory_runner.max_concurrent_training_machine_tasks or trainer.rollout_buffer.max_outstanding_leases",
                 flush=True,
             )
 

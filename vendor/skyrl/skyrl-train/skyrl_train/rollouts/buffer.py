@@ -1,8 +1,8 @@
 """Rollout buffer: leases generation capacity to rollout workers and selects training batches.
 
-A rollout worker writes each completed prompt group through a ``RolloutWriter``. The writer checks the
+A rollout worker writes each completed rollout group through a ``RolloutWriter``. The writer checks the
 group's content where the payload already is, stores the payload in the run's payload store
-(``skyrl_train.rollouts.payloads``), and commits a small verdict together with a reference to the payload, so
+(``skyrl_train.rollouts.payloads``), and submits a small verdict together with a reference to the payload, so
 the buffer, a Ray actor, selects batches without reading payloads. The trainer fetches only the payloads it
 trains on.
 """
@@ -49,12 +49,12 @@ from skyrl_train.trajectory_runners.types import BatchFields, RewardShapingCompo
 class RolloutBufferConfig:
     """Batch shape, generation concurrency, and selection rules of one training run.
 
-    ``max_in_flight`` caps concurrent rollouts and ``max_candidate_groups`` bounds the dynamic-sampling candidates
-    one batch may inspect; None leaves either unbounded.
+    ``max_outstanding_leases`` caps open leases, including a lease held during entry selection.
+    ``max_candidate_groups`` bounds the dynamic-sampling candidates one batch may inspect.
     """
 
     batch_size: int
-    max_in_flight: int | None
+    max_outstanding_leases: int | None
     max_staleness_steps: int
     batch_policy: BatchPolicy
     dynamic_sampling: DynamicSamplingType | None
@@ -64,27 +64,27 @@ class RolloutBufferConfig:
     def __post_init__(self) -> None:
         if self.batch_size < 1:
             raise ValueError(f"rollout batch size must be positive, got {self.batch_size}")
-        if self.max_in_flight is not None and self.max_in_flight < 1:
-            raise ValueError(f"max in-flight rollouts must be positive, got {self.max_in_flight}")
+        if self.max_outstanding_leases is not None and self.max_outstanding_leases < 1:
+            raise ValueError(f"max outstanding leases must be positive, got {self.max_outstanding_leases}")
         if self.max_staleness_steps < 0:
             raise ValueError(f"max_staleness_steps must be non-negative, got {self.max_staleness_steps}")
 
     @property
     def max_untrained_groups(self) -> int:
-        """Groups leased, committed, or batched that the next ``max_staleness_steps + 1`` steps can train on."""
+        """Groups leased, submitted, or batched that the next ``max_staleness_steps + 1`` steps can train on."""
         return (self.max_staleness_steps + 1) * self.batch_size
 
     @property
-    def max_concurrent_rollouts(self) -> int:
-        """The most groups that can generate at once."""
-        if self.max_in_flight is None:
+    def effective_lease_limit(self) -> int:
+        """The most leases that can be open at once."""
+        if self.max_outstanding_leases is None:
             return self.max_untrained_groups
-        return min(self.max_in_flight, self.max_untrained_groups)
+        return min(self.max_outstanding_leases, self.max_untrained_groups)
 
 
 @dataclass(frozen=True)
 class RolloutLease:
-    """Permission to generate one prompt group for batch ``batch_id`` with the policy published at ``policy_step``.
+    """Permission to generate one rollout group for batch ``batch_id`` with the policy published at ``policy_step``.
 
     A batch id is the training step expected to train the group; the batch policy decides whether it must.
     """
@@ -96,22 +96,28 @@ class RolloutLease:
 
 
 @dataclass(frozen=True)
-class RolloutTask:
-    """One prompt group to generate under a buffer lease."""
+class RolloutGroupJob:
+    """One leased rollout group to generate for a dataset entry."""
 
     lease: RolloutLease
-    prompt: dict
+    entry: dict
     request: TrajectoryRequestBatch
 
 
 @dataclass
 class RolloutGroup:
-    """One prompt's samples, generated under one lease."""
+    """One entry's samples, generated under one lease."""
 
     trajectory_batch: TrajectoryBatch
     uid: str
     policy_step: int
-    prompt: dict
+    entry: dict
+
+    def __setstate__(self, state: dict) -> None:
+        # Older checkpoints and object-store payloads used "prompt" for the entry.
+        if "prompt" in state:
+            state["entry"] = state.pop("prompt")
+        self.__dict__.update(state)
 
 
 @dataclass(frozen=True)
@@ -289,7 +295,7 @@ class RolloutContentPolicy:
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
         grader_stats = None
         if self.report_graders:
-            metadata = group.prompt["input"].metadata
+            metadata = group.entry["input"].metadata
             grader_stats = GraderStats()
             grader_stats.add(batch, repeat(metadata, len(batch["rewards"])))
         if not decision.accepted:
@@ -302,44 +308,54 @@ class RolloutWriter(Protocol):
     async def write_rollout(self, lease: RolloutLease, group: RolloutGroup) -> None: ...
 
 
-async def write_trajectory_batch(task: RolloutTask, writer: RolloutWriter, batch: TrajectoryBatch) -> int:
-    """Write a completed batch under its prompt group's lease."""
+async def write_trajectory_batch(job: RolloutGroupJob, writer: RolloutWriter, batch: TrajectoryBatch) -> int:
+    """Write a completed batch under its rollout group's lease."""
     with rollout_wait("enqueue"):
         await writer.write_rollout(
-            task.lease, RolloutGroup(batch, task.prompt["uid"], task.lease.policy_step, task.prompt)
+            job.lease, RolloutGroup(batch, job.entry["uid"], job.lease.policy_step, job.entry)
         )
     return sum(len(response) for response in batch["response_ids"])
 
 
 @dataclass(frozen=True)
 class PayloadReference:
-    """Nest one reference so Ray passes an ObjectRef to ``commit`` without resolving it."""
+    """Nest one reference so Ray passes an ObjectRef to ``submit_group`` without resolving it."""
 
     value: object | None
 
 
 @dataclass
-class ReadyRollout:
-    """A committed group that no batch has taken yet.
+class SubmittedGroup:
+    """A submitted group that no batch has taken yet.
 
     ``payload`` holds one reference to the ``RolloutGroup``; it is None when the verdict
     excludes the group.
-    ``committed_at`` is the buffer process's monotonic time at commit, and None for a group restored from a
+    ``submitted_at`` is the buffer process's monotonic time at submission, and None for a group restored from a
     checkpoint.
     """
 
     lease_id: str
     policy_step: int
     batch_id: int
-    prompt: dict
+    entry: dict
     verdict: RolloutVerdict
     payload: object | None
-    committed_at: float | None
+    submitted_at: float | None
+
+    def __setstate__(self, state: dict) -> None:
+        if "prompt" in state:
+            state["entry"] = state.pop("prompt")
+            state["submitted_at"] = state.pop("committed_at", None)
+        self.__dict__.update(state)
+
+
+# Old torch.save checkpoints resolve this name when unpickling a submitted group.
+ReadyRollout = SubmittedGroup
 
 
 @dataclass(frozen=True)
 class GroupDisposition:
-    """How one committed group left the buffer: ``consumed`` by a batch or an admission or selection outcome."""
+    """How one submitted group left the buffer: ``consumed`` by a batch or an admission or selection outcome."""
 
     uid: str
     disposition: str
@@ -349,9 +365,9 @@ class GroupDisposition:
 
 @dataclass(frozen=True)
 class BufferSnapshot:
-    """Committed groups, prompts awaiting regeneration, and leases not yet committed, for a checkpoint."""
+    """Submitted groups, entries awaiting regeneration, and leases still open, for a checkpoint."""
 
-    ready: list[ReadyRollout]
+    submitted: list[SubmittedGroup]
     retries: list[dict]
     leases: frozenset[str]
 
@@ -365,7 +381,7 @@ class BatchSelection:
 
 
 @dataclass(frozen=True)
-class AdmittedRollout:
+class AdmittedGroupMetadata:
     """One selected group's stable batch index, identity, and size."""
 
     index: int
@@ -380,12 +396,12 @@ class AdmittedRollout:
 class Admission:
     """Progress toward the current batch since the previous ``admit`` call.
 
-    ``dispositions`` holds every committed group that left the buffer, so its uid may be generated again.
+    ``dispositions`` holds every submitted group that left the buffer, so its uid may be generated again.
     ``selection`` is set only on the call that completes the batch.
     """
 
     batch_id: int
-    admitted: list[AdmittedRollout]
+    admitted: list[AdmittedGroupMetadata]
     retries: list[dict]
     generated: list[tuple[int, GeneratedWork]]
     dispositions: list[GroupDisposition]
@@ -454,7 +470,7 @@ class _SelectionStats:
 
 
 class AsyncRolloutPolicy(Protocol):
-    """Which batch a rollout generates for, and which batch it trains in once committed.
+    """Which batch a rollout generates for, and which batch it trains in once submitted.
 
     Batch ids are training steps: after ``publish(step)`` the trainer assembles batch ``step``.
     """
@@ -462,13 +478,13 @@ class AsyncRolloutPolicy(Protocol):
     def lease_batch(self, step: int, occupancy: collections.Counter[int]) -> int | None:
         """The batch a lease granted now generates for, or None when generation may not run further ahead.
 
-        ``occupancy`` counts the leased, committed, and admitted groups of each batch id, including the batch the
+        ``occupancy`` counts the leased, submitted, and admitted groups of each batch id, including the batch the
         trainer has taken until the next publish.
         """
         ...
 
-    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: collections.Counter[int]) -> int | None:
-        """The batch a committed group joins, or None when it is too stale to join any.
+    def train_batch(self, rollout: SubmittedGroup, open_batch: int, admitted: collections.Counter[int]) -> int | None:
+        """The batch a submitted group joins, or None when it is too stale to join any.
 
         ``open_batch`` is the earliest batch still taking groups and ``admitted`` counts each batch's admitted groups.
         """
@@ -493,7 +509,7 @@ class FullBatchRolloutPolicy:
                 return batch_id
         return None
 
-    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: collections.Counter[int]) -> int | None:
+    def train_batch(self, rollout: SubmittedGroup, open_batch: int, admitted: collections.Counter[int]) -> int | None:
         if rollout.batch_id < open_batch:
             # Only a checkpoint written under the rolling policy holds such a group.
             raise ValueError(
@@ -505,14 +521,11 @@ class FullBatchRolloutPolicy:
 
 @dataclass(frozen=True)
 class RollingBatchPolicy:
-    """Train groups in the order they commit.
+    """Train groups in submission order.
 
-    A batch never waits for a slow group: it takes the first groups to commit after the previous batch filled. Groups
-    that generate quickly therefore train sooner and at lower staleness than slow ones, and a group that would train
-    more than ``max_staleness_steps`` after its lease's policy step is discarded and its prompt returned to the prompt
-    loader, which regenerates it up to ``max_stale_retries`` times in a row. A prompt whose rollouts outlast that
-    window never trains, and for others the regenerated groups that do train are the ones that happened to finish
-    quickly.
+    Each batch takes the first groups submitted after the previous batch filled. Groups that finish quickly train
+    sooner and at lower staleness. If a group misses the staleness window, the buffer discards it and returns its
+    entry to the selector. The selector re-offers it up to ``max_stale_retries`` times in a row.
     """
 
     config: RolloutBufferConfig
@@ -521,10 +534,10 @@ class RollingBatchPolicy:
         untrained = sum(occupancy.values())
         if untrained >= self.config.max_untrained_groups:
             return None
-        # The batch the group joins if groups commit in lease order.
+        # The batch the group joins if groups are submitted in lease order.
         return step + untrained // self.config.batch_size
 
-    def train_batch(self, rollout: ReadyRollout, open_batch: int, admitted: collections.Counter[int]) -> int | None:
+    def train_batch(self, rollout: SubmittedGroup, open_batch: int, admitted: collections.Counter[int]) -> int | None:
         batch_id = open_batch
         while admitted[batch_id] >= self.config.batch_size:
             batch_id += 1
@@ -540,15 +553,15 @@ def async_rollout_policy(config: RolloutBufferConfig) -> AsyncRolloutPolicy:
 
 
 class RolloutBuffer:
-    """Lease accounting, committed groups, and batch selection for one training run.
+    """Lease accounting, submitted groups, and batch selection for one training run.
 
     The trainer publishes each policy step after syncing its weights to inference. Leases open only after
-    the first publish. Besides any ``max_in_flight`` cap, leases are bounded so that groups not yet trained (leased,
-    committed, or in the current batch) never exceed ``max_staleness_steps + 1`` batches: a group leased now
+    the first publish. The buffer also caps untrained groups, counting leased groups, pending submissions, and
+    groups in batches. That total never exceeds ``max_staleness_steps + 1`` batches. A group leased now
     can only be trained within that many steps, so generating more would only produce stale work.
 
-    Every commit is assigned to a batch by the batch policy and judged against it immediately: a group too stale for
-    any batch returns its prompt for regeneration, a content rejection or duplicate UID is dropped, and dynamic
+    Every submission is assigned to a batch by the batch policy and judged against it immediately: a group too stale for
+    any batch returns its entry for regeneration, a content rejection or duplicate UID is dropped, and dynamic
     sampling decides the rest. Groups admitted to a later batch wait for its step.
     """
 
@@ -558,10 +571,10 @@ class RolloutBuffer:
         self._policy_step = 0
         self._family_order = collections.deque(config.groups_per_family)
         self._leases: dict[str, RolloutLease] = {}
-        # Committed groups not yet assigned to a batch; only groups restored before the first publish wait here.
-        self._ready: list[ReadyRollout] = []
-        self._admitted: collections.defaultdict[int, list[ReadyRollout]] = collections.defaultdict(list)
-        self._unreported: list[ReadyRollout] = []
+        # Submitted groups not yet assigned to a batch; only groups restored before the first publish wait here.
+        self._pending: list[SubmittedGroup] = []
+        self._admitted: collections.defaultdict[int, list[SubmittedGroup]] = collections.defaultdict(list)
+        self._unreported: list[SubmittedGroup] = []
         self._batch_taken = False
         self._retries: list[dict] = []
         self._generated: list[tuple[int, GeneratedWork]] = []
@@ -573,10 +586,10 @@ class RolloutBuffer:
     def _lease_batch(self) -> int | None:
         if self._policy_step == 0:
             return None
-        if self.config.max_in_flight is not None and len(self._leases) >= self.config.max_in_flight:
+        if self.config.max_outstanding_leases is not None and len(self._leases) >= self.config.max_outstanding_leases:
             return None
         occupancy = collections.Counter(lease.batch_id for lease in self._leases.values())
-        occupancy.update(rollout.batch_id for rollout in self._ready)
+        occupancy.update(rollout.batch_id for rollout in self._pending)
         occupancy.update({batch_id: len(groups) for batch_id, groups in self._admitted.items()})
         return self._policy.lease_batch(self._policy_step, occupancy)
 
@@ -594,8 +607,8 @@ class RolloutBuffer:
         occupied = collections.Counter(
             lease.family for lease in self._leases.values() if lease.batch_id == batch_id and lease.family is not None
         )
-        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._ready if group.batch_id == batch_id)
-        occupied.update(group.prompt[FAMILY_COLUMN] for group in self._admitted[batch_id])
+        occupied.update(group.entry[FAMILY_COLUMN] for group in self._pending if group.batch_id == batch_id)
+        occupied.update(group.entry[FAMILY_COLUMN] for group in self._admitted[batch_id])
         for _ in range(len(self._family_order)):
             family = self._family_order[0]
             self._family_order.rotate(-1)
@@ -603,20 +616,20 @@ class RolloutBuffer:
                 return family
         raise RuntimeError(f"No group slot remains for this family in rollout batch {batch_id}")
 
-    async def commit(self, lease_id: str, prompt: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
+    async def submit_group(self, lease_id: str, entry: dict, verdict: RolloutVerdict, payload: PayloadReference) -> None:
         """Record a written group and release its lease."""
         async with self._changed:
             lease = self._leases[lease_id]
-            if lease.family is not None and prompt.get(FAMILY_COLUMN) != lease.family:
-                raise ValueError("Committed prompt family does not match its rollout lease")
+            if lease.family is not None and entry.get(FAMILY_COLUMN) != lease.family:
+                raise ValueError("Submitted entry family does not match its rollout lease")
             del self._leases[lease_id]
             self._generated.append((lease.policy_step, verdict.work))
             if verdict.grader_stats is not None:
                 self._grader_stats.merge(verdict.grader_stats)
                 verdict = replace(verdict, grader_stats=None)
-            self._ready.append(
-                ReadyRollout(
-                    lease_id, lease.policy_step, lease.batch_id, prompt, verdict, payload.value, time.monotonic()
+            self._pending.append(
+                SubmittedGroup(
+                    lease_id, lease.policy_step, lease.batch_id, entry, verdict, payload.value, time.monotonic()
                 )
             )
             self._select()
@@ -654,7 +667,7 @@ class RolloutBuffer:
     async def admit(self, timeout: float) -> Admission:
         """Wait up to ``timeout`` seconds for the current batch to progress.
 
-        Returns newly admitted group metadata, prompts to regenerate, and groups that left the buffer. The call that
+        Returns newly admitted group metadata, entries to regenerate, and groups that left the buffer. The call that
         completes the batch also returns how the batch was selected; the batch then counts as taken until the next
         ``publish``.
 
@@ -691,7 +704,7 @@ class RolloutBuffer:
                 metrics = stats.metrics(self.config.dynamic_sampling)
                 if self.config.groups_per_family:
                     counts = collections.Counter(
-                        group.prompt[FAMILY_COLUMN] for group in self._admitted[self._policy_step]
+                        group.entry[FAMILY_COLUMN] for group in self._admitted[self._policy_step]
                     )
                     if counts != self.config.groups_per_family:
                         raise RuntimeError(f"Rollout batch does not meet {GROUPS_PER_FAMILY_KEY}")
@@ -706,7 +719,7 @@ class RolloutBuffer:
             admission = Admission(
                 batch_id=self._policy_step,
                 admitted=[
-                    AdmittedRollout(
+                    AdmittedGroupMetadata(
                         index=index,
                         uid=rollout.verdict.uid,
                         policy_step=rollout.policy_step,
@@ -735,7 +748,7 @@ class RolloutBuffer:
         return self._grader_stats.summary()
 
     def snapshot(self) -> BufferSnapshot:
-        """Copy committed groups not yet in a taken batch, and prompts awaiting regeneration."""
+        """Copy submitted groups not yet in a taken batch, and entries awaiting regeneration."""
         admitted = [
             rollout
             for batch_id, groups in sorted(self._admitted.items())
@@ -743,30 +756,32 @@ class RolloutBuffer:
             for rollout in groups
         ]
         return BufferSnapshot(
-            ready=[*admitted, *self._ready], retries=list(self._retries), leases=frozenset(self._leases)
+            submitted=[*admitted, *self._pending], retries=list(self._retries), leases=frozenset(self._leases)
         )
 
     async def restore(self, snapshot: BufferSnapshot) -> None:
         """Load a checkpoint's groups into an unpublished, empty buffer."""
         async with self._changed:
-            if self._policy_step or self._leases or self._ready or self._retries or any(self._admitted.values()):
+            if self._policy_step or self._leases or self._pending or self._retries or any(self._admitted.values()):
                 raise RuntimeError("a rollout buffer can only be restored before training starts")
             if self.config.groups_per_family:
-                occupied = collections.Counter((row.batch_id, row.prompt.get(FAMILY_COLUMN)) for row in snapshot.ready)
+                occupied = collections.Counter(
+                    (group.batch_id, group.entry.get(FAMILY_COLUMN)) for group in snapshot.submitted
+                )
                 if any(
                     family is None or count > self.config.groups_per_family.get(family, 0)
                     for (_, family), count in occupied.items()
                 ):
                     raise ValueError(f"Checkpoint rollout groups do not fit {GROUPS_PER_FAMILY_KEY}")
-            self._ready.extend(snapshot.ready)
+            self._pending.extend(snapshot.submitted)
             self._retries.extend(snapshot.retries)
 
-    def _reject(self, stats: _SelectionStats, rollout: ReadyRollout, rejection: AdmissionRejection) -> None:
+    def _reject(self, stats: _SelectionStats, rollout: SubmittedGroup, rejection: AdmissionRejection) -> None:
         stats.reject(rejection)
         self._dispose(rollout, rejection.value)
 
-    def _dispose(self, rollout: ReadyRollout, disposition: str) -> None:
-        dwell = None if rollout.committed_at is None else time.monotonic() - rollout.committed_at
+    def _dispose(self, rollout: SubmittedGroup, disposition: str) -> None:
+        dwell = None if rollout.submitted_at is None else time.monotonic() - rollout.submitted_at
         self._dispositions.append(
             GroupDisposition(rollout.verdict.uid, disposition, rollout.verdict.work.generated_token_count, dwell)
         )
@@ -785,17 +800,17 @@ class RolloutBuffer:
         return None
 
     def _select(self) -> None:
-        """Assign committed groups to batches in arrival order and judge each against its batch."""
+        """Assign submitted groups to batches in arrival order and judge each against its batch."""
         if self._policy_step == 0:
             return
         open_batch = self._policy_step + int(self._batch_taken)
         admitted = collections.Counter({batch_id: len(groups) for batch_id, groups in self._admitted.items()})
-        for rollout in self._ready:
+        for rollout in self._pending:
             verdict = rollout.verdict
             batch_id = self._policy.train_batch(rollout, open_batch, admitted)
             if batch_id is None:
                 self._reject(self._stats[open_batch], rollout, AdmissionRejection.STALE)
-                self._retries.append(rollout.prompt)
+                self._retries.append(rollout.entry)
                 continue
             stats = self._stats[batch_id]
             batch = self._admitted[batch_id]
@@ -816,4 +831,4 @@ class RolloutBuffer:
                 admitted[batch_id] += 1
                 if batch_id == self._policy_step:
                     self._unreported.append(rollout)
-        self._ready = []
+        self._pending = []

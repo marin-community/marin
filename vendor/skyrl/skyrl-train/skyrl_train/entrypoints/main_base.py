@@ -391,12 +391,13 @@ class BasePPOExp:
                 num_workers=8,
                 max_completion_length=self.cfg.generator.sampling_params.max_generate_length,
             )
-        prompts_dataset = self.task_dataset(self.cfg.data.train_data)
+        task_dataset = self.task_dataset(self.cfg.data.train_data)
         # make sure the dataset is large enough to train on
-        assert len(prompts_dataset) >= self.cfg.trainer.train_batch_size, (
-            f"dataset should be atleast as large as `train_batch_size` {self.cfg.trainer.train_batch_size}, got size {len(prompts_dataset)}"
+        assert len(task_dataset) >= self.cfg.trainer.train_batch_size, (
+            f"the task dataset has {len(task_dataset)} entries, fewer than train_batch_size "
+            f"{self.cfg.trainer.train_batch_size}"
         )
-        return prompts_dataset
+        return task_dataset
 
     def task_dataset(self, data_files):
         from skyrl_train.dataset.tasks import SourceTaskDataset  # noqa: PLC0415
@@ -413,7 +414,7 @@ class BasePPOExp:
         )
 
     def get_eval_dataset(self, data_files: list[str] | None = None):
-        """Load selected evaluation prompts or new mismatch-probe prompts."""
+        """Load selected task entries for evaluation or a mismatch probe."""
         data_files = self.cfg.data.val_data if data_files is None else data_files
         probe = self.cfg.trainer.mismatch_probe
         needs_probe_prompts = probe.enabled and probe.reuse_probe is None

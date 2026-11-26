@@ -1,7 +1,10 @@
 """Recovery through the trainer loader and the existing CPU checkpoint strategy."""
 
+import asyncio
 import pickle
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import ray
@@ -10,11 +13,16 @@ import torch.distributed as dist
 
 from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.dynamic_sampling import GroupSelectionPolicy
+from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
-from skyrl_train.rollouts.context import TrainingContextState
-from skyrl_train.rollouts.loader import PromptLoaderState, SeededPasses
+from skyrl_train.rollouts.buffer import BatchPolicy, RolloutBuffer, RolloutBufferConfig, RolloutContentPolicy
+from skyrl_train.rollouts.context import RolloutRequestSpec, TrainingContext, TrainingContextState
+from skyrl_train.rollouts.loader import DatasetEntrySelector, DatasetEntrySelectorState, SeededPasses
+from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.utils.trainer_utils import ResumeMode
+from tests.cpu.task_specs import lowered_task, task_input, text_task
 from tests.cpu.tiny_training.cpu_backend import CPUStrategy
 
 
@@ -47,7 +55,7 @@ class LocalPolicyGroup:
             checkpoint / TRAINER_STATE_FILENAME,
         )
         torch.save(
-            TrainingContextState(PromptLoaderState({"epoch": 0, "position": data_position}, []), [], None),
+            TrainingContextState(DatasetEntrySelectorState({"epoch": 0, "position": data_position}, []), [], None),
             checkpoint / "data.pt",
         )
         (root / LATEST_CHECKPOINT_FILE).write_text(str(step))
@@ -80,11 +88,88 @@ def trainer_factory(tmp_path, monkeypatch):
     dist.destroy_process_group()
 
 
-def next_prompt_index(trainer) -> int:
+def next_entry_index(trainer) -> int:
     order = SeededPasses(2, seed=0, shuffle=False)
     if trainer._restored_rollout_state is not None:
-        order.load_state_dict(trainer._restored_rollout_state.loader.order)
+        order.load_state_dict(trainer._restored_rollout_state.selector.order)
     return order.next_index()
+
+
+class CheckpointTasks:
+    def __len__(self) -> int:
+        return 3
+
+    def __getitem__(self, index: int) -> int:
+        return index
+
+    def uid(self, index: int) -> str:
+        return f"task-{index}"
+
+    label = uid
+
+    def collate_fn(self, indices: list[int]) -> list[dict]:
+        return [
+            {"uid": self.uid(index), "input": task_input(lowered_task(text_task(self.uid(index)), "text"))}
+            for index in indices
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("object_store", [False, True])
+async def test_old_rollout_state_restores_an_admitted_group_and_selector_cursor(monkeypatch, object_store):
+    fixture = Path(__file__).parent / "fixtures/legacy_rollout_state"
+    state = torch.load(fixture / "rollout_state.pt", map_location="cpu", weights_only=False)
+    if object_store:
+        group = replace(state.submitted[0], payload=str(fixture / "rollout_group.pickle"))
+        state = replace(state, submitted=[group], object_store_root=str(fixture))
+        payloads = ObjectStorePayloads(str(fixture))
+    else:
+        # Keep Ray's object-store boundary in-process.
+        def put(group):
+            future = asyncio.get_running_loop().create_future()
+            future.set_result(group)
+            return future
+
+        monkeypatch.setattr(ray, "put", put)
+        payloads = MemoryPayloads()
+
+    dataset = CheckpointTasks()
+    selector = DatasetEntrySelector(
+        dataset,
+        SeededPasses(len(dataset), seed=0, shuffle=False),
+        batch_size=1,
+        minimum_pool_size=2,
+        max_stale_retries=1,
+        max_unusable_groups=2,
+        families={dataset.uid(index): "example" for index in range(len(dataset))},
+    )
+    config = RolloutBufferConfig(1, 1, 0, BatchPolicy.FULL_BATCH, None, None, {"example": 1})
+    buffer = RolloutBuffer(config)
+    context = TrainingContext(
+        selector,
+        config,
+        SimpleNamespace(restore=SimpleNamespace(remote=buffer.restore)),
+        RolloutContentPolicy(
+            GroupAdmissionPolicy(
+                GroupAdvantageInvariant.exact_physical(physical_group_size=1), rollout_logprobs_required=False
+            ),
+            GroupSelectionPolicy(None),
+        ),
+        RolloutRequestSpec(1, {}),
+        None,
+        payloads,
+        rollout_spans=False,
+        wait_labels=("lease", "task"),
+    )
+
+    await context.load_state_dict(state)
+    await buffer.publish(1)
+    (admitted,) = (await buffer.admit(timeout=1)).admitted
+    (group,) = await payloads.fetch(buffer.payload_refs(1, [admitted.index]))
+    assert (admitted.uid, admitted.sample_count, admitted.response_tokens) == ("task-0", 1, 2)
+    assert group.entry["input"].spec.task.id == "task-0"
+    assert group.trajectory_batch["response_ids"] == [[3, 4]]
+    assert [selector.next_entry(live=(), family="example")["uid"] for _ in range(2)] == ["task-1", "task-2"]
 
 
 @pytest.mark.parametrize("reset", [False, True])
@@ -100,7 +185,7 @@ def test_continuation_recovers_own_progress_and_next_update(tmp_path, trainer_fa
     continuation = trainer_factory(output, seed, reset=reset)
     assert continuation.load_checkpoints() == (0 if reset else 2, str(seed))
     assert continuation.distillation_scored_tokens_total == (0 if reset else 34)
-    assert next_prompt_index(continuation) == 0
+    assert next_entry_index(continuation) == 0
     for _ in range(3):
         original.policy_model.update()
         continuation.policy_model.update()
@@ -110,7 +195,7 @@ def test_continuation_recovers_own_progress_and_next_update(tmp_path, trainer_fa
     recovered = trainer_factory(output, seed, reset=reset)
     assert recovered.load_checkpoints() == (own_step, str(own))
     assert recovered.distillation_scored_tokens_total == own_step * 17
-    assert next_prompt_index(recovered) == 1
+    assert next_entry_index(recovered) == 1
     original.policy_model.update()
     for policy in (continuation.policy_model, recovered.policy_model):
         policy.update()

@@ -1,9 +1,9 @@
 """Static trajectory runner that emits dataset-supplied preference pairs.
 
-DPO reads chosen and rejected completions from the training parquet instead of
-generating rollouts. Each prompt is leased with ``n_samples_per_prompt=2``; repetition
-0 becomes the chosen row (+1 role) and repetition 1 the rejected row (-1 role), so the
-trainer's group machinery delivers adjacent rows that the DPO loss pairs in order.
+DPO reads chosen and rejected completions from the training parquet. Each preference-pair
+entry gets a lease with ``n_samples_per_prompt=2``. Repetition 0 becomes the chosen row
+(+1 role) and repetition 1 the rejected row (-1 role). The DPO loss pairs these adjacent
+training rows in order.
 """
 
 from collections.abc import Mapping
@@ -12,7 +12,7 @@ from typing import Any
 from loguru import logger
 
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat, completion_text, tokenized_pair
-from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
+from skyrl_train.rollouts.buffer import RolloutGroupJob, RolloutWriter, write_trajectory_batch
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.types import (
@@ -54,9 +54,9 @@ class PreferencePairTrajectoryRunner:
         self.generator_config = generator_config
         self.trajectory_sink: RetentionSink | None = None
 
-    async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
-        batch = await self.run(task.request)
-        return await write_trajectory_batch(task, writer, batch)
+    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
+        batch = await self.run(job.request)
+        return await write_trajectory_batch(job, writer, batch)
 
     def set_trajectory_sink(self, sink: RetentionSink) -> None:
         sink.bind_runner(type(self).__name__)

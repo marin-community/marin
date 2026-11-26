@@ -266,7 +266,7 @@ fragment as `mochi-inference.yaml` beside your experiment:
 ```yaml
 trainer:
   rollout_buffer:
-    max_in_flight: 128
+    max_outstanding_leases: 128
 generator:
   num_inference_engines: 8
   inference_engine_tensor_parallel_size: 1
@@ -332,20 +332,22 @@ spec = replace(
 execution = replace(execution, role_topology=RoleTopologyMode.NVLINK_DOMAIN)
 ```
 
-The 128-group admission limit is separate from the trainer batch. The native
-buffer also bounds untrained groups by `(staleness + 1) * batch_size`: at
-staleness three, a six-group batch admits at most 24 groups. The 128-sequence
-limit applies to each vLLM DP worker, which uses one GPU in this layout. To keep a smoke
-run's admission cap at two groups, use
-`inference = inference.with_settings(("trainer.rollout_buffer.max_in_flight=2",))`
+The 128-lease limit includes leases held by dispatch while it selects an eligible
+entry. The buffer also bounds untrained groups by `(staleness + 1) * batch_size`.
+At staleness three, a six-group batch allows at most 24 untrained groups.
+The 128-sequence limit applies to each vLLM DP worker, which uses one GPU in this
+layout. To limit a smoke run to two outstanding leases, use
+`inference = inference.with_settings(("trainer.rollout_buffer.max_outstanding_leases=2",))`
 before updating `spec`. Use a new artifact version for the changed
 inference layout and inspect the rendered launch document before submitting it.
+Existing launch documents and settings can still use `max_in_flight`. If a
+document has both keys, `max_outstanding_leases` takes precedence.
 
 This example was composed for vLLM build `marin-vllm-gpu-20261113-0ac9dcb157ee`.
 CPU validation covers recipe composition,
 native launch loading, training configuration and three-domain placement, with
-and without existing inference topology declarations. It also checks the two-group
-admission override. These checks provide no GPU execution or performance evidence.
+and without existing inference topology declarations. It also checks the two-lease
+override. These checks provide no GPU execution or performance evidence.
 GPU memory fit, updated-weight publication, long-context training and recovery
 need validation on your runtime. [Issue #11430](https://github.com/marin-community/marin/issues/11430)
 tracks serving work.

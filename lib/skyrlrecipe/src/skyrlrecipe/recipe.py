@@ -12,7 +12,14 @@ from typing import Any, Self
 from pydantic import Field, PositiveInt, ValidationError, model_validator
 
 from .budget import ContextBudget
-from .documents import MISSING, get_path, merge_mappings, set_path
+from .documents import (
+    MISSING,
+    get_path,
+    merge_mappings,
+    normalize_rollout_buffer_config,
+    normalize_setting_path,
+    set_path,
+)
 from .model import FrozenMap, OpenMap, freeze, thaw
 from .ownership import OWNER_MESSAGES, REMOVED
 from .rules import RLEntrypoint, validate_engine_init_kwargs, validate_tp_divides_heads
@@ -45,6 +52,7 @@ class RecipePatch(RecipeSections):
 
     @classmethod
     def from_document(cls, document: Mapping[str, Any]) -> Self:
+        document = normalize_rollout_buffer_config(document)
         _reject_author_paths(document)
         return cls.model_validate_json(json.dumps(thaw(freeze(document)), allow_nan=False))
 
@@ -60,6 +68,7 @@ class RecipePatch(RecipeSections):
             key, separator, raw = setting.partition("=")
             if not separator or not key:
                 raise ValueError(f"a setting must have dotted.key=value form: {setting!r}")
+            key = normalize_setting_path(key)
             patch = {}
             set_path(patch, key, None)
             _reject_author_paths(patch)
@@ -68,7 +77,7 @@ class RecipePatch(RecipeSections):
             except (ValidationError, json.JSONDecodeError) as error:
                 raise ValueError(f"setting {setting!r}: {error}") from error
             set_path(patch, key, value)
-            document = merge_mappings(document, patch)
+            document = merge_mappings(document, normalize_rollout_buffer_config(patch))
         return type(self).from_document(document)
 
 

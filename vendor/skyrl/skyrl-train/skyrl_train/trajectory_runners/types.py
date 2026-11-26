@@ -43,18 +43,18 @@ class BatchMetadata:
 
 @dataclass(frozen=True)
 class TaskRequestBatch:
-    rows: tuple[TaskInput, ...]
+    inputs: tuple[TaskInput, ...]
     sampling_params: dict[str, Any] | None = None
     trajectory_ids: tuple[TrajectoryID, ...] | None = None
     batch_metadata: BatchMetadata | None = None
 
     @property
     def metadata(self) -> tuple[TrajectoryMetadata, ...]:
-        return tuple(row.metadata for row in self.rows)
+        return tuple(task_input.metadata for task_input in self.inputs)
 
     @property
     def public_prompts(self) -> tuple[ConversationType, ...]:
-        return tuple(task_messages(row.spec) for row in self.rows)
+        return tuple(task_messages(task_input.spec) for task_input in self.inputs)
 
 
 @dataclass(frozen=True)

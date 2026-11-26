@@ -16,7 +16,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.rollout_observability import RolloutTimings, current_rollout_observation, measure_rollout
-from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter
+from skyrl_train.rollouts.buffer import RolloutGroupJob, RolloutWriter
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.base import TrajectoryRunner
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
@@ -29,9 +29,9 @@ _Result = TypeVar("_Result")
 
 
 class RolloutWorkers(Protocol):
-    """The rollout processes a coordinator hands tasks to."""
+    """The rollout processes that receive group jobs from dispatch."""
 
-    async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
+    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         """Generate and write one group, returning its response token count."""
         ...
 
@@ -117,10 +117,10 @@ class RolloutWorker:
         return output, None if observation is None else observation.timings()
 
     async def run_task(
-        self, task: RolloutTask, writer: RolloutWriter, observe: bool
+        self, job: RolloutGroupJob, writer: RolloutWriter, observe: bool
     ) -> tuple[int, RolloutTimings | None]:
         with measure_rollout(enabled=observe) as observation:
-            response_tokens = await self._runner.run_task(task, writer)
+            response_tokens = await self._runner.run_task(job, writer)
         return response_tokens, None if observation is None else observation.timings()
 
     async def start_eval_session(
@@ -139,7 +139,7 @@ class RolloutWorker:
 class RolloutWorkerPool:
     """Rollout worker actors that the trainer uses as its trajectory runner.
 
-    Each training task or ``run`` request goes whole to the least-loaded worker; training tasks write their groups
+    Each group job or ``run`` request goes whole to the least-loaded worker; group jobs write their groups
     straight to the rollout buffer. Evaluation drains training requests and uses the same entire pool;
     new training submissions wait until evaluation finishes. A request fails with
     ``RolloutWorkerStalledError`` when its worker completes nothing for the progress timeout.
@@ -207,9 +207,9 @@ class RolloutWorkerPool:
             _training_phase(input_batch), lambda actor, observe: actor.run.remote(input_batch, observe)
         )
 
-    async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
+    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         return await self._observed(
-            _training_phase(task.request), lambda actor, observe: actor.run_task.remote(task, writer, observe)
+            _training_phase(job.request), lambda actor, observe: actor.run_task.remote(job, writer, observe)
         )
 
     async def start_eval_session(

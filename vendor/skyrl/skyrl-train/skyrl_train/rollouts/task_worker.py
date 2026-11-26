@@ -52,7 +52,7 @@ from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
 from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInterface, InferenceEngineInput
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
-from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
+from skyrl_train.rollouts.buffer import RolloutGroupJob, RolloutWriter, write_trajectory_batch
 from skyrl_train.rollouts.group_grading import GROUP_GRADERS, GroupGrader, grade_groups
 from skyrl_train.rollouts.machines import OwnedMachineFactory, TaskMachineError
 from skyrl_train.rollouts.workers import WorkerShard, detached_config
@@ -491,8 +491,11 @@ class TaskRolloutWorker:
             return await self._generate(request)
 
     async def _generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
-        lowered_tasks = [row.spec.model_copy(update={"judge_connection": self.judge_connection}) for row in request.rows]
-        group_graders = [row.group_grader for row in request.rows]
+        lowered_tasks = [
+            task_input.spec.model_copy(update={"judge_connection": self.judge_connection})
+            for task_input in request.inputs
+        ]
+        group_graders = [task_input.group_grader for task_input in request.inputs]
         metadata = request.batch_metadata
         phase = "train" if metadata is None else metadata.training_phase
         trajectory_ids = request.trajectory_ids
@@ -519,7 +522,7 @@ class TaskRolloutWorker:
             session_id = session_ids[index]
             attempt_id = session_id
             external_agent = lowered.harness in agents
-            identity = request.rows[index].metadata.evaluation_identity
+            identity = request.inputs[index].metadata.evaluation_identity
 
             async def model(request):
                 try:
@@ -633,11 +636,11 @@ class TaskRolloutWorker:
     async def stop_eval_session(self) -> None:
         pass
 
-    async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
+    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         with self._active_request():
-            rollouts = await self.generate(task.request)
-            batch = await self.training_batch(task.request, rollouts)
-            return await write_trajectory_batch(task, writer, batch)
+            rollouts = await self.generate(job.request)
+            batch = await self.training_batch(job.request, rollouts)
+            return await write_trajectory_batch(job, writer, batch)
 
 
 @dataclass(frozen=True)

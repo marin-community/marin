@@ -277,10 +277,10 @@ def test_task_timings_survive_projection_concatenation_and_row_selection():
             )
         )
     ids = tuple(TrajectoryID(str(i), 0) for i in range(len(inputs)))
-    request = TaskRequestBatch(rows=tuple(inputs), trajectory_ids=ids)
+    request = TaskRequestBatch(inputs=tuple(inputs), trajectory_ids=ids)
     whole = WholeTaskProjection(*projection_args)
     batches = [
-        whole.project(rollouts[part], replace(request, rows=request.rows[part], trajectory_ids=ids[part]))
+        whole.project(rollouts[part], replace(request, inputs=request.inputs[part], trajectory_ids=ids[part]))
         for part in (slice(0, 1), slice(1, None))
     ]
     combined = concatenate_trajectory_batches(batches)

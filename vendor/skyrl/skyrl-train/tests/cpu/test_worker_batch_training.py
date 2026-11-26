@@ -46,7 +46,7 @@ def _worker_batch_config(root: Path, tiny_policy: Path, builder: str, estimator:
     cfg.trainer.batch_builder = builder
     # Serial rollout admission gives both builders the same row order.
     cfg.trajectory_runner.rollout_workers.num_workers = 1
-    cfg.trainer.rollout_buffer.max_in_flight = 1
+    cfg.trainer.rollout_buffer.max_outstanding_leases = 1
     cfg.trainer.train_batch_size = cfg.trainer.policy_mini_batch_size = 3
     cfg.trainer.training_metrics = True
     cfg.trainer.algorithm.advantage_estimator = estimator
@@ -147,8 +147,8 @@ def test_worker_reads_shared_object_payloads_and_trains_after_resume(forkserver_
     assert [row["trainer/global_step"] for row in _trained_steps(tmp_path)] == [1, 2]
     assert list((tmp_path / "rollouts").rglob("*.pkl"))
     state = torch.load(tmp_path / "ckpts/global_step_2/data.pt", weights_only=False)
-    assert any(group.verdict.trainable for group in state.ready)
-    assert all(group.verdict.row_facts is None for group in state.ready)
+    assert any(group.verdict.trainable for group in state.submitted)
+    assert all(group.verdict.row_facts is None for group in state.submitted)
     cfg.trainer.max_steps = 3
     _run_worker_batch_case(forkserver_context, cfg)
     steps = _trained_steps(tmp_path)

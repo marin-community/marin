@@ -116,13 +116,23 @@
     "rows": [
       [
         1788566460000,
-        "slot mean · driver",
+        "lease mean · driver",
         3.3333333333333335
       ],
       [
         1788566460000,
-        "slot max · driver",
+        "lease max · driver",
         18.0
+      ],
+      [
+        1788566460000,
+        "task mean · driver",
+        8.0
+      ],
+      [
+        1788566460000,
+        "task max · driver",
+        12.0
       ]
     ]
   },

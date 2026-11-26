@@ -27,7 +27,7 @@ from skyrl_train.batch_assembly import (
 )
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.group_admission import resolve_group_advantage_invariant
-from skyrl_train.rollouts.buffer import AdmittedRollout, RolloutGroup
+from skyrl_train.rollouts.buffer import AdmittedGroupMetadata, RolloutGroup
 from skyrl_train.trajectory_runners.trajectory_processing import (
     normalize_trajectory_batches,
     token_reward_rows,
@@ -419,7 +419,7 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
 
     def check():
         validate_cfg(cfg)
-        group = AdmittedRollout(
+        group = AdmittedGroupMetadata(
             0, "g0", 0, len(batch["response_ids"]), sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch)
         )
         plan_worker_batch(cfg, (group,), global_step=0, dp_size=2, max_staleness_steps=0, num_experts=None)

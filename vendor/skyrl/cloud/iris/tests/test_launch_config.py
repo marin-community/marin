@@ -54,6 +54,22 @@ from skyrl_train.inference_engines.ray_wrapped_inference_engine import (
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 
 
+def test_old_rollout_lease_limit_loads_in_authored_and_resolved_configs(tmp_path):
+    document = raw_launch_config()
+    document["skyrl"]["trainer"]["rollout_buffer"] = {"max_in_flight": 5}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(document))
+    config = load_launch_config(path)
+    assert config.skyrl.trainer.rollout_buffer.max_outstanding_leases == 5
+    assert "max_in_flight" not in config.skyrl.trainer.rollout_buffer
+
+    resolved = OmegaConf.to_container(config, resolve=True)
+    buffer = resolved["skyrl"]["trainer"]["rollout_buffer"]
+    buffer["max_in_flight"] = buffer.pop("max_outstanding_leases")
+    path.write_text(yaml.safe_dump(resolved))
+    assert load_launch_config(path) == config
+
+
 @pytest.mark.parametrize(
     "overrides", [{}, {"resume_mode": "from_path"}, {"resume_mode": "none"}, {"resume_path": "other"}]
 )

@@ -17,7 +17,7 @@ from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
 from skyrl_train.distillation import validate_distillation_attachment
 from skyrl_train.group_admission import GroupAdvantageInvariant
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.rollouts.buffer import RowFacts, AdmittedRollout
+from skyrl_train.rollouts.buffer import RowFacts, AdmittedGroupMetadata
 from skyrl_train.metric_reduction import MetricReduction
 from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -81,7 +81,7 @@ class BatchPlan:
 
 def plan_worker_batch(
     cfg: DictConfig,
-    groups: Sequence[AdmittedRollout],
+    groups: Sequence[AdmittedGroupMetadata],
     *,
     global_step: int,
     dp_size: int,

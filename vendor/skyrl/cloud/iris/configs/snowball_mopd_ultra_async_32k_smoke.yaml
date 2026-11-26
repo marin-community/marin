@@ -12,7 +12,7 @@ trainer:
   rollout_buffer:
     max_staleness_steps: 1
     batch_policy: rolling
-    max_in_flight: 96
+    max_outstanding_leases: 96
 teacher_routing:
   opd:
     revision: snowball-mopd-ultra-async-32k-v1

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { flowGraph, cards } from '../src/contracts.js';
 import { createMeasurements, cumulativeRate, waitShare } from '../src/measurements.js';
 import {
-  canceledAttemptCount, cardsWithSamples, promptOccupancyAtLongestWait, recordedNodeSettings, timingDistribution,
+  canceledAttemptCount, cardsWithSamples, entryOccupancyAtLongestWait, recordedNodeSettings, timingDistribution,
 } from '../src/display.js';
 import { driverPhases, driverSetup } from '../src/phases.js';
 
@@ -82,20 +82,30 @@ test('six recorded seconds in a ten-second bin is 60 percent', () => {
     [60, 0, null, null, null]);
 });
 
-test('dispatch coverage places a completed wait over the time it occupied', () => {
-  const records = [
-    { timestamp_ms: 10_000, value: 10, wait: 'slot' },
-    { timestamp_ms: 23_000, value: 13, wait: 'prompt' },
-  ].map(({ wait, ...row }, seq) => ({
-    ...row, seq, name: 'rollout_wait_seconds', attributes_json: JSON.stringify({ wait, stat: 'sum' }),
-  }));
-  const { series } = createMeasurements(records, { from: 0, to: 30_000 });
-  assert.deepEqual(series.slotWaitTime[0].data.map((point) => point.value), [10, 0, null]);
-  assert.deepEqual(series.promptWaitTime[0].data.map((point) => point.value), [0, 10, 3]);
-  assert.equal(series.promptWait[0].data[0].waitStart, 10_000);
-});
+for (const [leaseLabels, taskLabels] of [
+  [['slot', 'slot'], ['prompt', 'prompt']],
+  [['lease', 'lease'], ['task', 'task']],
+  [['slot', 'lease'], ['prompt', 'task']],
+]) {
+  test(`dispatch places each ${leaseLabels.join('/')} and ${taskLabels.join('/')} wait on one timeline`, () => {
+    const records = [
+      { timestamp_ms: 10_000, value: 10, wait: leaseLabels[0] },
+      { timestamp_ms: 23_000, value: 13, wait: taskLabels[0] },
+      { timestamp_ms: 27_000, value: 4, wait: leaseLabels[1] },
+      { timestamp_ms: 30_000, value: 3, wait: taskLabels[1] },
+    ].flatMap(({ wait, ...row }, index) => ['sum', 'max'].map((stat, offset) => ({
+      ...row, seq: 2 * index + offset, name: 'rollout_wait_seconds',
+      attributes_json: JSON.stringify({ wait, stat }),
+    })));
+    const { series } = createMeasurements(records, { from: 0, to: 40_000 });
+    assert.deepEqual(series.leaseWait[0].data.map(({ value, waitStart }) => [value, waitStart]), [[10, 0], [4, 23_000]]);
+    assert.deepEqual(series.taskWait[0].data.map(({ value, waitStart }) => [value, waitStart]), [[13, 10_000], [3, 27_000]]);
+    assert.deepEqual(series.leaseWaitTime[0].data.map((point) => point.value), [10, 0, 4, null]);
+    assert.deepEqual(series.taskWaitTime[0].data.map((point) => point.value), [0, 10, 6, null]);
+  });
+}
 
-test('a prompt wait ending without a recorded launch adds no prompt starts', () => {
+test('a task selection wait ending without a recorded launch adds no group starts', () => {
   const rows = [
     { name: 'rollout_call', timestamp_ms: 18_000, seq: 1, body_json: '{"started_unix_ms":5000}' },
     { name: 'rollout_waits', timestamp_ms: 42_000, seq: 2, value: 1, attributes_json: '{"wait":"prompt"}' },
@@ -103,11 +113,11 @@ test('a prompt wait ending without a recorded launch adds no prompt starts', () 
       attributes_json: '{"wait":"prompt","stat":"sum"}' },
   ];
   const { series } = createMeasurements(rows, window);
-  assert.deepEqual(series.promptItems[0].data.map((point) => point.value), [0.1, null, null, null, null]);
-  assert.equal(series.promptWait[0].data[0].value, 22);
+  assert.deepEqual(series.entryStarts[0].data.map((point) => point.value), [0.1, null, null, null, null]);
+  assert.equal(series.taskWait[0].data[0].value, 22);
 });
 
-test('Dispatch summarizes occupancy at the longest prompt wait with run coverage', () => {
+test('Dispatch summarizes occupancy at the longest task selection wait with run coverage', () => {
   const attempt = (start, end) => ({
     name: 'rollout_call', timestamp_ms: end, seq: end,
     body_json: { started_unix_ms: start, finished_unix_ms: end },
@@ -120,12 +130,12 @@ test('Dispatch summarizes occupancy at the longest prompt wait with run coverage
     { name: 'rollout_groups', timestamp_ms: 25_000, seq: 25_000, value: 1, attributes_json: { disposition: 'consumed' } }];
   const context = { startMs: 0, endMs: 45_000, trainingRows: 2 };
   const { series } = createMeasurements(rows, window, [], null, context);
-  const waits = series.promptWait[0].data;
-  assert.equal(promptOccupancyAtLongestWait(waits, window).outstanding, 2);
-  assert.equal(promptOccupancyAtLongestWait(waits, { from: 0, to: 15_000 }).outstanding, 0);
+  const waits = series.taskWait[0].data;
+  assert.equal(entryOccupancyAtLongestWait(waits, window).outstanding, 2);
+  assert.equal(entryOccupancyAtLongestWait(waits, { from: 0, to: 15_000 }).outstanding, 0);
   const partial = { from: 10_000, to: 50_000 };
-  const partialWaits = createMeasurements(rows, partial, [], null, context).series.promptWait[0].data;
-  assert.equal(promptOccupancyAtLongestWait(partialWaits, partial), null);
+  const partialWaits = createMeasurements(rows, partial, [], null, context).series.taskWait[0].data;
+  assert.equal(entryOccupancyAtLongestWait(partialWaits, partial), null);
 });
 
 test('batch volumes use consumed groups from the complete wait, while releases keep their recorded time', () => {
@@ -148,7 +158,7 @@ test('batch volumes use consumed groups from the complete wait, while releases k
   const { series } = createMeasurements(rows, window);
   assert.deepEqual(series.batchGroups[0].data.map(({ t, value }) => [t, value]), [[26_000, 2]]);
   assert.deepEqual(series.batchTokens[0].data.map(({ t, value }) => [t, value]), [[26_000, 1_000]]);
-  assert.deepEqual(series.promptReleases[0].data.map((p) => p.count ?? null), [1, null, 2, null, null]);
+  assert.deepEqual(series.entryReleases[0].data.map((p) => p.count ?? null), [1, null, 2, null, null]);
   const partial = createMeasurements(rows, { from: 10_000, to: 50_000 }).series;
   assert.deepEqual(partial.batchGroups[0].data, []);
   assert.deepEqual(partial.batchTokens[0].data, []);
@@ -245,7 +255,7 @@ test('expansion rewires the same typed edge and chart in both directions', () =>
     assert.equal(next.to[1], edge.to[1]);
     assert.equal(next.from[0], edge.from[0] === 'rollouts' ? 'workers' : edge.from[0]);
     assert.equal(next.to[0], edge.to[0] === 'rollouts'
-      ? (['prompts', 'leases'].includes(edge.id) ? 'dispatch' : 'workers') : edge.to[0]);
+      ? (['entries', 'leases'].includes(edge.id) ? 'dispatch' : 'workers') : edge.to[0]);
     assert.ok(cards[next.card]);
   }
   assert.deepEqual(flowGraph(false, true), collapsed);

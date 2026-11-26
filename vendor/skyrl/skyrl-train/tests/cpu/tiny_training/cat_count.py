@@ -79,7 +79,11 @@ def cat_count_config(
                     "off_policy_correction": "none" if staleness else "tis",
                     "group_admission": {"stall_timeout": 120},
                 },
-                "rollout_buffer": {"max_staleness_steps": staleness, "max_in_flight": 8, "object_store_root": None},
+                "rollout_buffer": {
+                    "max_staleness_steps": staleness,
+                    "max_outstanding_leases": 8,
+                    "object_store_root": None,
+                },
                 "train_batch_size": 8,
                 "policy_mini_batch_size": 8,
                 "update_epochs_per_batch": 2,

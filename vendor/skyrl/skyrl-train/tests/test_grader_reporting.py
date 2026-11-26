@@ -109,7 +109,7 @@ async def test_training_report_counts_a_crashed_grader_in_a_rejected_group(tmp_p
     buffer = RolloutBuffer(
         RolloutBufferConfig(
             batch_size=1,
-            max_in_flight=1,
+            max_outstanding_leases=1,
             max_staleness_steps=0,
             batch_policy=BatchPolicy.FULL_BATCH,
             dynamic_sampling=None,
@@ -126,7 +126,7 @@ async def test_training_report_counts_a_crashed_grader_in_a_rejected_group(tmp_p
     await buffer.publish(1)
 
     metadata = TrajectoryMetadata("row-0", "taskcompendium", "blend", task_id="task-1", subset_id="code")
-    prompt = {"input": SimpleNamespace(metadata=metadata)}
+    task_entry = {"input": SimpleNamespace(metadata=metadata)}
     for result, loss_mask in (
         (VerificationResult.error("crash", diagnostics={GRADING_FAILURE: "execution"}), [0]),
         (VerificationResult.verified(1.0), [1]),
@@ -139,8 +139,8 @@ async def test_training_report_counts_a_crashed_grader_in_a_rejected_group(tmp_p
             rewards=[result.score or 0.0],
             verification_results=[result],
         )
-        verdict = policy.verdict(RolloutGroup(batch, "row-0", lease.policy_step, prompt))
-        await buffer.commit(lease.lease_id, prompt, verdict, PayloadReference(None))
+        verdict = policy.verdict(RolloutGroup(batch, "row-0", lease.policy_step, task_entry))
+        await buffer.submit_group(lease.lease_id, task_entry, verdict, PayloadReference(None))
 
     admission = await buffer.admit(timeout=1)
     assert len(admission.admitted) == 1

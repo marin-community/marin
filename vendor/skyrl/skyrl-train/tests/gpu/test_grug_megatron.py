@@ -890,12 +890,12 @@ class _RecordedRollouts:
     def set_trajectory_sink(self, sink):
         sink.bind_runner(type(self).__name__)
 
-    async def run_task(self, task, writer):
-        batch = copy.deepcopy(self.groups[task.prompt["uid"]])
+    async def run_task(self, job, writer):
+        batch = copy.deepcopy(self.groups[job.entry["uid"]])
         async with self.ready:
-            await self.ready.wait_for(lambda: self.order[0] == task.prompt["uid"])
+            await self.ready.wait_for(lambda: self.order[0] == job.entry["uid"])
             await writer.write_rollout(
-                task.lease, RolloutGroup(batch, task.prompt["uid"], task.lease.policy_step, task.prompt)
+                job.lease, RolloutGroup(batch, job.entry["uid"], job.lease.policy_step, job.entry)
             )
             self.order.pop(0)
             self.ready.notify_all()
@@ -932,7 +932,7 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
     validate_cfg(cfg)
     cfg.trainer.training_metrics = True
     cfg.trainer.rollout_buffer.max_staleness_steps = 0
-    cfg.trainer.rollout_buffer.max_in_flight = 3
+    cfg.trainer.rollout_buffer.max_outstanding_leases = 3
     cfg.generator.trajectory_retention.enabled = False
     cfg.data.shuffle = False
     dataset = SourceTaskDataset(
@@ -966,8 +966,8 @@ def test_megatron_worker_batches_match_driver_update(tmp_path):
                 [0.1, 0.2] + [0.0] * (length - 3) + [reward]
                 for length, reward in zip(lengths, batch["rewards"], strict=True)
             ]
-        prompt = dataset.collate_fn([dataset[index]])[0]
-        groups.append(RolloutGroup(batch, dataset.uid(index), 1, prompt))
+        task_entry = dataset.collate_fn([dataset[index]])[0]
+        groups.append(RolloutGroup(batch, dataset.uid(index), 1, task_entry))
     initialize_ray(cfg)
     shared_pg = placement_group([{"GPU": 1, "CPU": 1}] * world_size, strategy="PACK")
 

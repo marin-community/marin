@@ -19,12 +19,12 @@ from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marinskyrl.environment_contract import EXECUTION_UID_ENV, TrainingType
-from marinskyrl.runtime_options import PolicyLossType
+from marinskyrl.runtime_options import PolicyLossType, static_preference_pairs_requested
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
-    SPARE_PROMPTS_PER_POOL,
+    SPARE_ENTRIES_PER_POOL,
     BatchPolicy,
     minimum_family_pool_sizes,
     validate_family_pools,
@@ -43,17 +43,23 @@ from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInva
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import (
     Admission,
-    AdmittedRollout,
+    AdmittedGroupMetadata,
     BufferSnapshot,
-    ReadyRollout,
+    SubmittedGroup,
     RolloutBuffer,
     RolloutBufferConfig,
     RowFacts,
     RolloutContentPolicy,
     RolloutGroup,
-    RolloutTask,
+    RolloutGroupJob,
 )
-from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
+from skyrl_train.rollouts.loader import (
+    DatasetEntryOrder,
+    DatasetEntrySelector,
+    DatasetEntrySelectorState,
+    RolloutDataset,
+    SeededPasses,
+)
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
 from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
@@ -69,36 +75,41 @@ _T = TypeVar("_T")
 
 @dataclass(frozen=True)
 class RolloutRequestSpec:
-    """How the coordinator turns one prompt into a trajectory request."""
+    """How the coordinator turns one dataset entry into a trajectory request."""
 
-    samples_per_prompt: int
+    repetitions: int
     sampling_params: dict
 
     @classmethod
     def from_config(cls, config: DictConfig) -> RolloutRequestSpec:
         return cls(
-            samples_per_prompt=config.generator.n_samples_per_prompt,
+            repetitions=config.generator.n_samples_per_prompt,
             sampling_params=get_sampling_params_for_backend(config.generator.backend, config.generator.sampling_params),
         )
 
-    def request(self, prompt: dict, policy_step: int) -> TrajectoryRequestBatch:
-        request, _ = prepare_trajectory_request(
-            [prompt], self.samples_per_prompt, self.sampling_params, "train", policy_step
-        )
+    def request(self, entry: dict, policy_step: int) -> TrajectoryRequestBatch:
+        request, _ = prepare_trajectory_request([entry], self.repetitions, self.sampling_params, "train", policy_step)
         return request
 
 
 @dataclass(frozen=True)
 class TrainingContextState:
-    """Checkpointed rollout state: the loader, including prompts to regenerate, and committed groups.
+    """Checkpointed rollout state: the selector, entries to regenerate, and submitted groups.
 
-    Each ready rollout's ``payload`` holds the durable form its payload store checkpoints: the ``RolloutGroup``
+    Each submitted group's ``payload`` holds the durable form its payload store checkpoints: the ``RolloutGroup``
     for payloads in memory, or the URI of its object under ``object_store_root``.
     """
 
-    loader: PromptLoaderState
-    ready: list[ReadyRollout]
+    selector: DatasetEntrySelectorState
+    submitted: list[SubmittedGroup]
     object_store_root: str | None
+
+    def __setstate__(self, state: dict) -> None:
+        # Migrate the names stored in earlier versions of the rollout checkpoint.
+        if "loader" in state:
+            state["selector"] = state.pop("loader")
+            state["submitted"] = state.pop("ready")
+        self.__dict__.update(state)
 
 
 @dataclass(frozen=True)
@@ -106,19 +117,19 @@ class RolloutBatchMetadata:
     """Ordered selected groups and metrics, without reading their trajectory payloads."""
 
     batch_id: int
-    groups: tuple[AdmittedRollout, ...]
+    groups: tuple[AdmittedGroupMetadata, ...]
     metrics: dict[str, float]
 
 
-def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) -> PromptOrder:
-    """Build the loader's prompt order: seeded passes by default, or the ``data.sampling`` order."""
+def entry_order_from_config(config: DictConfig, dataset: RolloutDataset) -> DatasetEntryOrder:
+    """Build the selector's entry order: seeded passes by default, or the ``data.sampling`` order."""
     sampling = config.data.sampling
     if sampling.kind is None:
         return SeededPasses(len(dataset), seed=config.trainer.seed, shuffle=config.data.shuffle)
     if config.trainer.step_wise_training:
-        raise ValueError("data.sampling.kind requires one group per prompt; step_wise_training is not supported")
+        raise ValueError("data.sampling.kind requires one group per entry; step_wise_training is not supported")
     if not isinstance(dataset, PromptDataset):
-        raise ValueError(f"data.sampling.kind requires a prompt dataset, got {type(dataset).__name__}")
+        raise ValueError(f"data.sampling.kind requires a dataset with a table, got {type(dataset).__name__}")
     seed = sampling.seed if sampling.seed is not None else config.trainer.seed
     batch_size = config.trainer.train_batch_size
     if SamplingKind(sampling.kind) is SamplingKind.DOMAIN_WEIGHTED:
@@ -134,22 +145,22 @@ def start_rollout_buffer(config: RolloutBufferConfig) -> ActorHandle:
 
 
 class TrainingContext:
-    """The prompt loader, the rollout buffer, and the rollout tasks in flight between them.
+    """The dataset entry selector, rollout buffer, and group jobs in flight between them.
 
     ``buffer`` is a ``RolloutBuffer`` actor, usually from ``start_rollout_buffer``; the context kills it on ``close``.
-    ``start`` runs the coordinator loop: for every lease the buffer grants, it takes the next prompt
-    from the loader and hands one task to a rollout worker, which writes the result to the buffer. A failed
-    task fails training: the next ``next_batch`` or ``publish`` raises its error. With ``rollout_spans`` it
+    ``start`` runs the coordinator loop: for every lease the buffer grants, it selects the next entry
+    and hands one group job to a rollout worker, which writes the result to the buffer. A failed
+    group job fails training: the next ``next_batch`` or ``publish`` raises its error. With ``rollout_spans`` it
     records each rollout call, the loop's waits, and every group's disposition.
 
     A uid is live from dispatch until the buffer reports that its group left: trained, rejected, discarded by
-    dynamic sampling, or returned for regeneration. The loader offers only uids that are not live, and a lease
+    dynamic sampling, or returned for regeneration. The selector offers only uids that are not live, and a lease
     waits for one to free up rather than generate a copy the batch would reject.
     """
 
     def __init__(
         self,
-        loader: PromptLoader,
+        selector: DatasetEntrySelector,
         config: RolloutBufferConfig,
         buffer: ActorHandle,
         content_policy: RolloutContentPolicy,
@@ -158,13 +169,15 @@ class TrainingContext:
         payloads: PayloadStore,
         *,
         rollout_spans: bool,
+        wait_labels: tuple[str, str],
         grader_report_path: str | None = None,
     ):
-        self.loader = loader
+        self.selector = selector
         self.config = config
         self._request_spec = request_spec
         self._workers = workers
         self._rollout_spans = rollout_spans
+        self._lease_wait, self._entry_wait = wait_labels
         self._grader_report_path = grader_report_path
         self._grader_report_attempt = os.environ.get(EXECUTION_UID_ENV) or uuid4().hex
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
@@ -172,7 +185,7 @@ class TrainingContext:
         self._buffer = buffer
         self._payloads = payloads
         self._writer = payloads.writer(self._buffer, content_policy)
-        self._in_flight: dict[str, RolloutTask] = {}
+        self._in_flight: dict[str, RolloutGroupJob] = {}
         self._live_uids: collections.Counter[str] = collections.Counter()
         self._uids_released = asyncio.Condition()
         self._running: set[asyncio.Task] = set()
@@ -182,7 +195,7 @@ class TrainingContext:
         self._submission_allowed.set()
 
     @classmethod
-    def from_config(cls, config: DictConfig, dataset: PromptGroupDataset, workers: RolloutWorkers) -> TrainingContext:
+    def from_config(cls, config: DictConfig, dataset: RolloutDataset, workers: RolloutWorkers) -> TrainingContext:
         algorithm = config.trainer.algorithm
         dynamic_sampling = algorithm.dynamic_sampling
         selection = GroupSelectionPolicy(
@@ -198,7 +211,7 @@ class TrainingContext:
         groups_per_family = validate_groups_per_family(config)
         buffer_config = RolloutBufferConfig(
             batch_size=batch_size,
-            max_in_flight=config.trainer.rollout_buffer.max_in_flight,
+            max_outstanding_leases=config.trainer.rollout_buffer.max_outstanding_leases,
             max_staleness_steps=config.trainer.rollout_buffer.max_staleness_steps,
             batch_policy=BatchPolicy(config.trainer.rollout_buffer.batch_policy),
             dynamic_sampling=selection.sampling_type,
@@ -208,7 +221,7 @@ class TrainingContext:
         families: dict[str, str] = {}
         if groups_per_family:
             if not isinstance(dataset, PromptDataset) or FAMILY_COLUMN not in dataset.dataframe.column_names:
-                raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a {FAMILY_COLUMN} column in the training rows")
+                raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a {FAMILY_COLUMN} column in the training data")
             column = dataset.dataframe.with_format(None)[FAMILY_COLUMN]
             families = {dataset.uid(index): family for index, family in enumerate(column)}
             validate_family_pools(
@@ -231,11 +244,11 @@ class TrainingContext:
         object_store_root = config.trainer.rollout_buffer.object_store_root
         report_graders = bool(config.trainer.get("dump_grader_report", False))
         return cls(
-            PromptLoader(
+            DatasetEntrySelector(
                 dataset,
-                prompt_order_from_config(config, dataset),
+                entry_order_from_config(config, dataset),
                 batch_size=batch_size,
-                minimum_pool_size=buffer_config.max_untrained_groups + SPARE_PROMPTS_PER_POOL,
+                minimum_pool_size=buffer_config.max_untrained_groups + SPARE_ENTRIES_PER_POOL,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
                 families=families,
@@ -248,6 +261,7 @@ class TrainingContext:
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
+            wait_labels=("slot", "prompt") if static_preference_pairs_requested(config) else ("lease", "task"),
             grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
         )
 
@@ -301,10 +315,10 @@ class TrainingContext:
         stall_timeout: float,
         on_admitted: Callable[[list[RolloutGroup]], Awaitable[None]],
     ) -> tuple[list[RolloutGroup], RolloutBatchMetadata]:
-        """Wait for the current step's batch and return its groups with selection and prompt-order metrics.
+        """Wait for the current step's batch and return its groups with selection and entry-order metrics.
 
         Groups reach ``on_admitted`` as they are admitted, before the batch is complete. Every group judged for
-        the batch, kept or discarded, then updates the loader's prompt order.
+        the batch, kept or discarded, then updates the selector's entry order.
 
         Raises:
             GroupAdmissionStalledError: No group was admitted, or admitted payloads did not arrive, for
@@ -312,7 +326,7 @@ class TrainingContext:
         """
         groups: list[RolloutGroup] = []
 
-        async def fetch_admitted(admitted: tuple[AdmittedRollout, ...]) -> None:
+        async def fetch_admitted(admitted: tuple[AdmittedGroupMetadata, ...]) -> None:
             reader = RolloutReader(self._buffer, self._payloads, admitted, stall_timeout)
             fetched = await self.wait(reader.read(self._policy_step, tuple(group.index for group in admitted)))
             groups.extend(fetched)
@@ -329,11 +343,11 @@ class TrainingContext:
         self,
         *,
         stall_timeout: float,
-        on_admitted: Callable[[tuple[AdmittedRollout, ...]], Awaitable[None]] | None = None,
+        on_admitted: Callable[[tuple[AdmittedGroupMetadata, ...]], Awaitable[None]] | None = None,
     ) -> RolloutBatchMetadata:
         """Wait for a selected batch without reading its trajectory payloads."""
         loop = asyncio.get_running_loop()
-        groups: list[AdmittedRollout] = []
+        groups: list[AdmittedGroupMetadata] = []
         deadline = loop.time() + stall_timeout
         while True:
             timeout = max(deadline - loop.time(), 0.0)
@@ -365,33 +379,33 @@ class TrainingContext:
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
-                    {**admission.selection.metrics, **self.loader.observe(admission.selection.judged)},
+                    {**admission.selection.metrics, **self.selector.observe(admission.selection.judged)},
                 )
 
     async def state_dict(self) -> TrainingContextState:
         """Capture every dispatched group that no trained batch has consumed.
 
-        The loader position and in-flight tasks are read together, before the buffer snapshot, so a task
-        that commits meanwhile appears in the buffer and not also among the prompts to regenerate.
+        The selector position and outstanding jobs are read together, before the buffer snapshot, so a job
+        that submits its group meanwhile appears in the buffer and not also among the entries to regenerate.
         """
         in_flight = dict(self._in_flight)
-        loader = self.loader.state_dict()
+        selector = self.selector.state_dict()
         snapshot: BufferSnapshot = await self._buffer.snapshot.remote()
-        uncommitted = [task.prompt for lease_id, task in in_flight.items() if lease_id in snapshot.leases]
-        payloads = await asyncio.gather(*(self._payloads.checkpoint(rollout.payload) for rollout in snapshot.ready))
-        ready = [
+        unsubmitted = [job.entry for lease_id, job in in_flight.items() if lease_id in snapshot.leases]
+        payloads = await asyncio.gather(*(self._payloads.checkpoint(rollout.payload) for rollout in snapshot.submitted))
+        submitted = [
             # The buffer's clock does not carry across processes.
             dataclasses.replace(
                 rollout,
                 payload=payload,
-                committed_at=None,
+                submitted_at=None,
                 verdict=dataclasses.replace(rollout.verdict, row_facts=None),
             )
-            for rollout, payload in zip(snapshot.ready, payloads, strict=True)
+            for rollout, payload in zip(snapshot.submitted, payloads, strict=True)
         ]
-        retries = [*loader.retries, *snapshot.retries, *uncommitted]
+        retries = [*selector.retries, *snapshot.retries, *unsubmitted]
         return TrainingContextState(
-            dataclasses.replace(loader, retries=retries), ready, self._payloads.object_store_root
+            dataclasses.replace(selector, retries=retries), submitted, self._payloads.object_store_root
         )
 
     async def load_state_dict(self, state: TrainingContextState) -> None:
@@ -400,86 +414,86 @@ class TrainingContext:
             raise RuntimeError("rollout state must be restored before dispatching starts")
         # Object URIs are absolute, so a resumed run may write new payloads under a different root, but it must
         # read the checkpoint's payloads the way they were stored.
-        if state.ready and (state.object_store_root is None) != (self._payloads.object_store_root is None):
+        if state.submitted and (state.object_store_root is None) != (self._payloads.object_store_root is None):
             raise ValueError(
                 f"the checkpoint's rollout payloads are in {state.object_store_root or 'memory'}, but this run "
                 f"keeps them in {self._payloads.object_store_root or 'memory'}; set "
                 "trainer.rollout_buffer.object_store_root to match"
             )
-        self.loader.load_state_dict(state.loader)
-        ready = [
-            dataclasses.replace(rollout, payload=self._payloads.restore(rollout.payload)) for rollout in state.ready
+        self.selector.load_state_dict(state.selector)
+        submitted = [
+            dataclasses.replace(group, payload=self._payloads.restore(group.payload)) for group in state.submitted
         ]
-        for start in range(0, len(ready), PAYLOAD_IO_THREADS):
+        for start in range(0, len(submitted), PAYLOAD_IO_THREADS):
             indices = [
                 index
-                for index in range(start, min(start + PAYLOAD_IO_THREADS, len(ready)))
-                if ready[index].verdict.trainable
+                for index in range(start, min(start + PAYLOAD_IO_THREADS, len(submitted)))
+                if submitted[index].verdict.trainable
             ]
-            groups = await self._payloads.fetch([ready[index].payload for index in indices])
+            groups = await self._payloads.fetch([submitted[index].payload for index in indices])
             for index, group in zip(indices, groups, strict=True):
                 verdict = dataclasses.replace(
-                    ready[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
+                    submitted[index].verdict, row_facts=RowFacts.from_batch(group.trajectory_batch)
                 )
-                ready[index] = dataclasses.replace(ready[index], verdict=verdict)
-        await self._buffer.restore.remote(BufferSnapshot(ready=ready, retries=[], leases=frozenset()))
-        self._live_uids.update(rollout.verdict.uid for rollout in ready)
+                submitted[index] = dataclasses.replace(submitted[index], verdict=verdict)
+        await self._buffer.restore.remote(BufferSnapshot(submitted=submitted, retries=[], leases=frozenset()))
+        self._live_uids.update(rollout.verdict.uid for rollout in submitted)
         logger.info(
-            "Restored rollout state: {} committed groups and {} prompts to regenerate",
-            len(ready),
-            len(state.loader.retries),
+            "Restored rollout state: {} submitted groups and {} entries to regenerate",
+            len(submitted),
+            len(state.selector.retries),
         )
 
     async def _dispatch(self) -> None:
         try:
             while True:
                 await self._submission_allowed.wait()
-                with self._wait("slot"):
+                with self._wait(self._lease_wait):
                     lease = await self._buffer.acquire_lease.remote()
-                with self._wait("prompt"):
+                with self._wait(self._entry_wait):
                     async with self._uids_released:
-                        prompt = await self._uids_released.wait_for(
-                            lambda: self.loader.next_prompt(self._live_uids, lease.family)
+                        entry = await self._uids_released.wait_for(
+                            lambda: self.selector.next_entry(self._live_uids, lease.family)
                         )
-                        self._live_uids[prompt["uid"]] += 1
-                # A lease or prompt wait may span an evaluation boundary. Keep the
+                        self._live_uids[entry["uid"]] += 1
+                # A lease or entry wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.
                 await self._submission_allowed.wait()
-                task = RolloutTask(lease, prompt, self._request_spec.request(prompt, lease.policy_step))
-                self._in_flight[lease.lease_id] = task
-                running = asyncio.create_task(self._run(task))
+                job = RolloutGroupJob(lease, entry, self._request_spec.request(entry, lease.policy_step))
+                self._in_flight[lease.lease_id] = job
+                running = asyncio.create_task(self._run(job))
                 self._running.add(running)
                 running.add_done_callback(self._running.discard)
         except Exception as error:
             self._fail(error)
 
     async def _release(self, admission: Admission) -> None:
-        """Free the uids of groups that left the buffer, queue prompts to regenerate, and wake dispatch."""
+        """Free the uids of groups that left the buffer, queue entries to regenerate, and wake dispatch."""
         if not admission.dispositions and not admission.retries:
             return
         async with self._uids_released:
             self._live_uids -= collections.Counter(outcome.uid for outcome in admission.dispositions)
             for outcome in admission.dispositions:
-                self.loader.record_disposition(outcome.uid, outcome.disposition)
-            for prompt in admission.retries:
-                self.loader.retry(prompt)
+                self.selector.record_disposition(outcome.uid, outcome.disposition)
+            for entry in admission.retries:
+                self.selector.retry(entry)
             self._uids_released.notify_all()
 
     def _wait(self, name: str) -> AbstractContextManager[None]:
         return dispatch_wait(name, step=self._policy_step, mode=self.mode, enabled=self._rollout_spans)
 
-    async def _run(self, task: RolloutTask) -> None:
+    async def _run(self, job: RolloutGroupJob) -> None:
         try:
             with observe_rollout_call(
-                step=task.lease.policy_step, mode=self.mode, enabled=self._rollout_spans
+                step=job.lease.policy_step, mode=self.mode, enabled=self._rollout_spans
             ) as observation:
-                response_tokens = await self._workers.run_task(task, self._writer)
+                response_tokens = await self._workers.run_task(job, self._writer)
                 if observation is not None:
                     observation.response_tokens = response_tokens
         except Exception as error:
             self._fail(error)
         finally:
-            del self._in_flight[task.lease.lease_id]
+            del self._in_flight[job.lease.lease_id]
 
     def _fail(self, error: Exception) -> None:
         logger.opt(exception=error).error("Rollout dispatch failed; training will stop")

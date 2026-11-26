@@ -774,38 +774,38 @@ def get_batch_failure_metrics(
 
 
 def prepare_trajectory_request(
-    rows: List[dict],
+    entries: List[dict],
     n_samples_per_prompt: int,
     sampling_params: Dict[str, Any],
     training_phase: TrainingPhase,
     global_step: int,
 ) -> Tuple[TrajectoryRequestBatch, List[str]]:
     """Return repeated typed inputs with attempt IDs and one UID per repeated input."""
-    inputs = tuple(row["input"] for row in rows for _ in range(n_samples_per_prompt))
+    inputs = tuple(entry["input"] for entry in entries for _ in range(n_samples_per_prompt))
     trajectory_ids = tuple(
-        TrajectoryID(instance_id=row["input"].metadata.uid, repetition_id=repetition)
-        for row in rows
+        TrajectoryID(instance_id=entry["input"].metadata.uid, repetition_id=repetition)
+        for entry in entries
         for repetition in range(n_samples_per_prompt)
     )
     metadata = BatchMetadata(global_step=global_step, training_phase=training_phase)
-    if all(isinstance(row, TaskInput) for row in inputs):
+    if all(isinstance(item, TaskInput) for item in inputs):
         request = TaskRequestBatch(
-            rows=inputs,
+            inputs=inputs,
             sampling_params=sampling_params,
             trajectory_ids=trajectory_ids,
             batch_metadata=metadata,
         )
-    elif all(isinstance(row, PreferenceInput) for row in inputs):
+    elif all(isinstance(item, PreferenceInput) for item in inputs):
         request = PreferenceRequestBatch(
-            prompts=tuple(row.prompt for row in inputs),
-            preferences=tuple(row.preference for row in inputs),
-            metadata=tuple(row.metadata for row in inputs),
+            prompts=tuple(item.prompt for item in inputs),
+            preferences=tuple(item.preference for item in inputs),
+            metadata=tuple(item.metadata for item in inputs),
             sampling_params=sampling_params,
             trajectory_ids=trajectory_ids,
             batch_metadata=metadata,
         )
     else:
-        raise TypeError("A request must contain TaskInput rows or static PreferenceInput rows, not a mixture")
+        raise TypeError("A request must contain a single input type, TaskInput or static PreferenceInput")
     return request, [item.instance_id for item in trajectory_ids]
 
 

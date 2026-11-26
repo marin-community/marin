@@ -52,7 +52,14 @@ from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import EvaluationProfile
-from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
+from skyrlrecipe.documents import (
+    MISSING,
+    get_path,
+    merge_mappings,
+    normalize_rollout_buffer_config,
+    normalize_setting_path,
+    set_path,
+)
 from skyrlrecipe.settings import parse_setting as typed_setting_value
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
@@ -86,9 +93,10 @@ def override_document(settings: tuple[str, ...]) -> dict:
     document = {}
     for text in settings:
         key, _, raw = text.partition("=")
+        key = normalize_setting_path(key)
         patch = {}
         set_path(patch, key, typed_setting_value(RecipePatch, key, raw))
-        document = merge_mappings(document, patch)
+        document = merge_mappings(document, normalize_rollout_buffer_config(patch))
     return document
 
 
@@ -552,12 +560,12 @@ def run_spec(
     if batch_changes:
         workload = workload.with_batches(batch_changes)
         preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, workload=workload)))
-    micro_batch, in_flight = workload.batch_parameters(config)
+    micro_batch, lease_limit = workload.batch_parameters(config)
     derived = {}
     if batch_changes and get_path(explicit, "trainer.micro_forward_batch_size_per_gpu") is MISSING:
         derived["micro_forward_batch_size_per_gpu"] = micro_batch
-    if get_path(authored, "trainer.rollout_buffer.max_in_flight") is MISSING:
-        derived["rollout_buffer"] = {"max_in_flight": in_flight}
+    if get_path(authored, "trainer.rollout_buffer.max_outstanding_leases") is MISSING:
+        derived["rollout_buffer"] = {"max_outstanding_leases": lease_limit}
     config = config.merge(RecipePatch.from_document({"trainer": derived}))
     default, selection = task_selections(preset, tasks)
     summary = selection_summary(selection)

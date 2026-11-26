@@ -40,7 +40,7 @@ from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
-from skyrlrecipe.documents import MISSING, get_path, set_path
+from skyrlrecipe.documents import MISSING, get_path, normalize_rollout_buffer_config, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 from tabulate import tabulate
 
@@ -467,6 +467,7 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
     """Normalize native configuration and resolve its runtime aliases for comparison."""
     recorded = recorded or RecordedLaunch.from_document(launch, attempt=launch["run"]["attempt_id"])
     config = deepcopy(launch)
+    config["skyrl"] = normalize_rollout_buffer_config(config["skyrl"])
     if get_path(config, "skyrl.trainer.rollout_buffer.groups_per_family") == {}:
         del config["skyrl"]["trainer"]["rollout_buffer"]["groups_per_family"]
     data = config["skyrl"]["data"]

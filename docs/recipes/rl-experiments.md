@@ -425,6 +425,15 @@ The dashboards are available through the [RL Grafana dashboard](https://grafana.
 [Marina RL progress](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/) and
 [EvalDash](https://marina.oa.dev/evaldash/).
 
+When rollout spans are enabled, task dispatch reports `rollout_wait_seconds`
+and `rollout_waits` with `role=trainer`. The `lease` wait measures time from
+requesting a lease until the buffer grants it. The `task` wait measures time
+from that grant until dispatch selects an eligible task entry. Earlier runs
+and static preference-pair runs use `slot` and `prompt` for those waits.
+Hublot and Grafana read both spellings. In other Finelog queries, group
+`slot` with `lease` and `prompt` with `task`. Sum durations with `stat=sum`
+and use `rollout_waits` for counts.
+
 ## Agentic checkpoint evaluation
 
 `train-long-checkpoint-eval` evaluates 30 pinned tasks each from BFCL, SWE-bench Verified

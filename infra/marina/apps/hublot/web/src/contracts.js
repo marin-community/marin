@@ -6,12 +6,12 @@ const port = (label, side, offset, child) => ({ label, side, offset, child });
 export const nodes = {
   source: {
     label: 'Task source', category: 'Input', position: [24, 24], size: [174, 100],
-    ports: { prompts: port('Prompt work', 'bottom', 50) },
+    ports: { entries: port('Dataset entries', 'bottom', 50) },
   },
   rollouts: {
     label: 'Rollouts', category: 'Stage', position: [385, 244], size: [199, 145],
     ports: {
-      prompts: port('Prompt work', 'left', 24, 'dispatch'),
+      entries: port('Dataset entries', 'left', 24, 'dispatch'),
       lease: port('Lease grant', 'left', 76, 'dispatch'),
       request: port('Model input', 'right', 25, 'workers'),
       output: port('Model output', 'right', 66, 'workers'),
@@ -25,14 +25,14 @@ export const nodes = {
   dispatch: {
     label: 'Dispatch', category: 'Rollouts', position: [24, 244], size: [174, 145],
     ports: {
-      prompts: port('Prompt work', 'top', 50),
+      entries: port('Dataset entries', 'top', 50),
       lease: port('Lease grant', 'bottom', 50),
-      task: port('Leased task', 'right', 49),
+      task: port('Rollout group job', 'right', 49),
     },
   },
   workers: {
     label: 'Workers', category: 'Rollouts', position: [385, 244], size: [199, 145],
-    ports: { task: port('Leased task', 'left', 49) },
+    ports: { task: port('Rollout group job', 'left', 49) },
   },
   inference: {
     label: 'Inference', category: 'Stage', position: [798, 244], size: [183, 112],
@@ -71,13 +71,13 @@ export const nodes = {
 
 // Settings use recorded values for the execution. Each node owns its own configuration fields.
 export const nodeSettings = {
-  source: { purpose: 'Offers eligible training prompts to Dispatch.', fields: [['trainingRows', 'Training rows']] },
-  rollouts: { purpose: 'Dispatches prompts and runs the rollouts that form each training group.',
-    fields: [['batchPolicy', 'Batch scheduling'], ['maxConcurrentRollouts', 'Concurrent rollout limit']] },
-  dispatch: { purpose: 'Acquires a lease and finds a prompt that can use it.',
-    fields: [['batchPolicy', 'Batch scheduling'], ['maxConcurrentRollouts', 'Concurrent rollout limit']] },
+  source: { purpose: 'Offers eligible dataset entries to Dispatch.', fields: [['trainingRows', 'Training rows']] },
+  rollouts: { purpose: 'Dispatches group jobs and runs the rollouts that form each group.',
+    fields: [['batchPolicy', 'Batch scheduling'], ['outstandingLeaseLimit', 'Outstanding lease limit']] },
+  dispatch: { purpose: 'Acquires a lease and selects an eligible dataset entry.',
+    fields: [['batchPolicy', 'Batch scheduling'], ['outstandingLeaseLimit', 'Outstanding lease limit']] },
   workers: { purpose: 'Runs model and tool calls, then assembles and hands off rollout groups.',
-    fields: [['maxConcurrentRollouts', 'Concurrent rollout limit']] },
+    fields: [['outstandingLeaseLimit', 'Outstanding lease limit']] },
   inference: { purpose: 'Serves model requests from the rollout workers.',
     fields: [['inferenceGpus', 'Configured inference GPUs']] },
   environment: { purpose: 'Executes tool calls or task steps and supplies observations and rewards.' },
@@ -96,8 +96,8 @@ export const nodeSettings = {
 const edge = (from, to, label, payload, { kind = 'work', lane } = {}) => ({ from, to, label, payload, kind, lane });
 
 export const edges = {
-  prompts: edge(['source', 'prompts'], ['rollouts', 'prompts'], 'Prompt work', 'Prompt work item'),
-  dispatchTask: edge(['dispatch', 'task'], ['workers', 'task'], 'Leased task', 'Leased rollout task'),
+  entries: edge(['source', 'entries'], ['rollouts', 'entries'], 'Dataset entries', 'Dataset entry'),
+  dispatchJob: edge(['dispatch', 'task'], ['workers', 'task'], 'Rollout group job', 'Rollout group job'),
   promptTokens: edge(['rollouts', 'request'], ['inference', 'request'], 'Model input', 'Prompt and continuation tokens'),
   generation: edge(['inference', 'output'], ['rollouts', 'output'], 'Model output', 'Generated tokens'),
   toolCall: edge(['rollouts', 'call'], ['environment', 'call'], 'Task action', 'Tool call or task action', { lane: 214 }),
@@ -124,7 +124,7 @@ export function flowGraph(expanded, separateGrading) {
     ? [nodes.rollouts.ports[handle].child, handle]
     : [id, handle];
   const activeEdges = Object.entries(edges)
-    .filter(([id]) => (expanded || id !== 'dispatchTask') &&
+    .filter(([id]) => (expanded || id !== 'dispatchJob') &&
       (separateGrading || id !== 'gradeSubmit' && id !== 'gradeResult'))
     .map(([id, e]) => ({ ...e, id, from: endpoint(e.from), to: endpoint(e.to), card: id }));
   return { nodes: activeNodes, edges: activeEdges };
@@ -158,11 +158,11 @@ export const signals = {
     { average: true, factor: 100 }),
   prefillTime: requestTiming('prefill', 'Mean prefill time'),
   decodeTime: requestTiming('decode', 'Mean decode time'),
-  quarantined: scalar('source', 'async/quarantined_prompts', 'Quarantined prompts', 'prompts'),
-  promptItems: metric('prompts', 'rollout_call', 'Recorded prompt starts', 'prompts/s', 'eventRate', {}, { time: 'body_json.started_unix_ms' }),
-  promptReleases: metric('buffer', 'rollout_groups', 'Prompt IDs released', 'prompts/s', 'deltaRate',
+  quarantined: scalar('source', 'async/quarantined_prompts', 'Quarantined entries', 'entries'),
+  entryStarts: metric('entries', 'rollout_call', 'Recorded group starts', 'entries/s', 'eventRate', {}, { time: 'body_json.started_unix_ms' }),
+  entryReleases: metric('buffer', 'rollout_groups', 'Dataset entry IDs released', 'entries/s', 'deltaRate',
     { disposition: 'consumed' }, { kind: 'scatter' }),
-  dispatched: metric('dispatchTask', 'rollout_call', 'Recorded starts', 'attempts/s', 'eventRate', {}, { time: 'body_json.started_unix_ms' }),
+  dispatched: metric('dispatchJob', 'rollout_call', 'Recorded starts', 'attempts/s', 'eventRate', {}, { time: 'body_json.started_unix_ms' }),
   activeAttempts: metric('workers', 'rollout_call', 'Recorded active attempts', 'attempts', 'concurrency'),
   attemptEnds: metric('workers', 'rollout_call', 'Attempt finishes', 'attempts/s', 'eventRate', {}, { time: 'body_json.finished_unix_ms', dimension: 'outcome' }),
   attemptTime: metric('workers', 'rollout_call', 'Group attempt wall time', 's', 'spanDuration', {},
@@ -205,8 +205,8 @@ export const signals = {
   rejectedByReason: metric('rejected', 'training_metric_value', 'Rejected groups by reason', 'groups/batch', 'points', {}, { metricPattern: '^async/rejected_count/(.+)$', facet: 'reason' }),
   openLeases: unrecorded('buffer', 'Open leases', 'leases'),
   grants: unrecorded('leases', 'Lease grants', 'grants/s'),
-  slotWait: awaitTime('dispatch', 'slot', 'Wait for a lease'),
-  promptWait: awaitTime('dispatch', 'prompt', 'Wait for a prompt'),
+  leaseWait: awaitTime('dispatch', ['lease', 'slot'], 'Wait for a lease'),
+  taskWait: awaitTime('dispatch', ['task', 'prompt'], 'Waiting to select an eligible task'),
   handoffWait: awaitTime('completed', 'enqueue', 'Buffer write time per attempt'),
   modelAwait: awaitTime('workers', 'model_client_await', 'Sum of model waits per attempt'),
   wait: metric('trainer', 'async_phase_window', 'Trainer batch wait', 's', 'duration', { phase: 'rollout_wait' },
@@ -228,18 +228,18 @@ const rejectionCard = (title) => card(title, ['rejected', 'rejectedByReason'],
   { rejectionSummary: true, groupLabel: 'Rejection reason' });
 const batchFailures = ['rolloutFailure', 'submissionFailure', 'rolloutInfra'];
 export const cards = {
-  source: card('Task source', ['quarantined'], 'Each point counts prompts the loader is holding back from dispatch.', {
-    links: [{ id: 'prompts', label: 'View prompt work' }],
+  source: card('Task source', ['quarantined'], 'Each point counts entries that the selector has quarantined.', {
+    links: [{ id: 'entries', label: 'View dataset entries' }],
   }),
-  rollouts: card('Rollouts', ['activeAttempts', 'attemptTime', 'slotWait', 'promptWait', 'attemptEnds', ...batchFailures],
+  rollouts: card('Rollouts', ['activeAttempts', 'attemptTime', 'leaseWait', 'taskWait', 'attemptEnds', ...batchFailures],
     'An attempt runs one group of rollouts. Active counts use start and end times recorded when attempts finish. Batch failures count individual rollouts.', {
       tabs: { 'rollouts/batch': 'Batch failures' },
       links: [{ id: 'dispatch', label: 'View Dispatch' }, { id: 'workers', label: 'View Workers' }],
     }),
-  dispatch: card('Dispatch', ['slotWait', 'promptWait', 'slotWaitTime', 'promptWaitTime'],
-    'Dispatch waits for a lease, then for an eligible prompt in that task family. A point appears when a wait ends. Waiting per 10 s estimates how much of each interval Dispatch spent waiting.', {
-      promptOccupancySummary: true,
-      links: [{ id: 'leases', label: 'View lease grants' }, { id: 'prompts', label: 'View prompt work' }],
+  dispatch: card('Dispatch', ['leaseWait', 'taskWait', 'leaseWaitTime', 'taskWaitTime'],
+    'Dispatch waits for a lease, then for an eligible entry in the lease’s family, when specified. A point appears when a wait ends. Waiting per 10 s estimates how much of each interval Dispatch spent waiting.', {
+      entryOccupancySummary: true,
+      links: [{ id: 'leases', label: 'View lease grants' }, { id: 'entries', label: 'View dataset entries' }],
     }),
   workers: card('Workers', ['activeAttempts', 'attemptTime', 'modelAwait', 'rolloutsPerGroup', 'modelAwaitCount',
     'attemptEnds', ...batchFailures], 'An attempt runs one group of rollouts. Active counts use attempts with recorded start and end times. Model wait time adds the waits for calls within each attempt. Those waits can overlap.', {
@@ -278,11 +278,11 @@ export const cards = {
     'The trainer records how long each step spent waiting for a batch and training. Counts come from completed optimizer steps and exclude padding added for data parallelism.', {
       batchWaitZoom: true,
     }),
-  prompts: card('Prompt work', ['promptItems'], 'Starts count attempts that later recorded an end. Releases count prompt IDs freed when the Buffer admits their groups. Reuse still depends on the task family and quarantine.', {
-    context: ['promptReleases'], tabs: { 'prompts/s': 'Releases and starts' },
-    links: [{ id: 'dispatch', label: 'View prompt waits in Dispatch' }],
+  entries: card('Dataset entries', ['entryStarts'], 'Starts count group jobs that later recorded an end. Releases count entry IDs freed when their groups leave for training. Reuse still depends on the task family and quarantine.', {
+    context: ['entryReleases'], tabs: { 'entries/s': 'Releases and starts' },
+    links: [{ id: 'dispatch', label: 'View task selection waits in Dispatch' }],
   }),
-  dispatchTask: card('Leased task', ['dispatched'], 'This chart counts attempts at their start times once they record an end.'),
+  dispatchJob: card('Rollout group job', ['dispatched'], 'This chart counts attempts at their start times once they record an end.'),
   promptTokens: card('Model input', ['promptTokens', 'promptTokensPerGpu'],
     'vLLM counts prompt and continuation tokens it handles, including tokens served from its prefix cache. The default rate adds input across engines in 10-second intervals.',
     { engines: true, tabs: { 'tokens/s': 'Tokens/s', 'tokens/s/GPU': 'Per GPU' } }),
@@ -317,7 +317,7 @@ export const cards = {
   leases: card('Lease grants', ['grants'], 'A lease reserves a slot for one group. Dispatch shows how long it waited for a lease.', {
     gapLabel: 'No grant events',
     gap: 'Finelog has no lease grant events in this window. Dispatch records how long it waited for a lease.',
-    links: [{ id: 'dispatch', label: 'View lease waits in Dispatch' }, { id: 'prompts', label: 'See prompt releases and starts' }],
+    links: [{ id: 'dispatch', label: 'View lease waits in Dispatch' }, { id: 'entries', label: 'See entry releases and starts' }],
   }),
   weights: card('Weight sync', ['sync'], 'Each point shows how long a weight sync took. Select a point to see its policy step and reason when recorded.', { tabs: { s: 'Sync duration' } }),
 };

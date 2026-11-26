@@ -329,7 +329,7 @@ _AGENTIC_PATCH = RecipePatch(
     context_budget=ContextBudget(request_window_tokens=102_400, max_new_tokens_per_turn=16_384, max_turns=128),
     trainer=sections.Trainer(
         use_sample_packing=True,
-        rollout_buffer=sections.RolloutBuffer(max_in_flight=32),
+        rollout_buffer=sections.RolloutBuffer(max_outstanding_leases=32),
         policy=sections.Policy(
             megatron_config=sections.PolicyMegatronConfig(
                 transformer_config_kwargs={"cp_comm_type": "a2a", "moe_router_fusion": False},
