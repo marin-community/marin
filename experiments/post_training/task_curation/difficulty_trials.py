@@ -53,7 +53,6 @@ from taskcompendium.grading_result import GradingFailure
 from taskcompendium.harbor.runtime import TaskNetworkPolicyReceipt, network_policy_qualified, read_source_runtime
 from verifyit.modes.grade_math import MATH_DEADLINE_REFERENCE_PARSE, MATH_VERIFIER_DEADLINE
 
-from experiments.post_training.task_curation import toolchain_binding
 from experiments.post_training.task_curation.difficulty.launch import DATA_ADMISSION_COMMAND
 from experiments.post_training.task_curation.difficulty_config import (
     DECLARED_JUDGE_PROVIDER_PREFIX,
@@ -251,11 +250,17 @@ _LOCK_TEMPDIR_COMMENT = re.compile(r"^\s*#.*requirements\.in")
 
 def _normalized_lock(lock: str) -> str:
     """The lock's pinned content, without the compile comment lines that name the staging directory."""
+    # Harbor's unit suite imports this module without the marin graph; the
+    # binding module pulls marin in, so keep the import inside the wrappers.
+    from experiments.post_training.task_curation import toolchain_binding  # noqa: PLC0415
+
     return toolchain_binding.normalized_lock(lock)
 
 
 def _declared_lock(environment: Environment) -> str | None:
     """The declared environment's compiled lock content, or None when its lock cannot compile."""
+    from experiments.post_training.task_curation import toolchain_binding  # noqa: PLC0415
+
     return toolchain_binding.declared_lock(environment)
 
 
@@ -269,6 +274,8 @@ def declared_grader_machine_image(lock_url: str) -> str | None:
     it instead of the host. Returns None when no declaration matches, keeping the existing
     lock-built machine; callers that need the toolchain fail closed at the toolchain probe.
     """
+    from experiments.post_training.task_curation import toolchain_binding  # noqa: PLC0415
+
     return toolchain_binding.resolved_toolchain_reference(lock_url)
 
 
