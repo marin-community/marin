@@ -290,7 +290,7 @@ def test_mochi_compiled_budget_stops_learning_after_first_optimizer_clock(
 @pytest.mark.parametrize("profile", ["one-rack"])
 @pytest.mark.parametrize("field", ["seconds", "drain_margin"])
 def test_round_refuses_training_clock_drift_before_allocation(local_round, tmp_path, field):
-    document = dataclasses.asdict(local_round)
+    document = json.loads(json.dumps(dataclasses.asdict(local_round)))
     budget = next(cb for cb in document["rl"]["recipe"]["trainer"]["callbacks"] if cb["type"] == "wall_time_budget")
     budget[field] += 1
     source = tmp_path / "changed-budget.yaml"
