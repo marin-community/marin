@@ -82,7 +82,14 @@ def _marin_mesh(tensor_parallel_size: int) -> MeshConfig:
     )
 
 
-def train_job(pod_config: TrainLmOnPodConfig, *, timeout: Duration | None = None, priority: int = 0) -> None:
+def train_job(
+    pod_config: TrainLmOnPodConfig,
+    *,
+    timeout: Duration | None = None,
+    priority: int = 0,
+    max_retries_failure: int = 0,
+    max_task_failures: int = 0,
+) -> None:
     """Dispatch the assembled config as its own Fray training job."""
     # GPU: resolve the env now so XLA_FLAGS is in the pod environment before the
     # worker imports JAX. TPU/CPU resolve in-worker, where mounted secrets are
@@ -92,9 +99,15 @@ def train_job(pod_config: TrainLmOnPodConfig, *, timeout: Duration | None = None
         if isinstance(pod_config.resources.device, GpuConfig)
         else {}
     )
-    remote(run_levanter_train_lm, resources=pod_config.resources, env_vars=env_vars, timeout=timeout, priority=priority)(
-        pod_config
-    )
+    remote(
+        run_levanter_train_lm,
+        resources=pod_config.resources,
+        env_vars=env_vars,
+        timeout=timeout,
+        priority=priority,
+        max_retries_failure=max_retries_failure,
+        max_task_failures=max_task_failures,
+    )(pod_config)
 
 
 def train_lm(

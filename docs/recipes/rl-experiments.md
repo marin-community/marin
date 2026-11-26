@@ -135,7 +135,11 @@ parallelism 32 across nodes, batch 256 at 262,144 positions, MuonH with a
 constant learning rate after 30 warmup updates, then linear cooldown over the
 final 15% of updates to a 0.1× floor, FP32 parameters with BF16
 compute, token-weighted accumulation, special-token initialization and update
-scaling, and the initial C4 reference check. It keeps the same staged Snowball
+scaling, and the initial C4 reference check. The preset also binds Exp6's GPU
+launch environment, including its collective scheduler and JAX command-buffer
+settings. Training allows two retries per task and 64 cumulative task failures;
+these separate Fray gates prevent a single failed startup from ending the gang.
+It keeps the same staged Snowball
 base and tokenizer bindings. Its all-position view reads existing cached
 `input_ids` with `TextLmDatasetFormat`, packing 256 documents with lookahead
 128. Stored assistant masks are ignored; padding still contributes no loss.

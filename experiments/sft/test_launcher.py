@@ -226,6 +226,11 @@ def test_exp7_resolves_exp6_sft_controls_at_the_native_boundary(tmp_path):
         step.run(materialized_config(step, str(tmp_path)))
     [request] = requests
     assert request.priority == 1
+    assert request.max_retries_failure == 2 and request.max_task_failures == 64
+    assert {name: request.environment.env_vars[name] for name in reference["source_runtime_env"]} == reference[
+        "source_runtime_env"
+    ]
+    assert set(reference["source_runtime_xla_flags"]) <= set(request.environment.env_vars["XLA_FLAGS"].split())
     assert request.resources.target_cluster == "cw-rno2a"
     assert request.resources.replicas == 32 and request.resources.device.count == 8
     assert request.timeout is None

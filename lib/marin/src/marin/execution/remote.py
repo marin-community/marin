@@ -58,6 +58,8 @@ class RemoteCallable(Generic[P, R]):
     name: str | None = None
     timeout: Duration | None = None
     priority: int = 0
+    max_retries_failure: int = 0
+    max_task_failures: int = 0
 
     def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
@@ -83,6 +85,8 @@ class RemoteCallable(Generic[P, R]):
                 resources=self.resources,
                 timeout=self.timeout,
                 priority=self.priority,
+                max_retries_failure=self.max_retries_failure,
+                max_task_failures=self.max_task_failures,
                 environment=create_environment(
                     extras=dependency_groups,
                     pip_packages=self.pip_packages,
@@ -104,6 +108,8 @@ def remote(
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
     priority: int = 0,
+    max_retries_failure: int = 0,
+    max_task_failures: int = 0,
 ) -> RemoteCallable[P, R]: ...
 
 
@@ -117,6 +123,8 @@ def remote(
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
     priority: int = 0,
+    max_retries_failure: int = 0,
+    max_task_failures: int = 0,
 ) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
@@ -130,6 +138,8 @@ def remote(
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
     priority: int = 0,
+    max_retries_failure: int = 0,
+    max_task_failures: int = 0,
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
@@ -150,6 +160,8 @@ def remote(
             name=name,
             timeout=timeout,
             priority=priority,
+            max_retries_failure=max_retries_failure,
+            max_task_failures=max_task_failures,
         )
 
     if fn is not None:

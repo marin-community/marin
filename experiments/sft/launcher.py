@@ -312,7 +312,7 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
-        env_vars={"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else None,
+        env_vars=({**spec.env_vars, **({"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else {})} or None),
         auto_build_caches=data_config.auto_build_caches,
     )
 
@@ -370,6 +370,8 @@ class HFModel(_LevanterModelSource):
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
     task_timeout_seconds: int | None = None
     priority: int = 0
+    max_retries_failure: int = 0
+    max_task_failures: int = 0
     # Built once: ArtifactStep compares by identity, so init_deps and build_train_config must share it.
     _mirror: ArtifactStep[LevanterCheckpoint] | None = field(init=False, repr=False, compare=False)
 
@@ -388,7 +390,13 @@ class HFModel(_LevanterModelSource):
     @property
     def run(self) -> Callable[..., None]:
         timeout = None if self.task_timeout_seconds is None else Duration.from_seconds(self.task_timeout_seconds)
-        return partial(train_job, timeout=timeout, priority=self.priority)
+        return partial(
+            train_job,
+            timeout=timeout,
+            priority=self.priority,
+            max_retries_failure=self.max_retries_failure,
+            max_task_failures=self.max_task_failures,
+        )
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
         return () if self._mirror is None else (self._mirror,)
@@ -655,6 +663,7 @@ class SFTSpec:
     prepared_data_format: LmDatasetFormatBase | None = None
     pack_lookahead_window: int | None = None
     per_device_parallelism: int = -1
+    env_vars: Mapping[str, str] = field(default_factory=dict)
     xla_flags: tuple[str, ...] = ()
     checkpointer: CheckpointerConfig = field(
         default_factory=lambda: CheckpointerConfig(

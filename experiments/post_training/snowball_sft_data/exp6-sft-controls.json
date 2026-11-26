@@ -98,6 +98,21 @@
     "min_lr_ratio": 0.1
   },
   "source_revision": "ad16b4832d32733879d5ca22a368b3b3e5ff643f",
+  "source_runtime_entrypoint": "ad16b4832d32733879d5ca22a368b3b3e5ff643f:experiments/post_training/long_loop/sft_runtime/train.py::run_grug/_apply_hero_ep_runtime_defaults",
+  "source_runtime_env": {
+    "JAX_ENABLE_PGLE": "false",
+    "LD_PRELOAD": "libjemalloc.so.2",
+    "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
+    "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
+    "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.75"
+  },
+  "source_runtime_xla_flags": [
+    "--xla_gpu_experimental_parallel_collective_overlap_limit=1",
+    "--xla_gpu_enable_latency_hiding_scheduler=true",
+    "--xla_gpu_memory_limit_slop_factor=85",
+    "--xla_gpu_enable_command_buffer="
+  ],
   "tensorstore_cache_bytes": 100000000,
   "token_weighted_accumulation": true,
   "train_seq_len": 262144,
