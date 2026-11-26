@@ -721,6 +721,8 @@ def main() -> None:
     # The repackager rule: the published card follows the original upstream, and an
     # approved user exception survives the repackaging with its lineage (original
     # pin, date, scope, upstream grant). The checker still arbitrates the result.
+    # The rebinding prepares into fresh scratch: the first publish's notice files
+    # belong to the wrapper card, and the upstream's own notices have different bytes.
     api = HfApi()
     card_path = Path(
         api.hf_hub_download(outcome.release_repo, "README.md", repo_type="dataset", revision=outcome.release_revision)
@@ -731,18 +733,23 @@ def main() -> None:
         bound,
         message=f"Bind {source.info.id}'s native TaskSpec conversion release to its original upstream license",
     )
-    publication = prepare_license_publication(bound, Path(args.output_root), use=source.intended_use.value)
+    rebind_root = Path(args.output_root).parent / f"{Path(args.output_root).name}-rebind"
+    if rebind_root.exists():
+        import shutil  # noqa: PLC0415
+
+        shutil.rmtree(rebind_root)
+    publication = prepare_license_publication(bound, rebind_root, use=source.intended_use.value)
     body = card_path.read_text(encoding="utf-8").split("---", 2)[-1].strip()
     lineage = exception_lineage(bound)
     if lineage:
         body = f"{body}\n\n{lineage}\n"
-    (Path(args.output_root) / "README.md").write_text(
+    (rebind_root / "README.md").write_text(
         licensed_dataset_card(body, publication, pretty_name="Native Harbor TaskSpec conversion release")
     )
     card_commit = api.upload_folder(
         repo_id=outcome.release_repo,
         repo_type="dataset",
-        folder_path=args.output_root,
+        folder_path=str(rebind_root),
         allow_patterns=["README.md"],
         commit_message="Bind the release card to its original upstream license",
     )
