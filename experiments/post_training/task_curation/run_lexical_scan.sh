@@ -35,8 +35,14 @@ test -f "marin-$REVISION/experiments/post_training/task_curation/lexical_scan.py
   || { echo "lexical scan: the extracted tree is missing the scan module" >&2; exit 1; }
 cd "marin-$REVISION"
 
-curl -fsSL --retry 5 "$POPULATIONS_URI" -o /workspace/populations.json
-curl -fsSL --retry 5 "$SOURCE_IDS_URI" -o /workspace/source-ids.json
+# The pod has no s3-capable curl; read the manifests through rigging's StoragePath.
+uv run --frozen --with-editable ./lib/taskcompendium[pipeline] python - <<PY
+from rigging.filesystem.storage_path import StoragePath
+from pathlib import Path
+Path("/workspace/populations.json").write_bytes(StoragePath("$POPULATIONS_URI").read_bytes())
+Path("/workspace/source-ids.json").write_bytes(StoragePath("$SOURCE_IDS_URI").read_bytes())
+PY
+test -s /workspace/populations.json && test -s /workspace/source-ids.json
 
 # The DF masks rebuild for the new cohort set (no frozen drop sets: the new
 # populations are not in the recorded artifact); the bloom is the pinned
