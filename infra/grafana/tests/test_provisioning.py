@@ -38,6 +38,8 @@ EXPRESSION_UID = "__expr__"
 # Grafana's built-in fan-out datasource: the panel's targets each name a real one.
 MIXED_DATASOURCE = "-- Mixed --"
 VALID_SEVERITIES = {"critical", "warning"}
+CHECKPOINT_ALERT_UID = "iris-controller-checkpoint-failed"
+CHECKPOINT_METRIC = "iris_controller_checkpoint_upload_success"
 
 
 def _stitched_dashboards() -> dict[str, dict]:
@@ -136,12 +138,11 @@ def test_alert_rules_have_resolvable_datasources_and_refids():
 
 
 def test_alert_rules_define_nodata_and_error_behavior():
-    # Most alert endpoints return explicit zeros when healthy. Optional storage
-    # telemetry and checkpoint metrics stay normal without matching rows.
+    # Most alert endpoints return explicit zeros when healthy.
     for rule in _rules():
         no_data_ok = rule["uid"].startswith("coreweave-storage-") or rule["uid"] in {
             "node-runtime-filesystem-full",
-            "iris-controller-checkpoint-failed",
+            CHECKPOINT_ALERT_UID,
         }
         expected_no_data = "OK" if no_data_ok else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
@@ -186,7 +187,7 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        if "iris_controller_checkpoint_upload_success" in sql:
+        if CHECKPOINT_METRIC in sql:
             return pa.table({"cluster": ["cw-rno2a"], "value": [0]})
         if "node_filesystem_available_bytes" in sql:
             return pa.table(
@@ -244,7 +245,7 @@ def test_every_rule_query_url_answers_on_the_bridge():
 
 
 def test_controller_checkpoint_alert_tracks_latest_attempt_per_cluster():
-    (rule,) = [rule for rule in _rules() if rule["uid"] == "iris-controller-checkpoint-failed"]
+    (rule,) = [rule for rule in _rules() if rule["uid"] == CHECKPOINT_ALERT_UID]
     sql = rule["data"][0]["model"]["url_options"]["params"][0]["value"]
     database = duckdb.connect()
     database.execute(
@@ -255,10 +256,10 @@ def test_controller_checkpoint_alert_tracks_latest_attempt_per_cluster():
     database.executemany(
         'INSERT INTO "telemetry_v1.iris" VALUES (?, ?, ?, ?, ?, ?)',
         [
-            ("cw-rno2a", "iris-controller", "iris_controller_checkpoint_upload_success", 0, now_ms - 120_000, 1),
-            ("cw-rno2a", "iris-controller", "iris_controller_checkpoint_upload_success", 1, now_ms - 60_000, 2),
-            ("cw-us-east-02a", "iris-controller", "iris_controller_checkpoint_upload_success", 0, now_ms - 30_000, 3),
-            ("cw-us-east-08a", "iris-controller", "iris_controller_checkpoint_upload_success", 0, now_ms - 3_600_000, 4),
+            ("cw-rno2a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 120_000, 1),
+            ("cw-rno2a", "iris-controller", CHECKPOINT_METRIC, 1, now_ms - 60_000, 2),
+            ("cw-us-east-02a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 30_000, 3),
+            ("cw-us-east-08a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 3_600_000, 4),
             ("cw-rno2a", "iris-controller", "unrelated_metric", 0, now_ms, 5),
         ],
     )
@@ -266,7 +267,6 @@ def test_controller_checkpoint_alert_tracks_latest_attempt_per_cluster():
     assert dict(database.execute(sql).fetchall()) == {"cw-rno2a": 0, "cw-us-east-02a": 1}
     database.execute('DELETE FROM "telemetry_v1.iris"')
     assert database.execute(sql).fetchall() == []
-    assert rule["noDataState"] == "OK"
 
 
 def test_configured_finelog_query_dependent_alerts_stay_normal_when_query_path_is_unavailable():
