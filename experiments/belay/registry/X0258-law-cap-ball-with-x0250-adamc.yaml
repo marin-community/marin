@@ -4,7 +4,7 @@ name: Law-cap ball with X0250 AdamC head and Adam decays
 category: Optimizers
 summary: 🤖 Posted on behalf of @WhenWen.
 source: intake
-status: done
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7148189436
@@ -36,3 +36,18 @@ trials:
   steps: 3030
   baseline: belay-X0258-control 3.0466 (same commit, seed 0)
   step_time_change: -1%
+- id: t002
+  variant: X0250 head/Adam decays + law-cap ball matrices (X0253)
+  rung: speedrun
+  protocol: fixed_time
+  batch: X0258
+  date: '2026-11-26'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0258
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_anneal_law_cap_ball: 'true'
+  commit: 77c984416e
+  priority: interactive
