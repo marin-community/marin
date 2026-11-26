@@ -21,6 +21,7 @@ from experiments.post_training.task_curation.datasets import (
     nemo_structured,
     repair_releases,
     structure_closure,
+    tasktrove_structured_native,
     terminus_pivot,
     thoughtcrime,
     workplace,
@@ -144,7 +145,6 @@ MAIN_SYNC_STAGED_IDS = frozenset(
         "Anthropic:hh_rlhf/helpful-online",
         "Anthropic:hh_rlhf/helpful-rejection-sampled",
         "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2",
-        "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
         "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2",
         "Nemotron:nemotron_ultra_mopd/hs3_en",
         "Nemotron:nemotron_ultra_mopd/hs3_multi",
@@ -209,6 +209,8 @@ R41_PENDING_SOURCE_IDS = (
         # The instruction-hierarchy admission (c42f355d09) also landed after the freeze.
         "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
+        # The native TaskTrove structured-output cohort qualified after the R40 freeze.
+        "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
     }
 )
 
@@ -264,7 +266,7 @@ PENDING_MEASUREMENT_SOURCES = (
     # license-banned KTO components never enter this listing.
     *(source for source in skyrl_preference.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
     *(source for source in nemotron_ultra.sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
-    *(source for source in tasktrove_structured_outputs.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
+    *tasktrove_structured_native.sources(),
     *(source for source in tasktrove_judged.candidate_sources() if source.info.id in MAIN_SYNC_STAGED_IDS),
 )
 
@@ -295,6 +297,7 @@ def configured_sources() -> list[RlDataSource]:
         *tasktrove_python_tests.sources(),
         *tasktrove_nl2bash.sources(),
         *tasktrove_structured_outputs.sources(),
+        *tasktrove_structured_native.sources(),
         *tasktrove_repositories.sources(),
         *swe_rebench_v2.admitted_sources(),
         *tasktrove_math.sources(),

@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "17f922e60313bb420fb376df3a590be48a430764",
+  "path": "experiments/post_training/task_curation/datasets/tasktrove_structured_native.json",
+  "sha256": "fbab78d9d17db1bf066e567d1fbeb0d1a53b981cb2d540d43c7dc4101f9b4301"
+}

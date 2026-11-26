@@ -1383,6 +1383,23 @@
       "reasons": []
     },
     {
+      "id": "Nemotron:Nemotron-RL-knowledge-mcqa",
+      "display_name": "Nemotron \u00b7 Nemotron-RL-knowledge-mcqa",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "Nemotron-RL-knowledge-mcqa",
+      "upstream_url": "https://huggingface.co/datasets/nvidia/Nemotron-RL-knowledge-mcqa",
+      "notes": "TRAIN native knowledge MCQA with original private expected answers and source scorer. This prepared-image population preserves source prompts, resources, private grader logic and budgets; inverse restores the original TaskSpecs. Six archived live grader checks remain scoped to the original private revision, with no new physical execution or oracle claim. Exact current-pin static retention is policy-bound. Historical 4,567 native holds, 24 earlier duplicates and 147 lexical removals remain archived and uncounted. Fresh seed-zero V4 SAMPLE reviewed 100/100, found 21 issues, and has 0 unavailable; Result some_issues. Known weaknesses include incorrect answer keys, ambiguous multiple-choice questions and underspecified numerical premises; all individual findings remain verbatim. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/knowledge-mcqa-prepared-final-pin-v4-review-v2/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/knowledge-mcqa-prepared-admission-evidence-v1/result.json. Content quality does not reject this source.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
       "id": "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
       "display_name": "Nvidia \u00b7 Nemotron-System-User-Instruction-Hierarchy-v1",
       "status": "Pending",
@@ -1847,9 +1864,9 @@
       "status": "Pending",
       "origin": "TaskTrove",
       "upstream_dataset": "laion__nemotron-gym-structured-outputs-v4",
-      "upstream_url": null,
-      "notes": "All formats require both a format check and a source-grounding judge. Inventory: the grounding judge model is unspecified. Pin the judge contract and complete grounding-verifier QA before admission.",
-      "stage": "Intake queued",
+      "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+      "notes": "TRAIN native structured-output tasks with the original schema grader, task bytes, budgets and terminal delivery preserved. All 53,766 admitted rows have archived conclusive NoP zero scores and exact-ID ownership qualification; 94 original rows remain Pending and uncounted (67 infrastructure retries, 8 scored cleanup holds, 19 ownership unknowns). Earlier 10 lexical removals remain excluded. The selected declarative build route is assessed explicitly; old unbuilt-image census diagnostics are preserved, not rewritten. No original oracle or new execution proof is claimed. Fresh seed-zero V4 SAMPLE reviewed 100/100 with 2 findings and 0 unavailable; Result good. Findings include missing grounding inputs permitting fabricated schema-valid values and a prompt that embeds its expected extraction. All individual findings remain verbatim. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/tasktrove-declared/2026.11.24.1/native-structured-qualified-final-pin-sample-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/tasktrove-declared/2026.11.24.1/native-structured-qualified-admission-evidence-v1/result.json. Content quality does not reject this source.",
+      "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
       "use": "train",
