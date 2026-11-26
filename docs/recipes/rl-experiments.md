@@ -64,9 +64,8 @@ checkpoint and returns its HF export. When step zero wins, the result points to 
 model and trained checkpoints stay only if `keep_every` or an outstanding export protects them.
 Detached launches use the trainer’s rolling checkpoint window.
 
-The smaller Snowball layouts pack one trajectory per replica with context parallelism of one and
-no separate packing token budget, and the campaign layout splits a 102,400-token request into
-20,480 packed token positions per context rank, with an update at that length still unmeasured.
+The 40-H100 `train-long` preset packs samples across two Megatron context ranks. The agentic
+campaign layout splits a 102,400-token request into 20,480 packed token positions per context rank.
 
 `train-medium-tools` runs Linux tasks and image graders on Daytona sandboxes in the RL organization, so set
 `DAYTONA_RL_API_KEY`.
@@ -319,7 +318,8 @@ The gate writes `gate_report.json` and `gate_report.md`. Status prints verdict, 
 path, followed by the Markdown tables of objectives, guards, invariants and reported statistics.
 JSON comparison rows have `objective`, `guard`, `requirement`, `reported` or `slice` roles.
 `run_inputs.json` records the requested settings and inputs for comparison; `run.config_changes` lists
-explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per GPU-hour.
+explicit settings and derived differences. The gate estimates GPU-hours from the configured GPU
+count and the time between the first recorded workload start and native job completion.
 
 Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, artifact version and
 replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the

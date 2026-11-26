@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+import fcntl
 import json
 import math
 import shutil
@@ -7,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -30,9 +32,8 @@ from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
-from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
+from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
-from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
@@ -49,7 +50,6 @@ from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunOptions, read_run_inputs, run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
-    cache_native_compositions,
     controls,
     edit_receipt,
     evaluation_task_rows,
@@ -598,6 +598,76 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
 
 
+@pytest.mark.timeout(15)
+@pytest.mark.parametrize("exit_early", [False, True], ids=["timeout", "nonzero-exit"])
+def test_native_failure_stops_build_child(tmp_path, exit_early):
+    lock = tmp_path / "build.lock"
+    lock.touch()
+    worker = Path(__file__).with_name("native_build_child.py")
+    deadline = monotonic() + 6
+    command = [sys.executable, "-I", str(worker), "exit" if exit_early else "wait", str(lock)]
+    if exit_early:
+        result = run_skyrl_cpu(command, timeout=2, stream_stderr=True)
+        assert result.returncode == 7
+        assert "build child ready" in result.stderr
+    else:
+        with pytest.raises(subprocess.TimeoutExpired, match="timed out after 2") as error:
+            run_skyrl_cpu(command, timeout=2)
+        assert b"build child ready" in error.value.stderr
+    with lock.open("r+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+    assert monotonic() < deadline, "native failure waited for the build child to finish"
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (subprocess.TimeoutExpired("compose", 120, stderr="sk\x1b-fixture-abcdefghijklmnopqrstuvwxyz"), "[REDACTED]"),
+        (subprocess.TimeoutExpired("compose", 120), "timed out after 120 s"),
+        (subprocess.CompletedProcess([], 0, "", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 0, "{", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 1, "", ""), "exited with status 1"),
+        (FileNotFoundError("native composer executable missing"), "native composer executable missing"),
+    ],
+    ids=["redacted-timeout", "timeout", "empty", "invalid-json", "nonzero", "missing-executable"],
+)
+def test_native_composition_reports_failure(monkeypatch, outcome, expected):
+    monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", lambda *args, **kwargs: sys.executable)
+
+    def compose(command, *, timeout):
+        Path(command[command.index("--progress-file") + 1]).write_text("Compose document 1/1")
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(gate, "run_skyrl_cpu", compose)
+    with pytest.raises(gate.InvalidComparison) as failure:
+        gate.compose_configs(["launch.yaml"])
+    message = str(failure.value)
+    assert expected in message and "native configuration cannot be composed" in message
+    if isinstance(outcome, Exception) or outcome.returncode:
+        assert "Compose document 1/1" in message
+    assert "fixture-abcdefghijklmnopqrstuvwxyz" not in message
+
+
+def test_native_composition_reports_environment_preparation_timeout(monkeypatch):
+    def prepare(timeout, **kwargs):
+        raise subprocess.TimeoutExpired("prepare", timeout)
+
+    monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", prepare)
+    with pytest.raises(gate.InvalidComparison, match=r"Prepare SkyRL CPU environment.*timed out after 300 s"):
+        gate.compose_configs(["launch.yaml"])
+
+
+@pytest.mark.timeout(15)
+def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
+    marker = tmp_path / "cancellation"
+    worker = Path(__file__).with_name("native_build_child.py")
+    with pytest.raises(KeyboardInterrupt):
+        run_skyrl_cpu([sys.executable, "-I", str(worker), "interrupt", str(marker)], stream_stderr=True)
+    assert marker.read_text() == "cancelled"
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -615,7 +685,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "omitted-current-nondefault",
         "omitted-schema-nondefault",
         "omitted-candidate-default",
-        "schema-timeout",
         "protocol-temperature",
         "evaluation-cadence",
         "malformed-seed",
@@ -635,7 +704,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             "omitted-current-nondefault",
             "omitted-schema-nondefault",
             "omitted-candidate-default",
-            "schema-timeout",
         )
         else (setting,)
     )
@@ -709,7 +777,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         "omitted-current-nondefault": {"config.skyrl.generator.chat_template_kwargs": {}},
         "omitted-schema-nondefault": {"config.skyrl.trainer.policy.optimizer_config.weight_decay": 0.0},
         "omitted-candidate-default": {"config.skyrl.generator.chat_template_kwargs": {}},
-        "schema-timeout": {"config.skyrl.generator.chat_template_kwargs": {}},
     }.get(case, {})
     if omissions:
         omitted = [candidate] if case == "omitted-candidate-default" else control_roots
@@ -718,34 +785,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 for path, original in omissions.items():
                     parent, key = path.rsplit(".", 1)
                     assert get_path(receipt, parent).pop(key) == original
-    if case == "schema-timeout":
-        cache_native_compositions(monkeypatch)
-        run_cpu = gate.run_skyrl_cpu
-        for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
-            with monkeypatch.context() as unavailable:
-                unavailable.setattr(
-                    Provenance,
-                    "capture",
-                    lambda *_, tag=diagnostic: Provenance(tag, "commit-one", False, "branch", "test"),
-                )
-
-                def unavailable_defaults(command, *, timeout, diagnostic=diagnostic):
-                    if "schema-defaults" not in command:
-                        return run_cpu(command, timeout=timeout)
-                    if diagnostic == "timeout":
-                        raise subprocess.TimeoutExpired(command, timeout)
-                    if diagnostic == "oserror":
-                        raise FileNotFoundError("native composer executable missing")
-                    return subprocess.CompletedProcess(command, 1 if diagnostic == "whitespace" else 0, "", "\n")
-
-                unavailable.setattr(gate, "run_skyrl_cpu", unavailable_defaults)
-                report = compare(preset.name, "--candidate", name)
-                assert (
-                    report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
-                ), report
-                if diagnostic == "timeout":
-                    assert "timed out after 120 s" in report["reason"]
-        return
     reasons = {
         "stale-default": ("control config differs",),
         "zero-spread": ("variation is zero",),
@@ -944,6 +983,8 @@ def test_python_run_saves_typed_inputs_for_comparison(
         fingerprint=built.runs[0].fingerprint(),
         inputs=built.inputs,
     )
+    with edit_receipt(source) as receipt:
+        receipt["result"]["started_at"] = "2026-11-06T17:40:00+00:00"
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / RUN_INPUTS_FILENAME).unlink()

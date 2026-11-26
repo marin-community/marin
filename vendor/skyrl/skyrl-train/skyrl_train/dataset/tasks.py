@@ -321,7 +321,7 @@ class SourceTaskDataset(TaskDataset):
                 task_id = task["id"]
                 identity = task_evaluation_identity(task, selection)
                 if selection is not None and TASK_SPEC_COLUMN in row:
-                    carried = {key: row[key] for key in TaskStrata.model_fields if key in row}
+                    carried = {key: row[key] for key in TaskStrata.model_fields if row.get(key) is not None}
                     if carried != identity.strata.model_dump(include=set(carried)):
                         raise ValueError(f"training row strata differ from selection manifest: {task_id}")
                 if task_id in identities and identities[task_id] != identity:

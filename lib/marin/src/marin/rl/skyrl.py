@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-import select
+import selectors
 import signal
 import subprocess
 import sys
@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path, PurePosixPath
-from time import monotonic
+from time import monotonic, sleep
 from typing import Literal, cast
 
 import fsspec
@@ -931,73 +931,74 @@ def run_skyrl_cpu(
 ) -> subprocess.CompletedProcess[str]:
     """Run a SkyRL CPU process in its own group and preserve diagnostic output."""
     environment = skyrl_cpu_environment(env_vars)
-    tail = b""
     deadline = None if timeout is None else monotonic() + timeout
     with (
         tempfile.TemporaryFile() as stdout,
-        tempfile.TemporaryFile() as stderr,
+        selectors.DefaultSelector() as diagnostics,
         subprocess.Popen(
-            command,
-            stdout=stdout,
-            stderr=subprocess.PIPE if stream_stderr else stderr,
-            env=environment,
-            start_new_session=True,
+            command, stdout=stdout, stderr=subprocess.PIPE, env=environment, start_new_session=True
         ) as process,
     ):
         pipe = process.stderr
+        assert pipe is not None
+        diagnostics.register(pipe, selectors.EVENT_READ)
+        tail = b""
 
-        def stream_diagnostics(wait: float) -> None:
-            nonlocal tail, pipe
-            if pipe is None:
-                select.select([], [], [], wait)
-            elif select.select([pipe], [], [], wait)[0]:
-                data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
-                if data:
-                    sys.stderr.write(data.decode(errors="replace"))
-                    tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
-                else:
-                    pipe = None
+        def read_diagnostics(wait: float) -> bool:
+            nonlocal tail
+            if not diagnostics.get_map():
+                sleep(wait)
+                return False
+            if not diagnostics.select(wait):
+                return False
+            data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
+            if not data:
+                diagnostics.unregister(pipe)
+                return False
+            tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
+            if stream_stderr:
+                sys.stderr.write(data.decode(errors="replace"))
+            return True
 
-        def diagnostics() -> bytes:
-            if not stream_stderr:
-                stderr.seek(max(0, os.fstat(stderr.fileno()).st_size - _CPU_DIAGNOSTIC_BYTES))
-                return stderr.read()
-            stream_diagnostics(0)
-            return tail
+        def drain_diagnostics() -> None:
+            # A descendant may still hold the pipe open after the launcher exits.
+            drain_until = monotonic() + 0.25
+            while monotonic() < drain_until and read_diagnostics(0):
+                pass
 
         try:
-            if stream_stderr:
-                while process.poll() is None:
-                    remaining = 0.25 if deadline is None else min(0.25, deadline - monotonic())
-                    if remaining <= 0:
-                        raise subprocess.TimeoutExpired(command, timeout)
-                    stream_diagnostics(remaining)
-            else:
-                process.wait(timeout=timeout)
+            while process.poll() is None:
+                remaining = 0.25 if deadline is None else min(0.25, deadline - monotonic())
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                read_diagnostics(remaining)
         except BaseException as error:
             try:
                 if stream_stderr and isinstance(error, KeyboardInterrupt):
-                    # Let the native launcher interrupt its Iris wait and cancel the job.
+                    # Give the launcher time to cancel its Iris wait.
                     with suppress(ProcessLookupError):
                         os.killpg(process.pid, signal.SIGINT)
                         cleanup = monotonic() + _LAUNCHER_CANCEL_GRACE_SECONDS
                         while monotonic() < cleanup:
                             process.poll()
                             os.killpg(process.pid, 0)
-                            stream_diagnostics(0.1)
+                            read_diagnostics(0.1)
             finally:
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
             if isinstance(error, subprocess.TimeoutExpired):
-                error.stderr = diagnostics()
+                drain_diagnostics()
+                error.stderr = tail
             raise
         returncode = process.wait()
         if returncode:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-        output = diagnostics().decode(errors="replace")
+        drain_diagnostics()
         stdout.seek(0)
-        return subprocess.CompletedProcess(command, returncode, stdout.read().decode(errors="replace"), output)
+        return subprocess.CompletedProcess(
+            command, returncode, stdout.read().decode(errors="replace"), tail.decode(errors="replace")
+        )
 
 
 def prepare_skyrl_cpu_python(timeout: float, *, project_root: Path | None = None) -> Path:

@@ -5,6 +5,8 @@
 
 import hashlib
 import os
+from argparse import Namespace
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -13,15 +15,19 @@ import torch.multiprocessing as mp
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 
+from experiments.post_training import nccl_transport_probe as probe
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
+    RankResult,
+    WorkerProcess,
     all_to_all_element_count,
-    gate_endpoint_name,
+    collect_worker,
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
     parse_worker_result,
     publish_gate_report,
+    rendezvous_endpoint_name,
     resolve_gloo_socket_ifname,
     worker_traceback,
     write_worker_result,
@@ -72,23 +78,73 @@ def test_parse_nccl_census_ignores_intra_node_p2p():
     assert parse_nccl_census(p2p_log) == NcclCensus(nccl_version="2.29.7", transports=[])
 
 
-def test_gate_verdict_fails_closed_on_sockets_and_failures():
-    """The gate passes only NET/IB or an empty (intra-node NVLink) census."""
+def test_gate_verdict_fails_closed_on_sockets_and_failures(tmp_path, monkeypatch):
+    """Require positive interconnect evidence from a multi-node job."""
     assert gate_verdict(True, [["NET/IB/0/GDRDMA"]]) == "pass"
-    assert gate_verdict(True, [[]]) == "pass"
+    assert gate_verdict(True, [[]]) == "missing_transport_evidence"
+    assert gate_verdict(True, [["NET/Other/0"]]) == "unexpected_transport"
     assert gate_verdict(True, [[], ["NET/IB/0/GDRDMA"]]) == "pass"
     assert gate_verdict(True, [["NET/Socket/0"]]) == "socket_transport"
     assert gate_verdict(True, [[], ["NET/Socket/0/Shared"]]) == "socket_transport"
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
 
+    full = "NCCL INFO NVLS comm 0x1234 headRank -1 nHeads 32 nvlsRanks 60 buffSize 1048576"
+    local = full.replace("nvlsRanks 60", "nvlsRanks 4")
+    socket = "NCCL INFO Channel 01 : 1[0] -> 4[0] via NET/Socket/0"
+    marker = probe.BENCHMARK_COMPLETE
+    streams = [[full, marker]] * 4
+    monkeypatch.setattr(probe, "spawn_worker", lambda _variant, rank, *_args, **_kwargs: rank)
 
-def test_sibling_gpu_gangs_get_separate_gate_rendezvous():
-    first_head = JobInfo(JobName.from_wire("/test/coordinator/control-r0/0"))
-    first_worker = JobInfo(JobName.from_wire("/test/coordinator/control-r0/1"))
-    second_head = JobInfo(JobName.from_wire("/test/coordinator/control-r1/0"))
-    assert first_head.job_id.namespace == second_head.job_id.namespace
-    assert gate_endpoint_name(first_head) == gate_endpoint_name(first_worker)
-    assert gate_endpoint_name(first_head) != gate_endpoint_name(second_head)
+    def completed_rank(rank):
+        census = probe.read_worker_census(([], streams[rank]))
+        return RankResult("baseline", rank, True, 0, 1.0, [], {}, census)
+
+    monkeypatch.setattr(probe, "collect_worker", completed_rank)
+
+    def verdict(allow):
+        result = probe.run_variant(
+            probe.Variant("baseline"),
+            0,
+            4,
+            60,
+            "127.0.0.1",
+            1,
+            tmp_path,
+            pynccl_init=True,
+            allow_interhost_nvlink=allow,
+        )
+        return result["interconnect_verdict"]
+
+    assert verdict(True) == "pass"
+    assert verdict(False) == "missing_transport_evidence"
+    streams[0] = [marker, full]
+    assert verdict(True) == "missing_transport_evidence"
+    streams[0] = [local, marker, full]
+    assert verdict(True) == "missing_transport_evidence"
+    streams[0] = [full, marker, socket]
+    assert verdict(True) == "socket_transport"
+
+    remote = "NCCL INFO Channel 00/0 : {}[0] -> 4[0] via P2P/MNNVL/read"
+    streams[:] = [[remote.format(rank), marker] for rank in range(4)]
+    assert verdict(True) == "pass"
+    assert verdict(False) == "missing_transport_evidence"
+    streams[0] = [marker, remote.format(0)]
+    assert verdict(True) == "missing_transport_evidence"
+    streams[0] = [remote.format(0).replace("4[0]", "1[0]"), marker]
+    assert verdict(True) == "missing_transport_evidence"
+
+
+@pytest.mark.parametrize("mode", ["launcher", "gate"])
+def test_sibling_gpu_gangs_get_separate_rendezvous(mode):
+    coordinator = JobName.root("test-user", "coordinator")
+    first, second = coordinator.child("first"), coordinator.child("second")
+
+    def endpoint(job, rank, attempt=0):
+        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host="127.0.0.1", attempt_id=attempt)
+        return rendezvous_endpoint_name(info, mode=mode)
+
+    assert endpoint(first, 0) == endpoint(first, 1)
+    assert len({endpoint(first, 0), endpoint(second, 0), endpoint(first, 0, attempt=1)}) == 3
 
 
 def test_mapped_nccl_libraries_parses_proc_maps(tmp_path):
@@ -181,15 +237,41 @@ def test_publish_gate_report_writes_task_specific_file(tmp_path):
     assert published.read_text() == '{"verdict": "pass"}'
 
 
-def test_worker_result_file_round_trip(tmp_path):
-    """The worker writes atomically and the launcher reads the matching payload."""
+@pytest.mark.parametrize("check_pynccl", [False, True])
+def test_worker_result_file_round_trip(tmp_path, check_pynccl):
+    """Check the worker receipt against the requested transport stages."""
     result_path = tmp_path / "baseline_default_env-rank3.json"
     payload = {"variant": "baseline_default_env", "rank": 3, "world_size": 192, "gpu": "GB200"}
     write_worker_result(result_path, payload)
     assert not list(tmp_path.glob("*.tmp"))
-    parsed, problem = parse_worker_result(result_path, 3, "baseline_default_env", 192)
-    assert parsed == payload
-    assert problem is None
+    log, output = tmp_path / "log", tmp_path / "output"
+    with log.open("wb") as logs, output.open("wb") as results:
+        rank = collect_worker(
+            WorkerProcess(
+                process=SimpleNamespace(wait=lambda **_: 0),
+                variant_name="baseline_default_env",
+                rank=3,
+                world_size=192,
+                started=0,
+                log_path=log,
+                output_path=output,
+                result_path=result_path,
+                log_file=logs,
+                output_file=results,
+                pynccl_requested=check_pynccl,
+            )
+        )
+    assert rank.worker == payload
+    assert rank.passed is not check_pynccl
+    if check_pynccl:
+        assert "pynccl init failed: missing result" in rank.error_tail
+
+
+def test_multinode_gate_refuses_a_task_without_visible_gpus(monkeypatch):
+    monkeypatch.setattr(probe, "get_job_info", lambda: SimpleNamespace(num_tasks=2, task_index=0))
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 0)
+    with pytest.raises(RuntimeError, match="task 0 has no visible GPUs"):
+        probe.run_gate(Namespace(gate_coverage="all-gpus"))
 
 
 def test_parse_worker_result_fails_closed_on_missing_file(tmp_path):
