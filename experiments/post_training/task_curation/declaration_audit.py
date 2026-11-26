@@ -474,14 +474,17 @@ def audit_replacement_links() -> list[str]:
 def exempt_unmeasured_sources(sources: dict) -> frozenset[str]:
     """The sources the projection audit raises no census demand for (ruling 2026-11-26).
 
-    Exactly the sources that are Excluded with an empty retained population: they have no
-    derived-contract or curriculum projection to bind. Every other unmeasured source —
-    Available, Pending, Deprecated, or any source with tasks — still reports.
+    Exactly the sources that are Excluded or Deprecated with an empty retained
+    population: they have no derived-contract or curriculum projection to bind (the
+    coordinator extended the ruling to Deprecated with zero tasks, 2026-11-26 5:25 AM).
+    Every other unmeasured source — Available, Pending, or any source with tasks —
+    still reports.
     """
+    exempt_statuses = (SourceStatus.EXCLUDED, SourceStatus.DEPRECATED)
     return frozenset(
         source.info.id
         for source in sources.values()
-        if source.status is SourceStatus.EXCLUDED and (source.info.count or 0) == 0
+        if source.status in exempt_statuses and (source.info.count or 0) == 0
     )
 
 

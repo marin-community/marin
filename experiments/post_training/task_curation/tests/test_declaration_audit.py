@@ -461,7 +461,7 @@ def test_only_a_passing_strict_finalizer_records_the_refresh_seal(waived_audit_c
 
 
 def test_the_census_demand_exemption_names_exactly_excluded_empty_sources():
-    """Ruling 2026-11-26: the projection audit exempts exactly Excluded sources whose
+    """Ruling 2026-11-26: the projection audit exempts exactly Excluded or Deprecated sources whose
     retained population is empty; any other status or a nonempty population stays
     inside the census demand."""
 
@@ -481,7 +481,8 @@ def test_the_census_demand_exemption_names_exactly_excluded_empty_sources():
         "Test:pending-empty": Source("Test:pending-empty", SourceStatus.PENDING, 0),
         "Test:available-empty": Source("Test:available-empty", SourceStatus.AVAILABLE, 0),
         "Test:deprecated-empty": Source("Test:deprecated-empty", SourceStatus.DEPRECATED, 0),
+        "Test:deprecated-with-tasks": Source("Test:deprecated-with-tasks", SourceStatus.DEPRECATED, 12927),
     }
     assert declaration_audit.exempt_unmeasured_sources(sources) == frozenset(
-        {"Test:zero-excluded", "Test:none-excluded"}
+        {"Test:zero-excluded", "Test:none-excluded", "Test:deprecated-empty"}
     )
