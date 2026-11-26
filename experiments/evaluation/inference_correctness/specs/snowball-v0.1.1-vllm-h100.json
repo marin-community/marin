@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "id": "snowball-v0.1.1-vllm-h100",
+  "reference": {
+    "uri": "s3://marin-us-east-02a/marin/inference/goldens/snowball-v0.1.1-59852d6f0726/4a5a4a2ffe883e06d73a2049fb93541ca62fd1e0dd66fe7f7484ecbcdea25fe7/manifest.json",
+    "sha256": "f296e39eb6f4fae9f1964c92698667d5985bc9d2bfa9dcea16d22b2e0d8e8cd2"
+  },
+  "resources": {
+    "cpu": 32,
+    "memory": "384GB",
+    "disk": "1TB",
+    "device": {
+      "gpu": {
+        "variant": "H100",
+        "count": 8
+      }
+    }
+  },
+  "serving_engine": "vllm",
+  "engine_kwargs": {
+    "dtype": "bfloat16",
+    "quantization": null,
+    "tensor_parallel_size": 1,
+    "data_parallel_size": 8,
+    "max_model_len": 262144
+  },
+  "hardware": [
+    "H100"
+  ],
+  "kv_cache_dtypes": [
+    "auto",
+    "bfloat16"
+  ],
+  "tolerances": {
+    "reference.representative": {
+      "maximum": 0.25,
+      "p99": 0.125,
+      "p90": 0.05,
+      "fraction_above_0075": 0.05
+    },
+    "batch": {
+      "maximum": 0.2,
+      "p99": 0.18,
+      "p90": 0.15,
+      "fraction_above_0075": 0.5
+    },
+    "cache.same_execution": {
+      "maximum": 0.0,
+      "p99": 0.0,
+      "p90": 0.0,
+      "fraction_above_0075": 0.0
+    },
+    "cache.changed_prefill": {
+      "maximum": 0.2,
+      "p99": 0.12,
+      "p90": 0.06,
+      "fraction_above_0075": 0.15
+    },
+    "decode": {
+      "maximum": 0.25,
+      "p99": 0.15,
+      "p90": 0.075,
+      "fraction_above_0075": 0.15
+    }
+  },
+  "tolerance_version": "snowball-v0.1.1-bf16-h100-provisional-v1",
+  "provisional": true,
+  "rationale": "Initial BF16 screen for the selected v0.1.1 reference. The step42150 gate is nearby evidence only. Calibrate this policy with the selected checkpoint and current runtime; retain baseline failures. Matched cache splits must agree exactly. These limits do not qualify RL trainer ratios.",
+  "evidence": [
+    "https://github.com/marin-community/marin/issues/7354",
+    "https://github.com/marin-community/marin-logbooks/issues/57"
+  ],
+  "batch_size": 4,
+  "decode_tokens": 32,
+  "cache_decode_tokens": 257,
+  "boundary_lengths": [
+    127,
+    128,
+    129,
+    255,
+    256,
+    257,
+    2047,
+    2048,
+    2049
+  ],
+  "replicas": 1
+}

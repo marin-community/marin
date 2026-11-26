@@ -722,6 +722,22 @@ def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
     max_num_seqs = engine_kwargs.get("max_num_seqs")
     if max_num_seqs is not None:
         args.extend(["--max-num-seqs", str(max_num_seqs)])
+    for name in (
+        "revision",
+        "tokenizer",
+        "tokenizer_revision",
+        "tensor_parallel_size",
+        "data_parallel_size",
+        "pipeline_parallel_size",
+        "kv_cache_dtype",
+        "quantization",
+    ):
+        value = engine_kwargs.get(name)
+        if value is not None:
+            args.extend([f"--{name.replace('_', '-')}", str(value)])
+    generation_config = engine_kwargs.get("override_generation_config")
+    if generation_config is not None:
+        args.extend(["--override-generation-config", json.dumps(generation_config)])
     return args
 
 

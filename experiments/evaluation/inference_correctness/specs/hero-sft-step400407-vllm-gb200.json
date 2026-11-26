@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "id": "hero-sft-step400407-vllm-gb200",
+  "reference": {
+    "uri": "s3://marin-us-east-02a/marin/inference/goldens/hero-sft-step400407-1a7886b05df2/6c8cd4e838a11be468be75e11c2a0876bfb99fa51bdd7933e9a018e4ae08fb73/manifest-ffecfe5e324e4379933b64c64dcef8aba1cbfc1fe7ff9f9b9b030299ab18e39b.json",
+    "sha256": "ffecfe5e324e4379933b64c64dcef8aba1cbfc1fe7ff9f9b9b030299ab18e39b"
+  },
+  "resources": {
+    "cpu": 32,
+    "memory": "256GB",
+    "disk": "1TB",
+    "device": {
+      "gpu": {
+        "variant": "GB200",
+        "count": 4
+      }
+    }
+  },
+  "serving_engine": "vllm",
+  "engine_kwargs": {
+    "dtype": "bfloat16",
+    "quantization": null,
+    "tensor_parallel_size": 1,
+    "data_parallel_size": 16,
+    "max_model_len": 262144
+  },
+  "hardware": [
+    "GB200"
+  ],
+  "kv_cache_dtypes": [
+    "auto",
+    "bfloat16"
+  ],
+  "tolerances": {
+    "reference.short": {
+      "maximum": 0.65,
+      "p99": 0.125,
+      "p90": 0.04,
+      "fraction_above_0075": 0.035
+    },
+    "reference.long": {
+      "maximum": 0.35,
+      "p99": 0.09,
+      "p90": 0.04,
+      "fraction_above_0075": 0.02
+    },
+    "batch": {
+      "maximum": 0.2,
+      "p99": 0.18,
+      "p90": 0.15,
+      "fraction_above_0075": 0.5
+    },
+    "cache.same_execution": {
+      "maximum": 0.0,
+      "p99": 0.0,
+      "p90": 0.0,
+      "fraction_above_0075": 0.0
+    },
+    "cache.changed_prefill": {
+      "maximum": 0.2,
+      "p99": 0.12,
+      "p90": 0.06,
+      "fraction_above_0075": 0.15
+    },
+    "decode": {
+      "maximum": 0.25,
+      "p99": 0.15,
+      "p90": 0.075,
+      "fraction_above_0075": 0.15
+    }
+  },
+  "tolerance_version": "hero-sft-step400407-bf16-gb200-provisional-v1",
+  "provisional": true,
+  "rationale": "Initial margins around the retained #11430 BF16 controls. Matched cache splits must agree exactly. These serving limits do not qualify RL trainer ratios. Cache-enabled settings are a new validation scope.",
+  "evidence": [
+    "https://github.com/marin-community/marin/issues/11430",
+    "https://github.com/marin-community/marin/issues/11430#issuecomment-6882101992"
+  ],
+  "batch_size": 4,
+  "decode_tokens": 32,
+  "cache_decode_tokens": 257,
+  "boundary_lengths": [
+    127,
+    128,
+    129,
+    255,
+    256,
+    257,
+    2047,
+    2048,
+    2049
+  ],
+  "replicas": 4
+}

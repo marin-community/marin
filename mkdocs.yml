@@ -119,6 +119,7 @@ nav:
       - Releasing to PyPI: dev-guide/releasing.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
+      - Inference Correctness: references/inference-correctness.md
       - Document Low-value Scoring: references/low-value-scoring.md
       - Replay Low-value Model Card: model-cards/replay-low-value-v1.md
       - Task Curation: references/task-curation.md
