@@ -560,7 +560,7 @@ def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, t
     result = plan(MOCHI, "train-medium-agentic")
     assert result.exit_code == 0, (result.output, result.exception)
     # The plan prints the YAML status, then the lowered steps, then every artifact's name@version.
-    status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+    status = printed_status(result.stdout)
     resolved = result.stdout.partition("\nResolved versions:\n")[2].split()
     (run,) = status["runs"]
     assert status["output"]["root"] == str(scratch)

@@ -100,7 +100,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
         if preset.name == "eval-short":
-            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+            status = printed_status(result.stdout)
             assert status["inputs"]["model"].partition(":")[0] == initializer
             assert status["updates"] == 0 and status["guards"] == []
         elif preset.name in ("speed-short", "data-short"):

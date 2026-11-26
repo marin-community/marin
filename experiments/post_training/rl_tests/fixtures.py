@@ -80,7 +80,9 @@ NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_t
 
 
 def printed_status(output):
-    # CliRunner merges stderr into result.output; status is on result.stdout.
+    # CliRunner merges stderr into result.output; status is on result.stdout. A plan prints its
+    # lowered steps after the status, so the YAML ends where the first StepSpec begins.
+    output = output.partition("\nStepSpec(")[0]
     marker = output.rfind("\npreset:")
     return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 

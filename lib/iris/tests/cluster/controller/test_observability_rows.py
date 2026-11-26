@@ -336,7 +336,7 @@ _FINELOG_CLUSTER_CONFIGS = [
 
 
 @pytest.mark.parametrize("config_path", _FINELOG_CLUSTER_CONFIGS, ids=lambda p: p.stem)
-def test_every_cluster_config_forwards_under_its_own_name_or_not_at_all(config_path):
+def test_every_finelog_cluster_config_forwards_under_its_own_name_or_not_at_all(config_path):
     # A forwarder ships only rows named for its forwarding.cluster, and the controller
     # names its rows with the cluster config name, so a mismatch would drop them.
     config = load_config(config_path)

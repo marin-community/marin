@@ -161,6 +161,7 @@ def test_crux_answer_skips_restated_tag_instruction(direction, response, expecte
 CONCAT = "def f(text, value):\n    return text + value"
 NESTED_ARGUMENTS = "[('u', 1)], [('s', 7), ('u', -5)]"
 NESTED = "[('u', 1), ('s', 7), ('u', -5)]"
+TURN_END = "<|eot_id|>"
 
 
 def _passes(program: str) -> bool:
@@ -186,12 +187,12 @@ def _passes(program: str) -> bool:
         # An output answer containing f(<input>), or an input answer without a call, is not an answer.
         ("output", "'a', 'b'", "'ab'", "[ANSWER]\nassert f('a', 'b') == f('a', 'b')\n[/ANSWER]", False),
         ("input", "'a', 'b'", "'ab'", "[ANSWER]\n'ab'\n[/ANSWER]", False),
-        # A nested call is read whole, tagged or untagged up to a terminal turn token.
-        ("output", NESTED_ARGUMENTS, NESTED, f"assert f({NESTED_ARGUMENTS}) == {NESTED}<|eot_id|>", True),
+        # Nested list and tuple arguments are read whole, tagged or untagged up to a terminal turn token.
+        ("output", NESTED_ARGUMENTS, NESTED, f"assert f({NESTED_ARGUMENTS}) == {NESTED}{TURN_END}", True),
         ("input", NESTED_ARGUMENTS, NESTED, f"[ANSWER]assert f({NESTED_ARGUMENTS}) == {NESTED}[/ANSWER]", True),
-        ("output", NESTED_ARGUMENTS, NESTED, f"assert f({NESTED_ARGUMENTS}) == [('u', 2)]<|eot_id|>", False),
-        ("output", "3, 4", "7", "assert f(3, 4) == 7<|eot_id|>", True),
-        ("output", "3, 4", "7", "assert f(3, 4) == 8<|eot_id|>", False),
+        ("output", NESTED_ARGUMENTS, NESTED, f"assert f({NESTED_ARGUMENTS}) == [('u', 2)]{TURN_END}", False),
+        ("output", "3, 4", "7", f"assert f(3, 4) == 7{TURN_END}", True),
+        ("output", "3, 4", "7", f"assert f(3, 4) == 8{TURN_END}", False),
         # An untagged answer inside a code fence is not read.
         ("output", "3, 4", "7", "```python\nassert f(3, 4) == 7\n```", False),
     ],

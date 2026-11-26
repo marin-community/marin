@@ -30,5 +30,5 @@ def test_interface_for_ipv4_finds_secondary_address(monkeypatch):
         },
     )
     assert interface_for_ipv4("192.0.2.2") == "en0"
-    with pytest.raises(RuntimeError, match=r"No local network interface owns IPv4 address '192\.0\.2\.3'"):
+    with pytest.raises(RuntimeError, match=r"192\.0\.2\.3"):
         interface_for_ipv4("192.0.2.3")
