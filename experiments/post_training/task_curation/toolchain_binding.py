@@ -68,12 +68,30 @@ def declared_lock(environment: Environment) -> str | None:
 
 
 def read_lock(lock_url: str) -> str | None:
-    """The frozen lock's normalized content, or None when it cannot be read."""
+    """The frozen lock's normalized content, or None when it cannot be read.
+
+    A seal-time artifact built under a local MARIN_PREFIX records its lock at a
+    dead local ``/…/images/…`` path; the regional mirror carries the same
+    relative layout, so the read falls back there before giving up.
+    """
     try:
         return normalized_lock(StoragePath(lock_url).read_text())
-    except Exception as error:
-        LOGGER.warning("Frozen lock read failed for %s: %s: %s", lock_url, type(error).__name__, error)
-        return None
+    except Exception:
+        pass
+    if "/images/" in str(lock_url) and not str(lock_url).startswith("s3://"):
+        regional = f"{REGIONAL_ENVIRONMENT_ROOT}/{str(lock_url).split('/images/')[-1]}"
+        try:
+            return normalized_lock(StoragePath(regional).read_text())
+        except Exception as error:
+            LOGGER.warning(
+                "Frozen lock read failed for %s and its regional mirror: %s: %s",
+                lock_url,
+                type(error).__name__,
+                error,
+            )
+            return None
+    LOGGER.warning("Frozen lock read failed for %s", lock_url)
+    return None
 
 
 def built_image(environment: Environment, *, repository: str = DEFAULT_REPOSITORY) -> str | None:
