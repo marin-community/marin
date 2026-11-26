@@ -159,6 +159,15 @@ class DSparkExport(Artifact):
     source_identity: str | None = None
 
 
+@dataclass(frozen=True)
+class TrainedDraft:
+    """Model files selected from Speculators' worker-local checkpoint."""
+
+    directory: Path
+    files: tuple[str, ...]
+    result: DSparkExport
+
+
 def _gpu_device_split(visible_devices: str, recipe: DraftRecipe) -> tuple[str, str]:
     """Partition the Iris task's visible GPU IDs into teacher and trainer masks."""
 
@@ -303,14 +312,13 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
 
 def _prepare_checkpoint(
     *,
-    export: Path,
     training: Path,
     teacher_identity: str,
     recipe: DraftRecipe,
     expected_steps: int,
     mapping: np.ndarray,
     packages: dict,
-) -> DSparkExport:
+) -> TrainedDraft:
     checkpoint = training / str(_EPOCHS - 1)
     state = json.loads((checkpoint / "training_state.json").read_text())
     metrics = json.loads((checkpoint / "val_metrics.json").read_text())
@@ -328,17 +336,15 @@ def _prepare_checkpoint(
     if index.is_file():
         names.append(index.name)
 
-    export.mkdir()
-    for name in names:
-        (export / name).hardlink_to(checkpoint / name)
-    (export / CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
-    return DSparkExport(
+    (checkpoint / CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
+    result = DSparkExport(
         steps=state["global_step"],
         validation=metrics,
         trainer_packages=packages,
         speculators_revision=SPECULATORS_REVISION,
         vllm_source_commit=VLLM_SOURCE_COMMIT,
     )
+    return TrainedDraft(checkpoint, (CONFIG_NAME, *names), result)
 
 
 def _teacher_environment(teacher: Path, recipe: DraftRecipe, hidden_states: Path, devices: str) -> VllmEnvironment:
@@ -496,7 +502,7 @@ def _fit(
     split: PreparedSplits,
     devices: str,
     server_context: AbstractContextManager[VllmEnvironment | None],
-) -> DSparkExport:
+) -> TrainedDraft:
     env = _speculators_environment(devices)
     data = scratch / "data"
     training = scratch / "checkpoints"
@@ -528,7 +534,6 @@ def _fit(
         )
         subprocess.run(train, env=env, check=True)
     return _prepare_checkpoint(
-        export=scratch / HF_DRAFT_SUBDIRECTORY,
         training=training,
         teacher_identity=teacher_identity,
         recipe=recipe,
@@ -556,8 +561,8 @@ def train_cached_draft(
     scratch: Path,
     hidden_states: StoragePath,
     split: PreparedSplits,
-) -> DSparkExport:
-    """Train on cached activations and prepare an HF draft under scratch."""
+) -> TrainedDraft:
+    """Train on cached activations and identify the model files to publish."""
 
     require_supported_vllm_release()
     _require_training_rows(split, recipe.trainer_ranks)
@@ -608,7 +613,7 @@ def train_and_export(
             for pattern in ("tokenizer*", "chat_template*", "special_tokens_map.json", "added_tokens.json"):
                 for file in (tokenizer_path / pattern).glob():
                     file.download_to(str(teacher_path / file.name))
-        result = _fit(
+        draft = _fit(
             teacher_path=teacher_path,
             teacher_identity=teacher_identity,
             recipe=recipe,
@@ -618,8 +623,8 @@ def train_and_export(
             devices=trainer_devices,
             server_context=_teacher_environment(teacher_path, recipe, hidden_states, teacher_devices),
         )
-        export = StoragePath(output) / result.hf_subdirectory
+        export = StoragePath(output) / draft.result.hf_subdirectory
         export.mkdirs()
-        for path in (scratch / result.hf_subdirectory).iterdir():
-            (export / path.name).upload_from(str(path))
-        return result
+        for name in draft.files:
+            (export / name).upload_from(str(draft.directory / name))
+        return draft.result

@@ -1,6 +1,6 @@
 # Train a DSpark draft from a completed SFT export
 
-`experiments.post_training.dspark_sft` trains a Qwen3-style DSpark draft on
+`experiments.post_training.drafting.dspark_sft` trains a Qwen3-style DSpark draft on
 fixed assistant replies. It runs the frozen Grug teacher on the rendered token
 IDs to collect hidden states. The trainer applies the teacher's final RMSNorm,
 gated norm and output projection to compute the distillation targets.
@@ -61,9 +61,9 @@ The recipe accepts `max_sequence_length` (default 32,768 tokens),
 durable regional output prefix and `RECIPE_URI` to the stored recipe.
 
 ```bash
-uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI"
-uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage preflight
-uv run --extra cpu python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage prepare
+uv run python -m experiments.post_training.drafting.dspark_sft --config "$RECIPE_URI"
+uv run python -m experiments.post_training.drafting.dspark_sft --config "$RECIPE_URI" --stage preflight
+uv run --extra cpu python -m experiments.post_training.drafting.dspark_sft --config "$RECIPE_URI" --stage prepare
 ```
 
 The default command prints the artifact graph. CPU preflight checks the
@@ -88,9 +88,9 @@ in proportion to their sampled conversation counts, using up to 256 tool-call,
 
 ```bash
 export MARIN_PREFIX=s3://marin-us-east-08a/marin
-uv run --extra cpu --extra dedup python -m experiments.post_training.dspark_sft \
+uv run --extra cpu --extra dedup python -m experiments.post_training.drafting.dspark_sft \
   --preset mochi-agentic --stage prepare
-uv run --extra cpu python -m experiments.post_training.dspark_sft \
+uv run --extra cpu python -m experiments.post_training.drafting.dspark_sft \
   --preset mochi-agentic --stage preflight
 ```
 
@@ -120,7 +120,7 @@ uv run iris --cluster=marin job run --no-wait \
   --cpu 48 --memory 768GB --disk 128GB --timeout 7200 \
   --sync-package marin-core --extra cpu -e TMPDIR /cache -e MARIN_PREFIX "$MARIN_PREFIX" \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
-  -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage prefill
+  -- python -m experiments.post_training.drafting.dspark_sft --preset mochi-agentic --stage prefill
 ```
 
 ## Fit a Mochi draft from cached activations
@@ -138,7 +138,7 @@ uv run iris --cluster=marin job run --no-wait \
   --cpu 12 --memory 160GB --disk 128GB --timeout 7200 \
   --sync-package marin-core --extra cpu -e TMPDIR /cache -e MARIN_PREFIX "$MARIN_PREFIX" \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
-  -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage train
+  -- python -m experiments.post_training.drafting.dspark_sft --preset mochi-agentic --stage train
 ```
 
 The default smoke trains three updates on 12 training and up to four validation
@@ -173,7 +173,7 @@ uv run iris --cluster=marin job run --no-wait \
   --enable-extra-resources --cpu 2 --memory 12GB --disk 48GB --timeout 3600 \
   --sync-package marin-core --extra cpu --extra dedup -e MARIN_PREFIX "$MARIN_PREFIX" \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
-  -- python -m experiments.post_training.dspark_sft --preset mochi-agentic-50m --stage prepare
+  -- python -m experiments.post_training.drafting.dspark_sft --preset mochi-agentic-50m --stage prepare
 ```
 
 After preparation succeeds, use the prefill and fitting commands with
@@ -205,7 +205,7 @@ uv run iris --cluster=marin job run --no-wait \
   --enable-extra-resources --replicas 1 --gpu "${GPU_TYPE}x${GPU_COUNT}" \
   --cpu 32 --memory 256GB --disk "$DSPARK_DISK" --sync-package marin-core --extra cpu \
   -e MARIN_PREFIX "$MARIN_PREFIX" -e TMPDIR /cache \
-  -- python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage train
+  -- python -m experiments.post_training.drafting.dspark_sft --config "$RECIPE_URI" --stage train
 ```
 
 The worker runs the artifact graph and provisions the trainer from pinned

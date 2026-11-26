@@ -4,20 +4,18 @@
 import hashlib
 import json
 from dataclasses import asdict, replace
-from pathlib import Path
 
 import numpy as np
 from datasets import Dataset
 from marin.execution.lazy import ArtifactStep, artifact_identity, resolve
 from marin.training.drafting.activation_store import activation_path, get_or_build_activation_cache
 from marin.training.drafting.dspark_data import ARROW_DATASET_DIR, PREPARED_DIR, SPLITS_FILE, PreparedSplits
-from marin.training.drafting.dspark_distillation import DSparkExport
+from marin.training.drafting.dspark_distillation import DSparkExport, TrainedDraft
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 from safetensors.numpy import save_file
 
-from experiments.post_training import dspark_sft
-from experiments.post_training.drafting import mochi
+from experiments.post_training.drafting import dspark_sft, mochi
 from vendor.skyrl.marinskyrl.model_manifest import HF_WEIGHT_INDEX_FILENAME, MODEL_MANIFEST_FILENAME, ModelManifest
 
 
@@ -46,11 +44,12 @@ def test_mochi_publishes_both_draft_sizes_from_one_activation_cache(tmp_path, mo
         result = DSparkExport(
             steps=3, validation={}, trainer_packages={}, speculators_revision="", vllm_source_commit=""
         )
-        export = scratch / result.hf_subdirectory
-        export.mkdir()
-        (export / "config.json").write_text("{}")
-        save_file({"weight": np.ones(1)}, str(export / "model.safetensors"))
-        return result
+        checkpoint = scratch / "checkpoints" / "0"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "config.json").write_text("{}")
+        (checkpoint / "training_state.json").write_text("{}")
+        save_file({"weight": np.ones(1)}, str(checkpoint / "model.safetensors"))
+        return TrainedDraft(checkpoint, ("config.json", "model.safetensors"), result)
 
     monkeypatch.setattr(mochi, "train_cached_draft", fit)
 
@@ -62,11 +61,17 @@ def test_mochi_publishes_both_draft_sizes_from_one_activation_cache(tmp_path, mo
     for version, size in (("2026.11.24", mochi.DraftSize.ONE_LAYER), ("2026.11.25", mochi.DraftSize.TWO_LAYERS)):
         recipe = replace(config, mochi_draft_size=size).training_recipe()
         draft = mochi.checkpoint_step(teacher, "", prepared, recipe, version, mochi.Sample.ALL)
-        result = resolve(draft)
-        export = Path(result.path) / result.hf_subdirectory
+        result = resolve(replace(draft, output_path_prefix=f"memory://{tmp_path.name}"))
+        export = StoragePath(result.path) / result.hf_subdirectory
         manifest = ModelManifest.model_validate_json((export / MODEL_MANIFEST_FILENAME).read_text())
         assert result.source_identity == manifest.identity
         assert manifest.tokenizer_mode == "policy"
+        assert {entry.path for entry in manifest.files} == {
+            "config.json",
+            "model.safetensors",
+            HF_WEIGHT_INDEX_FILENAME,
+        }
+        assert not (export / "training_state.json").exists()
         index = json.loads((export / HF_WEIGHT_INDEX_FILENAME).read_text())
         assert index["weight_map"] == {"weight": "model.safetensors"}
         for entry in manifest.files:

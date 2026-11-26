@@ -51,6 +51,7 @@ from marin.training.drafting.dspark_distillation import (
     HIDDEN_STATES_DIR,
     DraftRecipe,
     DSparkExport,
+    TrainedDraft,
     extraction_config,
     train_cached_draft,
 )
@@ -190,15 +191,15 @@ def checkpoint_step(
     )
 
 
-def _publish_draft(export: Path, destination: StoragePath) -> str:
-    manifest = snapshot_model_manifest(export, None, None, tokenizer_mode="policy")
+def _publish_draft(draft: TrainedDraft, destination: StoragePath) -> str:
+    manifest = snapshot_model_manifest(draft.directory, None, None, tokenizer_mode="policy", model_files=draft.files)
     destination.mkdirs()
     marker = destination / MODEL_MANIFEST_FILENAME
     # The artifact record write can fail after the draft has been uploaded.
     if marker.exists():
         marker.rm()
     for entry in manifest.files:
-        (destination / entry.path).upload_from(str(export / entry.path))
+        (destination / entry.path).upload_from(str(draft.directory / entry.path))
     marker.write_text(manifest.model_dump_json(indent=2) + "\n")
     return manifest.identity
 
@@ -212,7 +213,7 @@ def _train_cached(config: CachedTraining, *, cache_key: str) -> DSparkExport:
     with TemporaryDirectory(prefix="mochi-dspark-fit-") as directory:
         scratch = Path(directory)
         _, split = _stage_data(config.prepared, scratch, config.sample)
-        result = train_cached_draft(
+        draft = train_cached_draft(
             teacher=config.teacher,
             teacher_identity=config.teacher_identity,
             recipe=config.recipe,
@@ -220,9 +221,9 @@ def _train_cached(config: CachedTraining, *, cache_key: str) -> DSparkExport:
             hidden_states=cache,
             split=split,
         )
-        destination = StoragePath(config.output) / result.hf_subdirectory
-        identity = _publish_draft(scratch / result.hf_subdirectory, destination)
-        return result.model_copy(update={"source_identity": identity})
+        destination = StoragePath(config.output) / draft.result.hf_subdirectory
+        identity = _publish_draft(draft, destination)
+        return draft.result.model_copy(update={"source_identity": identity})
 
 
 def _select_smoke_data(data: Dataset, split: PreparedSplits, destination: Path) -> tuple[Dataset, PreparedSplits]:
