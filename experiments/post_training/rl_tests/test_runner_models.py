@@ -364,7 +364,7 @@ def test_mochi_plan_refuses_an_incomplete_default_export(
     assert "--sft PRESET" in result.output and "--init NAME@VERSION" in result.output
 
 
-@pytest.mark.usefixtures("source_provenance")
+@pytest.mark.usefixtures("source_provenance", "cache_native_compositions")
 @pytest.mark.parametrize(
     ("model", "override"),
     [("snowball", True), ("mochi", False), ("mochi", True)],
