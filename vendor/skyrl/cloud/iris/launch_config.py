@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import json
 import posixpath
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -531,3 +536,32 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
     if trainer_seed != run["seed"]:
         raise ValueError(f"run.seed={run['seed']} does not match skyrl.trainer.seed={trainer_seed!r}")
     return topology
+
+
+def main() -> None:
+    """Print composed native launch documents in the SkyRL CPU environment."""
+    from rigging.filesystem.s3_compat import configure_coreweave_s3  # noqa: PLC0415
+
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument("--checkout", required=True, type=Path)
+    parser.add_argument("--validate-driver", action="store_true")
+    parser.add_argument("configs", nargs="+", type=Path)
+    args = parser.parse_args()
+    checkout = args.checkout.resolve()
+    with contextlib.redirect_stdout(sys.stderr):
+        sources = (__file__, *(import_module(name).__file__ for name in ("skyrl_train", "marinskyrl")))
+        for source in sources:
+            if not Path(source).resolve().is_relative_to(checkout):
+                raise ValueError(f"{source} must resolve inside {checkout}")
+        configure_coreweave_s3()
+        documents = []
+        for path in args.configs:
+            config = load_launch_config(path)
+            if args.validate_driver:
+                validate_launch_driver_config(config)
+            documents.append(OmegaConf.to_container(config, resolve=True))
+    print(json.dumps(documents))
+
+
+if __name__ == "__main__":
+    main()
