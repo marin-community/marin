@@ -522,6 +522,17 @@ def grader_machine(
     return runtime.model_copy(update={"network": NetworkPolicy.ALLOW})
 
 
+def grader_resources(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> MachineRuntimeSpec:
+    """The run's verifier machine, with the task's CPUs, memory and storage for any the run leaves unset."""
+    return runtime.model_copy(
+        update={
+            "cpus": inputs.cpus if runtime.cpus is None else runtime.cpus,
+            "memory_mb": inputs.memory_mb if runtime.memory_mb is None else runtime.memory_mb,
+            "storage_mb": inputs.storage_mb if runtime.storage_mb is None else runtime.storage_mb,
+        }
+    )
+
+
 def episode_limits(run: RolloutLimits, operation: AgentEpisode, inputs: EpisodeInputs) -> RolloutLimits:
     """Task limits over the protocol's; the run supplies only tool-turn and cleanup deadlines."""
     return run.model_copy(update=operation.limits_for(inputs).model_dump())
@@ -799,6 +810,10 @@ async def _score_rollout(
         else grader_environment(task.grader)
     )
     verifier = None if grader_build is None else grader_machine(config.verifier_machine, grader_build)
+    if verifier is not None and isinstance(operation, AgentEpisode):
+        # A separate grader runs the agent's work; where the run sizes it no further, it gets the agent's resources.
+        assert case.item.episode is not None
+        verifier = grader_resources(verifier, case.item.episode)
     spec = TaskRolloutSpec(
         task=task,
         harness=harness,
