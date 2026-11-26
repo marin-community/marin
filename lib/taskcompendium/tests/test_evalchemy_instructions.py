@@ -25,16 +25,12 @@ from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, Operatio
 from taskcompendium.importers.evalchemy.instructions import convert_instructions, instruction_item
 from taskcompendium.importers.evalchemy.scorers.instruction_spec import InstructionProfile, InstructionSpec
 from taskcompendium.importers.evalchemy.scorers.instructions import grade_source_instructions
+from taskcompendium.importers.evalchemy.scorers.nltk_data import PUNKT_TAB_ENGLISH, PUNKT_TAB_SHA256, PUNKT_TAB_URL
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TextMessage
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
 from taskcompendium.runtime.resources import resource_bytes
-
-# The archive IFBENCH_GRADER mounts (experiments/post_training/task_curation/datasets/environments.py PUNKT_TAB).
-PUNKT_TAB_URL = "https://raw.githubusercontent.com/nltk/nltk_data/4f15a3d89eefe9748ec1c05be495d91289197155/packages/tokenizers/punkt_tab.zip"
-PUNKT_TAB_SHA256 = "e57f64187974277726a3417ca6f181ec5403676c717672eef6a748a7b20e0106"
-PUNKT_TAB_ENGLISH = "punkt_tab/english/"
 
 
 @pytest.fixture(scope="session")
@@ -45,7 +41,7 @@ def ifbench_nltk_data(tmp_path_factory):
     root = tmp_path_factory.mktemp("nltk_data")
     tokenizers = root / "tokenizers"
     with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
-        zipped.extractall(tokenizers, [name for name in zipped.namelist() if name.startswith(PUNKT_TAB_ENGLISH)])
+        zipped.extractall(tokenizers, [name for name in zipped.namelist() if name.startswith(f"{PUNKT_TAB_ENGLISH}/")])
     nltk.data.path.insert(0, str(root))
     yield
     nltk.data.path.remove(str(root))
