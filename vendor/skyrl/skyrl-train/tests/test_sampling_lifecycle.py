@@ -166,7 +166,7 @@ async def test_empty_ftpo_batch_closes_paid_sampling_feedback(monkeypatch):
     )
     order.assign("prompt")
     context = TrainingContext.__new__(TrainingContext)
-    context._observe_after_optimizer = order.finish_step
+    context.loader = SimpleNamespace(order=order)
     events = []
     monkeypatch.setattr("skyrl_train.rollouts.context.record_event", lambda name, body: events.append((name, body)))
     group = AdmittedRollout(0, "prompt", 1, 2, 100)
