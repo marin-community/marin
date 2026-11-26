@@ -7,7 +7,7 @@ import pytest
 from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
 from marinskyrl.agent_harnesses import AgentHarnessSettings, TaskAgentHarnesses
-from rolloutengine.harness.external import AgentHarness
+from rolloutengine.harness.external import AgentHarness, ReplyMatch
 from rolloutengine.harness.step import StepHarness
 from rolloutengine.models import ContextWindowExceeded, Prompt, Transition
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
@@ -58,8 +58,8 @@ def agent_harnesses(monkeypatch):
     async def tokenize(_payload):
         raise AssertionError("This scripted harness only requests completions")
 
-    def bind(agent):
-        monkeypatch.setattr("marinskyrl.agent_harnesses.pi_harness", lambda _options, _tokenize: AgentHarness(agent))
+    def bind(agent, reply_match=ReplyMatch.NORMALIZED):
+        monkeypatch.setattr("marinskyrl.agent_harnesses.pi_harness", lambda _options, _tokenize: AgentHarness(agent, reply_match=reply_match))
         return TaskAgentHarnesses(
             AgentHarnessSettings.model_validate(
                 {"pi": {"version": "0.87.0", "thinking": "high", "thinking_format": "chat-template", "setup_timeout": 10}}
@@ -309,7 +309,8 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
 
 
 @pytest.mark.asyncio
-async def test_native_worker_retains_observations_when_chat_annotations_are_empty(agent_harnesses, worker_config):
+@pytest.mark.parametrize("reply_match", [ReplyMatch.NORMALIZED, ReplyMatch.EXACT])
+async def test_native_worker_retains_observations_when_chat_annotations_are_empty(agent_harnesses, worker_config, reply_match):
     async def agent(_context, complete):
         messages = [{"role": "user", "content": "Start"}]
         for index in range(3):
@@ -329,7 +330,7 @@ async def test_native_worker_retains_observations_when_chat_annotations_are_empt
     )
     worker = TaskRolloutWorker(
         worker_config, WholeTaskProjection(worker_config, WorkerTokenizer()), ScriptedClient(replies), {},
-        agents=agent_harnesses(agent), shutdown_timeout=5,
+        agents=agent_harnesses(agent, reply_match), shutdown_timeout=5,
     )
     try:
         (result,) = await worker.generate(request)
@@ -337,7 +338,7 @@ async def test_native_worker_retains_observations_when_chat_annotations_are_empt
     finally:
         await worker.shutdown()
     assert result.failure is None
-    assert len(result.conversations) == 1
+    assert len(result.conversations) == (1 if reply_match is ReplyMatch.NORMALIZED else 3)
     assert [message["content"] for message in batch["evidence_messages"][0]] == [
         "Start", "Working", "observation 0", "Working", "observation 1", "12",
     ]

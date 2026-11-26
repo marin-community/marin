@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from rolloutengine.harness.core import HarnessContext, ModelSession
-from rolloutengine.harness.external import AgentHarness
+from rolloutengine.harness.external import AgentHarness, ReplyMatch
 from rolloutengine.models import ContextRecovery, LimitReached, ModelTurn, Prompt, RolloutLimits
 from rolloutengine.test_support import arithmetic_task, engine, rollout_spec
 
@@ -187,7 +187,8 @@ def test_limits_reject_a_non_positive_stall_batch_count():
 
 
 @pytest.mark.parametrize("changed_observation", [False, True])
-async def test_external_agent_preserves_observations_with_empty_chat_annotations(changed_observation):
+@pytest.mark.parametrize("reply_match", [ReplyMatch.NORMALIZED, ReplyMatch.EXACT])
+async def test_external_agent_preserves_observations_with_empty_chat_annotations(changed_observation, reply_match):
     content = terminus_message("cat notes.txt")
     calls = []
 
@@ -213,10 +214,10 @@ async def test_external_agent_preserves_observations_with_empty_chat_annotations
                 ]
             )
 
-    result = await run_stall(AgentHarness(agent), ModelAdapter(complete), STALL_LIMITS)
+    result = await run_stall(AgentHarness(agent, reply_match=reply_match), ModelAdapter(complete), STALL_LIMITS)
     assert result.rollout.stop_reason == ("stop" if changed_observation else "repeat_stall")
     assert len(calls) == (8 if changed_observation else 3)
-    assert len(result.rollout.conversations) == 1
+    assert len(result.rollout.conversations) == (1 if reply_match is ReplyMatch.NORMALIZED else len(calls))
     assert result.rollout.conversations[0].steps[0].transition.observations == (
         {"role": "user", "content": "output 0" if changed_observation else "unchanged output"},
     )

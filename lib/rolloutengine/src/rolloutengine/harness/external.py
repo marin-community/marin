@@ -112,6 +112,9 @@ async def complete_agent_prompt(
             return await session.reply(
                 prompt.messages[len(history) :], token_ids=prompt.token_ids, options=prompt.options
             )
+        if len(prompt.messages) > len(history) and _messages_equal(prefix, history):
+            # Exact replay may require a new token conversation, while its tool feedback still completes the last turn.
+            session.record(observations=prompt.messages[len(history) :])
     return await session.start(prompt)
 
 

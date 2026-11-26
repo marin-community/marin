@@ -242,6 +242,8 @@ class _Recorder:
         ):
             # The turn and token limits end the attempt before a new conversation. A length stop does not.
             self._stop_at_limit(self.step_observations, None)
+        if self.step_observations:
+            self._check_stall(self.step_observations, None)
         if current is None:
             self.begin_turn_budget()
         conversation = _Conversation(prompt, self.mode)
@@ -275,12 +277,7 @@ class _Recorder:
             or (self.limits.max_turns is not None and self.turns >= self.limits.max_turns)
         ):
             self._stop_at_limit(observations, token_ids)
-        if self.pairs.maxlen:
-            assert conversation.pending is not None
-            window = [*self.pairs, ActionPair.of(conversation.pending.turn.message, observations)]
-            if detect_stall(window, self.pairs.maxlen):
-                # The grading path still runs: a stall ends the attempt like any other limit.
-                self._stop_at_limit(observations, token_ids, reason=REPEAT_STALL_STOP_REASON)
+        self._check_stall(observations, token_ids)
         served = conversation.trace.prefix
         if token_ids is not None and self.mode == TraceMode.EXACT_TOKENS and token_ids[: len(served)] != served:
             # The harness pinned the wrong tokens, so no model sees this request. As at a limit, the refused
@@ -322,6 +319,15 @@ class _Recorder:
             self.step_data = data
         if metrics:
             self.step_metrics.update(metrics)
+
+    def _check_stall(self, observations: tuple[dict[str, Any], ...], token_ids: tuple[int, ...] | None) -> None:
+        if not self.pairs.maxlen:
+            return
+        conversation = self.conversation
+        assert conversation is not None and conversation.pending is not None
+        window = [*self.pairs, ActionPair.of(conversation.pending.turn.message, observations)]
+        if detect_stall(window, self.pairs.maxlen):
+            self._stop_at_limit(observations, token_ids, reason=REPEAT_STALL_STOP_REASON)
 
     def _add_to_ended_step(self, data: object, metrics: Mapping[str, Any] | None) -> None:
         def added(step: RolloutStep) -> RolloutStep:
