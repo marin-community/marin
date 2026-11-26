@@ -41,7 +41,7 @@ shared_prompt: |-
   inspect each changed file themselves (see "Inputs"). The complexity lane
   additionally receives a `COMPLEXITY LEADS` block of advisory static metrics. One lane is holistic: the **meta** lane reasons over
   the whole change rather than scanning hunks, may read beyond the diff to confirm a
-  finding, and runs on small changes too. A final **composer**
+  finding, and runs only on larger diffs (>100 changed lines). A final **composer**
   agent then merges the lanes' outputs into one list.
 
   Consequences for a lane agent: apply only your lane's rules, and resolve
@@ -286,7 +286,7 @@ lanes:
       it. Fire only where a hunk-scoped pass structurally cannot see the problem: it
       spans files, lives in an unchanged file, or is a property of the whole change.
     - **Start at a consumer.** Work out what it needs before assessing the shape
-      the diff gives it. Even a small change can alter a widely used contract.
+      the diff gives it.
       When context could settle a design concern, trace a real use before
       deciding whether to report it.
 
@@ -296,7 +296,7 @@ lanes:
 
     ## Aspirational redesign
   include_complexity_leads: false
-  min_diff_lines: 0
+  min_diff_lines: 100
   rules:
   - ml-there-must-be-a-better-way
   - ml-data-clump-threaded
