@@ -1,0 +1,12 @@
+id: X0256
+slug: x0250-with-matrix-lr-clamped-at
+name: X0250 with matrix LR clamped at schedule floor
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7122322467
+  author: armorfaye
+  approved_by: armorfaye (trusted)
