@@ -248,10 +248,10 @@ export const cards = {
       summaries: { rolloutsPerGroup: 'generated group', modelAwaitCount: 'attempt' },
     }),
   inference: card('Inference', ['running', 'waiting', 'prefillTime', 'decodeTime', 'kvCache'],
-    'Running and waiting count requests inside vLLM. Each 10-second point adds the latest counts from the engines.', {
+    'Running and waiting count requests inside vLLM. The fleet chart adds across engines. In long ranges it uses each engine’s mean count per interval.', {
       engines: true, tabs: { s: 'Prefill and decode', '%': 'KV cache' },
       helpByUnit: {
-        s: 'Prefill processes the input. Decode generates new tokens. Each 10-second point estimates the mean time per finished request. Gaps mark intervals with no finishes or missing samples.',
+        s: 'Prefill processes the input. Decode generates new tokens. Each point estimates the mean time per finished request. Gaps mark intervals with no finishes or missing samples.',
         '%': 'The KV cache stores attention state. The fleet chart averages the percentage used across engines.',
       },
       links: [{ id: 'promptTokens', label: 'View model input' }, { id: 'generation', label: 'View model output' }],
@@ -284,10 +284,10 @@ export const cards = {
   }),
   dispatchTask: card('Leased task', ['dispatched'], 'This chart counts attempts at their start times once they record an end.'),
   promptTokens: card('Model input', ['promptTokens', 'promptTokensPerGpu'],
-    'vLLM counts prompt and continuation tokens it handles, including tokens served from its prefix cache. The default rate adds input across engines in 10-second intervals.',
+    'vLLM counts prompt and continuation tokens it handles, including tokens served from its prefix cache. The fleet rate adds input across engines.',
     { engines: true, tabs: { 'tokens/s': 'Tokens/s', 'tokens/s/GPU': 'Per GPU' } }),
   generation: card('Model output', ['generation', 'generationPerGpu'],
-    'vLLM counts new tokens generated during decode. The default rate adds output across engines in 10-second intervals.',
+    'vLLM counts new tokens generated during decode. The fleet rate adds output across engines.',
     { engines: true, tabs: { 'tokens/s': 'Tokens/s', 'tokens/s/GPU': 'Per GPU' } }),
   toolCall: card('Task action', ['calls'], 'This chart counts calls the worker waited for in the task environment. Choose a task family or backend when those labels are available.', {
     gapLabel: 'No call counts', gap: 'Finelog has no environment await counts in this window. Task Environment reports batch tool use when available.',
@@ -322,6 +322,37 @@ export const cards = {
   weights: card('Weight sync', ['sync'], 'Each point shows how long a weight sync took. Select a point to see its policy step and reason when recorded.', { tabs: { s: 'Sync duration' } }),
 };
 
-export const MAX_WINDOW_MINUTES = 60;
+export const inferenceSignals = Object.fromEntries(Object.entries(signals)
+  .filter(([, signal]) => signal.filter.metric_source === 'vllm'));
+export const deferredCards = new Set(Object.values(inferenceSignals)
+  .map((signal) => signal.subject));
+
+export const FLEET_CARD = 'fleet';
+const fleetSignals = new Set(['promptTokens', 'generation', 'running', 'waiting']);
+export const inferenceMetricCards = { requests: 'inference', s: 'inferenceTiming', '%': 'inferenceCache' };
+export const metricCards = new Set([...deferredCards, ...Object.values(inferenceMetricCards)]);
+export const inferenceTabGroups = {
+  inferenceDefaults: [...deferredCards],
+  inferenceOtherTabs: [...metricCards].filter((id) => !deferredCards.has(id)),
+};
+
+export function metricSignals(card) {
+  const entries = Object.entries(inferenceSignals);
+  if (card === FLEET_CARD) return entries.filter(([id]) => fleetSignals.has(id));
+  if (inferenceTabGroups[card]) return inferenceTabGroups[card].flatMap(metricSignals);
+  const unit = Object.keys(inferenceMetricCards).find((key) => inferenceMetricCards[key] === card);
+  if (unit) return entries.filter(([, signal]) => signal.subject === 'inference' && signal.unit === unit);
+  return entries.filter(([, signal]) => signal.subject === card);
+}
+
+export const MAX_OVERVIEW_DAYS = 7;
 export const MIN_WINDOW_MS = 10_000;
 export const SPAN_LOOKAHEAD_MS = 30 * 60_000;
+export const RAW_METRIC_WINDOW_MS = 10 * 60_000;
+export const METRIC_POINTS = 360;
+export const SAMPLE_SLICE_MS = 30_000;
+export const FIRST_SAMPLE_BATCH_SIZE = 4;
+export const SAMPLE_BATCH_SIZE = 12;
+export const BACKGROUND_READ_PAUSE_MS = 2_000;
+export const GRAPH_SAMPLE_LIMIT = 12;
+export const OVERVIEW_SAMPLE_LIMIT = 72;
