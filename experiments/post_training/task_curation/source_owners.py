@@ -211,31 +211,32 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
     ),
     "Nemotron:nemotron_ultra_mopd/hs3_en": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (100% NoGrader; cc-by-4.0 license PASS)",
     ),
     "Nemotron:nemotron_ultra_mopd/hs3_multi": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (962/962 NoGrader; cc-by-4.0 license PASS)",
     ),
     "Nemotron:nemotron_ultra_mopd/hs3_multiturn": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (1,243/1,243 NoGrader; cc-by-4.0 license PASS)",
     ),
     "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (2,000/2,000 NoGrader;"
+        " agent: no declared environment; cc-by-4.0 PASS)",
     ),
     "Nemotron:nemotron_ultra_mopd/safety_en": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (629/629 NoGrader; cc-by-4.0 license PASS)",
     ),
     "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (860/860 NoGrader; cc-by-4.0 license PASS)",
     ),
     "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (3,903/3,903 NoGrader; cc-by-4.0 license PASS)",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
@@ -251,11 +252,11 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (246/246 NoGrader; cc-by-4.0 license PASS)",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="Measurements pending",
+        note="excluded 2026-11-26 — grader-missing (932/932 NoGrader; cc-by-4.0 license PASS)",
     ),
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",

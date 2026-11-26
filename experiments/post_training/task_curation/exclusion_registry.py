@@ -78,6 +78,110 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
+    "Nemotron:nemotron_ultra_mopd/hs3_en": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): no executable grader is"
+                " declared on any task — the blend converter emits NoGrader text tasks, and the sibling hs3"
+                " grading censuses at this pin report 100% 'No executable grader is declared' (hs3_multi 962,"
+                " hs3_multiturn 1,243). cc-by-4.0 license gate PASSES (registry ingest_c_intake_20261126_a_v1)"
+                " — re-admissible with an executable or reward-model grader plus a zero-missing grading"
+                " census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/hs3_multi": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 962/962 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6, s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/)."
+                " cc-by-4.0 license gate PASSES — re-admissible with an executable or reward-model grader"
+                " plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/hs3_multiturn": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 1,243/1,243 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 2,000/2,000 tasks 'No executable grader is declared', and the"
+                " actor census reports every task blocked on 'agent: no declared environment' (execution"
+                " requirement). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/safety_en": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 629/629 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 860/860 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6, s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/"
+                "results/449f65753d610f85f4c8/receipt.json). cc-by-4.0 license gate PASSES — re-admissible"
+                " with an executable or reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 3,903/3,903 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 246/246 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Excluded per the user correction (2026-11-26 3:20 PM EST; ingest C): the sealed grading"
+                " census at this pin reports 932/932 tasks 'No executable grader is declared' (converter"
+                " 1509fc8638f6). cc-by-4.0 license gate PASSES — re-admissible with an executable or"
+                " reward-model grader plus a zero-missing grading census; not banned."
+            ),
+        ),
+    ),
     "TaskTrove:DCAgent__mix_h4_binary_easy": (
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
