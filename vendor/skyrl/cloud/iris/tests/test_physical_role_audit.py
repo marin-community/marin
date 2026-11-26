@@ -71,7 +71,7 @@ def test_healthy_single_node_writes_a_verified_report(audit):
     topology = RoleTopology(("policy",), LocalityPlan((1,), (0,)))
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 1
-    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}:1"
+    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}.1"
 
 
 def test_healthy_multi_node_groups_may_share_a_fabric(audit):
@@ -79,13 +79,13 @@ def test_healthy_multi_node_groups_may_share_a_fabric(audit):
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 3
     assert len({row["host"] for row in report["nodes"]}) == 3
-    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}:1"}
+    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}.1"}
 
 
 def test_a_split_group_fabric_is_rejected(audit, tmp_path):
     topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
     nodes = role_nodes(topology)
-    nodes[1]["Labels"][FABRIC_LABEL] = f"{CLUSTER_UUID}:2"
+    nodes[1]["Labels"][FABRIC_LABEL] = f"{CLUSTER_UUID}.2"
     with pytest.raises(ValueError):
         audit(topology, nodes)
     assert not (tmp_path / "role-topology.json").exists()
