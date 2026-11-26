@@ -5,11 +5,13 @@
 
 from dataclasses import replace
 
+from skyrlrecipe import RecipePatch, sections
+
 from experiments.post_training import rl
 from experiments.post_training.qwen_sampler import LAYOUT, TASKS, WITHIN_SOURCE_PASS, sampler_preset
 from experiments.post_training.rl_presets import ModelPresets, Preset
 
-RELEASE = "2026.11.26.1"
+RELEASE = "2026.11.26.2"
 STRING_TASKS = "qwen-timing-string-ei@2026.11.26.1"
 POOLS = (("full", TASKS), ("string-ei", STRING_TASKS))
 SEEDS = (101, 103)
@@ -28,7 +30,16 @@ def timing_preset(pool: str, tasks: str, seed: int) -> Preset:
         revision=RELEASE,
         evaluation_interval=None,
     )
-    return replace(preset, tasks=tasks, evaluations=(), held_out_tasks=None, accepts_settings=False)
+    # The native dataset loader opens configured validation paths even when evaluation is disabled.
+    config = preset.recipe.config.merge(RecipePatch(data=sections.Data(val_data=())))
+    return replace(
+        preset,
+        recipe=replace(preset.recipe, config=config),
+        tasks=tasks,
+        evaluations=(),
+        held_out_tasks=None,
+        accepts_settings=False,
+    )
 
 
 QWEN_TIMING = ModelPresets(
