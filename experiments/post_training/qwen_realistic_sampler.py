@@ -15,7 +15,7 @@ from experiments.post_training.qwen_topic_control import RESPONSE_PROFILES, init
 from experiments.post_training.rl_presets import ModelPresets, Preset
 from experiments.post_training.task_curation.qwen_realistic_sampler import MAX_PROMPT_TOKENS, NAME, VERSION
 
-READINESS_REVISION = "2026.11.26.2"
+READINESS_REVISION = "2026.11.26.3"
 
 
 def readiness(panel: str, copies: int, mode: str) -> Preset:
@@ -36,6 +36,7 @@ def readiness(panel: str, copies: int, mode: str) -> Preset:
         cleanup_timeout=60,
     )
     config = preset.recipe.config.replace(
+        extra_env={"OT_AGENT_RAY_OBJECT_STORE_CAP_GIB": "8"},
         environment=sections.Environment(
             task_sessions={"local": {}, "task_spec": {"package_verifier": verifier.model_dump(mode="json")}}
         ),

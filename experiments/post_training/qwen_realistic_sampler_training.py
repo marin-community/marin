@@ -41,6 +41,7 @@ def realistic_smoke(arm: str, epsilon: float) -> Preset:
     config = preset.recipe.config.replace(
         environment=probe.recipe.config.environment,
         context_budget=probe.recipe.config.context_budget,
+        extra_env=probe.recipe.config.extra_env,
     ).merge(
         RecipePatch(
             trainer=sections.Trainer(
