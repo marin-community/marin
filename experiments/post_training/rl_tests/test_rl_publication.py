@@ -841,7 +841,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             ],
         )
         assert command.exit_code == 0, (command.output, command.exception)
-    served_controls = [row for row in stored().values() if row["is_control"]]
+    served_controls = [row for row in stored().values() if row.get("is_control") is True]
     assert len(served_controls) == gate.CONTROL_COUNT
     assert all(
         row["branch"] == "main" and row["preset_version"] == report.control.version and row["gate_result"] is None

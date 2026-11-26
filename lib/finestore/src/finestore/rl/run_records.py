@@ -9,6 +9,7 @@ recorded checkpoint ancestors, bounded by each continuation's starting step.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, model_validator
 from rigging.filesystem.storage_path import prefix_join
 
-from finestore.layout import OnConflict, TableVersion
+from finestore.layout import OnConflict
 from finestore.reader import ReadView
 from finestore.rl.strata import TaskStrata
 from finestore.schema import arrow_schema
@@ -311,16 +312,6 @@ def attempt_lineage(export_root: str, attempt_id: str) -> tuple[LineageEntry, ..
     return _lineage(export_root, attempt_id, {})
 
 
-def attempt_evidence_versions(export_root: str, attempt_id: str) -> tuple[tuple[str, TableVersion, TableVersion], ...]:
-    """Identify the stored metric and evaluation tables read for an attempt and its ancestry."""
-    views: dict[str, ReadView] = {}
-    _lineage(export_root, attempt_id, views)
-    return tuple(
-        (root, view.table_version(METRICS_TABLE), view.table_version(EVALUATIONS_TABLE))
-        for root, view in sorted(views.items())
-    )
-
-
 def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[str, Any]]:
     """Join bounded history by step, retaining each metric's source attempt.
 
@@ -352,11 +343,24 @@ def write_evaluations(export_root: str, rows: Sequence[EvaluationTaskRow]) -> No
 
 
 def read_evaluations(
-    export_root: str, *, attempt_id: str, evaluation: str, step: int | None = None
+    export_root: str, *, attempt_id: str, evaluation: str | None = None, step: int | None = None
 ) -> list[EvaluationTaskRow]:
     """Read one attempt and evaluation without combining retries or other profiles."""
     view = ReadView(run_records_root(export_root))
-    where = [("attempt_id", "==", attempt_id), ("evaluation", "==", evaluation)]
+    where = [("attempt_id", "==", attempt_id)]
+    if evaluation is not None:
+        where.append(("evaluation", "==", evaluation))
     if step is not None:
         where.append(("step", "==", step))
     return [EvaluationTaskRow.model_validate(row) for row in view.iter_rows(EVALUATIONS_TABLE, where=where)]
+
+
+def attempt_evidence_digest(export_root: str, attempt_id: str) -> str:
+    """Hash the metrics and evaluations consumed for this attempt, including bounded ancestors."""
+    metrics = read_attempt_metrics(export_root, attempt_id)
+    evaluations = sorted(
+        read_evaluations(export_root, attempt_id=attempt_id),
+        key=lambda row: (row.evaluation, row.step, row.task_id),
+    )
+    evidence = (metrics, [row.model_dump(mode="json") for row in evaluations])
+    return hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()

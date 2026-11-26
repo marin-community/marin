@@ -444,6 +444,7 @@ class RunMeasurements:
     evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
+    scoring_groups: dict[tuple[str, str], tuple[str | None, str | None]]
     gpu_hours: float | None
     engine: dict
     attempt_id: str
@@ -537,6 +538,7 @@ def read_measurements(
     task_set = preset.held_out_tasks if preset.held_out is not None else None
     scores, initial_scores = [ANSWER_SCHEMA.empty_table()], []
     evaluations = []
+    scoring_groups = {}
     response_token_counts: set[int | None] = set()
     primary_answers = 0
     for index, evaluation in enumerate(profiles):
@@ -556,15 +558,11 @@ def read_measurements(
         intended_step = workload.metric_step(preset.updates)
         sessions = [(evaluation.name, table, intended_step)]
         if evaluation.held_out:
-            task_digest, protocol = identities[evaluation.name]
-            identities[evaluation.name] = (
-                task_digest,
-                {
-                    **protocol,
-                    "family_scoring": score_membership(table, "family_mean"),
-                    "aai_scoring": score_membership(table, "aai_weighted_mean"),
-                },
-            )
+            for row in all_scores.select(("task_id", "family", "aai_category")).to_pylist():
+                task = (evaluation.name, row["task_id"])
+                assignment = (row["family"], row["aai_category"])
+                if scoring_groups.setdefault(task, assignment) != assignment:
+                    raise InvalidComparison(f"held-out evaluation scoring groups differ: {task}")
         if evaluation.at_start:
             if initial.num_rows and frozenset(initial["task_id"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
@@ -593,7 +591,7 @@ def read_measurements(
                                 (
                                     recorded_task_sets[evaluation.name].task_set_sha256,
                                     evaluation_protocol(launch, evaluation.name),
-                                    score_membership(session, statistic, scored_only=True),
+                                    score_membership(session, statistic),
                                 ),
                                 sort_keys=True,
                             ).encode()
@@ -663,6 +661,7 @@ def read_measurements(
         evaluations=tuple(evaluations),
         slices=slices,
         evaluation_identity=identities,
+        scoring_groups=scoring_groups,
         gpu_hours=gpu_hours,
         engine=tracking.get("engine", {}),
         attempt_id=terminal.attempt_id,

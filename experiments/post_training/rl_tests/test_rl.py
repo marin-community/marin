@@ -776,7 +776,8 @@ def test_submission_exit_codes_and_publication_retries(
                 path = root / filename
                 pending[path] = path.read_bytes()
                 path.unlink()
-    phase = {"retry": False}
+    phase = {"retry": False, "canceled": False}
+    original_provenance = Provenance.capture
     if case == "unexpected":
         path = Path(recipe.selection_artifact(preset.tasks).path()) / recipe.SUMMARY_FILENAME
         summary = json.loads(path.read_text())
@@ -795,6 +796,8 @@ def test_submission_exit_codes_and_publication_retries(
         assert int(query["from"][0]) > 0
 
     def finish(*args, **kwargs):
+        if phase["canceled"]:
+            return SimpleNamespace(state=JobState.KILLED)
         if case != "child":
             assert_submission_link()
         for path, data in pending.items():
@@ -833,6 +836,7 @@ def test_submission_exit_codes_and_publication_retries(
             other = json.loads((source / "terminal.json").read_text())
             other["config"]["run"].update(attempt_id="foreign-attempt", coordinator_iris_job_id="/test-user/other")
             write_receipt(source, other)
+            append_metrics(source, {1: {"step": 1, "attempt_id": "foreign-attempt", "policy/entropy": 0.3}})
             assert snowball.read_stored_skyrl_attempt(str(source)).attempt_id == "foreign-attempt"
             monkeypatch.setattr(
                 Provenance,
@@ -967,6 +971,11 @@ def test_submission_exit_codes_and_publication_retries(
     if case == "changed-source":
         [record] = published
         assert record["attempt_id"] == "native-0" and record["gate_result"]["verdict"] == "pass"
+        phase["canceled"] = True
+        monkeypatch.setattr(Provenance, "capture", original_provenance)
+        repeated = CliRunner().invoke(selected, invoked)
+        assert repeated.exit_code == 3, (repeated.output, repeated.exception)
+        assert "verdict" not in printed_status(repeated.stdout) and published == [record]
         return
     unavailable["value"] = False
     phase["retry"] = True

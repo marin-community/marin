@@ -778,6 +778,8 @@ def _wait_for_run(
     if _evaluation_failed(snapshot, preset):
         raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
     verdict = snapshot.get("verdict")
+    if verdict == Verdict.PASS and coordinator_error is not None:
+        verdict = None
     if verdict is None and not gate_required and coordinator_error is None and successful_runs:
         verdict = Verdict.PASS
     raise click.exceptions.Exit(EXIT_CODES[verdict])
@@ -1181,7 +1183,11 @@ def _run_graph(handles: list[ArtifactStep], max_concurrent: int, prefix: str, co
     cached = _CACHED_ATTEMPTS.validate_json(os.environ.get(CACHED_ATTEMPTS_ENV, "{}"))
     for step, artifact in zip(planned.runs, attempts, strict=True):
         path, attempt_id = step.path(prefix), artifact.attempt_id
-        if attempt_id is None or attempt_id == cached.get(path):
+        if attempt_id is None:
+            if planned.gate is not None:
+                raise rl_gate.InvalidComparison(f"gated native artifact has no attempt ID: {path}")
+            continue
+        if attempt_id == cached.get(path):
             continue
         _, stored = read_stored_skyrl_attempts(path)
         record = stored.get(attempt_id)

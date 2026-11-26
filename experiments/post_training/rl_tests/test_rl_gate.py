@@ -266,7 +266,10 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     edit_metrics(roots[1], lambda row: row.update({key: 0.0}))
     updated = run(gate_for_candidates())[0]
     assert updated.path != report.path
-    assert all(row.holds for row in updated.invariants if row.name == "require/" + key)
+    assert [(row.replicate, row.holds) for row in updated.invariants if row.name == "require/" + key] == [
+        (0, True),
+        (1, True),
+    ]
 
     cohort = cohort_from_fixtures(roots[0])
     member = cohort.attempts[0]
@@ -289,7 +292,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     with edit_receipt(Path(other.path)) as receipt:
         receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
     stale = run(gate_for_candidates())[0]
-    assert stale.path != report.path
+    assert stale.path != updated.path
     assert stale.verdict == "invalid" and "stored control config version" in stale.reason
 
 
@@ -700,6 +703,7 @@ def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
         "omitted-candidate-default",
         "protocol-temperature",
         "family-assignment",
+        "initial-family-assignment",
         "evaluation-cadence",
         "malformed-seed",
     ],
@@ -790,13 +794,18 @@ def test_gate_compares_recorded_configuration_and_defaults(
             set_path(receipt, path, value)
     if case == "missing-guard":
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
-    if case == "family-assignment":
+    if case in {"family-assignment", "initial-family-assignment"}:
         current = read_stored_skyrl_attempts(str(candidate))[0]
         export_root = str(candidate / "exports")
         rows = read_evaluations(export_root, attempt_id=current, evaluation="eval/")
-        first = next(row for row in rows if row.step == preset.updates)
-        reassigned = first.model_copy(update={"strata": first.strata.model_copy(update={"family": "alternate"})})
-        write_evaluations(export_root, [reassigned])
+        task = next(row.task_id for row in rows if row.step == preset.updates)
+        reassigned = [
+            row.model_copy(update={"strata": row.strata.model_copy(update={"family": "alternate"})})
+            for row in rows
+            if row.task_id == task and (case == "family-assignment" or row.step == 0)
+        ]
+        assert {row.step for row in reassigned} == ({0, preset.updates} if case == "family-assignment" else {0})
+        write_evaluations(export_root, reassigned)
         reasons = ("scoring groups differ",)
     if case == "evaluation-cadence":
         with edit_receipt(candidate) as receipt:

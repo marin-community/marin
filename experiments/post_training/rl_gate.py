@@ -20,7 +20,7 @@ from time import monotonic
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict, completed_controls
-from finestore.rl.run_records import AttemptRecord, RunIndexIdentity, attempt_evidence_versions
+from finestore.rl.run_records import AttemptRecord, RunIndexIdentity, attempt_evidence_digest
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
@@ -909,6 +909,7 @@ def _write_gate(
     output: str,
     run_attempts: tuple[AttemptRecord | None, ...] = (),
     control_attempts: tuple[AttemptRecord | None, ...] = (),
+    evidence_digests: tuple[str | None, ...] = (),
 ) -> GateReport:
     preset_name = preset.name
     metadata = RunMetadata(
@@ -955,7 +956,12 @@ def _write_gate(
             update={"held_out_tasks": controls[0].held_out_tasks, "engines": tuple(run.engine for run in controls)}
         )
         if any(candidate.evaluation_identity != controls[0].evaluation_identity for candidate in (*runs, *controls)):
-            raise InvalidComparison("evaluation protocol, held-out TaskSpec content or scoring groups differ")
+            raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
+        groups = {}
+        for data in (*controls, *runs):
+            for task, assignment in data.scoring_groups.items():
+                if groups.setdefault(task, assignment) != assignment:
+                    raise InvalidComparison(f"held-out evaluation scoring groups differ: {task}")
         model = runs[0].config["inputs"]["model"]
         resolved_model = ResolvedModelLocator(
             **{field.name: model[field.name] for field in fields(ResolvedModelLocator)}
@@ -989,6 +995,8 @@ def _write_gate(
         comparisons=comparisons,
         gaps=list(preset.gaps),
     )
+    if evidence_digests != _evidence_digests(run_attempts, control_attempts):
+        raise InvalidComparison("stored gate evidence changed while the comparison ran")
     for name, value in (
         (
             GATE_REPORT_FILENAME,
@@ -1059,6 +1067,30 @@ def _stored_attempt(path: str, attempt_id: str | None = None) -> AttemptRecord |
         return None
 
 
+def _evidence_digests(
+    candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]
+) -> tuple[str | None, ...]:
+    if not all(receipt is not None and receipt.native.result.state == "succeeded" for receipt in candidates):
+        return ()
+    digests = []
+    for receipt in (*candidates, *controls):
+        root = receipt.native.config.get("artifacts", {}).get("export_root") if receipt is not None else None
+        digests.append(attempt_evidence_digest(root, receipt.attempt_id) if isinstance(root, str) and receipt else None)
+    return tuple(digests)
+
+
+def _evidence_suffix(
+    candidates: tuple[AttemptRecord | None, ...],
+    controls: tuple[AttemptRecord | None, ...],
+    digests: tuple[str | None, ...],
+) -> str:
+    receipts = tuple(
+        receipt.model_dump(mode="json", exclude={"issue", "interruption"}) if receipt is not None else None
+        for receipt in (*candidates, *controls)
+    )
+    return "-evidence-" + fingerprint_hash(canonical_json((receipts, digests)))
+
+
 class GateAddress(BaseModel):
     """The submitted gate address and the candidate and control receipts that determine its suffix."""
 
@@ -1076,32 +1108,13 @@ class GateAddress(BaseModel):
     def control_receipts(self) -> tuple[AttemptRecord | None, ...]:
         return tuple(map(_control_attempt, self.controls))
 
-    def suffix(self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]) -> str:
-        evidence = []
-        for identities, group in (
-            (tuple(identity for identity, _ in self.candidates), candidates),
-            (tuple(member.attempt_id for member in self.controls), controls),
-        ):
-            for identity, receipt in zip(identities, group, strict=True):
-                if receipt is None:
-                    evidence.append((identity, None, ()))
-                else:
-                    export_root = receipt.native.config.get("artifacts", {}).get("export_root")
-                    versions = (
-                        attempt_evidence_versions(export_root, receipt.attempt_id)
-                        if isinstance(export_root, str)
-                        else ()
-                    )
-                    evidence.append(
-                        (identity, receipt.model_dump(mode="json", exclude={"issue", "interruption"}), versions)
-                    )
-        return "-evidence-" + fingerprint_hash(canonical_json(evidence))
-
     def completed_path(self, candidates: tuple[AttemptRecord | None, ...] | None = None) -> str:
         parent, version = self.path.rsplit("/", 1)
         if candidates is None:
             candidates = self.candidate_receipts()
-        return f"{parent}{self.suffix(candidates, self.control_receipts())}/{version}"
+        controls = self.control_receipts()
+        suffix = _evidence_suffix(candidates, controls, _evidence_digests(candidates, controls))
+        return f"{parent}{suffix}/{version}"
 
 
 def gate_address(step: ArtifactStep[GateReport], prefix: str | None = None) -> GateAddress:
@@ -1124,10 +1137,14 @@ def _gate_with_evidence(
     if run_attempts is None:
         run_attempts = address.candidate_receipts(attempt_ids)
     controls = address.control_receipts()
+    digests = _evidence_digests(run_attempts, controls)
     return replace(
         step,
-        name=step.runtime_args["name"] + address.suffix(run_attempts, controls),
-        runtime_args={**step.runtime_args, "evidence": {"run_attempts": run_attempts, "control_attempts": controls}},
+        name=step.runtime_args["name"] + _evidence_suffix(run_attempts, controls, digests),
+        runtime_args={
+            **step.runtime_args,
+            "evidence": {"run_attempts": run_attempts, "control_attempts": controls, "evidence_digests": digests},
+        },
     )
 
 

@@ -593,7 +593,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             )
         write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
-            root, name, recipe.RUN_ARTIFACT_VERSION, fingerprint=fingerprint, global_step=0 if generating else max_steps
+            root,
+            name,
+            recipe.RUN_ARTIFACT_VERSION,
+            fingerprint=fingerprint,
+            global_step=0 if generating else max_steps,
+            run_id=run_id,
+            attempt_id=attempt,
         )
         (root / ".executor_status").write_text("SUCCESS")
         stored_metrics = {}

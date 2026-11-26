@@ -440,11 +440,11 @@ def publish_runs(
     if coordinator is None and issue is not None and (len(outputs) != 1 or attempt_id is None):
         raise ValueError("An issue requires exactly one output and its explicit attempt ID")
     result = PublicationOutcome()
+    cache = cached_attempts or {}
     snapshots = {}
     for path in outputs:
         try:
-            cached = cached_attempts.get(path) if cached_attempts is not None else None
-            snapshots[path] = _prepare_publication_attempts(path, coordinator, interrupted, cached)
+            snapshots[path] = _prepare_publication_attempts(path, coordinator, interrupted, cache.get(path))
         except Exception as error:
             result.unserved_records.append(path)
             result.errors.append(str(error))
@@ -455,7 +455,13 @@ def publish_runs(
             snapshot.records.get(snapshot.current) if (snapshot := snapshots.get(path)) is not None else None
             for path in outputs
         )
-        if submitted_gate is not None:
+        if submitted_gate is not None and (
+            not interrupted
+            or any(
+                row is not None and row.attempt_id != cache.get(path)
+                for path, row in zip(outputs, candidates, strict=True)
+            )
+        ):
             gate_path = submitted_gate.completed_path(candidates)
         current_ids = tuple(row.attempt_id if row is not None else None for row in candidates)
         report = _read_publication_gate(gate_path, current_ids, len(outputs))
@@ -477,6 +483,12 @@ def publish_runs(
             result.unserved_records.append((path, attempt_id))
             result.errors.append(f"No stored native receipt at {path} for {attempt_id}")
         for selected_id, receipt in selected.items():
+            if (
+                interrupted
+                and selected_id == cache.get(path)
+                and receipt.native.config["run"].get("coordinator_iris_job_id") != coordinator
+            ):
+                continue
             if attempt_id is None and not receipt.native.result.state.is_terminal and receipt.interruption is None:
                 continue
             destination = (receipt.index_run_id, selected_id)
