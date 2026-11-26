@@ -502,16 +502,24 @@ async def episode_turn(request: ModelRequest, *, model: Model, options: Mapping[
 
 def episode_machine(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> MachineRuntimeSpec:
     """The run's task machine with the task's network policy and the resources it sets."""
-    return episode_resources(runtime, inputs).model_copy(update={"network": inputs.network, "gpus": inputs.gpus})
-
-
-def episode_resources(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> MachineRuntimeSpec:
-    """``runtime`` with the CPUs, memory and storage the task sets, keeping the run's for any it leaves unset."""
     return runtime.model_copy(
         update={
+            "network": inputs.network,
             "cpus": runtime.cpus if inputs.cpus is None else inputs.cpus,
             "memory_mb": runtime.memory_mb if inputs.memory_mb is None else inputs.memory_mb,
             "storage_mb": runtime.storage_mb if inputs.storage_mb is None else inputs.storage_mb,
+            "gpus": inputs.gpus,
+        }
+    )
+
+
+def grader_resources(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> MachineRuntimeSpec:
+    """The run's verifier machine, with the task's CPUs, memory and storage for any the run leaves unset."""
+    return runtime.model_copy(
+        update={
+            "cpus": inputs.cpus if runtime.cpus is None else runtime.cpus,
+            "memory_mb": inputs.memory_mb if runtime.memory_mb is None else runtime.memory_mb,
+            "storage_mb": inputs.storage_mb if runtime.storage_mb is None else runtime.storage_mb,
         }
     )
 
@@ -794,9 +802,9 @@ async def _score_rollout(
     )
     verifier = config.verifier_machine if grader_build is not None else None
     if verifier is not None and isinstance(operation, AgentEpisode):
-        # A separate grader runs the agent's work, so it gets the resources the task gives the agent's machine.
+        # A separate grader runs the agent's work; where the run sizes it no further, it gets the agent's resources.
         assert case.item.episode is not None
-        verifier = episode_resources(verifier, case.item.episode)
+        verifier = grader_resources(verifier, case.item.episode)
     if (
         verifier is not None
         and grader_build is not None

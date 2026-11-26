@@ -1568,7 +1568,10 @@ def convert_separately_graded_episode_row(row: RawRow, context: ConversionContex
 
 
 @pytest.mark.asyncio
-async def test_a_separate_grader_gets_the_resources_the_task_gives_its_agent(tmp_path, run_config):
+@pytest.mark.parametrize(("run_memory", "grader_memory"), [(None, 512), (8192, 8192)], ids=["unset", "explicit"])
+async def test_a_separate_grader_gets_the_task_s_resources_where_the_run_sets_none(
+    tmp_path, run_config, run_memory, grader_memory
+):
     corpus = publish_episodes(tmp_path, ("episode/solve",), ShellAgent(), convert=convert_separately_graded_episode_row)
 
     async def model(request):
@@ -1579,7 +1582,7 @@ async def test_a_separate_grader_gets_the_resources_the_task_gives_its_agent(tmp
         update={
             "source_limit": None,
             "task_machine": machine_runtime(backend="shellsim"),
-            "verifier_machine": machine_runtime(backend="shellsim"),
+            "verifier_machine": machine_runtime(backend="shellsim", memory_mb=run_memory),
         }
     )
     output = str(tmp_path / "results")
@@ -1597,7 +1600,7 @@ async def test_a_separate_grader_gets_the_resources_the_task_gives_its_agent(tmp
     # The episode sets 512 MB; the agent's machine denies network as the task does, the grader as the run does.
     assert [(spec.memory_mb, spec.network) for spec in factory.created] == [
         (512, NetworkPolicy.DENY),
-        (512, config.verifier_machine.network),
+        (grader_memory, config.verifier_machine.network),
     ]
 
 
