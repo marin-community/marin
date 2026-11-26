@@ -169,6 +169,7 @@ def compose_toolchain_image(lock_url: str, *, repository: str = DEFAULT_REPOSITO
     from experiments.post_training.task_curation.datasets.environments import TOOLCHAIN_GRADER_PACKAGES  # noqa: PLC0415
     from experiments.post_training.task_curation.images.build import environment_artifact  # noqa: PLC0415
 
+    configure_coreweave_s3()
     lock = read_lock(lock_url)
     if lock is None:
         raise ValueError(f"the frozen lock cannot be read: {lock_url}")
