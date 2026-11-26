@@ -31,6 +31,7 @@ from marin.rollouts.evaluation import (
     ModelIdentity,
     episode_turn,
     generation_turn,
+    grader_machine,
     grading_limits,
     run_evaluation,
     run_identity,
@@ -893,6 +894,17 @@ def test_grading_deadline_covers_the_judge_budget(run_config, judge_budget, dead
     limits = run_config.limits.model_copy(update={"verifier_timeout": 600, "attempt_timeout": 1800})
     extended = grading_limits(limits, task)
     assert (extended.verifier_timeout, extended.attempt_timeout) == deadlines
+
+
+@pytest.mark.parametrize("capabilities,network", [(("network",), NetworkPolicy.ALLOW), ((), NetworkPolicy.DENY)])
+def test_grader_machines_have_the_network_their_environment_requires(capabilities, network):
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_image=f"grader@sha256:{'a' * 64}",
+        capabilities=capabilities,
+    )
+    run_default = machine_runtime(backend="daytona", network=NetworkPolicy.DENY)
+    assert grader_machine(run_default, environment) == run_default.model_copy(update={"network": network})
 
 
 @dataclass
