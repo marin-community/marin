@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -1784,7 +1785,9 @@ def test_sft_only_arm_exports_without_starting_rl(tmp_path, monkeypatch, selecti
     command = snowball.command(snowball_model.SNOWBALL, argv=arguments, sft_presets=lambda: (MIXTURE_262K_32NODE,))
     result = CliRunner().invoke(command, arguments)
     assert result.exit_code == 0, (result.output, result.exception)
-    execution = recipe.run_execution(snowball_model.SNOWBALL.by_name["train-long-agentic"])
+    execution = recipe.run_execution(
+        snowball_model.SNOWBALL.by_name["train-long-agentic"], wandb_entity=os.environ.get("WANDB_ENTITY")
+    )
     environment = {key: "fixture" for key in execution.required_env_vars}
     _, request = _coordinator_request(
         plans, "experiments.post_training.snowball_rl", arguments, Path.cwd(), environment, execution=execution
