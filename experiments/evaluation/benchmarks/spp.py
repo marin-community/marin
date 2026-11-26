@@ -23,6 +23,8 @@ to the first choice as in the reference harness. Serving in float32 removes them
 
 from functools import partial
 
+from finestore.rl.curation import SourceOrigin
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     LikelihoodMetric,
@@ -59,6 +61,7 @@ AIRISK_POPULATION = 1281
 def _source(
     *,
     name: str,
+    upstream_name: str,
     source: HfSource,
     item_builder,
     metric: Metric,
@@ -66,9 +69,11 @@ def _source(
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="SPP:" + name,
-            title=name,
-            origin="SPP",
+            data_restriction=DataRestriction.OPEN,
+            origin=SourceOrigin.DLAB_SPP,
+            upstream_dataset=source.repo.split("/", 1)[1],
+            upstream_name=upstream_name,
+            build_path="SPP",
             family="likelihood-choice",
             tags=(*SPP_TAGS, "single-turn", "benchmark"),
             count=population,
@@ -105,6 +110,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
     return [
         _source(
             name="constitution",
+            upstream_name="ConstitutionEval",
             source=HfSource(
                 "dlab-spp/constitution-eval",
                 CONSTITUTION_REVISION,
@@ -118,6 +124,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         ),
         _source(
             name="airisk",
+            upstream_name="AIRiskDilemmas",
             source=HfSource(
                 "dlab-spp/airisk_dilemmas",
                 AIRISK_REVISION,

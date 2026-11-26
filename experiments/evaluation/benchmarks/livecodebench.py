@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from evalrecords.records import TaskEvidence
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, source_evidence, unsupported
 from taskcompendium.convert.code import THREAD_ENVIRONMENT
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
@@ -45,7 +46,7 @@ from experiments.evaluation.benchmarks.environments import LIVECODEBENCH_GRADER
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.datasets.skyrl.code import SCORERS, lcb_test_cases
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 HARNESS_REVISION = "998c52d394b836f15fff3b9a29866191108ff81b"
 """LiveCodeBench/LiveCodeBench commit whose prompt, extraction and timeouts this benchmark follows."""
@@ -171,9 +172,12 @@ def livecodebench_item(task: TaskSpec) -> EvaluationItem:
 def source() -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="LiveCodeBench:release_v6",
-            title="LiveCodeBench",
-            origin="LiveCodeBench",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="release_v6",
+            upstream_name="LiveCodeBench",
+            subset=None,
+            build_path="LiveCodeBench",
+            origin=SourceOrigin.LIVECODEBENCH,
             family="competitive-programming",
             tags=("eval", "source:livecodebench", "benchmark", "code", "single-turn"),
             count=RELEASE_V6_POPULATION,

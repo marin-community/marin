@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from pydantic import ValidationError
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.convert.script_grader import grade_script, script_package
@@ -23,7 +24,7 @@ from verifyit.spec import DEFAULT_OUTPUT, Constraint
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 HERE = Path(__file__).parent
 IFEVAL_GRADE = grade_script(HERE / "nemotron_if_grade.py")
@@ -180,9 +181,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:nemotron_if",
-                title="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
-                origin="MarinSkyRL",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="nemotron_if",
+                upstream_name="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.NEMOTRON,
                 family="instruction-following",
                 tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/ifeval"),
             ),
@@ -205,9 +209,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="MarinSkyRL:rlvr_ifeval",
-                title="allenai/RLVR-IFeval",
-                origin="MarinSkyRL",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="rlvr_ifeval",
+                upstream_name="allenai/RLVR-IFeval",
+                subset=None,
+                build_path="MarinSkyRL",
+                origin=SourceOrigin.ALLENAI,
                 family="instruction-following",
                 tags=("rlvr", "single-turn", "license:odc-by", "gym/ifeval"),
             ),

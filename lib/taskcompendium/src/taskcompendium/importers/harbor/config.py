@@ -82,6 +82,13 @@ def _size_mb(size: str) -> int:
     return int(float(size[:-1]) * units[size[-1]])
 
 
+class EnvironmentSetup(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    command: str = Field(min_length=1)
+    timeout_sec: float = Field(gt=0)
+
+
 class EnvironmentConfig(HarborModel):
     build_timeout_sec: float = 600.0
     docker_image: str | None = None
@@ -98,6 +105,7 @@ class EnvironmentConfig(HarborModel):
     skills_dir: str | None = None
     healthcheck: Healthcheck | None = None
     workdir: str | None = None
+    setup: EnvironmentSetup | None = None
 
     @field_validator("os", mode="before")
     @classmethod
@@ -205,15 +213,22 @@ def _require_environment(environment: EnvironmentConfig, section: str) -> None:
         raise UnsupportedHarborFeature(f"[{section}] installs agent skills from skills_dir")
 
 
-def require_supported(config: HarborTaskConfig) -> None:
+def require_supported(
+    config: HarborTaskConfig, *, agent_user: str | None = None, setup_timeout: float | None = None
+) -> None:
     """Reject task-level features the importer cannot lower; environment files are checked while lowering."""
     if config.schema_version not in SUPPORTED_SCHEMAS:
         raise UnsupportedHarborFeature(f"task.toml schema {config.schema_version} is not supported")
     if config.steps or config.multi_step_reward_strategy is not None:
         raise UnsupportedHarborFeature("multi-step tasks are not supported")
     _require_environment(config.environment, "environment")
-    if config.agent.user not in ROOT_USERS:
+    if agent_user is None and config.agent.user not in ROOT_USERS:
         raise UnsupportedHarborFeature(f"agent runs as user {config.agent.user!r}; only root is supported")
+    if agent_user is not None and str(config.agent.user) != agent_user:
+        raise UnsupportedHarborFeature(f"agent runs as user {config.agent.user!r}; deployment expects {agent_user}")
+    setup = config.environment.setup
+    if (setup.timeout_sec if setup is not None else None) != setup_timeout:
+        raise UnsupportedHarborFeature("environment setup timeout does not match the deployment")
     if config.verifier.user not in ROOT_USERS:
         raise UnsupportedHarborFeature(f"verifier runs as user {config.verifier.user!r}; only root is supported")
     if any(hook.user is not None for hook in config.verifier.collect):
@@ -222,12 +237,14 @@ def require_supported(config: HarborTaskConfig) -> None:
     verifier = config.verifier.environment
     if verifier is not None:
         _require_environment(verifier, "verifier.environment")
-        if verifier.healthcheck is not None or verifier.mcp_servers:
-            raise UnsupportedHarborFeature("verifier environments with healthchecks or MCP servers")
+        if verifier.healthcheck is not None or verifier.mcp_servers or verifier.setup is not None:
+            raise UnsupportedHarborFeature("verifier environments with healthchecks, MCP servers, or setup commands")
 
 
-def read_task_config(directory: Path) -> HarborTaskConfig:
+def read_task_config(
+    directory: Path, *, agent_user: str | None = None, setup_timeout: float | None = None
+) -> HarborTaskConfig:
     """Parse a package's ``task.toml`` and reject task-level features the importer cannot lower."""
     config = HarborTaskConfig.model_validate(tomllib.loads((directory / TASK_CONFIG).read_text()))
-    require_supported(config)
+    require_supported(config, agent_user=agent_user, setup_timeout=setup_timeout)
     return config

@@ -710,8 +710,9 @@ groups:
         labels:
           severity: warning
           notification: storage-daily
+          operator_behavior: storage
         annotations:
-          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage projected above 80% of quota"
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage projected at {{ humanizePercentage $values.A.Value }} of quota"
           description: >-
             Projected quota use in 24 hours is {{ humanizePercentage $values.A.Value }}
             if recent growth continues, with current usage as a floor.
@@ -719,6 +720,8 @@ groups:
             before the end of the working day. This warning is delivered daily
             between 15:00 and 16:00 America/Los_Angeles.
           runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md#coreweave-storage-telemetry
+          related_url: https://cw-s3.oa.dev/?v=time
+          related_label: Size & growth
           __dashboardUid__: marin-storage
           __panelId__: "2"
         data:

@@ -255,12 +255,12 @@ DS_1000_MINI_200 = HarborDataset(
     title="DS-1000, random 200",
     source=github_packages(
         "penfever/harbor-datasets",
-        "791c0607c15a6d7946aa52e9c1a427d104fc0916",
-        "970d8e5e3e61f6c5f955be5815eb0f73729bbcd739f5657d3e71cee9725d9385",
+        "cedf53d7193626b466c856b5021c4056106bfd84",
+        "0f5f1022b497ebf9a70b7ab4803a1e77048cf2bca43081a1c9e08ede0ce29872",
         root="datasets/ds1000",
         packages=DS_1000_MINI_200_PACKAGES,
     ),
-    version=VERSION,
+    version="2026.11.25",
     count=200,
 )
 BFCL_PARITY_PI = HarborDataset(

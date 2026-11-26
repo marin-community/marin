@@ -42,7 +42,7 @@ def test_root_wheel_owns_launcher_and_training_packages(built_wheel: BuiltWheel)
     assert "skyrl_gym/__init__.py" in built_wheel.names
     assert "skyrl_train/__init__.py" in built_wheel.names
     assert "skyrl_train/config/ppo_base_config.yaml" in built_wheel.names
-    assert "skyrl_train/inline_harbor.py" in built_wheel.names
+    assert "marinskyrl/agent_harnesses.py" in built_wheel.names
     assert "skyrl_gym/envs/nemotron_ultra/abstention_prompt.txt" in built_wheel.names
     assert "skyrl_gym/envs/nemotron_ultra/jailbreak_verifiers.yaml" in built_wheel.names
 
@@ -51,7 +51,8 @@ def test_base_dependencies_are_cpu_only(built_wheel: BuiltWheel) -> None:
     requirements = Parser().parsestr(built_wheel.metadata).get_all("Requires-Dist", [])
     base_requirements = {requirement.partition(";")[0].strip().split("[")[0].split()[0].lower() for requirement in requirements if "extra ==" not in requirement}
 
-    assert base_requirements.isdisjoint({"flash-attn", "torch", "transformer-engine", "vllm", "harbor", "harbor-config"})
+    assert base_requirements.isdisjoint({"flash-attn", "torch", "transformer-engine", "vllm"})
+    assert {Requirement(value).name for value in requirements}.isdisjoint({"harbor", "harbor-config"})
 
 
 def test_training_extras_publish_hardware_policy_and_rollout_requirements(built_wheel: BuiltWheel) -> None:
