@@ -93,7 +93,6 @@ async def test_judged_feedback_includes_prefetched_discards_across_resume(resume
             rollout_context.record_sampling_result(outcome, result.batch_id)
     receipts = {fields["lease_id"]: fields for name, fields in events if name == "sampling_group_result"}
     assert len(receipts) == 4
-    # The prefetched discard is visible in admission one and contributes to the source sampler in batch two.
     assert receipts[future.lease_id]["dispatch_step"] == receipts[future.lease_id]["admission_batch"] == 1
     assert receipts[future.lease_id]["feedback_batch"] == 2
     assert receipts[future.lease_id]["verified_one"] == 2

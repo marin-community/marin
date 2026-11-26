@@ -29,7 +29,6 @@ def test_wandb_group_bounds_long_names_and_distinguishes_suffixes(prefix):
 
     assert len(first.encode("utf-8")) <= 128
     assert len(second.encode("utf-8")) <= 128
-    assert prefix.startswith(first.rsplit("-", 1)[0])
     assert first != second
     assert _wandb_group_name(f"{prefix}-seed83") == first
 

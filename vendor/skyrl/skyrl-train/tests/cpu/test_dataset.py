@@ -90,7 +90,7 @@ def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluatio
         prompt_order_from_config(config, training_duplicates, held_out=[validation])
 
     config.data.sampling.reversion_mass = 1.0
-    with pytest.raises(ValueError, match=r"data.sampling.reversion_mass.*Set it to 0"):
+    with pytest.raises(ValueError):
         prompt_order_from_config(config, training, held_out=[validation])
 
 

@@ -313,10 +313,12 @@ each training batch. Each Parquet training row supplies its `family`. The counts
 `trainer.train_batch_size`. Use `batch_policy: full_batch`.
 Each family needs one distinct usable prompt per open group slot in that family and one spare.
 A rejected group releases a slot in its own family.
-Leave `data.sampling.kind` unset for seeded passes within each family. A `prompt-thompson-*` order
-ranks eligible prompts within the leased family and learns from completed optimizer steps. The
-within-source variant allocates each family's draw window using the reference row weights in that
-family, capped by available rows per source. Checkpoints retain each family's draw position.
+Leave `data.sampling.kind` unset for seeded passes within each family. The
+`prompt-thompson-source`, `prompt-thompson-contextual`, `prompt-thompson-cost-aware`, and
+`prompt-thompson-within-source-cost-aware` orders rank eligible prompts within the leased family
+and learn from completed optimizer steps. The within-source variant allocates each family's draw
+window using the reference row weights in that family, capped by available rows per source.
+Checkpoints retain each family's draw position.
 Omit the family counts to use other prompt orders, including curriculum sampling.
 
 `prompt-thompson-within-source-pass-cost-aware` draws from the least-visited eligible
