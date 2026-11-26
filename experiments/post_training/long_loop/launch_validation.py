@@ -75,7 +75,9 @@ def validate_launch(
     return receipt
 
 
-def regional_preflight(document: str, readable_uris: tuple[str, ...], check_task_inputs: bool = False) -> None:
+def regional_preflight(
+    document: str, readable_uris: tuple[str, ...], check_task_inputs: bool = False, check_vocabulary: bool = False
+) -> None:
     """Read evaluation dependencies and construct its worker in an isolated CPU task."""
     launch = yaml.safe_load(document)
     inputs = launch["inputs"]
@@ -86,7 +88,13 @@ def regional_preflight(document: str, readable_uris: tuple[str, ...], check_task
         with StoragePath(uri).open("rb") as stream:
             stream.read(1)
     with tempfile.TemporaryDirectory(prefix="long-loop-regional-preflight-") as directory:
-        receipt = validate_launch(document, Path(directory), build_worker=True, check_task_inputs=check_task_inputs)
+        receipt = validate_launch(
+            document,
+            Path(directory),
+            build_worker=True,
+            check_task_inputs=check_task_inputs,
+            check_vocabulary=check_vocabulary,
+        )
     logger.info("Regional evaluation CPU preflight passed: %s", json.dumps(receipt, sort_keys=True))
 
 
@@ -96,6 +104,7 @@ def validate_before_allocation(
     readable_uris: tuple[str, ...] = (),
     secrets: dict[str, str] | None = None,
     check_task_inputs: bool = False,
+    check_vocabulary: bool = False,
 ) -> dict:
     """Gate long-loop workers on regional CPU admission before GPU allocation."""
     with tempfile.TemporaryDirectory(prefix="long-loop-validation-") as directory:
@@ -114,7 +123,9 @@ def validate_before_allocation(
     nested = get_job_info() is not None
     request = JobRequest(
         name=f"long-loop-eval-preflight-{uuid4().hex[:8]}",
-        entrypoint=Entrypoint.from_callable(regional_preflight, args=(document, readable_uris, check_task_inputs)),
+        entrypoint=Entrypoint.from_callable(
+            regional_preflight, args=(document, readable_uris, check_task_inputs, check_vocabulary)
+        ),
         resources=ResourceConfig.with_cpu(
             cpu=4,
             ram="16GB",

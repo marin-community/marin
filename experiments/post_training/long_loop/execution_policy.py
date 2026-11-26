@@ -4,6 +4,7 @@
 """Controlled execution envelope for comparable long-loop experiments."""
 
 from datetime import timedelta
+from enum import StrEnum
 from types import MappingProxyType
 
 DEFAULT_TASK_TIMEOUT_SECONDS = 3 * 24 * 60 * 60
@@ -14,8 +15,17 @@ SFT_UPDATE_RESERVE = timedelta(minutes=10)
 RL_TRAINING_BUDGET = MappingProxyType({"seconds": 43200, "drain_margin": 1800})
 
 
-def rl_training_callbacks(callbacks: list[dict], *, groups_per_step: int) -> list[dict]:
-    """Bind the shared RL clock and reject conflicting recipe declarations."""
+class RlStopping(StrEnum):
+    WALL_TIME = "wall_time"
+    MAX_STEPS = "max_steps"
+
+
+def rl_training_callbacks(
+    callbacks: list[dict], *, groups_per_step: int, stopping: RlStopping = RlStopping.WALL_TIME
+) -> list[dict]:
+    """Bind the shared RL clock, or remove it for an explicit step-bounded campaign."""
+    if stopping is RlStopping.MAX_STEPS:
+        return [callback for callback in callbacks if callback["type"] != "wall_time_budget"]
     for callback in callbacks:
         if callback["type"] == "wall_time_budget":
             for field, expected in RL_TRAINING_BUDGET.items():

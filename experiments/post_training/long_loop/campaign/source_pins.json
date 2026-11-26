@@ -1,0 +1,2401 @@
+{
+  "publications": {
+    "repo": "open-athena/atlas-source-pins",
+    "revision": "e4f09fcf0e20ffd36f189dd7c267e652167e925c",
+    "filename": "atlas_publications.json",
+    "sha256": "082676b2b0f4518a92d7f97b0b64a175c950e241c64cdb14dad6015680a92c35"
+  },
+  "candidate_sha256": {
+    "v2": "cc583ac9c45c969122444e31562ca8aff585151bb359a25bbdd403e19a752448"
+  },
+  "sources": {
+    "AI-MO:numina_math": {
+      "repo": "open-athena/marinskyrl-numina-math-61c8eeaa-retained-2026.11.16.1",
+      "revision": "db0dcb7758e8270ef07b5d40a1bef0563e76f248",
+      "version": "2026.11.13.1",
+      "name": "numina_math-retained",
+      "type": "RLVR",
+      "count": 795290,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1/61c8eeaa09ba4a52bf79/actor/.artifact.json",
+      "license": [
+        "Apache-2.0",
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "0e34b97e35462e14955e1e9a110290c35445f8f99961e601d24b7c1c86527884",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=AI-MO:numina_math"
+    },
+    "AllenAI:IF_multi_constraints_upto5": {
+      "repo": "open-athena/allenai-if-multi-constraints-upto5-7bcdabaf-retained-20261116-b-v1",
+      "revision": "1b4076f63af29e34aee43e16781784890b1e9835",
+      "version": "2026.11.13.1",
+      "name": "ifbench-train-retained",
+      "type": "RLVR",
+      "count": 95357,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/retained-census/ifbench/2026.11.16.1/7bcdabaf57071c23bcdc/actor/.artifact.json",
+      "license": [
+        "odc-by"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "9628ff2516d7c1a2f5c2cb7c4584f53a36369d0198dd4aab5a195ae3fcc301c6",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=unspecified; source identity=AllenAI:IF_multi_constraints_upto5"
+    },
+    "BytedTsinghua-SIA:dapo_math": {
+      "repo": "open-athena/marinskyrl-dapo-math-251da0b4-retained-20261113-v1",
+      "revision": "36fa57456e941732aa805200cda98389734b5399",
+      "version": "2026.11.13.1",
+      "name": "dapo_math-retained",
+      "type": "RLVR",
+      "count": 16901,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/251da0b43247d05fc57e/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "db877970b54d109dfeb0bd2c7f1e24ff329a8d2be1ae0a777f2a00c9cb60cf4a",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=BytedTsinghua-SIA:dapo_math"
+    },
+    "ChilleD:svamp": {
+      "repo": "open-athena/marinskyrl-svamp-dbfea888-retained-20261116-v1",
+      "revision": "0b5b473a0e6d04860524add557b69bb3f2b53adc",
+      "version": "2026.11.13.1",
+      "name": "svamp-retained",
+      "type": "RLVR",
+      "count": 700,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b8/dbfea88815bfa816a3fc/actor/.artifact.json",
+      "license": [
+        "mit"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "162fe210c513f1e2c703e56901b556e40546139b4d3aee148ddd09afa678c977",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=ChilleD:svamp"
+    },
+    "CodeParrot:apps": {
+      "repo": "open-athena/marinskyrl-apps-5b74ad63-retained-20261116-v1",
+      "revision": "9ac8025b4ae11f9e0f90f2600cc49025c5ef844a",
+      "version": "2026.11.13.1",
+      "name": "apps-retained",
+      "type": "RLVR",
+      "count": 4447,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b4/5b74ad63ca86e91403d0/actor/.artifact.json",
+      "license": [
+        "mit"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "ee5cad8d0008e4007b0936a677cef5a7346b06269ce8521177aa2b8f8cd316b7",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=competitive-programming; declared type=RLVR; source identity=CodeParrot:apps"
+    },
+    "EleutherAI:hendrycks_math": {
+      "repo": "open-athena/marinskyrl-hendrycks-math-bd6fa045-retained-20261113-v1",
+      "revision": "29862633dc66f3228af2e99104ec2bc8251bda60",
+      "version": "2026.11.13.1",
+      "name": "hendrycks_math-retained",
+      "type": "RLVR",
+      "count": 1705,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/bd6fa045e69a6feb2343/actor/.artifact.json",
+      "license": [
+        "mit"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "9af67f01059087c7b87ef89ade40fdc025062f0309b7331c126af196be65e3e5",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=EleutherAI:hendrycks_math"
+    },
+    "FWeindel:validated-tasks/fineenvs_v2": {
+      "repo": "open-athena/fweindel-fineenvs-v2-oracle-qualified-20261120-b-v2",
+      "revision": "d6c199c7b895c9f22153c03fbd02d044d25db6cb",
+      "version": "2026.11.13.1",
+      "name": "fineenvs-v2-retained-oracle-filtered",
+      "type": "Agentic",
+      "count": 2582,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/fweindel-fineenvs/2026.11.17.1/oracle-qualified-v2/fineenvs_v2/census/actor/.artifact.json",
+      "license": [
+        "mit"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "a1987f0e217de36a8b67080e0880187700b8c47f59671e074dd620f2b5e81ce3",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=terminal; declared type=unspecified; source identity=FWeindel:validated-tasks/fineenvs_v2"
+    },
+    "Gretel:gretel_text_to_sql": {
+      "repo": "open-athena/marinskyrl-gretel-text-to-sql-769201fa-retained-20261116-v1",
+      "revision": "52818f58db6e723f2fe513c9115d8718e5fbf99e",
+      "version": "2026.11.13.1",
+      "name": "gretel_text_to_sql-retained",
+      "type": "RLVR",
+      "count": 55316,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1/769201fa9361c4f0b028/actor/.artifact.json",
+      "license": [
+        "Apache-2.0",
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "50f761411b820846fe28e91179addf0b78388c886e2b33b0cfe3b7f5ea6d0a18",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=text-to-sql; declared type=RLVR; source identity=Gretel:gretel_text_to_sql"
+    },
+    "Lego-X:Terminal-Lego-15k": {
+      "repo": "open-athena/terminal-lego-root-delivery-qualified-20261122-b-v1",
+      "revision": "01d71ba8b6dd0458c5552445c8b7b73b2d8fc4fa",
+      "version": "2026.11.13.1",
+      "name": "terminal-lego-root-delivery-oracle-filtered",
+      "type": "Agentic",
+      "count": 1216,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/terminal-lego/2026.11.20.1/root-delivery-census-correction-v1/qualified/census/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "9774859a656f7f3a689e7f732a49a34357be3e1bde99f948e4900d505bdf0ed7",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=terminal; declared type=unspecified; source identity=Lego-X:Terminal-Lego-15k"
+    },
+    "Marin:forge-main-20261117": {
+      "repo": "open-athena/forge-main-atlas-20261122-v1",
+      "revision": "f5766a0e3da2320d30af7c5d6c245f1f1fa711d5",
+      "version": "2026.11.22.1",
+      "name": "forge-main-20261117-oracle-filtered",
+      "type": "RLVR",
+      "count": 3577,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/forge-main/2026.11.21.2/selected-qualification-v3/actor/.artifact.json",
+      "license": [
+        "openmdw-1.1"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "2f0ee817c7d8a506416f9dde01333751481e669b8b5ab709bc236bb912846f46",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=synthetic-cross-domain; declared type=RLVR; source identity=Marin:forge-main-20261117"
+    },
+    "Nemotron:Nemotron-Cascade-2-RL-data/MOPD": {
+      "repo": "open-athena/nemotron-nemotron-cascade-2-rl-data-mopd-d9411399-retained-20261116-b-v1",
+      "revision": "7ac886010b3706345337eed86330b484111cfbf8",
+      "version": "2026.11.13.1",
+      "name": "nemotron-cascade-2-mopd-retained",
+      "type": "RLVR",
+      "count": 3698,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/retained-census/cascade/2026.11.16.1/d941139928857a09768b/actor/.artifact.json",
+      "license": [
+        "odc-by"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "03ba298ce90a43f0f0315b9c72ad367f9de55f4e5b5a17e545c409f5958b9fed",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=mixed; declared type=unspecified; source identity=Nemotron:Nemotron-Cascade-2-RL-data/MOPD"
+    },
+    "Nemotron:Nemotron-Cascade-2-RL-data/multi-domain-RL": {
+      "repo": "open-athena/nemotron-nemotron-cascade-2-rl-data-multi-domain-rl-ee15b18a-retained-20261116-b-v1",
+      "revision": "52522171b690b25e50faa954619ab56362c0d55a",
+      "version": "2026.11.13.1",
+      "name": "nemotron-cascade-2-multi-domain-rl-retained",
+      "type": "RLVR",
+      "count": 12903,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/retained-census/cascade/2026.11.16.1/ee15b18affec7822f712/actor/.artifact.json",
+      "license": [
+        "odc-by"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "c695c97eeaa2a8b65439e555948a262f5f5a858f2d17bb71377a228dcc2a49df",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=mixed; declared type=unspecified; source identity=Nemotron:Nemotron-Cascade-2-RL-data/multi-domain-RL"
+    },
+    "Nemotron:Nemotron-RL-instruction_following-structured_outputs": {
+      "repo": "open-athena/nemotron-nemotron-rl-instruction-following-structured-o-6abcd1f2-retained-20261124-b-final-nemo",
+      "revision": "be4cd53e7d59041e5a401b03a0fe4018ca401c29",
+      "version": "2026.11.13.1",
+      "name": "nemo-structured-native-train-retained",
+      "type": "RLVR",
+      "count": 9213,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/structured-release-sample-v1/census/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "300120b1f815d32c2cd1f8a4634936874711e5b914aecaf2083ec17577a3275f",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction_following; declared type=unspecified; source identity=Nemotron:Nemotron-RL-instruction_following-structured_outputs"
+    },
+    "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-agent-swe-pivot-single-s-c82c21c7-retained-20261113-v1",
+      "revision": "4fac18c420496b79ae685db55d1bf577661c3eb5",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_agent_swe_pivot_single_step_tool_use_with_argument_comparison_agent_nebius_swe_rebench_v2-retained",
+      "type": "Agentic",
+      "count": 1840,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/c82c21c77bf0522eca2c/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "ae5812721e7d142943b35cbf3c048988d3244302c9d599f5801db8f558cf3980",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=swe-repo; declared type=unspecified; source identity=Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-abste-f8b6719c-retained-20261113-v1",
+      "revision": "c370a53be3f94b841e4d42c3ac704f40de914efc",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_abstention-retained",
+      "type": "RLVR",
+      "count": 2299,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/f8b6719c07e92a4aabf4/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "7c5ed943a425aa882a2c9619cef9bd7a3e45f0bc497bc65a43e31d97ee8e74fd",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-abstention; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_abstention"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-calen-db100211-retained-20261116-v1",
+      "revision": "d42f6b0d42a17c595b3b6048089dc835f1469b82",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_calendar_v2-retained",
+      "type": "RLVR",
+      "count": 910,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b8/db10021154d54f399523/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "168c68dca511aad15771bcc556a1c3168c99c49f50f09c6c507d1dae06b3c309",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_calendar_v2"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-comp-96fe01cb-retained-20261116-v1",
+      "revision": "cbfcb9243ef773316f4728b619578677e55ccd77",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_comp_coding-retained",
+      "type": "RLVR",
+      "count": 7929,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b3/96fe01cbdb250f183d13/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "279b0b8736a520ec76a71660ee65213a6864459f0cacb646b923b931e7b3789c",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=competitive-programming; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_comp_coding"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-instr-ca5c0fe9-retained-20261116-v1",
+      "revision": "b9af11e658996aa3ba9164af9e43eceb687a72b5",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_instruction_following-retained",
+      "type": "RLVR",
+      "count": 10409,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b2b/ca5c0fe99fdb5e4ecd7e/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "c447942d4d4bc5560823fa16b0d35b248b1581a96e1bea175b6f0b61b1a19387",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_instruction_following"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-jailb-24bcf489-retained-20261113-v1",
+      "revision": "d8ccaddb782540e0d47d21979c6d5c872a283829",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_jailbreak-retained",
+      "type": "Alignment",
+      "count": 1121,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/24bcf4897deb32f4e6e0/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "b7537f03779159ddac7b6b495329180d0f8a720e175d5cb4836ca3f53db80092",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=safety; declared type=Alignment; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_jailbreak"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_cot": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-aab0f213-retained-20261113-v1",
+      "revision": "39e709249bc568f6fa36d7e7d6cab56da611b0f9",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_math_cot-retained",
+      "type": "RLVR",
+      "count": 4400,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/aab0f213dc20bb60a8eb/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "9930e105257a4fca620c35beb89bef89b5853415d89cd16ce6743a0b98ae206a",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_cot"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1",
+      "revision": "7e120186d5b58fbb91497404eea7c62c50dd5aed",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_math_tir-retained",
+      "type": "Agentic",
+      "count": 5790,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/49907debf646334752c0/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "b2172432caaae520adc9743e5972c7922c3322285b1473f888dcbf1c1fa21f96",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=math-answer; declared type=Agentic; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-multi-880000d8-retained-20261113-v1",
+      "revision": "9d6809b3eb420ac17fda833301833868e815a6a8",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_multichallenge_len40k-retained",
+      "type": "RLVR",
+      "count": 1184,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/880000d8badc86149df6/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "a0dc4622f9144327365f55634a3da092e95c71bd2430f0a39313c251cc774042",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-nvarc-1223d453-retained-20261116-v1",
+      "revision": "3d607f16554cc01166a2cff11c3b540d50f79908",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_nvarc_inductive-retained",
+      "type": "RLVR",
+      "count": 2097,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b5/1223d45372db8a546eea/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "1031ee49df8f3e19474863d3dc01b6c7f5228b370224d4a40846d99976f0c297",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=arc-agi; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_inductive"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-nvarc-f1ff808c-retained-20261116-v1",
+      "revision": "72a0378366bc0d1549e62a1f054fdfbfd4e87831",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_nvarc_transductive-retained",
+      "type": "RLVR",
+      "count": 2069,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b6/f1ff808c708631eec3f6/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "d1c8aa939ac59d8a1c355348f4fa23367f62a36900be486d79c45c8657cbcf69",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=arc-agi; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_nvarc_transductive"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-reaso-cdf55a72-retained-20261116-v1",
+      "revision": "c7ccce03910629cb7db9816c23583646d7212bbc",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_reasoning_gym-retained",
+      "type": "RLVR",
+      "count": 1385,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b7/cdf55a729040b3c9e9fe/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "6378b45658eb09e8e55577c8cc62d18822d37113e6a04ee9e901f7a9ccc7648f",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=reasoning-gym; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_reasoning_gym"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-stem-04bdf411-retained-20261113-v1",
+      "revision": "094d654a5d80cb73a8c4cff75b9c55178f3b8d26",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_stem_mcqa-retained",
+      "type": "RLVR",
+      "count": 2095,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/04bdf411f819ea83eb7e/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "33fb5f0ee1d5403f2e61666c317c21d92bacf0ece716cb7220eec349ab9defcd",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-multiple-choice; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-stem-9673fa57-retained-20261116-v1",
+      "revision": "5d514c206b33a38705c4d6f12bbe25fa2a2bdf71",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_stem_mcqa_cot_rima_new-retained",
+      "type": "RLVR",
+      "count": 2077,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b5/9673fa578f51b0c93dd4/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "765fa0e5cccb88857884d5eea6afe399089b55cccd81a880ca922d11350c05e0",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-multiple-choice; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_stem_mcqa_cot_rima_new"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-struc-fac4332d-retained-20261116-v1",
+      "revision": "facc2d35975121eed5dbc49c2118565e7c7891cb",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_structured_outputs_v2-retained",
+      "type": "RLVR",
+      "count": 682,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b8/fac4332d5b2318c8bbaa/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "0938de346efeb1b0f62ddbb1b0e548e27fa29aa76a78cdb95ed4b6969b3b88b4",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_structured_outputs_v2"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-toolc-8380bd8d-retained-20261113-v1",
+      "revision": "4a5a5c5767f67a5f9e383e2be351088acac4f780",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_sft_step3200_toolcall_schema-retained",
+      "type": "RLVR",
+      "count": 2264,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/8380bd8df1b1fe515ceb/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "94c86d76e21f4a511a64d0dd5d3a2b81d9f21e3cef203ec64448b84290becd30",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=tool-use; declared type=unspecified; source identity=Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_toolcall_schema"
+    },
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-v3-agentic-rl-step-c9385670-retained-20261113-v1",
+      "revision": "271399281fc87f3102577ad3e1c3a1e226d05fad",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_mopd_ultra_v3_agentic_rl_step73_structured_outputs_v2-retained",
+      "type": "RLVR",
+      "count": 7138,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/c9385670c20f09b3229b/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "b6e66d667a52444bdd4db5f152f97b48e5cd46406794db9dd613260481d6af55",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-language-mixing-hs3-ult-3543235c-retained-20261113-v1",
+      "revision": "a1e25bae044f96f89b9ff64c0c3bb42d8fd6c569",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_language_mixing_hs3_ultra_genrm_fmt-retained",
+      "type": "Alignment",
+      "count": 4599,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/3543235c6ab78bc9d2e5/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "68b412b7300e1077ea0853eac1e72fe7b1376e6c7eb0cb4d9720b622cb10d29e",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=preference; declared type=Alignment; source identity=Nemotron:nemotron_ultra_rlvr1/language_mixing_hs3_ultra_genrm_fmt"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-abst-e337b8da-retained-20261113-v1",
+      "revision": "53156b631c6fca7bca1a5693ea18d95936881b22",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_abstention-retained",
+      "type": "RLVR",
+      "count": 2299,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/e337b8dab6eb59d39859/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "68b17e9399bd22abaae6ef8a3d5695bc625183d3738f663b6b738a6fe1065930",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-abstention; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_abstention"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-cale-ee5c044d-retained-20261116-v1",
+      "revision": "1ec3089062e3526e0902130d76f22415a4b6431a",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_calendar_v2-retained",
+      "type": "RLVR",
+      "count": 910,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b8/ee5c044d18d7cadc921a/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "452f6687a9a421d8828d7f284cfde55255b0c5e3783fc3c270a1ae4aabf19eee",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-comp-3e83d403-retained-20261116-v1",
+      "revision": "fe915015e013505153d9c711af94e1e86c5ffc90",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_comp_coding-retained",
+      "type": "RLVR",
+      "count": 7928,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b3/3e83d4031fa0e4742cba/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "f6f6a072799105f33451ca581123d02d9e585f4919ea7cf4ab28ffce0153e4cc",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=competitive-programming; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-inst-c40988ec-retained-20261116-v1",
+      "revision": "460eb6ad0fc7fe41bf9a817ee52e75652d19515b",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_instruction_following-retained",
+      "type": "RLVR",
+      "count": 11828,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b2b/c40988ec19106411ff4d/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "1f92478a958ed1a08dd2cd7846146aa331f25da2ce186612ae1e07ab2ff01839",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_instruction_following"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-jail-abb8e2df-retained-20261113-v1",
+      "revision": "899f77568c704d9566b1096fa6e61d80a2ae3937",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_jailbreak-retained",
+      "type": "Alignment",
+      "count": 1121,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/abb8e2df9d851ecb0345/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "5a4fb5bb3826f7adc937428ee61eee5b0fe4d4e457794f51427c05183b8bcb4f",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=safety; declared type=Alignment; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_jailbreak"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-c39d65c6-retained-20261113-v1",
+      "revision": "5d7382c202ebbbfde021ab8cb1d651e41f6a0a69",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_cot-retained",
+      "type": "RLVR",
+      "count": 4400,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/c39d65c6dbfa1881afbb/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "713808c3c9b7f68f1c86149da82fefe7e100110c31fe632f08139fe0c6f49133",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_cot"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1",
+      "revision": "7c2a84bf83e48996ed51dcf4cbf4ace384856efd",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_tir-retained",
+      "type": "Agentic",
+      "count": 5790,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/cd9cbcbc3a8b0784ea4a/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "bb1c007006cc73060f224240c1b76a91af0bc2af0ffe741cdad44d91a35fc802",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=math-answer; declared type=Agentic; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-mult-ffee8901-retained-20261113-v1",
+      "revision": "d9413e7871b01a6c1ba18f5cc3aa3e298b85476c",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_multichallenge_len40k-retained",
+      "type": "RLVR",
+      "count": 1184,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/ffee8901ef47d10067c7/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "76e86874ad3c37c37be78228a82a1279bb8d05eb16fba21f85dcdbc23c3dad3b",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-nvar-fa685f7d-retained-20261116-v1",
+      "revision": "5384e976afe89e1853e97793afa90a592cceb0ff",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_inductive-retained",
+      "type": "RLVR",
+      "count": 2097,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b5/fa685f7d71a9e39586b5/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "7f0762c2ee9016d2a91769ddb8886623e17e84f96e9d26005722817eb792f1ff",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=arc-agi; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_inductive"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-nvar-b480cbe0-retained-20261116-v1",
+      "revision": "9e4c2913b67b81f727890748f341a0783b6135f2",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_nvarc_transductive-retained",
+      "type": "RLVR",
+      "count": 2069,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b6/b480cbe0c56385c69ece/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "398afd03709890656d699d777697c036959895dde6b766106e98cd77c12ef971",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=arc-agi; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_nvarc_transductive"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-reas-70eecf33-retained-20261116-v1",
+      "revision": "afd3cf55df38637e9ff727482f0b1d24ec230012",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_reasoning_gym-retained",
+      "type": "RLVR",
+      "count": 2088,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b5/70eecf3335d3cd245d13/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "a0ec23bb6792516d7a418b0a6800193444b925cb7300e46ea5b7d112c57f0ac2",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=reasoning-gym; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_reasoning_gym"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-stem-fa1f2f23-retained-20261113-v1",
+      "revision": "d4469d5f8d507c97ca7f6ff0d97579d53a1aebf0",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa-retained",
+      "type": "RLVR",
+      "count": 2095,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/fa1f2f23e72e05f18933/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "f0b06e7fc4fad48118d7fe7c5c2a4861df879a05b470efef1d4604ae0591e402",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-multiple-choice; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-stem-0eb9d373-retained-20261116-v1",
+      "revision": "93cfab26f619337d54c4baa90c020b6fad9bc068",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_stem_mcqa_cot_rima_new-retained",
+      "type": "RLVR",
+      "count": 2077,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b5/0eb9d37339f7d905de45/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "5bc06030275bb047b8c101cb2f04110940fa9fcb0cf85c43461a3052c4afec42",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-multiple-choice; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_stem_mcqa_cot_rima_new"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-stru-defc7f2c-retained-20261116-v1",
+      "revision": "a381a8d703f2ffed25a50b6311a232c33ffe1c98",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_structured_outputs_v2-retained",
+      "type": "RLVR",
+      "count": 2080,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b5/defc7f2c0c3c7a0f3c4a/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "1c0d105cbd98eef43ebb0ae5c1daa4c0c5588f79a2f8e276e1326aea8ec2f4a6",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_structured_outputs_v2"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-swe-f13b621a-retained-20261113-v1",
+      "revision": "9513d0693219e0b64552aa66a455ffe8a02d55f9",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_swe_pivot_len40k_swe_gym_swe_gym-retained",
+      "type": "Agentic",
+      "count": 502,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/f13b621a26e4fea3c43a/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "6cbee976fef7c968fba66aefd326444d1791bd852ac897a14390d8952606b9c8",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=swe-repo; declared type=unspecified; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-swe-dadb8d84-retained-20261113-v1",
+      "revision": "94f9b6ba1d9321da9ce2c71223d9c488670c5c37",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_swe_pivot_len40k_nebius_swe_rebench_v2-retained",
+      "type": "Agentic",
+      "count": 2016,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/dadb8d843f81fb950baa/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "1a55d404f5566b94a642231e502946c52d9be74f6191b559641bb0f9e76956fc",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=swe-repo; declared type=unspecified; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot": {
+      "repo": "open-athena/tau-pivot-rlvr1-taskcompendium-20261113",
+      "revision": "1c274f93ce0dde4b2697108f5242ecdeb80f4092",
+      "version": "2026.11.13.1",
+      "name": "tau-pivot-rlvr1-retained",
+      "type": "RLVR",
+      "count": 20035,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/27c428049451f36ede81/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "66185e466dbb55fc0e65de7c525d31b9e0365182f36d4cf4121f77d2bc4877c9",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=tool-use; declared type=unspecified; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_tau_pivot"
+    },
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-tool-a81e18bc-retained-20261113-v1",
+      "revision": "f60c55a31f8594d730cb3ebf0452e15649451dc4",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_toolcall_schema-retained",
+      "type": "RLVR",
+      "count": 2879,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/a81e18bcc449107ec1f5/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "e513e2b03100392ce361580b79923712810b34bdbeea742ffd01324c9dedff09",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=tool-use; declared type=unspecified; source identity=Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_toolcall_schema"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-language-mixing-hs3-ult-2432d731-retained-20261113-v1",
+      "revision": "4460ab0d74fa0a88179a593b90f3071cb68e7c7d",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_language_mixing_hs3_ultra_genrm_fmt-retained",
+      "type": "Alignment",
+      "count": 4566,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/2432d731fb2b1d1079cd/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "be9fe68def36d3f0fa5df456b4f7951c1e224525d6ecefad0df97e53a636653e",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=preference; declared type=Alignment; source identity=Nemotron:nemotron_ultra_rlvr2/language_mixing_hs3_ultra_genrm_fmt"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-abst-70ba04b2-retained-20261113-v1",
+      "revision": "0d22e0bfff07a835d5d5f9819c13e10695bacc68",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_abstention-retained",
+      "type": "RLVR",
+      "count": 2299,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/70ba04b2d5695d533f41/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "643848f9301df4731080a4525aaf51ebb8d5508d40e6ad795b2adff03598d919",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-abstention; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_abstention"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-cale-e02f0dfd-retained-20261116-v1",
+      "revision": "6c47f387efed10cdca8665683c5adacfc2fd9084",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_calendar_v2-retained",
+      "type": "RLVR",
+      "count": 910,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b8/e02f0dfdc71dbe363b01/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "f3be9b49a8c22b0de2c4abf3e1b7f8d728c709dc343472848bd4c4f76800e01e",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_calendar_v2"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-comp-bf9fd53a-retained-20261116-v1",
+      "revision": "c9fb161610739c1f53ce7c2444aee6dbb112e881",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_comp_coding-retained",
+      "type": "RLVR",
+      "count": 7929,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b3/bf9fd53af3bfb714c3d5/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "8e32302b95006ac909546cecd50ffef9e843a877111a93292c2dbf2cbed8350c",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=competitive-programming; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_comp_coding"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-ds2-565975a4-retained-20261116-v1",
+      "revision": "e08c5da865ba6b48175858b4ecc9d68cafc6a0d2",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_ds2_freeform-retained",
+      "type": "RLVR",
+      "count": 1392,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b6/565975a4c6588ca19e67/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "8b342ff6b1f2a533714de4382771a40d9a00963df5dbca3a0cb7c7c966668f3c",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds2_freeform"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-ds3-cc4c7bd2-retained-20261116-v1",
+      "revision": "c551050f1d5a4f4fda0f53b86491d525c4e53fe5",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_ds3_citation-retained",
+      "type": "RLVR",
+      "count": 1403,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b6/cc4c7bd2c2d24ceee471/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "afa2a3b06a836700e462df8401c477829a4bf54b059d2ed8ffaf38e8923de9f9",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_ds3_citation"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-inst-e325790a-retained-20261116-v1",
+      "revision": "b714f4f176f207b72ac14161fcb256701a963e12",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_instruction_following-retained",
+      "type": "RLVR",
+      "count": 10409,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b2b/e325790ab1a01748f25d/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "574a9ddc01d51f0cf03ca2c5b65c6a3d5d4c44ba5992c25bcf60655a69977575",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_instruction_following"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-jail-ce00a4a2-retained-20261113-v1",
+      "revision": "11b739ff62ca9550041be46c08db95855a4ea6b5",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_jailbreak-retained",
+      "type": "Alignment",
+      "count": 1121,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/ce00a4a24e1275a08f34/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "8cf17c1a24b463d3446358bd8c4b36836ac73864ac9823da194b32113371df50",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=safety; declared type=Alignment; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_jailbreak"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-0a4352f8-retained-20261113-v1",
+      "revision": "d8e49588fc6ee17fba414aacce5c29d38609768f",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_cot-retained",
+      "type": "RLVR",
+      "count": 4400,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/0a4352f8b609a47bfa0b/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "b1a0705b577996dc59e2267629c47246c8d50971360c003ca71f3a7ed97dbc46",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_cot"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1",
+      "revision": "18d99806633f7ae886baf448f5535e8a2b4620ae",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_tir-retained",
+      "type": "Agentic",
+      "count": 5790,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/5d445c0f0ff38ab1d734/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "57ec8bae91bcd3a26eb79ae02563ffd38f9e07f1dda29d6e65d879f99994fc01",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=math-answer; declared type=Agentic; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-nvar-1f8bd4c6-retained-20261116-v1",
+      "revision": "e356c533967910155b38b194913b42c6ae0ff982",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_nvarc_inductive-retained",
+      "type": "RLVR",
+      "count": 2097,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b5/1f8bd4c604fcd3f11e82/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "a2befa69d5015209bb79f7fb8aae911eedc4306c566d95c8939e40be653a3a03",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=arc-agi; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_inductive"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-nvar-977e9295-retained-20261116-v1",
+      "revision": "24d1a2c17e99c89c090f83eaa752208d951cfc31",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_nvarc_transductive-retained",
+      "type": "RLVR",
+      "count": 2069,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b6/977e929530c1e89af31f/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "d5db355705ba41791906984b95b98e38d95edb971fd582916b73b006cd3fd153",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=arc-agi; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_nvarc_transductive"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-reas-441c53eb-retained-20261116-v1",
+      "revision": "4030d6d4e30e7e4aa82edaecdd70e74bf917b914",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_reasoning_gym-retained",
+      "type": "RLVR",
+      "count": 1385,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b7/441c53eb019821abeb1e/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "b57e9bb58b186379ff8d2a79a86c7ed08020edb6b42225e02c5865ac7a475bce",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=reasoning-gym; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_reasoning_gym"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-stem-ae831f62-retained-20261113-v1",
+      "revision": "a8d119a60fffd6d7dfbc2b4190f270be75ec4a0a",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_stem_mcqa-retained",
+      "type": "RLVR",
+      "count": 2095,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/ae831f62f4ee555b108c/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "fafc377052a73ce79c02894eb0bc676199316aa401d896b52f53730cd6f9b05f",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-multiple-choice; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-stem-aff6a4d6-retained-20261116-v1",
+      "revision": "805f88a6730ecf3968c14a33070c693e3a2c2085",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_stem_mcqa_cot_rima_new-retained",
+      "type": "RLVR",
+      "count": 2077,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b6/aff6a4d617f08b5bd683/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "1701cabb275383e810bad70da757c7b3fdfc922c51b8f0814e0c124be662ae30",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-multiple-choice; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_stem_mcqa_cot_rima_new"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-stru-b1f6f147-retained-20261116-v1",
+      "revision": "9683e22a2c9cfff3eee735b9b10da942b3ebc269",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_structured_outputs_v2-retained",
+      "type": "RLVR",
+      "count": 682,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b8/b1f6f14780a448a88b46/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "463c6b811b8a4a9a7772c049b2323e2d65c95310c6212df53adfa68b3ea1fff0",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v2"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-stru-af85d883-retained-20261113-v1",
+      "revision": "7a8181f26e399c156dfbb1bc75d6382929da920c",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_structured_outputs_v3-retained",
+      "type": "RLVR",
+      "count": 1215,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/af85d8834b0ba6bd479f/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "b06ac8f39e00be8fd02c8da79193f237be5b6746ff5a6ff8232657f200453b8c",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_structured_outputs_v3"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-swe-472bc3c6-retained-20261113-v1",
+      "revision": "5846f671af0c8d50731251bd240bf94c404a3e1c",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_swe_pivot_len40k_swe_gym_swe_gym-retained",
+      "type": "Agentic",
+      "count": 502,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/472bc3c600e4df6df2d6/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "82669d01a3e4aab0d343fbebb66270cc9ad87407b6076dae8fee7a4cfc74c4f1",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=swe-repo; declared type=unspecified; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/SWE-Gym/SWE-Gym"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-swe-aceb95ea-retained-20261113-v1",
+      "revision": "813142924ae8ea9dfe54c3072012f18e209be32c",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_swe_pivot_len40k_nebius_swe_rebench_v2-retained",
+      "type": "Agentic",
+      "count": 2016,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/aceb95ea95f1ee6f504d/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "56cd82e1eb90f36869c79e7dc494c03f677636c3d1ab783ce883cb3ce1aa3803",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=swe-repo; declared type=unspecified; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-tool-4af876a3-retained-20261113-v1",
+      "revision": "bb8052bb05631c6c58b95d94f85de241d1f97f89",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_toolcall_schema-retained",
+      "type": "RLVR",
+      "count": 2264,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/4af876a30a46819eee90/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "c66a00752221a4f2de84fea6086dcd4059cd88fdb73f6d12921d0773be7afb97",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=tool-use; declared type=unspecified; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_toolcall_schema"
+    },
+    "Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1": {
+      "repo": "open-athena/atlas-terminal-pivot-oracle-20261115-v1",
+      "revision": "749601f48a75f03d4068e5d2106ffed706f5fec7",
+      "version": "2026.11.13.1",
+      "name": "nemotron-terminal-pivot-retained-oracle-filtered",
+      "type": "Agentic",
+      "count": 31104,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.15.1/pivot-admission-v1/census/21a3a60dd01975fcee1f/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "9644b072ad3578a37aaf29413edeedec3f84ec61fbf20a676ca3c915cf8c09ff",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=terminal-action; declared type=unspecified; source identity=Nemotron:nvidia/Nemotron-RL-Agentic-Terminal-Pivot-v1"
+    },
+    "OpenAI:gsm8k": {
+      "repo": "open-athena/marinskyrl-gsm8k-41476efe-retained-20261116-v1",
+      "revision": "c9a8ff4c68cccedee91ebb503199ff0b8d73282a",
+      "version": "2026.11.13.1",
+      "name": "gsm8k-retained",
+      "type": "RLVR",
+      "count": 7473,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b3/41476efe80f54ca41f67/actor/.artifact.json",
+      "license": [
+        "MIT",
+        "mit"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "ef4bdb6d4203dc606f461f031a5639ce6883619f4c5125461d85b0fdf5c72fae",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=OpenAI:gsm8k"
+    },
+    "OpenAthena:pdbthink-coordinate-tasks": {
+      "repo": "open-athena/pdbthink-coordinate-tasks-oracle-qualified-20261122-b-v1",
+      "revision": "25265b8ecb2155015eae283fa383452d1a439ffa",
+      "version": "2026.11.13.1",
+      "name": "pdbthink-coordinate-train-daytona-retained-oracle-filtered",
+      "type": "RLVR",
+      "count": 46805,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/pdbthink/2026.11.16.1/oracle-qualified-publication-census-v1/census/actor/.artifact.json",
+      "license": [
+        "Apache-2.0",
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "2d5996392fd90e0de5d1ecaea7684bf3dcd046796f0997c444d7d46df5739aec",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=protein-coordinate; declared type=unspecified; source identity=OpenAthena:pdbthink-coordinate-tasks"
+    },
+    "OpenAthena:structure-closure": {
+      "repo": "open-athena/snowballv01-structure-closure-d9e5f81a-retained-2026.11.18.1-r1",
+      "revision": "c70a87a62e9b6a559f01b0874ee02d2363054fcc",
+      "version": "2026.11.13.1",
+      "name": "snowball-v01-structure-closure-train-retained",
+      "type": "RLVR",
+      "count": 57312,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/census-repair/20261118/retained-census-20261118/census/d9e5f81ad5b060aed710/actor/.artifact.json",
+      "license": [
+        "openmdw-1.1"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "8bf4329fb1fe15fe7de91aee582455ae71ecbf44ecda8077b501e5eed0907830",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=structural; declared type=RLVR; source identity=OpenAthena:structure-closure"
+    },
+    "POLARIS-Project:Polaris-Dataset-53K": {
+      "repo": "open-athena/polaris-project-polaris-dataset-53k-b25e0cb8-retained-20261116-b-v1",
+      "revision": "9079512fe3d2d332b446b1b37deb9d2898f5461e",
+      "version": "2026.11.13.1",
+      "name": "polaris-53k-retained",
+      "type": "RLVR",
+      "count": 53167,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/polaris/2026.11.16.1/retained-census/2026.11.16.1/b25e0cb84e99b1f26085/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "a0dae893dcfaaf099475ba6794cec28dfce1eeb361a0cbadc738e21714a1d3eb",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=POLARIS-Project:Polaris-Dataset-53K"
+    },
+    "PRIME-RL:eurus2_code": {
+      "repo": "open-athena/marinskyrl-eurus2-code-a8a86264-retained-20261113-v1",
+      "revision": "3993e1d5cffbbbb98a64aae73b7018709e923b31",
+      "version": "2026.11.13.1",
+      "name": "eurus2_code-retained",
+      "type": "RLVR",
+      "count": 24592,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/a8a86264c8094750d353/actor/.artifact.json",
+      "license": [
+        "mit"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "21cd5654ea10543b9cb13aac5ca481d2367adec291160f2ff87fab923440dbe7",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=competitive-programming; declared type=RLVR; source identity=PRIME-RL:eurus2_code"
+    },
+    "RST:laion/rts-1k-rootless-apptainer": {
+      "repo": "open-athena/atlas-oracle-1e0af0ebe59e0eb380bf-20261117of1",
+      "revision": "3fe05149a182c3d9ab141ccc7ef2b8fb27b44d00",
+      "version": "2026.11.13.1",
+      "name": "rst-validated-retained-oracle-filtered",
+      "type": "Agentic",
+      "count": 623,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-a/2026.11.17.1/rst-multiswe-passing-census-v1/1e0af0ebe59e0eb380bf/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "51f9386ba40fc5429635318cbe3252b98665a75b36fb616764ef158e8b35a736",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=terminal; declared type=unspecified; source identity=RST:laion/rts-1k-rootless-apptainer"
+    },
+    "Reasoning Gym:reasoning_gym": {
+      "repo": "open-athena/marinskyrl-reasoning-gym-86531e4c-retained-20261116-v2",
+      "revision": "60cbfd12d22832e116c630d0f83463511e2b049c",
+      "version": "2026.11.13.1",
+      "name": "reasoning_gym_generated-retained",
+      "type": "RLVR",
+      "count": 103870,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-adoptions/86531e4cc7ed8ee99fb0/actor/.artifact.json",
+      "license": [
+        "Apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "c88203b8d3f94af25004a5e085a32749c502a91877214aa926bb35d4ea05fb77",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=reasoning-gym; declared type=RLVR; source identity=Reasoning Gym:reasoning_gym"
+    },
+    "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119": {
+      "repo": "ibragim-bad/SWE-rebench-V2.1",
+      "revision": "26c0145ded93168b0d5d095420155901ad2d5a2f",
+      "version": "2026.11.20.2",
+      "name": "swe-rebench-v2-1-repaired",
+      "type": "Agentic",
+      "count": 21272,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/swe-repair/2026.11.20.1/measurements/rl-data/atlas/intake-population/swe-rebench-v2-1-repaired/2026.11.20.3/.artifact.json",
+      "license": [
+        "cc-by-4.0"
+      ],
+      "files": [
+        "data/train-00000-of-00006.parquet",
+        "data/train-00001-of-00006.parquet",
+        "data/train-00002-of-00006.parquet",
+        "data/train-00003-of-00006.parquet",
+        "data/train-00004-of-00006.parquet",
+        "data/train-00005-of-00006.parquet"
+      ],
+      "sha256": null,
+      "admission": "pending-publication",
+      "route": "agentic",
+      "route_basis": "Atlas family=swe-repo; declared type=Agentic; source identity=SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119"
+    },
+    "TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2": {
+      "repo": "open-athena/nl2bash-cleaned-85b437bd-oracle-filter-20261114-v1",
+      "revision": "780889d966a2913b2e70b0a35a32b11740f31c01",
+      "version": "2026.11.15.1-code-final-qualification",
+      "name": "tasktrove-nl2bash-oracle-filtered",
+      "type": "Agentic",
+      "count": 1422,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.15.201-nl2bash-cleaned-final-pin-metadata/85b437bdc22be85e318a/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "7ffa6416246a7a983cc3c66f97a64104b13df5254fa1208c03b68ccbf1f953bb",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=shell-cmd; declared type=Agentic; source identity=TaskTrove:DCAgent2__nl2bash-tasks-cleaned-oracle-v2"
+    },
+    "TaskTrove:DCAgent__exp_rpt_curriculum-easy": {
+      "repo": "open-athena/task-trove-dcagent-exp-rpt-curriculum-easy-4940c584-retained-20261116-v1",
+      "revision": "7a71017f7c78bfc7938a42e28709467fa0b08908",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-curriculum_easy-retained",
+      "type": "Agentic",
+      "count": 505,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b8/4940c5843763df7770db/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "6e09e347d3eb064e0b17f086a9d0ec1d681df7a8b75656b947645b616dc403a9",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=unit-test-gen; declared type=Agentic; source identity=TaskTrove:DCAgent__exp_rpt_curriculum-easy"
+    },
+    "TaskTrove:DCAgent__exp_rpt_e2egit-large": {
+      "repo": "open-athena/task-trove-dcagent-exp-rpt-e2egit-large-553f18a8-retained-20261116-v1",
+      "revision": "52b46900218c3127b7af036137a11f255f3a885e",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-e2egit_large-retained",
+      "type": "Agentic",
+      "count": 4993,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b4/553f18a8468d4c633118/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "329aa4f51c8e2290e841f032ed5b055b0291db954912b3900d82330786751c73",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=unit-test-gen; declared type=Agentic; source identity=TaskTrove:DCAgent__exp_rpt_e2egit-large"
+    },
+    "TaskTrove:DCAgent__exp_rpt_multifile-v3": {
+      "repo": "open-athena/task-trove-dcagent-exp-rpt-multifile-v3-19512025-retained-20261116-v1",
+      "revision": "a3d8ec35976dc839f8312cbbdb0c8bf58483720f",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-multifile-retained",
+      "type": "Agentic",
+      "count": 4842,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b4/195120256a6f16c3b937/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "2ab60746cb118b1d9e7fc859bf5dababf431acad08dc138f0d486e961ac6c536",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=unit-test-gen; declared type=Agentic; source identity=TaskTrove:DCAgent__exp_rpt_multifile-v3"
+    },
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2": {
+      "repo": "open-athena/pymethods-large-72ea1618-oracle-filter-20261114-v1",
+      "revision": "9bb2b58153faa81e9ef156425be4054cffefe0e4",
+      "version": "2026.11.15.1-code-final-qualification",
+      "name": "tasktrove-pymethods_large-oracle-filtered",
+      "type": "Agentic",
+      "count": 4951,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.15.164-six-final-pin-metadata/72ea16180a238d201038/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "fabeede41923266ecdbcfa2e14a81f77d2394c2c8a87172398de8fd06c8e8e0c",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=unit-test-gen; declared type=Agentic; source identity=TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2"
+    },
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118": {
+      "repo": "open-athena/atlas-repair-pymethods-20261118-oracle-filter-v1",
+      "revision": "3699e8ea33bda5774a045db8a25f09aa878628a8",
+      "version": "5",
+      "name": "atlas-repair-pymethods-20261118-oracle-filtered",
+      "type": "Agentic",
+      "count": 3754,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/repair-candidates/20261116/pymethods-seal-census-v2/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "a4320b1dc4f050c0c426e7425326be65edcf917d2d9f35cb0574ff0a750d4a9e",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=unit-test-gen; declared type=Agentic; source identity=TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@repaired-20261118"
+    },
+    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2": {
+      "repo": "open-athena/unitsyn-large-bc301818-oracle-filter-20261114-v1",
+      "revision": "2e229e8c80f561969c1cab87e4ccbc7fb049ce87",
+      "version": "2026.11.15.1-code-final-qualification",
+      "name": "tasktrove-unitsyn_large-oracle-filtered",
+      "type": "Agentic",
+      "count": 4949,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.15.164-six-final-pin-metadata/bc301818cccd454da3de/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "70c995c16f03c202c9ff698f6be555d9783b4be4b65992940b1bc03ecc25ff4b",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=unit-test-gen; declared type=Agentic; source identity=TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2"
+    },
+    "TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2": {
+      "repo": "open-athena/task-trove-sankalpkj-nemotron-math-oracle-filter-eaf403d5-oracle-filtered-20261114-v2",
+      "revision": "ca4f2be9881621bff9f29c2acfc02df02ac60a85",
+      "version": "2026.11.14.2-final-private",
+      "name": "tasktrove-math_oracle-retained-oracle-filtered",
+      "type": "RLVR",
+      "count": 57419,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/eaf403d5a835aea7f859/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "1e9de74e12ce8dd80f018956902e5497c9d5be376c468a0eb4a6d1817b81f483",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=unspecified; source identity=TaskTrove:SankalpKJ__nemotron-math-oracle-filtered-v2"
+    },
+    "TaskTrove:laion__all-puzzles-v2": {
+      "repo": "open-athena/task-trove-laion-all-puzzles-v2-f2975a12-retained-20261113-v1",
+      "revision": "fb73d862f3a6fed9389ec3d9fd856dff19727ac8",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-puzzles-retained",
+      "type": "RLVR",
+      "count": 6921,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/f2975a1229b461e559c6/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "39984502a62bd5aed68afc127255145b8450b621e5ec702f85f4a59c6c0543cf",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=unspecified; source identity=TaskTrove:laion__all-puzzles-v2"
+    },
+    "TaskTrove:laion__codeforces-v3": {
+      "repo": "open-athena/task-trove-laion-codeforces-v3-2a90aa72-retained-20261113-v1",
+      "revision": "eccf9a938be33173b6c8a58eab6d17f27b8b479a",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-codeforces-retained",
+      "type": "Agentic",
+      "count": 9690,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/2a90aa727848d0ecfc63/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "b21cff99523ba5f8225789ad4fe48dbf3ea3ba440f38e632f85c7533241dfe6b",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=competitive-programming; declared type=Agentic; source identity=TaskTrove:laion__codeforces-v3"
+    },
+    "TaskTrove:laion__exp_rpt_taco-v2": {
+      "repo": "open-athena/taco-laion-ede8bc2f-oracle-filter-20261114-v1",
+      "revision": "77909f8c8049f881c0b6d33f536347eec88bbc4b",
+      "version": "2026.11.15.1-code-final-qualification",
+      "name": "tasktrove-taco-oracle-filtered",
+      "type": "Agentic",
+      "count": 5063,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.15.180-taco-final-pin-metadata/ede8bc2f026837651de2/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "e0094346273b126cb32f79e93a4ca310c6741b231ff505452866c1d8df34394f",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=stdin-stdout; declared type=Agentic; source identity=TaskTrove:laion__exp_rpt_taco-v2"
+    },
+    "TaskTrove:laion__nemo-prism-math-v3": {
+      "repo": "open-athena/task-trove-laion-nemo-prism-math-v3-a3d51da3-oracle-filtered-20261114-v2",
+      "revision": "5d593e5ca5584f81377a3654abc9a22f87494f96",
+      "version": "2026.11.14.2-final-private",
+      "name": "tasktrove-math_prism-retained-oracle-filtered",
+      "type": "RLVR",
+      "count": 2221,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/a3d51da36bea0199a80b/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "a2f47adf859b63431a17c2599b2251bfb31276493f73ee281ce53053a4461244",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=unspecified; source identity=TaskTrove:laion__nemo-prism-math-v3"
+    },
+    "TaskTrove:laion__nemotron-gym-agent-calendar-v2": {
+      "repo": "open-athena/calendar-71f57c8d-oracle-filter-20261114-v1",
+      "revision": "d885672abbb489b64ee04e2cb1ac60c0901b56f1",
+      "version": "2026.11.15.1-code-final-qualification",
+      "name": "tasktrove-calendar-oracle-filtered",
+      "type": "RLVR",
+      "count": 2699,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-code/2026.11.15.164-six-final-pin-metadata/71f57c8da42a8b89e527/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "07527f7026242a89fead468af9ae5a03d2355a7fd037d3eb76809ced43e2b8d3",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=tool-use; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-agent-calendar-v2"
+    },
+    "TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-arc-agi-python-inductive-212804e0-retained-20261116-v1",
+      "revision": "0238fe394ab32ee184023beef7613d6f2c7b33ca",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-arc_inductive-retained",
+      "type": "Agentic",
+      "count": 10000,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b2b/212804e061db16cc83d2/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "723c905dd9e72798e75357e562f54c729e08f5f2185483c9c37fb271009ff27a",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=arc-agi; declared type=Agentic; source identity=TaskTrove:laion__nemotron-gym-arc-agi-python-inductive-v2"
+    },
+    "TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-arc-agi-transductive-v3-07b4c830-retained-20261116-v1",
+      "revision": "7b8abdc1ec6722f42f84accabedcb20203255032",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-arc_transductive-retained",
+      "type": "Agentic",
+      "count": 10000,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b2b/07b4c830fe0e913f502f/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "91d3c39e751c9e95d11eddaa8ce8be1f00e94133c2691395a45bdc89ce51a686",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=arc-agi; declared type=Agentic; source identity=TaskTrove:laion__nemotron-gym-arc-agi-transductive-v3"
+    },
+    "TaskTrove:laion__nemotron-gym-competitive-coding-v2": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-competitive-coding-v2-bfdf98ff-retained-20261113-v1",
+      "revision": "91c0435c11651d2e6514bb8fe6a5b91ef6463ba1",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-competitive_coding-retained",
+      "type": "Agentic",
+      "count": 13969,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/bfdf98ff8d4e52a17f69/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "8f73b325a0e11aef58ff97d1e5854b40151a8e5378e8cf85ab9b1758775237d9",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=competitive-programming; declared type=Agentic; source identity=TaskTrove:laion__nemotron-gym-competitive-coding-v2"
+    },
+    "TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-instruction-follow-aafde1e3-oracle-filtered-20261114-v2",
+      "revision": "5c2d64e5881bbe9c3fc94c6fdfb4a9c8db175e17",
+      "version": "2026.11.14.2-final-private",
+      "name": "tasktrove-if_calendar-oracle-filtered",
+      "type": "RLVR",
+      "count": 5673,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/aafde1e39328ed196c75/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "3206bcfeb9c82c00254f811ea20f3a2630e96ca597a21f410e5004b63518a7d6",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-instruction-following-calendar-v3"
+    },
+    "TaskTrove:laion__nemotron-gym-instruction-following-structured-v3": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-instruction-following-str-b2730ff5-retained-20261116-v1",
+      "revision": "d0d371fe41dc5205773179b6b48ece808dff1a1b",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-structured-retained",
+      "type": "RLVR",
+      "count": 9008,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b3/b2730ff55ee6af33f464/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "62c87884c6c1fdb46580d282e3ce68ef6e219e9cfd90fac3e3348d47cd2ba3d1",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-instruction-following-structured-v3"
+    },
+    "TaskTrove:laion__nemotron-gym-instruction-following-v3": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-instruction-following-v3-eb1ec2ad-retained-20261113-v1",
+      "revision": "018602fd89f3f9252e02b12263bbbf71845e2343",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-ifeval-retained",
+      "type": "RLVR",
+      "count": 46241,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/eb1ec2ade726b8a1381f/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "fd2d23a9f414d1aa57abbcb298b5c61d9cf33491d8b2b164bda045099b687c63",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-instruction-following-v3"
+    },
+    "TaskTrove:laion__nemotron-gym-knowledge-mcqa-v2": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-knowledge-mcqa-v2-c3f31664-retained-20261113-v1",
+      "revision": "95625c078cbaeff09607c1786571cd6df6fb78da",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-knowledge_mcqa-retained",
+      "type": "RLVR",
+      "count": 612943,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/c3f3166431515228ea8d/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "ff48ae7c92a26f3f0a402f047822e761ed4d1d4fb83154f45575404eda463a17",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-short-answer; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-knowledge-mcqa-v2"
+    },
+    "TaskTrove:laion__nemotron-gym-knowledge-openqa-v4": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-knowledge-openqa-v4-308a6e22-retained-20261116-v1",
+      "revision": "97c65e928600f3251352ff67e3cdad5da7e70523",
+      "version": "2026.11.13.1",
+      "name": "knowledge-openqa-retained",
+      "type": "RLVR",
+      "count": 122357,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1/308a6e22695482e8f6f9/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "2bc614d206b6e163133acf45bdf469b5acc8bf42b7ffaad207c03a25ec6851c6",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-short-answer; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-knowledge-openqa-v4"
+    },
+    "TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-math-openmathreaso-c006510f-oracle-filtered-20261114-v2",
+      "revision": "48079c75912680dd3d1381e5289e4a47556eb4dc",
+      "version": "2026.11.14.2-final-private",
+      "name": "tasktrove-math_openreasoning-retained-oracle-filtered",
+      "type": "RLVR",
+      "count": 42618,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/c006510fc621a8987f56/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "0f6aabbe230e9ccbfce8faa723c62d3c73fc5a1aeac911fc8e5f55994e2ca481",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2"
+    },
+    "TaskTrove:laion__nemotron-gym-math-stack-overflow-v3": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-math-stack-overflo-410a4406-oracle-filtered-20261114-v2",
+      "revision": "dbec3ca6aacfb8fc0574633646b22cd5706d8971",
+      "version": "2026.11.14.2-final-private",
+      "name": "tasktrove-math_stack-retained-oracle-filtered",
+      "type": "RLVR",
+      "count": 110600,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/410a4406bc286d818465/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "62bddf2d2e87c3ea747e2aa8cb31800a51c433b74e3883d876cff4329aa56b4e",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-math-stack-overflow-v3"
+    },
+    "TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-multichallenge-advanced-v-185e593b-retained-20261116-v1",
+      "revision": "815ba090a64195fddf65b46ad8d906e21691eca2",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-multichallenge-retained",
+      "type": "RLVR",
+      "count": 1068,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b7/185e593b1e10ffcf2595/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "1cbb327d94132e226d91e54f4fe92f29506a30c3450ec48a515c667030999fdf",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=llm-judge-freeform; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-multichallenge-advanced-v4"
+    },
+    "TaskTrove:laion__nemotron-gym-reasoning-gym-v2": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-reasoning-gym-v2-bcaf1766-retained-20261116-v1",
+      "revision": "c697d5b390b641a891d412203c73a3703f21bb75",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-reasoning-gym-retained",
+      "type": "RLVR",
+      "count": 14259,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1-b2b/bcaf1766dcc234a3b080/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "fa2e336a0591c8ef4ab5c03dd86279cecf2c50b474277f8402c4b6870e90c898",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=reasoning-gym; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-reasoning-gym-v2"
+    },
+    "TaskTrove:laion__nemotron-gym-safety-v3": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-safety-v3-f51d465c-retained-20261116-v1",
+      "revision": "9d1671022cee888859ae613ce125ab78cdce1fbd",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-safety-retained",
+      "type": "RLVR",
+      "count": 89066,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1/f51d465ce14159f8560e/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "b9120645c0cbedb1e956f1d6061a0a24b013312ba96792c7ed9dd11002b06cd0",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=llm-judge-freeform; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-safety-v3"
+    },
+    "TaskTrove:laion__nemotron-gym-science-so-openq-v3": {
+      "repo": "open-athena/task-trove-laion-nemotron-gym-science-so-openq-v3-c1a06aab-retained-20261116-v1",
+      "revision": "cb5150519069e2b4f24dc987f45d8f72a9d8a566",
+      "version": "2026.11.13.1",
+      "name": "science-openqa-retained",
+      "type": "RLVR",
+      "count": 150644,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1/c1a06aab0cee838d9c92/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "56f57c10b42979e3a1666ac63cf8d70c50f2c28f1b0f8f1a17db70cd3f2b3626",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=llm-judge-freeform; declared type=unspecified; source identity=TaskTrove:laion__nemotron-gym-science-so-openq-v3"
+    },
+    "TaskTrove:smartie-calibforge-rebuilt-v1": {
+      "repo": "open-athena/campaign-release-smartie-calibforge-rebuilt-v1-a179f723-retained-20261116-v1",
+      "revision": "93f73c7fe618dc57a5527116044384515124fa18",
+      "version": "2026.11.13.1",
+      "name": "calibforge-v1-rebuilt-retained",
+      "type": "Agentic",
+      "count": 1357,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-adoptions/a179f7232f7fe35348d9/actor/.artifact.json",
+      "license": [
+        "Apache-2.0",
+        "other"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "55bebc6293727d2064a969fc54b8e3de6a334041d722ff54c26ac06774b0bec8",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=terminal-agent; declared type=Agentic; source identity=TaskTrove:smartie-calibforge-rebuilt-v1"
+    },
+    "TaskTrove:swesmith-verifier-repaired-v5": {
+      "repo": "open-athena/campaign-release-swesmith-verifier-repaired-v5-0bfcd894-retained-20261116-v1",
+      "revision": "758b28bf4cc0d0e770329f2944c9451fd578566a",
+      "version": "2026.11.13.1",
+      "name": "swesmith-verifier-repaired-v5-retained",
+      "type": "Agentic",
+      "count": 7016,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-swesmith/0bfcd894f5d3f6676595/actor/.artifact.json",
+      "license": [
+        "Apache-2.0",
+        "apache-2.0",
+        "cc-by-4.0",
+        "mit",
+        "other"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": null,
+      "admission": "pending-publication",
+      "route": "agentic",
+      "route_basis": "Atlas family=swe-repo; declared type=Agentic; source identity=TaskTrove:swesmith-verifier-repaired-v5"
+    },
+    "TaskTrove:tasktrove-codeforces-rebuilt-v1": {
+      "repo": "open-athena/campaign-release-tasktrove-codeforces-rebuilt-v1-e8ef857d-retained-20261117-b-v1",
+      "revision": "de35b4c7a7ef7ce93194659bfb0143605555c6cd",
+      "version": "2026.11.13.1",
+      "name": "codeforces-v1-rebuilt-retained",
+      "type": "Agentic",
+      "count": 9673,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.18.3-codeforces/e8ef857d8ec3ef76c1e9/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "9ccca79cb8b2479a6034d873ab1a83403a73f3b09163f8b117cea2dcff279c55",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=competitive-programming; declared type=Agentic; source identity=TaskTrove:tasktrove-codeforces-rebuilt-v1"
+    },
+    "TaskTrove:tasktrove-curriculum-easy-rebuilt-v1": {
+      "repo": "open-athena/campaign-release-tasktrove-curriculum-easy-rebuilt-v1-37fbdc29-retained-20261117-v1",
+      "revision": "deb90b4be20f7de4e96a55ed442cf51c94c6defa",
+      "version": "2026.11.13.1",
+      "name": "curriculum-easy-v1-rebuilt-retained",
+      "type": "Agentic",
+      "count": 505,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.17.1/37fbdc295ae79fe5660c/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "5d2c357d4c8d1c04707f73859bd46c39eb5929b87173cbd776611c5743381795",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=python-tests; declared type=Agentic; source identity=TaskTrove:tasktrove-curriculum-easy-rebuilt-v1"
+    },
+    "TaskTrove:tasktrove-e2egit-large-rebuilt-v1": {
+      "repo": "open-athena/campaign-release-tasktrove-e2egit-large-rebuilt-v1-7c5352ce-retained-20261117-v1",
+      "revision": "631ba820176a3fa4d89d35186924960d2a0e8e7b",
+      "version": "2026.11.13.1",
+      "name": "e2egit-large-v1-rebuilt-retained",
+      "type": "Agentic",
+      "count": 4993,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.17.1/7c5352cebb83cadf8f67/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "563d65d8e8b31e0587fd927a42d123fa1b94d5c4994092fd39846d17b8a44b76",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=python-tests; declared type=Agentic; source identity=TaskTrove:tasktrove-e2egit-large-rebuilt-v1"
+    },
+    "TaskTrove:tasktrove-knowledge-openqa-qa": {
+      "repo": "open-athena/campaign-release-tasktrove-knowledge-openqa-qa-2b5961f4-retained-20261116-v1",
+      "revision": "9d3fbb17806c98a9d6c4299807ab586f3620cad9",
+      "version": "2026.11.13.1",
+      "name": "knowledge-openqa-qa-retained",
+      "type": "RLVR",
+      "count": 122314,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1/2b5961f4fdc08f3d4218/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "f84abfc814f125617c26d88324f59accfa6da23c12d3751bf3ea9d78c3ea7f3c",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=qa-short-answer; declared type=RLVR; source identity=TaskTrove:tasktrove-knowledge-openqa-qa"
+    },
+    "TaskTrove:tasktrove-math_gym-qa": {
+      "repo": "open-athena/campaign-release-tasktrove-math-gym-qa-03ef831a-retained-2026.11.16.1-mathgym",
+      "revision": "2ec57f36b9ca674c30ec7a5fa514bebf242cc97d",
+      "version": "2026.11.13.1",
+      "name": "math_gym-qa-retained",
+      "type": "RLVR",
+      "count": 3922,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-mathgym/03ef831ab6bc99825711/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "f821efee87a426a2927b5e22c42a40cf1b7e3ab6051355650de734e488324cf9",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=TaskTrove:tasktrove-math_gym-qa"
+    },
+    "TaskTrove:tasktrove-math_openreasoning-qa": {
+      "repo": "open-athena/campaign-release-tasktrove-math-openreasoning-qa-45247a4a-oracle-filtered-20261114-v2",
+      "revision": "5528a398ba2372d53f803ce3e93c6cca2f4b4aae",
+      "version": "2026.11.14.2-final-private",
+      "name": "math_openreasoning-qa-retained-oracle-filtered",
+      "type": "RLVR",
+      "count": 42618,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/45247a4ae50647945db9/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "63056b50b2613729f86d11bceeff883d94da03e327c1b75a0abc1278ab8dea67",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=TaskTrove:tasktrove-math_openreasoning-qa"
+    },
+    "TaskTrove:tasktrove-math_prism-qa": {
+      "repo": "open-athena/campaign-release-tasktrove-math-prism-qa-9433b411-oracle-filtered-20261114-v2",
+      "revision": "12332f2b420313ff5cd635d0bd2ecf688b7db6ae",
+      "version": "2026.11.14.2-final-private",
+      "name": "math_prism-qa-oracle-filtered",
+      "type": "RLVR",
+      "count": 2221,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/9433b411a517ac95adbd/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "9226688e154ea3443dc075cc475901b8defa23e34211aec1b49d77577f4cd432",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=TaskTrove:tasktrove-math_prism-qa"
+    },
+    "TaskTrove:tasktrove-math_stack-qa": {
+      "repo": "open-athena/campaign-release-tasktrove-math-stack-qa-dd13c545-oracle-filtered-20261114-v2",
+      "revision": "5c6818d70670ff2da80ff73fe062bba8c0937be2",
+      "version": "2026.11.14.2-final-private",
+      "name": "math_stack-qa-retained-oracle-filtered",
+      "type": "RLVR",
+      "count": 110600,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/dd13c545c945cf0e6664/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "e84035ed1e5eef679da7e762021261513d0d8a50a0a77d5d6df4899acd431876",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=TaskTrove:tasktrove-math_stack-qa"
+    },
+    "TaskTrove:tasktrove-multifile-rebuilt-v1": {
+      "repo": "open-athena/campaign-release-tasktrove-multifile-rebuilt-v1-76b6d3b9-retained-20261117-v1",
+      "revision": "4eccab275b61b30831b648a6bb8ec848f97296ad",
+      "version": "2026.11.13.1",
+      "name": "multifile-v1-rebuilt-retained",
+      "type": "Agentic",
+      "count": 4842,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.17.1/76b6d3b9e1db99a24a77/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "4904f5fd19afe236ad7c9ecf56ce997071f666db914997bde079746389cd5aa5",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=python-tests; declared type=Agentic; source identity=TaskTrove:tasktrove-multifile-rebuilt-v1"
+    },
+    "TaskTrove:tasktrove-puzzles-qa": {
+      "repo": "open-athena/tasktrove-tasktrove-puzzles-qa-ab46b3ff-retained-20261116-v1",
+      "revision": "4b557369b6c2db6b0dd00b56c13c8e43ea2fefdb",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-puzzles-qa-retained",
+      "type": "RLVR",
+      "count": 6921,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r9/ab46b3ff4a2ac6a14bd7/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "a7bbc7ed30817bb6075ffcd0c8ffd488ad42cf0e6bfb343e4a74777c8bda2610",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=TaskTrove:tasktrove-puzzles-qa"
+    },
+    "TaskTrove:tasktrove-safety-qa": {
+      "repo": "open-athena/campaign-release-tasktrove-safety-qa-5f6ab15c-retained-20261116-v1",
+      "revision": "9da661b792767f41ed5b224b281035f62e4fba6a",
+      "version": "2026.11.13.1",
+      "name": "safety-qa-retained",
+      "type": "RLVR",
+      "count": 44939,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1/5f6ab15c19f34603c89a/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "5961227a577a414ba583b6947369825be6f69c86bd70fcc6f86ce1aa32d14f2b",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=llm-judge-freeform; declared type=RLVR; source identity=TaskTrove:tasktrove-safety-qa"
+    },
+    "TaskTrove:tasktrove-science-openqa-qa": {
+      "repo": "open-athena/campaign-release-tasktrove-science-openqa-qa-3c4aa6a7-retained-20261116-v1",
+      "revision": "0494a8d2c57f5ccd8d4ae7ef7307c44305df1209",
+      "version": "2026.11.13.1",
+      "name": "science-openqa-qa-retained",
+      "type": "RLVR",
+      "count": 150644,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-r1/3c4aa6a78a63218fb919/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "2c06111fa062de83cf3e3187a89a4c21d1657be559f6c5e4b049d3251200b11f",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=llm-judge-freeform; declared type=RLVR; source identity=TaskTrove:tasktrove-science-openqa-qa"
+    },
+    "agentica-org:deepscaler": {
+      "repo": "open-athena/marinskyrl-deepscaler-3a809497-retained-20261113-v1",
+      "revision": "20c9b3dd39fb118e555f4b9e32f21dace4305879",
+      "version": "2026.11.13.1",
+      "name": "deepscaler-retained",
+      "type": "RLVR",
+      "count": 39689,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/3a8094974e3e686887ea/actor/.artifact.json",
+      "license": [
+        "mit"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "c9b91839af460fd7a8b3ff369f0ac49ed1e5f54a30ee21a93b45c8202488a9e9",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=agentica-org:deepscaler"
+    },
+    "di-zhang-fdu:aime_1983_2024": {
+      "repo": "open-athena/marinskyrl-aime-1983-2024-f8228652-retained-20261123-v1",
+      "revision": "b5985013909c09431e8c604d5849c46678d09866",
+      "version": "2026.11.13.1",
+      "name": "aime_1983_2024-retained",
+      "type": "RLVR",
+      "count": 918,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/pending-burndown/20261123-lexical-v1/retained-census/f822865284f71d809902/actor/.artifact.json",
+      "license": [
+        "mit"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "51c0735edaa78353809e706993aa63235d1f73df9e4874616f9ef80320e92b1d",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=di-zhang-fdu:aime_1983_2024"
+    },
+    "pafitis:hardmath@rhs": {
+      "repo": "open-athena/pafitis-hardmath-rhs-83371b10-retained-2026.11.18.1",
+      "revision": "00d51df256e06f1a9c791312a1e59dd18ea7a99f",
+      "version": "2026.11.13.1",
+      "name": "hardmath_rhs-retained",
+      "type": "RLVR",
+      "count": 684,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.18.1-rhs/83371b101966e9a593c0/actor/.artifact.json",
+      "license": [
+        "MIT"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "sha256": "7356660ffb44a8946d7e43b999ec255042b7e66be38e2ef79c6e42994e026022",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=pafitis:hardmath@rhs"
+    }
+  }
+}

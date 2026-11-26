@@ -26,6 +26,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import Enum
 from functools import partial
 from pathlib import Path
 from types import UnionType
@@ -42,7 +43,14 @@ from marin.execution.lazy import ArtifactStep, StepContext, run
 from marin.experiment.cli import build_options_with_runner
 from marin.rl.cli import submit_or_run
 from marin.rl.curriculum import RlCurriculum, consumed_route_quotas
-from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, MegatronGeometry, SkyRLPolicyModel, SkyRLRolePlan
+from marin.rl.skyrl import (
+    ArtifactDataSource,
+    ArtifactHfModel,
+    MegatronGeometry,
+    SkyRLCheckpointStorage,
+    SkyRLPolicyModel,
+    SkyRLRolePlan,
+)
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -65,6 +73,7 @@ from experiments.post_training.long_loop.execution_policy import (
     SFT_FINALIZATION_RESERVE,
     SFT_TRAINING_DURATION,
     SFT_UPDATE_RESERVE,
+    RlStopping,
     rl_training_callbacks,
 )
 from experiments.post_training.long_loop.exp3_production import (
@@ -264,6 +273,8 @@ class RoundRl:
     selection_eligibility: str
     export_hf: bool = False
     retained_checkpoints: int = -1
+    stopping: RlStopping = RlStopping.WALL_TIME
+    native_checkpoint_storage: SkyRLCheckpointStorage = SkyRLCheckpointStorage.PERMANENT
     native_checkpoint: str | None = None
     gpu_variant: str = "GB200"
     recipe_patch: FilePin | None = None
@@ -461,6 +472,8 @@ def _decode_strict(section: dict, target: type, label: str):
             value = _decode_strict(value, field.type, f"{label}.{name}")
         elif field.type is timedelta:
             value = draccus.decode(timedelta, value)
+        elif isinstance(field.type, type) and issubclass(field.type, Enum):
+            value = field.type(value)
         elif field.type is not bool and isinstance(value, bool):
             raise ValueError(f"{label}.{name} must be {field.type.__name__}, got bool")
         elif not isinstance(value, value_type):
@@ -505,7 +518,9 @@ def load_round(path: Path) -> RoundSpec | AdoptedHfRound | AdoptedRlRound | Reco
             "trainer": {
                 **trainer,
                 "callbacks": rl_training_callbacks(
-                    trainer.get("callbacks", []), groups_per_step=spec.rl.role_plan["train_batch_size"]
+                    trainer.get("callbacks", []),
+                    groups_per_step=spec.rl.role_plan["train_batch_size"],
+                    stopping=spec.rl.stopping,
                 ),
             },
         }
@@ -621,7 +636,7 @@ def patched_rl_recipe(recipe: dict, patch: FilePin | None) -> dict:
     return merge_mappings(recipe, authored.to_skyrl())
 
 
-def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactStep:
+def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False, verify_pool_at_runtime: bool = False) -> ArtifactStep:
     """Adopt a pinned HF export or a native RL checkpoint without an SFT stage."""
     model = spec.adopted_model
     config = pinned_json(prefix_join(model.uri, "config.json"), model.config_sha256)
@@ -751,18 +766,26 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
         gpu_variant=rl.gpu_variant,
         curriculum=curriculum,
         export_hf=rl.export_hf,
-        retention=dataclasses.replace(RETENTION, resume_checkpoint_count=rl.retained_checkpoints),
+        retention=dataclasses.replace(
+            RETENTION,
+            resume_checkpoint_count=rl.retained_checkpoints,
+            native_checkpoint_storage=rl.native_checkpoint_storage,
+        ),
+        stopping=rl.stopping,
     )
     original_build = step.build_config
 
+    def verify_pool():
+        for name, sha256 in files.items():
+            fs, key = filesystem_for(prefix_join(rl.pools["uri"], name))
+            with fs.open(key, "rb") as stream:
+                actual = hashlib.file_digest(stream, "sha256").hexdigest()
+            if actual != sha256:
+                raise ValueError(f"Round data changed: {rl.pools['uri']}/{name}")
+
     def verified_build(context):
-        if not context.is_fingerprint:
-            for name, sha256 in files.items():
-                fs, key = filesystem_for(prefix_join(rl.pools["uri"], name))
-                with fs.open(key, "rb") as stream:
-                    actual = hashlib.file_digest(stream, "sha256").hexdigest()
-                if actual != sha256:
-                    raise ValueError(f"Round data changed: {rl.pools['uri']}/{name}")
+        if not context.is_fingerprint and not verify_pool_at_runtime:
+            verify_pool()
         return original_build(context)
 
     step = dataclasses.replace(step, build_config=verified_build)
@@ -778,6 +801,16 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False) -> ArtifactSt
             ),
         )
         step = dataclasses.replace(step, expected_fingerprint=step.fingerprint())
+    if verify_pool_at_runtime:
+        original_run = step.run
+
+        def verified_run(config):
+            if get_job_info() is None:
+                raise ValueError("Deferred pool verification requires the regional coordinator")
+            verify_pool()
+            return original_run(config)
+
+        step = dataclasses.replace(step, run=verified_run)
     return step
 
 

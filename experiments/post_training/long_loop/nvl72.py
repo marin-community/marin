@@ -40,7 +40,7 @@ from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import ContextBudget, RecipePatch, RLEntrypoint, SkyRLRecipe, sections
 from skyrlrecipe.locality import RoleTopologyMode
 
-from experiments.post_training.long_loop.execution_policy import rl_training_callbacks
+from experiments.post_training.long_loop.execution_policy import RlStopping, rl_training_callbacks
 from experiments.post_training.long_loop.openresearcher_service import (
     OpenResearcherService,
     retrieval_launch,
@@ -276,6 +276,7 @@ def build_run(
     openresearcher_service: OpenResearcherService | None = None,
     gpu_variant: str = "GB200",
     curriculum: RlCurriculum | None = None,
+    stopping: RlStopping = RlStopping.WALL_TIME,
 ) -> ArtifactStep[SkyRLRun]:
     """Build an RL training artifact from model, data and optional native checkpoint handles.
 
@@ -337,7 +338,9 @@ def build_run(
     budgeted_callbacks = sections.Trainer.model_validate(
         {
             "callbacks": tuple(
-                rl_training_callbacks([callback.to_skyrl() for callback in callbacks], groups_per_step=groups)
+                rl_training_callbacks(
+                    [callback.to_skyrl() for callback in callbacks], groups_per_step=groups, stopping=stopping
+                )
             )
         }
     ).callbacks
