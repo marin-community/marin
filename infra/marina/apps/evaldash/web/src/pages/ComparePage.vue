@@ -107,7 +107,7 @@ watch(focusName, async (next, previous) => {
 })
 
 function setScope(show: BenchmarkScope) {
-  if (show !== index.value.scope) void pushQuery({ show, bpage: '' })
+  if (show !== index.value.scope) void pushQuery({ show, bpage: '', focus: '' })
 }
 
 function setPage(next: number) {

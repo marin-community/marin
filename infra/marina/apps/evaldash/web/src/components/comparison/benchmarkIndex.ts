@@ -33,7 +33,7 @@ export function benchmarkPage(ordered: readonly ComparisonRow[], query: Benchmar
   const page = Math.min(Math.max(1, Number.parseInt(query.page, 10) || 1), pageCount)
   const offset = (page - 1) * PAGE_SIZE
   const rows = matches.slice(offset, offset + PAGE_SIZE)
-  const focused = query.focus ? ordered.find((row) => row.benchmark === query.focus) : rows[0]
+  const focused = query.focus ? matches.find((row) => row.benchmark === query.focus) : rows[0]
 
   return { scope, rows, focused, page, pageCount, offset, total: matches.length, allCount: ordered.length, sharedCount: shared.length }
 }
