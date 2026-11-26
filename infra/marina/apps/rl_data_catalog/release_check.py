@@ -742,7 +742,10 @@ def run_sweep_units(
                     try:
                         context.route(root + "**", route_request)
                         page = context.new_page()
-                        page.set_default_navigation_timeout(60000)
+                        # The live host serves every page load to fresh, cache-empty
+                        # contexts across the pool; under that load a load event can
+                        # exceed 60 s (R40 #62: five evidence units timed out).
+                        page.set_default_navigation_timeout(120000)
                         page.on("pageerror", lambda error, label=unit.label: errors.append(f"{label}: {error}"))
                         page.on("response", report_failed_response)
                         page.on("requestfailed", report_failed_request)

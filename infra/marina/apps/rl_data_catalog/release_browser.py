@@ -380,8 +380,10 @@ def evidence_sweep(
 
 
 def check_map(page: Page) -> dict[str, Any]:
-    expect(page.locator("#provenance")).to_contain_text('"release_id"')
-    expect(page.locator("#curriculum-map")).not_to_have_attribute("aria-busy", "true")
+    # The map renders from the release metadata the reader computes on first request; the
+    # parallel pool can hold that past Playwright's 5 s default (R40 #62).
+    expect(page.locator("#provenance")).to_contain_text('"release_id"', timeout=60000)
+    expect(page.locator("#curriculum-map")).not_to_have_attribute("aria-busy", "true", timeout=60000)
     result = page.locator("#curriculum-map").evaluate(MAP_PARTITIONS)
     if result["failures"] or not page.evaluate("document.documentElement.scrollWidth<=innerWidth"):
         raise ValueError(f"Curriculum overlap or parent/child mismatch: {result}")
