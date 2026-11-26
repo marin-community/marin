@@ -31,19 +31,19 @@ from taskcompendium.models import TaskSpec, grades_with_judge
 from experiments.post_training.long_loop.campaign_runtime import bind_runtime
 
 pytestmark = [pytest.mark.manual, pytest.mark.asyncio]
-SOURCE = "TaskTrove:laion__nemotron-gym-math-v5"
+SOURCE = "TaskTrove:laion__nemotron-gym-math-openmathreasoning-v2"
 DISK_ROOT = Path("/var/lib/shellbox-disk-pool")
 REPOSITORY = Path(__file__).resolve().parents[4]
+PINS = REPOSITORY / "experiments/post_training/long_loop/campaign/source_pins.json"
+SOURCE_PIN = json.loads(PINS.read_text())["sources"][SOURCE]
 
 
 @pytest.mark.timeout(600)
-async def test_original_math_verifier_runs_with_declared_local_disk():
+async def test_original_math_verifier_runs_with_declared_local_disk(monkeypatch):
     assert get_job_info() is not None, "Run this proof inside the regional privileged CPU job"
     configure_coreweave_s3()
     subprocess.run(["bash", "-c", local_disk_setup_script(str(DISK_ROOT))], check=True)
-    pins = REPOSITORY / "experiments/post_training/long_loop/campaign/source_pins.json"
-    pin = json.loads(pins.read_text())["sources"][SOURCE]
-    release = pin["current_release"]
+    release = SOURCE_PIN["current_release"]
     token = require_secret("HF_TOKEN")
     metadata = get_hf_file_metadata(
         hf_hub_url(release["repo"], "tasks.parquet", revision=release["revision"], repo_type="dataset"), token=token
@@ -68,11 +68,23 @@ async def test_original_math_verifier_runs_with_declared_local_disk():
     assert requirements is not None and spec.verifier_machine.storage_mb is not None
     assert spec.verifier_machine.storage_mb >= requirements.storage_mb > 0
     factories = task_machine_factories(OmegaConf.create({"local": {"disk_root": str(DISK_ROOT)}}))
+    factory = factories["local"]
+    create = factory.create
+    allocations = []
+
+    async def record_create(machine_spec):
+        machine = await create(machine_spec)
+        allocations.append(machine_spec.storage_mb)
+        return machine
+
+    # Observe the real allocation boundary without replacing the backend or grader.
+    monkeypatch.setattr(factory, "create", record_create)
     harness = AssistantPrefixHarness() if spec.harness == ASSISTANT_PREFIX_HARNESS else shell_harness(spec.harness)
     model = ReplayModel([{"role": "assistant", "content": "0"}])
     result = await RolloutEngine(factories, {spec.harness: harness}).run_task(spec, model.complete)
     assert result.grade.status is Outcome.GRADED, result.grade
     assert result.grade.reward is not None and math.isfinite(result.grade.reward)
+    assert allocations and all(size == spec.verifier_machine.storage_mb for size in allocations)
     assert not list(DISK_ROOT.glob("sandbox-*"))
     propagation = subprocess.check_output(
         ["findmnt", "-n", "-o", "PROPAGATION", "--target", str(DISK_ROOT)], text=True
@@ -99,6 +111,7 @@ async def test_original_math_verifier_runs_with_declared_local_disk():
                 "root_uid": root_stat.st_uid,
                 "root_mode": oct(root_stat.st_mode & 0o777),
                 "pool_probe": "loop/ext4/overlay/ENOSPC/cleanup passed at construction",
+                "actual_verifier_allocations_storage_mb": allocations,
                 "remaining_owned_allocations": [],
                 "task_spec_bytes_unchanged": True,
             },
