@@ -28,7 +28,7 @@ from taskcompendium.backend_requirements import BackendFit, BackendSourceMap, Ba
 from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateGroupMember, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.backend_capabilities import production_matrix
-from experiments.post_training.task_curation.release_stages import package_preview, release_check, strict_audit
+from experiments.post_training.task_curation.release_stages import guard, package_preview, release_check, strict_audit
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from infra.marina.apps.rl_data_catalog.server.curriculum import TOTAL_METRICS
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
@@ -823,3 +823,14 @@ def test_release_check_refuses_mismatched_produced_receipts(tmp_path):
             checker=silent,
         )
     assert _last_alert_kind(tmp_path) == release_check.alerts.KIND_FAIL
+
+
+def test_package_preview_refuses_the_in_region_bundle(tmp_path, monkeypatch):
+    """The package and the release checks share a workstation disk; the bundle has neither."""
+    repo = tmp_path / "repo"
+    revision = _init_repo(repo)
+    monkeypatch.setenv(guard.ATTESTED_REVISION_ENV, revision)
+    with pytest.raises(ValueError, match="workstation worktree"):
+        package_preview.run_package_preview(
+            _package_inputs(tmp_path, revision), dry_run=True, repo_root=repo, feeds=_feeds(tmp_path)
+        )

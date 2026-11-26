@@ -72,16 +72,20 @@ def seal(path: str, value: dict) -> ArtifactRef:
 def verify_repo_state(repo_root: Path, revision: str) -> str:
     """The packaging checkout must be clean and contain the plan's pinned revision.
 
-    In the in-region bundle mode the submitter attests the workspace (the guard's
-    landing-log check carries the landed attestation) and the git checks cannot run.
+    The release tail runs from a workstation checkout, never the in-region bundle:
+    the package lands on local disk that the release checks and the publish read
+    next, and the maintained release check runs workstation gates (git, pre-commit,
+    a Docker Postgres, browser journeys).
     """
     from experiments.post_training.task_curation.release_stages.guard import (  # noqa: PLC0415 — avoids the guard/package cycle at module load
         attested_revision,
     )
 
-    attested = attested_revision()
-    if attested is not None:
-        return attested
+    if attested_revision() is not None:
+        raise ValueError(
+            "preview packaging runs from a clean landed workstation worktree, not the in-region bundle;"
+            " run the release tail there with `atlas-release ... run`"
+        )
     dirty = subprocess.run(
         ["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True, check=True
     ).stdout.strip()
