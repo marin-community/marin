@@ -121,13 +121,16 @@ class Controls:
     known-invalid submission, which must score zero unless ``negative_reward(task)`` supplies the
     expected partial reward. When neither callable supplies a submission,
     the task is graded on an empty submission, which must score zero; a sandbox grader grades it in
-    a fresh grading machine. ``memory_mb`` sizes each fresh grading machine. Judge-graded tasks use
-    the campaign's explicit remote judge connection rather than a network-denied grading machine.
+    a fresh grading machine. ``memory_mb`` sizes each fresh grading machine and
+    ``storage_mb``, when set, its disk; an image too large for the backend's default disk needs it.
+    Judge-graded tasks use the campaign's explicit remote judge connection rather than a network-denied
+    grading machine.
     """
 
     golden: Callable[[TaskSpec], ControlSubmission | None] | None = None
     negative: Callable[[TaskSpec], ControlSubmission | None] | None = None
     memory_mb: int = 512
+    storage_mb: int | None = None
     negative_reward: Callable[[TaskSpec], float] | None = None
 
 

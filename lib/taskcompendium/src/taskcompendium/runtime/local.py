@@ -267,8 +267,10 @@ class LocalGraderMachines:
     def identity(self) -> dict[str, Any]:
         return {"backend": Backend.LOCAL.value, "python": DEFAULT_PYTHON_VERSION}
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
-        """Return an unprepared bubblewrap spec; ``memory_mb`` is advisory."""
+    def machine(
+        self, environment: EnvironmentRequirements, memory_mb: int, storage_mb: int | None
+    ) -> tuple[MachineFactory, MachineSpec]:
+        """Return an unprepared bubblewrap spec; ``memory_mb`` and ``storage_mb`` are advisory."""
         if environment.packages_lock is None and environment.package_spec is None:
             raise ValueError("A local grader requires a package spec or packages lock")
         spec = MachineSpec(HostImage(), network=NetworkPolicy.DENY, workdir=DEFAULT_WORKSPACE)

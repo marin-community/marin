@@ -200,7 +200,9 @@ class ControlMachines:
     def identity(self) -> dict:
         return {"backend": "fixture"}
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int) -> tuple[MachineFactory, MachineSpec]:
+    def machine(
+        self, environment: EnvironmentRequirements, memory_mb: int, storage_mb: int | None
+    ) -> tuple[MachineFactory, MachineSpec]:
         assert environment.docker_image is not None
         return self.factory, MachineSpec(DockerImage(environment.docker_image), memory_mb=memory_mb)
 

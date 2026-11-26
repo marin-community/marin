@@ -253,7 +253,7 @@ def test_oracle_runs_in_the_agent_image_and_otherwise_in_the_grader_image(agent_
 class OracleMachines(FixtureGradingMachines):
     """Provide image machines and a simulator, leaving lock preparation unsupported."""
 
-    def machine(self, environment: EnvironmentRequirements, memory_mb: int):
+    def machine(self, environment: EnvironmentRequirements, memory_mb: int, storage_mb: int | None):
         if environment.command_semantics == CommandSemantics.SHELL_SIMULATOR:
             return ShellSimMachineFactory(), MachineSpec(PackageSpec(), memory_mb=memory_mb)
         return self.factory, MachineSpec(DockerImage(environment.docker_image or GRADER_IMAGE), memory_mb=memory_mb)
