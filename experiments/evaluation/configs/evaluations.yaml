@@ -217,32 +217,25 @@ evaluations:
       concurrency: 32
       task_machine:
         image_build: declarative
-  swebench-pro:
-    benchmark: swebench-pro
-    protocol: mini-swe-agent
+  swebench-multilingual:
+    benchmark: swebench-multilingual-100
+    protocol: terminus-2
     run:
       concurrency: 32
       task_machine:
         image_build: declarative
-  swebench-pro-200:
-    benchmark: swebench-pro-200
-    protocol: mini-swe-agent
-    run:
-      concurrency: 32
-      task_machine:
-        image_build: declarative
-  swebench-pro-smoke:
-    benchmark: swebench-pro-smoke
-    protocol: mini-swe-agent
-    run:
-      concurrency: 16
-      task_machine:
-        image_build: declarative
-  swebench-pro-lite:
-    benchmark: swebench-pro-smoke
-    protocol: mini-swe-agent
+  swebench-multilingual-lite:
+    benchmark: swebench-multilingual-100
+    protocol: terminus-2
     run:
       limit: 2
+      task_machine:
+        image_build: declarative
+  swebench-multilingual-full:
+    benchmark: swebench-multilingual
+    protocol: terminus-2
+    run:
+      concurrency: 32
       task_machine:
         image_build: declarative
   swebench-science:

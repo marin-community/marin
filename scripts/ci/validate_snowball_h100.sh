@@ -3,7 +3,7 @@ set -euo pipefail
 
 job_name="${1:?usage: validate_snowball_h100.sh JOB_NAME}"
 
-# Sync both GPU extras once. marin-core selects the cu128 Torch wheel and Iris
+# Sync both GPU extras once. marin-core selects the cu132 Torch wheel and Iris
 # restores JAX's CUDA 13 libraries after sync. A later uv sync undoes that order.
 # Limit pytest's automatic worker count to the one assigned GPU.
 # Exact scoring/AD comparisons require deterministic GPU reductions.

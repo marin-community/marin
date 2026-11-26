@@ -308,6 +308,19 @@ class GenState(eqx.Module):
         return new_state, child_local_id  # type: ignore
 
 
+def _copy_clone_cache(cache: PageCache, decode_state: DecodeState, source, target, length) -> PageCache:
+    page_size = decode_state.page_table.page_size
+
+    def copy_partial_page(cache):
+        last_page = length // page_size
+        source_page = decode_state.sequences.page_indices["seq", source, "page", last_page].scalar()
+        target_page = decode_state.sequences.page_indices["seq", target, "page", last_page].scalar()
+        return cache.copy_page(source_page, target_page)
+
+    cache = jax.lax.cond(length % page_size != 0, copy_partial_page, lambda cache: cache, cache)
+    return cache.copy_sequence(source, target)
+
+
 @functools.partial(jax.jit, donate_argnums=0)
 def _clone_sequence(
     state,
@@ -345,19 +358,8 @@ def _clone_sequence(
 
     decode_state = decode_state.clone_pages_from(parent_local_id, child_local_id)
 
-    page_size = decode_state.page_table.page_size
     src_len = decode_state.seq_lens["seq", parent_local_id].scalar()
-
-    def _copy(_):
-        last_idx = (src_len + page_size - 1) // page_size - 1
-        src_page = decode_state.sequences.page_indices["seq", parent_local_id, "page", last_idx].scalar()
-        dst_page = decode_state.sequences.page_indices["seq", child_local_id, "page", last_idx].scalar()
-        return state.cache.copy_page(src_page, dst_page)
-
-    def _identity(_):
-        return state.cache
-
-    cache = jax.lax.cond((src_len % page_size != 0) & (src_len > 0), _copy, _identity, None)
+    cache = _copy_clone_cache(state.cache, decode_state, parent_local_id, child_local_id, src_len)
 
     new_state = dataclasses.replace(state, decode_state=decode_state, cache=cache)
     return new_state, child_local_id
@@ -632,32 +634,14 @@ def _handle_clones(
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
     cache = gen_state.cache
-    size = decode_state.sequences.page_size
 
-    def copy_pages_for_updated_seq(
-        i,
-        state: tuple[DecodeState, PageCache],
-    ) -> tuple[DecodeState, PageCache]:
-        decode_state, cache = state
-        src_slot_id = src_ids["position", i].scalar()
-        dst_slot_id = tgt_ids["position", i].scalar()
+    def copy_prefilled_cache(i, cache):
+        source = src_ids["position", i].scalar()
+        target = tgt_ids["position", i].scalar()
+        length = decode_state.seq_lens["seq", target].scalar()
+        return _copy_clone_cache(cache, decode_state, source, target, length)
 
-        src_len = decode_state.seq_lens["seq", dst_slot_id].scalar()
-        used_pages = (src_len + size - 1) // size
-        last_idx = jnp.maximum(used_pages - 1, 0)
-
-        def _copy(_):
-            src_page = decode_state.sequences.page_indices["seq", src_slot_id, "page", last_idx].scalar()
-            dst_page = decode_state.sequences.page_indices["seq", dst_slot_id, "page", last_idx].scalar()
-            return cache.copy_page(src_page, dst_page)
-
-        def _identity(_):
-            return cache
-
-        cache = jax.lax.cond((src_len % size != 0) & (src_len > 0), _copy, _identity, None)
-        return decode_state, cache
-
-    decode_state, cache = jax.lax.fori_loop(0, num_new, copy_pages_for_updated_seq, (decode_state, cache))
+    cache = jax.lax.fori_loop(0, num_new, copy_prefilled_cache, cache)
 
     # Enqueue/update tokens for the clone targets (only the first num_new entries will be used)
     decode_state = decode_state.update_tokens(new_tokens, tgt_ids, log_probs, num_new)

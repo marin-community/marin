@@ -194,8 +194,7 @@ async def test_rows_round_trip_through_a_finelog_server(finelog_client):
 
 async def test_values_that_the_encoder_refuses_do_not_lose_the_other_rows(finelog_client):
     log = FinelogRolloutLog(finelog_client)
-    # Nothing checks what a harness reports before its rows are queued: here numbers as tool call IDs, and a lone
-    # surrogate in a role and in a tool name. The grader refuses the odd message only after that.
+    # FineLog queues raw harness observations before grading; a rejected attempt must not lose other queued rows.
     odd = {"role": "tool\ud800", "tool_call_id": 7, "content": "12"}
     with pytest.raises(GradedRolloutInterrupted):
         await run_two_turns(

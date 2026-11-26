@@ -11,6 +11,10 @@ DEFAULT_HF_EXPORT_TIMEOUT = 7200
 DEFAULT_HF_HUB_REVISION = "main"
 
 
+class ExportFailed(RuntimeError):
+    """An Iris failure during checkpoint conversion or Hub publication."""
+
+
 class HFUploadMode(StrEnum):
     LATEST = "latest"
     ALL = "all"
