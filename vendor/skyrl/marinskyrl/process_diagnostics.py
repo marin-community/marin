@@ -181,7 +181,7 @@ def initialize_process_diagnostics(
     *,
     environment: Mapping[str, str] | None = None,
 ) -> tuple[Path | None, Path | None]:
-    """Log fatal stacks by default and enable extra files in distributed debug mode."""
+    """Enable configured fatal stack capture and write files in distributed debug mode."""
     values = os.environ if environment is None else environment
     enable_fatal_stack_capture(environment=values)
     if values.get(DEBUG_MODE_ENV) != DebugMode.DISTRIBUTED:

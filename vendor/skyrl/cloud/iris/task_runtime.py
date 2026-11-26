@@ -214,6 +214,7 @@ DEFAULT_RENDEZVOUS_TIMEOUT = 1800
 DEFAULT_CLUSTER_JOIN_TIMEOUT = 1800
 POLL_INTERVAL = 5
 STARTUP_POLL_INTERVAL = 1.0
+RAY_DISABLE_LOG_MONITOR = "--include-log-monitor=false"
 RENDEZVOUS_REWRITE_INTERVAL = 5.0
 # Tolerates clock skew between nodes and the time rank-0 needs to start Ray.
 RENDEZVOUS_FRESHNESS_SLACK = 60
@@ -1214,7 +1215,7 @@ def ray_start_head(
     cmd = [
         _ray_bin(),
         "start",
-        "--include-log-monitor=false",
+        RAY_DISABLE_LOG_MONITOR,
         "--head",
         f"--node-ip-address={head_ip}",
         f"--port={allocated_ray_port(RayPort.HEAD)}",
@@ -1245,7 +1246,7 @@ def ray_start_worker(
     cmd = [
         _ray_bin(),
         "start",
-        "--include-log-monitor=false",
+        RAY_DISABLE_LOG_MONITOR,
         f"--address={head_ip}:{ray_port}",
         f"--node-ip-address={node_ip}",
         *_ray_port_flags(),
@@ -1377,7 +1378,7 @@ def launch_training_driver(config_path: Path, env: dict[str, str]) -> subprocess
 
 
 def log_failure_diagnostics(reason: str) -> None:
-    """Wait briefly for the daemon collecting failure diagnostics."""
+    """Log failure diagnostics to the Iris task stream within a fixed budget."""
     artifact_thread = threading.Thread(
         target=log_termination_diagnostics, args=(reason,), daemon=True, name="failure-diagnostics"
     )
@@ -1396,9 +1397,8 @@ def archive_interrupted_task_debug(
     if not artifact_root.is_dir():
         return
 
-    uri = join_resource_path(
-        rendezvous_dir, "debug_artifacts", safe_artifact_component(gang_epoch), f"rank-{rank}.tar.zst"
-    )
+    destination = StoragePath(rendezvous_dir) / "debug_artifacts" / safe_artifact_component(gang_epoch)
+    destination = destination / f"rank-{rank}.tar.zst"
     stop = threading.Event()
 
     def upload() -> None:
@@ -1406,7 +1406,7 @@ def archive_interrupted_task_debug(
             return
         result = capture_task_outputs(
             artifact_root,
-            ResolvedOutputDestination(StoragePath(uri), TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_UNSPECIFIED),
+            ResolvedOutputDestination(destination, TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_UNSPECIFIED),
             INTERRUPTED_DEBUG_ARCHIVE_LIMITS,
             Deadline.from_seconds(INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT),
             stop,
@@ -1431,6 +1431,34 @@ class _HeadInterrupted(BaseException):
         self.signum = signum
 
 
+def _start_head_cluster(args: argparse.Namespace, head_ip: str, ray_port: int, gang_epoch: str, num_tasks: int) -> str:
+    rendezvous_dir = args.rendezvous_dir
+    if num_tasks > 1:
+        if not rendezvous_dir:
+            raise ValueError("Multi-node SkyRL requires ray.rendezvous_dir")
+        clear_rendezvous(rendezvous_dir)
+
+    ray_start_head(
+        head_ip,
+        resolve_ray_spill_target(rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        labels=args.ray_labels,
+    )
+    ray_address = f"{head_ip}:{ray_port}"
+    if num_tasks == 1:
+        _log("Single-node slice: skipping rendezvous and multi-node wait.")
+        return ray_address
+
+    _log(f"Ray head started; publishing rendezvous to {_rendezvous_uri(rendezvous_dir)}")
+    write_rendezvous(rendezvous_dir, head_ip, ray_port, gang_epoch)
+    wait_for_nodes(
+        ray_address,
+        num_tasks,
+        args.cluster_join_timeout,
+        rewrite_cb=lambda: write_rendezvous(rendezvous_dir, head_ip, ray_port, gang_epoch),
+    )
+    return ray_address
+
+
 def run_head(
     args: argparse.Namespace,
     config_path: Path,
@@ -1442,7 +1470,6 @@ def run_head(
     gang_epoch = uuid.uuid4().hex
     head_ip = _own_ip()
     ray_port = allocated_ray_port(RayPort.HEAD)
-    ray_address = f"{head_ip}:{ray_port}"
     _log(f"ROLE=head rank=0/{num_tasks} head_ip={head_ip} ray_port={ray_port}")
 
     process = None
@@ -1461,36 +1488,7 @@ def run_head(
         signal.signal(signal.SIGINT, _request_shutdown)
         signal.signal(signal.SIGTERM, _request_shutdown)
 
-        # On iris task retry, a rendezvous file from a previous attempt still points
-        # at a now-dead head. Purge before starting the new head.
-        if num_tasks > 1 and args.rendezvous_dir:
-            clear_rendezvous(args.rendezvous_dir)
-
-        ray_start_head(
-            head_ip,
-            resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
-            labels=args.ray_labels,
-        )
-        _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
-
-        if num_tasks > 1:
-            if not args.rendezvous_dir:
-                raise ValueError(
-                    "Multi-node iris slice (IRIS_NUM_TASKS>1) requires --rendezvous-dir "
-                    "(or OT_AGENT_IRIS_RENDEZVOUS_DIR) so worker ranks can find the head IP."
-                )
-            _log(
-                f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
-            )
-            write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
-            wait_for_nodes(
-                ray_address,
-                num_tasks,
-                args.cluster_join_timeout,
-                rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
-            )
-        else:
-            _log("Single-node slice: skipping rendezvous and multi-node wait.")
+        ray_address = _start_head_cluster(args, head_ip, ray_port, gang_epoch, num_tasks)
 
         if args.role_topology is not None:
             verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))

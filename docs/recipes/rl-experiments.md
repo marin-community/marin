@@ -339,6 +339,9 @@ Set `CANDIDATE` to the stored run name or `NAME@VERSION`. Pass `--marina-url ORI
 index. The report records the control version and exact attempts. Reports use the caller's namespace
 under the preset's output root.
 
+If a saved candidate predates a launch-schema change, run the comparison from
+the source revision recorded with that candidate.
+
 ## Change a preset's default
 
 1. Edit that preset's `tasks`, `model`, `held_out_tasks` or `recipe` in `snowball_rl.py`.

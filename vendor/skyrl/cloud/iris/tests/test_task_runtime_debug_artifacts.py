@@ -19,7 +19,7 @@ from marinskyrl.environment_contract import (
 
 
 @pytest.mark.parametrize("mode", [DebugMode.LIGHT, DebugMode.DISTRIBUTED, DebugMode.OFF])
-def test_worker_debug_artifacts_use_iris_attempt_outputs(tmp_path, monkeypatch, mode):
+def test_task_debug_modes_write_iris_attempt_outputs(tmp_path, monkeypatch, mode):
     monkeypatch.setenv(IRIS_OUTPUT_DIR_ENV, str(tmp_path))
     monkeypatch.setenv("IRIS_TASK_ID", "/test/debug/0:0")
     monkeypatch.delenv(DEBUG_ARTIFACT_DIR_ENV, raising=False)
