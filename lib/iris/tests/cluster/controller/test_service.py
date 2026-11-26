@@ -254,6 +254,19 @@ def test_launch_job_rejects_an_unknown_job_category(service, state):
     assert exc.value.code == Code.INVALID_ARGUMENT
 
 
+def test_an_earlier_builds_text_project_and_category_are_dropped_and_its_description_kept(service, state):
+    """Clients from unreleased builds sent project (field 1) and category (field 2) as text."""
+    request = make_job_request("earlier-build")
+    # Wire bytes: field 1 "p", field 2 "c", field 3 "made-up description".
+    request.tags.ParseFromString(b"\x0a\x01p\x12\x01c\x1a\x13made-up description")
+    service.launch_job(request, None)
+
+    status = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id="/test-user/earlier-build"), None
+    )
+    assert status.request.tags == job_pb2.JobTags(description="made-up description")
+
+
 def test_launch_job_rejects_band_above_the_user_cap(service, state):
     """An explicit band above the user's cap is refused."""
     _cap_user_at(state, job_pb2.PRIORITY_BAND_BATCH)

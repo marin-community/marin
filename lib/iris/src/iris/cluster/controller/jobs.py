@@ -54,7 +54,6 @@ from iris.cluster.types import (
     JOB_CATEGORY_NAMES,
     LOCAL_ADMIN_SUBMITTER,
     MAX_JOB_DESCRIPTION_CHARS,
-    MAX_JOB_PROJECT_CHARS,
     TERMINAL_JOB_STATES,
     USER_JOB_STATES,
     CoschedulingConfig,
@@ -507,13 +506,12 @@ def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest
         raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
     if request.tags.category != job_pb2.JOB_CATEGORY_UNSPECIFIED and request.tags.category not in JOB_CATEGORY_NAMES:
         raise ConnectError(Code.INVALID_ARGUMENT, f"Job tag category {request.tags.category} is not a JobCategory")
-    for tag, limit in (
-        ("project", MAX_JOB_PROJECT_CHARS),
-        ("description", MAX_JOB_DESCRIPTION_CHARS),
-    ):
-        length = len(getattr(request.tags, tag))
-        if length > limit:
-            raise ConnectError(Code.INVALID_ARGUMENT, f"Job tag {tag} has {length} characters; the limit is {limit}")
+    if len(request.tags.description) > MAX_JOB_DESCRIPTION_CHARS:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            f"Job tag description has {len(request.tags.description)} characters; "
+            f"the limit is {MAX_JOB_DESCRIPTION_CHARS}",
+        )
     if request.HasField("coscheduling"):
         try:
             CoschedulingConfig(

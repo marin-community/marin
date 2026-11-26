@@ -52,7 +52,6 @@ from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     JOB_CATEGORIES,
     MAX_JOB_DESCRIPTION_CHARS,
-    MAX_JOB_PROJECT_CHARS,
     CoschedulingConfig,
     Entrypoint,
     EnvironmentSpec,
@@ -1066,13 +1065,6 @@ Examples:
     ),
 )
 @click.option(
-    "--project",
-    type=str,
-    default=None,
-    help=f"Job tag: the effort this job belongs to, up to {MAX_JOB_PROJECT_CHARS} characters. Child jobs inherit it. "
-    + _JOB_TAG_RETENTION,
-)
-@click.option(
     "--category",
     type=click.Choice(list(JOB_CATEGORIES)),
     default=None,
@@ -1144,7 +1136,6 @@ def run(
     container_profile: str | None,
     egress_policy: str | None,
     egress_allow: tuple[str, ...],
-    project: str | None,
     category: str | None,
     description: str | None,
     cancel_on_exit: bool,
@@ -1223,11 +1214,10 @@ def run(
             extra_bundle_includes=include,
             tags=(
                 job_pb2.JobTags(
-                    project=project,
                     category=JOB_CATEGORIES[category] if category else job_pb2.JOB_CATEGORY_UNSPECIFIED,
                     description=description,
                 )
-                if project or category or description
+                if category or description
                 else None
             ),
         )

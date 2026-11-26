@@ -131,8 +131,6 @@ than a person, so its jobs are attributed to this well-known principal. Per-clus
 federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
 a peer only if that peer's policy names it explicitly."""
 
-# Longest JobTags.project the controller accepts.
-MAX_JOB_PROJECT_CHARS = 100
 # Longest JobTags.description the controller accepts.
 MAX_JOB_DESCRIPTION_CHARS = 1000
 
@@ -155,12 +153,10 @@ def job_tags_dict(tags: job_pb2.JobTags) -> dict[str, str]:
 
 def job_tags_from_dict(stored: dict[str, str]) -> job_pb2.JobTags:
     """Inverse of ``job_tags_dict``."""
-    category = stored.get("category")
-    return job_pb2.JobTags(
-        project=stored.get("project", ""),
-        description=stored.get("description", ""),
-        category=JOB_CATEGORIES[category] if category else job_pb2.JOB_CATEGORY_UNSPECIFIED,
-    )
+    description = stored.get("description", "")
+    if "category" not in stored:
+        return job_pb2.JobTags(description=description)
+    return job_pb2.JobTags(description=description, category=JOB_CATEGORIES[stored["category"]])
 
 
 def is_federated(cluster: str) -> bool:

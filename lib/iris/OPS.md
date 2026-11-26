@@ -116,13 +116,13 @@ Logs default to the last 1,000 lines. Search older output server-side:
 iris job logs /user/job --max-lines 400000 --no-tail --substring 'Saving checkpoint'
 ```
 
-Tag each root job you submit with what it is for: `--project <effort>`,
-`--category <kind>` and `--description "<what it does>"` (SDK:
+Tag each root job you submit with what it is for: `--category <kind>` and
+`--description "<what it does>"` (SDK:
 `IrisClient.submit(tags=job_pb2.JobTags(...))`). The categories, a fixed list,
-and suggested projects are in `.agents/skills/use-iris/references/job-tags.md`. On a child job, each
+are in `.agents/skills/use-iris/references/job-tags.md`. On a child job, each
 tag it leaves unset comes from the parent. The tags go to Finelog `iris.controller_db__jobs.tags`.
 Put the command's own arguments after `--`: without it, an argument named like
-an iris option (`--project`, `--memory`, ...) is taken by iris.
+an iris option (`--memory`, `--category`, ...) is taken by iris.
 
 Kubernetes rejects `EXISTING_JOB_POLICY_RECREATE` for an active job. Cancel it
 and verify its Pods are gone before submitting the replacement; a terminal job

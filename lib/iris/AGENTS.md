@@ -112,7 +112,7 @@ Key behaviors:
 - `task_env`, `-e`, and `env_vars` retain ordinary environment delivery. Use the explicit `secrets` map for file delivery.
 - Child jobs inherit ordinary parent env vars and secrets available to the submitting client (child values take precedence). `EnvironmentSpec(secret_behavior=SecretBehavior.ISOLATE)` opts out of secret inheritance. Sandboxes never inherit secrets. Job RPCs and storage carry secret values for dispatch/retries; the controller never reads a parent map for inheritance. Display APIs redact them.
 - The CLI also loads env vars from `.marin.yaml`'s `env:` section.
-- Job tags (`JobTags`, `--project`, `--category`, `--description`) are copied to Finelog and kept permanently: never put credentials or other sensitive content in them.
+- Job tags (`JobTags`, `--category`, `--description`) are copied to Finelog and kept permanently: never put credentials or other sensitive content in them.
 - A `CONTAINER_PROFILE_SANDBOX` job gets none of the above except its own explicit `env_vars` and `secrets` (`docs/container-profiles.md`).
 - The submitting user for top-level jobs resolves as: explicit `user`/`--user` → `IRIS_USER` env var → the enclosing job's user → OS user → `root` (`resolve_job_user`). Export `IRIS_USER` when your OS username is uninformative (e.g. a shared `marin` account). Submissions from inside a job become child jobs of the enclosing job and skip this resolution entirely.
 

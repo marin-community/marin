@@ -85,15 +85,15 @@ def test_job_run_refuses_a_category_outside_the_list_before_submitting(recorded_
 
 def test_job_run_leaves_everything_after_double_dash_to_the_command(recorded_job_submissions):
     # Iris options may come before or after the command's first word; everything
-    # after '--' is the command's, including its own --project and --memory.
+    # after '--' is the command's, including its own --category and --memory.
     result = CliRunner().invoke(
         run,
-        ["--no-wait", "script.py", "--memory", "2G", "--", "--project", "p", "--memory", "3G"],
+        ["--no-wait", "script.py", "--memory", "2G", "--", "--category", "rl", "--memory", "3G"],
         obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
     )
     assert result.exit_code == 0, result.output
     [submission] = recorded_job_submissions
-    assert submission["entrypoint"].command[-5:] == ["script.py", "--project", "p", "--memory", "3G"]
+    assert submission["entrypoint"].command[-5:] == ["script.py", "--category", "rl", "--memory", "3G"]
     assert submission["resources"].memory == "2G"
     assert submission["tags"] is None
 

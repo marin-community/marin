@@ -426,7 +426,7 @@ def test_a_federated_job_carries_its_tags_to_the_peer(tmp_path, log_client):
         manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
 
         request = _cluster_pinned_request("fed-tags")
-        request.tags.CopyFrom(job_pb2.JobTags(project="tokenizer-sweep", category=job_pb2.JOB_CATEGORY_EVALUATION))
+        request.tags.CopyFrom(job_pb2.JobTags(category=job_pb2.JOB_CATEGORY_EVALUATION, description="Sweep sizes."))
         parent_service.launch_job(request, None)
         promote_queued_federation(manager, parent_state)
         manager.sync_once()
@@ -435,7 +435,7 @@ def test_a_federated_job_carries_its_tags_to_the_peer(tmp_path, log_client):
         child = root.child("shard")
         submit_job(peer_state, child.to_wire(), make_job_request(child.to_wire()))
 
-        expected = {"project": "tokenizer-sweep", "category": "evaluation"}
+        expected = {"category": "evaluation", "description": "Sweep sizes."}
         with peer_state._db.read_snapshot() as tx:
             assert json.loads(reads.get_job_detail(tx, root).tags_json) == expected
             assert json.loads(reads.get_job_detail(tx, child).tags_json) == expected

@@ -790,14 +790,12 @@ class WorkerMetadata(_message.Message):
     def __init__(self, hostname: _Optional[str] = ..., ip_address: _Optional[str] = ..., cpu_count: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ..., tpu_name: _Optional[str] = ..., tpu_worker_hostnames: _Optional[str] = ..., tpu_worker_id: _Optional[str] = ..., tpu_chips_per_host_bounds: _Optional[str] = ..., gpu_count: _Optional[int] = ..., gpu_name: _Optional[str] = ..., gpu_memory_mb: _Optional[int] = ..., gce_instance_name: _Optional[str] = ..., gce_zone: _Optional[str] = ..., attributes: _Optional[_Mapping[str, AttributeValue]] = ..., provenance: _Optional[_Union[Provenance, _Mapping]] = ...) -> None: ...
 
 class JobTags(_message.Message):
-    __slots__ = ("project", "description", "category")
-    PROJECT_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("description", "category")
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
     CATEGORY_FIELD_NUMBER: _ClassVar[int]
-    project: str
     description: str
     category: JobCategory
-    def __init__(self, project: _Optional[str] = ..., description: _Optional[str] = ..., category: _Optional[_Union[JobCategory, str]] = ...) -> None: ...
+    def __init__(self, description: _Optional[str] = ..., category: _Optional[_Union[JobCategory, str]] = ...) -> None: ...
 
 class EgressRule(_message.Message):
     __slots__ = ("domain", "cidr", "ports")

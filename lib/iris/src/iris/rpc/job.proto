@@ -751,11 +751,10 @@ enum JobCategory {
 // are omitted, and the category is its lowercase name (JOB_CATEGORY_PRE_TRAINING
 // is "pre-training").
 message JobTags {
-  // Field 2 was a free-text category in unreleased builds.
-  reserved 2;
-  // The effort the job belongs to, such as a project or issue name, at most
-  // iris.cluster.types.MAX_JOB_PROJECT_CHARS characters.
-  string project = 1;
+  // Fields 1 (a free-text project) and 2 (a free-text category) were in
+  // unreleased builds.
+  reserved 1, 2;
+  reserved project;
   // Free-form text on what the job does, at most
   // iris.cluster.types.MAX_JOB_DESCRIPTION_CHARS characters.
   string description = 3;
