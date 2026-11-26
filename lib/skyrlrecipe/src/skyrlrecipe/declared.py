@@ -158,6 +158,12 @@ class EvaluationCallback(Section):
     stop_when: SectionMap[EvaluationMinimum | EvaluationImprovement] | None = unset_field()
 
 
+class DevelopmentProbeMixCallback(Section):
+    type: Literal["development_probe_mix"]
+    panel_sha256: str
+    expected_tasks: PositiveInt
+
+
 class ReferenceLikelihoodCallback(Section):
     type: Literal["reference_likelihood"]
     reference_paths: tuple[str, ...]
@@ -228,6 +234,7 @@ Callback = Annotated[
     | BestCheckpointCallback
     | DistillationTokenBudgetCallback
     | EvaluationCallback
+    | DevelopmentProbeMixCallback
     | ReferenceLikelihoodCallback
     | HFModelSaveCallback
     | DatabaseRegistrationCallback

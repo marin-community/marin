@@ -54,7 +54,11 @@ from skyrl_train.inference_observability import (
     trainer_metrics,
 )
 
+from skyrl_train.contextual_sampling import PromptThompsonOrder
+from skyrl_train.dataset.tasks import TASK_EVALUATION_IDENTITY
 from skyrl_train.mismatch_probe.callback import MismatchProbeCallback
+from skyrl_train.probe_mix import CALLBACK_TYPE as DEVELOPMENT_MIX_TYPE, panel_identity
+from skyrl_train.telemetry import record_event
 from skyrl_train.callbacks.reference_likelihood import ReferenceLikelihoodCallback
 
 from .base import (
@@ -249,6 +253,61 @@ class RolloutTokenBudgetCallback(TrainerCallback):
             )
         # A retry can restore a checkpoint written before the stopping update's evaluation.
         control.should_evaluate = True
+        return control
+
+
+@register_callback(DEVELOPMENT_MIX_TYPE)
+class DevelopmentProbeMixCallback(TrainerCallback):
+    """Apply a development-only baseline or milestone before the next rollout publish."""
+
+    error_behavior = CallbackErrorBehavior.RAISE
+
+    def __init__(self, panel_sha256: str, expected_tasks: int):
+        self.panel_sha256 = panel_sha256
+        self.expected_tasks = expected_tasks
+
+    def on_train_begin(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        order = trainer.context.loader.order
+        if not isinstance(order, PromptThompsonOrder) or order.development_mix is None:
+            raise ValueError("Development probe mix requires a configured source-pass order")
+        if state.global_step > 0 and order.development_mix.initial is None:
+            raise ValueError("The resumed rollout checkpoint is missing development probe state")
+        identities = trainer.eval_dataset.dataframe.with_format(None)[TASK_EVALUATION_IDENTITY]
+        digests = {json.loads(value)["task_digest"] for value in identities if value is not None}
+        if len(identities) != self.expected_tasks or len(digests) != self.expected_tasks:
+            raise ValueError("Development probe requires a unique identity for every pinned task")
+        if panel_identity(digests) != self.panel_sha256:
+            raise ValueError("The primary evaluation is not the pinned development probe")
+        return control
+
+    async def on_evaluate_async(
+        self, state: TrainerState, control: TrainerControl, *, trainer, metrics: dict[str, float], **kwargs
+    ) -> TrainerControl:
+        total = trainer.rollout_gross_response_tokens_total
+        milestones = trainer.cfg.trainer.rollout_token_eval_milestones
+        last = trainer.rollout_gross_response_tokens_last_update
+        if state.global_step and (
+            total >= trainer.cfg.trainer.rollout_token_budget or not total - last < milestones[0] <= total
+        ):
+            return control
+        if metrics.get(EVALUATION_ATTEMPTED_METRIC) != self.expected_tasks or (
+            metrics.get(EVALUATION_SCORED_METRIC) != self.expected_tasks
+        ):
+            raise ValueError("Development probe mix requires complete verifier coverage")
+        decision = trainer.context.loader.order.observe_development_probe(
+            step=state.global_step, accuracy=metrics["eval/all/avg_verifier_score"], gross_tokens=total
+        )
+        if decision is not None:
+            record_event(
+                "development_probe_mix_decision",
+                {
+                    **vars(decision),
+                    "panel_sha256": self.panel_sha256,
+                    "gross_training_tokens": total,
+                    "scored_tasks": self.expected_tasks,
+                    "development_response_tokens": metrics["eval/all/response_tokens"],
+                },
+            )
         return control
 
 

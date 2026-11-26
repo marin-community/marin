@@ -55,6 +55,7 @@ from skyrl_train.dynamic_sampling import (
     GroupSelectionPolicy,
     resolve_dynamic_sampling_criteria,
 )
+from skyrl_train.probe_mix import CALLBACK_TYPE as DEVELOPMENT_MIX_TYPE, DevelopmentProbeMix
 from skyrl_train.grader_reporting import write_grader_report
 from rolloutengine.models import GROSS_ROLLOUT_TOKENS_METRIC
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
@@ -201,6 +202,10 @@ def prompt_order_from_config(
             )
         ]
         held_out_digests = {public_prompt_digest(text) for panel in held_out for text in _public_prompt_texts(panel)}
+        probe = next(
+            (callback for callback in config.trainer.get("callbacks") or () if callback.type == DEVELOPMENT_MIX_TYPE),
+            None,
+        )
         return PromptThompsonOrder(
             prompts,
             held_out_digests,
@@ -212,6 +217,7 @@ def prompt_order_from_config(
             epsilon=sampling.epsilon,
             reference_tokens=max(1, samples * config.generator.sampling_params.max_generate_length // 2),
             groups_per_family=groups_per_family,
+            development_mix=DevelopmentProbeMix(seed=seed, panel_sha256=probe.panel_sha256) if probe else None,
         )
     if kind in ADAPTIVE_SOURCE_KINDS:
         if config.generator.n_samples_per_prompt < 2:
