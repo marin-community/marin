@@ -15,7 +15,7 @@ from experiments.post_training.qwen_sampler import ROLE_PLAN, with_rollout_token
 from experiments.post_training.rl_presets import BatchMix, ModelPresets, Preset
 from experiments.post_training.task_curation.qwen_realistic_sampler import TRAIN_FAMILIES
 
-REVISION = "2026.11.26.7"
+REVISION = "2026.11.26.8"
 SEEDS = (26633, 26639)
 GROSS_TOKENS = 2_097_152
 MAX_UPDATES = 120
@@ -56,7 +56,9 @@ def realistic_study(arm: str, epsilon: float, counts: tuple[int, ...], seed: int
             )
         )
     )
-    recipe = replace(smoke.recipe, config=config, layout=replace(smoke.recipe.layout, job_timeout_seconds=7200))
+    recipe = replace(
+        smoke.recipe, config=config, layout=replace(smoke.recipe.layout, host_memory="128GB", job_timeout_seconds=7200)
+    )
     preset = replace(
         smoke,
         name=f"realistic-study-{arm}-seed{seed}",
