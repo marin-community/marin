@@ -363,6 +363,7 @@ def _session_invariants(
     task_ids: Sequence[str],
     answers_per_task: int,
     required_coverage: bool,
+    minimum_task_coverage: float,
 ) -> list[Invariant]:
     rows = table.to_pylist()
     counts = Counter(row["task_id"] for row in rows)
@@ -375,9 +376,9 @@ def _session_invariants(
             Invariant(
                 name=f"{name}/task_coverage",
                 value=coverage,
-                limit=preset.minimum_task_coverage,
+                limit=minimum_task_coverage,
                 comparator=">=",
-                holds=coverage >= preset.minimum_task_coverage,
+                holds=coverage >= minimum_task_coverage,
             )
         )
     return result
@@ -611,7 +612,14 @@ def read_measurements(
                     )
                 )
             invariants.extend(
-                _session_invariants(session_name, session, recorded_tasks, recorded_answers, required_coverage)
+                _session_invariants(
+                    session_name,
+                    session,
+                    recorded_tasks,
+                    recorded_answers,
+                    required_coverage,
+                    preset.minimum_task_coverage,
+                )
             )
             if evaluation.held_out and required_coverage:
                 invariants.append(

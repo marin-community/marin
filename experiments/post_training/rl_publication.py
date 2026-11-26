@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
@@ -29,11 +30,10 @@ from finestore.rl.run_records import (
     METRIC_ATTEMPT_IDS,
     AttemptRecord,
     EvaluationTaskRow,
-    read_attempt_metrics,
-    read_evaluations,
     read_attempt,
     read_attempt_metrics,
     read_attempts,
+    read_evaluations,
     run_records_root,
     update_attempt,
     write_attempt,

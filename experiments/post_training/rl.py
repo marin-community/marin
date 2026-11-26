@@ -73,8 +73,8 @@ from marin.rl.skyrl_records import (
     read_stored_skyrl_attempt,
     read_stored_skyrl_attempts,
 )
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 from pydantic import BaseModel, TypeAdapter
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output, username_segment
 from skyrlrecipe.documents import MISSING, get_path
@@ -151,7 +151,6 @@ def _curriculum_arm(
     layout = replace(preset.recipe.layout, coordinator_timeout_hours=0, job_timeout_seconds=0)
     return replace(
         preset.with_updates(updates),
-        revision=version,
         recipe=replace(preset.recipe, layout=layout),
         evaluations=(evaluation,),
         held_out_tasks=None,
@@ -1233,7 +1232,7 @@ def command(
                 )
             if sft_steps is not None:
                 assert isinstance(sft, SFTPreset)
-                version = preset.revision if sft_data_mix is not None else resolve_version("sft-steps", None)
+                version = resolve_version("sft-rl-arm" if sft_data_mix is not None else "sft-steps", None)
                 source_recipe = sft.recipe.with_steps(sft_steps, version=version)
                 sft = replace(sft, recipe=source_recipe)
             try:

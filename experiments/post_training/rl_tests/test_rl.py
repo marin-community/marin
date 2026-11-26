@@ -1,7 +1,5 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-import hashlib
-import importlib.util
 import json
 import re
 import shutil
@@ -29,6 +27,7 @@ from finestore.rl.run_records import (
     read_evaluations,
     write_attempt,
 )
+from finestore.rl.strata import TaskStrata
 from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, set_job_info
 from iris.cluster.types import JobName
@@ -38,13 +37,11 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, run
 from marin.experiment.cli import graph_handles
 from marin.rl import skyrl as skyrl_api
-from marin.rl.cli import _coordinator_request
-from marin.rl.cli import RUN_INDEX_ENV
+from marin.rl.cli import RUN_INDEX_ENV, _coordinator_request
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
-from s3fs import S3FileSystem
 from skyrlrecipe.documents import merge_mappings, set_path
 from taskcompendium.models import (
     AnswerType,
@@ -89,8 +86,18 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import read_skyrl_metrics, run_native_test, selection_summary
-from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
+from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE, OPENTHOUGHTS_32K_4NODE
+from experiments.post_training.task_curation.selection import (
+    FULL_VALIDATION_FILENAME,
+    SUMMARY_FILENAME,
+    TASK_SCHEMA,
+    TASK_SPEC_COLUMN,
+    TRAIN_FILENAME,
+    VALIDATION_FILENAME,
+    TrainingHoldout,
+    curriculum_holdout_step,
+)
+from experiments.sft.launcher import PreparedData
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
@@ -1741,20 +1748,7 @@ def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
     assert request.timeout is None
     path = tmp_path / "launch.json"
     path.write_text(json.dumps(launch))
-    native = native_json()(
-        """
-import json,sys
-from omegaconf import OmegaConf
-from skyrl_train.trainer import RayPPOTrainer
-config = json.load(open(sys.argv[1]))['skyrl']
-trainer = RayPPOTrainer.__new__(RayPPOTrainer)
-trainer.cfg = OmegaConf.create(config)
-trainer.train_dataset = range(100000)
-trainer._configure_training_schedule()
-print(json.dumps({'stop':trainer.total_training_steps,'available':trainer.available_training_steps}))
-""",
-        [str(path)],
-    )
+    native = run_native_test("cloud.iris.tests.native_curriculum_checks", ("schedule", str(path)))
     assert native["stop"] == rl_updates < native["available"]
 
 
@@ -1889,34 +1883,7 @@ def test_curriculum_holdout_is_seeded_disjoint_and_records_its_population(tmp_pa
 
 
 def test_best_checkpoint_uses_three_evaluation_mean_and_restores_window(tmp_path):
-    result = native_json()(
-        """
-import asyncio,json,sys
-from pathlib import Path
-from types import SimpleNamespace
-from skyrl_train.callbacks.base import TrainerControl,TrainerState
-from skyrl_train.callbacks.builtin import BestCheckpointCallback
-root=Path(sys.argv[1])
-saved=[]
-step=0
-async def save_checkpoints(): saved.append(step)
-trainer=SimpleNamespace(cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(root),export_path=str(root/'exports'))),save_checkpoints=save_checkpoints)
-params=dict(initial_model_uri='sft-final',expected_tasks=200,minimum_scored_tasks=198,selection_window=3)
-callback=BestCheckpointCallback(**params)
-async def main():
- global callback,step
- windows=[]
- for step,score in zip((3,6,9,12,15,18),(.9,.1,.2,.8,.8,.1)):
-  if step==15: callback=BestCheckpointCallback(**params)
-  metrics={'eval/all/num_attempted':200,'eval/all/num_scored':200,'eval/all/avg_verifier_score':score}
-  await callback.on_evaluate_async(TrainerState(step,0,18,18),TrainerControl(),trainer=trainer,metrics=metrics)
-  windows.append(metrics.get('eval/selection_score'))
- selected=json.loads((root/'best_checkpoint.json').read_text())
- print(json.dumps({'selected':selected,'saved':saved,'windows':windows,'export':json.loads((root/'exports/best_checkpoint.json').read_text())}))
-asyncio.run(main())
-""",
-        [str(tmp_path)],
-    )
+    result = run_native_test("cloud.iris.tests.native_curriculum_checks", ("checkpoint-window", str(tmp_path)))
     assert result["selected"]["step"] == 15
     assert result["selected"]["accuracy"] == pytest.approx(0.6)
     assert result["windows"][:2] == [None, None]

@@ -317,6 +317,10 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     assert record.evaluation.postprocessing["native_inputs_uri"] == native_inputs_uri
     if producer_kind != "rl":
         return
+    Path(record_path(evaluation.records_prefix, run_id)).unlink()
+    assert run_micro210(config) == evaluation
+    assert ReadView(record.results_path).token == archive.token
+    assert read_eval_record(record_path(evaluation.records_prefix, run_id)).rl_attempt == record.rl_attempt
     assert (
         submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]

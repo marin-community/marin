@@ -360,16 +360,10 @@ MOCHI = ModelPresets(
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
         _EVAL_SHORT,
-        replace(
-            agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
-            revision=_TRAIN_LONG_AGENTIC.revision,
-        ),
+        agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
         _TRAIN_LONG_AGENTIC,
         _TRAIN_LONG_MICRO210,
-        replace(
-            agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
-            revision=_TRAIN_LONG_AGENTIC.revision,
-        ),
+        agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
     ),
     namespace="mochi-rl",
     initializers={"mochi-v5": _V5},
