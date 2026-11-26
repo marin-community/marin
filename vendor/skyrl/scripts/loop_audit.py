@@ -329,10 +329,21 @@ def _wall_seconds(row: Mapping[str, Any]) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def verdict_passed(row: Mapping[str, Any]) -> bool | None:
-    """Read full credit from the native verifier score or an explicit pass verdict."""
+def is_infrastructure_error(row: Mapping[str, Any]) -> bool:
+    """Keep verified agent-limit outcomes while excluding other saved trial errors."""
     verification = row.get("verification") or {}
-    if verification.get("status") != "verified":
+    graded_agent_error = row.get("exception_type") in GRADED_AGENT_EXCEPTIONS and verification.get("status") == "verified"
+    return not graded_agent_error and (
+        bool(row.get("server_error"))
+        or bool(row.get("exception_type"))
+        or row.get("error_treatment") not in (None, "none")
+    )
+
+
+def verdict_passed(row: Mapping[str, Any]) -> bool | None:
+    """Read full credit under #10197, with ungraded and infrastructure outcomes absent."""
+    verification = row.get("verification") or {}
+    if verification.get("status") != "verified" or is_infrastructure_error(row):
         return None
     score = _outcome_reward(verification.get("score"))
     passed = score == 1.0 if score is not None else verification.get("passed")
@@ -394,11 +405,7 @@ def audit_cohort(cohort: Mapping[str, Any], rows: Iterable[dict[str, Any]]) -> t
         verification = row.get("verification") or {}
         status = verification.get("status")
         graded_agent_error = row.get("exception_type") in GRADED_AGENT_EXCEPTIONS and status == "verified"
-        infrastructure_error = not graded_agent_error and (
-            bool(row.get("server_error"))
-            or (bool(row.get("exception_type")) and not graded_agent_error)
-            or (row.get("error_treatment") not in (None, "none") and not graded_agent_error)
-        )
+        infrastructure_error = is_infrastructure_error(row)
         damaged = (
             not valid_tokens
             or not valid_prompt

@@ -69,3 +69,18 @@ def test_hand_check_sample_identifies_the_selected_repetition_of_a_task():
     selected = report["hand_check_sample"][0]
     assert (selected["attempt_id"], selected["uid"], selected["ordinal"]) == ("eval-attempt", "task-group", 1)
     assert report["hand_check_sample"][0]["cut_turns"] == 3
+
+
+def test_stopped_pass_rate_excludes_unknown_verifier_outcomes():
+    messages = [assistant("cat a.txt"), user("same")] * 3
+    trials = [simulate_trial(row(messages, passed=passed), 3)[0] for passed in (True, False, None)]
+    for exception in ("TaskMachineError", "AgentTimeoutError"):
+        saved = {**row(messages, passed=True), "exception_type": exception}
+        trials.append(simulate_trial(saved, 3)[0])
+
+    report = summarize("tb2", trials, 0, 3, 30)
+
+    assert report["fired_trials"] == 5
+    assert report["stopped_trials_with_passing_verdict"] == 2
+    assert report["stopped_trials_with_unknown_verdict"] == 2
+    assert report["stopped_trials_pass_rate"] == 2 / 3

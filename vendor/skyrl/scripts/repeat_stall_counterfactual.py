@@ -100,6 +100,7 @@ def read_rows(pattern: str) -> list[dict[str, Any]]:
 def summarize(cohort: str, simulations: Sequence[Mapping[str, Any]], wait_suppressed: int, batches: int, sample: int) -> dict[str, Any]:
     fired = [item for item in simulations if item["fired"]]
     fire_indices = [item["fire_index"] for item in fired]
+    graded = [item for item in fired if item["verdict"] is not None]
     stopped_passes = [item for item in fired if item["verdict"]]
     at_risk = [item for item in stopped_passes if item["cut_turns"] > 0]
     sample_rows = sorted(fired, key=lambda item: (-item["cut_turns"], item["task_id"] or ""))[:sample]
@@ -113,7 +114,8 @@ def summarize(cohort: str, simulations: Sequence[Mapping[str, Any]], wait_suppre
         "fire_index_p90": float(np.percentile(fire_indices, 90)) if fire_indices else None,
         "cut_turns_median": float(np.median([item["cut_turns"] for item in fired])) if fired else None,
         "stopped_trials_with_passing_verdict": len(stopped_passes),
-        "stopped_trials_pass_rate": len(stopped_passes) / len(fired) if fired else None,
+        "stopped_trials_with_unknown_verdict": len(fired) - len(graded),
+        "stopped_trials_pass_rate": len(stopped_passes) / len(graded) if graded else None,
         "at_risk_passes_cut_before_their_last_turn": len(at_risk),
         "wait_only_suppressed_windows": wait_suppressed,
         "hand_check_sample": [
@@ -149,12 +151,13 @@ def main() -> None:
         reports.append(summarize(cohort, simulations, suppressed, args.batches, args.sample))
     document = {"batches": args.batches, "cohorts": reports}
     StoragePath(args.output).write_text(json.dumps(document, indent=2) + "\n")
-    lines = ["| Cohort | Trials | Fired | Fire rate | Fire turn p50/p90 | Stopped pass rate | At-risk passes |", "| --- | ---: | ---: | ---: | --- | ---: | ---: |"]
+    lines = ["| Cohort | Trials | Fired | Fire rate | Fire turn p50/p90 | Graded stopped pass rate | Unknown verdicts | At-risk passes |", "| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |"]
     for report in reports:
         lines.append(
             f"| {report['cohort']} | {report['trials']} | {report['fired_trials']} | {report['fire_rate']:.3f} "
             f"| {report['fire_index_median']}/{report['fire_index_p90']} "
             f"| {report['stopped_trials_pass_rate'] if report['stopped_trials_pass_rate'] is not None else 'n/a'} "
+            f"| {report['stopped_trials_with_unknown_verdict']} "
             f"| {report['at_risk_passes_cut_before_their_last_turn']} |"
         )
     markdown = "\n".join(lines) + "\n\nHand-check the sample in the JSON output for precision (I1 passes at ≥ 90% genuine stalls).\n"
