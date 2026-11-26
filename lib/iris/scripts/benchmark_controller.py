@@ -78,11 +78,8 @@ from iris.cluster.controller.reads import (  # noqa: F401
 )
 from iris.cluster.controller.reconcile.commit import commit_effects
 from iris.cluster.controller.reconcile.worker import (
-    ReconcileInputs,
-    ReconcileRow,
     WorkerReconcilePlan,
     WorkerReconcileResult,
-    build_reconcile_plans,
     task_updates_from_result,
 )
 from iris.cluster.controller.scheduling.policy import (
@@ -103,7 +100,7 @@ from iris.cluster.controller.task_state import ACTIVE_TASK_STATES
 from iris.cluster.controller.tasks import tasks_for_listing
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.controller.workers import worker_roster
-from iris.cluster.types import USER_JOB_STATES, AttemptUid, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import USER_JOB_STATES, JobName, UserBudgetDefaults, WorkerId
 from iris.managed_thread import ThreadContainer
 from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import controller_pb2, job_pb2, query_pb2, worker_pb2
@@ -2297,11 +2294,10 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
 # replicas, all dispatched to ``num_workers`` healthy workers), then times the
 # four stages of one polling tick:
 #
-#     1. ``_snapshot_reconcile_inputs`` (DB read + per-job RunTaskRequest
-#        template build).
-#     2. building the controller-owned ``ControlSnapshot`` intermediary.
-#     3. building the per-worker plans and ``WorkerFleetReconcileRequest``, then
-#        ``RpcTaskBackend.reconcile`` fanout over Connect RPC to a single
+#     1. ``_load_worker_snapshot`` (DB read + per-job RunTaskRequest template
+#        build).
+#     2. building the per-worker plans and ``WorkerFleetReconcileRequest``.
+#     3. ``RpcTaskBackend.reconcile`` fanout over Connect RPC to a single
 #        in-process fake worker that echoes observations back.
 #     4. ``apply_reconcile_updates`` plus effect commit in one DB transaction.
 #
@@ -2589,82 +2585,32 @@ def _serialized_bytes(plans) -> int:
     return sum(p.request.ByteSize() for p in plans)
 
 
-def _snapshot_reconcile_inputs(state: SyntheticReconcileState) -> tuple[ReconcileInputs, dict[WorkerId, str]]:
-    """Replicate ``controller._snapshot_reconcile_inputs`` against the synthetic DB."""
-    db = state.db
-    health = state.health
-    with db.read_snapshot() as snap:
-        addresses = reads.list_active_healthy_workers(snap, health)
-        if not addresses:
-            return ReconcileInputs(job_specs={}, worker_ids=[], rows_by_worker={}), {}
-        worker_ids = list(addresses)
-        target_ids = set(worker_ids)
-        raw_rows = snap.execute(
-            select(
-                task_attempts_table.c.worker_id,
-                tasks_table.c.task_id,
-                task_attempts_table.c.attempt_id,
-                tasks_table.c.state.label("task_state"),
-                task_attempts_table.c.state.label("attempt_state"),
-                tasks_table.c.job_id,
-                task_attempts_table.c.attempt_uid,
-            )
-            .select_from(
-                task_attempts_table.join(
-                    tasks_table,
-                    (tasks_table.c.task_id == task_attempts_table.c.task_id)
-                    & (tasks_table.c.current_attempt_id == task_attempts_table.c.attempt_id),
-                )
-            )
-            .where(
-                task_attempts_table.c.worker_id.is_not(None),
-                task_attempts_table.c.finished_at_ms.is_(None),
-            ),
-        ).all()
-        rows = [row for row in raw_rows if row.worker_id in target_ids]
-        templates_by_job: dict[JobName, job_pb2.RunTaskRequest | None] = {}
-        for row in rows:
-            if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
+def _load_worker_snapshot(state: SyntheticReconcileState) -> ControlSnapshot:
+    """Load the control snapshot with dispatch templates, as ``Controller._worker_reconcile_request`` does."""
+    with state.db.read_snapshot() as snap:
+        control = reads.load_control_snapshot(snap, state.health, scan_timeouts=False)
+        job_specs: dict[JobName, job_pb2.RunTaskRequest] = {}
+        for row in control.reconcile_rows:
+            if row.task_state != job_pb2.TASK_STATE_ASSIGNED or row.job_id in job_specs:
                 continue
-            if row.job_id not in templates_by_job:
-                templates_by_job[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
-
-    rows_by_worker: dict[WorkerId, list[ReconcileRow]] = {wid: [] for wid in worker_ids}
-    for row in rows:
-        rows_by_worker[WorkerId(str(row.worker_id))].append(
-            ReconcileRow(
-                worker_id=WorkerId(str(row.worker_id)),
-                task_id=row.task_id,
-                attempt_id=int(row.attempt_id),
-                task_state=int(row.task_state),
-                attempt_state=int(row.attempt_state),
-                job_id=row.job_id,
-                attempt_uid=AttemptUid(str(row.attempt_uid)),
-            )
-        )
-    job_specs = {jid: spec for jid, spec in templates_by_job.items() if spec is not None}
-    inputs = ReconcileInputs(job_specs=job_specs, worker_ids=worker_ids, rows_by_worker=rows_by_worker)
-    return inputs, addresses
+            template = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
+            if template is not None:
+                job_specs[row.job_id] = template
+    return dataclasses.replace(control, job_specs=job_specs)
 
 
 def _one_reconcile_tick(state: SyntheticReconcileState, provider: RpcTaskBackend) -> tuple[float, float, float, float]:
     """Run one full reconcile tick. Returns (snapshot, compute, rpc, apply) ms."""
     t0 = time.perf_counter()
-    inputs, addresses = _snapshot_reconcile_inputs(state)
+    snapshot = _load_worker_snapshot(state)
     t1 = time.perf_counter()
-    snapshot = ControlSnapshot(
-        worker_addresses=addresses,
-        reconcile_rows=[row for rows in inputs.rows_by_worker.values() for row in rows],
-        timeout_rows=[],
-        job_specs=inputs.job_specs,
-    )
-    t2 = time.perf_counter()
     request = WorkerFleetReconcileRequest(
         targets=[
             WorkerReconcileTarget(plan=plan, address=snapshot.worker_addresses[plan.worker_id])
             for plan in plans_from_snapshot(snapshot)
         ]
     )
+    t2 = time.perf_counter()
     observation = provider.reconcile(request)
     t3 = time.perf_counter()
     now = Timestamp.now()
@@ -2690,7 +2636,7 @@ def _measure_full_tick(
     send (the worker is already running) and exercise the **steady-state
     polling tick** that runs every 250 ms in production.
     """
-    _snapshot_reconcile_inputs(state)
+    _load_worker_snapshot(state)
 
     dispatch = _StageTimings()
     s, c, r, a = _one_reconcile_tick(state, provider)
@@ -2712,15 +2658,15 @@ def _measure_full_tick(
 
 
 def _measure_compute_only(state: SyntheticReconcileState, *, n_iters: int) -> tuple[list[float], int]:
-    """Time just ``build_reconcile_plans`` (pure compute) — no RPC, no DB transaction."""
-    inputs, _addresses = _snapshot_reconcile_inputs(state)
-    plans = build_reconcile_plans(inputs)  # warmup
+    """Time just ``plans_from_snapshot`` (pure compute) — no RPC, no DB transaction."""
+    snapshot = _load_worker_snapshot(state)
+    plans = plans_from_snapshot(snapshot)  # warmup
     total_bytes = _serialized_bytes(plans)
 
     times: list[float] = []
     for _ in range(n_iters):
         t0 = time.perf_counter()
-        _plans = build_reconcile_plans(inputs)
+        _plans = plans_from_snapshot(snapshot)
         times.append((time.perf_counter() - t0) * 1000)
     return times, total_bytes
 
@@ -2787,7 +2733,7 @@ def _run_reconcile_scenario(
                     f"  ReconcileRequest payload:    total={_human_bytes(total_bytes)}  "
                     f"avg/worker={_human_bytes(int(per_worker_avg))}"
                 )
-                print("  " + _summarize_reconcile("compute (build_reconcile_plans)", compute_ms))
+                print("  " + _summarize_reconcile("compute (plans_from_snapshot)", compute_ms))
 
                 dispatch, steady = _measure_full_tick(state, provider, n_iters=n_iters)
                 print("  -- dispatch tick (all ASSIGNED, full spec on the wire) --")
