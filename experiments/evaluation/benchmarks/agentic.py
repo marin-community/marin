@@ -43,7 +43,7 @@ VERSION = "2026.11.17.2"
 # The version of the datasets whose rule renders a judge spec into each task. Their recipe identity
 # does not cover the rendered judge, so a change to it bumps this version.
 JUDGED_VERSION = "2026.11.23"
-# SWE-bench Multilingual's version, bumped when its agent went offline and its tests moved to a separate verifier.
+# SWE-bench Multilingual's version; a change to how its package edits run or grade the agent bumps it.
 SWEBENCH_MULTILINGUAL_VERSION = "2026.11.26"
 # Terminal-Bench's build-pov-ray allows its agent and its verifier 12,000 seconds each.
 TERMINAL_BENCH_ATTEMPT_TIMEOUT = 8 * 60 * 60
@@ -314,27 +314,30 @@ SWEBENCH_VERIFIED_MINI_SWE = HarborDataset(
     count=500,
     images=SWEBENCH_VERIFIED.recipe,
 )
+SWEBENCH_WORKSPACE = "/testbed"
+SWEBENCH_GIT = f"git -c safe.directory={SWEBENCH_WORKSPACE}"
 SWEBENCH_WORKSPACE_TREE = "/opt/marin/workspace-tree"
 """The git tree of the image's workspace, untracked files included, that the agent's changes are diffed against."""
-SWEBENCH_PATCH = "/logs/artifacts/model.patch"
+SWEBENCH_ARTIFACTS = "/logs/artifacts"
+SWEBENCH_PATCH = f"{SWEBENCH_ARTIFACTS}/model.patch"
 SWEBENCH_ENVIRONMENT = "[environment]\nbuild_timeout_sec = 1800.0\ncpus = 4\nmemory = '8G'\nstorage = '10G'\n"
 SWEBENCH_LARGE_FILE_BYTES = 1024 * 1024
 """New files above this size, such as core dumps and build output, stay out of the agent's patch."""
 SWEBENCH_COLLECT = (
-    'set -e; cd /testbed; git="git -c safe.directory=/testbed -c core.quotePath=false"; '
+    f'set -e; cd {SWEBENCH_WORKSPACE}; git="{SWEBENCH_GIT} -c core.quotePath=false"; '
     f"tree=$(cat {SWEBENCH_WORKSPACE_TREE}); $git add -A; "
     '$git diff --cached --name-only --diff-filter=A "$tree" | while IFS= read -r file; do '
     f'if [ -f "$file" ] && [ "$(wc -c < "$file")" -gt {SWEBENCH_LARGE_FILE_BYTES} ]; then '
     '$git rm -q --cached -- "$file"; fi; '
     "done; "
-    f'mkdir -p /logs/artifacts; $git diff --cached --binary "$tree" > {SWEBENCH_PATCH}'
+    f'mkdir -p {SWEBENCH_ARTIFACTS}; $git diff --cached --binary "$tree" > {SWEBENCH_PATCH}'
 )
 # A patch taken against the verifier's own starting tree fails to apply only when grading itself fails, so the
 # script then exits without a reward, which records an infrastructure error rather than a zero.
 SWEBENCH_APPLY = (
     f"if [ -s {SWEBENCH_PATCH} ]; then\n"
     f'    echo "Applying the agent\'s patch, $(wc -c < {SWEBENCH_PATCH}) bytes"\n'
-    f"    git -c safe.directory=/testbed -C /testbed apply --binary {SWEBENCH_PATCH} || exit 1\n"
+    f"    {SWEBENCH_GIT} -C {SWEBENCH_WORKSPACE} apply --binary {SWEBENCH_PATCH} || exit 1\n"
     "fi\n"
 )
 # The agent works offline, so it cannot fetch the upstream fix. Its tests run in Harbor's separate verifier: a fresh
@@ -347,9 +350,8 @@ SWEBENCH_MULTILINGUAL_EDITS = (
         "environment/Dockerfile",
         "RUN mkdir -p /logs\n",
         "RUN mkdir -p /logs\n"
-        f"RUN mkdir -p /opt/marin && cd /testbed && git -c safe.directory=/testbed add -A"
-        f" && git -c safe.directory=/testbed write-tree > {SWEBENCH_WORKSPACE_TREE}"
-        " && git -c safe.directory=/testbed reset -q\n",
+        f"RUN mkdir -p {SWEBENCH_WORKSPACE_TREE.rsplit('/', 1)[0]} && cd {SWEBENCH_WORKSPACE} && {SWEBENCH_GIT} add -A"
+        f" && {SWEBENCH_GIT} write-tree > {SWEBENCH_WORKSPACE_TREE} && {SWEBENCH_GIT} reset -q\n",
     ),
     PackageEdit(
         "task.toml",
