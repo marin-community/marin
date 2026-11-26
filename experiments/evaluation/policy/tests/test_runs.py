@@ -10,10 +10,10 @@ from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, At
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from marin.evaluation.runner import _record
+from marin.inference import vllm_backend
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, SelectionStatus
 
 from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.policy import launch
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     RunEvidence,
@@ -79,8 +79,8 @@ def _paths(policy) -> dict[str, str]:
 
 def test_a_new_inference_build_moves_every_run(monkeypatch):
     before = _paths(POLICY)
-    release = replace(launch.VLLM_GPU_RELEASE, release_tag="marin-vllm-gpu-next")
-    monkeypatch.setattr(launch, "VLLM_GPU_RELEASE", release)
+    release = replace(vllm_backend.VLLM_GPU_RELEASE, release_tag="marin-vllm-gpu-next")
+    monkeypatch.setattr(vllm_backend, "VLLM_GPU_RELEASE", release)
     after = _paths(POLICY)
     assert all(before[name] != after[name] for name in before)
 
