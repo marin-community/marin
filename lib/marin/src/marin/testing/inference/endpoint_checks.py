@@ -1,58 +1,292 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared HTTP checks. Callers own deployment and the measurement window."""
+"""Four numerical comparisons against an endpoint supplied by the caller."""
 
 import asyncio
 import dataclasses
-import gzip
 import hashlib
 import json
 import math
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Literal
 
-import aiohttp
 import numpy as np
+from google.protobuf.json_format import MessageToDict, ParseDict
+from iris.cluster.types import ResourceSpec
+from iris.rpc import job_pb2
 from prometheus_client.parser import text_string_to_metric_families
+from pydantic import ConfigDict, Field, JsonValue, field_serializer, field_validator
 from rigging.filesystem.storage_path import prefix_join
 
+from marin.evaluation.model_config import ServeBackend
+from marin.inference.config import InferenceModelConfig
 from marin.testing.inference.backend_parity import TokenDistribution, distribution_difference
+from marin.testing.inference.endpoint import VllmEndpoint, response_distribution, response_top_distribution
 from marin.testing.inference.goldens import (
+    ArtifactRef,
     ErrorLimits,
     LookupStatus,
-    ModelFixture,
+    ModelIdentity,
+    Record,
     ReferenceLookup,
+    ReferenceManifest,
     canonical_bytes,
-    history_digest,
     lookup_reference,
     read_bytes,
+    verified_bytes,
 )
+from marin.testing.inference.results import CheckReport, CheckResult, CheckStatus, ComparisonResult, CoverageResult
 
-TOP_K = 50
 MAX_CACHE_PREPARATION_REQUESTS = 3
-HTTP_TIMEOUT = aiohttp.ClientTimeout(total=900)
-RANK_HEADER = "X-data-parallel-rank"
 _CHECKPOINT_CONFIG_FILENAME = "config.json"
 _CACHE_PROBE_SUFFIX_TOKENS = 17
 _SHORT_HISTORY_LIMIT = 4096
 
 
-def response_distribution(entries: dict) -> TokenDistribution:
-    return TokenDistribution.from_logprob_map(
-        {
-            int(str(token).removeprefix("token_id:")): float(value["logprob"] if isinstance(value, dict) else value)
-            for token, value in entries.items()
+class TestSpec(Record):
+    """A shared reference plus caller-owned placement, serving settings and limits.
+
+    ``reference`` pins one immutable manifest across execution variants.
+    ``resources`` is the Iris request; reading or running a spec allocates nothing.
+    ``engine_kwargs`` uses the existing vLLM model configuration, including dtype.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    schema_version: Literal[1] = 1
+    id: str
+    reference: ArtifactRef
+    resources: ResourceSpec
+    replicas: int = Field(default=1, ge=1)
+    serving_engine: ServeBackend
+    engine_kwargs: dict[str, JsonValue]
+    hardware: tuple[str, ...]
+    kv_cache_dtypes: tuple[str, ...] = ("auto", "bfloat16")
+    tolerances: dict[str, ErrorLimits]
+    tolerance_version: str
+    provisional: bool
+    rationale: str
+    evidence: tuple[str, ...]
+    batch_size: int = Field(default=4, ge=2)
+    decode_tokens: int = Field(default=32, ge=2)
+    cache_decode_tokens: int = Field(default=257, ge=2)
+    boundary_lengths: tuple[int, ...] = (127, 128, 129, 255, 256, 257, 2047, 2048, 2049)
+
+    @field_validator("resources", mode="before")
+    @classmethod
+    def parse_resources(cls, value: Any) -> ResourceSpec:
+        if isinstance(value, ResourceSpec):
+            return value
+        values = dict(value)
+        device = values.pop("device", None)
+        return ResourceSpec(**values, device=ParseDict(device, job_pb2.DeviceConfig()) if device is not None else None)
+
+    @field_serializer("resources")
+    def resource_fields(self, value: ResourceSpec) -> dict:
+        return {
+            "cpu": value.cpu,
+            "memory": value.memory,
+            "disk": value.disk,
+            "device": (
+                MessageToDict(value.device, preserving_proto_field_name=True) if value.device is not None else None
+            ),
         }
+
+    @property
+    def reference_limits(self) -> dict[str, ErrorLimits]:
+        return {
+            name.removeprefix("reference."): value
+            for name, value in self.tolerances.items()
+            if name.startswith("reference.")
+        }
+
+    def make_model_config(self) -> InferenceModelConfig:
+        """Convert the reference identity to Marin's existing serving model type."""
+        manifest = ReferenceManifest.model_validate_json(verified_bytes(self.reference))
+        identity = manifest.model
+        arguments: dict[str, Any] = dict(self.engine_kwargs)
+        arguments.update(
+            tokenizer=identity.tokenizer,
+            tokenizer_revision=identity.tokenizer_revision,
+            override_generation_config=dict(arguments.get("override_generation_config", {}))
+            | {"eos_token_id": identity.eos_token_id},
+        )
+        if not identity.weights.startswith(("s3://", "gs://")):
+            arguments["revision"] = identity.revision
+        return InferenceModelConfig(name=self.id, path=identity.weights, engine_kwargs=arguments)
+
+    async def run(self, endpoint: VllmEndpoint) -> CheckReport:
+        """Run the four comparisons without deploying or saving anything."""
+        return CheckReport(
+            reference=await check_reference(endpoint, self),
+            batch=await check_batch(endpoint, self),
+            cache=await check_cache(endpoint, self),
+            decode=await check_decode(endpoint, self),
+        )
+
+
+def read_test_spec(path: str) -> TestSpec:
+    return TestSpec.model_validate_json(read_bytes(path))
+
+
+async def check_reference(endpoint: VllmEndpoint, spec: TestSpec) -> CheckResult:
+    """Compare serving scores with the pinned reference at the same positions."""
+    return await _run_check(endpoint, spec, "reference", _check_reference)
+
+
+async def check_batch(endpoint: VllmEndpoint, spec: TestSpec) -> CheckResult:
+    """Compare isolated requests with requests observed running together."""
+    return await _run_check(endpoint, spec, "batch", _check_batch)
+
+
+async def check_cache(endpoint: VllmEndpoint, spec: TestSpec) -> CheckResult:
+    """Compare fresh/reused prefill and exact prepared branch controls."""
+    return await _run_check(endpoint, spec, "cache", _check_cache)
+
+
+async def check_decode(endpoint: VllmEndpoint, spec: TestSpec) -> CheckResult:
+    """Compare emitted-token scores with recomputation of their exact prefixes."""
+    return await _run_check(endpoint, spec, "decode", _check_decode)
+
+
+def _comparison(value: dict, limits: ErrorLimits) -> ComparisonResult:
+    return ComparisonResult(
+        status=CheckStatus.INCOMPLETE if value["status"] == "pending" else CheckStatus(value["status"]),
+        positions=value["positions"],
+        statistics=value.get("statistics"),
+        limits=limits,
+        worst=tuple(value.get("worst", ())),
     )
 
 
-def response_top_distribution(entries: dict) -> TokenDistribution:
-    """Exclude an appended prompt token below the requested top-k cutoff."""
-    scores = response_distribution(entries)
-    return TokenDistribution(scores.token_ids[:TOP_K], scores.logprobs[:TOP_K])
+def _measurements(
+    name: str, value: dict, spec: TestSpec
+) -> tuple[dict[str, ComparisonResult], dict[str, CoverageResult]]:
+    if name == "reference":
+        differences = {
+            f"reference.{group}": _comparison(row, spec.tolerances[f"reference.{group}"])
+            for group, row in value["groups"].items()
+        }
+        coverage = {
+            "histories": CoverageResult(
+                status=(
+                    CheckStatus.PASSED
+                    if len(value["completed_cases"]) == value["total_cases"]
+                    else CheckStatus.INCOMPLETE
+                ),
+                observations={"completed_cases": value["completed_cases"], "total_cases": value["total_cases"]},
+            )
+        }
+        return differences, coverage
+    if name == "cache":
+        differences = {
+            "cache.same_execution": _comparison(value["same_split"], spec.tolerances["cache.same_execution"]),
+            "cache.changed_prefill": _comparison(value["different_split"], spec.tolerances["cache.changed_prefill"]),
+        }
+        coverage = {}
+        for key in ("prefill_reuse", "settled_branches", "decode_reuse", "replayed_decode_reuse", "matched_repeat"):
+            row = value[key]
+            status = row["status"] if row["status"] in ("passed", "not_required") else "incomplete"
+            coverage[key] = CoverageResult(
+                status=status,
+                observations=row.get("observations", {field: item for field, item in row.items() if field != "status"}),
+            )
+        return differences, coverage
+    differences = {name: _comparison(value, spec.tolerances[name])}
+    coverage = {}
+    if name == "batch":
+        coverage["overlap"] = CoverageResult(
+            status=CheckStatus.PASSED if value["running_peak"] >= 2 else CheckStatus.INCOMPLETE,
+            observations={"running_peak": value["running_peak"], "batch_evidence": value["batch_evidence"]},
+        )
+    return differences, coverage
+
+
+async def _run_check(
+    endpoint: VllmEndpoint,
+    spec: TestSpec,
+    name: str,
+    operation: Callable[[VllmEndpoint, ReferenceLookup, TestSpec], Awaitable[dict]],
+) -> CheckResult:
+    started = time.time()
+    request_start = len(endpoint.requests)
+    differences: dict[str, ComparisonResult] = {}
+    coverage: dict[str, CoverageResult] = {}
+    observations = None
+    details: dict = {}
+    status = CheckStatus.INCOMPLETE
+    try:
+        references = await asyncio.to_thread(lookup_reference, spec.reference)
+        details["reference_lookup"] = {"status": references.status, "reason": references.reason}
+        if references.status == LookupStatus.MISMATCHED:
+            status = CheckStatus.FAILED
+        elif references.status == LookupStatus.FOUND:
+            assert references.manifest is not None
+            identity = await _verify_identity(endpoint, spec, references.manifest.model)
+            details["identity"] = identity
+            if identity["status"] != "passed":
+                status = CheckStatus.FAILED
+            elif spec.serving_engine != ServeBackend.VLLM:
+                details["reason"] = "Only vLLM is implemented"
+            elif {case.group for case in references.cases} - spec.reference_limits.keys():
+                details["reason"] = "The spec omits a reference comparison limit"
+            elif (
+                name == "batch"
+                and sum(len(case.tokens) <= _SHORT_HISTORY_LIMIT for case in references.cases) < spec.batch_size
+            ):
+                details["reason"] = "Too few distinct histories for the required batch"
+            elif name == "decode" and not any(len(case.tokens) < _SHORT_HISTORY_LIMIT for case in references.cases):
+                details["reason"] = "No history fits the decode comparison"
+            elif name == "cache" and max(map(len, (case.tokens for case in references.cases))) <= max(
+                spec.boundary_lengths
+            ):
+                details["reason"] = "The histories do not cover every required cache boundary"
+            else:
+                value = json.loads(canonical_bytes(await operation(endpoint, references, spec)))
+                differences, coverage = _measurements(name, value, spec)
+                observations = value.get("observations")
+                measured = {
+                    "status",
+                    "positions",
+                    "statistics",
+                    "limits",
+                    "worst",
+                    "observations",
+                    "groups",
+                    "same_split",
+                    "different_split",
+                    "prefill_reuse",
+                    "settled_branches",
+                    "decode_reuse",
+                    "replayed_decode_reuse",
+                    "matched_repeat",
+                }
+                details.update({key: row for key, row in value.items() if key not in measured})
+                if value.get("failures") or any(row.status == CheckStatus.FAILED for row in differences.values()):
+                    status = CheckStatus.FAILED
+                elif any(row.status == CheckStatus.INCOMPLETE for row in differences.values()) or any(
+                    row.status == CheckStatus.INCOMPLETE for row in coverage.values()
+                ):
+                    status = CheckStatus.INCOMPLETE
+                else:
+                    status = CheckStatus.PASSED
+    except Exception as error:
+        status = CheckStatus.FAILED
+        details["error"] = f"{type(error).__name__}: {error}"
+    return CheckResult(
+        status=status,
+        test_spec=spec.model_dump(mode="json"),
+        run_metadata=dict(endpoint.metadata) | {"started_unix": started, "finished_unix": time.time()},
+        differences=differences,
+        coverage=coverage,
+        observations=observations,
+        details=details,
+        requests=tuple(endpoint.requests[request_start:]),
+        seconds=time.time() - started,
+    )
 
 
 def mismatch_summary(rows: list[dict], limits: ErrorLimits) -> dict:
@@ -74,108 +308,6 @@ def mismatch_summary(rows: list[dict], limits: ErrorLimits) -> dict:
     }
 
 
-@dataclass
-class EndpointClient:
-    base_url: str
-    model: str
-    output: Path
-    session: aiohttp.ClientSession = field(init=False)
-    requests: list[dict] = field(default_factory=list, init=False)
-
-    async def __aenter__(self) -> "EndpointClient":
-        self.output.mkdir(parents=True, exist_ok=True)
-        # Parsing and compressing a large prompt-score response can outlast the
-        # server's keepalive timeout. Do not reuse an idle connection afterward.
-        self.session = aiohttp.ClientSession(
-            timeout=HTTP_TIMEOUT, connector=aiohttp.TCPConnector(limit=0, force_close=True)
-        )
-        return self
-
-    async def __aexit__(self, *_exc) -> None:
-        await self.session.close()
-
-    @property
-    def root(self) -> str:
-        return self.base_url.rstrip("/").removesuffix("/v1")
-
-    async def get(self, path: str) -> dict:
-        async with self.session.get(f"{self.root}/{path}") as response:
-            response.raise_for_status()
-            return await response.json()
-
-    async def reset_cache(self) -> None:
-        async with self.session.post(f"{self.root}/reset_prefix_cache") as response:
-            response.raise_for_status()
-
-    async def metrics(self) -> str:
-        async with self.session.get(f"{self.root}/metrics") as response:
-            response.raise_for_status()
-            return await response.text()
-
-    async def complete(
-        self,
-        tokens: tuple[int, ...],
-        *,
-        label: str,
-        count: int = 1,
-        prompt_scores: bool = False,
-        rank: int = 0,
-    ) -> dict:
-        body = {
-            "model": self.model,
-            "prompt": tokens,
-            "add_special_tokens": False,
-            "max_tokens": count,
-            "temperature": 0,
-            "ignore_eos": True,
-            "logprobs": TOP_K,
-            "return_tokens_as_token_ids": True,
-            "return_token_ids": True,
-        }
-        if prompt_scores:
-            body["prompt_logprobs"] = TOP_K
-        started = time.time()
-        async with self.session.post(
-            f"{self.root}/v1/completions",
-            json=body,
-            headers={RANK_HEADER: str(rank), "X-Request-Id": label},
-        ) as response:
-            raw = await response.read()
-            # Keep failed HTTP responses too. Request IDs and histories are recorded separately.
-            path = self.output / f"{len(self.requests):05d}-{label}.json.gz"
-            with gzip.open(path, "wb") as stream:
-                stream.write(raw)
-            self.requests.append(
-                {
-                    "label": label,
-                    "history_sha256": history_digest(tokens),
-                    "prompt_tokens": len(tokens),
-                    "rank": rank,
-                    "requested_tokens": count,
-                    "prompt_scores": prompt_scores,
-                    "http_status": response.status,
-                    "response": path.name,
-                    "response_sha256": hashlib.sha256(raw).hexdigest(),
-                    "seconds": time.time() - started,
-                }
-            )
-            response.raise_for_status()
-        result = json.loads(raw)
-        (choice,) = result["choices"]
-        if choice.get("prompt_token_ids") != list(tokens):
-            raise ValueError(f"The endpoint changed the exact input tokens: {label}")
-        if len(choice["token_ids"]) != count:
-            raise ValueError(f"The endpoint returned an incomplete continuation: {label}")
-        for token, top in zip(choice["token_ids"], choice["logprobs"]["top_logprobs"], strict=True):
-            distribution = response_distribution(top)
-            if int(token) not in distribution.token_ids or int(token) != distribution.token_ids[0]:
-                # Equal maximum scores may have a different tie order.
-                scores = dict(zip(distribution.token_ids, distribution.logprobs, strict=True))
-                if scores.get(int(token)) != max(scores.values()):
-                    raise ValueError(f"The greedy token lacks its finite maximum score: {label}")
-        return result
-
-
 def next_distribution(response: dict) -> TokenDistribution:
     return response_top_distribution(response["choices"][0]["logprobs"]["top_logprobs"][0])
 
@@ -193,17 +325,16 @@ def metric_values(text: str, name: str) -> dict[str, float]:
     }
 
 
-async def verify_deployment(client: EndpointClient, fixture: ModelFixture, runtime_source: str) -> dict:
+async def _verify_identity(client: VllmEndpoint, spec: TestSpec, identity: ModelIdentity) -> dict:
     """Check server-reported identities instead of trusting a caller's labels."""
-    information = await client.get("server_info?config_format=json")
+    information = await client.server_info()
     config = information["vllm_config"]
     model = config["model_config"]
-    version = await client.get("version")
-    identity = fixture.model
+    version = client.metadata["version"]
     expected = {
         "tokenizer": identity.tokenizer,
         "tokenizer_revision": identity.tokenizer_revision,
-        "quantization": fixture.policy.quantization,
+        "quantization": spec.engine_kwargs.get("quantization"),
     }
     if not identity.weights.startswith(("s3://", "gs://")):
         expected["revision"] = identity.revision
@@ -217,13 +348,11 @@ async def verify_deployment(client: EndpointClient, fixture: ModelFixture, runti
     weights = model.get("model_weights") or model["model"]
     if weights != identity.weights:
         mismatches["weights"] = {"actual": weights, "expected": identity.weights}
-    if runtime_source[:12] not in version["version"]:
-        mismatches["runtime"] = {"actual": version["version"], "expected": runtime_source}
-    if str(model["dtype"]).removeprefix("torch.") != fixture.policy.dtype:
-        mismatches["dtype"] = {"actual": str(model["dtype"]), "expected": fixture.policy.dtype}
+    if str(model["dtype"]).removeprefix("torch.") != spec.engine_kwargs["dtype"]:
+        mismatches["dtype"] = {"actual": str(model["dtype"]), "expected": spec.engine_kwargs["dtype"]}
     hardware = information["system_env"]["nvidia_gpu_models"]
-    if not any(device in hardware for device in fixture.policy.hardware):
-        mismatches["hardware"] = {"actual": hardware, "expected": fixture.policy.hardware}
+    if not any(device in hardware for device in spec.hardware):
+        mismatches["hardware"] = {"actual": hardware, "expected": spec.hardware}
     if identity.weights.startswith(("s3://", "gs://")):
         manifest_bytes = await asyncio.to_thread(read_bytes, prefix_join(identity.weights, "export-manifest.json"))
         digest = hashlib.sha256(manifest_bytes).hexdigest()
@@ -246,8 +375,8 @@ async def verify_deployment(client: EndpointClient, fixture: ModelFixture, runti
     if config["cache_config"].get("enable_prefix_caching") is not True:
         mismatches["prefix_caching"] = {"actual": config["cache_config"].get("enable_prefix_caching"), "expected": True}
     cache_dtype = config["cache_config"].get("cache_dtype")
-    if cache_dtype not in fixture.policy.kv_cache_dtypes:
-        mismatches["kv_cache_dtype"] = {"actual": cache_dtype, "expected": fixture.policy.kv_cache_dtypes}
+    if cache_dtype not in spec.kv_cache_dtypes:
+        mismatches["kv_cache_dtype"] = {"actual": cache_dtype, "expected": spec.kv_cache_dtypes}
     eos = model.get("override_generation_config", {}).get("eos_token_id", json.loads(config_bytes).get("eos_token_id"))
     if identity.eos_token_id not in (eos if isinstance(eos, list) else [eos]):
         mismatches["eos_token_id"] = {"actual": eos, "expected": identity.eos_token_id}
@@ -282,9 +411,9 @@ async def verify_deployment(client: EndpointClient, fixture: ModelFixture, runti
     }
 
 
-async def check_reference(client: EndpointClient, references: ReferenceLookup, fixture: ModelFixture) -> dict:
+async def _check_reference(client: VllmEndpoint, references: ReferenceLookup, spec: TestSpec) -> dict:
     expected = {(row.case_id, row.position): row for row in references.scores}
-    groups: dict[str, list[dict]] = {name: [] for name in fixture.policy.reference}
+    groups: dict[str, list[dict]] = {name: [] for name in spec.reference_limits}
     observations = []
     completed = []
     failures = []
@@ -311,7 +440,7 @@ async def check_reference(client: EndpointClient, references: ReferenceLookup, f
             failures.append({"case": case.id, "error": f"{type(error).__name__}: {error}"})
             continue
         completed.append(case.id)
-    summaries = {name: mismatch_summary(rows, fixture.policy.reference[name]) for name, rows in groups.items()}
+    summaries = {name: mismatch_summary(rows, spec.reference_limits[name]) for name, rows in groups.items()}
     return {
         "status": (
             "passed" if not failures and all(value["status"] == "passed" for value in summaries.values()) else "failed"
@@ -324,22 +453,22 @@ async def check_reference(client: EndpointClient, references: ReferenceLookup, f
     }
 
 
-async def check_batch(client: EndpointClient, references: ReferenceLookup, fixture: ModelFixture) -> dict:
+async def _check_batch(client: VllmEndpoint, references: ReferenceLookup, spec: TestSpec) -> dict:
     cases = sorted(
         (case for case in references.cases if len(case.tokens) <= _SHORT_HISTORY_LIMIT),
         key=lambda case: len(case.tokens),
     )
-    selected = cases[-fixture.policy.batch_size :]
-    if len(selected) < fixture.policy.batch_size:
+    selected = cases[-spec.batch_size :]
+    if len(selected) < spec.batch_size:
         raise ValueError("The suite has too few distinct cases for the engine batch")
     alone = []
     for index, case in enumerate(selected):
         await client.reset_cache()
-        alone.append(await client.complete(case.tokens, label=f"alone-{index}", count=fixture.policy.decode_tokens))
+        alone.append(await client.complete(case.tokens, label=f"alone-{index}", count=spec.decode_tokens))
     await client.reset_cache()
     before = await client.metrics()
     tasks = [
-        asyncio.create_task(client.complete(case.tokens, label=f"batch-{index}", count=fixture.policy.decode_tokens))
+        asyncio.create_task(client.complete(case.tokens, label=f"batch-{index}", count=spec.decode_tokens))
         for index, case in enumerate(selected)
     ]
     running_peak = 0.0
@@ -353,20 +482,23 @@ async def check_batch(client: EndpointClient, references: ReferenceLookup, fixtu
         await asyncio.sleep(0.05)
     batched = await asyncio.gather(*tasks)
     after = await client.metrics()
-    (client.output / "batch-before.prom").write_text(before)
-    (client.output / "batch-after.prom").write_text(after)
     rows = [
         dataclasses.asdict(distribution_difference(next_distribution(a), next_distribution(b))) | {"case": case.id}
         for case, a, b in zip(selected, alone, batched, strict=True)
     ]
-    summary = mismatch_summary(rows, fixture.policy.batch)
-    if running_peak < 2:
-        summary |= {"status": "failed", "reason": "No simultaneous running requests were observed on engine 0"}
-    return summary | {"engine": 0, "running_peak": running_peak, "batch_evidence": evidence, "observations": rows}
+    summary = mismatch_summary(rows, spec.tolerances["batch"])
+    return summary | {
+        "engine": 0,
+        "running_peak": running_peak,
+        "batch_evidence": evidence,
+        "metrics_before": before,
+        "metrics_after": after,
+        "observations": rows,
+    }
 
 
-async def check_settled_branch(
-    client: EndpointClient,
+async def _check_settled_branch(
+    client: VllmEndpoint,
     branch: tuple[int, ...],
     alternate: tuple[int, ...],
     boundary: int,
@@ -411,13 +543,14 @@ async def check_settled_branch(
     return result
 
 
-async def check_cache(
-    client: EndpointClient,
+async def _check_cache(
+    client: VllmEndpoint,
     references: ReferenceLookup,
-    fixture: ModelFixture,
-    cache_config: dict,
-    max_model_len: int,
+    spec: TestSpec,
 ) -> dict:
+    information = await client.server_info()
+    cache_config = information["vllm_config"]["cache_config"]
+    max_model_len = information["vllm_config"]["model_config"]["max_model_len"]
     # The scoped TP1 fixtures use attention blocks and optional Mamba blocks.
     block_size = math.lcm(cache_config["block_size"], cache_config.get("mamba_block_size") or 1)
     retention = cache_config["prefix_cache_retention_interval"]
@@ -431,7 +564,7 @@ async def check_cache(
     decode_reuse = []
     replayed_decode_reuse = []
     failures = []
-    for length in fixture.policy.boundary_lengths:
+    for length in spec.boundary_lengths:
         observed = {"boundary": length}
         evidence.append(observed)
         try:
@@ -476,7 +609,7 @@ async def check_cache(
 
             other_token = next(token for token in source if token != branch[length])
             isolated_alternate = (*prefix, other_token, *branch[length + 1 :])
-            settled = await check_settled_branch(
+            settled = await _check_settled_branch(
                 client, branch, isolated_alternate, length, block_size, label=f"cache-{length}"
             )
             settled_branches.append(settled)
@@ -489,7 +622,7 @@ async def check_cache(
             interval = block_size if retention is None else retention
             checkpoint = (len(prefix) // interval + 1) * interval if interval else 0
             direct_required = checkpoint > 0 and checkpoint + 5 <= max_model_len
-            count = fixture.policy.cache_decode_tokens
+            count = spec.cache_decode_tokens
             if direct_required and checkpoint > len(prefix) + count - 1:
                 decode_prefix = source[: checkpoint - 1]
                 count = max(count, checkpoint - len(decode_prefix) + 1)
@@ -526,7 +659,7 @@ async def check_cache(
                 raise ValueError("The generated history cannot reach an intermediate branch checkpoint")
             other_token = next(token for token in source if token != history[divergence])
             replay_alternate = (*history[:divergence], other_token, *history[divergence + 1 :])
-            replayed = await check_settled_branch(
+            replayed = await _check_settled_branch(
                 client, history, replay_alternate, divergence, block_size, label=f"cache-{length}-replayed-decode"
             )
             replayed["requested_boundary"] = length
@@ -545,7 +678,7 @@ async def check_cache(
     # An exact repeat of a warmed history supplies a matched-split control even if prefix
     # seeding and branching fill different numbers of blocks on this model.
     try:
-        branch = source[: max(fixture.policy.boundary_lengths) + _CACHE_PROBE_SUFFIX_TOKENS]
+        branch = source[: max(spec.boundary_lengths) + _CACHE_PROBE_SUFFIX_TOKENS]
         await client.complete(branch, label="cache-matched-seed")
         a = await client.complete(branch, label="cache-matched-first")
         b = await client.complete(branch, label="cache-matched-second")
@@ -562,14 +695,14 @@ async def check_cache(
     except Exception as error:
         matched_repeat = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
     summaries = {
-        "same_split": mismatch_summary(same_split, fixture.policy.same_split),
-        "different_split": mismatch_summary(different_split, fixture.policy.different_split),
+        "same_split": mismatch_summary(same_split, spec.tolerances["cache.same_execution"]),
+        "different_split": mismatch_summary(different_split, spec.tolerances["cache.changed_prefill"]),
     }
     coverage = {
         name: {
             "status": (
                 "passed"
-                if len(rows) == len(fixture.policy.boundary_lengths)
+                if len(rows) == len(spec.boundary_lengths)
                 and all(
                     row["status"] == "passed" or (name == "decode_reuse" and row["status"] == "not_required")
                     for row in rows
@@ -606,7 +739,7 @@ async def check_cache(
     }
 
 
-async def check_decode(client: EndpointClient, references: ReferenceLookup, fixture: ModelFixture) -> dict:
+async def _check_decode(client: VllmEndpoint, references: ReferenceLookup, spec: TestSpec) -> dict:
     cases = sorted(
         (case for case in references.cases if len(case.tokens) < _SHORT_HISTORY_LIMIT), key=lambda case: len(case.tokens)
     )
@@ -614,7 +747,7 @@ async def check_decode(client: EndpointClient, references: ReferenceLookup, fixt
     differences = []
     for index, case in enumerate(selected):
         await client.reset_cache()
-        decoded = await client.complete(case.tokens, label=f"decode-{index}", count=fixture.policy.decode_tokens)
+        decoded = await client.complete(case.tokens, label=f"decode-{index}", count=spec.decode_tokens)
         choice = decoded["choices"][0]
         history = case.tokens + tuple(choice["token_ids"])
         await client.reset_cache()
@@ -638,74 +771,4 @@ async def check_decode(client: EndpointClient, references: ReferenceLookup, fixt
                     "max_probability_error": abs(math.exp(a) - math.exp(b)),
                 }
             )
-    return mismatch_summary(differences, fixture.policy.decode) | {"observations": differences}
-
-
-async def check_endpoint(
-    base_url: str,
-    model: str,
-    fixture: ModelFixture,
-    runtime_source: str,
-    output: Path,
-) -> dict:
-    """Run the shared suite and retain evidence, including failures and missing coverage."""
-    references = lookup_reference(fixture)
-    report: dict = {
-        "schema_version": 1,
-        "status": "pending",
-        "model": fixture.model.model_dump(),
-        "runtime_source": runtime_source,
-        "manifest": fixture.manifest.model_dump(),
-        "policy": fixture.policy.model_dump(),
-        "policy_sha256": hashlib.sha256(canonical_bytes(fixture.policy.model_dump(mode="json"))).hexdigest(),
-        "started_unix": time.time(),
-        "reference_lookup": {"status": references.status, "reason": references.reason},
-        "checks": {},
-    }
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    def save() -> None:
-        output.write_bytes(canonical_bytes(report))
-
-    if references.status != LookupStatus.FOUND:
-        if references.status == LookupStatus.MISMATCHED:
-            report["status"] = "failed"
-            report["checks"]["reference_identity"] = {"status": "failed", "reason": references.reason}
-        save()
-        return json.loads(output.read_bytes())
-    async with EndpointClient(base_url, model, output.parent / f"{output.stem}-requests") as client:
-        stages: tuple[tuple[str, Callable[[], Awaitable[dict]]], ...] = (
-            ("deployment", lambda: verify_deployment(client, fixture, runtime_source)),
-            ("reference", lambda: check_reference(client, references, fixture)),
-            ("batch", lambda: check_batch(client, references, fixture)),
-            (
-                "cache",
-                lambda: check_cache(
-                    client,
-                    references,
-                    fixture,
-                    report["checks"]["deployment"]["cache_config"],
-                    report["checks"]["deployment"]["model_config"]["max_model_len"],
-                ),
-            ),
-            ("decode", lambda: check_decode(client, references, fixture)),
-        )
-        for name, stage in stages:
-            started = time.time()
-            try:
-                result = await stage()
-            except Exception as error:
-                result = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
-            report["checks"][name] = result | {"seconds": time.time() - started}
-            report["requests"] = client.requests
-            save()
-            if name == "deployment" and result["status"] != "passed":
-                break
-    report["status"] = (
-        "passed"
-        if len(report["checks"]) == 5 and all(row["status"] == "passed" for row in report["checks"].values())
-        else "failed"
-    )
-    report["finished_unix"] = time.time()
-    save()
-    return json.loads(output.read_bytes())
+    return mismatch_summary(differences, spec.tolerances["decode"]) | {"observations": differences}

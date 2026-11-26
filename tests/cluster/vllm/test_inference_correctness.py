@@ -3,26 +3,20 @@
 
 """Run the shared checker against an existing dedicated vLLM endpoint."""
 
-import asyncio
-
 import pytest
-from marin.testing.inference.endpoint_checks import check_endpoint
+from marin.testing.inference.results import CheckStatus
 
 
 @pytest.mark.manual
+@pytest.mark.asyncio
 @pytest.mark.timeout(10800)
-def test_candidate_matches_shared_correctness_policy(correctness_endpoint):
-    endpoint = correctness_endpoint
-    report = asyncio.run(
-        check_endpoint(
-            endpoint.url,
-            endpoint.model,
-            endpoint.fixture,
-            endpoint.runtime_source,
-            endpoint.output,
-        )
-    )
-    assert report["status"] == "passed", {
-        "report": str(endpoint.output),
-        "checks": {name: result["status"] for name, result in report["checks"].items()},
+async def test_candidate_matches_shared_correctness_policy(correctness_endpoint, correctness_spec, request):
+    async with correctness_endpoint as endpoint:
+        report = await correctness_spec.run(endpoint)
+    output = request.config.getoption("--correctness-output")
+    if output:
+        report.save(output)
+    assert report.status == CheckStatus.PASSED, {
+        name: {"status": getattr(report, name).status, "details": getattr(report, name).details}
+        for name in ("reference", "batch", "cache", "decode")
     }

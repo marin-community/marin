@@ -327,7 +327,7 @@ class ServedModelConfig:
 
 @dataclass
 class InferenceModelConfig:
-    """Model and engine arguments consumed by an in-process vLLM server."""
+    """Model and engine arguments consumed by Marin's serving launchers."""
 
     name: str
     path: str | None

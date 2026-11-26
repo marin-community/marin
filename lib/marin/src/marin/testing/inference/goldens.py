@@ -1,12 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Immutable reference scores and separately versioned acceptance policies."""
+"""Immutable checkpoint identities, input histories and reference scores."""
 
 import hashlib
 import json
 from enum import StrEnum
-from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.buckets import filesystem_for
@@ -25,7 +24,9 @@ class ModelIdentity(Record):
     eos_token_id: int
 
 
-class Artifact(Record):
+class ArtifactRef(Record):
+    """An immutable file identified by its URI and SHA256 digest."""
+
     uri: str
     sha256: str
 
@@ -50,13 +51,13 @@ class ReferenceManifest(Record):
     schema_version: int = 1
     model: ModelIdentity
     suite_id: str
-    cases: Artifact
-    scores: Artifact
+    cases: ArtifactRef
+    scores: ArtifactRef
     reference_source: str
     reference_commit: str
     reference_config: dict
     lineage: dict
-    raw_artifacts: tuple[Artifact, ...] = ()
+    raw_artifacts: tuple[ArtifactRef, ...] = ()
 
 
 class ErrorLimits(Record):
@@ -66,32 +67,6 @@ class ErrorLimits(Record):
     p99: float = Field(ge=0, le=1)
     p90: float = Field(ge=0, le=1)
     fraction_above_0075: float = Field(ge=0, le=1)
-
-
-class AcceptancePolicy(Record):
-    id: str
-    provisional: bool
-    rationale: str
-    evidence: tuple[str, ...]
-    hardware: tuple[str, ...]
-    dtype: str = "bfloat16"
-    quantization: str | None = None
-    kv_cache_dtypes: tuple[str, ...] = ("auto", "bfloat16")
-    reference: dict[str, ErrorLimits]
-    same_split: ErrorLimits
-    different_split: ErrorLimits
-    batch: ErrorLimits
-    decode: ErrorLimits
-    batch_size: int = Field(default=4, ge=2)
-    decode_tokens: int = Field(default=32, ge=2)
-    cache_decode_tokens: int = Field(default=257, ge=2)
-    boundary_lengths: tuple[int, ...] = (127, 128, 129, 255, 256, 257, 2047, 2048, 2049)
-
-
-class ModelFixture(Record):
-    model: ModelIdentity
-    manifest: Artifact
-    policy: AcceptancePolicy
 
 
 class LookupStatus(StrEnum):
@@ -114,7 +89,7 @@ def read_bytes(uri: str) -> bytes:
         return stream.read()
 
 
-def verified_bytes(artifact: Artifact) -> bytes:
+def verified_bytes(artifact: ArtifactRef) -> bytes:
     raw = read_bytes(artifact.uri)
     actual = hashlib.sha256(raw).hexdigest()
     if actual != artifact.sha256:
@@ -131,16 +106,10 @@ def history_digest(tokens: tuple[int, ...]) -> str:
     return hashlib.sha256(canonical_bytes(tokens)).hexdigest()
 
 
-def read_fixture(path: str) -> ModelFixture:
-    return ModelFixture.model_validate_json(Path(path).read_bytes())
-
-
-def lookup_reference(fixture: ModelFixture) -> ReferenceLookup:
+def lookup_reference(reference: ArtifactRef) -> ReferenceLookup:
     """Read saved scores; distinguish absent objects from contradictory evidence."""
     try:
-        manifest = ReferenceManifest.model_validate_json(verified_bytes(fixture.manifest))
-        if manifest.model != fixture.model:
-            raise ValueError("The reference manifest identifies a different checkpoint or tokenizer")
+        manifest = ReferenceManifest.model_validate_json(verified_bytes(reference))
         cases_raw = verified_bytes(manifest.cases)
         if hashlib.sha256(cases_raw).hexdigest() != manifest.suite_id:
             raise ValueError("The prompt file does not match the immutable suite identity")
@@ -167,8 +136,6 @@ def lookup_reference(fixture: ModelFixture) -> ReferenceLookup:
             found.add(key)
         if not expected or found != expected:
             raise ValueError(f"Reference coverage differs: {len(found)}/{len(expected)} rows")
-        if {case.group for case in cases} - fixture.policy.reference.keys():
-            raise ValueError("The acceptance policy omits a reference group")
         return ReferenceLookup(
             status=LookupStatus.FOUND,
             reason="Checkpoint, prompts, scores and hashes match",
