@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import uuid
 from collections.abc import Sequence
 from enum import StrEnum
@@ -23,7 +24,13 @@ from finestore.reader import ReadView
 from iris.cli.connect import open_iris_client
 from iris.cluster.types import Entrypoint, ResourceSpec
 from levanter.compat.hf_checkpoints import load_tokenizer
-from marin.evaluation.task_worker import DEFAULT_MAX_ATTEMPTS, execution_config
+from marin.evaluation.task_worker import (
+    DAYTONA_API_KEY,
+    DEFAULT_MAX_ATTEMPTS,
+    execution_config,
+    machine_backends,
+    machine_factories,
+)
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, run_evaluation
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -31,7 +38,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from rigging.timing import retry_with_backoff
 from rolloutengine.models import ModelRequest, ModelTurn
-from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.machine import Backend
 
 from experiments.evaluation.task_driver import add_worker_arguments, submit_worker
@@ -103,10 +110,17 @@ def reply_config(config: EvaluationRunConfig, reply: TrivialReply) -> Evaluation
     return config.model_copy(update={"model": model, "judge": None})
 
 
-def evaluate_reply(datasets: tuple[str, ...], output: str, config: EvaluationRunConfig, reply: TrivialReply) -> None:
+def evaluate_reply(
+    datasets: tuple[str, ...],
+    output: str,
+    config: EvaluationRunConfig,
+    reply: TrivialReply,
+    daytona: DaytonaConnection | None,
+) -> None:
     """Evaluate ``reply`` on the corpora into the archive at ``output``, retaining completed attempts on resume.
 
-    The driver refuses corpora scored by likelihood or graded by a judge.
+    Task and verifier machines use the backends that ``config`` selects; Daytona machines connect through
+    ``daytona``. The driver refuses corpora scored by likelihood or graded by a judge.
     """
     configure_coreweave_s3()
     config = execution_config(reply_config(config, reply))
@@ -119,7 +133,7 @@ def evaluate_reply(datasets: tuple[str, ...], output: str, config: EvaluationRun
             config,
             model,
             completion_model=model,
-            machine_factories={Backend.LOCAL: LocalMachineFactory()},
+            machine_factories=machine_factories(config, daytona),
             tokenizer=tokenizer,
         )
     )
@@ -131,16 +145,35 @@ def evaluate_replies(
     config: EvaluationRunConfig,
     replies: tuple[TrivialReply, ...],
     max_attempts: int,
+    daytona: DaytonaConnection | None,
 ) -> None:
     """Evaluate each reply into ``<output>/<reply>`` with ``max_attempts`` passes, then print the floor table."""
     for reply in replies:
         retry_with_backoff(
-            partial(evaluate_reply, datasets, str(StoragePath(output) / reply), config, reply),
+            partial(evaluate_reply, datasets, str(StoragePath(output) / reply), config, reply, daytona),
             retryable=lambda error: isinstance(error, EvaluationInfrastructureError),
             max_attempts=max_attempts,
             operation=f"Trivial-reply evaluation ({reply})",
         )
     print(floor_table(output, replies))
+
+
+def run_reply_worker(
+    datasets: tuple[str, ...],
+    output: str,
+    config: EvaluationRunConfig,
+    replies: tuple[TrivialReply, ...],
+    max_attempts: int,
+) -> None:
+    """Evaluate the replies on an Iris worker, which receives the run's task secrets and Daytona key as secrets."""
+    # Iris delivers secrets as files, and machines resolve ``${NAME}`` templates from this process's environment.
+    os.environ.update({name: require_secret(name) for name in config.task_secrets})
+    daytona = (
+        DaytonaConnection(api_key=require_secret(DAYTONA_API_KEY))
+        if Backend.DAYTONA in machine_backends(execution_config(config))
+        else None
+    )
+    evaluate_replies(datasets, output, config, replies, max_attempts, daytona)
 
 
 def floor_table(output: str, replies: Sequence[TrivialReply]) -> str:
@@ -200,16 +233,24 @@ def main() -> None:
     datasets = tuple(arguments.dataset)
     replies = tuple(arguments.reply or PLAIN_REPLIES)
     logging.basicConfig(level=logging.INFO)
+    daytona = None
+    if Backend.DAYTONA in machine_backends(execution_config(config)):
+        daytona = DaytonaConnection(api_key=require_secret(arguments.daytona_api_key_env))
+        # Reject an incomplete account before any worker starts.
+        daytona.client_factory()
     if arguments.local:
-        evaluate_replies(datasets, arguments.output, config, replies, arguments.max_attempts)
+        evaluate_replies(datasets, arguments.output, config, replies, arguments.max_attempts, daytona)
         return
-    # The worker needs no model connection, only the host variables that task machines read.
+    # The worker needs no model connection, only the host variables that task machines read and the Daytona key.
     secrets = {name: require_secret(name) for name in config.task_secrets}
+    if daytona is not None:
+        assert daytona.api_key is not None
+        secrets[DAYTONA_API_KEY] = daytona.api_key
     with open_iris_client(cluster_name=arguments.cluster, workspace=find_project_root()) as client:
         job = submit_worker(
             client,
             Entrypoint.from_callable(
-                evaluate_replies, datasets, arguments.output, config, replies, arguments.max_attempts
+                run_reply_worker, datasets, arguments.output, config, replies, arguments.max_attempts
             ),
             (*datasets, arguments.output),
             execution_config(config),

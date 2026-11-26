@@ -294,13 +294,15 @@ uv run --package marin-core --group test python \
 tokenizer, context window, token budgets, and source limit select the cohort
 and prompts of that run. The command replaces the model identity with
 `trivial-reply/<reply>` and drops the judge, and writes each reply's archive to
-`<output>/<reply>`, which resumes like any result root. With `--local`, it runs
-on the host, so graders that need a machine need Shellbox's bubblewrap backend.
-Without `--local`, it submits one Iris CPU worker, as `task_driver` does. The
-worker evaluates the replies in turn and prints the table to the job log. It
-needs shared storage roots and no model connection; the run's `task_secrets`
-reach it as Iris secrets. The driver refuses corpora scored by likelihood and
-corpora graded by a judge.
+`<output>/<reply>`, which resumes like any result root. Graders that need a
+machine use the backends the run config selects, with the factories and Daytona
+key of `task_driver`. With `--local`, it runs on the host. Without `--local`, it
+submits one Iris CPU worker, as `task_driver` does. The worker evaluates the
+replies in turn and prints the table to the job log. It needs shared storage
+roots and no model connection. The run's `task_secrets` reach it as Iris secret
+files, and it sets each one in its environment, where machine templates read
+them. The driver refuses corpora scored by likelihood and corpora graded by a
+judge.
 
 `--reply` selects replies and repeats; the default is the five plain replies.
 A JSON-value answer format parses the whole reply as one JSON value, so a plain

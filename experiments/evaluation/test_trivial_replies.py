@@ -4,8 +4,9 @@
 """Replies that ignore the task are scored through the evaluation driver and reduced per benchmark."""
 
 import json
+import os
 from contextlib import nullcontext
-from inspect import signature
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,14 +16,28 @@ from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
+from iris.cluster.secrets import task_secret_values, write_task_secrets
 from iris.cluster.types import Entrypoint
 from iris.rpc import controller_pb2, job_pb2
+from marin.evaluation import task_worker
 from marin.rollouts.evaluation import EvaluationRunConfig, ModelIdentity
-from rolloutengine.models import RolloutLimits
+from rigging.secrets import SECRETS_DIR_ENV
+from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
+from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.machine import Backend, NetworkPolicy, PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, ifeval_task, numeric_answer_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
-from taskcompendium.models import AnswerType, JsonValueAnswer, TaskSpec
+from taskcompendium.models import (
+    AnswerType,
+    CommandSemantics,
+    EnvironmentRequirements,
+    ExitCodeReward,
+    GraderMachine,
+    JsonValueAnswer,
+    ScriptGrader,
+    TaskSpec,
+)
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow, SourceRecipe
@@ -37,6 +52,8 @@ ZERO = {"kind": "zero", "prompt": "What is 5 minus 5?"}
 CAPITAL = {"kind": "capital", "prompt": "What is the capital of France?"}
 REPEAT = {"kind": "repeat", "prompt": "Repeat this sentence."}
 JSON_WORD = {"kind": "json_word", "prompt": "Answer with the JSON string hello."}
+SECRET = {"kind": "secret", "prompt": "Say hello."}
+TASK_TOKEN = "secret-task-token"
 
 
 class WordTokenizer:
@@ -59,6 +76,21 @@ def convert(row: RawRow, _context: ConversionContext) -> TaskSpec:
         task = exact_answer_task(row, prompt=prompt, answers=("Paris",), ignore_case=True)
     elif kind == "repeat":
         task = exact_answer_task(row, prompt=prompt, answers=(prompt,), ignore_case=False)
+    elif kind == "secret":
+        # The grading machine reads the run's task secret, and its grader passes when it holds the value.
+        environment = EnvironmentRequirements(
+            command_semantics=CommandSemantics.LINUX_PROCESS,
+            package_spec=PackageSpec(),
+            environment_variables={"TASK_TOKEN": "${FIXTURE_TASK_TOKEN}"},
+        )
+        grader = ScriptGrader(
+            argv=("sh", "-c", f'test "$TASK_TOKEN" = {TASK_TOKEN}'),
+            cwd=None,
+            placement=GraderMachine(environment=environment),
+            reward=ExitCodeReward(),
+        )
+        text_task = answer_task(row, prompt=prompt, spec=ExactSpec(expected=("hello",)))
+        task = TaskSpec.model_validate({**dict(text_task), "grader": grader})
     else:
         text_task = answer_task(row, prompt=prompt, spec=ExactSpec(expected=("hello",)))
         task = TaskSpec.model_validate(
@@ -102,7 +134,12 @@ def publish_corpus(tmp_path, rows: list[dict]) -> str:
     return str(corpus)
 
 
-def run_config(*, source_limit: int | None = None, task_secrets: tuple[str, ...] = ()) -> EvaluationRunConfig:
+def run_config(
+    *,
+    source_limit: int | None = None,
+    task_secrets: tuple[str, ...] = (),
+    verifier_machine: MachineRuntimeSpec | None = None,
+) -> EvaluationRunConfig:
     return EvaluationRunConfig(
         model=ModelIdentity(
             name="solver",
@@ -116,6 +153,7 @@ def run_config(*, source_limit: int | None = None, task_secrets: tuple[str, ...]
         concurrency=2,
         source_limit=source_limit,
         task_secrets=task_secrets,
+        verifier_machine=verifier_machine,
         limits=RolloutLimits(
             max_turns=1,
             max_total_tokens=None,
@@ -227,28 +265,62 @@ def iris_submission(tmp_path, monkeypatch):
     return submit, requests
 
 
-def test_cli_submits_every_reply_to_one_iris_worker_without_model_connections(iris_submission, monkeypatch, capsys):
+def run_iris_worker(
+    request: controller_pb2.Controller.LaunchJobRequest, storage: dict[str, str], secrets: Path, monkeypatch
+) -> None:
+    """Run the submitted callable as an Iris worker does, which reads the job's secrets only from files in ``secrets``.
+
+    ``storage`` maps each object-storage root of the submission to the local directory that stands in for it.
+    """
+    write_task_secrets(task_secret_values(request.environment), secrets, uid=os.getuid(), gid=os.getgid())
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(secrets))
+    for name in request.environment.secrets:
+        monkeypatch.delenv(name, raising=False)
+
+    def stored(value):
+        if isinstance(value, tuple):
+            return tuple(stored(item) for item in value)
+        return storage.get(value, value) if isinstance(value, str) else value
+
+    worker, arguments, options = Entrypoint.from_proto(request.entrypoint).resolve()
+    worker(*map(stored, arguments), **{key: stored(value) for key, value in options.items()})
+
+
+@pytest.mark.parametrize("backend", [Backend.LOCAL, Backend.DOCKER])
+def test_iris_worker_grades_in_the_selected_machines_that_read_the_run_task_secrets(
+    tmp_path, iris_submission, monkeypatch, capsys, backend
+):
     submit, requests = iris_submission
-    monkeypatch.setenv("FIXTURE_TASK_TOKEN", "secret-task-token")
-    config = run_config(task_secrets=("FIXTURE_TASK_TOKEN",))
+    monkeypatch.setattr(trivial_replies, "load_tokenizer", lambda *_args, **_kwargs: WordTokenizer())
+    # A host machine stands in for Docker, which test hosts do not run.
+    monkeypatch.setattr(task_worker, "DockerMachineFactory", LocalMachineFactory)
+    monkeypatch.setenv("FIXTURE_TASK_TOKEN", TASK_TOKEN)
+    machine = MachineRuntimeSpec(
+        backend=backend,
+        network=NetworkPolicy.DENY,
+        cpus=None,
+        memory_mb=None,
+        storage_mb=None,
+        gpus=0,
+        user=None,
+        startup_timeout=60,
+        cleanup_timeout=10,
+    )
+    config = run_config(task_secrets=("FIXTURE_TASK_TOKEN",), verifier_machine=machine)
     roots = ("--dataset", "s3://fixture/corpus", "--output", "s3://fixture/floor")
     submit(config, *roots, "--reply", "word", "--reply", "echo")
 
     (request,) = requests
     assert capsys.readouterr().out.split() == [request.name]
     assert request.container_profile == job_pb2.CONTAINER_PROFILE_PRIVILEGED
-    worker, arguments, options = Entrypoint.from_proto(request.entrypoint).resolve()
-    assert worker is trivial_replies.evaluate_replies
-    assert signature(worker).bind(*arguments, **options).arguments == {
-        "datasets": ("s3://fixture/corpus",),
-        "output": "s3://fixture/floor",
-        "config": config,
-        "replies": (trivial_replies.TrivialReply.WORD, trivial_replies.TrivialReply.ECHO),
-        "max_attempts": trivial_replies.DEFAULT_MAX_ATTEMPTS,
-    }
-    assert request.environment.secrets["FIXTURE_TASK_TOKEN"] == "secret-task-token"
-    assert b"secret-task-token" not in request.entrypoint.SerializeToString()
+    assert TASK_TOKEN.encode() not in request.entrypoint.SerializeToString()
     assert {SOLVER_ENDPOINT, SOLVER_API_KEY, JUDGE_ENDPOINT, JUDGE_API_KEY}.isdisjoint(request.environment.secrets)
+
+    corpus = publish_corpus(tmp_path, [SECRET])
+    storage = {"s3://fixture/corpus": corpus, "s3://fixture/floor": str(tmp_path / "floor")}
+    run_iris_worker(request, storage, tmp_path / "secrets", monkeypatch)
+    # Each reply's grading machine held the secret, so its grader passed.
+    assert capsys.readouterr().out.splitlines()[-1] == "| floor | accuracy | 1.000 (1/1) | 1.000 (1/1) |"
 
 
 def test_cli_refuses_to_submit_local_roots_to_iris(tmp_path, iris_submission):

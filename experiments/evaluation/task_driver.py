@@ -97,7 +97,12 @@ def submit_worker(
 
 
 def add_worker_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add ``--cluster`` or ``--local``, and the Iris worker's name, resources, lifetime and wait flags."""
+    """Add the Daytona key, ``--cluster`` or ``--local``, and the Iris worker's name, resources and wait flags."""
+    parser.add_argument(
+        "--daytona-api-key-env",
+        default="DAYTONA_EVAL_API_KEY",
+        help="Daytona eval-org key, read when the run config selects Daytona machines.",
+    )
     execution = parser.add_mutually_exclusive_group()
     execution.add_argument("--cluster", default=DEFAULT_CLUSTER, help="Iris cluster for the CPU evaluation worker.")
     execution.add_argument(
@@ -132,11 +137,6 @@ def main() -> None:
     parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
     parser.add_argument("--judge-endpoint", help="Explicit judge endpoint, when the selected tasks use a judge.")
     parser.add_argument("--judge-api-key-env", default="VERIFYIT_JUDGE_API_KEY")
-    parser.add_argument(
-        "--daytona-api-key-env",
-        default="DAYTONA_EVAL_API_KEY",
-        help="Daytona eval-org key, read when the run config selects Daytona machines.",
-    )
     add_worker_arguments(parser)
     parser.add_argument(
         "--max-attempts",
