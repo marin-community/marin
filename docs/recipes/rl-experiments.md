@@ -191,8 +191,8 @@ checkpoints or export; learner and engine token rates are descriptive telemetry.
 ## Qwen sampler development loop
 
 Use Qwen3-0.6B to check sampler behavior on two H100s. Its ShellSim grader scores arithmetic,
-string transformations and list operations with guest networking disabled. All arms reuse the
-same 4,608 training prompts, model, tokenizer and prepared-task cache.
+string transformations and list operations with guest networking disabled. The learning comparisons
+use the same 4,608 training prompts, model, tokenizer and prepared-task cache.
 
 Plan the ranked sampler and its uniform control from the same checkout with CoreWeave storage credentials:
 
@@ -217,6 +217,17 @@ budget. Compare each arm's change from initialization at its actual stopping upd
 all dispatched training tokens, including rejected groups, and report actual spend and H100-hours.
 The protocol, earlier pilot and replay commands, per-seed results and costs are recorded in the
 [adaptive sampler study](https://github.com/marin-community/marin/pull/12313).
+
+For training-loop timing, use the 1,024-prompt subset covering five-letter reversal and
+odd-position extraction followed by reversal. The timing presets run 12 synchronous updates
+with four completions per prompt, a 4,096-token cap and evaluation disabled. Compare updates
+4–8 and 8–12 to measure warm training. Use `full` in place of `string-ei` for the nine-cell
+reference, and `103` in place of `101` for the second paired seed.
+
+```bash
+uv run python -m experiments.post_training.qwen_timing \
+  --preset east02-timing-string-ei-seed101 --version dev --priority interactive --plan
+```
 
 ## Four-source Snowball sampler experiment
 
