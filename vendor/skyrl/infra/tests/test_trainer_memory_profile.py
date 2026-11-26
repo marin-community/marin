@@ -4,8 +4,42 @@ import copy
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 
+from skyrl_train import trainer_memory_profile
+from skyrl_train.config.utils import get_default_config
+from skyrl_train.config.validation import validate_megatron_config
+from skyrl_train.models.megatron_router_replay import dense_replay_targets, validate_replay_geometry
 from skyrl_train.trainer_memory_profile import preserve_training_state, warm_state_profile
+
+
+def test_sizing_with_router_replay_uses_balanced_valid_targets():
+    cfg = get_default_config()
+    OmegaConf.set_struct(cfg, False)
+    cfg.generator.weight_sync_backend = "nccl"
+    cfg.generator.engine_init_kwargs.enable_return_routed_experts = True
+    cfg.trainer.policy.optimizer_config.optimizer = "adam"
+    cfg.trainer.policy.megatron_config.moe_router_replay = True
+    cfg.trainer.policy.megatron_config.memory_profile = {
+        "enabled": True,
+        "max_sequence_length": 65_536,
+        "valid_token_counts": [17],
+        "minimum_headroom_fraction": 0.0,
+    }
+    validate_megatron_config(cfg)
+
+    routes = trainer_memory_profile.sizing_replay_routes(4, 3, 3, 8, 2)
+    validate_replay_geometry(
+        num_layers_captured=routes.shape[-2], expected_moe_layers=3, topk_captured=routes.shape[-1], expected_topk=2,
+        num_experts=8, targets=routes, response_len=routes.shape[1], num_actions=3,
+    )
+    dense, mask = dense_replay_targets(routes, batch_size=4, seq_len=4, num_actions=3)
+    assert mask[:, :3].all() and not mask[:, 3].any()
+    assert (routes[..., 0] != routes[..., 1]).all()
+    for layer_routes in routes.unbind(dim=2):
+        counts = torch.bincount(layer_routes.flatten().long(), minlength=8)
+        assert counts.min() >= 2 and counts.max() <= 4
+    torch.testing.assert_close(dense[:, :3], routes.long())
 
 
 @pytest.mark.parametrize("fails", [None, "warmup", "measured"])
