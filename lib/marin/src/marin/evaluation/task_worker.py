@@ -6,6 +6,7 @@
 import asyncio
 import functools
 import logging
+import os
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
@@ -287,6 +288,8 @@ def run_worker(
     # Iris endpoint URLs can contain scoped credentials.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # Iris delivers the run's task secrets as files; machine templates read ${NAME} from this process's environment.
+    os.environ.update({name: require_secret(name) for name in config.task_secrets})
     judge_endpoint = get_secret(JUDGE_ENDPOINT)
     judge = JudgeConnection(judge_endpoint, require_secret(JUDGE_API_KEY)) if judge_endpoint else None
     daytona = (
