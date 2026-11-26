@@ -956,6 +956,8 @@ def test_python_run_saves_typed_inputs_for_comparison(
         fingerprint=built.runs[0].fingerprint(),
         inputs=built.inputs,
     )
+    with edit_receipt(source) as receipt:
+        receipt["result"]["started_at"] = "2026-11-06T17:40:00+00:00"
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / RUN_INPUTS_FILENAME).unlink()
