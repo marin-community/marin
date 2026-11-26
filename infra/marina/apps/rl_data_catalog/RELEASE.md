@@ -109,7 +109,7 @@ Preflight and hosted invocations run these blocking gates and exit nonzero on fa
 | Main table at 1440/390, light/dark | Every displayed Examples value matches its bound observation. Headers, cells and chips fit; no chip subtitles or page overflow; filters and Show everything work and persist. |
 | Header reconciliation | Shown + hidden QUICK/BAD + filtered + folded equals total tasks, and the same admitted subsets equal total admission. Quality totals use task populations. |
 | Curriculum API invariants | Every selected/previous release × TRAIN/EVAL/all × exported confidence level × domain reconciles outcomes to its denominator and aggregate counts to source vectors. Display projections agree with the recorded cutoffs; every taxonomy node, including empty nodes, is present and capability labels differ from their subjects. Parents include their children plus remainder. |
-| Representative browser pass | One selected release, Use and measured domain per layout loads the confidence control and sampled-task list. One Evidence/Backends presentation and each authored page family pass geometry and readability checks, with screenshots. |
+| Browser pass | Preflight: representative (below). Hosted: the full sweep. Post-publish: the families whose content changed since the hosted sweep, in full. Representative: one selected release, Use and measured domain per layout loads the confidence control and sampled-task list. One Evidence/Backends presentation and each authored page family pass geometry and readability checks, with screenshots. |
 | Status keyboard access | Every reason summary and evidence link stays visible when reached with Tab, including deep rows and opened explanations, at all release widths in both themes. |
 | Catalog and archive preservation | Code-only releases retain selected catalog/curriculum pointers and source declarations. Every previously retained assessment and packet content checksum remains unchanged by immutable pipeline/task identity, even if an intended catalog refresh copies history to a new load ID. |
 | Production hold | Production's actual revision matches the explicit hold both before and after checking. |
@@ -218,33 +218,36 @@ Table header labels stay on one line, including unsortable headers. The geometry
 gate rejects text that fits its cell only by stacking letters vertically. Use
 labels also remain on one line.
 
-## Full post-publish or nightly browser audit
+## Full sweep, post-publish diff and nightly audit
 
-After a successful hosted check, the checker starts the unchanged full curriculum,
-Evidence/Backends and readability walks in a detached local process. The hosted
-receipt records `postpublish_job` with its PID, command, log and receipt paths.
-This job does not delay release completion. Its receipt has `phase: postpublish`
-and `blocking: false`; a finding gives that job a nonzero exit without changing
-the successful hosted receipt. A launch failure is recorded in `launch_error`.
-Report any launch failure or audit finding to the coordinator, with the receipt
-and screenshots, and track the fix for the next release.
+The hosted check sweeps the new immutable revision in full: every
+release/Use/domain/confidence browser case, every Evidence/Backends presentation
+and every readability page family. The sweep runs as independent per-layout units
+(domains and evidence cases split into chunks) on a bounded pool of parallel
+pages (`SWEEP_WORKERS`, 16), each on its own browser context. A hosted check at the
+preflight's own checkout records `code_gates_from` instead of rerunning lint and
+the unit/journey commands, which that passing preflight receipt already covers.
 
-To repeat the full audit after publication or from a nightly scheduler, use the
-same clean landed cut and successful version-2 preflight baseline:
+The post-publish check (`--postpublish --hosted-receipt <hosted.json>`) compares
+against that hosted sweep: it re-reads every API response the hosted sweep
+recorded, re-sweeps in full only the page families whose served content changed,
+and runs the representative sweep for the rest. It is a blocking phase; the hosted
+check starts no detached audit.
+
+To repeat the audit after publication or from a nightly scheduler, use the same
+clean landed cut, the successful version-2 preflight baseline and the revision's
+hosted receipt:
 
 ```bash
 uv run python -m infra.marina.apps.rl_data_catalog.release_check \
   --revision "$REVISION" --baseline "$ARTIFACTS/preflight.json" \
-  --production-version "$PRODUCTION_HOLD" --expected-mode public --full-browser-sweep \
-  --receipt "$ARTIFACTS/nightly-full.json"
+  --production-version "$PRODUCTION_HOLD" --expected-mode public \
+  --postpublish --hosted-receipt "$ARTIFACTS/hosted.json" \
+  --receipt "$ARTIFACTS/nightly.json"
 ```
 
-The full audit retains every release/Use/domain/confidence browser case and every
-Evidence/Backends and readability presentation from the earlier blocking sweep.
-It skips repeated lint and unit/journey commands. API and preservation checks
-still run, and production remains held. Keep the clean worktree and credentials
-available until the recorded job finishes; inspect its receipt after completion.
-There is no new persistent service or scheduler configuration.
+API and preservation checks still run, and production remains held. There is no
+new persistent service or scheduler configuration.
 
 ## Intended measurement refreshes
 
@@ -310,7 +313,7 @@ The installed `test_rendered_contrast_readability_and_reflow` journey and the
 input-bound `browser_checks` both run the representative readability pass. Any
 violation in that pass blocks release. It covers the source table, curriculum, source evidence, backends, assessments,
 and guide, plus representative source/evidence states, filters and folded groups, confidence levels and one measured curriculum domain, public instructions from a stored task example in each layout, source breakdowns, empty/error states, hover,
-active and keyboard focus on representative controls. The full audit retains
+active and keyboard focus on representative controls. The full sweep retains
 every filter value, keyboard target and grouped pointer style. Layouts are 1440, 390 and 320 CSS px in both themes;
 page and dialog checks also apply 200% text size and WCAG text-spacing overrides.
 

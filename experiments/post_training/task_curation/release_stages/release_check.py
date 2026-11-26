@@ -133,14 +133,14 @@ def verify_phase_receipt(ref: ArtifactRef, expected_phase: str, revision: str) -
     return document
 
 
-def checker_baseline(preflight_document: dict) -> bytes:
-    """The digest-verified maintained preflight receipt the stage receipt sealed."""
-    ref = preflight_document.get("checker_receipt")
+def checker_baseline(phase_document: dict, phase: str = "preflight") -> bytes:
+    """The digest-verified maintained checker receipt a phase's stage receipt sealed."""
+    ref = phase_document.get("checker_receipt")
     if not ref:
-        raise ValueError("the preflight stage receipt does not bind its checker receipt")
+        raise ValueError(f"the {phase} stage receipt does not bind its checker receipt")
     raw = StoragePath(ref["uri"]).read_bytes()
     if hashlib.sha256(raw).hexdigest() != ref["sha256"]:
-        raise ValueError(f"preflight checker receipt digest mismatch: {ref['uri']}")
+        raise ValueError(f"{phase} checker receipt digest mismatch: {ref['uri']}")
     return raw
 
 
@@ -158,6 +158,8 @@ def local_checker_paths(inputs: ReleaseCheckInputs) -> dict[str, Path]:
         paths["oracle_inventory"] = work / "inputs" / "oracle-inventory.json"
     else:
         paths["baseline"] = work / "inputs" / "preflight-baseline.json"
+    if inputs.phase == "postpublish":
+        paths["hosted_receipt"] = work / "inputs" / "hosted-receipt.json"
     return paths
 
 
@@ -247,7 +249,7 @@ def planned_checker_arguments(
         return argv
     argv += ["--revision", str(inputs.published_revision), "--baseline", str(paths["baseline"])]
     if inputs.phase == "postpublish":
-        argv.append("--full-browser-sweep")
+        argv += ["--postpublish", "--hosted-receipt", str(paths["hosted_receipt"])]
     return argv
 
 
@@ -316,7 +318,8 @@ def run_release_check(
                 if baseline.production_version != inputs.production_version:
                     raise ValueError("the preflight baseline pins a different production version")
         if inputs.hosted_receipt is not None:
-            verify_phase_receipt(inputs.hosted_receipt, "hosted", inputs.source_revision)
+            hosted_document = verify_phase_receipt(inputs.hosted_receipt, "hosted", inputs.source_revision)
+            staged["hosted_receipt"] = checker_baseline(hosted_document, "hosted")
         paths = local_checker_paths(inputs)
         receipt_path = str(paths["receipt"])
         live = live_applet_module.live_applet(inputs.service_url, inputs.applet_id)

@@ -4,9 +4,9 @@ Follow the canonical [release procedure](RELEASE.md) and its `release_check`
 entry point for every preview release. Complete curriculum count/taxonomy checks
 run once through the API for every release, Use, confidence level and domain.
 A representative browser/readability pass and screenshots block publication;
-the full browser sweep runs afterward or nightly and records a separate,
-non-blocking receipt. Report its findings to the coordinator; see
-[full audit commands](RELEASE.md#full-post-publish-or-nightly-browser-audit).
+the hosted check sweeps the published revision in full on parallel pages, and the
+post-publish check re-sweeps only the page families whose content changed; see
+[full sweep and post-publish commands](RELEASE.md#full-sweep-post-publish-diff-and-nightly-audit).
 
 Synced to preview revision 21 (2026-11-16).
 

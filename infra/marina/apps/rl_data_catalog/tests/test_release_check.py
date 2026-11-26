@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from infra.marina.apps.rl_data_catalog import release_check
 from infra.marina.apps.rl_data_catalog.release_browser import verify_rendered_partition
 from infra.marina.apps.rl_data_catalog.release_check import main
 from infra.marina.apps.rl_data_catalog.release_evidence import catalog_state, projected_sources, task_totals
+from infra.marina.apps.rl_data_catalog.server.json_digest import json_sha256
 from infra.marina.apps.rl_data_catalog.server.source_counts import SourceCounts
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.filtration_fixtures import count_evidence, filtered_declaration
@@ -102,7 +104,7 @@ def test_release_checker_rejects_population_or_admission_reconciliation_regressi
         verify_rendered_partition(110, 60, shown, admitted, omitted)
 
 
-@pytest.mark.parametrize("failure", ["command", "production", "workspace"])
+@pytest.mark.parametrize("failure", ["command", "production", "workspace", "covered"])
 def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -111,7 +113,8 @@ def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
         json.dumps(
             {
                 "version": 2,
-                "source_revision": "a" * 40,
+                # A hosted check at the preflight's own checkout reuses its code gates.
+                "source_revision": "a" * 40 if failure == "covered" else "b" * 40,
                 "preview_base_version": 1,
                 "package": {},
                 "evidence_before": {},
@@ -184,12 +187,19 @@ def test_release_cli_persists_failed_gate_receipt_and_exits_nonzero(
     elif failure == "production":
         assert result["error"]["exception_type"] == "ValueError"
         assert result["error"]["gate"] == "production-version"
+    elif failure == "covered":
+        assert result["commands"] == [] and result["code_gates_from"] == "a" * 40
+        assert result["error"]["gate"] == "production-version"
     else:
         assert result["error"]["gate"] == "workspace-environment"
 
 
-@pytest.mark.parametrize("full,failed", [(False, False), (True, False), (True, True)])
-def test_cli_records_nonblocking_audit_separately_from_hosted_success(tmp_path, monkeypatch, full, failed):
+@pytest.mark.parametrize("postpublish,failed", [(False, False), (True, False), (True, True)])
+def test_cli_records_the_hosted_and_postpublish_phases_without_a_detached_audit(
+    tmp_path, monkeypatch, postpublish, failed
+):
+    """R40 #60: the hosted check no longer detaches a second full sweep beside the
+    graph's postpublish phase; postpublish is its own blocking phase."""
     receipt_path = tmp_path / "receipt.json"
     args = [
         "release_check",
@@ -202,27 +212,105 @@ def test_cli_records_nonblocking_audit_separately_from_hosted_success(tmp_path, 
         "--receipt",
         str(receipt_path),
     ]
-    if full:
-        args.append("--full-browser-sweep")
+    if postpublish:
+        args += ["--postpublish", "--hosted-receipt", str(tmp_path / "hosted.json")]
     monkeypatch.setattr(sys, "argv", args)
 
     def checked(args, artifacts, receipt):
         if failed:
             receipt.gate = "hosted-browser-sweep"
-            raise ValueError("full audit finding")
+            raise ValueError("postpublish finding")
 
     monkeypatch.setattr(release_check, "run_checks", checked)
-    monkeypatch.setattr(
-        release_check, "launch_postpublish", lambda *args: {"blocking": False, "launch_error": "unavailable"}
-    )
     with pytest.raises(SystemExit) as exit_code:
         main()
     assert exit_code.value.code == (1 if failed else 0)
     recorded = json.loads(receipt_path.read_text())
     assert recorded["passed"] is (not failed)
-    assert recorded["blocking"] is (not full)
-    assert recorded["phase"] == ("postpublish" if full else "hosted")
-    assert recorded["postpublish_job"] == (None if full else {"blocking": False, "launch_error": "unavailable"})
+    assert recorded["blocking"] is True
+    assert recorded["phase"] == ("postpublish" if postpublish else "hosted")
+
+
+def _hosted_receipt(tmp_path: Path, **overrides: Any) -> Path:
+    document = {
+        "phase": "hosted",
+        "passed": True,
+        "revision": 41,
+        "browser": {"scope": "full", "api_response_sha256": {"api/sources": "a" * 64}},
+        **overrides,
+    }
+    path = tmp_path / "hosted.json"
+    path.write_text(json.dumps(document))
+    return path
+
+
+def test_postpublish_compares_against_the_revisions_full_hosted_sweep(tmp_path):
+    assert release_check.hosted_sweep_baseline(_hosted_receipt(tmp_path), 41)["scope"] == "full"
+    with pytest.raises(ValueError, match="not a passing hosted receipt"):
+        release_check.hosted_sweep_baseline(_hosted_receipt(tmp_path, revision=40), 41)
+    with pytest.raises(ValueError, match="no full browser sweep"):
+        release_check.hosted_sweep_baseline(
+            _hosted_receipt(tmp_path, browser={"scope": "representative", "api_response_sha256": {"k": "v"}}), 41
+        )
+
+
+class _ServedReader:
+    def __init__(self, documents: dict[str, Any]) -> None:
+        self.documents = documents
+        self.cache: dict[str, Any] = {"api/sources": "stale cache entry"}
+
+    def get(self, path: str) -> Any:
+        return self.documents[path]
+
+
+def test_postpublish_diff_rereads_every_recorded_response_and_maps_changes_to_families():
+    served = {
+        "api/sources": {"sources": []},
+        "api/curriculum?release=r": {"hierarchy": [1]},
+        "api/source?source_id=x": {},
+    }
+    recorded = {key: json_sha256(value) for key, value in served.items()}
+    reader = _ServedReader({**served, "api/curriculum?release=r": {"hierarchy": [2]}})
+    assert release_check.changed_api_keys(reader, recorded) == ["api/curriculum?release=r"]
+    assert reader.cache == {}
+    families = {release_check.sweep_family(key) for key in served}
+    assert families == {
+        release_check.SweepFamily.SOURCES,
+        release_check.SweepFamily.CURRICULUM,
+        release_check.SweepFamily.EVIDENCE,
+    }
+    assert release_check.sweep_family("measurements/oracle-inventory.json") is release_check.SweepFamily.READABILITY
+
+
+class _HierarchyReader:
+    def get(self, path: str) -> Any:
+        assert path == "api/curriculum?release=current"
+        return {"hierarchy": [{"kind": "subject", "subject_id": f"D{index:02d}"} for index in range(1, 21)]}
+
+
+def test_full_sweep_splits_into_bounded_parallel_units(tmp_path, monkeypatch):
+    """R40 #60: the full sweep was one serial page walk (40+ min); it is split per layout
+    and per domain/case chunk so a bounded page pool runs it."""
+    sources = [{"id": f"Marin:s{index}"} for index in range(3)]
+    releases = [{"release_id": "current", "selected": True}]
+    cases = [{"id": f"Marin:s{index}"} for index in range(10)]
+    monkeypatch.setattr(release_check, "evidence_cases", lambda rows, pending: cases)
+    full = set(release_check.SweepFamily)
+    units = release_check.sweep_units(
+        _HierarchyReader(), {"sources": sources}, releases, tmp_path, full, set(), root="https://x/"
+    )
+    representative = release_check.sweep_units(
+        _HierarchyReader(), {"sources": sources}, releases, tmp_path, set(), set(), root="https://x/"
+    )
+    by_family = Counter(unit.family for unit in units)
+    layouts = len(release_check.LAYOUTS)
+    # 20 domains in chunks of 8 (3 chunks) plus the release walk; 10 cases in chunks of 8 (2 chunks).
+    assert by_family[release_check.SweepFamily.CURRICULUM] == layouts * 4
+    assert by_family[release_check.SweepFamily.EVIDENCE] == layouts * 2
+    assert by_family[release_check.SweepFamily.SOURCES] == layouts
+    assert by_family[release_check.SweepFamily.READABILITY] == layouts
+    assert len({unit.label for unit in units}) == len(units)
+    assert len(representative) == layouts * 4
 
 
 def test_release_cli_fails_closed_with_history_timeout_sql_and_bindings(tmp_path, monkeypatch):

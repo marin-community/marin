@@ -750,10 +750,18 @@ def test_release_check_hosted_delegates_with_baseline_and_seals(tmp_path):
     assert stage_receipt["target"]["id"] == "12345678-1234-5678-1234-567812345678"
 
 
-def test_release_check_postpublish_plans_full_sweep(tmp_path):
+def test_release_check_postpublish_diffs_against_the_staged_hosted_receipt(tmp_path):
     preflight_ref = _preflight_stage_receipt(tmp_path)
+    hosted_checker = _seal_json(tmp_path, "hosted-checker.json", {"phase": "hosted", "passed": True, "revision": 7})
     hosted_ref = _seal_json(
-        tmp_path, "hosted-receipt.json", {"phase": "hosted", "passed": True, "source_revision": REVISION}
+        tmp_path,
+        "hosted-receipt.json",
+        {
+            "phase": "hosted",
+            "passed": True,
+            "source_revision": REVISION,
+            "checker_receipt": {"uri": hosted_checker.uri, "sha256": hosted_checker.sha256},
+        },
     )
     checker = _FakeChecker("postpublish", REVISION)
     inputs = _release_check_inputs(
@@ -763,11 +771,14 @@ def test_release_check_postpublish_plans_full_sweep(tmp_path):
         inputs, dry_run=True, repo_root=tmp_path, feeds=_feeds(tmp_path), checker=checker
     )
     assert checker.calls == []
-    assert "--full-browser-sweep" in proof["planned_checker"]["arguments"]
+    arguments = proof["planned_checker"]["arguments"]
+    assert "--postpublish" in arguments
     release_check.run_release_check(
         inputs, dry_run=False, repo_root=tmp_path / "repo", feeds=_feeds(tmp_path), checker=checker
     )
-    assert "--full-browser-sweep" in checker.calls[0][1]
+    argv = checker.calls[0][1]
+    staged = Path(argv[argv.index("--hosted-receipt") + 1])
+    assert staged.read_bytes() == Path(hosted_checker.uri).read_bytes()
 
 
 def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
