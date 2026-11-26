@@ -45,7 +45,7 @@ def resolved_manifest(manifest: dict, selection: str) -> dict:
     return manifest
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", default="cohorts/manifest.json")
     parser.add_argument("--selection", default=REGIONAL_SELECTION)
@@ -53,7 +53,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--baseline")
     parser.add_argument("--exclude-cohort", action="append", default=[], choices=tuple(MANIFEST_COHORTS.values()))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     configure_coreweave_s3()
     source = StoragePath(args.manifest).read_bytes()
     manifest = resolved_manifest(json.loads(source), args.selection)
