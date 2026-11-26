@@ -10,6 +10,7 @@ from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, At
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from marin.evaluation.runner import _record
+from marin.inference import vllm_backend
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, SelectionStatus
 
 from experiments.evaluation.curated import selection_dataset
@@ -133,6 +134,36 @@ def test_a_supplied_model_at_a_candidates_location_is_checked_against_its_own_co
     (run,) = expected_runs(POLICY, variant, limit=None, evaluations={"aime24"})
     record = _write(tmp_path, run)
     assert record_candidate(POLICY, record).name == "qwen-variant"
+
+
+def _paths(policy) -> dict[str, str]:
+    names = {"aime24", "swebench-verified"}
+    return {run.name: run.record_path for run in expected_runs(policy, QWEN, limit=None, evaluations=names)}
+
+
+def test_a_new_inference_build_moves_every_run(monkeypatch):
+    before = _paths(POLICY)
+    release = replace(vllm_backend.VLLM_GPU_RELEASE, release_tag="marin-vllm-gpu-next")
+    monkeypatch.setattr(vllm_backend, "VLLM_GPU_RELEASE", release)
+    after = _paths(POLICY)
+    assert all(before[name] != after[name] for name in before)
+
+
+def test_a_new_agent_concurrency_moves_only_that_agents_run_and_verify_names_it(tmp_path):
+    before = _paths(POLICY)
+    agent = next(evaluation for evaluation in POLICY.in_distribution if evaluation.name == "swebench-verified")
+    faster = replace(
+        POLICY, in_distribution=tuple(replace(e, concurrency=32) if e is agent else e for e in POLICY.in_distribution)
+    )
+    after = _paths(faster)
+    assert before["aime24"] == after["aime24"]
+    assert before["swebench-verified"] != after["swebench-verified"]
+
+    (old,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"swebench-verified"})
+    (new,) = expected_runs(faster, QWEN, limit=None, evaluations={"swebench-verified"})
+    state, problems = run_problems(_write(tmp_path, old), _evidence(new), new)
+    assert state is RunState.INVALID
+    assert any(problem.startswith("run_id:") for problem in problems)
 
 
 def test_a_run_of_the_policy_is_valid(tmp_path):

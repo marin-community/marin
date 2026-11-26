@@ -152,14 +152,17 @@ def _release_commit(policy: EvalPolicy) -> str | None:
 
 
 def _checked_release(policy: EvalPolicy) -> str | None:
-    """The release commit to check a released policy's runs against, which must be the checkout.
+    """The release commit to check a released policy's runs against, which must be the clean checkout.
 
-    A released policy's expected runs come from its tag's code, so checking from another commit would compare
+    A released policy's expected runs come from its tag's code, so checking from other code would compare
     its records against something else.
     """
     release = _release_commit(policy)
-    if release is not None and git_output(["rev-parse", "HEAD"], find_project_root()) != release:
-        raise click.ClickException(f"check {policy.version} from its tag: git checkout {policy.release_tag}")
+    if release is None:
+        return None
+    root = find_project_root()
+    if git_output(["rev-parse", "HEAD"], root) != release or git_output(["status", "--porcelain"], root):
+        raise click.ClickException(f"check {policy.version} from a clean checkout of its tag {policy.release_tag}")
     return release
 
 

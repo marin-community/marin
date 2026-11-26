@@ -34,6 +34,7 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
+from marin.inference.vllm_backend import vllm_launcher
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,13 @@ def _vllm_engine_config(
         extra_metric_families=_SPECULATIVE_METRIC_FAMILIES if serve.speculative is not None else frozenset(),
         speculative=serve.speculative,
     )
+
+
+def inference_build(serve: ServeConfig, platform: Platform) -> str:
+    """The server build a model's evaluations run on: its vLLM launcher with every pin, or its backend."""
+    if serve.backend is not ServeBackend.VLLM:
+        return serve.backend.value
+    return repr(vllm_launcher(_vllm_engine_config(serve, platform, ())))
 
 
 def _vllm_environment_variables(serve: ServeConfig, platform: Platform) -> dict[str, str]:

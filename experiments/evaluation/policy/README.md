@@ -78,8 +78,8 @@ Each candidate runs on one server at its serving window, split only when its jud
 keys, and the server runs several evaluations at once. A full run (no `--limit`) launches only from a
 clean checkout at HEAD, so its records name the commit that ran.
 
-A run's ID comes from the policy version, the run's inputs, the server's inference build (the vLLM
-release or fork) and tensor parallelism, and, for an agent, how many attempts it runs at once, so
+A run's ID comes from the policy version, the run's inputs, the server's vLLM build and
+accelerator, and, for an agent, how many attempts it runs at once, so
 launching again finds the same paths. `launch` resolves every model before submitting any job, leaves
 out evaluations whose record already succeeded, and starts no server for a group with none left; the
 dry run lists them. Failed runs rerun at their old paths. A run that succeeded but is invalid (for

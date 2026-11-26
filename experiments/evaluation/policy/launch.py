@@ -8,11 +8,16 @@ from collections.abc import Collection
 from dataclasses import replace
 
 from marin.evaluation.hardware import Platform, default_platform
-from marin.evaluation.model_config import ModelConfig, ServeBackend
-from marin.evaluation.serving_config import checkpoint_digest, native_context_window, resolved_serve_config
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
+from marin.evaluation.model_config import ModelConfig
+from marin.evaluation.serving_config import (
+    checkpoint_digest,
+    inference_build,
+    native_context_window,
+    resolved_serve_config,
+)
 
 from experiments.evaluation.curated import pinned_model
+from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, LaunchSpec
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, resolve, serving_window
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
@@ -59,24 +64,15 @@ def model_candidate(model: ModelConfig) -> PolicyCandidate:
     return PolicyCandidate(model=model, max_context=window)
 
 
-def _inference_build(model: ModelConfig, platform: Platform) -> str:
-    """The inference build a server for the model runs, which can change its outputs."""
-    if model.serve.backend is not ServeBackend.VLLM:
-        return model.serve.backend.value
-    if platform is Platform.GPU:
-        return VLLM_GPU_RELEASE.release_tag
-    return f"{VLLM_FORK_REQUIREMENT}; {TPU_INFERENCE_FORK_REQUIREMENT}"
-
-
 def run_key(policy: EvalPolicy, release_commit: str | None, model: ModelConfig, platform: Platform) -> str:
-    """The part of every run ID a policy launch sets: the version, a release's commit, and the server's
-    inference build and tensor parallelism, which the model's serving config leaves out of its identity."""
+    """The part of every run ID a policy launch sets: the version, a release's commit, and the server's build
+    and accelerator, which fix the vLLM release and tensor parallelism the model's own identity leaves out."""
     return json.dumps(
         {
             "policy": policy.version,
             "release": release_commit,
-            "inference": _inference_build(model, platform),
-            "tensor_parallel": model.serve.tensor_parallel_size,
+            "inference": inference_build(model.serve, platform),
+            "accelerator": MARIN_EVAL_HARDWARE.select(model, platform, None).label,
         },
         sort_keys=True,
     )
