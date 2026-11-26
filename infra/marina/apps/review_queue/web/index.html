@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f5f5ef">
+    <title>Review queue · Marin</title>
+    <link rel="stylesheet" href="./style.css">
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">M</span><span>MARIN <span class="brand-light">/ COLLABORATION</span></span></div>
+        <a class="repo-link" href="https://github.com/marin-community/marin/pulls" target="_blank" rel="noopener noreferrer">Open GitHub ↗</a>
+      </header>
+
+      <section class="intro" aria-labelledby="page-title">
+        <div class="eyebrow"><span class="live-dot" aria-hidden="true"></span> LIVE FROM GITHUB <span class="eyebrow-rule"></span> FIRST PASS</div>
+        <h1 id="page-title">Review queue<span class="title-period">.</span></h1>
+        <p class="lede">See who has an open review request before asking for another. Each card links to the PRs behind its count.</p>
+        <div class="controls">
+          <button id="refresh" type="button">Refresh queue <span aria-hidden="true">↻</span></button>
+          <span id="updated" class="updated" aria-live="polite">Loading open pull requests…</span>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="Queue summary">
+        <div class="metric"><span class="metric-label">OPEN PULL REQUESTS</span><strong id="open-count">—</strong><span class="metric-note">Across marin-community/marin</span></div>
+        <div class="metric"><span class="metric-label">INDIVIDUAL REQUESTS</span><strong id="request-count">—</strong><span class="metric-note">One count per requested person</span></div>
+        <div class="metric"><span class="metric-label">PEOPLE IN QUEUE</span><strong id="reviewer-count">—</strong><span class="metric-note">With a pending request</span></div>
+      </section>
+
+      <section class="queue" aria-labelledby="queue-title">
+        <div class="section-heading">
+          <div><div class="section-kicker">01 / INDIVIDUAL REQUESTS</div><h2 id="queue-title">Who has reviews waiting</h2></div>
+          <label class="search-label">Find reviewer <input id="search" type="search" placeholder="Search by GitHub handle" autocomplete="off"></label>
+        </div>
+        <p class="section-note">Sorted by the number of open PRs requesting each person. Multiple requests on one PR appear in each person's queue.</p>
+        <div id="reviewers" class="reviewers" aria-live="polite"><p class="empty">Loading reviewer requests…</p></div>
+      </section>
+
+      <section class="secondary" aria-label="Other review requests">
+        <div class="secondary-panel"><div class="section-kicker">02 / TEAM REQUESTS</div><h2>Requested teams <span id="team-count" class="heading-count">—</span></h2><p class="section-note">Team requests are shown separately because GitHub does not assign them to one person.</p><div id="teams" class="compact-list"><p class="empty">Loading…</p></div></div>
+        <div class="secondary-panel"><div class="section-kicker">03 / NO REVIEWER</div><h2>Open without a request <span id="unassigned-count" class="heading-count">—</span></h2><p class="section-note">Drafts are included. These PRs currently have no individual or team review request.</p><div id="unassigned" class="compact-list"><p class="empty">Loading…</p></div></div>
+      </section>
+
+      <footer><span>Source: GitHub open pull requests · refreshed when this page loads or you press Refresh.</span><span>Counts describe pending requests, not required approvals or actual availability.</span></footer>
+    </main>
+  </body>
+</html>
