@@ -10,6 +10,7 @@ receipt creates a new dataset revision plus an index bump for the next landing.
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,8 +31,10 @@ from experiments.post_training.task_curation.source import CatalogConfig, RlData
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 LICENSE_RECEIPT_INDEX = Path(__file__).with_name("datasets") / "license_receipts" / "index.json"
+LICENSE_RECEIPT_HISTORY_INDEX = Path(__file__).with_name("datasets") / "license_receipt_history" / "index.json"
 LICENSE_RECEIPT_REPO = "open-athena/marin-license-receipts"
 BANNED_SOURCES_ISSUE = LICENSE_REGISTRY_ISSUE
+type LicensePin = tuple[str, str, str]
 
 
 def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
@@ -60,6 +63,60 @@ def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
     if any(key != receipt.source_id for key, receipt in receipts.items()):
         raise ValueError("License registry key differs from the receipt source identity")
     return receipts
+
+
+def read_license_receipt_history(path: Path) -> dict[LicensePin, LicenseReceipt]:
+    """Read immutable receipts keyed by exact source, dataset and revision.
+
+    Distinct pins of one source may coexist. Duplicate pins are refused, so
+    neither shard order nor upload time can override a reviewed decision.
+    """
+    receipts = {}
+    for _, document in sorted(load_referenced_json(path).items()):
+        for source_id, record in document.items():
+            receipt = LicenseReceipt.model_validate(record)
+            pin = (receipt.source_id, receipt.dataset_id, receipt.revision)
+            if source_id != canonical_source_id(source_id) or source_id != receipt.source_id or pin in receipts:
+                raise ValueError(f"Duplicate or mismatched archived license pin: {pin}")
+            receipts[pin] = receipt
+    return receipts
+
+
+def exact_pin_license_receipt(
+    source_id: str,
+    dataset_id: str | None,
+    revision: str | None,
+    selected: Mapping[str, LicenseReceipt],
+    archived: Mapping[LicensePin, LicenseReceipt],
+) -> LicenseReceipt | None:
+    """Prefer the selected exact-pin receipt, then check reviewed history."""
+    receipt = selected.get(source_id)
+    if receipt is not None and (receipt.source_id, receipt.dataset_id, receipt.revision) == (
+        source_id,
+        dataset_id,
+        revision,
+    ):
+        return receipt
+    if dataset_id is None or revision is None:
+        return None
+    return archived.get((source_id, dataset_id, revision))
+
+
+def bind_registered_license_receipt[ConfigT: CatalogConfig](
+    source: RlDataSource[ConfigT],
+    selected: Mapping[str, LicenseReceipt],
+    archived: Mapping[LicensePin, LicenseReceipt],
+) -> RlDataSource[ConfigT]:
+    """Bind reviewed evidence for the source's current pin without changing selection."""
+    dataset = source.dataset
+    receipt = exact_pin_license_receipt(
+        source.info.id,
+        dataset.name if dataset is not None else None,
+        dataset.revision if dataset is not None else None,
+        selected,
+        archived,
+    )
+    return bind_license_receipt(source, receipt)
 
 
 def adopt_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message: str, namespace: str) -> str:
@@ -151,6 +208,7 @@ def licensed_source[ConfigT: CatalogConfig](source: RlDataSource[ConfigT]) -> Rl
     """Load the canonical reviewed receipt, then enforce permission before any graph work."""
     if source.info.license_receipt is None:
         receipts = read_license_receipts(LICENSE_RECEIPT_INDEX)
-        source = bind_license_receipt(source, receipts.get(source.info.id))
+        archived = read_license_receipt_history(LICENSE_RECEIPT_HISTORY_INDEX)
+        source = bind_registered_license_receipt(source, receipts, archived)
     source.require_license()
     return source

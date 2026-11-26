@@ -1,0 +1,12 @@
+{
+  "repo": "open-athena/marin-license-receipts",
+  "revision": "032e29d1eab03847845ba47f6c99629edae38af9",
+  "references": [
+    {
+      "repo": "open-athena/marin-license-receipts",
+      "revision": "032e29d1eab03847845ba47f6c99629edae38af9",
+      "path": "exact-pin-history/native-retained-20261126-v1/part-000.json",
+      "sha256": "f5acb3d8814082f565b2d2af3b21be99483e0b71d0bb38e7d09c92e9328d37ad"
+    }
+  ]
+}

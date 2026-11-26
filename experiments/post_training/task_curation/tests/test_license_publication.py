@@ -21,7 +21,12 @@ from huggingface_hub import DatasetCard
 from huggingface_hub.hf_api import RepoFile
 from taskcompendium.pipeline.models import IntendedUse
 
-from experiments.post_training.task_curation import license_publication, license_resolution, native_quick
+from experiments.post_training.task_curation import (
+    license_binding,
+    license_publication,
+    license_resolution,
+    native_quick,
+)
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from infra.marina.apps.rl_data_catalog.server import licensing
 
@@ -531,6 +536,27 @@ def test_check_publication_passes_on_the_recorded_lineage_exception(tmp_path, mo
     assert evidence["rule_id"] == "E1"
     assert evidence["lineage_exception"]["scope"] == ["train"]
     assert evidence["lineage_exception"]["approved"] is True
+
+
+def test_check_publication_uses_archived_exception_only_at_its_exact_pin_and_scope(monkeypatch):
+    receipt = lineage_receipt(REVISION, ["train"])
+    registered_lineage(monkeypatch, receipt)
+    future = lineage_receipt("e" * 40, ["train"])
+    monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {future.source_id: future})
+    monkeypatch.setattr(
+        license_binding,
+        "load_referenced_json",
+        lambda path: {"history/part-000.json": {receipt.source_id: receipt.model_dump(mode="json")}},
+    )
+    evidence = license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "train")
+    assert evidence["verdict"] == "PASS"
+    assert evidence["lineage_exception"]["revision"] == receipt.revision
+    with pytest.raises(ValueError, match="Published pin failed"):
+        license_publication.check_publication(receipt.source_id, receipt.dataset_id, receipt.revision, "eval")
+    unrelated = lineage_receipt("f" * 40, ["train"])
+    monkeypatch.setattr(license_publication, "resolve_license", lambda target: unrelated)
+    with pytest.raises(ValueError, match="Published pin failed"):
+        license_publication.check_publication(unrelated.source_id, unrelated.dataset_id, unrelated.revision, "train")
 
 
 def test_check_publication_clears_a_repackager_fail_on_the_folder_lineage(tmp_path, monkeypatch):

@@ -117,6 +117,18 @@ selection and admission counts. A checker run cannot lift them: the user approve
 a recorded registry change. Earlier declarations, task artifacts and app revisions
 remain intact.
 
+The selected license registry keeps one reviewed receipt per source. A separate
+history index, `datasets/license_receipt_history/index.json`, references immutable
+reviewed receipts for other exact source/dataset/revision combinations. Canonical
+source binding and publication checks prefer a matching selected receipt, then
+look up the exact pin in history. This lets a currently declared release keep its
+reviewed evidence while an admission lane selects evidence for its next release.
+History cannot override a matching selected receipt or transfer an exception to
+another revision or use scope. Both paths still enforce the current license gate.
+Archive additions use `reference_data.commit_reference_documents` with new shard
+paths and update the history index. Preserve existing shard bytes and the selected
+registry index.
+
 ## Current admission policy
 
 Ruling 72 (2026-11-20, clarified the same day): `CONSUMER` checks are advisory.

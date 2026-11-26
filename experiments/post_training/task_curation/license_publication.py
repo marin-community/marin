@@ -27,7 +27,10 @@ from huggingface_hub import DatasetCard, HfApi, hf_hub_download
 from huggingface_hub.hf_api import RepoFile
 
 from experiments.post_training.task_curation.license_binding import (
+    LICENSE_RECEIPT_HISTORY_INDEX,
     LICENSE_RECEIPT_INDEX,
+    exact_pin_license_receipt,
+    read_license_receipt_history,
     read_license_receipts,
 )
 from experiments.post_training.task_curation.license_resolution import (
@@ -396,8 +399,14 @@ def recorded_lineage_exception(source_id: str, dataset_id: str, revision: str, u
     combination rescues a card-check escalation: the receipt must sit at the published
     pin, carry the resolved upstream, and hold an approved exception for this use.
     """
-    receipt = read_license_receipts(LICENSE_RECEIPT_INDEX).get(source_id)
-    if receipt is None or (receipt.dataset_id, receipt.revision) != (dataset_id, revision):
+    receipt = exact_pin_license_receipt(
+        source_id,
+        dataset_id,
+        revision,
+        read_license_receipts(LICENSE_RECEIPT_INDEX),
+        read_license_receipt_history(LICENSE_RECEIPT_HISTORY_INDEX),
+    )
+    if receipt is None:
         return None
     if receipt.resolved_source is None:
         return None

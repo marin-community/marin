@@ -99,8 +99,10 @@ from experiments.post_training.task_curation.grading_binding import bind_grading
 from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
 from experiments.post_training.task_curation.lexical_policy import source_lexical_use
 from experiments.post_training.task_curation.license_binding import (
+    LICENSE_RECEIPT_HISTORY_INDEX,
     LICENSE_RECEIPT_INDEX,
-    bind_license_receipt,
+    bind_registered_license_receipt,
+    read_license_receipt_history,
     read_license_receipts,
 )
 from experiments.post_training.task_curation.oracle_admitted_release import (
@@ -469,8 +471,9 @@ def all_sources() -> dict[str, RlDataSource]:
         for source_id, source in sources.items()
     }
     license_receipts = read_license_receipts(LICENSE_RECEIPT_INDEX)
+    archived_licenses = read_license_receipt_history(LICENSE_RECEIPT_HISTORY_INDEX)
     selected = {
-        source_id: bind_license_receipt(source, license_receipts.get(source_id))
+        source_id: bind_registered_license_receipt(source, license_receipts, archived_licenses)
         for source_id, source in selected.items()
     }
     receipts = derived_contract_receipts()

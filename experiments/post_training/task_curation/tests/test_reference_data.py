@@ -317,6 +317,31 @@ def test_read_license_receipts_reads_a_staged_receipts_file(tmp_path: Path):
     assert receipts["fixture:other"].revision == "b" * 40
 
 
+def test_license_history_preserves_distinct_pins_and_rejects_duplicate_pins(tmp_path: Path, hub: dict):
+    first = _receipt("fixture:source", "fixture/dataset", "a" * 40)
+    second = _receipt("fixture:source", "fixture/next-release", "b" * 40)
+    index = tmp_path / "history.json"
+    reference_data.create_reference_index(
+        index,
+        license_binding.LICENSE_RECEIPT_REPO,
+        {
+            "history/part-000.json": json.dumps({first.source_id: first.model_dump(mode="json")}).encode(),
+            "history/part-001.json": json.dumps({second.source_id: second.model_dump(mode="json")}).encode(),
+        },
+        message="Archive two reviewed pins",
+    )
+    archived = license_binding.read_license_receipt_history(index)
+    assert archived[(first.source_id, first.dataset_id, first.revision)] == first
+    assert archived[(second.source_id, second.dataset_id, second.revision)] == second
+    reference_data.commit_reference_documents(
+        index,
+        {"history/part-002.json": json.dumps({first.source_id: first.model_dump(mode="json")}).encode()},
+        message="Duplicate pin",
+    )
+    with pytest.raises(ValueError, match="Duplicate or mismatched archived license pin"):
+        license_binding.read_license_receipt_history(index)
+
+
 def test_read_license_receipts_still_reads_staging_directories(tmp_path: Path):
     directory = tmp_path / "receipts"
     directory.mkdir()

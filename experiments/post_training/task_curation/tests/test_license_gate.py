@@ -26,6 +26,8 @@ from experiments.post_training.task_curation.license_binding import (
     LICENSE_RECEIPT_INDEX,
     append_license_receipt,
     bind_license_receipt,
+    bind_registered_license_receipt,
+    exact_pin_license_receipt,
 )
 from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.pipeline import process_rows
@@ -284,6 +286,52 @@ def test_source_rename_carries_its_license_receipt(tmp_path):
     assert bound.info.license_receipt is not None
     assert bound.info.license_receipt.evidence == receipt.evidence
     bound.require_license()
+
+
+def test_license_history_binds_current_pin_without_dropping_future_selection(tmp_path):
+    input_path = tmp_path / "input.txt"
+    input_path.write_text("1\n2\n")
+    source = with_license(number_source(input_path))
+    current = source.info.license_receipt
+    assert current is not None
+    future = current.model_copy(update={"dataset_id": "fixture/future-release", "revision": "b" * 40})
+    selected = {source.info.id: future}
+    archived = {(current.source_id, current.dataset_id, current.revision): current}
+    source = replace(source, info=replace(source.info, license_receipt=None))
+
+    bound = bind_registered_license_receipt(source, selected, archived)
+    # This regression previously prevented catalog publication while an admission
+    # lane had already selected the next release's reviewed receipt.
+    bound.require_license()
+    assert bound.info.license_receipt == current
+    assert selected[source.info.id] == future
+    assert exact_pin_license_receipt(source.info.id, future.dataset_id, future.revision, selected, archived) == future
+    assert exact_pin_license_receipt(source.info.id, current.dataset_id, "c" * 40, selected, archived) is None
+
+
+def test_license_history_cannot_override_a_restricted_selected_receipt(tmp_path):
+    input_path = tmp_path / "input.txt"
+    input_path.write_text("1\n")
+    source = with_license(number_source(input_path))
+    archived_receipt = source.info.license_receipt
+    assert archived_receipt is not None
+    restricted = archived_receipt.model_copy(
+        update={
+            "evidence": [
+                license_evidence(
+                    "https://example.test/LICENSE", b"SPDX-License-Identifier: CC-BY-NC-4.0\n", "license_file"
+                )
+            ]
+        }
+    )
+    bound = bind_registered_license_receipt(
+        source,
+        {source.info.id: restricted},
+        {(archived_receipt.source_id, archived_receipt.dataset_id, archived_receipt.revision): archived_receipt},
+    )
+    with pytest.raises(ValueError, match="blocks ingest and admission"):
+        bound.require_license()
+    assert bound.info.license_receipt == restricted
 
 
 def test_license_gate_precedes_recipe_validation_and_ingestion(tmp_path, monkeypatch):
