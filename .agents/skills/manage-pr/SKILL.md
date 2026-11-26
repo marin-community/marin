@@ -23,11 +23,6 @@ validation concurrently. Resolve their results before pushing and publishing,
 then monitor the PR. A WIP checkpoint may stop after clean-up, lint, staging,
 commit, and push.
 
-Draft the PR title and description before advisory review. Pass the exact draft
-title with `--pr-title` and the description file with `--pr-body-file` to the
-review command so the prose lane checks PR vocabulary alongside the branch.
-If either changes after review, rerun the prose lane against the final draft.
-
 ## 1. Clean up your own diff
 
 Read the complete branch diff and remove dead code, weak tests, stale prose,
@@ -78,8 +73,7 @@ each process handle, output, and exit status. Do not wait for test results to
 start the review.
 
 ```bash
-./infra/pre-commit.py --review --calling-agent=claude \
-  --pr-title "<draft title>" --pr-body-file "<draft body file>"
+./infra/pre-commit.py --review --calling-agent=claude
 ```
 
 The advisory review is required before every PR. It reviews the whole branch
@@ -95,7 +89,7 @@ Run these checks while the review proceeds, concurrently where independent:
 - If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`.
 - If the change is docs-heavy: `uv run mkdocs build --strict`.
 
-While commands run, gather issue links and refine the PR title/body. Keep the
+While commands run, draft the PR title/body and gather issue links. Keep the
 reviewed files and Git base stable until all readers finish: reviewers inspect
 the live checkout throughout their run. Do not edit, auto-fix, rebase, or run
 checks that rewrite reviewed files concurrently. The affected-test runner syncs

@@ -112,34 +112,7 @@ def test_review_reports_failure_when_agent_is_missing(tmp_path: Path, monkeypatc
     assert linter.run_lint_review(linter.LintReviewAgent.CODEX) == 1
 
 
-def test_review_includes_current_glossary_and_draft_pr_text_in_prose_lane(
-    review_workspace: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-):
-    agents, _ = review_workspace
-    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("rev-1", "~~Old~~ New"))
-    workspace = agents.parent
-    body_file = workspace / "pr-body.md"
-    body_file.write_text("First line\nSecond line\n")
-
-    assert (
-        linter.run_lint_review(
-            linter.LintReviewAgent.CODEX,
-            lane_names=["prose"],
-            agent_executable=agents / "codex",
-            pr_title="Draft title",
-            pr_body_file=body_file,
-        )
-        == 0
-    )
-    prompts = list((workspace / "logs").glob("*/**/prose/prompt.md"))
-    assert len(prompts) == 1
-    prompt = prompts[0].read_text()
-    assert _pr_text_from_prompt(prompt) == {"title": "Draft title", "body": "First line\nSecond line\n"}
-    assert "Content SHA: rev-1" in prompt
-    assert "~~Old~~ New" in prompt
-
-
-def test_review_includes_published_pr_text_in_prose_lane(
+def test_review_includes_current_glossary_and_published_pr_text_in_prose_lane(
     review_workspace: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ):
     agents, _ = review_workspace
@@ -148,7 +121,7 @@ def test_review_includes_published_pr_text_in_prose_lane(
     gh.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"title":"Published title","body":"Published description"}\'\n')
     gh.chmod(0o755)
     monkeypatch.setenv("MARIN_REVIEW_PR_NUMBER", "123")
-    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("rev-1", "terms"))
+    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("rev-1", "~~Old~~ New"))
 
     assert (
         linter.run_lint_review(
@@ -160,6 +133,8 @@ def test_review_includes_published_pr_text_in_prose_lane(
     )
     prompt = next((workspace / "logs").glob("*/**/prose/prompt.md")).read_text()
     assert _pr_text_from_prompt(prompt) == {"title": "Published title", "body": "Published description"}
+    assert "Content SHA: rev-1" in prompt
+    assert "~~Old~~ New" in prompt
 
 
 def test_review_fails_when_glossary_is_unavailable(review_workspace: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch):

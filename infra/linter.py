@@ -271,12 +271,8 @@ class ReviewMetadata:
     body: str
 
 
-def _review_pr_metadata(title: str | None, body_file: pathlib.Path | None) -> ReviewMetadata | None:
-    if title is not None and body_file is not None:
-        return ReviewMetadata(title, body_file.read_text(encoding="utf-8"))
-    if title is not None or body_file is not None:
-        raise ValueError("--pr-title and --pr-body-file must be supplied together")
-
+def _review_pr_metadata() -> ReviewMetadata | None:
+    """The published title and description of the PR under review, or None outside a PR review."""
     pr_number = _review_pr_number()
     if pr_number is None:
         return None
@@ -295,12 +291,10 @@ def _lane_has_rule(lane: LintLane, code: str) -> bool:
     return any(rule.code == code for rule in lane.rules)
 
 
-def _review_inputs(
-    lanes: list[LintLane], pr_title: str | None, pr_body_file: pathlib.Path | None
-) -> tuple[ReviewMetadata | None, GlossarySource | None]:
+def _review_inputs(lanes: list[LintLane]) -> tuple[ReviewMetadata | None, GlossarySource | None]:
     pr_metadata = None
     if any(lane.name == PROSE_LANE_NAME for lane in lanes):
-        pr_metadata = _review_pr_metadata(pr_title, pr_body_file)
+        pr_metadata = _review_pr_metadata()
     glossary = None
     if any(_lane_has_rule(lane, RL_VOCABULARY_RULE) for lane in lanes):
         glossary = fetch_glossary()
@@ -752,8 +746,6 @@ def run_lint_review(
     compose: bool = True,
     *,
     agent_executable: pathlib.Path | None = None,
-    pr_title: str | None = None,
-    pr_body_file: pathlib.Path | None = None,
 ) -> int:
     """Run the advisory `infra/lint/` catalog over the branch's changes via headless agents.
 
@@ -813,7 +805,7 @@ def run_lint_review(
 
     shared_text = LINT_CATALOG.shared_prompt
     try:
-        pr_metadata, glossary = _review_inputs(lanes, pr_title, pr_body_file)
+        pr_metadata, glossary = _review_inputs(lanes)
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         click.echo(f"Error: could not load review inputs: {error}", err=True)
         return 1
