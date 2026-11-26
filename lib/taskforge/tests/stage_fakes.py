@@ -17,7 +17,7 @@ from rolloutengine.models import (
     TaskRolloutSpec,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, TaskResource
 
 from taskforge.effects.context import Context
 from taskforge.effects.issues import Hold, Restart
@@ -33,10 +33,12 @@ class Environments(EnvFactory):
     def __init__(self) -> None:
         self.created: list[FakeEnv] = []
         self.requested: list[EnvironmentRequirements] = []
+        self.installed: list[tuple[TaskResource, ...]] = []
 
     @override
-    async def create(self, requirements: EnvironmentRequirements) -> FakeEnv:
+    async def create(self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()) -> FakeEnv:
         self.requested.append(requirements)
+        self.installed.append(resources)
         env = FakeEnv(requirements.model_dump_json(), {}, lambda event: None)
         self.created.append(env)
         return env

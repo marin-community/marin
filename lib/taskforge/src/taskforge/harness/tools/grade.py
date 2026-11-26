@@ -12,7 +12,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource
 
 from taskforge.effects.context import Context
-from taskforge.effects.issues import Hold, OutputBudgetExhausted
+from taskforge.effects.issues import EnvironmentSetupFailed, Hold, OutputBudgetExhausted
 from taskforge.harness.protocol import ToolResult
 from taskforge.harness.tools.base import FILE_ERRORS, ValidatedTool
 from taskforge.lowering import InvalidTaskSpec, LoweringSettings, check_candidates, lower_with_settings
@@ -83,6 +83,8 @@ class GradeTool(ValidatedTool[CandidateArgs]):
             # The grading machine's budget, not the caller's session: raised, it would read as the caller's own
             # exhausted search. The caller may grade another candidate; reproducing this one stays inconclusive.
             return ToolResult(f"Grading this candidate failed and produced no grade: {error} on the grading machine")
+        except EnvironmentSetupFailed as error:
+            return ToolResult(f"Cannot grade draft: its environment's setup commands failed: {error}")
         try:
             checks = grader_checks(result)
         except ValueError as error:

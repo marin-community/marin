@@ -29,7 +29,12 @@ from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.reward_shaping import parse_trajectory_reward_shaping_config
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
 from skyrl_train.config.trajectory_selection import best_of_n_sample_count, optimization_samples_per_prompt
-from skyrl_train.config.utils import generation_context_limit, model_expert_count, normalize_logging_backends
+from skyrl_train.config.utils import (
+    generation_context_limit,
+    load_policy_model_config,
+    model_expert_count,
+    normalize_logging_backends,
+)
 from skyrl_train.config.validation import (
     validate_batch_invariant_config,
     validate_megatron_config,
@@ -49,17 +54,18 @@ def moe_router_replay_requested(cfg: DictConfig, role: str = "policy") -> bool:
     return bool(cfg.trainer[role].megatron_config.get("moe_router_replay", False))
 
 
-def _policy_dp_size(cfg: DictConfig) -> int:
-    policy_world_size = cfg.trainer.placement.policy_num_nodes * cfg.trainer.placement.policy_num_gpus_per_node
-
-    pp = cfg.trainer.policy.megatron_config.pipeline_model_parallel_size
-    cp = cfg.trainer.policy.megatron_config.context_parallel_size
-    tp = cfg.trainer.policy.megatron_config.tensor_model_parallel_size
-    assert policy_world_size % (pp * cp * tp) == 0, (
-        f"policy_world_size {policy_world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
+def _dp_size(cfg: DictConfig, role: str) -> int:
+    placement = cfg.trainer.placement
+    world_size = placement[f"{role}_num_nodes"] * placement[f"{role}_num_gpus_per_node"]
+    megatron = cfg.trainer[role].megatron_config
+    pp = megatron.pipeline_model_parallel_size
+    cp = megatron.context_parallel_size
+    tp = megatron.tensor_model_parallel_size
+    assert world_size % (pp * cp * tp) == 0, (
+        f"{role}_world_size {world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
         "This ensures that the data parallel size is an integer."
     )
-    return policy_world_size // (pp * cp * tp)
+    return world_size // (pp * cp * tp)
 
 
 def validate_batch_sizes(cfg: DictConfig):
@@ -79,7 +85,7 @@ def validate_batch_sizes(cfg: DictConfig):
     assert cfg.trainer.micro_forward_batch_size_per_gpu > 0, "micro_forward_batch_size_per_gpu must be greater than 0"
 
     # Validate policy mini batch size
-    policy_dp_size = _policy_dp_size(cfg)
+    policy_dp_size = _dp_size(cfg, "policy")
 
     assert cfg.trainer.train_batch_size % cfg.trainer.policy_mini_batch_size == 0, (
         f"train_batch_size {cfg.trainer.train_batch_size} should be divisible by policy_mini_batch_size {cfg.trainer.policy_mini_batch_size}"
@@ -110,15 +116,7 @@ def validate_batch_sizes(cfg: DictConfig):
 
     use_ref_model = reference_model_required(cfg.trainer.algorithm)
     if use_ref_model:
-        ref_world_size = cfg.trainer.placement.ref_num_nodes * cfg.trainer.placement.ref_num_gpus_per_node
-        pp = cfg.trainer.ref.megatron_config.pipeline_model_parallel_size
-        cp = cfg.trainer.ref.megatron_config.context_parallel_size
-        tp = cfg.trainer.ref.megatron_config.tensor_model_parallel_size
-        assert ref_world_size % (pp * cp * tp) == 0, (
-            f"ref_world_size {ref_world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
-            "This ensures that the data parallel size is an integer."
-        )
-        ref_dp_size = ref_world_size // (pp * cp * tp)
+        ref_dp_size = _dp_size(cfg, "ref")
         lcm_dp_size = math.lcm(lcm_dp_size, ref_dp_size)
 
     assert cfg.trainer.train_batch_size >= lcm_dp_size, (
@@ -164,7 +162,7 @@ def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = Tru
         if unsupported:
             return reason
     train_rows = cfg.trainer.train_batch_size * optimization_samples_per_prompt(cfg)
-    if train_rows % _policy_dp_size(cfg):
+    if train_rows % _dp_size(cfg, "policy"):
         return "rows requiring DP padding"
     megatron = cfg.trainer.policy.megatron_config
     etp = megatron.get("expert_tensor_parallel_size") or megatron.tensor_model_parallel_size
@@ -175,18 +173,9 @@ def worker_batch_refusal(cfg: DictConfig, *, check_runtime_resources: bool = Tru
         if not check_runtime_resources and not os.path.isfile(os.path.join(model.path, "config.json")):
             return None
 
-        from transformers import AutoConfig
-        from skyrl_train.models import register_local_models
-
-        register_local_models()
         try:
-            metadata = AutoConfig.from_pretrained(
-                model.path,
-                trust_remote_code=True,
-                revision=model.get("revision"),
-                local_files_only=not check_runtime_resources,
-            )
-        except Exception as error:
+            metadata = load_policy_model_config(cfg, local_files_only=not check_runtime_resources)
+        except (OSError, ValueError) as error:
             if cfg.trainer.batch_builder != BatchBuilder.AUTO:
                 raise
             logger.warning("Could not read the policy model configuration for automatic batch assembly ({!r})", error)
@@ -375,7 +364,7 @@ def _is_mla_arch(model_cfg) -> bool:
     return False
 
 
-def _resolve_num_kv_heads(model_path: str, *, local_files_only: bool):
+def _resolve_num_kv_heads(cfg: DictConfig, *, local_files_only: bool):
     """Resolve (num_kv_heads, is_mla, model_cfg) from an HF model config, offline-safe.
 
     Returns (None, False, None) if the config cannot be resolved without a network
@@ -385,14 +374,7 @@ def _resolve_num_kv_heads(model_path: str, *, local_files_only: bool):
     models the effective kv-head count is 1 (single shared latent).
     """
     try:
-        from transformers import AutoConfig
-    except Exception:  # transformers unavailable -> cannot resolve
-        return None, False, None
-    try:
-        # Respect offline / cached configs: do not force a network download at
-        # validate-time. If the config isn't locally resolvable, transformers raises
-        # (offline) or we let any error fall through to the graceful-degrade path.
-        model_cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True, local_files_only=local_files_only)
+        model_cfg = load_policy_model_config(cfg, local_files_only=local_files_only)
     except Exception:
         return None, False, None
 
@@ -493,7 +475,7 @@ def _validate_dcp_cfg(cfg: DictConfig, *, local_files_only: bool):
 
     # (b)/(f) model-aware bounds: resolve the HF config offline-safely.
     model_path = cfg.trainer.policy.model.path
-    num_kv_heads, is_mla, model_cfg = _resolve_num_kv_heads(model_path, local_files_only=local_files_only)
+    num_kv_heads, is_mla, model_cfg = _resolve_num_kv_heads(cfg, local_files_only=local_files_only)
     if num_kv_heads is None:
         # Could not resolve the config without a network download -> degrade gracefully:
         # keep the cheap dcp<=tp bound (already asserted) and warn, leaning on vLLM's own

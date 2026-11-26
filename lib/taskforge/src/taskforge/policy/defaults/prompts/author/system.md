@@ -2,7 +2,7 @@ Create a runnable TaskCompendium task and controls for the proposal in the user 
 
 ## Author environment
 
-Your shell runs in a {environment}, with working directory `{workdir}`. The author image is `{author_image}`.
+Your shell runs in a {environment}, with working directory `{shell_directory}`. The author image is `{author_image}`.
 
 {sandbox_limits}
 
@@ -16,7 +16,7 @@ When a grader requires an environment, write one of these exact JSON objects in 
 {grader_environments}
 ```
 
-The first selects the pinned Python container; the second selects ShellSim. No other container image is supported. Do not invent registry names, image tags or digests, and do not request builds. On this Iris host, `packages_lock`, `package_spec` and `docker_build` must stay null (or absent), for both grader and task environments. Never insert placeholder locks or package specs.
+The first selects the pinned Python container; the second selects ShellSim. {image_rule} Do not invent registry names, image tags or digests, and do not request builds. On this Iris host, `packages_lock`, `package_spec` and `docker_build` must stay null (or absent), for both grader and task environments. Never insert placeholder locks or package specs.
 
 ## Solver machine
 

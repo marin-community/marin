@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
+from functools import cached_property
 import io as stdlib_io
 import json
 import math
@@ -22,7 +23,7 @@ from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
 from transformers import AutoTokenizer
-from skyrl_train.config.utils import model_expert_count
+from skyrl_train.config.utils import load_policy_model_config, model_expert_count
 from collections import defaultdict, deque
 
 import numpy as np
@@ -1503,7 +1504,7 @@ class RayPPOTrainer:
 
     async def _train_loaded_step(self, epoch: int, step_wall: StepWallTime) -> BatchSummary:
         context, policy = self.context, self.policy_model
-        num_experts = self._resolve_num_experts() if moe_router_replay_requested(self.cfg) else None
+        num_experts = self._num_experts if moe_router_replay_requested(self.cfg) else None
         stall_timeout = admission_stall_timeout(
             recent_step_times=self._step_time_history, timeout_override=self.group_admission_stall_timeout
         )
@@ -2062,40 +2063,20 @@ class RayPPOTrainer:
             len(self.inference_engine_client.engines),
         )
 
-    def _resolve_num_experts(self) -> Optional[int]:
-        """Resolve the policy model's MoE expert count from its HF config, memoized.
-
-        Used to pick a deterministic, rank-invariant route dtype when each worker
-        materializes a microbatch. Reads the HF config at
-        ``cfg.trainer.policy.model.path`` once and resolves the expert count across
-        MoE arch variants (Qwen3-MoE: ``num_experts``; Mixtral: ``num_local_experts``;
-        DeepSeek/Qwen-style: ``n_routed_experts``). Returns None (and caches None) if
-        the config has no such field (non-MoE) or can't be loaded, in which case
-        the selected batch uses one observed-max dtype for all workers.
-        """
-        if getattr(self, "_num_experts_cache", "__unset__") != "__unset__":
-            return self._num_experts_cache
-        num_experts: Optional[int] = None
+    @cached_property
+    def _num_experts(self) -> Optional[int]:
+        """Read the policy expert count for choosing a rank-invariant route dtype."""
         try:
-            from transformers import AutoConfig
-
-            model_path = self.cfg.trainer.policy.model.path
-            hf_config = AutoConfig.from_pretrained(
-                model_path,
-                trust_remote_code=True,
-                revision=self.cfg.trainer.policy.model.get("revision"),
-            )
-            num_experts = model_expert_count(hf_config)
+            num_experts = model_expert_count(load_policy_model_config(self.cfg, local_files_only=False))
         except Exception as e:  # noqa: BLE001 — config load is best-effort; fallback is safe
             logger.warning(
                 f"Could not resolve num_experts from policy model config for the "
                 f"routed-experts dtype pick ({e!r}); the batch will use its "
                 f"observed-max fallback."
             )
-            num_experts = None
+            return None
         if num_experts is not None:
             logger.info(f"Resolved policy model num_experts={num_experts} for routed-experts dtype pick.")
-        self._num_experts_cache: Optional[int] = num_experts
         return num_experts
 
     def convert_to_training_input(
@@ -2121,7 +2102,7 @@ class RayPPOTrainer:
             facts=facts,
             fields=fields,
             rollout_staleness=tuple(rollout_staleness) if rollout_staleness is not None else None,
-            num_experts=self._resolve_num_experts() if routed_experts is not None else None,
+            num_experts=self._num_experts if routed_experts is not None else None,
         )
         training_input = assemble_slice(
             plan,
