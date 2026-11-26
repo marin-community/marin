@@ -20,7 +20,7 @@ from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materia
 from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
-from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 
 from experiments.post_training import rl, rl_compose, rl_gate
@@ -225,11 +225,11 @@ def test_micro210_preset_requires_an_export_even_without_an_eligible_best(select
 
 def test_cross_host_generation_plan_refuses_a_non_vllm_backend(selection):
     preset = MOCHI.by_name["eval-short"]
-    config = preset.recipe.config.merge(RecipePatch(generator=sections.Generator(backend="sglang")))
-    preset = replace(preset, recipe=replace(preset.recipe, config=config))
-    result = plan(replace(MOCHI, presets=(preset,)), preset.name)
-    assert result.exit_code == 4, (result.output, result.exception)
-    assert "Cross-host expert-parallel generation requires vLLM" in result.output
+    spec = rl_compose.run_spec(preset, name="cross-host-evaluation", model_name=MOCHI.model)
+    config = yaml.safe_load(spec.config_yaml)
+    config["generator"]["backend"] = "sglang"
+    with pytest.raises(ValueError, match="Cross-host expert-parallel generation requires vLLM"):
+        rl_compose.run_step(preset, replace(spec, config_yaml=yaml.safe_dump(config)))
 
 
 @pytest.mark.parametrize(
