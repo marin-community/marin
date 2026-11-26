@@ -5,18 +5,27 @@ import dataclasses
 import hashlib
 import json
 
+import pyarrow.parquet as pq
 import pytest
 import yaml
 from fray.iris_backend import convert_constraints
 from marin.execution.lazy import materialized_config
 from marin.rl.curriculum import validation_payload
+from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
+from skyrl_train.dataset.harbor_import import harbor_trial_task, restore_harbor_trial_task
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ExecutionRequirements
 
 from experiments.post_training.long_loop import campaign
 from experiments.post_training.long_loop.campaign import REFERENCE, campaign_round
-from experiments.post_training.long_loop.campaign_data import CampaignMix, load_mix, partition_mix, retained_task
+from experiments.post_training.long_loop.campaign_data import (
+    CampaignMix,
+    load_mix,
+    partition_mix,
+    retained_task,
+    write_parquet,
+)
 from experiments.post_training.long_loop.campaign_runtime import bind_runtime
 from experiments.post_training.long_loop.execution_policy import RlStopping, rl_training_callbacks
 from experiments.post_training.long_loop.round_runner import adopted_round_rl, load_round
@@ -254,7 +263,7 @@ def test_retained_runtime_lowering_preserves_grader_and_declared_resources():
     }
     defaults = REFERENCE.parents[4] / "vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml"
     environment = yaml.safe_load(defaults.read_text())["task_spec"]
-    projected = bind_runtime(row, environment, "nonagentic")
+    projected = bind_runtime(row, environment)
     lowered = TaskRolloutSpec.model_validate_json(projected["task_rollout_spec"])
     assert lowered.task == task
     assert projected["task_spec"] == row["task_spec"]
@@ -284,7 +293,7 @@ def test_null_catalog_sizes_keep_provider_defaults_and_declared_minima():
     defaults = REFERENCE.parents[4] / "vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml"
     environment = yaml.safe_load(defaults.read_text())["task_spec"]
     environment["image_verifier"].update(cpus=2, memory_mb=4096, storage_mb=10240)
-    projected = bind_runtime(row, environment, "nonagentic")
+    projected = bind_runtime(row, environment)
     lowered = TaskRolloutSpec.model_validate_json(projected["task_rollout_spec"])
     assert lowered.task == task
     assert projected["task_spec"] == row["task_spec"]
@@ -292,3 +301,34 @@ def test_null_catalog_sizes_keep_provider_defaults_and_declared_minima():
     assert lowered.task_machine.memory_mb == 8192
     assert lowered.task_machine.storage_mb == 10240
     assert lowered.limits.total_turn_timeout == 600
+
+
+def test_mixed_validation_metadata_survives_parquet_publication(tmp_path):
+    rows = [
+        {"task_spec": '{"id": "first"}', "runtime": "{}", "teacher_route": "first", "first_metadata": "kept"},
+        {"task_spec": '{"id":"second"}', "runtime": "{}", "teacher_route": "second", "second_metadata": "also kept"},
+    ]
+    digest = write_parquet(StoragePath(str(tmp_path)), "validation.parquet", rows)
+    assert digest == hashlib.sha256((tmp_path / "validation.parquet").read_bytes()).hexdigest()
+    actual = pq.read_table(tmp_path / "validation.parquet").to_pylist()
+    assert actual == [
+        {**rows[0], "second_metadata": None},
+        {**rows[1], "first_metadata": None},
+    ]
+
+
+def test_original_harbor_package_survives_runtime_binding(tmp_path):
+    package = tmp_path / "original"
+    package.mkdir()
+    (package / "instruction.md").write_text("Write the requested file.")
+    (package / "task.toml").write_text('[environment]\ndocker_image = "fixture@sha256:' + "a" * 64 + '"\n')
+    task = harbor_trial_task(package, source=arithmetic_task().source)
+    row = {"task_spec": task.model_dump_json(), "runtime": "{}"}
+    defaults = REFERENCE.parents[4] / "vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml"
+    environment = yaml.safe_load(defaults.read_text())["task_spec"]
+    bound = TaskRolloutSpec.model_validate_json(bind_runtime(row, environment)["task_rollout_spec"])
+    assert bound.harness == "harbor_trial"
+    assert bound.task == task
+    restored = tmp_path / "restored"
+    restore_harbor_trial_task(bound.task, restored)
+    assert {p.name: p.read_bytes() for p in restored.iterdir()} == {p.name: p.read_bytes() for p in package.iterdir()}

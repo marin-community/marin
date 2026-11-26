@@ -166,11 +166,15 @@ def partition_mix(mix: CampaignMix, rows: dict[str, list[dict]], version: str) -
 
 def write_parquet(destination: StoragePath, name: str, rows: list[dict]) -> str:
     """Publish complete TaskSpec/runtime rows without dropping retained columns."""
-    if not rows or any(row.keys() != rows[0].keys() for row in rows):
-        raise ValueError(f"Empty or heterogeneous pool schema: {name}")
+    if not rows:
+        raise ValueError(f"Empty pool schema: {name}")
+    # Validation combines retained cohorts with different metadata columns.
+    # Give Arrow the full union: inferring keys from the first row loses extras.
+    columns = sorted({key for row in rows for key in row})
+    records = [{column: row.get(column) for column in columns} for row in rows]
     with tempfile.TemporaryDirectory() as temporary:
         local = Path(temporary) / "tasks.parquet"
-        pq.write_table(pa.Table.from_pylist(rows), local, compression="zstd")
+        pq.write_table(pa.Table.from_pylist(records), local, compression="zstd")
         expected = hashlib.sha256(local.read_bytes()).hexdigest()
         target = destination / name
         target.parent.mkdirs(exist_ok=True)
@@ -237,7 +241,6 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
                     str(local),
                     str(lowered),
                     str(settings),
-                    pin["route"],
                 ]
             )
             rows[label] = pq.read_table(lowered).to_pylist()

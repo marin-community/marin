@@ -12,10 +12,10 @@ import pyarrow.parquet as pq
 from cloud.iris.launch_config import load_launch_config
 from omegaconf import OmegaConf
 from skyrl_train.dataset.tasks import canonical_task_spec
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import NoGrader, TaskSpec
 
 
-def bind_runtime(row: dict, environment: dict, route: str) -> dict:
+def bind_runtime(row: dict, environment: dict) -> dict:
     """Lower the unchanged task through the native adapter, retaining published sizing."""
     task = TaskSpec.model_validate_json(row["task_spec"])
     settings = {
@@ -24,7 +24,9 @@ def bind_runtime(row: dict, environment: dict, route: str) -> dict:
         "task_machine_by_dataset": dict(environment["task_machine_by_dataset"]),
     }
     runtime = json.loads(row["runtime"]) if isinstance(row.get("runtime"), str) else row.get("runtime", {})
-    if route == "agentic":
+    # Only the original Harbor package importer delegates grading via NoGrader.
+    # A scheduler's agentic route does not turn native TaskSpecs into packages.
+    if "harbor" in task.tags and isinstance(task.grader, NoGrader):
         settings["harness_by_dataset"][task.source.dataset] = "harbor_trial"
     if runtime.get("task_machine") is not None:
         # The native recipe's image-machine template selects Daytona and its network
@@ -48,14 +50,13 @@ if __name__ == "__main__":
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("environment", type=Path)
-    parser.add_argument("route", choices=("agentic", "nonagentic"))
     arguments = parser.parse_args()
     environment = OmegaConf.to_container(
         load_launch_config(arguments.environment).skyrl.environment.task_sessions.task_spec, resolve=True
     )
     rows = pq.read_table(arguments.source).to_pylist()
     pq.write_table(
-        pa.Table.from_pylist([bind_runtime(row, environment, arguments.route) for row in rows]),
+        pa.Table.from_pylist([bind_runtime(row, environment) for row in rows]),
         arguments.output,
         compression="zstd",
     )

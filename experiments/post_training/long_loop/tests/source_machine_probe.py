@@ -13,7 +13,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from omegaconf import OmegaConf
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
-from skyrl_train.dataset.tasks import canonical_task_spec
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from taskcompendium.models import (
@@ -29,6 +28,7 @@ from taskcompendium.models import (
 )
 from verifyit.modes.grade_judge import JudgeConnection
 
+from experiments.post_training.long_loop.campaign_runtime import bind_runtime
 from experiments.post_training.long_loop.validate_launch import configure_worker_environment, validate_source_tasks
 
 
@@ -128,9 +128,12 @@ def main(tmp_path: Path) -> None:
     }
     # A retained campaign row includes both raw and prepared columns. Production
     # consumes the prepared task even when the launch has no dataset override.
-    bound = canonical_task_spec(actor, {**config, "task_machine_by_dataset": machine})
+    row = bind_runtime(
+        {"task_spec": actor.model_dump_json(), "runtime": json.dumps({"task_machine": machine[actor.source.dataset]})},
+        config,
+    )
     pq.write_table(
-        pa.table({"task_spec": [actor.model_dump_json()], "task_rollout_spec": [bound.model_dump_json()]}),
+        pa.Table.from_pylist([row]),
         tmp_path / f"{actor.id}.parquet",
     )
     receipts = validate_source_tasks(launch, worker)
