@@ -154,7 +154,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         return SimpleNamespace(convert_ids_to_tokens=token_content.__getitem__)
 
     monkeypatch.setattr("levanter.compat.hf_checkpoints.load_tokenizer", load_bound_tokenizer)
-    step = micro210_step(model, name="test/micro210", version="2026.11.18")
+    serving = MOCHI_SERVING if producer_kind == "sft" else SNOWBALL_SERVING
+    step = micro210_step(model, name="test/micro210", version="2026.11.18", serving=serving)
     assert producer in step.deps
     output = tmp_path / "result"
     output.mkdir()

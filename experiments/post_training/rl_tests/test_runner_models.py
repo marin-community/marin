@@ -20,7 +20,7 @@ from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materia
 from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
-from skyrlrecipe import RecipePatch
+from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.documents import set_path
 
 from experiments.post_training import rl, rl_compose, rl_gate
@@ -213,11 +213,23 @@ def test_micro210_graph_accepts_an_sft_export_that_has_yet_to_run(selection, tmp
     sft = ArtifactStep.adopt("tests/pending-sft", "2026.11.26", str(tmp_path / "pending-sft"))
     preset = SNOWBALL.by_name["train-long-agentic-micro210"]
     [run] = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, init=ArtifactHfModel(sft)).runs
-    assert preset.then is not None
-    following = preset.then(run)
-    assert isinstance(following, tuple)
-    _health, evaluation = following
+    _health, evaluation = (build(run) for build in preset.then)
     assert sft in run.deps and run in evaluation.deps
+
+
+def test_micro210_preset_requires_an_export_even_without_an_eligible_best(selection):
+    result = plan(SNOWBALL, "train-long-agentic-micro210", "--checkpoints", "best", "--export", "best")
+    assert result.exit_code == 4, (result.output, result.exception)
+    assert "Micro210 requires --export latest or best_and_final" in result.output
+
+
+def test_cross_host_generation_plan_refuses_a_non_vllm_backend(selection):
+    preset = MOCHI.by_name["eval-short"]
+    config = preset.recipe.config.merge(RecipePatch(generator=sections.Generator(backend="sglang")))
+    preset = replace(preset, recipe=replace(preset.recipe, config=config))
+    result = plan(replace(MOCHI, presets=(preset,)), preset.name)
+    assert result.exit_code == 4, (result.output, result.exception)
+    assert "Cross-host expert-parallel generation requires vLLM" in result.output
 
 
 @pytest.mark.parametrize(
@@ -311,7 +323,7 @@ def test_resume_inherits_the_source_runs_initializer(
         runs.append(step)
         return apply("tests/after-rl", after_rl, version="2026.11.19.1", run=step)
 
-    preset = replace(preset, then=collect)
+    preset = replace(preset, then=(collect,))
     table = replace(table, presets=(preset,))
     started = plan(table, preset.name, *start_args)
     assert started.exit_code == 0, (started.output, started.exception)

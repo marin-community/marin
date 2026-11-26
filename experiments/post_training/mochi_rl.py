@@ -14,7 +14,8 @@ from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
-from experiments.evaluation.micro210 import micro210_after_rl, micro210_command
+from experiments.evaluation.micro210 import micro210_command, micro210_preset
+from experiments.grug.moe_hero_ep.ops.export_metadata import MANIFEST_FILENAME as SFT_EXPORT_MANIFEST
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
 from experiments.post_training.rl_presets import (
@@ -30,7 +31,6 @@ from experiments.post_training.rl_presets import (
     Training,
 )
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
-from experiments.post_training.task_curation.task_health import task_health_step
 
 _MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
@@ -224,7 +224,13 @@ _EVAL_SERVING = RecipePatch(
     extra_env=_THREE_RACK_PATCH.extra_env,
 )
 
-MICRO210_RECIPE = Recipe(layout=_EVAL_LAYOUT, fixed_reply_tokens=None, config=_EVAL_SERVING)
+MICRO210_RECIPE = Recipe(
+    layout=_EVAL_LAYOUT,
+    fixed_reply_tokens=None,
+    config=_EVAL_SERVING,
+    sft_export_manifest=SFT_EXPORT_MANIFEST,
+    engine_serving_keys=frozenset({"load_format", "moe_backend", "model_loader_extra_config", "compilation_config"}),
+)
 
 _EVALUATION = Evaluation(
     name="eval_lite_100",
@@ -296,19 +302,7 @@ _EVAL_SHORT = replace(
     evaluations=(replace(_EVALUATION, name="eval_lite", file=Path(FULL_VALIDATION_FILENAME).stem, every=None),),
 )
 
-_TRAIN_LONG_MICRO210 = replace(
-    _TRAIN_LONG_AGENTIC,
-    name="train-long-agentic-micro210",
-    checkpoints="best_and_final",
-    export="best_and_final",
-    checkpoint_every=2,
-    temporary_output=False,
-    retention=replace(_TRAIN_LONG_AGENTIC.retention, checkpoints_in_run_output=True),
-    recipe=replace(
-        _TRAIN_LONG_AGENTIC.recipe, layout=replace(_TRAIN_LONG_AGENTIC.recipe.layout, coordinator_timeout_hours=146)
-    ),
-    then=lambda run: (task_health_step(run), micro210_after_rl(run, serving=MICRO210_RECIPE)),
-)
+_TRAIN_LONG_MICRO210 = micro210_preset(_TRAIN_LONG_AGENTIC, serving=MICRO210_RECIPE, checkpoint_every=2)
 
 MOCHI = ModelPresets(
     model="mochi",

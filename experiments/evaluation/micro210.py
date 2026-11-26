@@ -53,7 +53,7 @@ from experiments.evaluation.micro210_policy import (
     runtime_policy_config,
 )
 from experiments.post_training.rl_compose import layout_execution
-from experiments.post_training.rl_presets import Generation, Recipe
+from experiments.post_training.rl_presets import Generation, Preset, Recipe
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 # The prepared table re-hosts benchmark items that must not be public; tasks read it
@@ -74,8 +74,6 @@ SERVING_KEYS = frozenset(
         "engine_init_kwargs",
     }
 )
-ENGINE_SERVING_KEYS = frozenset({"load_format", "moe_backend", "model_loader_extra_config", "compilation_config"})
-
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 
 
@@ -88,6 +86,7 @@ class Micro210Run:
     smoke_rows: tuple[int, ...]
     expected_manifest_sha256: str | None
     policy_reference: Micro210PolicyReference
+    sft_export_manifest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -195,12 +194,13 @@ def validate_inputs(protocol: dict, model: ResolvedModelLocator, inputs: str) ->
                 raise ValueError(f"Canonical Micro210 tokenizer has incompatible stop token ID: {token_id}")
 
 
-def export_identity(model: ResolvedModelLocator, expected: str | None) -> ExportManifestIdentity | ProducerIdentity:
+def export_identity(
+    model: ResolvedModelLocator, expected: str | None, sft_manifest: str | None
+) -> ExportManifestIdentity | ProducerIdentity:
     """Identify the completed export by its manifest or immutable producer."""
-    from experiments.grug.moe_hero_ep.ops import export_metadata  # noqa: PLC0415
-
     root = StoragePath(model.uri)
-    for filename in (MODEL_MANIFEST_FILENAME, export_metadata.MANIFEST_FILENAME):
+    manifests = (MODEL_MANIFEST_FILENAME, sft_manifest) if sft_manifest else (MODEL_MANIFEST_FILENAME,)
+    for filename in manifests:
         try:
             digest = file_sha256(root / filename)
         except FileNotFoundError:
@@ -236,7 +236,7 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     reference = config.policy_reference
     policy = micro210_policy.read_micro210_policy(reference)
     model = config.skyrl.model
-    identity = export_identity(model, config.expected_manifest_sha256)
+    identity = export_identity(model, config.expected_manifest_sha256, config.sft_export_manifest)
     validate_inputs(policy, model, PREPARED_INPUTS)
     document = yaml.safe_load(config.skyrl.launch_config_yaml)
     native_inputs_uri = document["inputs"]["validation_data"][0]["uri"]
@@ -324,7 +324,7 @@ def micro210_step(
     if (
         patch.keys() - {"generator", "extra_env"}
         or generator.keys() - SERVING_KEYS
-        or generator.get("engine_init_kwargs", {}).keys() - ENGINE_SERVING_KEYS
+        or generator.get("engine_init_kwargs", {}).keys() - serving.engine_serving_keys
     ):
         raise ValueError("Micro210 serving may only change inference serving settings")
     runtime = merge_mappings(runtime, patch)
@@ -373,6 +373,7 @@ def micro210_step(
             smoke_rows,
             pinned.identity.removeprefix(MODEL_IDENTITY_PREFIX) if pinned else None,
             reference,
+            serving.sft_export_manifest,
         )
 
     configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)
@@ -395,6 +396,21 @@ def micro210_after_rl(run: ArtifactStep[SkyRLRun], *, serving: Recipe) -> Artifa
     )
     return micro210_step(
         SkyRLPolicyModel(run), name=f"{run.name}/micro210", version=run.version, serving=replace(serving, layout=layout)
+    )
+
+
+def micro210_preset(preset: Preset, *, serving: Recipe, checkpoint_every: int | None = None) -> Preset:
+    """Retain the final and best checkpoints and evaluate the exported policy."""
+    return replace(
+        preset,
+        name="train-long-agentic-micro210",
+        checkpoints="best_and_final",
+        export="best_and_final",
+        checkpoint_every=preset.checkpoint_every if checkpoint_every is None else checkpoint_every,
+        temporary_output=False,
+        retention=replace(preset.retention, checkpoints_in_run_output=True),
+        recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, coordinator_timeout_hours=146)),
+        then=(*preset.then, partial(micro210_after_rl, serving=serving)),
     )
 
 

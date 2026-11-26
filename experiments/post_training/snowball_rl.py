@@ -24,7 +24,7 @@ from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
 
-from experiments.evaluation.micro210 import micro210_after_rl, micro210_command
+from experiments.evaluation.micro210 import micro210_command, micro210_preset
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import (
     NO_AGENTIC_TASKS,
@@ -56,7 +56,6 @@ from experiments.post_training.task_curation.selection import (
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
 )
-from experiments.post_training.task_curation.task_health import task_health_step
 
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -424,18 +423,7 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     name="train-medium-tools",
 )
 
-_TRAIN_LONG_MICRO210 = replace(
-    _TRAIN_LONG_AGENTIC,
-    name="train-long-agentic-micro210",
-    checkpoints="best_and_final",
-    export="best_and_final",
-    temporary_output=False,
-    retention=replace(_TRAIN_LONG_AGENTIC.retention, checkpoints_in_run_output=True),
-    recipe=replace(
-        _TRAIN_LONG_AGENTIC.recipe, layout=replace(_TRAIN_LONG_AGENTIC.recipe.layout, coordinator_timeout_hours=146)
-    ),
-    then=lambda run: (task_health_step(run), micro210_after_rl(run, serving=MICRO210_RECIPE)),
-)
+_TRAIN_LONG_MICRO210 = micro210_preset(_TRAIN_LONG_AGENTIC, serving=MICRO210_RECIPE)
 
 _PRESETS = (
     _snowball(

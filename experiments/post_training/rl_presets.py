@@ -353,6 +353,8 @@ class Recipe:
     fixed_reply_tokens: int | None
     config: RecipePatch
     training_plan: SkyRLRolePlan | None = None
+    sft_export_manifest: str | None = None
+    engine_serving_keys: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -432,7 +434,7 @@ class Preset:
     batch_mix: BatchMix | None = None
     held_out_tasks: str | None = None
     checkpoint_evaluation: tuple[CheckpointCohort, ...] = ()
-    then: Callable[[ArtifactStep[SkyRLRun]], ArtifactStep | tuple[ArtifactStep, ...]] | None = None
+    then: tuple[Callable[[ArtifactStep[SkyRLRun]], ArtifactStep], ...] = ()
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()

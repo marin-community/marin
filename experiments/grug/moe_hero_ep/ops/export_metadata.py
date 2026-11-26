@@ -3,15 +3,21 @@
 
 """Request, shard naming, and completion metadata for Hero exports."""
 
+from __future__ import annotations
+
 import re
 from dataclasses import asdict
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from levanter.compat.hf_export import HFShardRecord, HFShardResume, write_export_json
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+
+if TYPE_CHECKING:
+    from levanter.compat.hf_export import HFShardRecord, HFShardResume
+
+    from experiments.grug.moe_hero_ep.model import GrugModelConfig
 
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
@@ -55,6 +61,8 @@ def split_expert_names(name: str, num_experts: int) -> tuple[str, ...]:
 
 def prepare_export(destination: str, request: dict) -> HFShardResume:
     """Write or verify the artifact request, rejecting completed or unrelated output."""
+    from levanter.compat.hf_export import HFShardResume, write_export_json  # noqa: PLC0415
+
     if re.fullmatch(r"[0-9a-f]{40}", request["config"]["source_revision"]) is None:
         raise ValueError("source_revision must be a 40-character lowercase hexadecimal Marin commit")
     root = StoragePath(destination)
@@ -70,6 +78,8 @@ def write_export_metadata(
     resume: HFShardResume, request: dict, records: list[HFShardRecord], payload_size: int, execution: dict
 ) -> None:
     """Commit the config and index, then publish the completion manifest last."""
+    from levanter.compat.hf_export import write_export_json  # noqa: PLC0415
+
     write_export_json(resume.root / "config.json", request["hf_config"])
     write_export_json(
         resume.root / INDEX_FILENAME,

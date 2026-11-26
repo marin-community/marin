@@ -1253,7 +1253,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             + f"following={following}\n"
             "table=snowball_rl.SNOWBALL\n"
             "if following is not None:\n"
-            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
+            "    table=replace(table,presets=tuple(replace(preset,then=(following,)) for preset in table.presets))\n"
             + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
