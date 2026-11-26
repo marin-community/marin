@@ -68,6 +68,36 @@ def test_job_run_resolves_secret_reference_and_isolation(recorded_job_submission
     assert value not in result.output
 
 
+def test_job_run_sends_tags_only_when_given(recorded_job_submissions):
+    assert _run_cli(["--category", "data-processing"]).exit_code == 0
+    assert _run_cli([]).exit_code == 0
+    assert [s["tags"] for s in recorded_job_submissions] == [
+        _job_pb2.JobTags(category=_job_pb2.JOB_CATEGORY_DATA_PROCESSING),
+        None,
+    ]
+
+
+def test_job_run_refuses_a_category_outside_the_list_before_submitting(recorded_job_submissions):
+    result = _run_cli(["--category", "post-training"])
+    assert result.exit_code == 2
+    assert recorded_job_submissions == []
+
+
+def test_job_run_leaves_everything_after_double_dash_to_the_command(recorded_job_submissions):
+    # Iris options may come before or after the command's first word; everything
+    # after '--' is the command's, including its own --category and --memory.
+    result = CliRunner().invoke(
+        run,
+        ["--no-wait", "script.py", "--memory", "2G", "--", "--category", "rl", "--memory", "3G"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+    assert result.exit_code == 0, result.output
+    [submission] = recorded_job_submissions
+    assert submission["entrypoint"].command[-5:] == ["script.py", "--category", "rl", "--memory", "3G"]
+    assert submission["resources"].memory == "2G"
+    assert submission["tags"] is None
+
+
 def test_validate_region_zone_valid_region(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
     result = _run_cli(["--region", "us-central2"], config=config)

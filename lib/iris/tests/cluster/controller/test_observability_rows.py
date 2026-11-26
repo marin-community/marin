@@ -328,6 +328,26 @@ def test_a_replaced_child_gets_its_own_job_key(state):
     assert {(j.job_id, j.submitted_at_ms) for j in rows.jobs} == {(child, 3_000)}
 
 
+def test_job_rows_carry_tags_and_children_inherit_them(state):
+    rows = _attach(state, "marin")
+    root = make_job_request("train")
+    root.tags.CopyFrom(job_pb2.JobTags(category=job_pb2.JOB_CATEGORY_PRE_TRAINING, description="Sweep sizes."))
+    submit_job(state, "train", root)
+    submit_job(state, "/test-user/train/data", make_job_request("/test-user/train/data"))
+    evaluation = make_job_request("/test-user/train/eval")
+    evaluation.tags.CopyFrom(job_pb2.JobTags(category=job_pb2.JOB_CATEGORY_EVALUATION, description=""))
+    submit_job(state, "/test-user/train/eval", evaluation)
+    submit_job(state, "untagged", make_job_request("untagged"))
+
+    tags = {j.job_id: json.loads(j.tags) if j.tags is not None else None for j in rows.jobs}
+    assert tags == {
+        "/test-user/train": {"category": "pre-training", "description": "Sweep sizes."},
+        "/test-user/train/data": {"category": "pre-training", "description": "Sweep sizes."},
+        "/test-user/train/eval": {"category": "evaluation", "description": "Sweep sizes."},
+        "/test-user/untagged": None,
+    }
+
+
 _CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))
 
 
@@ -479,7 +499,8 @@ class _Classified:
     docs/observability-rows.md ("Which columns are copied")."""
 
     row_class: type
-    # DB column -> the Finelog field it is copied to.
+    # DB column -> the Finelog field it is copied to; "<table>.<field>" for a
+    # field of another table's rows.
     copied: dict[str, str]
     # DB column -> why it is not copied.
     excluded: dict[str, str]
@@ -540,6 +561,9 @@ _COLUMNS: dict[str, _Classified] = {
             "fail_if_exists": "fail_if_exists",
             "container_profile": "container_profile",
             "egress_policy": "egress_policy",
+            # The stated exception to "no user-written text": kept for reporting,
+            # copied as written.
+            "tags_json": "jobs.tags",
         },
         {
             "name": "duplicate",
@@ -633,7 +657,13 @@ def test_every_controller_db_column_is_classified(tmp_path, table):
         f"see {_RULE}"
     )
     fields = {field.name: field for field in dataclasses.fields(classified.row_class)}
-    sources = set(copied.values()) | classified.derived
+    copied_here = {target for target in copied.values() if "." not in target} | {
+        target.removeprefix(f"{table}.")
+        for other in _COLUMNS.values()
+        for target in other.copied.values()
+        if target.startswith(f"{table}.")
+    }
+    sources = copied_here | classified.derived
     # Exact, so an EXCLUDED column copied anyway, or under a new name, fails too.
     assert fields.keys() == sources, (
         f"{classified.row_class.__name__} fields without a classified source: {sorted(fields.keys() - sources)}; "

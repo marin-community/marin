@@ -25,11 +25,14 @@ name or place the work, such as the job name, user, `task_image` and
 the constraint keys.
 `task_image` is an image reference (`registry/path:tag`), which is needed to
 know what ran; a container runtime rejects credentials in a reference, and
-registry auth comes from the node's credential helper. There are two
-exceptions, both below: the free-text `error` and `status_message` columns,
-redacted, and the launch's git identity, read from the environment into the
-`provenance_*` columns. Rows are kept forever, so any other column that fails
-the rule is left out, not redacted and kept.
+registry auth comes from the node's credential helper. There are three
+exceptions: the free-text `error` and `status_message` columns, redacted; the
+launch's git identity, read from the environment into the `provenance_*`
+columns (both described below); and job tags. Job tags (`job_config.tags_json`, copied to
+`iris.controller_db__jobs.tags`) are user-written but exist for reporting, so
+they are copied as written, without redaction; never put credentials or
+sensitive content in a tag. Rows are kept forever, so any other
+column that fails the rule is left out, not redacted and kept.
 
 Not copied, all from `job_config`:
 
@@ -49,6 +52,7 @@ Copied columns that differ from the controller DB:
 
 | Column | Differs from the controller DB |
 | --- | --- |
+| `iris.controller_db__jobs.tags` | Added: `job_config.tags_json`, as written |
 | `iris.controller_db__jobs.placement` | The DB's `jobs.cluster` ("local" or the peer the job was handed to), renamed because `cluster` here is the writing controller |
 | `iris.controller_db__job_config.accelerator_*` | Added: the device request flattened (below) |
 | `iris.controller_db__job_config.provenance_*` | Added: four fields of `environment_json`'s `MARIN_PROVENANCE` (below) |
@@ -152,6 +156,11 @@ WHERE a.rn = 1 AND a.started_at IS NOT NULL AND a.finished_at IS NOT NULL
 GROUP BY a.root_job_id, c.accelerator_type
 ORDER BY accelerator_hours DESC;
 ```
+
+`iris.controller_db__jobs.tags` holds the job's tags as a JSON object
+(`json_get(tags, 'category')`), copied as written with the category as its
+lowercase name (`pre-training`), or NULL for an untagged job; jobs submitted before tags existed are
+untagged.
 
 `error` is not truncated, but token-like strings in it are redacted (see
 **Free text** above).

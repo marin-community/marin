@@ -131,6 +131,34 @@ than a person, so its jobs are attributed to this well-known principal. Per-clus
 federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
 a peer only if that peer's policy names it explicitly."""
 
+# Longest JobTags.description the controller accepts.
+MAX_JOB_DESCRIPTION_CHARS = 1000
+
+JOB_CATEGORY_NAMES: dict[int, str] = {
+    number: name.removeprefix("JOB_CATEGORY_").lower().replace("_", "-")
+    for name, number in job_pb2.JobCategory.items()
+    if number != job_pb2.JOB_CATEGORY_UNSPECIFIED
+}
+"""Each job category's tag value, as ``--category`` takes it and Finelog stores it (``pre-training``)."""
+JOB_CATEGORIES: dict[str, int] = {name: number for number, name in JOB_CATEGORY_NAMES.items()}
+
+
+def job_tags_dict(tags: job_pb2.JobTags) -> dict[str, str]:
+    """The tags that are set, as ``job_config.tags_json`` and Finelog hold them: the category by its tag value."""
+    stored = {field.name: value for field, value in tags.ListFields() if value}
+    if tags.category:
+        stored["category"] = JOB_CATEGORY_NAMES[tags.category]
+    return stored
+
+
+def job_tags_from_dict(stored: dict[str, str]) -> job_pb2.JobTags:
+    """Inverse of ``job_tags_dict``; a tag that is not stored stays unset (``None`` leaves a field unset)."""
+    category = stored.get("category")
+    return job_pb2.JobTags(
+        description=stored.get("description"),
+        category=JOB_CATEGORIES[category] if category is not None else None,
+    )
+
 
 def is_federated(cluster: str) -> bool:
     """Whether a job/task ``cluster`` value denotes a peer this controller handed off to.
