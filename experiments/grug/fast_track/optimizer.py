@@ -680,6 +680,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ``adamc_adam`` group's ``lambda`` and the ``MUONC_ANNEAL_ADAMW_DECAY`` of the Adam groups' rank >= 2 leaves scale by
     ``muonc_anneal_adam_decay_lr_steps / (adam_lr N)``, so their total decay ``lambda adam_lr N`` is the same at every
     rung. The head's decay is unchanged. 0: off."""
+    muonc_anneal_decay_floor_frac: float = 0.0
+    """With ``muonc_anneal_decay``: the fraction ``f`` of the matrix decay held constant, ``lambda_t = lambda ((1 - f)
+    lr_m / lr_max + f)`` in place of ``lambda lr_m / lr_max``. 0: off."""
     muonc_anneal_lr_floor: bool = False
     """With ``muonc_anneal_decay``: the late-annealed matrix LR is clamped from below at the schedule's floor,
     ``lr_m = max(lr_t s(t) / s(t0), min_lr_ratio lr_max)`` from ``t0``; the matrix decay ``lambda_t`` follows the
@@ -913,6 +916,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 if self.muonc_anneal_decay_lr_steps:
                     matrix_decay *= self.muonc_anneal_decay_lr_steps / (self.learning_rate * num_train_steps)
                 decay = matrix_decay * matrix_lr / self.learning_rate
+                if self.muonc_anneal_decay_floor_frac:
+                    floor_frac = self.muonc_anneal_decay_floor_frac
+                    decay = matrix_decay * ((1 - floor_frac) * matrix_lr / self.learning_rate + floor_frac)
                 transforms["muonh"] = muonc_annealed_at(matrix_lr, decay)
                 transforms["kda_beta"] = muonc_annealed_at(matrix_lr * KDA_BETA_LR_MULT, decay)
                 transforms["adamh"] = optax.chain(
@@ -1003,6 +1009,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError(
                 "muonc_anneal_law_cap_ball needs muonc_anneal_decay and excludes muonc_anneal_decay_lr_steps"
             )
+        if not 0 <= self.muonc_anneal_decay_floor_frac <= 1 or (
+            self.muonc_anneal_decay_floor_frac and not self.muonc_anneal_decay
+        ):
+            raise ValueError("muonc_anneal_decay_floor_frac must be in [0, 1] and needs muonc_anneal_decay")
         if self.muonc_anneal_lr_floor and not self.muonc_anneal_decay:
             raise ValueError("muonc_anneal_lr_floor needs muonc_anneal_decay")
         if self.muonh_law_cap_ball and (
