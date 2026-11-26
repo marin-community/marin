@@ -1012,6 +1012,45 @@ def test_submission_exit_codes_and_publication_retries(
         assert cached["issue"] == 73
 
 
+def test_control_launcher_saves_handoff_before_iris_accepts(selection, monkeypatch, tmp_path):
+    client, _ = fake_iris(monkeypatch, "unused")
+    path = tmp_path / "pending.json"
+    monkeypatch.setenv("IRIS_USER", "test-user")
+    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    monkeypatch.setenv(snowball.rl_publication.CONTROL_SUBMISSION_ENV, str(path))
+    clean_main = Provenance("tree-one", "commit-one", False, "main", "test-user")
+    monkeypatch.setattr(Provenance, "capture", lambda *_: clean_main)
+    monkeypatch.setattr(snowball, "_base_preset", lambda *_: ("commit-one", "current-version"))
+    monkeypatch.setattr(snowball, "_follow_detached", lambda *_: pytest.fail("Started a runner-local watcher"))
+
+    def submit(**kwargs):
+        receipt = snowball.rl_publication.ControlSubmission.model_validate_json(path.read_text())
+        job = JobName.root("test-user", kwargs["name"])
+        assert receipt.job == str(job)
+        assert len(receipt.outputs) == 2
+        assert all(Path(output).is_relative_to(tmp_path) for output in receipt.outputs)
+        assert snowball.rl_publication.CONTROL_SUBMISSION_ENV not in kwargs["environment"].env_vars
+        return SimpleNamespace(job_id=job)
+
+    client.submit.side_effect = submit
+    argv = (
+        "--preset",
+        "speed-medium",
+        "--version",
+        recipe.RUN_ARTIFACT_VERSION,
+        "--control",
+        "workflow-batch",
+        "--replicates",
+        "2",
+        "--run",
+    )
+    result = CliRunner().invoke(
+        snowball.command(snowball_model.SNOWBALL, argv=argv, entry_module="experiments.post_training.snowball_rl"),
+        argv,
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+
+
 @pytest.mark.parametrize(
     "model,outcome,pr_number",
     [

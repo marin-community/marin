@@ -254,7 +254,7 @@ jobs:
           set -eo pipefail
           uv run --frozen --all-packages --extra cpu --no-default-groups \
             python -m experiments.post_training.rl_nightly_controls --batch "$CONTROL_BATCH" \
-            --presets="$CONTROL_PRESETS" --state-dir gs://marin-us-central1/ci/rl-controls/pending \
+            --presets="$CONTROL_PRESETS" --state-dir s3://marin-us-east-08a/marin/ci/rl-controls/pending \
             2>&1 | tee rl-controls.log
       - uses: actions/upload-artifact@v7
         if: always()

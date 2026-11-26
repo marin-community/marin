@@ -393,7 +393,7 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(record
 
     def publish(record, _url):
         nonlocal unavailable
-        if record.attempt_id == "preempted" and unavailable:
+        if record.attempt_id == "accepted" and unavailable:
             unavailable = False
             raise RuntimeError("Marina temporarily unavailable")
         rows[record.attempt_id] = record
@@ -454,7 +454,7 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(record
     states[coordinator] = JobState.FAILED
     assert tick("125-1") == 1
     assert requests == {"123-1": 3}
-    assert rows["accepted"].status == "succeeded"
+    assert "accepted" not in rows and rows["preempted"].status == "failed"
     assert tick("126-1") == 0
     assert requests == {"123-1": 3, "126-1": 2}
     assert rows["accepted"].status == "succeeded" and rows["accepted"].preset_version == version
