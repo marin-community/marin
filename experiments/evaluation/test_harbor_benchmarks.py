@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tarfile
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,13 +18,21 @@ from shellbox.machine import NetworkPolicy
 from taskcompendium.evaluation.corpus import evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, PiAgent, TerminusAgent
 from taskcompendium.importers.harbor.package import JobSettings
-from taskcompendium.models import AgentMachine, ScriptGrader, Source, TaskSpec, VerifyitGrader
+from taskcompendium.models import AgentMachine, GraderMachine, ScriptGrader, Source, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import ImportFailureKind, ImportRejection, RawRow
 
 import experiments.evaluation.benchmarks.harbor as harbor_module
 import experiments.post_training.task_curation.harbor_packages as packages_module
-from experiments.evaluation.benchmarks.agentic import BIXBENCH, FINANCEAGENT
+from experiments.evaluation.benchmarks.agentic import (
+    BIXBENCH,
+    FINANCEAGENT,
+    SWEBENCH_APPLY,
+    SWEBENCH_COLLECT,
+    SWEBENCH_ENVIRONMENT,
+    SWEBENCH_MULTILINGUAL,
+    SWEBENCH_WORKSPACE_TREE,
+)
 from experiments.evaluation.benchmarks.harbor import (
     NODE_VERSION,
     HarborConversion,
@@ -192,6 +201,57 @@ def test_a_harbor_repository_publishes_one_agent_item_per_package(tmp_path, loca
     )
     assert case.task.environment_requirements.docker_image == f"{IMAGE}@{DIGEST}"
     assert isinstance(case.task.grader, ScriptGrader) and case.task.grader.placement == AgentMachine()
+
+
+def test_swebench_multilingual_agents_work_offline_and_their_patch_grades_on_a_networked_machine(
+    tmp_path, local_graph, monkeypatch
+):
+    repository = tmp_path / "repository"
+    package = repository / "org__repo-1"
+    write_package(package, f"[verifier]\ntimeout_sec = 3000\n\n[agent]\ntimeout_sec = 3000\n\n{SWEBENCH_ENVIRONMENT}")
+    (package / "environment").mkdir()
+    dockerfile = f"FROM {IMAGE}\n\nWORKDIR /testbed\n\nRUN mkdir -p /logs\n"
+    (package / "environment" / "Dockerfile").write_text(dockerfile)
+    test_script = 'LOG_FILE=$(mktemp)\nexec > >(tee "$LOG_FILE") 2>&1\necho 1 > /logs/verifier/reward.txt\n'
+    (package / "tests" / "test.sh").write_text(test_script)
+
+    def snapshot(repo, *, repo_type, revision, local_dir):
+        shutil.copytree(repository, local_dir, dirs_exist_ok=True)
+        return local_dir
+
+    monkeypatch.setattr(packages_module, "snapshot_download", snapshot)
+    root, options = local_graph
+    stage_repository_packages("org/fixture", REVISION, StoragePath(str(root)))
+    monkeypatch.setattr(harbor_module, "IMAGE_LOCKS", tmp_path / "locks")
+    (tmp_path / "locks").mkdir()
+    (tmp_path / "locks" / "fixture.json").write_text(json.dumps({IMAGE: DIGEST}))
+    dataset = replace(
+        SWEBENCH_MULTILINGUAL, recipe="fixture", source=huggingface_packages("org/fixture", REVISION), count=1
+    )
+    source = harbor_source(dataset, TerminusAgent())
+
+    artifact = run(source.pipeline(source, options), max_concurrent=1)[0]
+
+    [case] = evaluation_cases(artifact.path)
+    assert case.item.episode is not None and case.item.episode.network == NetworkPolicy.DENY
+    assert "network" not in case.task.environment_requirements.capabilities
+    grader = case.task.grader
+    assert isinstance(grader, ScriptGrader) and isinstance(grader.placement, GraderMachine)
+    assert "network" in grader.placement.environment.capabilities
+    assert grader.placement.collect[0].argv[-1] == SWEBENCH_COLLECT
+
+    def files(build):
+        return {file.path: base64.b64decode(file.source.content_base64).decode() for file in build.files}
+
+    pinned = dockerfile.replace(IMAGE, f"{IMAGE}@{DIGEST}")
+    assert files(grader.placement.environment.docker_build)["Dockerfile"] == pinned
+    assert SWEBENCH_WORKSPACE_TREE in files(case.task.environment_requirements.docker_build)["Dockerfile"]
+    [verifier_script] = [
+        base64.b64decode(resource.source.content_base64).decode()
+        for resource in case.task.resources.verifier
+        if resource.path == "test.sh"
+    ]
+    assert verifier_script == test_script.replace("2>&1\n", f"2>&1\n\n{SWEBENCH_APPLY}", 1)
 
 
 def test_job_settings_publish_three_trials_with_replaced_timeouts_and_pi_in_the_image(
