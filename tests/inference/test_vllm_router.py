@@ -346,18 +346,3 @@ def test_iris_serving_preserves_staged_weights_and_rank_routing(
         reset_context(context_token)
     assert int(registered_metadata["data_parallel_size"]) == rank_count
     assert not Path(json.loads(argv_path.read_text())[1]).exists()
-
-
-def test_multitask_router_rejects_local_staging_before_submission():
-    with pytest.raises(ValueError, match="stream loading"):
-        RemoteInferenceConfig(
-            model=ServedModelConfig(weights="s3://models/large", object_store_load_mode=ObjectStoreLoadMode.STAGE_LOCAL),
-            engine=VllmEngineConfig(router=VllmRouterConfig()),
-            iris=IrisConfig(
-                worker_resources=ResourceConfig.with_gpu("H100", count=4, replicas=2),
-                worker_environment=create_environment(docker_image="test"),
-                serving_geometry=ServingGeometry(
-                    tensor_parallel_size=1, data_parallel_size=8, pipeline_parallel_size=1, gpus_per_task=4
-                ),
-            ),
-        )

@@ -92,6 +92,7 @@ class ServeConfig:
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
     pipeline_parallel_size: int = 1
+    pipeline_layer_partition: tuple[int, ...] = field(default=(), metadata={"fingerprint_omit_value": ()})
     instances: int = 1
     gpu_memory_utilization: float | None = None
     max_model_len: int | None = None
@@ -142,6 +143,11 @@ class ServeConfig:
             if self.instances > 1:
                 raise ValueError("pipeline parallelism requires instances=1")
             validate_serving_geometry_args(self.vllm_extra_args)
+        if self.pipeline_layer_partition:
+            if len(self.pipeline_layer_partition) != self.pipeline_parallel_size:
+                raise ValueError("pipeline_layer_partition needs one layer count per pipeline stage")
+            if any(layers < 1 for layers in self.pipeline_layer_partition):
+                raise ValueError("pipeline_layer_partition layer counts must be positive")
         if self.gpu_memory_utilization is not None:
             if not 0 < self.gpu_memory_utilization <= 1:
                 raise ValueError("gpu_memory_utilization must be in (0, 1]")

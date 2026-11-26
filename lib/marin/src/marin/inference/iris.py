@@ -664,9 +664,11 @@ def _run_native_gpu_service(service: IrisServiceConfig) -> None:
     assert geometry is not None
     assert isinstance(service.engine, VllmEngineConfig)
     model, num_chips = _resolved_model(service.model, service.iris)
-    spec = _vllm_model_spec(model, num_chips, None)
     backend = VllmBackend(cast(VllmEngineConfig, _resolved_engine(service.engine, service.iris)))
-    with iris_vllm_launch(geometry) as launch:
+    # Every task stages its own copy before the gang rendezvous, so staging time counts against the
+    # followers' coordinator wait rather than vLLM's distributed startup.
+    with _staged_model(model) as model, iris_vllm_launch(geometry) as launch:
+        spec = _vllm_model_spec(model, num_chips, None)
         with backend.start(spec, extra_args=launch.extra_cli_args, subprocess_env=launch.subprocess_env) as environment:
             if launch.is_leader:
                 with iris_vllm_followers(launch):

@@ -653,6 +653,7 @@ def test_evaluation_steps_record_failures_without_blocking_other_steps(tmp_path,
     # Unset optional serve settings are omitted from records so that earlier records keep their config digests.
     del expected_config["serve"]["vllm_use_nccl_symm_mem"]
     del expected_config["serve"]["vllm_nightly"]
+    del expected_config["serve"]["pipeline_layer_partition"]
     assert succeeded.model.config.model_dump(mode="json") == expected_config
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
     assert {(row.run_id, row.status) for row in catalog_rows} == {
