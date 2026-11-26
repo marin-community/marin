@@ -2,7 +2,7 @@ name: Agentic lint
 
 # Best-effort Loom lint review. The `agentic-lint` label records that a PR has
 # had a published-PR lint pass from this workflow. The author's local review
-# runs before publication. A new commit or PR text edit starts another pass.
+# runs before publication.
 on:
   pull_request_target:
     types: [opened, ready_for_review, reopened, synchronize, edited, unlabeled]
