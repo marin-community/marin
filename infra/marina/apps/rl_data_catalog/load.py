@@ -69,7 +69,7 @@ from infra.marina.apps.rl_data_catalog.server.cohort_summaries import materializ
 from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.quality import Quality, quality_display, review_completeness
-from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
+from infra.marina.apps.rl_data_catalog.server.schema import CURRICULUM_ANALYZE_SETTINGS, SCHEMA_SQL
 
 MAX_BATCH_BYTES = 1_000_000
 STAGING_TABLE_PREFIX = "atlas_"
@@ -198,6 +198,12 @@ def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
     }
     for name in names:
         query(statements[name], {})
+
+
+def ensure_curriculum_analyze_settings(query: AppletQuery) -> None:
+    """Apply the schema's autoanalyze threshold to the curriculum tables (idempotent)."""
+    for statement in CURRICULUM_ANALYZE_SETTINGS:
+        query(statement, {})
 
 
 def sql_column_names(columns: str) -> tuple[str, ...]:

@@ -24,6 +24,7 @@ from experiments.post_training.task_curation.retirement import retired_admission
 from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
 from infra.marina.apps.rl_data_catalog.load import (
     batches,
+    ensure_curriculum_analyze_settings,
     ensure_tables,
     insert_rows,
     served_declaration_projection,
@@ -413,6 +414,7 @@ def load_curriculum(
         counts["confidence"] = insert("confidence", vectors)
     ensure_tables(execute, ("curriculum_source_areas",))
     materialize_source_areas(lambda sql, bound: execute(sql, bound).get("rows", []), load_id)
+    ensure_curriculum_analyze_settings(execute)
     execute(
         "UPDATE curriculum_current SET previous_load_id=load_id, load_id=:load_id WHERE name='latest'",
         {"load_id": load_id},

@@ -242,6 +242,24 @@ CREATE TABLE IF NOT EXISTS atlas_projection_refresh_seals (
 
 SCHEMA_SQL += PROJECTION_REFRESH_SEAL_SQL
 
+# Each curriculum load adds about a tenth of these tables' rows, below Postgres's
+# default 10% autoanalyze threshold, so a new load could stay unanalyzed and be planned
+# from stale statistics (R40: its load was estimated at 3.4% of curriculum_tasks and
+# served 11.5%, and its sample-pool pages hit the gateway timeout). A 1% threshold
+# analyzes the tables after every load.
+CURRICULUM_ANALYZED_TABLES = (
+    "curriculum_sources",
+    "curriculum_nodes",
+    "curriculum_ancestors",
+    "curriculum_tasks",
+    "curriculum_matches",
+    "curriculum_statistics",
+)
+CURRICULUM_ANALYZE_SETTINGS = tuple(
+    f"ALTER TABLE {table} SET (autovacuum_analyze_scale_factor = 0.01)" for table in CURRICULUM_ANALYZED_TABLES
+)
+SCHEMA_SQL += "".join(statement + ";\n" for statement in CURRICULUM_ANALYZE_SETTINGS)
+
 SCHEMA_SQL += (
     "CREATE OR REPLACE VIEW atlas_cohort_summary AS WITH counts AS (\n"
     + cohort_counts_sql()

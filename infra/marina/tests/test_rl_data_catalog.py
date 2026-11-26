@@ -116,6 +116,7 @@ from experiments.post_training.task_curation.tests.license_fixtures import isola
 from infra.marina.apps.rl_data_catalog.confidence import confidence_rows
 from infra.marina.apps.rl_data_catalog.load import (
     CatalogDisplayPolicy,
+    ensure_curriculum_analyze_settings,
     full_review_pipeline_key,
 )
 from infra.marina.apps.rl_data_catalog.load import (
@@ -152,7 +153,7 @@ from infra.marina.apps.rl_data_catalog.server.evidence_content import pack_conte
 from infra.marina.apps.rl_data_catalog.server.methods import rl_variant
 from infra.marina.apps.rl_data_catalog.server.quality import result
 from infra.marina.apps.rl_data_catalog.server.review_content import task_request_evidence
-from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
+from infra.marina.apps.rl_data_catalog.server.schema import CURRICULUM_ANALYZED_TABLES, SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 from infra.marina.apps.rl_data_catalog.tests.contamination_fixtures import contamination_declarations
 from infra.marina.apps.rl_data_catalog.tests.difficulty_fixtures import difficulty_measurement
@@ -4575,3 +4576,24 @@ def test_dataset_method_variants_survive_catalog_and_api_projection(tmp_path, ca
         evidence = client.get("/source", params={"source_id": row["id"]}).json()
         assert evidence["method_tags"] == ["RL", "SFT-viable"]
         assert evidence["method_variants"] == variants
+
+
+def _curriculum_reloptions(query: AppletQuery) -> dict[str, list[str] | None]:
+    rows = query(
+        "SELECT relname, reloptions FROM pg_class WHERE relname = ANY(CAST(:names AS TEXT[]))"
+        " AND relnamespace = to_regnamespace(current_schema())",
+        {"names": list(CURRICULUM_ANALYZED_TABLES)},
+    )["rows"]
+    return {row["relname"]: row["reloptions"] for row in rows}
+
+
+def test_curriculum_tables_are_analyzed_after_every_load(catalog_query):
+    """Regression (R40 #58): a load adding a tenth of the rows stayed under the default
+    autoanalyze threshold, so the planner estimated R40's load at a third of its size."""
+    expected = {table: ["autovacuum_analyze_scale_factor=0.01"] for table in CURRICULUM_ANALYZED_TABLES}
+    assert _curriculum_reloptions(catalog_query) == expected
+    for table in CURRICULUM_ANALYZED_TABLES:
+        catalog_query(f"ALTER TABLE {table} RESET (autovacuum_analyze_scale_factor)", {})
+    assert set(_curriculum_reloptions(catalog_query).values()) == {None}
+    ensure_curriculum_analyze_settings(catalog_query)
+    assert _curriculum_reloptions(catalog_query) == expected
