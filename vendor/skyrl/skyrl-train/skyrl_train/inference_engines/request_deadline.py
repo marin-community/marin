@@ -4,6 +4,17 @@ import asyncio
 from collections.abc import Awaitable, Callable
 
 
+PARTIAL_RESPONSE_RETURN_MARGIN = 30.0
+
+
+def partial_response_timeout(execution_remaining: float | None) -> float | None:
+    """Return an abort delay that leaves transport time inside the execution budget."""
+    if execution_remaining is None:
+        return None
+    margin = min(PARTIAL_RESPONSE_RETURN_MARGIN, execution_remaining / 2)
+    return max(0.0, execution_remaining - margin)
+
+
 async def finish_partial_on_timeout[T](
     request: Awaitable[T], timeout: float | None, finish_partial: Callable[[], Awaitable[bool]],
     *, scheduled: asyncio.Event | None = None

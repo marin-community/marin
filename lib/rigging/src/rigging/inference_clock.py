@@ -106,6 +106,13 @@ class InferenceClock:
         self.scheduled_requests += 1
         self._resume(admitted=True)
 
+    def execution_remaining(self) -> float | None:
+        """Return the nearest active execution budget after admission."""
+        deadlines = [deadline for timer in self.timers if (deadline := timer.timeout.when()) is not None]
+        if not deadlines:
+            return None
+        return max(0.0, min(deadlines) - asyncio.get_running_loop().time())
+
     def metrics(self) -> dict[str, float]:
         return {
             "timing/inference_queue_wait": self.queue_wait,

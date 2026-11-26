@@ -13,6 +13,8 @@ from packaging import version
 from ray.actor import ActorHandle, ActorMethod
 from ray.util.placement_group import PlacementGroupSchedulingStrategy, placement_group, remove_placement_group
 from rigging.inference_clock import current_inference_clock
+from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON
+from skyrl_train.inference_engines.request_deadline import finish_partial_on_timeout, partial_response_timeout
 from skyrl_train.inference_engines.request_timing import RequestScheduled, RequestCompleted
 from uuid import uuid4
 from rigging.timing import ExponentialBackoff, retry_with_backoff
@@ -371,11 +373,18 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
             sessions = input_batch.get("session_ids")
             request_id = request_id_for_session(sessions[0]) if sessions else uuid4().hex
             tracked = {**input_batch, "request_ids": [request_id]}
-            return await self._scheduled_call(self.inference_engine_actor.generate_with_scheduling, tracked)
+            output, deadline_finished = await self._scheduled_call(
+                self.inference_engine_actor.generate_with_scheduling, tracked, request_id
+            )
+            if deadline_finished:
+                output["stop_reasons"] = [
+                    TOTAL_TURN_TIMEOUT_STOP_REASON if reason == "abort" else reason for reason in output["stop_reasons"]
+                ]
+            return output
         actor_task = await _submit_actor_task(self.inference_engine_actor.generate, input_batch=input_batch)
         return await _await_actor_task(actor_task)
 
-    async def _scheduled_call(self, method: ActorMethod, payload: dict):
+    async def _scheduled_call(self, method: ActorMethod, payload: dict, request_id: str):
         clock = current_inference_clock()
         assert clock is not None
         stream = None
@@ -392,15 +401,26 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
                         or first.value.get("stop_reasons") == ["abort"]
                         or (first.value.get("choices") and first.value["choices"][0]["finish_reason"] == "abort")
                     ):
-                        return first.value
+                        return first.value, False
                     raise RuntimeError("Completed inference did not report engine-slot ownership")
                 assert isinstance(first, RequestScheduled)
                 clock.scheduled()
             generation_started = time.monotonic()
-            ref = await anext(stream)
-            result = await ref
+
+            async def collect():
+                ref = await anext(stream)
+                return await ref
+
+            async def finish_partial():
+                actor_task = await _submit_actor_task(
+                    self.inference_engine_actor.abort_active_partial_request, request_id
+                )
+                return await _await_actor_task(actor_task)
+
+            timeout = partial_response_timeout(clock.execution_remaining())
+            result, deadline_finished = await finish_partial_on_timeout(collect(), timeout, finish_partial)
             assert isinstance(result, RequestCompleted)
-            return result.value
+            return result.value, deadline_finished
         finally:
             if generation_started is not None:
                 clock.generation += time.monotonic() - generation_started
@@ -440,7 +460,16 @@ class RayWrappedInferenceEngine(InferenceEngineInterface):
 
     async def chat_completion(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:
         if current_inference_clock() is not None:
-            return await self._scheduled_call(self.inference_engine_actor.chat_completion_with_scheduling, request_payload)
+            output, deadline_finished = await self._scheduled_call(
+                self.inference_engine_actor.chat_completion_with_scheduling,
+                request_payload,
+                request_payload["headers"]["x-request-id"],
+            )
+            if deadline_finished:
+                for choice in output["choices"]:
+                    if choice["finish_reason"] == "abort":
+                        choice["finish_reason"] = TOTAL_TURN_TIMEOUT_STOP_REASON
+            return output
         actor_task = await _submit_actor_task(self.inference_engine_actor.chat_completion, request_payload)
         return await _await_actor_task(actor_task)
 

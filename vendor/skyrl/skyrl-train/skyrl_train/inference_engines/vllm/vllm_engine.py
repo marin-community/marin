@@ -1403,7 +1403,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         finally:
             self._request_timings.forget_schedule(request_id)
 
-    async def _abort_active_partial_request(self, request_id: str) -> bool:
+    async def abort_active_partial_request(self, request_id: str) -> bool:
         """Return whether an abort was issued; the caller still awaits partial output."""
         key = self._request_timings.request_key(request_id)
         timing = self._request_timings.requests.get(key)
@@ -1454,7 +1454,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         try:
             final_output, deadline_finished = await finish_partial_on_timeout(
-                collect(), self._request_timeout, lambda: self._abort_active_partial_request(request_id),
+                collect(), self._request_timeout, lambda: self.abort_active_partial_request(request_id),
                 scheduled=self._request_timings.scheduled_event(request_id)
             )
             if deadline_finished and final_output.outputs[0].finish_reason == "abort":
@@ -1693,7 +1693,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                         request, minimal_request, exact_prompt_token_ids
                     )
                 generator, deadline_finished = await finish_partial_on_timeout(
-                    pending, self._request_timeout, lambda: self._abort_active_partial_request(request_id),
+                    pending, self._request_timeout, lambda: self.abort_active_partial_request(request_id),
                     scheduled=self._request_timings.scheduled_event(request_id)
                 )
                 assert isinstance(generator, (ChatCompletionResponse, ErrorResponse))
@@ -1701,7 +1701,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 generator, deadline_finished = await finish_partial_on_timeout(
                     self.openai_serving_completion.create_completion(request, minimal_request),
                     self._request_timeout,
-                    lambda: self._abort_active_partial_request(request_id),
+                    lambda: self.abort_active_partial_request(request_id),
                     scheduled=self._request_timings.scheduled_event(request_id),
                 )
                 assert isinstance(generator, (CompletionResponse, ErrorResponse))

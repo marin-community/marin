@@ -1614,6 +1614,18 @@ from consumed-batch metrics.
 Use a fresh round version after adopting this runtime change. Editing a recipe
 does not change an already submitted run.
 
+The shared clock-aware task client also requests partial output before its
+nearest active execution deadline. After actual engine admission it reserves
+up to 30 seconds for returning the response; when less than 60 seconds remains,
+it reserves half that remaining time. This uses the remaining trial/turn/agent
+budget, including time spent in earlier turns, rather than resetting a fresh
+per-request deadline. It covers canonical evaluation even when the serving
+profile has no `request_timeout_seconds` setting, without overriding the frozen
+protocol. The client awaits the original response collector after the native
+abort, retains its exact token metadata, and marks a returned native abort as
+`total_turn_timeout` so the real verifier runs. Requests that generated no tokens remain unavailable;
+caller cancellation remains cancellation.
+
 ## Mochi DSpark serving gate
 
 `rounds/mochi-exp4-dspark-rl.yaml` prepares Exp4 RL from the regional Mochi SFT
