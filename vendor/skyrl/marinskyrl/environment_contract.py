@@ -771,6 +771,7 @@ def write_task_runtime(path: Path, *, cuda: bool, project: Path) -> None:
         for name, value in values.items():
             mode = "prepend" if name in _PREPENDED_RUNTIME_ENV else "replace"
             stream.write(os.fsencode(f"{mode}:{name}={value}") + b"\0")
+        stream.write(b"complete\0")
         stream.flush()
         Path(stream.name).replace(path)
 

@@ -62,6 +62,7 @@ from experiments.post_training.rl_tests.fixtures import (
     fake_publication,
     fake_s3,
     fake_s3_checkpoint,
+    printed_status,
     replace_evaluations,
     write_published_artifact,
     write_receipt,
@@ -73,12 +74,6 @@ from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
-
-
-def printed_status(output):
-    # CliRunner merges stderr into result.output; status is on result.stdout.
-    marker = output.rfind("\npreset:")
-    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
 def test_preset_table_rejects_duplicate_names():
