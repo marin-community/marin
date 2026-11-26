@@ -211,10 +211,15 @@ class CatalogReader:
         self.releases: dict[str, Any] = {}
         self.candidate_api = CandidateApi(query) if query is not None else None
 
-    def get(self, path: str) -> Any:
+    @staticmethod
+    def cache_key(path: str) -> str:
         url = urlsplit(path)
         query = urlencode(sorted((key, value) for key, value in parse_qsl(url.query) if value))
-        key = url.path + ("?" + query if query else "")
+        return url.path + ("?" + query if query else "")
+
+    def get(self, path: str) -> Any:
+        url = urlsplit(path)
+        key = self.cache_key(path)
         if key not in self.cache:
             params = dict(parse_qsl(url.query))
             if self.candidate_api is not None and url.path in {
@@ -293,6 +298,40 @@ class CatalogReader:
                 data = marina_request(self.root, "GET", "/" + key, session=self.session, token_provider=self.provider)
             self.cache[key] = data
         return self.cache[key]
+
+
+CURRICULUM_LATENCY_LIMIT = 10.0
+"""Seconds one whole-subject sample-pool page may take on the real catalog (R40 #54)."""
+
+
+def curriculum_latency(
+    reader: CatalogReader, releases: list[dict[str, Any]], clock: Any = time.monotonic
+) -> dict[str, Any]:
+    """Time every subject's sample-pool page of the selected curriculum; refuse a slow one.
+
+    The curriculum page requests ``limit=1000`` sample pools per subject. R40's query
+    exceeded the 60 s gateway timeout for half the subjects and only the postpublish
+    full sweep found it, after the publish. Each page is read uncached.
+    """
+    selected = [release["release_id"] for release in releases if release.get("selected")]
+    if len(selected) != 1:
+        raise ValueError(f"Expected exactly one selected curriculum release, found {selected}")
+    release_id = selected[0]
+    hierarchy = reader.get(f"api/curriculum?{urlencode({'release': release_id})}")["hierarchy"]
+    subjects = sorted({node["subject_id"] for node in hierarchy if node.get("kind") == "subject"})
+    timings: dict[str, float] = {}
+    for subject in subjects:
+        path = "api/curriculum/tasks?" + urlencode(
+            {"intended_use": "all", "release": release_id, "sample_pool": "true", "limit": "1000", "subject_id": subject}
+        )
+        reader.cache.pop(reader.cache_key(path), None)
+        started = clock()
+        reader.get(path)
+        timings[subject] = round(clock() - started, 2)
+    slow = {subject: seconds for subject, seconds in timings.items() if seconds > CURRICULUM_LATENCY_LIMIT}
+    if slow:
+        raise ValueError(f"Curriculum sample-pool pages exceed {CURRICULUM_LATENCY_LIMIT} s: {slow}")
+    return {"release_id": release_id, "limit_seconds": CURRICULUM_LATENCY_LIMIT, "subjects": timings}
 
 
 def candidate_taxonomy() -> dict[str, Any]:
@@ -656,6 +695,11 @@ def run_checks(args: argparse.Namespace, artifacts: Path, receipt: ReleaseReceip
         receipt.gate = "curriculum-api-invariants"
         receipt.api_invariants = curriculum_invariants(reader.get, reader.get("api/curriculum/releases")["releases"])
         receipt.api_invariants["evidence_browsers"] = browse_invariants(reader.get, expected["sources"])
+        if package:
+            receipt.gate = "curriculum-latency"
+            receipt.api_invariants["curriculum_latency"] = curriculum_latency(
+                reader, reader.get("api/curriculum/releases")["releases"]
+            )
         stored_groups = stored_duplicate_groups(query, before["selected"]["load_id"])
         if baseline:
             verify_preservation(baseline.evidence_before, before, refresh_snapshot=args.refresh_snapshot)

@@ -8,6 +8,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 import requests
@@ -309,3 +310,37 @@ def test_landed_cut_takes_the_attested_revision_without_git(monkeypatch):
     assert release_check.landed_cut("a" * 40) == "a" * 40
     with pytest.raises(ValueError, match="not a full commit sha"):
         release_check.landed_cut("HEAD")
+
+
+class _TimedCurriculumReader:
+    """A candidate reader whose sample-pool pages take a configured time on a fake clock."""
+
+    def __init__(self, seconds: dict[str, float], clock: list[float]) -> None:
+        self.seconds = seconds
+        self.clock = clock
+        self.cache: dict[str, Any] = {}
+        self.requested: list[str] = []
+
+    cache_key = staticmethod(release_check.CatalogReader.cache_key)
+
+    def get(self, path: str) -> Any:
+        self.requested.append(path)
+        if path.startswith("api/curriculum?"):
+            return {"hierarchy": [{"kind": "subject", "subject_id": subject} for subject in self.seconds]}
+        subject = dict(parse_qsl(urlsplit(path).query))["subject_id"]
+        self.clock[0] += self.seconds[subject]
+        return {"tasks": []}
+
+
+def test_curriculum_latency_refuses_a_slow_subject_page():
+    """Regression (R40 #54): whole-subject sample pools exceeded the gateway timeout on the
+    real catalog, found only after the publish by the postpublish sweep."""
+    releases = [{"release_id": "old", "selected": False}, {"release_id": "current", "selected": True}]
+    clock = [0.0]
+    fast = _TimedCurriculumReader({"D01": 3.0, "D02": 4.0}, clock)
+    measured = release_check.curriculum_latency(fast, releases, clock=lambda: clock[0])
+    assert measured["release_id"] == "current" and measured["subjects"] == {"D01": 3.0, "D02": 4.0}
+    assert all("release=current" in path for path in fast.requested)
+    slow = _TimedCurriculumReader({"D01": 3.0, "D02": 61.0}, clock)
+    with pytest.raises(ValueError, match="D02"):
+        release_check.curriculum_latency(slow, releases, clock=lambda: clock[0])
