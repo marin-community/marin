@@ -168,8 +168,8 @@ those compressed bytes as base64. No request files are written while checking.
 | Field | Meaning and units |
 | --- | --- |
 | `differences[*].positions` | Number of matching next-token positions compared. |
-| `statistics.maximum`, `p99`, `p90` | Maximum and percentiles of per-position bounds on absolute probability error, in [0, 1]. |
-| `statistics.fraction_above_0075` | Fraction of positions whose bound is strictly greater than 0.075. |
+| `statistics.maximum`, `p99`, `p90` | Maximum and percentiles of per-position upper bounds on absolute probability error, in [0, 1]. |
+| `statistics.fraction_above_0075` | Fraction of positions whose upper bound is strictly greater than 0.075. |
 | `limits` | Corresponding `ErrorLimits`, using the same units. |
 | `coverage[*]` | Required histories, observed overlap or cache hits; `not_required` is limited to unreachable periodic decode reuse. |
 | `details.identity` | Observed checkpoint, tokenizer, device, dtype and cache configuration checks. |
