@@ -103,7 +103,7 @@ def test_native_launch_preserves_numeric_like_run_index_fingerprints(selection, 
     monkeypatch.setenv(RUN_INDEX_ENV, json.dumps({config.run_id: index.model_dump(mode="json")}))
     path = tmp_path / "indexed-launch.yaml"
 
-    def capture(launch, *, forward_env):
+    def capture(launch, **_):
         path.write_text(launch.launch_config_yaml)
 
     monkeypatch.setattr(snowball, "run_skyrl", capture)
