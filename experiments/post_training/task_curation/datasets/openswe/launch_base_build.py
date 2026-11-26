@@ -6,13 +6,16 @@
 Follows the landed launch-kaniko pattern (the swe-rebench-v2 base build): a
 sealed regional builder, one INTERNAL GHCR package, one tag per Python version,
 digest-pinned destination, credentials only via the secret-delivered Docker
-config. The job records each version's digest into the bindings manifest the
-converter's ``condensed_base_bindings`` input requires.
+config.
 
-Local validation builds must pass for every version before this job is
-submitted; a version the conda channels cannot serve (2.7 on a modern miniconda,
-for instance) fails its own build and stays out of the bindings, and the rows
-naming it convert to typed exclusions.
+The job's collector prints the bindings manifest (one digest-pinned reference
+per built version) to the job log and writes it to the job's working directory;
+the Kaniko image has no S3 client, so the operator stages the printed manifest
+to ``BINDINGS_URI`` after the job seals — the converter's
+``condensed_base_bindings`` input requires it there. A version the conda
+channels cannot serve fails its own build and stays out of the bindings, and
+the rows naming it convert to typed exclusions. Local validation builds must
+pass for every version before this job is submitted.
 """
 
 import base64
