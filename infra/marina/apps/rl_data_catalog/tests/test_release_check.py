@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from dataclasses import asdict
@@ -315,7 +316,7 @@ def test_landed_cut_takes_the_attested_revision_without_git(monkeypatch):
 class _TimedCurriculumReader:
     """A candidate reader whose sample-pool pages take a configured time on a fake clock."""
 
-    def __init__(self, seconds: dict[str, float], clock: list[float]) -> None:
+    def __init__(self, seconds: dict[str, float | None], clock: list[float]) -> None:
         self.seconds = seconds
         self.clock = clock
         self.cache: dict[str, Any] = {}
@@ -328,7 +329,10 @@ class _TimedCurriculumReader:
         if path.startswith("api/curriculum?"):
             return {"hierarchy": [{"kind": "subject", "subject_id": subject} for subject in self.seconds]}
         subject = dict(parse_qsl(urlsplit(path).query))["subject_id"]
-        self.clock[0] += self.seconds[subject]
+        seconds = self.seconds[subject]
+        if seconds is None:
+            raise MarinaRequestError(504, "query exceeded its statement timeout")
+        self.clock[0] += seconds
         return {"tasks": []}
 
 
@@ -341,6 +345,6 @@ def test_curriculum_latency_refuses_a_slow_subject_page():
     measured = release_check.curriculum_latency(fast, releases, clock=lambda: clock[0])
     assert measured["release_id"] == "current" and measured["subjects"] == {"D01": 3.0, "D02": 4.0}
     assert all("release=current" in path for path in fast.requested)
-    slow = _TimedCurriculumReader({"D01": 3.0, "D02": 61.0}, clock)
-    with pytest.raises(ValueError, match="D02"):
+    slow = _TimedCurriculumReader({"D01": 3.0, "D02": 61.0, "D03": None}, clock)
+    with pytest.raises(ValueError, match=re.escape("'D02': 61.0, 'D03': None")):
         release_check.curriculum_latency(slow, releases, clock=lambda: clock[0])

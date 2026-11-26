@@ -319,16 +319,25 @@ def curriculum_latency(
     release_id = selected[0]
     hierarchy = reader.get(f"api/curriculum?{urlencode({'release': release_id})}")["hierarchy"]
     subjects = sorted({node["subject_id"] for node in hierarchy if node.get("kind") == "subject"})
-    timings: dict[str, float] = {}
+    timings: dict[str, float | None] = {}
     for subject in subjects:
         path = "api/curriculum/tasks?" + urlencode(
             {"intended_use": "all", "release": release_id, "sample_pool": "true", "limit": "1000", "subject_id": subject}
         )
         reader.cache.pop(reader.cache_key(path), None)
         started = clock()
-        reader.get(path)
+        try:
+            reader.get(path)
+        except MarinaRequestError as error:
+            if error.status_code != 504:
+                raise
+            # The gateway's statement timeout: the page is slow, name it with the others.
+            timings[subject] = None
+            continue
         timings[subject] = round(clock() - started, 2)
-    slow = {subject: seconds for subject, seconds in timings.items() if seconds > CURRICULUM_LATENCY_LIMIT}
+    slow = {
+        subject: seconds for subject, seconds in timings.items() if seconds is None or seconds > CURRICULUM_LATENCY_LIMIT
+    }
     if slow:
         raise ValueError(f"Curriculum sample-pool pages exceed {CURRICULUM_LATENCY_LIMIT} s: {slow}")
     return {"release_id": release_id, "limit_seconds": CURRICULUM_LATENCY_LIMIT, "subjects": timings}
