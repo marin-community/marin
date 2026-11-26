@@ -33,7 +33,7 @@ class ControllerProvider(Protocol):
         """
         ...
 
-    def preflight_controller(self, config: IrisClusterConfig) -> None:
+    def preflight_controller(self, config: IrisClusterConfig) -> tuple[str, str] | None:
         """Resolve operator-side inputs without mutating cluster resources.
 
         Providers may cache the resolved inputs for the subsequent start or

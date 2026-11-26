@@ -142,7 +142,7 @@ def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key():
     config = coreweave_config(signing_key="gcp-secret://p/secrets/k/versions/1")
     needs = requirements(config, s3_env=["CW_KEY_ID", "CW_KEY_SECRET"])
 
-    assert {n.target for n in needs if n.kind is Need.ENV} == {"CW_KEY_ID", "CW_KEY_SECRET"}
+    assert {n.target for n in needs if n.kind is Need.NAMED_SECRET} == {"CW_KEY_ID", "CW_KEY_SECRET"}
     context_needs = [n for n in needs if n.kind is Need.KUBE_CONTEXT]
     assert [(n.target, n.source) for n in context_needs] == [("marin-gpu_US-EAST-02A", "~/.kube/coreweave-iris")]
     # The operator resolves the source; the rendered config points at its mounted file.

@@ -77,7 +77,6 @@ from iris.cluster.platforms.types import (
 )
 from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.egress_dns import DomainAllowlist
-from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.timing import Duration
 
 
@@ -476,15 +475,12 @@ def test_rollout_uses_one_storage_pair_for_operator_and_controller(tmp_path, mon
     source.write_text(json.dumps({"CW_KEY_ID": "deploy-key", "CW_KEY_SECRET": "deploy-secret"}))
     monkeypatch.setenv("CW_KEY_ID", "ambient-key")
     monkeypatch.setenv("CW_KEY_SECRET", "ambient-secret")
-    monkeypatch.setenv("FSSPEC_S3", '{"key":"ambient-key","secret":"ambient-secret","token":"ambient-token"}')
-    monkeypatch.setattr("fsspec.config.conf", {})
     provider, k8s = _make_provider()
     config = _make_cluster_config(remote_state_dir="s3://test-bucket/state")
     config.controller.coreweave.storage_credentials_ref = f"file:{source}"
     _seed_prerequisites(k8s, config)
 
-    provider.preflight_controller(config)
-    assert s3_credential_options() == {"key": "deploy-key", "secret": "deploy-secret"}
+    assert provider.preflight_controller(config) == ("deploy-key", "deploy-secret")
     assert k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets") is None
     source.unlink()
     provider.start_controller(config)

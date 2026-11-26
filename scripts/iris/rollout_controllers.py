@@ -30,7 +30,10 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_c
 from iris.client.client import IrisClient
 from iris.client.workload import JobStatus
 from iris.cluster.config import IrisClusterConfig, load_config
-from iris.cluster.platforms.k8s.controller import resolve_controller_storage_credentials
+from iris.cluster.platforms.k8s.controller import (
+    needs_controller_storage_credentials,
+    resolve_controller_storage_credentials,
+)
 from iris.cluster.provenance import provenance_from_proto
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.state import JobState
@@ -38,7 +41,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.provenance import Provenance
-from rigging.secrets import ENV_SCHEME, GCP_SECRET_SCHEME, as_secret_spec, resolve_secret_spec
+from rigging.secrets import ENV_SCHEME, GCP_SECRET_SCHEME, as_secret_spec, get_secret, resolve_secret_spec
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +111,7 @@ class Need(StrEnum):
     COMMAND_RUNS = "command-runs"
     SECRET = "secret"
     STORAGE_SECRET = "storage-secret"
+    NAMED_SECRET = "named-secret"
     KUBE_CONTEXT = "kube-context"
 
 
@@ -392,15 +396,16 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
                     source=platform.kubeconfig_path,
                 )
             )
-        node_health = config.kubernetes_provider and config.kubernetes_provider.node_health
-        if config.storage.remote_state_dir.startswith("s3://") or (node_health and node_health.storage is not None):
+        if needs_controller_storage_credentials(config):
             assert config.controller.coreweave is not None
             reference = config.controller.coreweave.storage_credentials_ref
             if reference is not None:
                 needs.append(Requirement(Need.STORAGE_SECRET, reference, "controller and node-agent S3 key pair"))
             else:
                 for name in s3_env if s3_env is not None else _s3_credential_env():
-                    needs.append(Requirement(Need.ENV, name, "S3 state auth projected into iris-storage-secrets"))
+                    needs.append(
+                        Requirement(Need.NAMED_SECRET, name, "S3 state auth projected into iris-storage-secrets")
+                    )
         # A Kubernetes controller pod holds no cloud credentials, so the deploy resolves
         # the signing key in the operator's shell and projects it into the Secret. It
         # resolves sources in their configured order; projected file references are
@@ -482,6 +487,9 @@ def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -
     target = requirement.target
     if requirement.kind is Need.ENV:
         value = environ.get(target, "")
+        return CheckResult(requirement, bool(value), "set" if value else "unset")
+    if requirement.kind is Need.NAMED_SECRET:
+        value = get_secret(target)
         return CheckResult(requirement, bool(value), "set" if value else "unset")
     if requirement.kind is Need.COMMAND:
         path = shutil.which(target)

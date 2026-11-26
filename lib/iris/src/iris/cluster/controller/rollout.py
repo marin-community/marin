@@ -64,11 +64,11 @@ def _record_url(remote_state_dir: str) -> str:
     return prefix_join(remote_state_dir, ROLLOUT_RECORD_FILENAME)
 
 
-def read_rollout_record(remote_state_dir: str) -> RolloutRecord | None:
+def read_rollout_record(remote_state_dir: str, **storage_options: str | None) -> RolloutRecord | None:
     """Return the rollout record from remote state, or None if absent/unreadable."""
     url = _record_url(remote_state_dir)
     try:
-        with open_url(url, "r") as f:
+        with open_url(url, "r", **storage_options) as f:
             data = f.read()
     except FileNotFoundError:
         return None
@@ -82,8 +82,8 @@ def read_rollout_record(remote_state_dir: str) -> RolloutRecord | None:
         return None
 
 
-def write_rollout_record(remote_state_dir: str, record: RolloutRecord) -> None:
+def write_rollout_record(remote_state_dir: str, record: RolloutRecord, **storage_options: str | None) -> None:
     """Write the rollout record to remote state, overwriting any existing one."""
     url = _record_url(remote_state_dir)
-    with open_url(url, "w") as f:
+    with open_url(url, "w", **storage_options) as f:
         f.write(record.model_dump_json(indent=2))
