@@ -6,6 +6,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from marinskyrl.agent_harnesses import PI_HARNESS
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.validation import validate_spec
@@ -19,10 +20,10 @@ from skyrl_train.dataset.tasks import SourceTaskDataset
 from skyrl_train.task_inputs import TaskInput, task_messages
 from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import (
+    GraderMachine,
     CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
-    GraderMachine,
     ResourceGroups,
     ScriptGrader,
     Source,
@@ -33,8 +34,6 @@ from taskcompendium.runtime.resources import inline_resource
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_runtime, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
-
-from marinskyrl.agent_harnesses import PI_HARNESS
 
 
 class LocalAdmissionFactory:

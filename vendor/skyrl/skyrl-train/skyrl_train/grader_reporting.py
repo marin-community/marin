@@ -92,7 +92,8 @@ class GraderStats:
         for row, result, passed, final in zip(metadata, results, successes, final_rows, strict=True):
             if not final:
                 continue
-            subset_id = row.subset_id or row.data_source or row.metric_class
+            subset_id = row.subset_id
+            assert subset_id is not None, "Reporting metadata must include a resolved subset"
             verified = result is not None and result.status is VerificationStatus.VERIFIED
             passed = passed and verified
             stats = self._subsets.setdefault(subset_id, _SubsetStats())

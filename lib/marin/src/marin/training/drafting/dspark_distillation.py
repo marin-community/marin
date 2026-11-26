@@ -40,6 +40,7 @@ from marin.training.drafting.dspark_data import (
     TOKEN_FREQUENCIES_FILE,
     DraftDataConfig,
     PreparedSplits,
+    draft_decoder_config,
     tensor_files,
 )
 
@@ -113,6 +114,8 @@ class DraftRecipe:
     total_variation_weight: float
     optimizer: Literal["muon", "adamw"]
     lr_schedule: Literal["linear", "cosine", "none"]
+    draft_layers: int
+    draft_intermediate_size: int | None = None
     draft_vocab_size: int = 32000
     block_size: int = 8
     markov_rank: int = 256
@@ -120,6 +123,8 @@ class DraftRecipe:
     seed: int = DEFAULT_DRAFT_SEED
 
     def __post_init__(self) -> None:
+        if self.draft_layers <= 0 or (self.draft_intermediate_size is not None and self.draft_intermediate_size <= 0):
+            raise ValueError("Draft layer count and intermediate size must be positive")
         if not self.feature_taps or tuple(sorted(set(self.feature_taps))) != self.feature_taps:
             raise ValueError("Feature taps must be strictly increasing")
         if self.feature_taps[0] < 0 or self.feature_taps[-1] >= self.data.shape.num_hidden_layers:
@@ -136,6 +141,10 @@ class DraftRecipe:
     def extraction_taps(self) -> tuple[int, ...]:
         return (*self.feature_taps, self.data.shape.num_hidden_layers)
 
+    @property
+    def intermediate_size(self) -> int:
+        return self.draft_intermediate_size or 3 * self.data.shape.hidden_size // 2
+
 
 class DSparkExport(Artifact):
     """Training results stored in the draft artifact's provenance record."""
@@ -147,6 +156,16 @@ class DSparkExport(Artifact):
     speculators_revision: str
     vllm_source_commit: str
     loss_implementation: str = _LOSS_IMPLEMENTATION
+    source_identity: str | None = None
+
+
+@dataclass(frozen=True)
+class TrainedDraft:
+    """Model files selected from Speculators' worker-local checkpoint."""
+
+    directory: Path
+    files: tuple[str, ...]
+    result: DSparkExport
 
 
 def _gpu_device_split(visible_devices: str, recipe: DraftRecipe) -> tuple[str, str]:
@@ -259,8 +278,8 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
         decoder["model_type"] != DRAFT_LAYER_TYPE
         or decoder["hidden_size"] != recipe.data.shape.hidden_size
         or decoder["vocab_size"] != recipe.data.shape.vocab_size
-        or decoder["num_hidden_layers"] != recipe.data.draft_layers
-        or decoder["intermediate_size"] != recipe.data.intermediate_size
+        or decoder["num_hidden_layers"] != recipe.draft_layers
+        or decoder["intermediate_size"] != recipe.intermediate_size
         or config["speculators_config"]["proposal_methods"][0]["speculative_tokens"] != recipe.block_size
     ):
         raise ValueError("DSpark decoder or proposal dimensions disagree with the recipe")
@@ -291,16 +310,15 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
     return config
 
 
-def _publish_checkpoint(
+def _prepare_checkpoint(
     *,
-    output: StoragePath,
     training: Path,
     teacher_identity: str,
     recipe: DraftRecipe,
     expected_steps: int,
     mapping: np.ndarray,
     packages: dict,
-) -> DSparkExport:
+) -> TrainedDraft:
     checkpoint = training / str(_EPOCHS - 1)
     state = json.loads((checkpoint / "training_state.json").read_text())
     metrics = json.loads((checkpoint / "val_metrics.json").read_text())
@@ -318,17 +336,15 @@ def _publish_checkpoint(
     if index.is_file():
         names.append(index.name)
 
-    output.mkdirs()
-    for name in names:
-        (output / name).upload_from(str(checkpoint / name))
-    (output / CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
-    return DSparkExport(
+    (checkpoint / CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
+    result = DSparkExport(
         steps=state["global_step"],
         validation=metrics,
         trainer_packages=packages,
         speculators_revision=SPECULATORS_REVISION,
         vllm_source_commit=VLLM_SOURCE_COMMIT,
     )
+    return TrainedDraft(checkpoint, (CONFIG_NAME, *names), result)
 
 
 def _teacher_environment(teacher: Path, recipe: DraftRecipe, hidden_states: Path, devices: str) -> VllmEnvironment:
@@ -383,7 +399,7 @@ def _write_config_and_build_command(
         "seed": recipe.seed,
         "verifier": {"verifier_name_or_path": str(teacher)},
         "draft": {
-            "draft_config": str(data / DRAFT_CONFIG_FILE),
+            "draft_config": str(scratch / DRAFT_CONFIG_FILE),
             "draft_vocab_size": recipe.draft_vocab_size,
             "d2t_path": str(scratch / _D2T_FILE),
             "t2d_path": str(scratch / _T2D_FILE),
@@ -476,9 +492,8 @@ def _speculators_environment(devices: str) -> dict[str, str]:
     return env
 
 
-def _fit_and_publish(
+def _fit(
     *,
-    output: str,
     teacher_path: Path,
     teacher_identity: str,
     recipe: DraftRecipe,
@@ -487,16 +502,23 @@ def _fit_and_publish(
     split: PreparedSplits,
     devices: str,
     server_context: AbstractContextManager[VllmEnvironment | None],
-) -> DSparkExport:
+) -> TrainedDraft:
     env = _speculators_environment(devices)
     data = scratch / "data"
     training = scratch / "checkpoints"
+    decoder = draft_decoder_config(
+        json.loads((teacher_path / CONFIG_NAME).read_text()),
+        recipe.data,
+        layers=recipe.draft_layers,
+        intermediate_size=recipe.intermediate_size,
+    )
+    (scratch / DRAFT_CONFIG_FILE).write_text(json.dumps(decoder, indent=2) + "\n")
     # Install the checkout's bucket routing in the isolated trainer environment.
     rigging_source = Path(rigging.__path__[0]).resolve().parents[1]
     extra_packages = (str(rigging_source),) if hidden_states.scheme in ("s3", "gs") else ()
     python = _install_speculators(scratch, env, extra_packages)
     steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split.train, env)
-    logger.info("Training DSpark for %s at %s for %d optimizer steps", teacher_identity, output, steps)
+    logger.info("Training DSpark for %s for %d optimizer steps", teacher_identity, steps)
     with server_context as server:
         train = _write_config_and_build_command(
             teacher_path,
@@ -511,8 +533,7 @@ def _fit_and_publish(
             endpoint=server.server_url if server is not None else None,
         )
         subprocess.run(train, env=env, check=True)
-    return _publish_checkpoint(
-        output=StoragePath(output) / HF_DRAFT_SUBDIRECTORY,
+    return _prepare_checkpoint(
         training=training,
         teacher_identity=teacher_identity,
         recipe=recipe,
@@ -532,25 +553,23 @@ def _stage_frozen_weights(source: StoragePath, teacher_path: Path) -> None:
     (teacher_path / SAFE_TENSORS_INDEX_NAME).write_text(json.dumps({"weight_map": weights}))
 
 
-def train_cached_and_export(
+def train_cached_draft(
     *,
-    output: str,
     teacher: str,
     teacher_identity: str,
     recipe: DraftRecipe,
     scratch: Path,
     hidden_states: StoragePath,
     split: PreparedSplits,
-) -> DSparkExport:
-    """Train on prepared Arrow data and indexed hidden states in object storage."""
+) -> TrainedDraft:
+    """Train on cached activations and identify the model files to publish."""
 
     require_supported_vllm_release()
     _require_training_rows(split, recipe.trainer_ranks)
     teacher_path = scratch / "teacher"
     _stage_frozen_weights(StoragePath(teacher), teacher_path)
     devices = ",".join(_worker_gpu_devices().split(",")[: recipe.trainer_ranks])
-    return _fit_and_publish(
-        output=output,
+    return _fit(
         teacher_path=teacher_path,
         teacher_identity=teacher_identity,
         recipe=recipe,
@@ -594,8 +613,7 @@ def train_and_export(
             for pattern in ("tokenizer*", "chat_template*", "special_tokens_map.json", "added_tokens.json"):
                 for file in (tokenizer_path / pattern).glob():
                     file.download_to(str(teacher_path / file.name))
-        return _fit_and_publish(
-            output=output,
+        draft = _fit(
             teacher_path=teacher_path,
             teacher_identity=teacher_identity,
             recipe=recipe,
@@ -605,3 +623,8 @@ def train_and_export(
             devices=trainer_devices,
             server_context=_teacher_environment(teacher_path, recipe, hidden_states, teacher_devices),
         )
+        export = StoragePath(output) / draft.result.hf_subdirectory
+        export.mkdirs()
+        for name in draft.files:
+            (export / name).upload_from(str(draft.directory / name))
+        return draft.result

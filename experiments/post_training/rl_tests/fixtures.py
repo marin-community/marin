@@ -47,6 +47,7 @@ from finestore.rl.strata import (
 )
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
+from fsspec.config import conf
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
@@ -134,6 +135,8 @@ def fake_s3(monkeypatch, *paths: str) -> None:
 
 
 def fake_s3_checkpoint(monkeypatch, uri: str, root: Path) -> None:
+    # Cached s3fs instances can carry sync wrappers created before the patch.
+    monkeypatch.setitem(conf, "s3", {**conf.get("s3", {}), "skip_instance_cache": True})
     prefix = uri.removeprefix("s3://")
 
     def local(path):

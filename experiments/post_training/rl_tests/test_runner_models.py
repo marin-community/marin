@@ -30,6 +30,7 @@ from experiments.post_training.rl_presets import BatchMix
 from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, fake_s3, write_published_artifact
 from experiments.post_training.snowball_rl import SNOWBALL
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 
 @pytest.fixture
@@ -223,8 +224,8 @@ def mochi_with_incomplete_default(tmp_path):
     preset = MOCHI.by_name["train-long"]
     model = preset.model
     root = tmp_path / "model"
-    (root / "hf").mkdir(parents=True)
-    (root / "hf" / "config.json").write_text("{}")
+    root.mkdir(parents=True)
+    (root / "config.json").write_text("{}")
     model = replace(model, step=ArtifactStep.adopt(model.step.name, model.step.version, str(root)))
     return replace(MOCHI, presets=(replace(preset, model=model),))
 
@@ -548,7 +549,6 @@ def test_command_refusals(selection, table, name, options, error, mode, request,
     if mode == "cross-backend":
         monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: "s3://marin-us-east-02a/marin")
         monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/fixture")
-        monkeypatch.setattr(rl, "check_cache", lambda _path: True)
         monkeypatch.setattr(rl, "read_skyrl_attempt", lambda _path: None)
         storage_exists = StoragePath.exists
 
@@ -568,7 +568,9 @@ def test_command_refusals(selection, table, name, options, error, mode, request,
 
 
 def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, tmp_path, monkeypatch):
-    monkeypatch.setattr(rl, "check_cache", lambda _path: True)
+    model = MOCHI.by_name["train-medium-agentic"].model
+    marker = StoragePath(model.step.path()) / MODEL_MANIFEST_FILENAME
+    fake_s3(monkeypatch, str(marker).removeprefix("s3://"))
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     scratch = tmp_path / "temporary"

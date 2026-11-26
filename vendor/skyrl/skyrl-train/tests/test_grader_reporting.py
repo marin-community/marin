@@ -6,10 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 from skyrl_gym.verification import VerificationResult
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
+
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
-from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.io import io
+from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
     BatchPolicy,
     PayloadReference,
@@ -20,7 +22,6 @@ from skyrl_train.rollouts.buffer import (
 )
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
-from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 
 
 def test_grader_report_keeps_baseline_and_final_success_by_task_and_subset(tmp_path):

@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
-from dataclasses import replace
+import hashlib
 from itertools import permutations
 from types import SimpleNamespace
+from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -13,7 +13,13 @@ import pytest
 from finestore.rl.run_records import read_evaluations
 from finestore.rl.strata import TaskEvaluationIdentity, TaskStrata
 from omegaconf import OmegaConf
+from torchdata.stateful_dataloader import StatefulDataLoader
+from transformers import AutoTokenizer
 from rolloutengine.models import ModelTurn
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
+
 from skyrl_train.batch_sampling import filter_trajectory_batch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import write_tasks
@@ -29,12 +35,6 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 )
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
 from skyrl_train.utils.trainer_utils import evaluation_response_metrics
-from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
-from torchdata.stateful_dataloader import StatefulDataLoader
-from transformers import AutoTokenizer
-
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, task_input, text_task, write_selection_panel
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
 
