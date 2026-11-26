@@ -1028,14 +1028,16 @@ def test_hf_config_reload_keeps_fp32_router_settings(tmp_path):
                 tokenizer=str(hf_path),
                 components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
             ),
-            model=config,
+            # initializer_std differs from the checkpoint's, so the reloaded value shows the HF config was used.
+            model=replace(config, initializer_std=2 * config.initializer_std),
             initialize_from_hf=str(hf_path),
             use_hf_model_config=True,
             trainer=trainer,
             optimizer=AdamConfig(learning_rate=5e-5),
         )
         main(run_config)
-    # main replaces run_config.model with the config read from HF metadata, which carries neither flag.
+    # main replaces run_config.model with the HF config, which carries neither flag; both must be restored.
+    assert run_config.model.initializer_std == config.initializer_std
     assert run_config.model.router_dot_fp32
     assert run_config.model.router_combine_fp32
 
