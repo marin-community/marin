@@ -6,13 +6,20 @@
 import os
 
 from experiments.post_training import rl, rl_compose
-from experiments.post_training.mochi_loop_guards.presets import S0, S1_RP, S1_STOP, S2_CONTROL, S2_TREATMENT
+from experiments.post_training.mochi_loop_guards.presets import (
+    S0,
+    S0_TB2_RECOVERY,
+    S1_RP,
+    S1_STOP,
+    S2_CONTROL,
+    S2_TREATMENT,
+)
 from experiments.post_training.rl_presets import ModelPresets
 
 REGIONAL_ROOT = "s3://marin-us-east-08a/marin"
 GUARDS = ModelPresets(
     model="mochi",
-    presets=(S0, S1_STOP, S1_RP, S2_CONTROL, S2_TREATMENT),
+    presets=(S0, S0_TB2_RECOVERY, S1_STOP, S1_RP, S2_CONTROL, S2_TREATMENT),
     namespace="mochi-loop-guards",
     control_pins={},
     needs_completed_default_export=False,

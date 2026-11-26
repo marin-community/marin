@@ -31,6 +31,7 @@ from experiments.post_training.rl_presets import (
 VERSION = "2026.11.25.1"
 RUN_VERSION = "2026.11.25.9"
 PANEL_SELECTION = f"users/benfeuer/mochi-loop-guards/panel@{VERSION}"
+TB2_RECOVERY_SELECTION = f"users/benfeuer/mochi-loop-guards/s0-infra-recovery-tb2@{VERSION}"
 POOL_SELECTION = f"users/benfeuer/mochi-loop-guards/snowball-100k-agentic-ho-excluded@{VERSION}"
 """The RL task pool: snowball-100k-agentic minus the 128 swesmith-ho held-out row hashes."""
 
@@ -295,6 +296,15 @@ def rl_arm(name: str, *, antithrash: bool, updates: int) -> Preset:
 
 
 S0 = panel_preset("s0-baseline")
+# Replay the 18 tasks with original infrastructure outcomes at all three frozen seeds.
+# Only the 33 originally ungraded identities enter recovery; the other 21 replays are ignored.
+S0_TB2_RECOVERY = replace(
+    panel_preset("s0-infra-recovery-tb2", cohorts=(PANEL_COHORTS[0],)),
+    revision="2026.11.25.10",
+    tasks=TB2_RECOVERY_SELECTION,
+    held_out_tasks=TB2_RECOVERY_SELECTION,
+    budget="128 GB200; 18 frozen TB2 tasks x 3 trials; replace only 33 original infrastructure outcomes",
+)
 GUARD_ARM_LAYOUT = replace(
     GUARDS_LAYOUT,
     name="mochi-guards-generate-64",
