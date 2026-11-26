@@ -249,10 +249,11 @@ their columns remain populated alongside native results.
 The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
 benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
 a verified cohort pass it explicitly, for example `cohort=eval-policy-2026-09-24-verified`.
-The all-cohorts view includes otherwise valid scores from runs that violated their named policy. Selecting a
-policy cohort excludes those scores and lists the rejected runs. Model detail and score history use
-the same admission rule across their timelines. Model detail keeps each run's policy violations
-visible even when the selected policy excludes its score.
+The all-cohorts view includes otherwise valid scores from runs that violated their named policy.
+Selecting a verified cohort excludes scores that violated that cohort's policy and lists the rejected
+runs. Model detail and score history apply the selected policy to scores from its own cohort across
+their timelines. Model detail keeps the full list of recorded cohorts and each run's policy violations
+visible even when the selected policy excludes a score.
 
 Scored views retain the selected `cohort` in the URL and carry it into model detail and score history.
 Model rows, benchmark protocols, and missing-cell explanations

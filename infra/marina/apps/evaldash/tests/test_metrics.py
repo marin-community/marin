@@ -19,7 +19,7 @@ from evaldash.metrics import (
     panel_request,
 )
 from evalrecords.eval_policy import EVALCHEMY_COMMIT
-from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_24_VERSION
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION
 from evalrecords.eval_stats import Completeness, MissingPolicy
 from evalrecords.model_identity import model_config_digest
 from evalrecords.records import (
@@ -953,7 +953,8 @@ def test_policy_violations_only_exclude_runs_in_a_named_cohort():
 
     store = MemoryRecordStore()
     policy_only = _record("policy-only", "math500", policy, "2026-09-25T00:00:00+00:00", 0.6)
-    store.refresh([*records, policy_only])
+    older_policy_run = _record("a", "math500", SEPTEMBER_16_VERSION, "2026-09-23T00:00:00+00:00", 0.3)
+    store.refresh([*records, policy_only, older_policy_run])
     config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
     api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
     with TestClient(api.app) as client:
@@ -966,19 +967,24 @@ def test_policy_violations_only_exclude_runs_in_a_named_cohort():
 
         panel_rows = client.get("/panel", params={"cohort": ALL_COHORTS}).json()["rows"]
         panel_cell = next(row for row in panel_rows if row["model"] == "a")["cells"]["math500"]
-        detail = client.get("/models/a", params={"cohort": ALL_COHORTS}).json()
-        history = client.get("/history", params={"model": "a", "task": "math500", "cohort": ALL_COHORTS}).json()
-
         assert panel_cell["run_id"] == newest["a"]
-        assert next(run for run in detail["runs"] if run["run_id"] == newest["a"])["headline"]["value"] == 0.6
-        assert detail["history"]["math500"][-1]["run_id"] == newest["a"]
-        assert history["points"][-1]["run_id"] == newest["a"]
+
+        for cohort in (ALL_COHORTS, "v1", "unversioned"):
+            detail = client.get("/models/a", params={"cohort": cohort}).json()
+            history = client.get("/history", params={"model": "a", "task": "math500", "cohort": cohort}).json()
+            assert [cohort["version"] for cohort in detail["cohorts"]] == [policy, "v1", SEPTEMBER_16_VERSION]
+            assert next(run for run in detail["runs"] if run["run_id"] == newest["a"])["headline"]["value"] == 0.6
+            assert detail["history"]["math500"][-1]["run_id"] == newest["a"]
+            assert history["points"][-1]["run_id"] == newest["a"]
 
         named_detail = client.get("/models/a", params={"cohort": policy}).json()
         named_history = client.get("/history", params={"model": "a", "task": "math500", "cohort": policy}).json()
+        assert [cohort["version"] for cohort in named_detail["cohorts"]] == [policy, "v1", SEPTEMBER_16_VERSION]
+        assert named_detail["current_version"] == policy
         rejected = next(run for run in named_detail["runs"] if run["run_id"] == newest["a"])
         assert rejected["headline"] is None
         assert rejected["policy_violations"]
+        assert named_history["points"][0]["run_id"] == older_policy_run.run_id
         assert newest["a"] not in {point["run_id"] for point in named_history["points"]}
 
 

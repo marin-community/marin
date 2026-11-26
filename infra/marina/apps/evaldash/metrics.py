@@ -230,10 +230,6 @@ def in_cohort(record: EvalRunRecord, request: SelectionRequest) -> bool:
     return request.cohort is CohortMode.LATEST_VALID or record.version == request.cohort_version
 
 
-def _policy_admits(violations: tuple[str, ...], cohort: CohortMode) -> bool:
-    return cohort is CohortMode.LATEST_VALID or not violations
-
-
 def _gap_reason(record: EvalRunRecord) -> str:
     """Why a record contributes no cell, when the request did not reject it outright."""
     if record.step_status not in (None, STATUS_SUCCESS):
@@ -466,7 +462,7 @@ class ScoredRecords:
         )
         self._lock = Lock()
         self._smoke_measurements: dict[str, Measurement | None] = {}
-        self._cohort_scores: dict[CohortMode, _CohortScores] = {}
+        self._cohort_scores: dict[str | None, _CohortScores] = {}
         self._last_selection: tuple[SelectionRequest, _ScoreSelection] | None = None
 
     def without_models(self, excluded: frozenset[str]) -> ScoredRecords:
@@ -474,6 +470,9 @@ class ScoredRecords:
 
     def violations(self, record: EvalRunRecord) -> tuple[str, ...]:
         return self._violations.get(record.run_id, ())
+
+    def policy_rejection(self, record: EvalRunRecord, version: str | None) -> tuple[str, ...]:
+        return self.violations(record) if record.version == version else ()
 
     def measurement(self, record: EvalRunRecord) -> Measurement | None:
         if not record.evaluation.name.endswith(SMOKE_SUFFIX):
@@ -486,24 +485,25 @@ class ScoredRecords:
                 self._smoke_measurements[record.run_id] = measurement_from_record(record)
             return self._smoke_measurements[record.run_id]
 
-    def cohort_scores(self, cohort: CohortMode) -> _CohortScores:
+    def cohort_scores(self, version: str | None) -> _CohortScores:
+        policy = version if version in POLICIES else None
         with self._lock:
-            if cohort not in self._cohort_scores:
+            if policy not in self._cohort_scores:
                 # Historical runs may inherit a compatible setting from another version. Restrict
                 # the alias sources by policy here, and apply version filters only after projection.
-                records = [record for record in self._non_smoke if _policy_admits(self.violations(record), cohort)]
+                records = [record for record in self._non_smoke if not self.policy_rejection(record, policy)]
                 measurements = _dashboard_measurements(records, self._measurements)
-                self._cohort_scores[cohort] = _CohortScores(
+                self._cohort_scores[policy] = _CohortScores(
                     records, measurements, declared_families(records), declared_protocols(measurements)
                 )
-            return self._cohort_scores[cohort]
+            return self._cohort_scores[policy]
 
     @cached_property
     def cohort_options(self) -> CohortOptions:
         return _cohort_options(self._non_smoke)
 
     def select(self, request: SelectionRequest) -> _ScoreSelection:
-        scores = self.cohort_scores(request.cohort)
+        scores = self.cohort_scores(request.cohort_version)
         with self._lock:
             if self._last_selection is not None and request == self._last_selection[0]:
                 return self._last_selection[1]
@@ -532,7 +532,7 @@ class ScoredRecords:
     def policy_rejections(
         self, request: SelectionRequest, models: tuple[str, ...] | None = None
     ) -> list[dict[str, object]]:
-        if request.cohort is CohortMode.LATEST_VALID:
+        if request.cohort_version not in POLICIES:
             return []
         return [
             {
@@ -543,15 +543,14 @@ class ScoredRecords:
             }
             for record in self._non_smoke
             if models is None or record.model.name in models
-            if in_cohort(record, request)
-            if (violations := self.violations(record))
+            if (violations := self.policy_rejection(record, request.cohort_version))
             if request.panel is None or record.evaluation.name in request.panel
             if matches_filters(record.model.name, self.metadata[record.run_id], request)
         ]
 
     def history(self, model: str, benchmark: str, request: SelectionRequest) -> list[dict]:
         """Return a scored column or raw eval's history across versions, oldest first."""
-        scores = self.cohort_scores(request.cohort)
+        scores = self.cohort_scores(request.cohort_version)
         measurements = [item for item in scores.measurements if item.benchmark == benchmark]
         if measurements:
             return _model_history([m for m in measurements if m.model == model], scores.protocols).get(benchmark, [])
@@ -560,7 +559,7 @@ class ScoredRecords:
         raw_records = [
             record
             for record in self.records
-            if record.evaluation.name == benchmark and _policy_admits(self.violations(record), request.cohort)
+            if record.evaluation.name == benchmark and not self.policy_rejection(record, request.cohort_version)
         ]
         raw_measurements = {
             record.run_id: score for record in raw_records if (score := self.measurement(record)) is not None
@@ -778,7 +777,7 @@ def build_meta(
     """Return panel filter metadata and all known variants for each family."""
     run_facets = build_run_facets(records, (r.status.value for r in records))
     scored = scored if scored is not None else ScoredRecords(records)
-    scores = scored.cohort_scores(CohortMode.LATEST_VALID)
+    scores = scored.cohort_scores(None)
     eval_names = scored.benchmark_names(scores)
     by_family = group_by_family(sorted(eval_names), scores.families)
     metadata = scored.metadata
@@ -865,16 +864,14 @@ def _model_runs(
     """Every run for the model, newest first, with grades only for admitted runs."""
     runs = []
     for record in records:
-        violations = scored.violations(record)
+        rejection = scored.policy_rejection(record, request.cohort_version)
         protocol = protocols.get(record.evaluation.name)
         measurement = scored.measurement(record)
         protocol_mismatch = (
             measurement is not None and protocol is not None and not matches_protocol(measurement, protocol)
         )
         headline = (
-            cell_payload(measurement)
-            if measurement is not None and not protocol_mismatch and _policy_admits(violations, request.cohort)
-            else None
+            cell_payload(measurement) if measurement is not None and not protocol_mismatch and not rejection else None
         )
         runs.append(
             {
@@ -885,13 +882,13 @@ def _model_runs(
                 "created_at": record.created_at,
                 "version": record.version,
                 "headline": headline,
-                "policy_violations": list(violations),
+                "policy_violations": list(scored.violations(record)),
                 "gap_reason": (
                     None
                     if headline
                     else (
-                        "; ".join(violations)
-                        if violations
+                        "; ".join(rejection)
+                        if rejection
                         else "metric differs from current protocol" if protocol_mismatch else _gap_reason(record)
                     )
                 ),
@@ -910,7 +907,7 @@ def build_model_detail(
 ) -> dict | None:
     """Everything the frontend Model view needs for one model, in one payload, or None when unknown.
 
-    ``current_version`` and ``cohorts`` reflect admitted non-smoke runs. The history spans admitted
+    ``current_version`` and ``cohorts`` reflect the model's recorded non-smoke runs. The history spans admitted
     scores across versions. ``runs`` lists every run for the model, including smoke runs, newest first.
     """
     model_records = [record for record in records if record.model.name == model]
@@ -919,16 +916,16 @@ def build_model_detail(
 
     scored = scored if scored is not None else ScoredRecords(records)
     # The selected cohort governs policy admission for the timeline across versions.
-    scores = scored.cohort_scores(request.cohort)
+    scores = scored.cohort_scores(request.cohort_version)
     newest = max(model_records, key=lambda record: record.created_at or "")
-    eligible = [record for record in scores.records if record.model.name == model]
+    cohorts = _model_cohorts([record for record in model_records if not record.evaluation.name.endswith(SMOKE_SUFFIX)])
     return {
         "model": model,
         "location": newest.model.location,
         "backend": newest.model.backend,
         "user": newest.user,
-        "current_version": max(eligible, key=lambda r: r.created_at or "").version if eligible else None,
-        "cohorts": _model_cohorts(eligible),
+        "current_version": cohorts[0]["version"] if cohorts else None,
+        "cohorts": cohorts,
         "history": _model_history([item for item in scores.measurements if item.model == model], scores.protocols),
         "runs": _model_runs(model_records, scores.protocols, request, scored),
     }

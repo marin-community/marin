@@ -153,12 +153,14 @@ function coverageNote(cell: PanelCell): string {
             <span v-if="data.user" class="text-text-muted">· {{ data.user }}</span>
           </div>
         </div>
-        <div class="ml-auto flex items-center gap-1.5">
+        <div role="group" aria-label="Cohort" class="flex max-w-full flex-wrap items-center gap-1.5 sm:ml-auto">
           <span class="font-mono text-[10px] uppercase tracking-widest text-text-muted self-center mr-1">Cohort</span>
           <button
             v-for="c in data.cohorts"
             :key="c.version ?? 'none'"
-            class="font-mono text-xs px-2.5 py-1 rounded border"
+            type="button"
+            :aria-pressed="selectedCohort === (c.version ?? UNVERSIONED_COHORT)"
+            class="max-w-full rounded border px-2.5 py-1 font-mono text-xs [overflow-wrap:anywhere]"
             :class="
               selectedCohort === (c.version ?? UNVERSIONED_COHORT)
                 ? 'border-accent text-text bg-accent-subtle'
@@ -169,6 +171,8 @@ function coverageNote(cell: PanelCell): string {
             {{ c.version ?? UNVERSIONED_COHORT }}
           </button>
           <button
+            type="button"
+            :aria-pressed="selectedCohort === ALL_COHORTS"
             class="font-mono text-xs px-2.5 py-1 rounded border"
             :class="
               selectedCohort === ALL_COHORTS
@@ -184,7 +188,7 @@ function coverageNote(cell: PanelCell): string {
 
       <!-- measurement profile: the large eval rail -->
       <div>
-        <div class="flex items-baseline justify-between mb-2">
+        <div class="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <h3 class="text-xs font-semibold uppercase tracking-wider text-text-secondary">Measurement profile</h3>
           <span class="text-xs text-text-muted">
             cohort {{ cohortLabel }} · newest scored run per benchmark · whisker = 95% interval · click a gauge for

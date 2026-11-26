@@ -89,11 +89,13 @@ def test_model_detail_preserves_the_directory_cohort_and_updates_when_it_changes
     assert parse_qs(urlsplit(detail.value.url).query)["cohort"] == ["2026.07.20"]
     expect(page.get_by_role("heading", name="snowball", exact=True)).to_be_visible()
     assert parse_qs(urlsplit(page.url).query)["cohort"] == ["2026.07.20"]
+    cohort = page.get_by_role("group", name="Cohort", exact=True)
+    expect(cohort.get_by_role("button", name="2026.07.20", exact=True, pressed=True)).to_be_visible()
 
     with page.expect_response(lambda response: urlsplit(response.url).path == detail_api) as detail:
-        page.get_by_role("button", name="all runs", exact=True).click()
+        cohort.get_by_role("button", name="all runs", exact=True).click()
     assert parse_qs(urlsplit(detail.value.url).query)["cohort"] == ["all"]
-    expect(page.get_by_role("heading", name="snowball", exact=True)).to_be_visible()
+    expect(cohort.get_by_role("button", name="all runs", exact=True, pressed=True)).to_be_visible()
 
 
 def test_compare_retries_model_choices_with_the_editor_closed(journey: Journey) -> None:
