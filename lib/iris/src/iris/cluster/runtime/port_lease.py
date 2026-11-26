@@ -36,14 +36,12 @@ def host_tcp_port_candidates(excluded: Collection[int], count: int) -> list[int]
 
 @contextmanager
 def lease_tcp_port(candidates: Iterator[int]) -> Iterator[int]:
-    """Claim an unbound TCP port until the context exits or its process dies.
-
-    The claim uses a Linux abstract Unix socket, which is visible across pods
-    sharing a network namespace even when their filesystems differ.
-    """
+    """Claim an unbound TCP port until the context exits or its process dies."""
     for value in islice(candidates, MAX_CANDIDATES_PER_PORT):
         lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
+            # Abstract Unix sockets share the network namespace across pods;
+            # the kernel drops the claim when the launcher process dies.
             # Keep the existing SkyRL name so running launchers coordinate with
             # this shared Iris implementation during a rolling deployment.
             lease.bind(f"\0marin-skyrl-port-{value}")
