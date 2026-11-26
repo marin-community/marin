@@ -24,6 +24,7 @@ from experiments.post_training.task_curation.datasets import (
     native_releases,
     nemo_mcqa,
     nemo_structured,
+    nemotron_ultra_renames_admitted,
     qa_abstention_admitted,
     repair_releases,
     s1_deepresearch_admitted,
@@ -275,13 +276,14 @@ PENDING_MEASUREMENT_SOURCES = (
         for source in nemotron_ultra.sources()
         if source.info.id
         in {
-            "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-            "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
             "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
             "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
             "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
         }
     ),
+    # The two admitted wave-1 renames bind their qualification records; their retained
+    # releases surface at the R41 load.
+    *nemotron_ultra_renames_admitted.sources(),
     # The main-sync staged sources (2026-11-25): declared on origin/main, absent
     # from the Atlas r39 cut, staged for R41 intake at their main pins. The
     # license-banned KTO components never enter this listing.
@@ -338,11 +340,9 @@ def configured_sources() -> list[RlDataSource]:
         *qa_abstention_admitted.sources(),
         *edge_websearch_admitted.sources(),
         *s1_deepresearch_admitted.sources(),
-        *s1_deepresearch_admitted.sources(),
         *freeform_formatting_admitted.sources(),
         *citation_formatting_admitted.sources(),
-        *freeform_formatting_admitted.sources(),
-        *citation_formatting_admitted.sources(),
+        *nemotron_ultra_renames_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),

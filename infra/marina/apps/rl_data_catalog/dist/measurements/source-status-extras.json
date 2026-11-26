@@ -32,11 +32,11 @@
     "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
     "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
     "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Anthropic:hh_rlhf/harmless-base": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Anthropic:hh_rlhf/helpful-base": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "Anthropic:hh_rlhf/helpful-online": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -121,7 +121,6 @@
     "TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
     "TaskTrove:R2E-Gym__R2E-Gym-V1": "SWE zero-task \u00b7 ses_de7ba44ecffe",
     "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
-    "TaskTrove:SWE-Gym__SWE-Gym": "SWE zero-task \u00b7 ses_de7ba44ecffe",
     "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
     "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
     "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122": "requirement-backfill \u00b7 awaits the next preview publication",
@@ -1857,42 +1856,6 @@
       "reasons": []
     },
     {
-      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_lean",
-      "status": "Pending",
-      "origin": "Nemotron",
-      "upstream_dataset": "nemotron_ultra_mopd",
-      "upstream_url": null,
-      "notes": "",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
-      "use": "train",
-      "method_tags": [
-        "RL"
-      ],
-      "reasons": []
-    },
-    {
-      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-      "status": "Pending",
-      "origin": "Nemotron",
-      "upstream_dataset": "nemotron_ultra_mopd",
-      "upstream_url": null,
-      "notes": "",
-      "stage": "Measurements pending",
-      "dataset_id": null,
-      "dataset_revision": null,
-      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
-      "use": "train",
-      "method_tags": [
-        "RL"
-      ],
-      "reasons": []
-    },
-    {
       "id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
       "display_name": "Nemotron \u00b7 nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
       "status": "Pending",
@@ -1934,6 +1897,42 @@
       "status": "Pending",
       "origin": "Nemotron",
       "upstream_dataset": "nemotron_ultra_rlvr2",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_lean",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
+      "upstream_url": null,
+      "notes": "",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "display_name": "Nemotron \u00b7 nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
+      "status": "Pending",
+      "origin": "Nemotron",
+      "upstream_dataset": "nemotron_ultra_mopd",
       "upstream_url": null,
       "notes": "",
       "stage": "Measurements pending",
