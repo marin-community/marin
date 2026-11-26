@@ -13,10 +13,12 @@ from experiments.post_training.task_curation.content_identity import read_conten
 from experiments.post_training.task_curation.datasets import (
     backfill_releases,
     campaign_releases,
+    citation_formatting_admitted,
     crosscode_python_repair,
     dolci_precise_if_admitted,
     edge_websearch_admitted,
     facet_terminal,
+    freeform_formatting_admitted,
     hierarchy_intake,
     inverse_ifeval_admitted,
     native_releases,
@@ -214,6 +216,8 @@ R41_PENDING_SOURCE_IDS = (
         "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
         "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
         "Nvidia:Nemotron-RL-InverseIFEval-v1",
+        "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
+        "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
         "Nvidia:Nemotron-RL-QA-Abstention-v1",
         "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
@@ -242,6 +246,8 @@ PENDING_MEASUREMENT_SOURCES = (
     *inverse_ifeval_admitted.sources(),
     *qa_abstention_admitted.sources(),
     *edge_websearch_admitted.sources(),
+    *freeform_formatting_admitted.sources(),
+    *citation_formatting_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -328,6 +334,10 @@ def configured_sources() -> list[RlDataSource]:
         *inverse_ifeval_admitted.sources(),
         *qa_abstention_admitted.sources(),
         *edge_websearch_admitted.sources(),
+        *freeform_formatting_admitted.sources(),
+        *citation_formatting_admitted.sources(),
+        *freeform_formatting_admitted.sources(),
+        *citation_formatting_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),

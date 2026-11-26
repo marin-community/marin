@@ -57,6 +57,8 @@
     "di-zhang-fdu:aime_1983_2024",
     "marin-community:mcp-atlas-easy",
     "Nvidia:Nemotron-RL-QA-Abstention-v1",
-    "Yatin:Edge-Agent-Reasoning-WebSearch-260K"
+    "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
+    "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
+    "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1"
   ]
 }

@@ -21,6 +21,8 @@
     "Nvidia:Nemotron-RL-InverseIFEval-v1": "ingest B \u00b7 Codex 01a1e039",
     "Nvidia:Nemotron-RL-QA-Abstention-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Yatin:Edge-Agent-Reasoning-WebSearch-260K": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+    "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+    "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:tasktrove-code-contests-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
     "TaskTrove:tasktrove-taco-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
@@ -1624,6 +1626,42 @@
       "upstream_dataset": "Edge-Agent-Reasoning-WebSearch-260K",
       "upstream_url": null,
       "notes": "TRAIN preparation-planning tasks converted from the pinned Edge WebSearch card: the raw user_prompt and role/industry/OS values are unchanged, and each task records the source-card-derived preparation-planning system contract as an explicit NormalizationChange. The added contract and new MEDIUM checklist judge are declared, not represented as a native grader or old-byte lineage; the generator checkpoint identity is undeclared by the source. Generated agent_reasoning stays private provenance, never judge gold or oracle, and no live search tool, environment, agent budget or native oracle is invented. Standard lexical retention removed zero of 260,293 input rows; no within-source duplicates. Canonical static retention covers all 260,293 current-pin tasks under the no-oracle policy, with executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 100/100 with zero issues, zero unavailable and zero uncertain; Result good. The content survey measured ten neighbors, all DISTINCT. Quality never vetoes admission. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/260293; global schema rejections 260293/260293, paths {'integrity_contract': 260293, 'grader.verifyit': 260293}. This records loader and launch binding, not a live judge response or executable-grader qualification. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/final-pin-sample-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/admission-evidence-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/consumer-binding-v1/result.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
+      "display_name": "Nvidia \u00b7 Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
+      "status": "Pending",
+      "origin": "Nvidia",
+      "upstream_dataset": "Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
+      "upstream_url": null,
+      "notes": "TRAIN freeform formatting: the original native user prompts, role metadata and the source's own system instructions are preserved verbatim; the tasks grade through deterministic native format verifiers (no judge), so no judge execution is claimed or needed. Standard lexical retention removed 1 input row(s); no within-source duplicates. Canonical static retention covers all 9,036 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 100/100, found 7 issues and 0 unavailable; Result good; findings remain verbatim. The content survey measured ten neighbors and the recorded disposition acknowledges the four family pairs: the Ultra SFT components carry these sources' prompts verbatim (40/40 inspected pairs identical) and the TaskTrove freeform/citation cohorts rephrase the shared upstream questions (0/40 identical); retain both, no double-counting. Quality never vetoes admission. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/9036; global schema rejections advisory per the standing policy. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/final-pin-sample-v3/freeform-flat.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/admission-evidence-freeform-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/consumer-binding-freeform-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/overlap-disposition-v6/disposition-receipt.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
+      "display_name": "Nvidia \u00b7 Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
+      "status": "Pending",
+      "origin": "Nvidia",
+      "upstream_dataset": "Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
+      "upstream_url": null,
+      "notes": "TRAIN citation formatting: the original native user prompts, role metadata and the source's own system instructions are preserved verbatim; the tasks grade through deterministic native format verifiers (no judge), so no judge execution is claimed or needed. Standard lexical retention removed 0 input row(s); no within-source duplicates. Canonical static retention covers all 9,525 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 100/100, found 16 issues and 0 unavailable; Result some_issues; findings remain verbatim. The content survey measured ten neighbors and the recorded disposition acknowledges the four family pairs: the Ultra SFT components carry these sources' prompts verbatim (40/40 inspected pairs identical) and the TaskTrove freeform/citation cohorts rephrase the shared upstream questions (0/40 identical); retain both, no double-counting. Quality never vetoes admission. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/9525; global schema rejections advisory per the standing policy. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/final-pin-sample-v3/citation-flat.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/admission-evidence-citation-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/consumer-binding-citation-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/overlap-disposition-v6/disposition-receipt.json.",
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,

@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "d0b972fc8d6c24f5e2fff82d48ebec3390ed3526",
+  "path": "experiments/post_training/task_curation/datasets/freeform_formatting_admitted.json",
+  "sha256": "331b8b1983ff6b49707b6fa1c09e786143f0c46c0f8bddeb39cddc428a8b05cf"
+}
