@@ -229,6 +229,11 @@ class CatalogReader:
                 "api/difficulty-rollout",
             }:
                 data = self.candidate_api.get(key)
+            elif self.candidate_api is not None and url.path == "api/taxonomy":
+                # The candidate's pages render from the tables its own API will serve;
+                # the preceding revision may serve an older table set (R40: v39 had no
+                # backend tables, so every Backends page failed the sweep).
+                data = candidate_taxonomy()
             elif self.query is not None and url.path == "api/source-labels":
                 catalog = self.get("api/sources")
                 data = {
@@ -290,6 +295,11 @@ class CatalogReader:
         return self.cache[key]
 
 
+def candidate_taxonomy() -> dict[str, Any]:
+    """The taxonomy tables this release's API serves (the server's ``/taxonomy`` route)."""
+    return taxonomy_tables(requirement_values=[requirement.value for requirement in Requirement])
+
+
 def browser_api_response(reader: CatalogReader, path: str, sources: list[dict[str, Any]]) -> tuple[int, Any]:
     """Deliver the real empty-assessment response without excusing missing required data."""
     try:
@@ -303,7 +313,7 @@ def browser_api_response(reader: CatalogReader, path: str, sources: list[dict[st
             # revision predates the endpoint, so the checker answers the route
             # from the candidate's own code - the same tables the released API
             # serves.
-            return 200, taxonomy_tables(requirement_values=[requirement.value for requirement in Requirement])
+            return 200, candidate_taxonomy()
         if (
             error.status_code == 404
             and parsed.path == "api/assessment"

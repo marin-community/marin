@@ -22,6 +22,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import graph as release_graph_module
 from experiments.post_training.task_curation.release_stages import release_check
+from experiments.post_training.task_curation.release_stages.exposure_probe import exposure_lists
 from experiments.post_training.task_curation.release_stages.graph import (
     _STAGE_SPECS,
     GRAPH_RECEIPT_KIND,
@@ -39,6 +40,7 @@ from experiments.post_training.task_curation.release_stages.graph import (
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
+from infra.marina.apps.rl_data_catalog.server.publication_scope import PUBLICATION_DECISIONS
 
 EXPECTED_NODES = (
     "declarations",
@@ -488,10 +490,13 @@ def test_release_check_phases_bind_their_receipts(tmp_path):
     postpublish_inputs = _materialized_inputs(built.stages["release_check_postpublish"], prefix)
     assert postpublish_inputs["published_revision"] == 31
     assert postpublish_inputs["hosted_receipt"] == hosted_check_receipt
+    census_receipt = {"uri": "s3://bucket/census.json", "sha256": "c" * 64}
+    _write_dep(built.stages["census"], prefix, "census", plan.release_id, census_receipt, tasks=17)
     hosted_check_inputs = _materialized_inputs(built.stages["hosted_check"], prefix)
     assert hosted_check_inputs["revision"] == 31
     assert hosted_check_inputs["root"] == "https://applets.example.test"
     assert hosted_check_inputs["release_manifest"] == marina_receipt
+    assert hosted_check_inputs["retained_tasks"] == 17
 
 
 def test_snapshot_publication_binds_the_composed_surveys(tmp_path):
@@ -521,21 +526,29 @@ def test_snapshot_publication_binds_the_composed_surveys(tmp_path):
     assert inputs["prior_declarations_uri"] == plan.pins.prior_declarations.uri
 
 
-def test_exposure_probe_binds_the_input_check_evidence(tmp_path):
-    release_root = str(tmp_path / "release")
-    input_check = {
-        "withheld_sources": ["Marin:secret"],
-        "publication_grants": [
-            {"source_id": "Marin:open", "upstream_url": "https://upstream", "license_id": "cc-by-4.0"}
-        ],
+def _exposure_declarations() -> dict[str, dict]:
+    """A declaration cut with one license-withheld source and every recorded grant's release."""
+    declarations = {
+        decision.source_id: {
+            "id": decision.source_id,
+            "dataset_id": decision.dataset_id,
+            "dataset_revision": decision.dataset_revision,
+        }
+        for decision in PUBLICATION_DECISIONS
     }
-    input_check_ref = _receipt_ref(tmp_path, "exposure-input-check.json", input_check)
-    plan = fixture_plan(
-        release_root=release_root,
-        pins={**fixture_plan().pins.model_dump(mode="json"), "exposure_input_check": input_check_ref},
-    )
+    declarations["Marin:secret"] = {"id": "Marin:secret", "exclusion_claims": [{"reason": "license-ban"}]}
+    declarations["Marin:open"] = {"id": "Marin:open"}
+    return declarations
+
+
+def test_exposure_probe_derives_its_lists_from_the_declaration_cut(tmp_path):
+    """Regression (R40 #48): the R40 plan pins no exposure input check, so the probe
+    must read the withheld sources and grants from the sealed declarations."""
+    plan = fixture_plan(release_root=str(tmp_path / "release"))
+    assert plan.pins.exposure_input_check is None
     built = release_graph(plan)
     prefix = str(tmp_path / "prefix")
+    _declarations_dep(built, prefix, plan, _receipt_ref(tmp_path, "declarations.json", _exposure_declarations()))
     marina_receipt = {"uri": "s3://bucket/manifest.json", "sha256": "e" * 64}
     _write_dep(
         built.stages["marina_release"],
@@ -544,13 +557,33 @@ def test_exposure_probe_binds_the_input_check_evidence(tmp_path):
         plan.release_id,
         marina_receipt,
         manifest=marina_receipt,
-        publish={"id": "x", "version": 31, "url": "https://applets.example.test", "mode": "private"},
+        publish={"id": "x", "version": 31, "url": "https://applets.example.test", "mode": "public"},
     )
     inputs = _materialized_inputs(built.stages["exposure_probe"], prefix)
     assert inputs["withheld_sources"] == ("Marin:secret",)
-    assert inputs["publication_grants"] == tuple(input_check["publication_grants"])
+    assert [grant["source_id"] for grant in inputs["publication_grants"]] == [
+        decision.source_id for decision in PUBLICATION_DECISIONS
+    ]
+    assert all(grant["upstream_url"] and grant["license_id"] for grant in inputs["publication_grants"])
+    assert inputs["input_check_receipt"] is None
     assert inputs["revision"] == 31
     assert inputs["root"] == plan.service.public_root
+
+
+def test_exposure_lists_refuse_a_grant_declared_at_another_release():
+    declarations = _exposure_declarations()
+    granted = PUBLICATION_DECISIONS[0].source_id
+    declarations[granted] = {**declarations[granted], "dataset_revision": "0" * 40}
+    with pytest.raises(ValueError, match="does not match its declared release"):
+        exposure_lists(declarations)
+
+
+def test_exposure_lists_refuse_a_withheld_grant():
+    declarations = _exposure_declarations()
+    granted = PUBLICATION_DECISIONS[0].source_id
+    declarations[granted] = {**declarations[granted], "exclusion_claims": [{"reason": "license-ban"}]}
+    with pytest.raises(ValueError, match="names a withheld source"):
+        exposure_lists(declarations)
 
 
 def test_cluster_stage_run_reads_back_its_graph_receipt_without_dispatch(tmp_path, monkeypatch):

@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
+from finestore.rl.status_taxonomy import PendingStage
 
 from experiments.post_training.task_curation.release_stages import (
     exposure_probe,
@@ -27,7 +28,8 @@ from experiments.post_training.task_curation.release_stages import (
     marina_release,
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
-from infra.marina.apps.rl_data_catalog.server.content_access import LICENSE_CONTENT_MARKER
+from experiments.post_training.task_curation.tests import release_audit_fixtures as audit_fixtures
+from infra.marina.apps.rl_data_catalog.server.content_access import LICENSE_CONTENT_MARKER, backend_metadata
 
 RELEASE_ID = "testrelease"
 APPLET_ID = "12345678-1234-5678-1234-567812345678"
@@ -349,28 +351,8 @@ def test_marina_release_refuses_packaged_module_drift(tmp_path):
 
 # --- hosted_check fixtures ---------------------------------------------------------------------
 
-
-def _declarations_document() -> dict:
-    return {
-        SOURCE_A: {"id": SOURCE_A, "status": "Available", "dataset_id": "fixture-a"},
-        SOURCE_B: {"id": SOURCE_B, "status": "Available", "dataset_id": "fixture-b"},
-    }
-
-
-def _backend_survey() -> dict:
-    return {
-        "catalog_root": "test:catalog",
-        "snapshot_id": "assembly-test-v1",
-        "schema_sha256": "d" * 64,
-        "sources": [{"source_id": SOURCE_A}, {"source_id": SOURCE_B}],
-    }
-
-
-def _identity_survey() -> dict:
-    return {
-        "fingerprints": {SOURCE_A: "f" * 64, SOURCE_B: "e" * 64},
-        "groups": [{"group_id": "group-1", "members": [SOURCE_A]}],
-    }
+CODE_REVISION = "d" * 40
+HOSTED_ROOT = f"{APP_ORIGIN}/a/{APPLET_ID}/v/{NEW_VERSION}/"
 
 
 def _deployment_manifest() -> dict:
@@ -379,10 +361,11 @@ def _deployment_manifest() -> dict:
         "release_id": RELEASE_ID,
         "revision": NEW_VERSION,
         "base_version": BASE_VERSION,
-        "url": f"{SERVICE_URL}/a/{APPLET_ID}/v/{NEW_VERSION}/",
+        "url": HOSTED_ROOT,
         "app_id": APPLET_ID,
-        "mode": "private",
-        "source_sha": "c" * 40,
+        "mode": "public",
+        "source_sha": audit_fixtures.REVISION,
+        "code_revision": CODE_REVISION,
         "service_url": SERVICE_URL,
         "package": {"root": "fixture:package"},
         "receipts": {"preflight": {}, "hosted": {}, "package": {}},
@@ -390,60 +373,47 @@ def _deployment_manifest() -> dict:
     }
 
 
-def _served_sources(declarations: dict) -> dict:
-    return {"snapshot_id": "assembly-test-v1", "sources": [{**row, "quality": "FULL"} for row in declarations.values()]}
-
-
-def _served_backends(survey: dict) -> dict:
-    return {"survey_id": "a" * 64, **survey, "matrix": []}
-
-
-def _served_duplicates(identity: dict) -> dict:
-    return {**identity, "partial_overlaps": [], "stored_groups": []}
-
-
-def _release_record(survey: dict) -> dict:
+def _served_documents(declarations: dict, survey, identity) -> dict[str, dict]:
+    """What the installed API serves for the sealed fixture documents (the strict audit's projection)."""
+    group = identity.groups[0].model_dump(mode="json")
+    backend_rows = {row.source_id: row.model_dump(mode="json") for row in survey.sources}
+    sources = [
+        {
+            **declarations[source_id],
+            "backend_capabilities": backend_rows[source_id],
+            "duplicate_group": group,
+            "partial_overlaps": [],
+        }
+        for source_id in audit_fixtures.SOURCE_IDS
+    ]
     return {
-        "revision": NEW_VERSION,
-        "app_id": APPLET_ID,
-        "commit": "a" * 40,
-        "selected_backend_map": survey,
-        "selected_backend_map_sha256": hosted_check.canonical_sha256(survey),
+        hosted_check.SOURCES_PATH: {"sources": sources, "snapshot_id": audit_fixtures.SNAPSHOT_ID},
+        hosted_check.BACKENDS_PATH: {**survey.model_dump(mode="json"), "survey_id": "fixture-survey", "matrix": []},
+        hosted_check.DUPLICATES_PATH: {"groups": [group], "partial_overlaps": {}, "stored_groups": []},
+        hosted_check.PROVENANCE_PATH: {"source_revision": CODE_REVISION, "modules": []},
     }
 
 
 def _hosted_fixture(tmp_path: Path, **overrides) -> tuple[hosted_check.HostedCheckInputs, dict[str, dict]]:
-    document_overrides = {
-        name: overrides.pop(name)
-        for name in ("sources", "backends", "duplicates", "record", "manifest")
-        if name in overrides
-    }
-    declarations = _declarations_document()
-    survey = _backend_survey()
-    identity = _identity_survey()
-    documents = {
-        hosted_check.SOURCES_PATH: document_overrides.get("sources", _served_sources(declarations)),
-        hosted_check.BACKENDS_PATH: document_overrides.get("backends", _served_backends(survey)),
-        hosted_check.DUPLICATES_PATH: document_overrides.get("duplicates", _served_duplicates(identity)),
-        hosted_check.RELEASE_RECORD_PATH: document_overrides.get("record", _release_record(survey)),
-    }
-    source_revision = overrides.pop("source_revision", "c" * 40)
+    manifest = overrides.pop("manifest", _deployment_manifest())
+    declarations = audit_fixtures.declarations_document()
+    survey = audit_fixtures.backend_survey()
+    identity = audit_fixtures.identity_survey()
     inputs = hosted_check.HostedCheckInputs(
         release_id=RELEASE_ID,
-        source_revision=source_revision,
+        source_revision=audit_fixtures.REVISION,
         revision=NEW_VERSION,
-        root=f"{APP_ORIGIN}/a/{APPLET_ID}/v/{NEW_VERSION}/",
+        root=HOSTED_ROOT,
         declarations=_seal_json(tmp_path, "declarations.json", declarations),
-        backend=_seal_json(tmp_path, "backend.json", survey),
-        identity=_seal_json(tmp_path, "identity.json", identity),
+        backend=_seal_json(tmp_path, "backend.json", survey.model_dump(mode="json")),
+        identity=_seal_json(tmp_path, "identity.json", identity.model_dump(mode="json")),
         expected_source_count=2,
-        release_manifest=_seal_json(
-            tmp_path, "deployment-manifest.json", document_overrides.get("manifest", _deployment_manifest())
-        ),
+        retained_tasks=4,
+        release_manifest=_seal_json(tmp_path, "deployment-manifest.json", manifest),
         output_root=str(tmp_path / "release" / "hosted"),
         **overrides,
     )
-    return inputs, documents
+    return inputs, _served_documents(declarations, survey, identity)
 
 
 class _FakeApi:
@@ -491,52 +461,68 @@ def test_hosted_check_seals_receipt_on_a_clean_pass(tmp_path):
         feeds=_feeds(tmp_path),
     )
     assert proof["mismatches"] == {} and proof["browser_checks"] == "executed"
-    assert page.visited == [f"{APP_ORIGIN}/a/{APPLET_ID}/v/{NEW_VERSION}/"]
+    assert page.visited == [HOSTED_ROOT]
     receipt = json.loads((tmp_path / "release" / "hosted" / "hosted-check.json").read_text())
     assert receipt["kind"] == f"atlas-{RELEASE_ID}-hosted-check"
     assert receipt["revision"] == NEW_VERSION and receipt["mismatches"] == {}
-    assert receipt["origin"] == f"{APP_ORIGIN}/a/{APPLET_ID}/v/{NEW_VERSION}/"
+    assert receipt["origin"] == HOSTED_ROOT
     assert [check["check"] for check in receipt["checks"]] == [
         hosted_check.SOURCES_PATH,
         hosted_check.BACKENDS_PATH,
         hosted_check.DUPLICATES_PATH,
-        hosted_check.RELEASE_RECORD_PATH,
+        hosted_check.PROVENANCE_PATH,
         "browser",
     ]
     assert proof["receipt"]["uri"].endswith("hosted-check.json")
     assert _last_alert(tmp_path)["kind"] == hosted_check.alerts.KIND_FINISH
 
 
+def test_hosted_check_accepts_the_serving_projection_of_withheld_and_downgraded_sources(tmp_path):
+    """Regression (R40 #49): the API serves a withheld source's backend metadata only, the
+    load's typed backend Pending downgrade, and the declaration's grading evidence; the old
+    field-by-field comparison with the raw sealed documents refused every such source."""
+    declarations = audit_fixtures.declarations_document()
+    declarations[audit_fixtures.SOURCE_A]["exclusion_claims"] = [{"reason": "license-ban"}]
+    survey = audit_fixtures.backend_survey()
+    identity = audit_fixtures.identity_survey()
+    inputs, _ = _hosted_fixture(tmp_path)
+    inputs = replace(inputs, declarations=_seal_json(tmp_path, "declarations-withheld.json", declarations))
+    documents = _served_documents(declarations, survey, identity)
+    rows = {row["id"]: row for row in documents[hosted_check.SOURCES_PATH]["sources"]}
+    rows[audit_fixtures.SOURCE_A]["backend_capabilities"] = backend_metadata(
+        rows[audit_fixtures.SOURCE_A]["backend_capabilities"]
+    )
+    rows[audit_fixtures.SOURCE_A]["notes"] = LICENSE_CONTENT_MARKER
+    rows[audit_fixtures.SOURCE_B].update(status="Pending", stage=PendingStage.BACKEND_VERIFICATION_PENDING.value)
+    proof = hosted_check.run_hosted_check(inputs, dry_run=False, api_client=_FakeApi(documents), feeds=_feeds(tmp_path))
+    assert proof["mismatches"] == {}
+
+
 def test_hosted_check_reports_every_source_mismatch_at_once(tmp_path):
-    declarations = _declarations_document()
-    served = _served_sources(declarations)
+    inputs, documents = _hosted_fixture(tmp_path)
+    served = documents[hosted_check.SOURCES_PATH]
     served["sources"][1]["status"] = "Excluded"
-    served["sources"].append({"id": "Marin:fixture-c", "status": "Available", "dataset_id": "fixture-c"})
-    inputs, documents = _hosted_fixture(tmp_path, sources=served)
+    served["sources"].append({**served["sources"][0], "id": "Marin:fixture-c"})
     with pytest.raises(ValueError) as failure:
         hosted_check.run_hosted_check(inputs, dry_run=False, api_client=_FakeApi(documents), feeds=_feeds(tmp_path))
     message = str(failure.value)
     assert message.startswith("Hosted check failed with")
-    assert SOURCE_B in message and "Marin:fixture-c" in message
-    assert "Excluded" in message
+    assert f"{audit_fixtures.SOURCE_B}: served status differs" in message and "Marin:fixture-c" in message
     assert not (tmp_path / "release" / "hosted" / "hosted-check.json").exists()
     assert _last_alert(tmp_path)["kind"] == hosted_check.alerts.KIND_FAIL
 
 
-def test_hosted_check_refuses_release_record_drift(tmp_path):
-    survey = _backend_survey()
-    inputs, documents = _hosted_fixture(tmp_path, record=dict(_release_record(survey), revision=NEW_VERSION + 1))
-    with pytest.raises(ValueError, match="revision is"):
+def test_hosted_check_refuses_a_served_applet_from_another_checkout(tmp_path):
+    inputs, documents = _hosted_fixture(tmp_path)
+    documents[hosted_check.PROVENANCE_PATH] = {"source_revision": "e" * 40}
+    with pytest.raises(ValueError, match="expected the published packaging checkout"):
         hosted_check.run_hosted_check(inputs, dry_run=False, api_client=_FakeApi(documents), feeds=_feeds(tmp_path))
-    divergent = {"snapshot_id": "other-snapshot", "schema_sha256": "0" * 64}
-    record = {
-        "revision": NEW_VERSION,
-        "app_id": APPLET_ID,
-        "selected_backend_map": divergent,
-        "selected_backend_map_sha256": hosted_check.canonical_sha256(divergent),
-    }
-    inputs, documents = _hosted_fixture(tmp_path, record=record)
-    with pytest.raises(ValueError, match="backend survey document"):
+
+
+def test_hosted_check_refuses_backend_document_drift(tmp_path):
+    inputs, documents = _hosted_fixture(tmp_path)
+    documents[hosted_check.BACKENDS_PATH]["snapshot_id"] = "other-snapshot"
+    with pytest.raises(ValueError, match="served snapshot_id differs from the sealed backend survey"):
         hosted_check.run_hosted_check(inputs, dry_run=False, api_client=_FakeApi(documents), feeds=_feeds(tmp_path))
 
 

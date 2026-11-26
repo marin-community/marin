@@ -2146,7 +2146,11 @@ def _marina_release_step(
 
 
 def _hosted_check_step(
-    plan: ReleasePlan, declarations: ArtifactStep, identity_backend: ArtifactStep, marina: ArtifactStep
+    plan: ReleasePlan,
+    declarations: ArtifactStep,
+    identity_backend: ArtifactStep,
+    census: ArtifactStep,
+    marina: ArtifactStep,
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["hosted_check"]
     identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "service")
@@ -2162,6 +2166,8 @@ def _hosted_check_step(
             "backend": _resolved_proof(ctx, identity_backend)["documents"]["backend_map"],
             "identity": _resolved_proof(ctx, identity_backend)["documents"]["identity_survey"],
             "expected_source_count": plan.expected_source_count,
+            # The measured census total, as the strict audit reads it.
+            "retained_tasks": _resolved_proof(ctx, census)["tasks"],
             "release_manifest": _resolved_receipt(ctx, marina),
             "output_root": stage_output_root(plan, "hosted-check"),
         }
@@ -2170,7 +2176,7 @@ def _hosted_check_step(
         plan,
         "hosted_check",
         spec,
-        (declarations, identity_backend, marina),
+        (declarations, identity_backend, census, marina),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=hosted_check_stage.HostedCheckInputs,
@@ -2178,22 +2184,29 @@ def _hosted_check_step(
 
 
 def _exposure_probe_step(
-    plan: ReleasePlan, marina: ArtifactStep, hosted: ArtifactStep, postpublish: ArtifactStep, audit_after: ArtifactStep
+    plan: ReleasePlan,
+    declarations: ArtifactStep,
+    marina: ArtifactStep,
+    hosted: ArtifactStep,
+    postpublish: ArtifactStep,
+    audit_after: ArtifactStep,
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["exposure_probe"]
     identity = _identity_fields(plan, "release_id", "service", "pins")
 
     def build_inputs(ctx: StepContext) -> dict:
+        # The withheld sources and grants come from the release's sealed declaration
+        # cut; an exposure_input_check pin, when a plan carries one, is a cross-check.
         publish = _resolved_proof(ctx, marina)["publish"]
-        if not plan.pins.exposure_input_check:
-            raise ValueError("the exposure probe requires the exposure_input_check pin")
-        input_check = read_ref(plan.pins.exposure_input_check)
+        withheld, grants = exposure_probe_stage.exposure_lists(
+            read_ref(ArtifactRef(**_resolved_receipt(ctx, declarations)))
+        )
         return {
             "release_id": plan.release_id,
             "revision": publish["version"],
             "root": plan.service.public_root,
-            "withheld_sources": tuple(sorted(input_check["withheld_sources"])),
-            "publication_grants": tuple(input_check["publication_grants"]),
+            "withheld_sources": withheld,
+            "publication_grants": grants,
             "input_check_receipt": _ref_dict(plan.pins.exposure_input_check),
             "output_root": stage_output_root(plan, "exposure-probe"),
         }
@@ -2202,7 +2215,7 @@ def _exposure_probe_step(
         plan,
         "exposure_probe",
         spec,
-        (marina, hosted, postpublish, audit_after),
+        (declarations, marina, hosted, postpublish, audit_after),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=exposure_probe_stage.ExposureProbeInputs,
@@ -2290,9 +2303,9 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     check_hosted = _release_check_step(plan, "hosted", None, check_preflight, None, None)
     marina = _marina_release_step(plan, package, check_preflight, check_hosted)
     audit_after = _strict_audit_step(plan, declarations, identity_backend, "after", census, origin_handle=marina)
-    hosted = _hosted_check_step(plan, declarations, identity_backend, marina)
+    hosted = _hosted_check_step(plan, declarations, identity_backend, census, marina)
     check_postpublish = _release_check_step(plan, "postpublish", None, check_preflight, check_hosted, marina)
-    exposure = _exposure_probe_step(plan, marina, hosted, check_postpublish, audit_after)
+    exposure = _exposure_probe_step(plan, declarations, marina, hosted, check_postpublish, audit_after)
 
     stages: dict[str, ArtifactStep] = {
         "declarations": declarations,

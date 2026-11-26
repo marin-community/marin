@@ -170,13 +170,19 @@ def served_retained_tasks(served: dict) -> int:
 
 
 def audit_served_population(
-    inputs: StrictAuditInputs,
     served: dict,
     declarations: dict[str, dict],
     survey: BackendSurvey,
     identity: SourceIdentitySurvey,
+    *,
+    expected_source_count: int,
+    retained_tasks: int,
+    source_revision: str,
 ) -> dict[str, list[str]]:
-    """The served sources against the sealed documents, with per-source mismatches."""
+    """The served sources against the sealed documents, with per-source mismatches.
+
+    The hosted check reuses this projection for the published revision.
+    """
     mismatches: dict[str, list[str]] = {}
     served_rows = {row["id"]: row for row in served["sources"]}
     expected_ids = set(declarations)
@@ -186,22 +192,22 @@ def audit_served_population(
             f" (served-only {sorted(set(served_rows) - expected_ids)},"
             f" declared-only {sorted(expected_ids - set(served_rows))})"
         )
-    if len(served_rows) != inputs.expected_source_count:
+    if len(served_rows) != expected_source_count:
         mismatches.setdefault("catalog", []).append(
-            f"{len(served_rows)} served sources, expected {inputs.expected_source_count}"
+            f"{len(served_rows)} served sources, expected {expected_source_count}"
         )
     retained = served_retained_tasks(served)
-    if retained != inputs.retained_tasks:
+    if retained != retained_tasks:
         mismatches.setdefault("catalog", []).append(
-            f"served catalog retains {retained} tasks, expected {inputs.retained_tasks}"
+            f"served catalog retains {retained} tasks, expected {retained_tasks}"
         )
     if served["snapshot_id"] != survey.snapshot_id:
         mismatches.setdefault("catalog", []).append(
             f"served snapshot {served['snapshot_id']!r} differs from the backend survey {survey.snapshot_id!r}"
         )
-    if survey.git_revision != inputs.source_revision:
+    if survey.git_revision != source_revision:
         mismatches.setdefault("catalog", []).append(
-            f"backend survey pins revision {survey.git_revision!r}, expected {inputs.source_revision!r}"
+            f"backend survey pins revision {survey.git_revision!r}, expected {source_revision!r}"
         )
     if set(identity.fingerprints) != expected_ids:
         mismatches.setdefault("identity-survey", []).append("identity fingerprints do not cover the release population")
@@ -331,7 +337,18 @@ def run_strict_audit(
         identity = SourceIdentitySurvey.model_validate(read_ref(inputs.identity))
         served = reader.get("api/sources")
         mismatches: dict[str, list[str]] = {}
-        _merge_mismatches(mismatches, audit_served_population(inputs, served, declarations, survey, identity))
+        _merge_mismatches(
+            mismatches,
+            audit_served_population(
+                served,
+                declarations,
+                survey,
+                identity,
+                expected_source_count=inputs.expected_source_count,
+                retained_tasks=inputs.retained_tasks,
+                source_revision=inputs.source_revision,
+            ),
+        )
         backend_reasons = audit_backends_document(survey, reader.get("api/backends"))
         if backend_reasons:
             mismatches.setdefault("api/backends", []).extend(backend_reasons)
