@@ -488,6 +488,20 @@ GROUP BY 1 ORDER BY lag_seconds DESC
             "SELECT t, cluster, node, gpu, value AS sm_utilization "
             "FROM devices WHERE kind = 'sm' ORDER BY cluster, node, gpu, t"
         ),
+        # Which node to inspect: the SM raster's samples averaged per node, idlest first.
+        "node_busy": (
+            """
+SELECT sm.cluster, sm.node, COUNT(DISTINCT sm.gpu) AS gpus, model.gpu_model, AVG(sm.value) AS busy_share
+FROM devices AS sm
+LEFT JOIN (
+    SELECT cluster, node, MAX(series) AS gpu_model
+    FROM devices WHERE kind = 'latest' AND name = 'gpu_power_watts'
+    GROUP BY 1, 2
+) AS model ON model.cluster = sm.cluster AND model.node = sm.node
+WHERE sm.kind = 'sm'
+GROUP BY 1, 2, 4 ORDER BY busy_share, 1, 2
+""".strip()
+        ),
         "temperature_distribution": (
             "SELECT t, series, SUM(value) AS value FROM devices "
             "WHERE kind = 'temperature_distribution' GROUP BY 1, 2 ORDER BY 1, 2"
@@ -499,7 +513,7 @@ GROUP BY 1 ORDER BY lag_seconds DESC
         SourceQuery("attribution", attribution_sql, ACCELERATOR_MAX_ATTRIBUTION_ROWS),
     )
     source_views = {
-        "devices": ("freshness", "model_power", "sm", "temperature_distribution"),
+        "devices": ("freshness", "model_power", "sm", "node_busy", "temperature_distribution"),
         "attribution": ("run_power",),
     }
     setup_sql = ()
