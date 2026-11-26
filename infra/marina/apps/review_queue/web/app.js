@@ -58,6 +58,7 @@ function loadFavorites() {
     names = JSON.parse(saved);
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
+    console.warn("Saved review queue favorites could not be read.");
     return new Set();
   }
   if (!Array.isArray(names)) return new Set();
@@ -74,24 +75,18 @@ function metric(label, value, className = "") {
   return cell;
 }
 
-function reviewerEntry(name, requests, stats, favorites, expanded, toggleFavorite) {
-  const key = name.toLowerCase();
-  const entry = document.createElement("div");
-  entry.className = "reviewer-entry";
-  const line = document.createElement("div");
-  line.className = "reviewer-line";
-
-  const identity = document.createElement("div");
-  identity.className = "reviewer-identity";
+function favoriteButton(name, starred, toggleFavorite) {
   const star = document.createElement("button");
   star.type = "button";
-  star.className = `star${favorites.has(key) ? " is-favorite" : ""}`;
-  star.textContent = favorites.has(key) ? "★" : "☆";
-  star.setAttribute("aria-pressed", String(favorites.has(key)));
-  star.setAttribute("aria-label", `${favorites.has(key) ? "Remove" : "Add"} ${name} ${favorites.has(key) ? "from" : "to"} favorites`);
+  star.className = `star${starred ? " is-favorite" : ""}`;
+  star.textContent = starred ? "★" : "☆";
+  star.setAttribute("aria-pressed", String(starred));
+  star.setAttribute("aria-label", starred ? `Remove ${name} from favorites` : `Add ${name} to favorites`);
   star.addEventListener("click", () => toggleFavorite(name));
-  identity.append(star, link(`https://github.com/${encodeURIComponent(name)}`, name, "reviewer-name"));
+  return star;
+}
 
+function reviewerMetrics(requests, stats) {
   const sizes = requests.flatMap((pr) => pr.lines == null ? [] : [pr.lines]);
   const subtotal = numberFormat.format(sizes.reduce((sum, lines) => sum + lines, 0));
   const lines = requests.length && sizes.length === 0 ? "—" : subtotal + (sizes.length < requests.length ? "+" : "");
@@ -99,34 +94,59 @@ function reviewerEntry(name, requests, stats, favorites, expanded, toggleFavorit
   const duration = response == null ? "—" : response < 1 ? `${Math.round(response * 60)}m` : `${Math.round(response)}h`;
   const average = metric("Avg response", duration);
   if (stats?.response_count) average.title = `Based on ${stats.response_count} matched reviews`;
-  const weekly = stats ? numberFormat.format(Math.round(stats.lines / 2)) : "—";
+  const weekly = stats ? numberFormat.format(stats.lines_per_week) : "—";
+  return [
+    metric("Pending PRs", String(requests.length), "pending"),
+    metric("Pending lines", lines),
+    average,
+    metric("Lines / week", weekly),
+  ];
+}
 
+function prDisclosure(handle, requests, expanded) {
   const action = document.createElement("button");
   action.type = "button";
   action.className = "expand";
-  if (requests.length) {
-    action.textContent = expanded.has(key) ? "Hide PRs ↑" : "View PRs ↓";
-    action.setAttribute("aria-expanded", String(expanded.has(key)));
-    action.addEventListener("click", () => {
-      if (expanded.has(key)) expanded.delete(key);
-      else expanded.add(key);
-      const isExpanded = expanded.has(key);
-      action.textContent = isExpanded ? "Hide PRs ↑" : "View PRs ↓";
-      action.setAttribute("aria-expanded", String(isExpanded));
-      requestsList.hidden = !isExpanded;
-    });
-  } else {
+  if (!requests.length) {
     action.textContent = "No requests";
     action.disabled = true;
+    return { action };
   }
-  line.append(identity, metric("Pending PRs", String(requests.length), "pending"), metric("Pending lines", lines), average, metric("Lines / week", weekly), action);
-  entry.append(line);
 
   const requestsList = document.createElement("div");
   requestsList.className = "request-list";
-  requestsList.hidden = !expanded.has(key);
   for (const pr of requests) requestsList.append(prRow(pr));
-  entry.append(requestsList);
+  function renderDisclosure() {
+    const open = expanded.has(handle);
+    action.textContent = open ? "Hide PRs ↑" : "View PRs ↓";
+    action.setAttribute("aria-expanded", String(open));
+    requestsList.hidden = !open;
+  }
+  action.addEventListener("click", () => {
+    if (expanded.has(handle)) expanded.delete(handle);
+    else expanded.add(handle);
+    renderDisclosure();
+  });
+  renderDisclosure();
+  return { action, requestsList };
+}
+
+function reviewerEntry(name, requests, stats, favorites, expanded, toggleFavorite) {
+  const handle = name.toLowerCase();
+  const entry = document.createElement("div");
+  entry.className = "reviewer-entry";
+  const line = document.createElement("div");
+  line.className = "reviewer-line";
+  const identity = document.createElement("div");
+  identity.className = "reviewer-identity";
+  identity.append(
+    favoriteButton(name, favorites.has(handle), toggleFavorite),
+    link(`https://github.com/${encodeURIComponent(name)}`, name, "reviewer-name"),
+  );
+  const { action, requestsList } = prDisclosure(handle, requests, expanded);
+  line.append(identity, ...reviewerMetrics(requests, stats), action);
+  entry.append(line);
+  if (requestsList) entry.append(requestsList);
   return entry;
 }
 

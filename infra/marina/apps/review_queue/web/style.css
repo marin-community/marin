@@ -5,6 +5,7 @@
   --muted: #62746a;
   --line: #d6ded5;
   --accent: #286d51;
+  --accent-light: #6fb184;
   --white: #fff;
   font-family: system-ui, sans-serif;
 }
@@ -32,7 +33,7 @@ button { cursor: pointer; }
 
 .intro { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 0; border-bottom: 1px solid var(--line); }
 h1 { margin: 0 0 5px; font-size: clamp(34px, 3.5vw, 42px); line-height: 1.1; letter-spacing: -.06em; font-weight: 600; }
-.title-period { color: #6fb184; }
+.title-period { color: var(--accent-light); }
 .lede { margin: 0; color: #4b6256; font-size: 14px; line-height: 1.5; }
 .controls { display: flex; align-items: end; flex-direction: column; gap: 6px; }
 #refresh { border: 0; border-radius: 4px; background: var(--ink); color: white; padding: 9px 13px; font-size: 12px; font-weight: 700; }
@@ -46,7 +47,7 @@ h2 { margin: 0; font-size: 25px; letter-spacing: -.04em; font-weight: 600; }
 .section-note { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .search-label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font: 500 10px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em; }
 .search-label input { width: 260px; height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--white); color: var(--ink); font: 13px system-ui, sans-serif; }
-.search-label input:focus { outline: 2px solid #6fb184; outline-offset: 2px; }
+.search-label input:focus { outline: 2px solid var(--accent-light); outline-offset: 2px; }
 .favorite-suggestion { margin: -7px 0 12px; }
 .favorite-suggestion button { border: 1px solid #a4cbb1; border-radius: 4px; background: #eaf3ec; color: var(--accent); padding: 8px 12px; font-size: 12px; font-weight: 700; }
 .favorite-suggestion button:hover { background: #dcebe0; }
