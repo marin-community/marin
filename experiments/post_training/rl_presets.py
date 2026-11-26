@@ -127,12 +127,15 @@ class Evaluation:
     sample: int | None = None
     every: int | None = None
     at_start: bool = False
+    selection: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.isidentifier():
             raise ValueError(f"evaluation name must be an identifier: {self.name!r}")
         if self.profile.n_samples_per_prompt is None or self.profile.sampling_params is None:
             raise ValueError("evaluation profiles require explicit sampling and answer counts")
+        if self.selection is not None and not self.held_out:
+            raise ValueError("an explicit evaluation selection requires source='held_out'")
 
     @property
     def answers(self) -> int:
@@ -444,7 +447,9 @@ class Preset:
             raise ValueError("measured window must lie within the planned steps")
         if self.gated and not self.guards:
             raise ValueError("gated presets require guards")
-        if self.held_out is not None and not self.held_out_tasks:
+        if any(
+            evaluation.held_out and not (evaluation.selection or self.held_out_tasks) for evaluation in self.evaluations
+        ):
             raise ValueError("held-out evaluations require a held-out task selection")
         cadence = self.checkpoint_every
         if cadence is not None and cadence <= 0:

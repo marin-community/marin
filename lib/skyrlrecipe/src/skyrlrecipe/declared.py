@@ -162,6 +162,9 @@ class DevelopmentProbeMixCallback(Section):
     type: Literal["development_probe_mix"]
     panel_sha256: str
     expected_tasks: PositiveInt
+    policy: Literal["adaptive", "randomized"]
+    confirmation_sha256: str | None = unset_field()
+    confirmation_tasks: PositiveInt | None = unset_field()
 
 
 class ReferenceLikelihoodCallback(Section):

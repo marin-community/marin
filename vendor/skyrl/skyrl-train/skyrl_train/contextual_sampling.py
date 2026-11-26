@@ -18,7 +18,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from skyrlrecipe.declared import PromptAcquisition
-from skyrl_train.probe_mix import DevelopmentProbeMix
+from skyrl_train.probe_mix import DevelopmentProbeMix, ProbeMixDecision, WINDOW as PROBE_WINDOW
 from skyrl_train.rollouts.prompt_order import PromptFeedback, PromptOrder, PromptSelection, SamplingFeedbackPhase
 
 _HASH_DIMENSION = 12
@@ -183,7 +183,7 @@ class PromptThompsonOrder(PromptOrder):
         self._source_boundaries: NDArray[np.float64] | None = None
         self.development_mix = development_mix
         if development_mix is not None and (
-            not self.uses_source_passes or epsilon != 1 or self._sources != ["easy", "intermediate"]
+            not self.uses_source_passes or epsilon != 1 or window_size != PROBE_WINDOW or self._sources != ["easy", "intermediate"]
         ):
             raise ValueError("Development probe mix requires uniform easy/intermediate source passes")
         if self.uses_source_passes:
@@ -236,7 +236,7 @@ class PromptThompsonOrder(PromptOrder):
         if self._groups_per_family:
             signature += (sorted(self._groups_per_family.items()), [prompt.family for prompt in prompts])
         if development_mix is not None:
-            signature += (development_mix.panel_sha256,)
+            signature += (development_mix.panel_sha256, development_mix.policy, 2)
         signature_bytes = json.dumps(signature, separators=(",", ":")).encode()
         self._signature = hashlib.sha256(signature_bytes + self._features.astype("<f8").tobytes()).hexdigest()
 
@@ -254,10 +254,15 @@ class PromptThompsonOrder(PromptOrder):
             self._window = self._draw_window(available, self._window_size, self._source_boundaries)
         return self._window.pop()
 
-    def observe_development_probe(self, *, step: int, accuracy: float, gross_tokens: int):
+    def observe_development_probe(
+        self, *, boundary: int, step: int, accuracy: float, gross_tokens: int, development_tokens: int
+    ) -> ProbeMixDecision | None:
         if self.development_mix is None:
             raise ValueError("The prompt order has no development probe controller")
-        decision = self.development_mix.observe(step=step, accuracy=accuracy, gross_tokens=gross_tokens)
+        decision = self.development_mix.observe(
+            boundary=boundary, step=step, accuracy=accuracy, gross_tokens=gross_tokens,
+            development_tokens=development_tokens,
+        )
         if decision is not None:
             self._pass_sources.clear()
         return decision

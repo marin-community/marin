@@ -8,7 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 from marinskyrl.distillation import compile_distillation_plan_from_config
 from marinskyrl.runtime_options import WeightSyncTransport
 from skyrlrecipe.declared import PromptAcquisition
-from skyrl_train.probe_mix import CALLBACK_TYPE as DEVELOPMENT_MIX_TYPE
+from skyrl_train.probe_mix import CALLBACK_TYPE as DEVELOPMENT_MIX_TYPE, WINDOW as PROBE_WINDOW
 
 GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
 FAMILY_COLUMN = "family"
@@ -117,18 +117,22 @@ def validate_rollout_launch(
     mixes = [item for item in callbacks if item.type == DEVELOPMENT_MIX_TYPE]
     if mixes:
         evaluation = [item for item in callbacks if item.type == "evaluation"]
+        profiles = evaluation[0].get("additional_evaluations") or {} if len(evaluation) == 1 else {}
         if (
             len(mixes) != 1
-            or len(milestones) != 1
+            or not milestones
+            or cfg.trainer.train_batch_size != PROBE_WINDOW
             or cfg.data.sampling.kind != PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE
             or cfg.data.sampling.epsilon != 1
             or cfg.generator.eval_n_samples_per_prompt != 1
             or len(evaluation) != 1
             or 0 < evaluation[0].get("eval_steps", 1) <= cfg.trainer.max_steps
             or not evaluation[0].get("eval_before_train")
-            or evaluation[0].get("additional_evaluations")
+            or any(profile.get("schedule") != "final" for profile in profiles.values())
+            or set(profiles) != ({"confirmation"} if mixes[0].get("confirmation_sha256") else set())
+            or bool(mixes[0].get("confirmation_tasks")) != bool(mixes[0].get("confirmation_sha256"))
         ):
             raise ValueError(
-                "Development probe mix needs uniform source passes, one token milestone, and a primary "
-                "one-sample development evaluation at initialization and budget boundaries"
+                "Development probe mix needs uniform source passes, token milestones, a primary one-sample "
+                "development evaluation, and an optional pinned terminal-only confirmation"
             )

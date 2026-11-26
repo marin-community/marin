@@ -217,7 +217,11 @@ def prompt_order_from_config(
             epsilon=sampling.epsilon,
             reference_tokens=max(1, samples * config.generator.sampling_params.max_generate_length // 2),
             groups_per_family=groups_per_family,
-            development_mix=DevelopmentProbeMix(seed=seed, panel_sha256=probe.panel_sha256) if probe else None,
+            development_mix=(
+                DevelopmentProbeMix(seed=seed, panel_sha256=probe.panel_sha256, policy=probe.policy)
+                if probe
+                else None
+            ),
         )
     if kind in ADAPTIVE_SOURCE_KINDS:
         if config.generator.n_samples_per_prompt < 2:

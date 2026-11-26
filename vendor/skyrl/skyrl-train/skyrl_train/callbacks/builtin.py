@@ -24,7 +24,7 @@ import json
 import math
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
@@ -256,57 +256,83 @@ class RolloutTokenBudgetCallback(TrainerCallback):
         return control
 
 
+def _pinned_eval_digests(dataset, expected: int, fingerprint: str) -> set[str]:
+    identities = dataset.dataframe.with_format(None)[TASK_EVALUATION_IDENTITY]
+    digests = {json.loads(value)["task_digest"] for value in identities if value is not None}
+    if len(identities) != expected or len(digests) != expected or None in digests:
+        raise ValueError("Each pinned evaluation requires unique identities and complete coverage")
+    if panel_identity(digests) != fingerprint:
+        raise ValueError("Evaluation dataset does not match its pinned task digests")
+    return digests
+
+
 @register_callback(DEVELOPMENT_MIX_TYPE)
 class DevelopmentProbeMixCallback(TrainerCallback):
-    """Apply a development-only baseline or milestone before the next rollout publish."""
+    """Credit only the primary development dataset at the configured training milestones."""
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, panel_sha256: str, expected_tasks: int):
+    def __init__(
+        self, panel_sha256: str, expected_tasks: int, policy: str,
+        confirmation_sha256: str | None = None, confirmation_tasks: int | None = None,
+    ):
         self.panel_sha256 = panel_sha256
         self.expected_tasks = expected_tasks
+        self.policy = policy
+        self.confirmation_sha256 = confirmation_sha256
+        self.confirmation_tasks = confirmation_tasks
 
     def on_train_begin(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
         order = trainer.context.loader.order
         if not isinstance(order, PromptThompsonOrder) or order.development_mix is None:
             raise ValueError("Development probe mix requires a configured source-pass order")
-        if state.global_step > 0 and order.development_mix.initial is None:
+        if state.global_step > 0 and order.development_mix.decision is None:
             raise ValueError("The resumed rollout checkpoint is missing development probe state")
-        identities = trainer.eval_dataset.dataframe.with_format(None)[TASK_EVALUATION_IDENTITY]
-        digests = {json.loads(value)["task_digest"] for value in identities if value is not None}
-        if len(identities) != self.expected_tasks or len(digests) != self.expected_tasks:
-            raise ValueError("Development probe requires a unique identity for every pinned task")
-        if panel_identity(digests) != self.panel_sha256:
-            raise ValueError("The primary evaluation is not the pinned development probe")
+        development = _pinned_eval_digests(trainer.eval_dataset, self.expected_tasks, self.panel_sha256)
+        if self.confirmation_sha256 is not None:
+            confirmation = trainer.additional_eval_dataloaders["confirmation"].dataset
+            reserved = _pinned_eval_digests(confirmation, self.confirmation_tasks, self.confirmation_sha256)
+            if development & reserved:
+                raise ValueError("Development and confirmation datasets must be disjoint")
+        return control
+
+    def on_train_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        mix = trainer.context.loader.order.development_mix
+        if len(mix.decisions) != 1 + len(trainer.cfg.trainer.rollout_token_eval_milestones):
+            raise ValueError("Development probe mix requires one decision per scheduled training boundary")
         return control
 
     async def on_evaluate_async(
         self, state: TrainerState, control: TrainerControl, *, trainer, metrics: dict[str, float], **kwargs
     ) -> TrainerControl:
         total = trainer.rollout_gross_response_tokens_total
-        milestones = trainer.cfg.trainer.rollout_token_eval_milestones
-        last = trainer.rollout_gross_response_tokens_last_update
-        if state.global_step and (
-            total >= trainer.cfg.trainer.rollout_token_budget or not total - last < milestones[0] <= total
-        ):
+        if state.is_last_step or total >= trainer.cfg.trainer.rollout_token_budget:
             return control
+        boundary = 0
+        if state.global_step:
+            milestones = trainer.cfg.trainer.rollout_token_eval_milestones
+            last = trainer.rollout_gross_response_tokens_last_update
+            crossed = [index for index, threshold in enumerate(milestones, start=1) if total - last < threshold <= total]
+            if not crossed:
+                return control
+            if len(crossed) != 1:
+                raise ValueError("One measured development checkpoint cannot credit multiple milestones")
+            boundary, = crossed
         if metrics.get(EVALUATION_ATTEMPTED_METRIC) != self.expected_tasks or (
             metrics.get(EVALUATION_SCORED_METRIC) != self.expected_tasks
         ):
             raise ValueError("Development probe mix requires complete verifier coverage")
+        paid_probe = metrics["eval/all/response_tokens"]
+        if not math.isfinite(paid_probe) or paid_probe != int(paid_probe) or paid_probe < 0:
+            raise ValueError("Development probe requires an exact response-token tally")
         decision = trainer.context.loader.order.observe_development_probe(
-            step=state.global_step, accuracy=metrics["eval/all/avg_verifier_score"], gross_tokens=total
+            boundary=boundary, step=state.global_step, accuracy=metrics["eval/all/avg_verifier_score"],
+            gross_tokens=total, development_tokens=int(paid_probe),
         )
         if decision is not None:
             record_event(
                 "development_probe_mix_decision",
-                {
-                    **vars(decision),
-                    "panel_sha256": self.panel_sha256,
-                    "gross_training_tokens": total,
-                    "scored_tasks": self.expected_tasks,
-                    "development_response_tokens": metrics["eval/all/response_tokens"],
-                },
+                {**asdict(decision), "policy": self.policy, "panel_sha256": self.panel_sha256, "scored_tasks": self.expected_tasks},
             )
         return control
 

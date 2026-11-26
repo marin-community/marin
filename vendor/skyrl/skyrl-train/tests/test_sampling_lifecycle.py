@@ -20,7 +20,7 @@ from skyrl_train.config.rollout_validation import validate_rollout_launch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.contextual_sampling import PromptFeedback, PromptThompsonOrder, PublicPrompt
 from skyrl_train.dataset.tasks import TASK_EVALUATION_IDENTITY
-from skyrl_train.probe_mix import DevelopmentProbeMix, panel_identity
+from skyrl_train.probe_mix import INITIAL_PROBABILITIES, DevelopmentProbeMix, panel_identity
 from skyrl_train.rollouts.buffer import AdmittedRollout, GroupDisposition, SamplingGroupResult
 from skyrl_train.rollouts.context import RolloutBatchMetadata, TrainingContext, TrainingContextState
 from skyrl_train.rollouts.loader import PromptLoaderState
@@ -225,21 +225,38 @@ async def test_empty_ftpo_batch_closes_paid_sampling_feedback(monkeypatch):
 
 def configure_development_probe(trainer):
     digests = tuple(f"{i:064x}" for i in range(4))
+    reserved = tuple(f"{i:064x}" for i in range(4, 8))
     identity = panel_identity(digests)
     trainer.cfg.data.sampling.kind = PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE.value
     trainer.cfg.data.sampling.epsilon = 1.0
+    trainer.cfg.trainer.train_batch_size = 16
     trainer.cfg.generator.eval_n_samples_per_prompt = 1
     trainer.cfg.trainer.callbacks = [
         {"type": "checkpoint", "save_steps": 1},
-        {"type": "evaluation", "eval_steps": 0, "eval_before_train": True},
-        {"type": "development_probe_mix", "expected_tasks": 4, "panel_sha256": identity},
+        {
+            "type": "evaluation",
+            "eval_steps": 0,
+            "eval_before_train": True,
+            "additional_evaluations": {
+                "confirmation": {"schedule": "final", "data_files": ["confirmation"], "n_samples_per_prompt": 1}
+            },
+        },
+        {
+            "type": "development_probe_mix", "expected_tasks": 4, "panel_sha256": identity, "policy": "adaptive",
+            "confirmation_tasks": 4, "confirmation_sha256": panel_identity(reserved),
+        },
     ]
     validate_rollout_launch(trainer.cfg)
     trainer.callback_handler = DefaultCallbackHandler(trainer.cfg)
     trainer.rollout_gross_response_tokens_last_update = 0
-    trainer.eval_dataset = SimpleNamespace(
-        dataframe=Dataset.from_dict({TASK_EVALUATION_IDENTITY: [json.dumps({"task_digest": d}) for d in digests]})
-    )
+
+    def dataset(identities):
+        return SimpleNamespace(
+            dataframe=Dataset.from_dict({TASK_EVALUATION_IDENTITY: [json.dumps({"task_digest": d}) for d in identities]})
+        )
+
+    trainer.eval_dataset = dataset(digests)
+    trainer.additional_eval_dataloaders = {"confirmation": SimpleNamespace(dataset=dataset(reserved))}
     prompts = [
         PublicPrompt(str(index), "easy" if index < 128 else "intermediate", f"Reverse the letters of word {index}.")
         for index in range(256)
@@ -254,7 +271,7 @@ def configure_development_probe(trainer):
         decay=0.95,
         epsilon=1,
         reference_tokens=100,
-        development_mix=DevelopmentProbeMix(seed=2, panel_sha256=identity),
+        development_mix=DevelopmentProbeMix(seed=2, panel_sha256=identity, policy="adaptive"),
     )
 
     def load(state):
@@ -279,26 +296,27 @@ async def emit_probe(trainer, state, accuracy, *, scored=4):
             "eval/all/num_scored": scored,
             "eval/all/avg_verifier_score": accuracy,
             "eval/all/response_tokens": 100,
+            "eval/confirmation/all/avg_verifier_score": 1 - accuracy,
         },
     )
 
 
 @pytest.mark.asyncio
-async def test_development_probe_updates_one_fresh_window_after_boundary_resume(budget_trainer, monkeypatch):
-    total, milestone = 2_097_152, 1_048_576
+async def test_development_probe_replays_boundary_before_next_publish(budget_trainer, monkeypatch):
+    total, milestones = 4_194_304, (1_048_576, 2_097_152, 3_145_728)
     events = []
     monkeypatch.setattr("skyrl_train.callbacks.builtin.record_event", lambda name, data: events.append((name, data)))
-    original = budget_trainer(budget=total, milestones=(milestone,))
+    original = budget_trainer(budget=total, milestones=milestones)
     prompts = configure_development_probe(original)
     original_order = original.context.loader.order
     state = original._create_trainer_state(epoch=0)
     await original.callback_handler.call_event_async("on_train_begin", state, TrainerControl(), trainer=original)
     await emit_probe(original, state, 0.25)
     first_rows = [original_order.next_index() for _ in range(16)]
-    assert sum(prompts[index].source == "easy" for index in first_rows) in (12, 13)
+    assert sum(prompts[index].source == "easy" for index in first_rows) == 8
 
     async def interrupt_after_probe(state, _timer, **_kwargs):
-        await emit_probe(original, state, 0.75)
+        await emit_probe(original, state, 0.44)
         raise OSError("interrupted after development feedback")
 
     original.global_step = 1
@@ -308,19 +326,19 @@ async def test_development_probe_updates_one_fresh_window_after_boundary_resume(
         await original._run_step_end_callbacks(original._create_trainer_state(epoch=0))
     await original._drain_checkpoint_upload()
     uninterrupted_rows = [original_order.next_index() for _ in range(16)]
-    assert sum(prompts[index].source == "easy" for index in uninterrupted_rows) in (3, 4)
+    assert sum(prompts[index].source == "easy" for index in uninterrupted_rows) == 10
     assert not set(first_rows).intersection(uninterrupted_rows)
-    assert events[0][1]["easy_rich_probability"] == 0.5
-    assert events[1][1]["easy_rich_probability"] == pytest.approx(0.6726396133)
+    assert events[0][1]["action_probabilities"] == INITIAL_PROBABILITIES
+    assert events[1][1]["action_probabilities"] == pytest.approx((0.214, 0.572, 0.214), abs=0.001)
 
-    retry = budget_trainer(budget=total, milestones=(milestone,))
+    retry = budget_trainer(budget=total, milestones=milestones)
     configure_development_probe(retry)
     order = retry.context.loader.order
 
     async def rerun_probe(state, timer, **_kwargs):
         with timer:
-            await emit_probe(retry, state, 0.75)
-            await emit_probe(retry, state, 0.75)
+            await emit_probe(retry, state, 0.44)
+            await emit_probe(retry, state, 0.44)
 
     async def consume_next_window(step):
         assert step == 2
@@ -336,24 +354,34 @@ async def test_development_probe_updates_one_fresh_window_after_boundary_resume(
     assert events[1] == events[2]
     assert len(events) == 3
 
-    retry.global_step = 2
+    for step, spend, score in ((2, 1_070_000, 0.53), (3, 1_045_000, 0.62)):
+        retry.global_step = step
+        retry.rollout_gross_response_tokens_total += spend
+        retry.rollout_gross_response_tokens_last_update = spend
+        await emit_probe(retry, retry._create_trainer_state(epoch=0), score)
+    decisions = [data for _, data in events]
+    assert [d["boundary"] for d in decisions] == [0, 1, 1, 2, 3]
+    assert [d["block_gross_training_tokens"] for d in decisions] == [0, 1_100_000, 1_100_000, 1_070_000, 1_045_000]
+    assert decisions[-1]["transfer_gain_per_100k_train_tokens"] == pytest.approx(0.9 / 1.045)
+
+    retry.global_step = 4
     retry.rollout_gross_response_tokens_total = total
-    await emit_probe(retry, retry._create_trainer_state(epoch=0), 0.0, scored=0)
-    assert len(events) == 3
+    state = retry._create_trainer_state(epoch=0)
+    await retry.callback_handler.call_event_async("on_train_end", state, TrainerControl(), trainer=retry)
+    await emit_probe(retry, state, 0.0, scored=0)
+    assert len(events) == 5
 
 
 @pytest.mark.asyncio
-async def test_development_probe_rejects_wrong_panel_and_partial_feedback(budget_trainer):
-    trainer = budget_trainer(budget=100, milestones=(50,))
+async def test_development_probe_pins_both_panels_and_rejects_partial_feedback(budget_trainer):
+    trainer = budget_trainer(budget=100, milestones=(25, 50, 75))
     configure_development_probe(trainer)
-    valid = trainer.eval_dataset.dataframe
-    trainer.eval_dataset.dataframe = valid.select(range(4)).map(
-        lambda row: {TASK_EVALUATION_IDENTITY: row[TASK_EVALUATION_IDENTITY].replace("0", "a", 1)}
-    )
+    valid = trainer.additional_eval_dataloaders["confirmation"].dataset
+    trainer.additional_eval_dataloaders["confirmation"].dataset = trainer.eval_dataset
     state = trainer._create_trainer_state(epoch=0)
-    with pytest.raises(ValueError, match="not the pinned development probe"):
+    with pytest.raises(ValueError, match="does not match its pinned task digests"):
         await trainer.callback_handler.call_event_async("on_train_begin", state, TrainerControl(), trainer=trainer)
-    trainer.eval_dataset.dataframe = valid
+    trainer.additional_eval_dataloaders["confirmation"].dataset = valid
     await trainer.callback_handler.call_event_async("on_train_begin", state, TrainerControl(), trainer=trainer)
     with pytest.raises(ValueError, match="complete verifier coverage"):
         await emit_probe(trainer, state, 0.25, scored=3)
@@ -362,3 +390,17 @@ async def test_development_probe_rejects_wrong_panel_and_partial_feedback(budget
         order.next_index()
     await emit_probe(trainer, state, 0.25)
     assert 0 <= order.next_index() < 256
+
+
+def test_mild_tilt_common_draw_and_randomized_shadow_across_different_update_steps():
+    adaptive = DevelopmentProbeMix(seed=137, panel_sha256="test", policy="adaptive")
+    randomized = DevelopmentProbeMix(seed=137, panel_sha256="test", policy="randomized")
+    for boundary, (accuracy, gross) in enumerate(((0.25, 0), (0.36, 1_100_000), (0.28, 2_170_000))):
+        args = dict(boundary=boundary, accuracy=accuracy, gross_tokens=gross, development_tokens=700)
+        a = adaptive.observe(step=boundary * 17, **args)
+        r = randomized.observe(step=boundary * 19, **args)
+        assert a.uniform_draw == r.uniform_draw
+        assert r.action_probabilities == INITIAL_PROBABILITIES
+    assert a.action_probabilities == pytest.approx((0.443, 0.447, 0.111), abs=0.001)
+    assert r.adaptive_action_probabilities == pytest.approx((0.438, 0.451, 0.111), abs=0.001)
+    assert (a.easy_quota, r.easy_quota) == (8, 10)

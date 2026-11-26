@@ -723,5 +723,6 @@ def evaluation_source(
         return default
     if evaluation.source == "tasks":
         return selection
-    assert held_out_tasks is not None
-    return selection_artifact(held_out_tasks)
+    reference = evaluation.selection or held_out_tasks
+    assert reference is not None
+    return selection_artifact(reference)
