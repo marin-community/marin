@@ -311,6 +311,22 @@ DOCKERFILE = "Dockerfile"
 """The path of a Docker build context's Dockerfile."""
 
 
+class BuildDirectory(BaseModel):
+    """An explicit empty directory retained from an original build archive."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: str
+    mode: str = Field(pattern=r"^[0-7]{3,4}$")
+    mtime_ns: int = Field(strict=True)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        validate_relative_file_path(value)
+        return value
+
+
 class DockerBuildContext(BaseModel):
     """Unresolved Docker build inputs, preserved as data without executing the recipe.
 
@@ -321,10 +337,21 @@ class DockerBuildContext(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     files: tuple[TaskResource, ...]
+    empty_directories: tuple[BuildDirectory, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def validate_files(self) -> "DockerBuildContext":
         validate_relative_file_paths(resource.path for resource in self.files)
+        directory_paths = [entry.path for entry in self.empty_directories]
+        validate_relative_file_paths(directory_paths)
+        for directory in directory_paths:
+            for resource in self.files:
+                if (
+                    resource.path == directory
+                    or resource.path.startswith(directory + "/")
+                    or directory.startswith(resource.path + "/")
+                ):
+                    raise ValueError(f"Empty build directory conflicts with a file: {directory}")
         if not any(resource.path == DOCKERFILE for resource in self.files):
             raise ValueError("A Docker build context requires Dockerfile")
         return self

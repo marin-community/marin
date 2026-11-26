@@ -78,9 +78,15 @@ def unpack_task_binary(row: dict[str, Any], _context: ConversionContext) -> dict
     files: dict[str, bytes] = {}
     file_metadata = {}
     archive_links = {}
+    directory_metadata = {}
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:*") as archive:
         for member in archive:
             name = member.name.removeprefix("./")
+            if member.isdir():
+                directory_metadata[name.rstrip("/")] = {
+                    "mode": format(member.mode & 0o7777, "04o"),
+                    "mtime_ns": int(Decimal(member.pax_headers.get("mtime", str(member.mtime))) * 1_000_000_000),
+                }
             if member.issym() or member.islnk():
                 archive_links[name] = {"target": member.linkname, "kind": "symlink" if member.issym() else "hardlink"}
             if member.isfile():
@@ -98,6 +104,7 @@ def unpack_task_binary(row: dict[str, Any], _context: ConversionContext) -> dict
         "archive_sha256": hashlib.sha256(blob).hexdigest(),
         "file_metadata": file_metadata,
         "archive_links": archive_links,
+        "directory_metadata": directory_metadata,
     }
     if VERIFIER_DATA in files:
         prepared["verifier_data"] = json.loads(files[VERIFIER_DATA])

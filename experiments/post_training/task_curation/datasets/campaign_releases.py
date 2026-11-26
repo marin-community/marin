@@ -16,7 +16,9 @@ to execute tasks from the screened public release alone.
 from dataclasses import dataclass, replace
 
 from finestore.rl.curation import (
+    DatasetRelease,
     IndependentQC,
+    LexicalContaminationEvidence,
     OracleValidation,
     OversightEvidence,
     OversightLevel,
@@ -25,8 +27,14 @@ from finestore.rl.curation import (
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation.datasets.swe_repair_license_receipts import (
+    SWESMITH_V5_RELEASE,
+    SWESMITH_V5_REVISION,
+    SWESMITH_VERIFIER_REPAIRED_V5_RECEIPT,
+)
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REVISION
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_prebuilt
+from experiments.post_training.task_curation.retained_release import RetainedCohort, import_retained
 from experiments.post_training.task_curation.source import (
     EXCLUDED_TAG,
     RlDataSource,
@@ -832,6 +840,161 @@ def sources() -> list[RlDataSource]:
                     evidence_url=_pinned_blob(swesmith, "manifest.json"),
                 ),
             )
+        ),
+        RlDataSource(
+            pipeline=import_retained,
+            config=RetainedCohort(
+                name="swesmith-verifier-repaired-v5-retained",
+                version="2026.11.13.1",
+                release=DatasetRelease(
+                    repo=SWESMITH_V5_RELEASE,
+                    revision=SWESMITH_V5_REVISION,
+                    url=f"https://huggingface.co/datasets/{SWESMITH_V5_RELEASE}/tree/{SWESMITH_V5_REVISION}",
+                ),
+                original_dataset=SourceReference(
+                    "open-athena/swesmith-verifier-repaired-v5-20261112",
+                    "26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+                    "https://huggingface.co/datasets/open-athena/swesmith-verifier-repaired-v5-20261112"
+                    "/tree/26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+                ),
+                expected_rows=7016,
+                tasks_parquet_sha256="bc8f505af1ef502c25bcc3a1f5677cd61bb4f48479b015cbed0f7d0c06eb095e",
+                intended_use=IntendedUse.TRAIN,
+                evidence_url=(
+                    "s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.16.1/"
+                    "0bfcd894f5d3f6676595/result.json"
+                ),
+            ),
+            info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="swesmith-verifier-repaired-v5",
+                upstream_name="swesmith-verifier-repaired-v5",
+                subset=None,
+                build_path="Snowball Smartie RL / Campaign Release",
+                origin=SourceOrigin.TASKTROVE,
+                upstream_url="https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
+                family="swe-repo",
+                tags=("agentic", "language:python", "campaign-release", "verified"),
+                task_format=TaskFormat.HARBOR,
+                count=7016,
+                daytona_snapshot_count=5,
+                daytona_count_basis=(
+                    "Complete 7016-TaskSpec census from "
+                    f"{SWESMITH_V5_RELEASE}@{SWESMITH_V5_REVISION}; native Harbor task.toml or published "
+                    "runtime allocations; actor only on Daytona, grader roles separate; no provider calls; "
+                    "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.16.1-swesmith/"
+                    "0bfcd894f5d3f6676595/population"
+                ),
+                daytona_execution_failures=0,
+                oracle_validation=OracleValidation.EXECUTED,
+                oversight=OversightEvidence(
+                    campaign="SWE-smith verifier repair v5",
+                    recipe_revision="43a40938875b4fbc4286a0784f6a7454110a0453",
+                    verification=(
+                        "Every admitted task has scored bug=0 and pinned-reference=1 controls, matched to its "
+                        "exact TaskSpec SHA256; infrastructure errors cannot admit a task. All 5,628 admitted "
+                        "v4 package strings remain byte-identical. Evidence: "
+                        "https://huggingface.co/datasets/open-athena/swesmith-verifier-repaired-v5-20261112"
+                        "/blob/26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd/controls.jsonl"
+                    ),
+                    reviewed=7016,
+                    admitted=7016,
+                    level=OversightLevel.SAMPLE,
+                ),
+                independent_qc=IndependentQC(
+                    verdict=Verdict.GOOD,
+                    method=(
+                        "Archived SAMPLE content panel validated against the original pin "
+                        "open-athena/swesmith-verifier-repaired-v5-20261112@26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd "
+                        "through the zero-drop retained lineage; retained readback 52130ad0c47f proves "
+                        "byte-identical retained tasks."
+                    ),
+                    reviewed=100,
+                    evidence_url=(
+                        "s3://marin-us-east-02a/marin/rl-data/atlas/sample-qc/2026.11.13.5/reviews/"
+                        "7957aadd80e4efc948c3/attempts/0a140fc3af884d40be021ed959062416"
+                    ),
+                ),
+                lexical_contamination=LexicalContaminationEvidence(
+                    version=1,
+                    input_dataset_id="open-athena/swesmith-verifier-repaired-v5-20261112",
+                    input_dataset_revision="26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+                    converter_revision="1509fc8638f6be3840b5c82b53348f93152a9c31",
+                    text_renderer_version="taskcompendium-format-conversation-v1",
+                    measured_tasks=7016,
+                    contaminated_tasks=0,
+                    contaminated_fraction=0.0,
+                    max_overlap=0.0,
+                    mean_max_overlap=0.0,
+                    p95_max_overlap=0.0,
+                    matched_evals={},
+                    eval_corpus_version="aa-index-v4.1.1-v3",
+                    eval_bloom_uri="s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42",
+                    eval_hash_index_uri=(
+                        "s3://marin-us-east-02a/marin/datakit/bloom/_combined_fixed_eca06d42/_bloom/"
+                        "eval_hash_index.parquet"
+                    ),
+                    feature_filter_version=4,
+                    ngram_length=13,
+                    overlap_threshold=0.5,
+                    min_matched_features=2,
+                    drop_set_uris=[
+                        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/ba83ebf5ecb958937ee8",
+                        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/df/2026.11.12.6/_global",
+                    ],
+                    task_flags_uri=(
+                        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/"
+                        "2026.11.12.6/ba83ebf5ecb958937ee8/task_flags"
+                    ),
+                    evidence_url=(
+                        "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684/report/"
+                        "2026.11.12.6/ba83ebf5ecb958937ee8/measurement.json"
+                    ),
+                    receipt={
+                        "use": "train",
+                        "status": "clean",
+                        "retained_tasks": 7016,
+                        "dropped_tasks": 0,
+                        "duplicate_dropped_tasks": 0,
+                        "release": {
+                            "private": True,
+                            "format": "taskcompendium",
+                            "dataset_id": SWESMITH_V5_RELEASE,
+                            "dataset_revision": SWESMITH_V5_REVISION,
+                            "drop_manifest_uri": (
+                                "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.16.1/"
+                                "ba83ebf5ecb958937ee8/combined-drops.parquet"
+                            ),
+                            "original_private_dataset_id": None,
+                            "original_private_dataset_revision": None,
+                            "duplicate_manifest_uri": (
+                                "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.16.1/"
+                                "ba83ebf5ecb958937ee8/duplicates.parquet"
+                            ),
+                            "dedup_census_uri": (
+                                "s3://marin-us-east-02a/marin/rl-data/atlas/within-source-dedup/2026.11.16.1/"
+                                "ba83ebf5ecb958937ee8/measurement.json"
+                            ),
+                            "original_dataset_id": "open-athena/swesmith-verifier-repaired-v5-20261112",
+                            "original_dataset_revision": "26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd",
+                        },
+                    },
+                ),
+                license_receipt=SWESMITH_VERIFIER_REPAIRED_V5_RECEIPT,
+                notes=(
+                    "7,016 controlled SWE-smith tasks: 5,628 admitted v4 packages preserved byte-for-byte "
+                    "and 1,388 newly admitted repairs. 1,029 of 8,045 candidates remain excluded with "
+                    "per-task reasons and receipts. Native Harbor packages retain their declared "
+                    "environment, bootstrap and hidden verifier; import validates the complete cohort "
+                    "without rewriting packages or rerunning controls. Oversight is full and oracle "
+                    "validation is executed. Preserved upstream recipes include floating image tags "
+                    "and dependency resolution; control receipts identify the tested builds. "
+                    "The repair-campaign repository is private. Controls do not measure model-solving accuracy. "
+                    "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
+                    "original oversight and quality evidence apply through this subset lineage: "
+                    "s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.16.1/0bfcd894f5d3f6676595/result.json."
+                ),
+            ),
         ),
         RlDataSource(
             info=SourceInfo(

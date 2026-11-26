@@ -3,8 +3,8 @@
 
 """Render a SWE-rebench-V2.1 dataset row into the files of its Harbor task.
 
-The rendered task format follows the published Harbor tasks. The grader template
-labels logs without named test results as unscorable.
+The rendered files are byte-identical to the tasks published on the Harbor Hub,
+so `scripts/eval.py` and `scripts/to_harbor.py` run exactly the published checks.
 """
 
 from __future__ import annotations

@@ -32,6 +32,17 @@ PUBLICATIONS_REFERENCE = PinnedHfFile(
     byte_size=1884753,
 )
 
+ASSUMED_ADMISSION_SOURCES = frozenset(
+    {
+        "TaskTrove:swesmith-verifier-repaired-v5",
+        "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119",
+    }
+)
+"""Sources the user ruled about to be admitted (2026-11-26), kept despite the sealed
+catalog's pre-admission retirement. Their Atlas admissions are in flight (the swesmith
+taskspec SAMPLE QC and the SWE-rebench repair lane); the catalog binds them at their
+current Atlas pins and every consumer reads their assumed-admission status note."""
+
 
 class AtlasPublication(BaseModel):
     """A final cohort and the measurement that certifies its exact import pin."""
@@ -123,6 +134,7 @@ def bind_publications(sources: list[RlDataSource]) -> list[RlDataSource]:
         for source in sources
         if source.info.id not in retired
         or (source.info.id == LICENSE_RECEIPT.source_id and PENDING_TAG in source.info.tags)
+        or source.info.id in ASSUMED_ADMISSION_SOURCES
     }
     selected.update({source_id: publication.source() for source_id, publication in publications.items()})
     return list(selected.values())

@@ -22,6 +22,7 @@ from experiments.post_training.task_curation.datasets.skyrl import ifeval as sky
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.datasets.skyrl import mcq as skyrl_mcq
 from experiments.post_training.task_curation.datasets.skyrl import preference as skyrl_preference
+from experiments.post_training.task_curation.datasets.swe_rebench_v2 import sources as swe_rebench_v2
 from experiments.post_training.task_curation.datasets.tasktrove import calendar as tasktrove_calendar
 from experiments.post_training.task_curation.datasets.tasktrove import code as tasktrove_code
 from experiments.post_training.task_curation.datasets.tasktrove import instruction_following as tasktrove_instructions
@@ -71,6 +72,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
+        *swe_rebench_v2.sources(),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *nemo_tool_calls.sources(),

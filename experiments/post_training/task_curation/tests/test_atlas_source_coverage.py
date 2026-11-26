@@ -31,6 +31,7 @@ import pytest
 from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
 from finestore.rl.source_identity import canonical_source_id
 
+from experiments.post_training.task_curation.datasets.atlas_publications import ASSUMED_ADMISSION_SOURCES
 from experiments.post_training.task_curation.sources import all_sources
 
 ATLAS_SOURCE_PINS_REPO = "open-athena/atlas-source-pins"
@@ -140,7 +141,12 @@ def test_dapo_math_binds_to_its_retained_release():
 def test_excluded_atlas_sources_do_not_enter_the_catalog():
     fixture = read_atlas_source_pins()
     sources = all_sources()
-    assert set(fixture["excluded_or_deprecated"]).isdisjoint(sources)
+    # The user's 2026-11-26 ruling keeps the two about-to-be-admitted SWE repair sources
+    # bound at their Atlas pins while their admission lanes finish; every other excluded
+    # or deprecated Atlas source stays out of the catalog.
+    excluded = set(fixture["excluded_or_deprecated"])
+    assert excluded.isdisjoint(set(sources) - ASSUMED_ADMISSION_SOURCES)
+    assert ASSUMED_ADMISSION_SOURCES <= set(sources)
     for source_id, override in fixture["status_overrides"].items():
         assert sources[source_id].declaration.status == override["worktree_status"]
 
