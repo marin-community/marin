@@ -25,6 +25,7 @@ from evalrecords.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
     EvalRef,
+    EvaluationOverrides,
     EvaluationSelection,
     ModelConfigRef,
     ModelRef,
@@ -75,7 +76,7 @@ from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import InferenceBackendState
-from marin.rollouts.evaluation import EVALUATION_EXECUTION_REVISION
+from marin.rollouts.evaluation import execution_revision
 from rigging.config_discovery import resolve_cluster_config
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -284,6 +285,7 @@ class _ResolvedDefinition:
     endpoint_route: EndpointRoute
     secret_env: dict[str, SecretSpec]
     egress_allow: tuple[str, ...]
+    run: EvaluationOverrides | None = None
 
 
 def _resolve_definitions(
@@ -291,7 +293,7 @@ def _resolve_definitions(
     model: ModelConfig,
     limit: int | None,
     seed: int | None,
-    default_seed: int | None,
+    supports_seed: bool,
     task_evidence: TaskEvidence | None,
     retry_unscored_harbor_trials: bool,
     judge_model: ModelConfig | None,
@@ -316,7 +318,14 @@ def _resolve_definitions(
             )
             definition = definition.model_copy(update={"run": selection_run(definition, protocol)})
             settings = settings_for(
-                definition, protocol, model, limit, seed, default_seed, task_machine_backend, task_evidence
+                definition,
+                protocol,
+                model,
+                limit,
+                seed,
+                DEFAULT_RUN_SEED if supports_seed else None,
+                task_machine_backend,
+                task_evidence,
             )
             secret_env: dict[str, SecretSpec] = {
                 **definition.run.task_secrets,
@@ -325,12 +334,15 @@ def _resolve_definitions(
             egress_allow = (
                 (urlsplit(definition.run.judge_endpoint).hostname,) if definition.run.judge_endpoint is not None else ()
             )
-            egress_allow += tuple(
-                host
-                for source in selected_sources(protocol)
-                if source.config is not None
-                for host in download_hosts(source.config.recipe)
-            )
+            corpora = tuple(source.config for source in selected_sources(protocol) if source.config is not None)
+            if (
+                not supports_seed
+                and settings.seed is not None
+                and any(corpus.run_defaults is not None and corpus.run_defaults.seed is not None for corpus in corpora)
+            ):
+                raise ValueError(f"{definition.benchmark} requires a serving backend that accepts its run seed")
+            egress_allow += tuple(host for corpus in corpora for host in download_hosts(corpus.recipe))
+            runtime = "taskspec:" + execution_revision(corpus.protocol for corpus in corpora)
             if settings.task_machine is not None and settings.task_machine.backend is TaskMachineBackend.DAYTONA:
                 secret_env[DAYTONA_API_KEY] = DAYTONA_SECRET_ENV[DAYTONA_API_KEY]
                 egress_allow = (*egress_allow, *DAYTONA_EGRESS)
@@ -341,12 +353,13 @@ def _resolve_definitions(
                         record_ref=record_ref_for(
                             definition, protocol, settings, agent_ref_for(protocol, model, settings)
                         ),
-                        runtime_descriptor="taskspec:" + EVALUATION_EXECUTION_REVISION,
-                        cache_runtime_descriptor="taskspec:" + EVALUATION_EXECUTION_REVISION,
+                        runtime_descriptor=runtime,
+                        cache_runtime_descriptor=runtime,
                         executor=None,
                         endpoint_route=EndpointRoute.DIRECT,
                         secret_env=secret_env,
                         egress_allow=egress_allow,
+                        run=definition.run,
                     ),
                 )
             )
@@ -457,7 +470,7 @@ def build_evaluation_batch(
         model,
         spec.limit,
         spec.seed,
-        DEFAULT_RUN_SEED if seeded else None,
+        seeded,
         spec.task_evidence,
         spec.retry_unscored_harbor_trials,
         judge.model if judge is not None else None,
@@ -535,14 +548,13 @@ def build_evaluation_batch(
             reference = policy_reference(reference, spec.policy_finalization)
         executor = definition.executor
         if reference.curated is not None:
-            selection = next(item for name, item in requested_definitions if name == eval_key)
-            assert isinstance(selection, EvaluationSelection)
+            assert definition.run is not None
             executor = partial(
                 _execute_curated,
                 model,
                 reference,
-                selection.run.judge_endpoint,
-                tuple(selection.run.task_secrets),
+                definition.run.judge_endpoint,
+                tuple(definition.run.task_secrets),
                 spec.policy_finalization,
                 policy_judge.accelerator if policy_judge is not None else None,
                 spec.priority_band,

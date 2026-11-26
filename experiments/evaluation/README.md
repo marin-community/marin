@@ -34,8 +34,9 @@ Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
 [configs/evaluations.yaml](configs/evaluations.yaml) declares curated suite choices and run overrides. The benchmark catalog supplies ordinary defaults.
 
 `micro210` selects 340 chat rows and 94 Pi rows from the sealed task table. Its policy
-uses Together judging on Daytona and caps Pi at eight concurrent attempts. Use a model
-with Pi's thinking format configured and an HF token with access to the sealed inputs.
+uses Together judging through a Daytona relay and requires Daytona task machines. It caps
+Pi at eight concurrent attempts. Use a backend that accepts seeded requests, a model
+with Pi's thinking format configured, and an HF token with access to the sealed inputs.
 `micro210-smoke` selects three rows from the full suite. The launcher reports the pooled
 reward once at least 90% of the full suite's rows have a score. To read it later, pass
 both run directories from the same launch to `scores`.

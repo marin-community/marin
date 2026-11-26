@@ -5,9 +5,10 @@
 
 import json
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pyarrow.parquet as pq
 from evalrecords.eval_stats import DEFAULT_MIN_COVERAGE
@@ -17,6 +18,7 @@ from evalrecords.records import (
     JudgeIdentity,
     PromptFormat,
     TaskEvidence,
+    TaskMachineBackend,
     TaskMachineSettings,
 )
 from finestore.rl.status_taxonomy import DataRestriction
@@ -41,7 +43,7 @@ from taskcompendium.pipeline.models import IntendedUse, RawRow
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks.harbor import EPISODE_LABEL, REWARD, harbor_item
-from experiments.evaluation.micro210 import STOP_TOKEN_CONTENT
+from experiments.evaluation.micro210 import STOP_TOKEN_CONTENT, native_binding_code_sha256
 from experiments.evaluation.micro210_inputs import native_rollout
 from experiments.evaluation.micro210_policy import (
     POLICY_REFERENCE,
@@ -54,8 +56,17 @@ from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_e
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
-POPULATIONS = {"micro210-chat": 340, "micro210-pi": 94}
-SMOKE_ROWS = {"micro210-chat": (0,), "micro210-pi": (1, 12)}
+
+@dataclass(frozen=True)
+class Cohort:
+    name: str
+    agent: Literal["single-turn", "pi"]
+    population: int
+    smoke_rows: tuple[int, ...]
+
+
+COHORTS = (Cohort("micro210-chat", "single-turn", 340, (0,)), Cohort("micro210-pi", "pi", 94, (1, 12)))
+POPULATIONS = {cohort.name: cohort.population for cohort in COHORTS}
 FULL_POPULATION = sum(POPULATIONS.values())
 FULL_PROTOCOL = "sealed"
 SOURCE_FAMILY = "micro210_family"
@@ -112,16 +123,17 @@ def build_item(task: TaskSpec, *, agent: AgentEpisode | None) -> EvaluationItem:
     return item.model_copy(update={"groups": {"family": task.labels[SOURCE_FAMILY]}})
 
 
-def build_source(name: str, variant: ProtocolVariant) -> tuple[RlDataSource[EvaluationCorpusRecipe], ...]:
+def build_source(cohort: Cohort, variant: ProtocolVariant) -> tuple[RlDataSource[EvaluationCorpusRecipe], ...]:
     policy = sealed_policy(POLICY_REFERENCE)
     evaluation = policy["evaluation"]
     config = evaluation["config"]
     generator, context = config["generator"], config["context_budget"]
     sampling, judge = generator["eval_sampling_params"], evaluation["judge"]
     harbor, installed = (config["terminal_bench"][key] for key in ("harbor", "installed_agent"))
-    rows = SMOKE_ROWS[name] if variant.protocol == "smoke" else ()
-    count = len(rows) if rows else POPULATIONS[name]
-    pi = name == "micro210-pi"
+    rows = cohort.smoke_rows if variant.protocol == "smoke" else ()
+    count = len(rows) if rows else cohort.population
+    pi = cohort.agent == "pi"
+    version = f"{CORPUS_REVISION}-{native_binding_code_sha256()[:12]}"
     kwargs = installed["agent"]["kwargs"]
     agent = (
         AgentEpisode(
@@ -145,8 +157,8 @@ def build_source(name: str, variant: ProtocolVariant) -> tuple[RlDataSource[Eval
         else None
     )
     protocol = EvaluationProtocol(
-        benchmark=name,
-        version=CORPUS_REVISION,
+        benchmark=cohort.name,
+        version=version,
         operation=OperationKind.AGENT_EPISODE if pi else OperationKind.CHAT_GENERATION,
         sampling=Sampling(
             temperature=sampling["temperature"],
@@ -156,7 +168,7 @@ def build_source(name: str, variant: ProtocolVariant) -> tuple[RlDataSource[Eval
             stop=tuple(STOP_TOKEN_CONTENT[token_id] for token_id in sampling["stop_token_ids"]),
             chat_template_kwargs=generator.get("chat_template_kwargs", {}),
         ),
-        trials=TrialPolicy(count=1, seed=evaluation["seed"]),
+        trials=TrialPolicy(count=1, seed=None),
         metrics=(REWARD,),
         primary_metric=REWARD.name,
         requires_judge=True,
@@ -183,14 +195,14 @@ def build_source(name: str, variant: ProtocolVariant) -> tuple[RlDataSource[Eval
         (evaluation["data_relative_path"],),
         SourceFormat.PARQUET,
         read=partial(read_rows, sha256=policy["prepared_rollouts_sha256"]),
-        select=partial(select_row, agent="pi" if pi else "single-turn", rows=rows),
+        select=partial(select_row, agent=cohort.agent, rows=rows),
     )
     return (
         RlDataSource(
             info=SourceInfo(
                 origin=SourceOrigin.OPENATHENA,
                 upstream_dataset=PREPARED_REPO,
-                upstream_name=name,
+                upstream_name=cohort.name,
                 variant=variant.protocol,
                 build_path="Micro210",
                 data_restriction=DataRestriction.PRIVATE_ALWAYS,
@@ -199,10 +211,10 @@ def build_source(name: str, variant: ProtocolVariant) -> tuple[RlDataSource[Eval
             ),
             config=EvaluationCorpusRecipe(
                 recipe=CurationRecipe(
-                    name=f"{name}-{variant.protocol}",
+                    name=f"{cohort.name}-{variant.protocol}",
                     source=source,
                     convert=partial(convert_row, policy=policy, images=json.loads(IMAGE_LOCK.read_text())),
-                    version=CORPUS_REVISION,
+                    version=version,
                     intended_use=IntendedUse.EVAL,
                     # The sealed chat rows include verifier resources larger than 1 MB.
                     resource_budget_bytes=2_000_000,
@@ -213,6 +225,7 @@ def build_source(name: str, variant: ProtocolVariant) -> tuple[RlDataSource[Eval
                 task_evidence=TaskEvidence.REFERENCE,
                 agent=agent,
                 run_defaults=run,
+                required_task_machine_backend=TaskMachineBackend.DAYTONA,
             ),
             pipeline=prepare_evaluation,
         ),
@@ -222,32 +235,38 @@ def build_source(name: str, variant: ProtocolVariant) -> tuple[RlDataSource[Eval
 def benchmarks() -> tuple[EvaluationBenchmark, ...]:
     return tuple(
         EvaluationBenchmark(
-            name,
+            cohort.name,
             tuple(
-                ProtocolVariant(protocol, None, PromptFormat.CHAT if name == "micro210-chat" else None)
+                ProtocolVariant(protocol, None, PromptFormat.CHAT if cohort.agent == "single-turn" else None)
                 for protocol in (FULL_PROTOCOL, "smoke")
             ),
-            partial(build_source, name),
+            partial(build_source, cohort),
         )
-        for name in POPULATIONS
+        for cohort in COHORTS
     )
 
 
 def print_pooled_score(records: Sequence[EvalRunRecord]) -> None:
     """Report the row-weighted reward for paired full Micro210 records in one launch."""
-    pairs: dict[str, dict[str, EvalRunRecord]] = {}
+    launches: dict[tuple[str, str, str], dict[str, tuple[str, EvalRunRecord]]] = {}
     for record in records:
         curated = record.evaluation.curated
         selection = None if curated is None else curated.selection
+        candidate = record.model.config_digest
         if (
             selection is not None
             and selection.protocol == FULL_PROTOCOL
             and selection.benchmark in POPULATIONS
-            and record.evaluation.name == selection.benchmark
+            and candidate
         ):
-            pairs.setdefault(record.group_id, {})[selection.benchmark] = record
-    for group, pair in sorted(pairs.items()):
+            launch = (record.group_id, record.created_at, candidate)
+            launches.setdefault(launch, {})[record.run_id] = (selection.benchmark, record)
+    for (group, _, _), runs in sorted(launches.items()):
+        pair = dict(runs.values())
         if pair.keys() != POPULATIONS.keys():
+            continue
+        if len(runs) != len(pair):
+            print(f"{group}  micro210  multiple records for one cohort")
             continue
         scored = 0
         total = 0.0

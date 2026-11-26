@@ -143,7 +143,10 @@ def selection_run(selection: EvaluationSelection, protocol: ResolvedEvaluationSe
     if first is None or any(value != first for value in defaults):
         raise ValueError(f"{selection.benchmark} corpora declare different run defaults")
     return EvaluationOverrides.model_validate(
-        {**first.model_dump(exclude_unset=True), **selection.run.model_dump(exclude_unset=True)}
+        {
+            **{key: getattr(first, key) for key in first.model_fields_set},
+            **{key: getattr(selection.run, key) for key in selection.run.model_fields_set},
+        }
     )
 
 
@@ -243,6 +246,11 @@ def settings_for(
         if task_machine_backend is not TaskMachineBackend.DAYTONA:
             update["image_build"] = TaskImageBuild.SNAPSHOT
         task_machine = TaskMachineSettings.model_validate({**task_machine.model_dump(), **update})
+    for source in selected_sources(protocol):
+        assert source.config is not None
+        required = source.config.required_task_machine_backend
+        if required is not None and (task_machine is None or task_machine.backend is not required):
+            raise ValueError(f"{selection.benchmark} requires task_machine.backend={required.value} for grading")
     concurrency_bounds = [bound for bound in (model.evaluation_num_concurrent, run.concurrency) if bound is not None]
     return CuratedSettings(
         concurrency=min(concurrency_bounds, default=DEFAULT_EVALUATION_CONCURRENCY),

@@ -1474,7 +1474,7 @@ async def test_task_machines_read_only_host_variables_the_run_supplies(tmp_path,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("agent", [PiAgent(), MiniSweAgent()], ids=lambda agent: agent.kind)
+@pytest.mark.parametrize("agent", [PiAgent(), MiniSweAgent(), ShellAgent()], ids=lambda agent: agent.kind)
 async def test_agent_requests_keep_explicit_sampling_and_fill_missing_values(tmp_path, run_config, agent):
     corpus = publish_episodes(tmp_path, ("episode/solve",), agent)
     requests = []
@@ -1500,9 +1500,9 @@ async def test_agent_requests_keep_explicit_sampling_and_fill_missing_values(tmp
         harnesses={agent.kind: lambda _agent, _budget: AgentHarness(run_agent)},
     )
 
-    assert [request.options for request in requests] == [
-        {"temperature": 0.7, "top_p": 0.8, "max_tokens": 7},
-        {"temperature": 0.0, "top_p": 0.95, "max_tokens": 6},
+    assert [(r.options["temperature"], r.options["top_p"], r.options["max_tokens"]) for r in requests] == [
+        (0.7, 0.8, 7),
+        (0.0, 0.95, 6),
     ]
 
 

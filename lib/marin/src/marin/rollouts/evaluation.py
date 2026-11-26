@@ -8,7 +8,7 @@ import dataclasses
 import json
 import logging
 import threading
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import MappingProxyType
@@ -222,6 +222,18 @@ def run_identity(run: Mapping[str, Any]) -> str:
     """
     described = {key: value for key, value in run.items() if key != RESPONSE_SOURCES}
     return canonical_sha256({**described, "config": scoring_settings(run["config"])})
+
+
+def execution_revision(protocols: Iterable[EvaluationProtocol]) -> str:
+    """Separate cached requests whose declared agent sampling changes the execution."""
+    if any(
+        protocol.operation is OperationKind.AGENT_EPISODE
+        and protocol.sampling is not None
+        and (protocol.sampling.temperature is not None or protocol.sampling.top_p is not None)
+        for protocol in protocols
+    ):
+        return f"{EVALUATION_EXECUTION_REVISION}+agent-sampling"
+    return EVALUATION_EXECUTION_REVISION
 
 
 def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig, trial: int) -> dict[str, Any]:
@@ -773,12 +785,11 @@ async def _score_rollout(
         task_machine = episode_machine(config.task_machine, case.item.episode)
         limits = episode_limits(config.limits, operation, case.item.episode)
         # Pi and mini-swe-agent construct requests and use the protocol's temperature and top-p as defaults.
-        agent_options = {**options, "extra_body": {**options["extra_body"], **config.agent_extra_body}}
-        policy_model = (
-            partial(agent_sampling_defaults, model=model, options=options)
-            if isinstance(operation.harness, PiAgent | MiniSweAgent)
-            else partial(episode_turn, model=model, options=agent_options)
-        )
+        if isinstance(operation.harness, PiAgent | MiniSweAgent):
+            policy_model = partial(agent_sampling_defaults, model=model, options=options)
+        else:
+            agent_options = {**options, "extra_body": {**options["extra_body"], **config.agent_extra_body}}
+            policy_model = partial(episode_turn, model=model, options=agent_options)
     else:
         assert isinstance(operation, ChatGeneration | TextGeneration)
         engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
@@ -975,7 +986,7 @@ async def run_evaluation(
     )
     run: dict[str, Any] = {
         "schema_version": 1,
-        "driver_revision": EVALUATION_EXECUTION_REVISION,
+        "driver_revision": execution_revision(protocol for _, protocol, _ in corpora),
         "config": config.model_dump(mode="json"),
         "datasets": [
             {

@@ -604,7 +604,7 @@ def test_changed_runtime_creates_new_steps_and_preserves_partial_archive(tmp_pat
     partial.write_text('{"response":"already generated"}')
     executed.clear()
 
-    monkeypatch.setattr(launch_module, "EVALUATION_EXECUTION_REVISION", "changed-execution")
+    monkeypatch.setattr("marin.rollouts.evaluation.EVALUATION_EXECUTION_REVISION", "changed-execution")
     after = prepare_evaluation_batch(spec)
     if cache_key is None:
         # A previous launcher can stamp the new runtime onto a record under its old run ID.
@@ -746,8 +746,12 @@ def _agent_model():
     )
 
 
-@pytest.mark.parametrize(("pi_scored", "reward"), [(94, "reward 0.3917"), (50, "(requires 90%)")])
-def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, pi_scored, reward):
+@pytest.mark.parametrize(
+    ("pi_scored", "same_candidate", "reward"),
+    [(51, True, "reward 0.4348"), (50, True, "(requires 90%)"), (94, False, None)],
+    ids=["above-floor", "below-floor", "different-model"],
+)
+def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, pi_scored, same_candidate, reward):
     monkeypatch.setattr(micro210, "POLICY_REFERENCE", policy_fixture_reference())
     model = replace(_agent_model(), agent=AgentConfig(agent_kwargs={"thinking_format": "chat-template"}))
     spec = replace(_pipeline_spec(tmp_path), model=model, evals=resolve_evaluations("micro210"))
@@ -757,9 +761,12 @@ def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, p
         batch.evaluations, ((340, 340, 0.5), (94, pi_scored, 0.0)), strict=True
     ):
         name = evaluation.identity.eval_ref.name
+        record_batch = batch
+        if name == "micro210-pi" and not same_candidate:
+            record_batch = replace(batch, model=replace(model, location="fixture/other"), source_model_config=None)
         paths.append(
             _record(
-                batch,
+                record_batch,
                 evaluation.identity,
                 RunStatus.SUCCEEDED,
                 None,
@@ -771,9 +778,13 @@ def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, p
         )
     result = CliRunner().invoke(cli, ["scores", *paths])
     assert result.exit_code == 0, result.output
-    summary = next(line for line in result.output.splitlines() if line.startswith(f"{batch.group_id}  micro210 "))
-    assert f"scored {340 + pi_scored}/434" in summary
-    assert reward in summary
+    summaries = [line for line in result.output.splitlines() if line.startswith(f"{batch.group_id}  micro210 ")]
+    if reward is None:
+        assert summaries == []
+    else:
+        [summary] = summaries
+        assert f"scored {340 + pi_scored}/434" in summary
+        assert reward in summary
 
 
 @pytest.fixture
