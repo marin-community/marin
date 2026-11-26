@@ -9,13 +9,16 @@ from pathlib import Path
 
 import pytest
 from finestore.rl.curation import OversightLevel
+from taskcompendium.pipeline.models import ReviewRecord, ReviewStatus
 
-from experiments.post_training.task_curation.sample_qc_binding import SampleQCReceipt
+import experiments.post_training.task_curation.sample_review_recovery as sample_review_recovery
+from experiments.post_training.task_curation.sample_qc_binding import SampleMissingObservation, SampleQCReceipt
 from experiments.post_training.task_curation.sample_review_recovery import (
     REGISTRY_REPO,
     ReceiptReference,
     RecoveryTarget,
     collect_receipt_history,
+    completion_queue,
     recover_target,
 )
 from experiments.post_training.task_curation.tests.test_review_carry_forward import (
@@ -177,3 +180,44 @@ def test_recover_target_refuses_a_receipt_from_another_source(tmp_path, monkeypa
     alien = target.model_copy(update={"source_id": "OpenAthena:another-source"})
     with pytest.raises(ValueError, match="no entry for this source"):
         recover_target(alien, tmp_path.as_posix(), (FIELD,))
+
+
+def test_completion_queue_targets_a_receipts_missing_observations(tmp_path, monkeypatch):
+    """The completion queue carries exactly the tasks a receipt's own missing
+    observations enumerate, beside a derivation record that resolves."""
+    population = write_population(tmp_path, "current", current_tasks())
+    reviews = {task_id: good_review(task_id) for task_id in list(current_tasks())}
+    missing_id = "task-004"
+    reviews[missing_id] = ReviewRecord(task_id=missing_id, status=ReviewStatus.REVIEWED, verdict=None, detail="held")
+    receipt = write_receipt(tmp_path, population, current_tasks(), reviews)
+    receipt = receipt.model_copy(
+        update={
+            "missing_observations": (
+                SampleMissingObservation(
+                    review=reviews[missing_id],
+                    batch_receipt={"uri": "memory://batch", "sha256": "e" * 64},
+                ),
+            )
+        }
+    )
+    reference = ReceiptReference(repo="fixture/registry", revision="b" * 40, path="part-000.json", sha256="a" * 64)
+    monkeypatch.setattr(sample_review_recovery, "_newest_sample_receipts", lambda: {SOURCE_ID: (reference, receipt)})
+    records_root = tmp_path / "records"
+    queue = completion_queue(records_root.as_posix(), (SOURCE_ID,))
+    assert len(queue.targets) == 1
+    target = queue.targets[0]
+    assert target.source_id == SOURCE_ID
+    assert target.task_ids == (missing_id,)
+    assert target.population == receipt.review.panel.input_artifact
+    record = json.loads(Path(target.topup_evidence).read_text())
+    assert record["missing_task_ids"] == [missing_id]
+    assert record["receipt"]["path"] == "part-000.json"
+
+
+def test_completion_queue_skips_complete_receipts(tmp_path, monkeypatch):
+    population = write_population(tmp_path, "current", current_tasks())
+    reviews = {task_id: good_review(task_id) for task_id in current_tasks()}
+    receipt = write_receipt(tmp_path, population, current_tasks(), reviews)
+    reference = ReceiptReference(repo="fixture/registry", revision="b" * 40, path="part-000.json", sha256="a" * 64)
+    monkeypatch.setattr(sample_review_recovery, "_newest_sample_receipts", lambda: {SOURCE_ID: (reference, receipt)})
+    assert completion_queue((tmp_path / "records").as_posix(), (SOURCE_ID,)).targets == ()
