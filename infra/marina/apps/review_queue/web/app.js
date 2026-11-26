@@ -125,14 +125,14 @@ function reviewerMetrics(pendingCount, stats, volume) {
   const lines = volume.lines === null ? "—" : `${numberFormat.format(volume.lines)}${volume.partial ? "+" : ""}`;
   const response = stats?.avg_response_hours;
   const duration = response == null ? "—" : response < 1 ? `${Math.round(response * 60)}m` : `${Math.round(response)}h`;
-  const average = metric("Avg response", duration);
+  const average = metric(sortColumns.response.label, duration);
   if (stats?.response_count) average.title = `Based on ${stats.response_count} matched reviews`;
   const load = stats ? numberFormat.format(stats.reviewed_lines) : "—";
   return [
-    metric("Pending PRs", String(pendingCount), "pending-count"),
-    metric("Pending lines", lines),
+    metric(sortColumns.pending.label, String(pendingCount), "pending-count"),
+    metric(sortColumns.lines.label, lines),
     average,
-    metric("Reviewer load", load),
+    metric(sortColumns.load.label, load),
   ];
 }
 
@@ -292,6 +292,28 @@ async function api(path, options) {
   return response.json();
 }
 
+function renderSyncStatus(queue) {
+  if (!queue.refreshed_at) {
+    $("updated").textContent = "Getting the first GitHub snapshot…";
+    return;
+  }
+  const { completed, total, history_discovered } = queue.sync;
+  const partial = !history_discovered || completed < total;
+  $("history-window").textContent = `Reviewer load: diff lines reviewed in the last ${queue.history_days} days${partial ? " · sync in progress" : ""}`;
+  $("sync-count").textContent = history_discovered
+    ? (total ? `${completed} of ${total} PR details synced` : "Queue up to date")
+    : `Finding PRs from the last ${queue.history_days} days…`;
+  const progress = $("sync-progress");
+  progress.max = total || 1;
+  progress.value = completed;
+  progress.hidden = !history_discovered || !total;
+  const snapshot = new Date(queue.refreshed_at);
+  const sameDay = snapshot.toDateString() === new Date().toDateString();
+  const timestamp = sameDay ? snapshot.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : snapshot.toLocaleDateString([], { month: "short", day: "numeric" });
+  $("updated").textContent = `Queue snapshot · ${timestamp}`;
+  $("updated").title = snapshot.toLocaleString();
+}
+
 function startReviewQueue() {
   let current = { prs: [], stats: {}, refreshed_at: null };
   let order = { column: "name", direction: 1 };
@@ -330,29 +352,11 @@ function startReviewQueue() {
     const next = await api("queue");
     const changed = JSON.stringify(next) !== JSON.stringify(current);
     current = next;
-    if (current.refreshed_at) {
-      if (changed) {
-        render();
-        renderOtherQueues(current.prs);
-      }
-      const { completed, total, history_discovered } = current.sync;
-      const partial = !history_discovered || completed < total;
-      $("history-window").textContent = `Reviewer load: diff lines reviewed in the last ${current.history_days} days${partial ? " · sync in progress" : ""}`;
-      $("sync-count").textContent = history_discovered
-        ? (total ? `${completed} of ${total} PR details synced` : "Queue up to date")
-        : `Finding PRs from the last ${current.history_days} days…`;
-      const progress = $("sync-progress");
-      progress.max = total || 1;
-      progress.value = completed;
-      progress.hidden = !history_discovered || !total;
-      const snapshot = new Date(current.refreshed_at);
-      const sameDay = snapshot.toDateString() === new Date().toDateString();
-      const timestamp = sameDay ? snapshot.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : snapshot.toLocaleDateString([], { month: "short", day: "numeric" });
-      $("updated").textContent = `Queue snapshot · ${timestamp}`;
-      $("updated").title = snapshot.toLocaleString();
-    } else {
-      $("updated").textContent = "Getting the first GitHub snapshot…";
+    if (current.refreshed_at && changed) {
+      render();
+      renderOtherQueues(current.prs);
     }
+    renderSyncStatus(current);
   }
 
   async function refresh() {

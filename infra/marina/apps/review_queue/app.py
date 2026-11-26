@@ -18,6 +18,7 @@ from sqlalchemy import Connection, Row, bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 REPO_API = "https://api.github.com/repos/marin-community/marin/"
+PULLS_PATH = "pulls"
 SYNC_LOCK = 0x726576696577
 SYNC_SECONDS = 20
 GITHUB_TIMEOUT = 4
@@ -32,6 +33,14 @@ READ_SNAPSHOT = text("SELECT * FROM queue_snapshot")
 logger = logging.getLogger(__name__)
 
 
+class ReviewerRef(TypedDict):
+    login: str
+
+
+class TeamRef(TypedDict):
+    slug: str
+
+
 class PullSummary(TypedDict):
     number: int
     title: str
@@ -39,8 +48,8 @@ class PullSummary(TypedDict):
     created_at: str
     updated_at: str
     draft: bool
-    requested_reviewers: list[dict[str, str]]
-    requested_teams: list[dict[str, str]]
+    requested_reviewers: list[ReviewerRef]
+    requested_teams: list[TeamRef]
     author: NotRequired[str | None]
 
 
@@ -79,9 +88,13 @@ class SyncProgress(TypedDict):
     history_discovered: bool
 
 
+class SyncResult(TypedDict):
+    retry_in: int
+
+
 class OpenPull(PullSummary):
     lines: int | None
-    reviewed_reviewers: list[dict[str, str]]
+    reviewed_reviewers: list[ReviewerRef]
 
 
 class QueuePayload(TypedDict):
@@ -116,8 +129,7 @@ def migrate(connection: Connection) -> None:
             singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
             refreshed_at timestamptz,
             retry_at timestamptz NOT NULL DEFAULT now(),
-            open_prs jsonb NOT NULL DEFAULT '[]',
-            recent_prs jsonb NOT NULL DEFAULT '[]'
+            open_prs jsonb NOT NULL DEFAULT '[]'
         )
     """
         )
@@ -158,7 +170,7 @@ def pr_summary(pr: dict) -> PullSummary:
 
 
 def review_facts(timeline: list[dict], author: str | None) -> list[ReviewFact]:
-    """Keep each external reviewer's latest review and its matched request time when available."""
+    """Keep each reviewer's latest submission and most recent matched response."""
     requests = {}
     reviews: dict[str, ReviewFact] = {}
     for event in timeline:
@@ -179,15 +191,15 @@ def review_facts(timeline: list[dict], author: str | None) -> list[ReviewFact]:
             requested = requests.pop(login, None)
             previous = reviews.get(login)
             response_hours = previous["response_hours"] if previous else None
-            response_at = previous["response_at"] if previous else None
+            matched_submission_at = previous["response_at"] if previous else None
             if requested is not None and submitted >= requested:
                 response_hours = (submitted - requested).total_seconds() / 3600
-                response_at = submitted.isoformat()
+                matched_submission_at = submitted.isoformat()
             reviews[login] = {
                 "login": login,
                 "submitted_at": submitted.isoformat(),
                 "response_hours": response_hours,
-                "response_at": response_at,
+                "response_at": matched_submission_at,
             }
     return list(reviews.values())
 
@@ -210,7 +222,7 @@ async def github_pages(client: httpx.AsyncClient, path: str, **params: str) -> A
 
 async def open_prs(client: httpx.AsyncClient) -> list[PullSummary]:
     pulls = {}
-    async for page in github_pages(client, "pulls", state="open"):
+    async for page in github_pages(client, PULLS_PATH, state="open"):
         for pr in page:
             pulls[pr["number"]] = pr_summary(pr)
     return list(pulls.values())
@@ -221,11 +233,12 @@ async def recent_prs(
 ) -> list[PullSummary]:
     """Fetch changed PRs and keep all known PRs inside the rolling window."""
     pulls = {pr["number"]: pr for pr in previous if datetime.fromisoformat(pr["updated_at"]) >= cutoff}
-    async for page in github_pages(client, "pulls", state="all", sort="updated", direction="desc"):
-        for pr in page:
-            if datetime.fromisoformat(pr["updated_at"]) < since:
-                return sorted(pulls.values(), key=lambda item: item["updated_at"], reverse=True)
+    async for page in github_pages(client, PULLS_PATH, state="all", sort="updated", direction="desc"):
+        changed = [pr for pr in page if datetime.fromisoformat(pr["updated_at"]) >= since]
+        for pr in changed:
             pulls[pr["number"]] = pr_summary(pr)
+        if len(changed) < len(page):
+            break
     return sorted(pulls.values(), key=lambda item: item["updated_at"], reverse=True)
 
 
@@ -242,7 +255,7 @@ async def pr_metadata(client: httpx.AsyncClient, number: int) -> PullMetadata:
     }
 
 
-def pending_metadata(snapshot: Row, versions: dict[int, str]) -> list[int]:
+def prs_missing_metadata(snapshot: Row, versions: dict[int, str]) -> list[int]:
     """Return PR numbers with missing or stale metadata in sync order."""
     pending = [pr for pr in snapshot.open_prs if pr["requested_reviewers"] or pr["requested_teams"]]
     # Interleave requests and recently updated PRs before checking older open PRs.
@@ -287,6 +300,21 @@ async def refresh_snapshot(connection: Connection, client: httpx.AsyncClient, sn
     return snapshot
 
 
+async def sync_prs(connection: Connection, client: httpx.AsyncClient, snapshot: Row) -> int:
+    cutoff = datetime.now(UTC) - HISTORY_WINDOW
+    if snapshot.history_since is None or not cutoff - DISCOVERY_INTERVAL < snapshot.history_since <= cutoff:
+        snapshot = await refresh_snapshot(connection, client, snapshot)
+    versions = dict(connection.execute(text("SELECT number, updated_at FROM review_metadata")).tuples().all())
+    missing = prs_missing_metadata(snapshot, versions)
+    for number in missing[:BATCH_SIZE]:
+        save_metadata(connection, await pr_metadata(client, number))
+    if len(missing) > BATCH_SIZE:
+        return RETRY_SECONDS
+    # The open snapshot timestamp can also change when a retained revision refreshes it.
+    next_scan = snapshot.history_since + HISTORY_WINDOW + DISCOVERY_INTERVAL
+    return max(1, int((next_scan - datetime.now(UTC)).total_seconds()))
+
+
 def save_metadata(connection: Connection, record: PullMetadata) -> None:
     connection.execute(
         text(
@@ -318,17 +346,7 @@ async def sync_batch(connection: Connection) -> int:
                 timeout=GITHUB_TIMEOUT,
             ) as client,
         ):
-            now = datetime.now(UTC)
-            cutoff = now - HISTORY_WINDOW
-            if snapshot.history_since is None or not cutoff - DISCOVERY_INTERVAL < snapshot.history_since <= cutoff:
-                snapshot = await refresh_snapshot(connection, client, snapshot)
-            versions = dict(connection.execute(text("SELECT number, updated_at FROM review_metadata")).tuples().all())
-            missing = pending_metadata(snapshot, versions)
-            for number in missing[:BATCH_SIZE]:
-                save_metadata(connection, await pr_metadata(client, number))
-            if len(missing) <= BATCH_SIZE:
-                next_scan = snapshot.history_since + HISTORY_WINDOW + DISCOVERY_INTERVAL
-                delay = max(1, int((next_scan - datetime.now(UTC)).total_seconds()))
+            delay = await sync_prs(connection, client, snapshot)
     except httpx.HTTPStatusError as error:
         delay = retry_seconds(error)
         logger.warning("Review queue sync paused after GitHub HTTP %s", error.response.status_code)
@@ -396,13 +414,13 @@ def queue_payload(connection: Connection) -> QueuePayload:
     metadata = {row.number: row for row in records}
     pulls = {pr["number"]: pr for pr in snapshot.history_prs + snapshot.open_prs}
     versions = {number: row.updated_at for number, row in metadata.items()}
-    total = len(pending_metadata(snapshot, {}))
+    total = len(prs_missing_metadata(snapshot, {}))
     return {
         "refreshed_at": snapshot.refreshed_at,
         "prs": enriched_open_prs(snapshot.open_prs, metadata),
         "stats": reviewer_history(records, pulls),
         "sync": {
-            "completed": total - len(pending_metadata(snapshot, versions)),
+            "completed": total - len(prs_missing_metadata(snapshot, versions)),
             "total": total,
             "history_discovered": snapshot.history_since is not None,
         },
@@ -420,7 +438,7 @@ def create_api(services: AppletServices) -> FastAPI:
             return queue_payload(connection)
 
     @api.post("/sync")
-    def sync(x_review_queue: Annotated[str, Header()]) -> dict:
+    def sync(x_review_queue: Annotated[str, Header()]) -> SyncResult:
         if x_review_queue != "sync":
             raise HTTPException(400, "Invalid sync request")
         with engine.begin() as connection:
