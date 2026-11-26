@@ -285,6 +285,7 @@ def main() -> None:
     for field in ("census_receipt", "identity_receipt", "backend_receipt"):
         document[field] = ArtifactRef(**document[field])
     inputs = SnapshotPublicationInputs(**document)
+    configure_coreweave_s3()
     proof = run_snapshot_publication(
         inputs,
         check_only=args.mode == "check-only",
