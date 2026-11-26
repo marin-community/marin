@@ -217,6 +217,79 @@ def test_verified_copy_rejects_alias_for_source_as_destination(tmp_path):
     assert source_file.read_bytes() == b"weights"
 
 
+class _GcsRewriteDestination:
+    """A destination whose store-side copy lands the object in a new generation.
+
+    GCS server-side copies (staged object promoted to its final path) assign the
+    copied object a fresh ETag without changing its bytes.
+    """
+
+    protocol = "gcs"
+
+    def __init__(self, filesystem):
+        self.filesystem = filesystem
+        self.etags: dict[str, str] = {}
+        self.generations = 0
+
+    def __getattr__(self, name):
+        return getattr(self.filesystem, name)
+
+    def _new_etag(self, path):
+        self.generations += 1
+        self.etags[path] = f"GENERATION-{self.generations}="
+
+    def cp_file(self, source_path, destination_path, **kwargs):
+        self.filesystem.cp_file(source_path, destination_path, **kwargs)
+        self._new_etag(destination_path)
+
+    def info(self, path):
+        info = self.filesystem.info(path)
+        if info.get("type") != "directory":
+            self.etags.setdefault(path, None)
+            if self.etags[path] is None:
+                self._new_etag(path)
+            info["etag"] = self.etags[path]
+        return info
+
+    def find(self, path, *, detail):
+        found = self.filesystem.find(path, detail=detail)
+        if detail:
+            for name, info in found.items():
+                if info.get("type") != "directory":
+                    self.etags.setdefault(name, None)
+                    if self.etags[name] is None:
+                        self._new_etag(name)
+                    info["etag"] = self.etags[name]
+        return found
+
+
+def test_verified_copy_promotes_gcs_objects_whose_copy_changes_the_etag(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abcdefghij")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+    rewrite_destination = _GcsRewriteDestination(destination_filesystem)
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return rewrite_destination, destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    result = verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert result.copied_files == 1
+    assert (destination / "weights.bin").read_bytes() == b"abcdefghij"
+    manifest = json.loads((destination / COMPLETION_MANIFEST).read_text())
+    assert manifest["files"][0]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    staging = destination / f"{STAGING_SUFFIX}"
+    assert not staging.exists()
+
+
 @pytest.mark.parametrize("reverse", [False, True])
 def test_verified_copy_rejects_contained_prefixes(tmp_path, reverse):
     parent = tmp_path / "parent"

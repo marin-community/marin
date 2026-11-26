@@ -508,7 +508,9 @@ def _destination_matches_marker(
     if marker.staging_identity.startswith(ETAG_IDENTITY_PREFIX) and marker.staging_identity.rpartition("-")[2].isdigit():
         # UploadPartCopy can change a multipart ETag without changing the bytes.
         return _sha256(filesystem, path) == marker.sha256
-    return False
+    # A store-side copy, such as a GCS rewrite, changes the object's ETag without
+    # changing its bytes; fall back to content when identity matching fails.
+    return _sha256(filesystem, path) == marker.sha256
 
 
 def _sha256(filesystem: AbstractFileSystem, path: str) -> str:
