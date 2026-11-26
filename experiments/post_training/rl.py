@@ -36,7 +36,6 @@ from marin.execution.artifact import is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
-from marin.execution.step_runner import check_cache
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
@@ -1004,12 +1003,10 @@ def command(
                     preset_version = rl_gate.config_version(validated)
         model = preset.model
         if (
-            table.needs_completed_default_export
+            table.default_export_marker is not None
             and run.inputs.init is None
             and (run.inputs.resume is None or run.inputs.resume.model is None)
-            and isinstance(model, ArtifactHfModel)
-            and model.step.adopt_source is not None
-            and not check_cache(model.step.path())
+            and not (StoragePath(model.step.path()) / table.default_export_marker).exists()
         ):
             sft_hint = "Build it with --sft PRESET or use" if sft_presets is not None else "Use"
             raise click.BadParameter(

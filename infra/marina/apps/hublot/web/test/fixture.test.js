@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { flowGraph, cards } from '../src/contracts.js';
-import { createMeasurements, cumulativeRate, waitShare } from '../src/measurements.js';
+import { flowGraph, cards, GRAPH_SAMPLE_LIMIT, OVERVIEW_SAMPLE_LIMIT, SAMPLE_SLICE_MS } from '../src/contracts.js';
+import {
+  createMeasurements, createSampledSeries, createSummarySeries, cumulativeRate, sampleEnds, waitShare,
+} from '../src/measurements.js';
 import {
   canceledAttemptCount, cardsWithSamples, promptOccupancyAtLongestWait, recordedNodeSettings, timingDistribution,
 } from '../src/display.js';
@@ -49,6 +51,36 @@ test('rates use configured GPUs for the fleet view and preserve real zeros and g
   assert.deepEqual(series.generationPerGpu[0].data.map((point) => point.value), [1, 0, null, null, null]);
   assert.deepEqual(series.generation[0].data.map((point) => point.value), [8, 0, null, null, null]);
   assert.equal(createMeasurements(rows, window).series.generationPerGpu, undefined);
+
+  const summary = createSummarySeries(
+    [{ name: 'generation_tokens_total', reason: null, bucket_start: 60_000, value: 80 }],
+    { from: 0, to: 65_000 }, 30_000, 'generation', 8,
+  );
+  assert.deepEqual(summary.generation[0].data.map((point) => point.value), [null, null, 16]);
+  assert.deepEqual(summary.generationPerGpu[0].data.map((point) => point.value), [null, null, 2]);
+
+  const sampled = createSampledSeries(
+    [{ name: 'generation_tokens_total', reason: null, bucket_start: 60_000, value: 80 }],
+    [{ from: 60_000, to: 65_000 }, { from: 0, to: 30_000 }], 'generation', 8,
+  );
+  assert.equal(sampled.generation[0].kind, 'scatter');
+  assert.deepEqual(sampled.generationPerGpu[0].data.map(({ start, t, value }) => [start, t, value]),
+    [[0, 15_000, null], [60_000, 62_500, 2]]);
+});
+
+test('overview samples fill gaps across a long run after the first graph reads', () => {
+  const hour = 3_600_000;
+  const range = { from: hour, to: 14 * hour };
+  const wait = { start: 12 * hour, end: 13 * hour, kind: 'rollout_wait' };
+  const ends = sampleEnds(range, [wait]);
+  assert.deepEqual(ends.slice(0, 2), [range.to, wait.end]);
+  assert.ok(Math.min(...ends.slice(0, GRAPH_SAMPLE_LIMIT)) < range.from + hour);
+  assert.equal(ends.length, OVERVIEW_SAMPLE_LIMIT);
+  const chronological = [...ends].sort((a, b) => a - b);
+  for (let index = 1; index < chronological.length; index++) {
+    const gap = chronological[index] - chronological[index - 1];
+    assert.ok(gap >= SAMPLE_SLICE_MS && gap <= 2 * hour / 3);
+  }
 });
 
 test('inference timing weights engines by completed requests and leaves gaps on resets', () => {
@@ -219,16 +251,17 @@ test('training-only startup logs show the training dataset count', () => {
   assert.equal(driverSetup(rows.slice(0, 2), startup).trainingRows, null);
 });
 
-test('driver timers locate evals and the final checkpoint, and require one attempt', () => {
-  const row = (epoch_ms, seq, tail) => ({ epoch_ms, seq, key: '/user/job/0:0',
-    line: 'skyrl_train.trainer:_finalize_training:682 - ' + tail });
+test('driver timers locate periodic and final evals and require one attempt', () => {
+  const row = (epoch_ms, seq, tail, method = '_finalize_training') => ({ epoch_ms, seq, key: '/user/job/0:0',
+    line: 'skyrl_train.trainer:' + method + ':682 - ' + tail });
   const rows = [
-    row(110_000, 1, "Finished: 'eval', time cost: 9.00s"),
-    row(141_000, 2, "Finished: 'save_checkpoints', time cost: 31.00s"),
-    row(145_000, 3, 'Saved final checkpoint.'),
+    row(90_000, 1, "Finished: 'eval', time cost: 10.00s", '_run_step_end_callbacks'),
+    row(110_000, 2, "Finished: 'eval', time cost: 9.00s"),
+    row(141_000, 3, "Finished: 'save_checkpoints', time cost: 31.00s"),
+    row(145_000, 4, 'Saved final checkpoint.'),
   ];
   assert.deepEqual(driverPhases(rows).map(({ kind, start, end }) => [kind, start, end]), [
-    ['evaluation', 101_000, 110_000], ['checkpoint', 110_000, 145_000],
+    ['evaluation', 80_000, 90_000], ['evaluation', 101_000, 110_000], ['checkpoint', 110_000, 145_000],
   ]);
   assert.deepEqual(driverPhases([...rows, { ...rows[0], key: '/user/job/0:1' }]), []);
 });

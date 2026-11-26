@@ -63,8 +63,9 @@ def test_iris_follower_only_starts_ray_and_does_not_publish_endpoint(monkeypatch
     context = SimpleNamespace(registry=registry, resolver=object())
     coordinator = MagicMock()
     coordinator.vllm_primary_address.return_value = "127.0.0.1:12000"
-    coordinator.shutdown_requested.side_effect = (
-        [ConnectError(Code.UNAVAILABLE, "temporary outage"), True] if transient else [True]
+    stopping = iris_vllm._GangState.STOPPING
+    coordinator.state.side_effect = (
+        [ConnectError(Code.UNAVAILABLE, "temporary outage"), stopping] if transient else [stopping]
     )
     coordinator.follower_stopped.side_effect = (
         [ConnectError(Code.NOT_FOUND, "temporary resolver gap"), None] if transient else [None]

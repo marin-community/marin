@@ -230,12 +230,27 @@ def test_sft_exports_once_at_the_final_update(tmp_path):
     trainer.hooks.run_hooks(info, force=True)
     assert {path.name: (path / "policy.txt").read_text() for path in export_path.iterdir()} == {"step-2": "2"}
     assert (export_path / "step-2" / "chat_template.jinja").read_text() == spec.chat_template
+
+
+def test_sft_model_resolves_to_the_final_update_export(tmp_path):
+    spec = dataclasses.replace(_spec(ConvertedCheckpointModel(conversion=_fake_conversion())), num_train_steps=3)
+    model = SFTPreset("converted", spec, ResourceConfig.with_cpu()).model()
+    export_path = Path(model.step.path(str(tmp_path))) / DEFAULT_HF_CHECKPOINTS_PATH
     context = StepContext.for_run(str(tmp_path / "rl"), str(tmp_path), deps=model.deps())
     locator = model.resolve(context)
     assert (locator.uri, locator.tokenizer_uri) == (str(export_path / "step-2"), None)
-    epoch_spec = dataclasses.replace(spec, version="2026.07.18-dev", num_train_steps=None, num_train_epochs=1)
-    epoch_model = SFTPreset("converted-epochs", epoch_spec, resources).model()
-    assert epoch_model.relative_path is None
+
+
+def test_epoch_sft_model_leaves_the_export_path_to_runtime():
+    # RL substitutes the run's terminal export only when the model has no fixed export path (rl_gate.py).
+    spec = dataclasses.replace(
+        _spec(ConvertedCheckpointModel(conversion=_fake_conversion())),
+        version="2026.07.18-dev",
+        num_train_steps=None,
+        num_train_epochs=1,
+    )
+    model = SFTPreset("converted-epochs", spec, ResourceConfig.with_cpu()).model()
+    assert model.relative_path is None
 
 
 def test_sft_artifacts_with_the_same_version_do_not_share_tracker_history():

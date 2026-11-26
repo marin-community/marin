@@ -1,6 +1,6 @@
 # Train a DSpark draft from a completed SFT export
 
-`experiments.post_training.dspark_sft` trains a Qwen3-style DSpark draft on
+`experiments.post_training.drafting.dspark_sft` trains a Qwen3-style DSpark draft on
 fixed assistant replies. It runs the frozen Grug teacher on the rendered token
 IDs to collect hidden states. The trainer applies the teacher's final RMSNorm,
 gated norm and output projection to compute the distillation targets.
@@ -61,9 +61,9 @@ The recipe accepts `max_sequence_length` (default 32,768 tokens),
 durable regional output prefix and `RECIPE_URI` to the stored recipe.
 
 ```bash
-uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI"
-uv run python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage preflight
-uv run --extra cpu python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage prepare
+uv run python -m experiments.post_training.drafting.dspark_sft --config "$RECIPE_URI"
+uv run python -m experiments.post_training.drafting.dspark_sft --config "$RECIPE_URI" --stage preflight
+uv run --extra cpu python -m experiments.post_training.drafting.dspark_sft --config "$RECIPE_URI" --stage prepare
 ```
 
 The default command prints the artifact graph. CPU preflight checks the
@@ -80,43 +80,69 @@ tokenizer pinned by the Mochi SFT recipe. The default three-step config uses a
 small sample of Nemotron tool calls, Nemotron reasoning-off instruction turns,
 and AgentTrove conversations. The first user prompt assigns each conversation
 to one split. Tool definitions and observations reach the teacher as context,
-and the template supervises assistant replies and tool calls. The selected
-archive shards and split are versioned by the artifact runner.
+and the template supervises assistant replies and tool calls. The mix samples
+shards, row groups, and rows with a fixed seed. Each split interleaves sources
+in proportion to their sampled conversation counts, using up to 256 tool-call,
+256 instruction, and 128 AgentTrove conversations per selected shard.
 [Mochi export record](https://github.com/marin-community/marin/issues/8089#issuecomment-6841382920)
 
 ```bash
-export MARIN_PREFIX=s3://marin-us-east-02a/marin
-uv run --extra cpu --extra dedup python -m experiments.post_training.dspark_sft \
+export MARIN_PREFIX=s3://marin-us-east-08a/marin
+uv run --extra cpu --extra dedup python -m experiments.post_training.drafting.dspark_sft \
   --preset mochi-agentic --stage prepare
-uv run --extra cpu python -m experiments.post_training.dspark_sft \
+uv run --extra cpu python -m experiments.post_training.drafting.dspark_sft \
   --preset mochi-agentic --stage preflight
 ```
 
-## Submit the Mochi Iris job
+## Prefill Mochi teacher activations
 
 Submit two four-GB200 tasks. The distributed BF16 teacher runs with TP1 and
 DP8/EP8. Each activation file lands on the leader, moves to the S3 scratch
 bucket selected by `marin_temp_bucket`, and is removed locally after upload.
-The bucket expires the files after three days. The teacher shuts down before
-Speculators uses one of the leader's GPUs and reads activations as it batches
-examples. The RunAI loader caps each process's CPU buffer at 8 GiB. The trainer
-stages only the teacher's embedding and final gated head shards.
+The bucket expires the files after three days. A completed cache can be reused
+for 48 hours from the start of extraction. Cache identity includes the teacher,
+prepared dataset, sample mode, tap layers, sequence limit, and extraction
+runtime. You can go directly to draft fitting when a reusable cache exists.
+Preflight reports the teacher GPU count as `prefill_gpus` and the fitting GPU
+count as `gpus`.
+
+Teacher prefill requests generate one token to return each activation file.
+The cache progress log reports completed conversations and prompt tokens per
+second, plus the mean time spent uploading an activation file.
 
 Export `CW_KEY_ID` and `CW_KEY_SECRET` before submission so Iris can pass
 them to the job as secrets.
 
 ```bash
 uv run iris --cluster=marin job run --no-wait \
-  --job-name mochi-dspark --target-cluster cw-us-east-08a --region us-east-08a \
+  --job-name mochi-dspark-prefill --target-cluster cw-us-east-08a --region us-east-08a \
   --enable-extra-resources --replicas 2 --gpu GB200x4 \
   --cpu 48 --memory 768GB --disk 128GB --timeout 7200 \
   --sync-package marin-core --extra cpu -e TMPDIR /cache -e MARIN_PREFIX "$MARIN_PREFIX" \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
-  -- python -m experiments.post_training.dspark_sft --preset mochi-agentic --stage train
+  -- python -m experiments.post_training.drafting.dspark_sft --preset mochi-agentic --stage prefill
+```
+
+## Fit a Mochi draft from cached activations
+
+After prefill completes, submit the fitting ArtifactStep on one GPU. Use
+matching preset, data, and sample selection for both stages. Speculators reads
+the activations as it batches examples. The RunAI loader caps each process's
+CPU buffer at 8 GiB. The trainer stages only the teacher's embedding and final
+gated head shards.
+
+```bash
+uv run iris --cluster=marin job run --no-wait \
+  --job-name mochi-dspark-fit --target-cluster cw-us-east-08a --region us-east-08a \
+  --enable-extra-resources --replicas 1 --gpu GB200x1 \
+  --cpu 12 --memory 160GB --disk 128GB --timeout 7200 \
+  --sync-package marin-core --extra cpu -e TMPDIR /cache -e MARIN_PREFIX "$MARIN_PREFIX" \
+  --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
+  -- python -m experiments.post_training.drafting.dspark_sft --preset mochi-agentic --stage train
 ```
 
 The default smoke trains three updates on 12 training and up to four validation
-conversations. Add `--steps 4000` to train for one packed epoch, capped at
+conversations. Add `--steps 4000` to both stages to train for one packed epoch, capped at
 4,000 optimizer steps, over the complete frozen mix. The epoch uses an
 8,192-token sequence and up to 1,024 anchors. Use `--data` to provide a
 different completed regional mix. Teacher activations take 48 KiB per input
@@ -125,13 +151,19 @@ the trainer environment, frozen weights, and the draft checkpoint.
 
 Use `--draft-size two-layer` to reproduce the 766M Mochi variant with two
 Qwen3 layers and a 6,144-wide FFN. It uses the same teacher, data, vocabulary,
-and training budget as the default and publishes a separate artifact.
+and training budget as the default and publishes a separate checkpoint.
+Both sizes share one prepared Arrow artifact and the same teacher activation
+cache. The trainer builds its decoder config from the chosen size.
+Mochi's one-rack RL presets use the qualified two-layer export from the interleaved
+50M mix. [Mochi RL launch defaults](../references/rl-launching.md)
 
 ## Scale the Mochi mix to about 50M input tokens
 
-`mochi-agentic-50m` samples more rows from the same three Datakit archives
-with the same prompt-group split. It trains the 521M draft for one packed
-epoch capped at 15,000 steps. Prepare on a CPU in `us-central2`, where the
+`mochi-agentic-50m` samples up to 2,560 tool-call, 1,536 instruction, and 384
+AgentTrove conversations per selected shard. These quotas are in rows, so the
+token share also depends on conversation length. The mix uses the same
+prompt-group holdout and interleaves both splits. It trains the 521M draft
+for one packed epoch capped at 15,000 steps. Prepare on a CPU in `us-central2`, where the
 original Nemotron shards live. The CPU job writes the sampled mix and
 prepared Arrow data to the training region.
 
@@ -141,11 +173,11 @@ uv run iris --cluster=marin job run --no-wait \
   --enable-extra-resources --cpu 2 --memory 12GB --disk 48GB --timeout 3600 \
   --sync-package marin-core --extra cpu --extra dedup -e MARIN_PREFIX "$MARIN_PREFIX" \
   --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET \
-  -- python -m experiments.post_training.dspark_sft --preset mochi-agentic-50m --stage prepare
+  -- python -m experiments.post_training.drafting.dspark_sft --preset mochi-agentic-50m --stage prepare
 ```
 
-After preparation succeeds, use the Mochi Iris command above with
-`--preset mochi-agentic-50m`, a fresh job name, and `--timeout 14400`. The
+After preparation succeeds, use the prefill and fitting commands with
+`--preset mochi-agentic-50m`, fresh job names, and `--timeout 14400`. The
 50M mix and its holdout use about 2.4 TiB of temporary object storage for
 teacher activations.
 
@@ -154,6 +186,11 @@ teacher activations.
 Serving Mochi drafts requires ShortConv state to survive rejected proposals.
 The promoted wheel needs the upstream fix for that verification path.
 [ShortConv verifier fix](https://github.com/marin-community/vllm/pull/140)
+
+The Mochi fit stage publishes a SkyRL-ready checkpoint under `MARIN_PREFIX`
+and prints a JSON object with its `source_uri` and `source_identity`. Pass that
+object as `generator.speculative_decoding.model`. Use the verifier that supplied
+the teacher activations and its policy tokenizer. [RL launch options](rl-experiments.md)
 
 ## Submit the Snowball Iris job
 
@@ -168,7 +205,7 @@ uv run iris --cluster=marin job run --no-wait \
   --enable-extra-resources --replicas 1 --gpu "${GPU_TYPE}x${GPU_COUNT}" \
   --cpu 32 --memory 256GB --disk "$DSPARK_DISK" --sync-package marin-core --extra cpu \
   -e MARIN_PREFIX "$MARIN_PREFIX" -e TMPDIR /cache \
-  -- python -m experiments.post_training.dspark_sft --config "$RECIPE_URI" --stage train
+  -- python -m experiments.post_training.drafting.dspark_sft --config "$RECIPE_URI" --stage train
 ```
 
 The worker runs the artifact graph and provisions the trainer from pinned

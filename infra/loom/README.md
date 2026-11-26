@@ -184,8 +184,8 @@ their federation mapping.
 The PR review workflow launches on open, ready-for-review, and reopen events.
 Reopen a PR to retry its latest head if a push invalidates an in-progress review.
 The `pr-holistic-review` mapping authorizes the whole-change review profile,
-which runs the `claude` agent with the `fable` model and also launches on
-pushes; its session skips small deltas since the last reviewed head.
+which also launches on pushes. Each PR has a stable channel, and each
+new head has a distinct run key.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only

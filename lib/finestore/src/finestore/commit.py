@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -57,6 +58,10 @@ _COMMIT_CONFLICTS = telemetry.counter("finestore_commit_conflicts", unit="{confl
 
 class CommitConflict(RuntimeError):
     """A manifest delta can no longer be applied to the current snapshot."""
+
+
+# Raises when the delta must not be published on top of the given manifest.
+Precondition = Callable[[Manifest], None]
 
 
 @dataclass(frozen=True)
@@ -118,6 +123,9 @@ class CommitDelta:
     epoch_update: int | None = None
     cache_history_floor: int = 0
     attribution: Attribution | None = None
+    # Checked with the other guards against every manifest a publication attempt is based on,
+    # so it holds for the manifest that HEAD finally names.
+    precondition: Precondition | None = None
 
 
 def _empty_manifest() -> Manifest:
@@ -255,6 +263,8 @@ def check_preconditions(base: Manifest, delta: CommitDelta) -> None:
             or current.row_commit_upper_bound > expected_content.row_commit_upper_bound
         ):
             raise CommitConflict(f"table {name!r} changed since the expected snapshot")
+    if delta.precondition is not None:
+        delta.precondition(base)
 
 
 def _published_shards(shards: tuple[Shard, ...], sequence: int) -> tuple[Shard, ...]:
