@@ -28,9 +28,23 @@ from taskcompendium.backend_requirements import BackendFit, BackendSourceMap, Ba
 from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateGroupMember, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.backend_capabilities import production_matrix
-from experiments.post_training.task_curation.release_stages import guard, package_preview, release_check, strict_audit
+from experiments.post_training.task_curation.release_stages import (
+    guard,
+    package_inputs,
+    package_preview,
+    release_check,
+    strict_audit,
+)
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory
+from experiments.post_training.task_curation.tests.admission_fixtures import actor_census_input
+from infra.marina.apps.rl_data_catalog.prepare_preview import oracle_inventory_payload
 from infra.marina.apps.rl_data_catalog.server.curriculum import TOTAL_METRICS
+from infra.marina.apps.rl_data_catalog.server.source_counts import (
+    ACTORLESS_POLICY_SHA256,
+    NO_ORACLE_POLICY_SHA256,
+    SourceCounts,
+)
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
 SOURCE_A = "Marin:fixture-a"
@@ -401,43 +415,115 @@ def test_strict_audit_input_validation(tmp_path):
         )
 
 
+def _census_row(source_id: str, *, measured: bool = True, status: str = "Available") -> dict:
+    if not measured:
+        return {
+            "source_id": source_id,
+            "declaration": {"status": status, "intended_use": "train", "actor_census_input": None},
+            "inventory": None,
+            "inventory_reference": None,
+            "oracle_tasks": 0,
+            "static_blocked_tasks": None,
+            "static_reason_counts": {},
+            "static_audit": None,
+        }
+    binding = actor_census_input(f"fixture/{source_id}", "a" * 40, "1", 3)
+    inventory = SampleInventory(
+        source_id=source_id,
+        dataset_id=binding.dataset_id,
+        dataset_revision=binding.dataset_revision,
+        converter_version=binding.converter_version,
+        input_artifact="s3://fixture/population",
+        task_specs_sha256=binding.task_specs_sha256,
+        scanned_task_specs_sha256=binding.task_specs_sha256,
+        retained_tasks=3,
+        sample_seed=0,
+        sample_size=3,
+        panel_path="s3://fixture/panel.parquet",
+        panel_sha256="b" * 64,
+        evidence_url="s3://fixture/inventory.json",
+        oracle_tasks=0,
+        execution_qualification="not_assessed",
+    )
+    return {
+        "source_id": source_id,
+        "declaration": {
+            "status": status,
+            "intended_use": "train",
+            "actor_census_input": binding.model_dump(mode="json"),
+        },
+        "inventory": inventory.model_dump(mode="json"),
+        "inventory_reference": {"uri": f"s3://fixture/{source_id}/summary.json", "sha256": "c" * 64},
+        "oracle_tasks": 0,
+        "static_blocked_tasks": 1,
+        "static_reason_counts": {"fixture": 1},
+        "static_audit": {"uri": f"s3://fixture/{source_id}/static.json", "sha256": "d" * 64},
+    }
+
+
+def _census_proof(rows: list[dict]) -> dict:
+    return {"sources": len(rows), "results": rows}
+
+
+CITATIONS = (
+    {"uri": "memory://rulings/no-oracle.md", "sha256": NO_ORACLE_POLICY_SHA256},
+    {"uri": "memory://rulings/actorless.md", "sha256": ACTORLESS_POLICY_SHA256},
+)
+PRIOR_COUNTS = {"sources": [{"policy": CITATIONS[0], "actorless_policy": CITATIONS[1]}]}
+
+FIXTURE_CENSUS = [
+    _census_row("Marin:first"),
+    _census_row("Marin:second"),
+    _census_row("Marin:dropped", measured=False, status="Excluded"),
+]
+
+
 def _package_inputs(tmp_path: Path, revision: str, **overrides) -> package_preview.PackagePreviewInputs:
     defaults: dict[str, Any] = {
         "release_id": RELEASE_ID,
         "source_revision": revision,
         "output_root": str(tmp_path / "release" / "package"),
-        "oracle_inventory": _seal_json(tmp_path, "oracle-inventory.json", {"schema_version": 2, "rows": []}),
-        "source_counts": _seal_json(tmp_path, "source-counts.json", {"sources": []}),
+        "census": _seal_json(tmp_path, "census-receipt.json", _census_proof(FIXTURE_CENSUS)),
+        "prior_source_counts": _seal_json(tmp_path, "prior-source-counts.json", PRIOR_COUNTS),
+        "expected_source_count": len(FIXTURE_CENSUS),
+        "derived_root": "memory://release/package-inputs",
     }
     defaults.update(overrides)
     return package_preview.PackagePreviewInputs(**defaults)
 
 
-def _seal_object_store_json(name: str, document: Any) -> ArtifactRef:
-    raw = json.dumps(document).encode()
-    uri = f"memory://package-inputs/{name}"
-    StoragePath(uri).write_bytes(raw, auto_mkdir=True)
-    return ArtifactRef(uri=uri, sha256=hashlib.sha256(raw).hexdigest())
+def test_package_inputs_derive_from_the_census_and_fail_closed():
+    derived = package_inputs.derive_package_inputs(_census_proof(FIXTURE_CENSUS), len(FIXTURE_CENSUS), CITATIONS)
+    assert (derived.census_sources, derived.counted_sources) == (3, 2)
+    assert derived.unmeasured_sources == ("Marin:dropped",)
+    observations = oracle_inventory_payload(derived.oracle_inventory)
+    counts = SourceCounts.model_validate_json(derived.source_counts)
+    assert [row["source_id"] for row in observations["sources"]] == ["Marin:first", "Marin:second"]
+    assert [row.source_id for row in counts.sources] == ["Marin:first", "Marin:second"]
+    assert all(row.static_blocked_tasks == 1 for row in counts.sources)
+    assert {(row.policy.uri, row.actorless_policy.uri) for row in counts.sources} == {
+        (CITATIONS[0]["uri"], CITATIONS[1]["uri"])
+    }
+    # A plan source missing from the census fails closed.
+    with pytest.raises(ValueError, match="the census covers 3 sources"):
+        package_inputs.derive_package_inputs(_census_proof(FIXTURE_CENSUS), len(FIXTURE_CENSUS) + 1, CITATIONS)
+    # An Available source must have a measured population.
+    unmeasured_available = [*FIXTURE_CENSUS[:2], _census_row("Marin:dropped", measured=False)]
+    with pytest.raises(ValueError, match="Available source Marin:dropped has no measured census population"):
+        package_inputs.derive_package_inputs(_census_proof(unmeasured_available), 3, CITATIONS)
 
 
-def test_package_preview_write_stages_package_and_seals_receipt(tmp_path, monkeypatch):
+def test_package_preview_write_derives_seals_and_stages_its_inputs(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     revision = _init_repo(repo)
-    # Plans pin the inputs at object-store URIs; prepare_preview reads local files.
-    oracle_document = {"schema_version": 2, "rows": []}
-    counts_document = {"sources": []}
-    inputs = _package_inputs(
-        tmp_path,
-        revision,
-        oracle_inventory=_seal_object_store_json("oracle-inventory.json", oracle_document),
-        source_counts=_seal_object_store_json("source-counts.json", counts_document),
-    )
+    inputs = _package_inputs(tmp_path, revision)
+    derived = package_inputs.derive_package_inputs(_census_proof(FIXTURE_CENSUS), len(FIXTURE_CENSUS), CITATIONS)
     staged: list[tuple[Path, Path, Path | None, Path | None]] = []
 
     def fake_prepare(checkout, output, oracle_inventory=None, source_counts=None):
         staged.append((checkout, Path(output), oracle_inventory, source_counts))
-        assert json.loads(oracle_inventory.read_bytes()) == oracle_document
-        assert json.loads(source_counts.read_bytes()) == counts_document
+        assert oracle_inventory.read_bytes() == derived.oracle_inventory
+        assert source_counts.read_bytes() == derived.source_counts
         dist = Path(output) / "dist"
         dist.mkdir(parents=True)
         (dist / "bundled-model-provenance.json").write_text(
@@ -453,8 +539,10 @@ def test_package_preview_write_stages_package_and_seals_receipt(tmp_path, monkey
     assert receipt["kind"] == package_preview.receipt_kind(RELEASE_ID)
     assert receipt["package"]["uri"] == str(planned)
     assert receipt["packaged"]["source_revision"] == revision
-    assert receipt["oracle_inventory"]["uri"] == inputs.oracle_inventory.uri
-    assert receipt["source_counts"]["uri"] == inputs.source_counts.uri
+    assert (receipt["census_sources"], receipt["counted_sources"]) == (3, 2)
+    for name, raw in (("oracle_inventory", derived.oracle_inventory), ("source_counts", derived.source_counts)):
+        sealed = StoragePath(receipt[name]["uri"]).read_bytes()
+        assert sealed == raw and receipt[name]["sha256"] == hashlib.sha256(raw).hexdigest()
     assert proof["receipt"]["sha256"] == hashlib.sha256(Path(proof["receipt"]["uri"]).read_bytes()).hexdigest()
     assert _last_alert_kind(tmp_path) == package_preview.alerts.KIND_FINISH
 
@@ -504,8 +592,8 @@ def test_package_preview_refusals(tmp_path, monkeypatch):
             feeds=_feeds(tmp_path),
         )
 
-    # The refs bind the originally sealed bytes; rewriting the document breaks the digest.
-    (tmp_path / "oracle-inventory.json").write_text(json.dumps({"schema_version": 3, "rows": []}))
+    # The census ref binds the originally sealed bytes; rewriting the document breaks the digest.
+    (tmp_path / "census-receipt.json").write_text(json.dumps(_census_proof(FIXTURE_CENSUS[:1])))
     with pytest.raises(ValueError, match="sealed reference digest mismatch"):
         package_preview.run_package_preview(
             dataclasses.replace(inputs, source_revision=repo2_revision),
@@ -533,7 +621,7 @@ def _preflight_receipt_document(revision: str, production_version: int = 41) -> 
 
 
 def _package_receipt(
-    tmp_path: Path, revision: str = REVISION, count: int = 2
+    tmp_path: Path, revision: str = REVISION, count: int = 2, census_sources: int = 2
 ) -> tuple[ArtifactRef, ArtifactRef, ArtifactRef, Path]:
     oracle_ref = _seal_json(tmp_path, "oracle-inventory.json", {"schema_version": 2, "rows": []})
     counts_ref = _seal_json(tmp_path, "source-counts.json", {"sources": []})
@@ -544,6 +632,8 @@ def _package_receipt(
         "release_id": RELEASE_ID,
         "source_revision": revision,
         "package": {"uri": str(package_dir)},
+        "census_sources": census_sources,
+        "counted_sources": 2,
         "packaged": {
             "source_revision": revision,
             "source_counts": {"sources": count},
@@ -834,3 +924,18 @@ def test_package_preview_refuses_the_in_region_bundle(tmp_path, monkeypatch):
         package_preview.run_package_preview(
             _package_inputs(tmp_path, revision), dry_run=True, repo_root=repo, feeds=_feeds(tmp_path)
         )
+
+
+def test_release_check_binds_the_package_to_the_census_and_its_counted_sources(tmp_path):
+    for name, overrides, message in (
+        ("census", {"census_sources": 3}, "derives from a census of 3 sources, expected 2"),
+        ("counted", {"count": 1}, "carries 1 count rows, the census measured 2"),
+    ):
+        root = tmp_path / name
+        root.mkdir()
+        package_ref, oracle_ref, counts_ref, _ = _package_receipt(root, **overrides)
+        inputs = _release_check_inputs(
+            root, "preflight", package=package_ref, oracle_inventory=oracle_ref, source_counts=counts_ref
+        )
+        with pytest.raises(ValueError, match=message):
+            release_check.run_release_check(inputs, dry_run=True, repo_root=root, feeds=_feeds(root))

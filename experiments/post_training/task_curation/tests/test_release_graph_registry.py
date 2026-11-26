@@ -418,9 +418,15 @@ def test_release_check_phases_bind_their_receipts(tmp_path):
         documents=documents,
     )
     package_receipt = {"uri": "s3://bucket/package.json", "sha256": "c" * 64}
-    _write_dep(built.stages["package_preview"], prefix, "package_preview", plan.release_id, package_receipt)
+    derived = {
+        "oracle_inventory": {"uri": "s3://bucket/package-inputs/oracle-inventory.json", "sha256": "2" * 64},
+        "source_counts": {"uri": "s3://bucket/package-inputs/source-counts.json", "sha256": "3" * 64},
+    }
+    _write_dep(built.stages["package_preview"], prefix, "package_preview", plan.release_id, package_receipt, **derived)
     preflight_inputs = _materialized_inputs(built.stages["release_check_preflight"], prefix)
     assert preflight_inputs["package"] == package_receipt
+    # The preflight checks the census-derived inputs the package sealed, not plan pins.
+    assert {name: preflight_inputs[name] for name in derived} == derived
     assert preflight_inputs["phase"] == "preflight"
     assert "published_revision" not in preflight_inputs
     assert preflight_inputs["applet_id"] == plan.service.applet_id

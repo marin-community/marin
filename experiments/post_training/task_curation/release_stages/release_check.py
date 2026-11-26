@@ -134,14 +134,20 @@ def verify_package_receipt(inputs: ReleaseCheckInputs) -> dict:
     for name, ref in (("oracle_inventory", inputs.oracle_inventory), ("source_counts", inputs.source_counts)):
         if ref is not None and document.get(name) != {"uri": ref.uri, "sha256": ref.sha256}:
             raise ValueError(f"the package receipt's {name} ref differs from the typed input")
-    counts = (packaged.get("source_counts") or {}).get("sources")
-    if counts != inputs.expected_source_count:
-        raise ValueError(f"the package carries {counts} sources, expected {inputs.expected_source_count}")
-    inventory = (packaged.get("oracle_inventory") or {}).get("sources")
-    if inventory is not None and inventory != inputs.expected_source_count:
+    # The package derives its counts from the release census; sources without a
+    # measured population carry no count row, so the census covers the plan's sources.
+    if document.get("census_sources") != inputs.expected_source_count:
         raise ValueError(
-            f"the packaged oracle inventory covers {inventory} sources, expected {inputs.expected_source_count}"
+            f"the package derives from a census of {document.get('census_sources')} sources,"
+            f" expected {inputs.expected_source_count}"
         )
+    counted = document.get("counted_sources")
+    counts = (packaged.get("source_counts") or {}).get("sources")
+    if counts != counted:
+        raise ValueError(f"the package carries {counts} count rows, the census measured {counted} sources")
+    inventory = (packaged.get("oracle_inventory") or {}).get("sources")
+    if inventory is not None and inventory != counted:
+        raise ValueError(f"the packaged oracle inventory covers {inventory} sources, the census measured {counted}")
     if not StoragePath(document["package"]["uri"]).exists():
         raise ValueError(f"the staged package directory is missing: {document['package']['uri']}")
     return document

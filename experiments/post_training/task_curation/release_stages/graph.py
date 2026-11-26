@@ -370,6 +370,10 @@ def plan_ref(release_root: str, relative: str, sha256: str | None = None) -> dic
     return {"uri": uri, "sha256": sha256} if sha256 else {"uri": uri, "sha256": ""}
 
 
+# The derived package inputs (oracle inventory, source counts) seal under this stage dir.
+PACKAGE_INPUTS_STAGE_DIR = "package-inputs"
+
+
 def stage_output_root(plan: ReleasePlan, stage: str) -> str:
     """The deterministic output prefix of one stage's artifacts."""
     return f"{plan.release_root}/{stage}"
@@ -1021,7 +1025,7 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "strict_audit_after", "strict_audit", strict_audit_stage.__name__, ("marina_release",), False
     ),
     "package_preview": StageSpec(
-        "package_preview", "package_preview", package_preview_stage.__name__, ("strict_audit_before",), False
+        "package_preview", "package_preview", package_preview_stage.__name__, ("strict_audit_before", "census"), False
     ),
     "release_check_preflight": StageSpec(
         "release_check_preflight", "release_check", release_check_stage.__name__, ("package_preview",), False
@@ -2011,24 +2015,29 @@ def _strict_audit_step(
     )
 
 
-def _package_preview_step(plan: ReleasePlan, audit: ArtifactStep) -> ArtifactStep[StageReceipt]:
+def _package_preview_step(plan: ReleasePlan, audit: ArtifactStep, census: ArtifactStep) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["package_preview"]
-    identity = _identity_fields(plan, "release_id", "source_revision", "pins", "package_output_root")
+    identity = _identity_fields(
+        plan, "release_id", "source_revision", "pins", "package_output_root", "expected_source_count"
+    )
 
-    def build_inputs(_ctx: StepContext) -> dict:
+    def build_inputs(ctx: StepContext) -> dict:
         return {
             "release_id": plan.release_id,
             "source_revision": plan.source_revision,
             "output_root": plan.package_output_root,
-            "oracle_inventory": _ref_dict(plan.pins.oracle_inventory),
-            "source_counts": _ref_dict(plan.pins.source_counts),
+            "census": _resolved_receipt(ctx, census),
+            # Only the ruling citations carry forward from the prior counts.
+            "prior_source_counts": _ref_dict(plan.pins.source_counts),
+            "expected_source_count": plan.expected_source_count,
+            "derived_root": stage_output_root(plan, PACKAGE_INPUTS_STAGE_DIR),
         }
 
     return _stage_step(
         plan,
         "package_preview",
         spec,
-        (audit,),
+        (audit, census),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=package_preview_stage.PackagePreviewInputs,
@@ -2059,9 +2068,10 @@ def _release_check_step(
             "production_version": plan.service.production_version,
         }
         if phase == "preflight":
+            package_proof = _resolved_proof(ctx, package)
             inputs["package"] = _resolved_receipt(ctx, package)
-            inputs["oracle_inventory"] = _ref_dict(plan.pins.oracle_inventory)
-            inputs["source_counts"] = _ref_dict(plan.pins.source_counts)
+            inputs["oracle_inventory"] = package_proof["oracle_inventory"]
+            inputs["source_counts"] = package_proof["source_counts"]
         else:
             inputs["preflight_receipt"] = _resolved_receipt(ctx, preflight)
             if phase == "hosted":
@@ -2255,7 +2265,7 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     curriculum_load = _curriculum_load_step(plan, compose, text_scans)
 
     audit_before = _strict_audit_step(plan, declarations, identity_backend, "before", catalog_load, curriculum_load)
-    package = _package_preview_step(plan, audit_before)
+    package = _package_preview_step(plan, audit_before, census)
     check_preflight = _release_check_step(plan, "preflight", package, None, None, None)
     check_hosted = _release_check_step(plan, "hosted", None, check_preflight, None, None)
     marina = _marina_release_step(plan, package, check_preflight, check_hosted)
