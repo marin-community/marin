@@ -10,21 +10,32 @@ guards and invariants, then verdict and effect. Replicate counts identify aggreg
 results. Attempts without report details remain descriptive; unknown measurements are explicit.
 A run-only link (`#run=<run_id>`) selects its latest attempt. Add
 `&attempt=<attempt_id>` to select a particular attempt. W&B links use the recorded
-run URL; the Grafana link uses the recorded native execution window. The Model column can filter by
-the recorded model. The issue number links to GitHub, and the opt-out is shown in the attempt details.
-Linked EvalDash evaluations open the recorded run IDs. The detail view includes per-step family, AAII-category and difficulty means and scored/attempted answer counts.
+run URL. The Grafana link uses the recorded native execution window. Filter by
+model or choose a preset to see its control history. Attempt details include the
+branch, commit, base version, explicit settings, composed configuration, and
+an issue link when recorded. The detail view includes per-step family, AAII
+category and difficulty means and scored and attempted answer counts.
 The attempt details link to a grader report when one was published. It shows
 training and evaluation success rates and verifier coverage by task and subset,
 with failure counts and grading latency by subset.
+
+Preset progress plots completed main controls in time order. The comparable
+line joins consecutive points only when their stored task digests and
+evaluation protocols agree. The global line connects every control score.
+Enable **Show branch runs** to plot branch scores. Select a point to open its
+exact native attempt.
 
 Malformed records are skipped individually and named in a visible note.
 
 ## Data contract
 
 The app's release migration creates its `rl_runs` table in the application schema.
-Each native `(run_id, attempt_id)` identifies one updatable JSON record. Repeat
-publication refreshes that attempt's record; null model, issue, EvalDash links, gate and gate-result values
-preserve their stored values. Other attempts remain separate.
+Each `(run_id, attempt_id)` identifies one updatable JSON record. The index groups native
+attempts of the same model, preset, user and composed comparison configuration. Repeat
+publication refreshes that attempt's record. Null provenance fields, issue, gate, gate result and
+grader report fields preserve their stored values.
+The app uses format 1. A terminal record takes precedence over a running update
+for the same attempt.
 
 Native failures and failed training or evaluation invariants set `status: failed` and name `failed_facts`.
 Training grader errors are reported in rollout metrics; they do not fail an ungated run's status.
@@ -37,11 +48,12 @@ Lineage duration sums those native jobs' stored windows. Missing lineage records
 measurements unknown; a missing window leaves elapsed time unknown with a timing note.
 
 `POST /api/runs` validates each submitted record with the shared
-`finestore.rl.rl_progress.AttemptSummary`, upserts its native key and returns the stored
-record. `GET /api/runs` returns stored records and lists malformed historical rows
-in `skipped_records`. See the
+`finestore.rl.rl_progress.AttemptSummary`, upserts its index and attempt key and returns the stored
+record. `GET /api/runs` returns stored summaries with `has_grader_report` and lists malformed historical rows
+in `skipped_records`. The detail view reads the redacted configuration from
+`GET /api/configuration` with the run and attempt IDs. See the
 [Snowball publication rules](../../../../docs/recipes/rl-experiments.md#dashboard-publication)
-for record semantics, retries and publishing pinned controls.
+for record semantics and publication retries.
 
 ## Validate and release
 
@@ -58,12 +70,17 @@ Check cold-loaded run and attempt hash links, refresh after repeat publication,
 and the detail dialog's scrolling body, close control, Escape,
 and backdrop dismissal. Stop the local stack with Ctrl-C.
 
-The `Marin - Release RL Progress` workflow runs manually from main, with inspection as its default. The `rl-progress` CI job runs the packaged API and `marina journey rl_progress` browser owner.
+The `Marin - Release RL Progress` workflow runs when dispatched on main and defaults to
+inspection. The `rl-progress` CI job runs
+the packaged API and `marina journey rl_progress` browser owner.
 
-Deploy a Marina runtime containing `finestore.rl.rl_progress` before releasing the app package.
+Release the shared runtime and history app together. The applet identity
+is declared in `applet.toml`. EvalDash uses its deployed URL for attempt
+backlinks. Republishing an indexed attempt records its native ID for
+backlinks from older evaluations.
 
 For production, follow [Marina's release procedure](../../README.md). Inspect the
-current private revision, then release with its exact `--base-version`. Merging
-source does not publish it. Verify the deployed assets, selected revision and all
+current private revision, then release with its exact `--base-version`. Verify
+the deployed assets, selected revision and all
 stored records after release. Do not change access mode or rewrite historical
 results as part of a frontend update.

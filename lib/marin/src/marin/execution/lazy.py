@@ -195,8 +195,8 @@ class ArtifactStep(Generic[T]):
     Mutually exclusive with ``adopt_source``."""
     adopt_source: str | None = None
     """Adopt pre-existing data at this location as a managed ``name@version`` (set via
-    :meth:`ArtifactStep.adopt`). Consumers resolve to ``adopt_source``; running it writes a provenance
-    record at the canonical address. Mutually exclusive with ``override_path``."""
+    :meth:`ArtifactStep.adopt`). Consumers resolve to ``adopt_source``. Writable adoption registers
+    provenance at the canonical address. Mutually exclusive with ``override_path``."""
     adopt_config: dict | None = None
     """For an adopted artifact, the synthetic ``config`` to record (e.g. a tokenized cache's
     tokenizer/format), so consumers read metadata the same way as for a produced artifact."""
@@ -206,6 +206,8 @@ class ArtifactStep(Generic[T]):
     ``None`` to opt out."""
     output_path_prefix: str | None = None
     """Storage root for this produced artifact. Dependencies retain their own roots."""
+    read_only: bool = False
+    """Resolve an adopted artifact at its source without registering it."""
 
     def __post_init__(self) -> None:
         validate_path_segment("name", self.name)
@@ -261,16 +263,18 @@ class ArtifactStep(Generic[T]):
         *,
         kind: type[T] = Artifact,  # pyrefly: ignore[bad-function-definition]
         config: dict | None = None,
+        read_only: bool = False,
     ) -> "ArtifactStep[T]":
-        """Register pre-existing data at ``source`` as a managed ``name@version`` handle.
+        """Reference pre-existing data at ``source`` as a ``name@version`` handle.
 
         The data is neither moved nor recomputed: a consumer that depends on the returned handle
-        resolves to ``source``. Running it writes a provenance record at the canonical
+        resolves to ``source``. By default, execution writes a provenance record at the canonical
         ``{prefix}/{name}/{version}`` (with ``source`` recorded). ``kind`` selects the handle's
         ``artifact_type`` for consumer routing (:class:`Artifact` by default), so a raw checkpoint
         path becomes a typed handle: ``ArtifactStep.adopt(name, version, "gs://…", kind=LevanterCheckpoint)``.
         ``config`` records synthetic metadata (e.g. a tokenized cache's tokenizer/format) so
-        consumers read it the same way as for a produced artifact.
+        consumers read it the same way as for a produced artifact. ``read_only`` references an
+        existing source without writing registration or execution metadata.
         """
         return cls(
             name=name,
@@ -280,6 +284,7 @@ class ArtifactStep(Generic[T]):
             build_config=lambda _ctx: None,
             adopt_source=source,
             adopt_config=config,
+            read_only=read_only,
         )
 
 
@@ -308,17 +313,18 @@ def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
 
 
 def _output_path_spec(handle: "ArtifactStep") -> str:
-    """The pin if it is set, otherwise the artifact's name and version."""
-    return handle.override_path or f"{handle.name}/{handle.version}"
+    """The artifact's existing address or its scheduled name and version."""
+    source = handle.adopt_source if handle.read_only else handle.override_path
+    return source or f"{handle.name}/{handle.version}"
 
 
 def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepSpec] | None = None) -> StepSpec:
     """Lower a handle graph into a ``StepSpec`` graph, recording ``provenance`` on every step.
 
-    Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin); the
+    Each handle becomes a step addressed by its explicit ``{name}/{version}`` or existing source. The
     fingerprint, version, artifact type, and dep identities travel in ``hash_attrs`` so the runner
     applies the drift check before serving a cached output, and the step fn writes a full
-    :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it only
+    :class:`ArtifactRecord` on success for writable, unpinned steps. Pure transform of *structure* — it only
     inspects ``handle.run`` to preserve a :class:`RemoteCallable` wrapper in the lowered spec.
 
     ``memo`` caches the spec of each handle by identity, so a handle several consumers share is
@@ -416,8 +422,9 @@ def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepS
         deps=dep_specs,
         hash_attrs=hash_attrs,
         fingerprint_payload=payload,
-        fn=step_fn,
-        writes_record=True,
+        fn=None if handle.read_only else step_fn,
+        writes_record=not handle.read_only,
+        read_only=handle.read_only,
     )
     memo[id(handle)] = spec
     return spec

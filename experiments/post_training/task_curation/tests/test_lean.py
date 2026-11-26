@@ -37,6 +37,7 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
     is_human_proof_row,
 )
 from experiments.post_training.task_curation.datasets.lean.numina import proof_key as numina_proof_key
+from experiments.post_training.task_curation.driver import _selected_sources
 from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
@@ -241,7 +242,9 @@ def test_a_malformed_verdict_is_a_grader_failure(verdict):
 
 
 def test_the_proofnet_eval_is_left_out_of_default_campaigns():
-    assert proofs.sources()[0].declaration.type == "eval"
+    proofnet = proofs.sources()[0].name
+    assert proofnet not in _selected_sources(())
+    assert proofnet in _selected_sources((proofnet,))
 
 
 def test_root_copies_only_a_regular_file_the_candidate_left_and_never_fails_as_the_grader(tmp_path):

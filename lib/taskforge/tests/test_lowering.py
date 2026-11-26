@@ -89,6 +89,52 @@ def test_grader_image_precheck_respects_available_host_factories(image: str | No
         assert lowered.verifier_machine.backend == (Backend.SHELLSIM if image is None else Backend.GVISOR)
 
 
+SOURCE_IMAGE = "docker.io/swerebench/sweb.eval.x86_64.astropy_1776_astropy-12907@sha256:" + "b" * 64
+
+
+SOURCE_GRADER_IMAGE = "ghcr.io/marin-community/source-grader@sha256:" + "d" * 64
+OTHER_IMAGE = "registry.example.com/other@sha256:" + "c" * 64
+
+
+@pytest.mark.parametrize(
+    "source_images,task_image,grader_image,refused",
+    [
+        ((), SOURCE_IMAGE, SOURCE_IMAGE, "grader image"),
+        ((SOURCE_IMAGE,), SOURCE_IMAGE, SOURCE_IMAGE, None),
+        ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), SOURCE_IMAGE, SOURCE_GRADER_IMAGE, None),
+        ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), SOURCE_IMAGE, OTHER_IMAGE, "grader image"),
+        ((SOURCE_IMAGE, SOURCE_GRADER_IMAGE), OTHER_IMAGE, SOURCE_GRADER_IMAGE, "task image"),
+        # The pinned image is admitted for a source task only when its source used it.
+        ((SOURCE_IMAGE,), SOURCE_IMAGE, GRADER_BASE_IMAGE, "grader image"),
+        ((SOURCE_IMAGE, GRADER_BASE_IMAGE), SOURCE_IMAGE, GRADER_BASE_IMAGE, None),
+    ],
+)
+def test_source_images_admit_only_the_source_tasks_own_images(
+    source_images: tuple[str, ...], task_image: str, grader_image: str, refused: str | None
+) -> None:
+    task = arithmetic_task(
+        environment_requirements=requirements(image=task_image, workdir="/testbed"),
+        grader=ScriptGrader(
+            argv=("sh", "-c", "echo 1"),
+            reward=StdoutReward(),
+            placement=GraderMachine(environment=requirements(image=grader_image, workdir="/testbed")),
+            answer_path=None,
+            timeout=1,
+        ),
+    )
+    settings = LoweringSettings(
+        GRADING_MACHINE, GRADING_MACHINE, rollout_limits(), source_images=frozenset(source_images)
+    )
+    factories = {backend.value: AvailableFactory(backend) for backend in (Backend.GVISOR, Backend.SHELLSIM)}
+    if refused is not None:
+        with pytest.raises(InvalidTaskSpec, match=f"{refused} must be"):
+            lower_with_settings(task, settings, factories)
+        return
+    lowered = lower_with_settings(task, settings, factories)
+    assert lowered.task_machine is not None and lowered.task_machine.backend == Backend.GVISOR
+    assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == Backend.GVISOR
+
+
 @pytest.mark.parametrize("directory", [None, "/custom"])
 def test_missing_workdir_resolves_before_machine_creation(directory: str | None) -> None:
     declared = EnvironmentRequirements(

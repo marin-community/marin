@@ -116,6 +116,11 @@ Confirm it actually reviewed the branch and inspect its findings and failures.
 Resolve every finding, checking the matching `infra/lint` rule, and fix failed
 checks. Put fixes in a new commit after validating the affected behavior.
 
+For a design finding, revisit the caller or maintenance cost the reviewer
+identified. If the design stays because a real constraint justifies that
+cost, explain the constraint briefly in the PR description so the next
+reviewer can evaluate the decision.
+
 Do not recursively rerun `--review` after small, targeted touch-ups made in
 response to its findings. Validate behavioral edits with the normal mechanical
 checks and relevant tests. For a formatter-only mechanical edit, rerun formatting

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -8,122 +9,32 @@ import sys
 
 import pytest
 
-
 REPOSITORY_ROOT = Path(__file__).parents[3]
 BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "cloud" / "iris" / "bootstrap_runtime.sh"
+RUNTIME_FILE = "runtime.env"
+FIXTURES = Path(__file__).with_name("bootstrap_fixtures")
 
 
-def _write_module(site_packages: Path, relative_path: str, source: str = "") -> None:
-    path = site_packages / relative_path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(source)
-
-
-def _fake_frozen_runtime(
+def fake_frozen_runtime(
     tmp_path: Path, *, managed_python_pin_is_unresolvable: bool = False
 ) -> tuple[Path, dict[str, str]]:
     environment = tmp_path / "runtime"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True)
-    site_packages = Path(
-        subprocess.run(
-            [environment / "bin" / "python", "-c", "import site; print(site.getsitepackages()[0])"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    )
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
 
-    for package in (
-        "shellbox/backends/daytona",
-        "shellbox/backends/shellsim",
-        "rolloutengine",
-        "megatron/bridge",
-        "nvidia/cu13/lib",
-        "quack",
-        "skyrl_train/models",
-        "transformer_engine/common",
-        "vllm/model_executor",
-    ):
-        (site_packages / package).mkdir(parents=True, exist_ok=True)
-    for package in (
-        "shellbox",
-        "shellbox/backends",
-        "megatron",
-        "shellbox/backends/daytona",
-        "shellbox/backends/shellsim",
-        "rolloutengine",
-        "megatron/bridge",
-        "quack",
-        "skyrl_train",
-        "skyrl_train/models",
-        "transformer_engine",
-        "transformer_engine/common",
-        "vllm/model_executor",
-    ):
-        _write_module(site_packages, f"{package}/__init__.py")
-
-    _write_module(site_packages, "quack/activation.py")
-    _write_module(site_packages, "flash_attn/__init__.py")
-    _write_module(site_packages, "flash_attn/cute/__init__.py")
-    _write_module(site_packages, "flash_attn/cute/interface.py", "flash_attn_varlen_func = object()\n")
-    _write_module(site_packages, "flash_attn_interface.py", "flash_attn_varlen_func = object()\n")
-    _write_module(site_packages, "memray.py")
-    _write_module(site_packages, "megatron/bridge/__init__.py", "class AutoBridge: pass\n")
-    _write_module(site_packages, "torch.py", "__version__ = '2.13.0+cu132'\n")
-    _write_module(site_packages, "vllm/__init__.py", "__version__ = 'test'\n")
-    _write_module(site_packages, "vllm/_C_stable_libtorch.py")
-    _write_module(site_packages, "vllm/cumem_allocator.py")
-    _write_module(
-        site_packages,
-        "transformer_engine/common/__init__.py",
-        "import os\nfrom pathlib import Path\nassert (Path(os.environ['NVRTC_HOME']) / 'lib').is_dir()\n",
-    )
-    _write_module(
-        site_packages,
-        "vllm/model_executor/models.py",
-        "class ModelRegistry:\n"
-        "    @staticmethod\n"
-        "    def get_supported_archs():\n"
-        "        return {'GrugMoeForCausalLM'}\n",
-    )
-    _write_module(
-        site_packages,
-        "skyrl_train/models/grug_moe.py",
-        "GRUG_MOE_ARCHITECTURE = 'GrugMoeForCausalLM'\n",
-    )
-    _write_module(site_packages, "shellbox/backends/daytona/machine.py", "class DaytonaMachineFactory: pass\n")
-    _write_module(site_packages, "shellbox/backends/shellsim/machine.py", "class ShellSimMachineFactory: pass\n")
-    _write_module(site_packages, "rolloutengine/engine.py", "class RolloutEngine: pass\n")
+    (site_packages / "nvidia/cu13/lib").mkdir(parents=True)
+    shutil.copytree(FIXTURES / "site-packages", site_packages, dirs_exist_ok=True)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     (fake_bin / "python3.12").symlink_to(sys.executable)
     uv = fake_bin / "uv"
-    if managed_python_pin_is_unresolvable:
-        uv.write_text(
-            "#!/bin/sh\n"
-            "selected_python=\n"
-            "downloads_disabled=false\n"
-            'while [ "$#" -gt 0 ]; do\n'
-            '  case "$1" in\n'
-            "    --python) selected_python=$2; shift 2 ;;\n"
-            "    --no-python-downloads) downloads_disabled=true; shift ;;\n"
-            "    *) shift ;;\n"
-            "  esac\n"
-            "done\n"
-            'if [ "$selected_python" = "$EXPECTED_SYSTEM_PYTHON" ] && "$downloads_disabled"; then\n'
-            "  exit 0\n"
-            "fi\n"
-            "echo 'error: No interpreter found for Python 3.12.13' >&2\n"
-            "exit 2\n"
-        )
-    else:
-        uv.write_text("#!/bin/sh\nexit 0\n")
+    shutil.copyfile(FIXTURES / "uv.sh", uv)
     uv.chmod(0o755)
-    return environment, os.environ | {
-        "EXPECTED_SYSTEM_PYTHON": str(fake_bin / "python3.12"),
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-    }
+    process_environment = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    if managed_python_pin_is_unresolvable:
+        process_environment["EXPECTED_SYSTEM_PYTHON"] = str(fake_bin / "python3.12")
+    return environment, process_environment
 
 
 def _run_bootstrap(
@@ -135,7 +46,7 @@ def _run_bootstrap(
             str(BOOTSTRAP_SCRIPT),
             str(REPOSITORY_ROOT),
             str(environment),
-            str(environment / "runtime.sh"),
+            str(environment / RUNTIME_FILE),
             profile,
             "production",
         ],
@@ -158,10 +69,13 @@ def _run_bootstrap(
 def test_policy_bootstrap_rejects_runtime_without_flash_attention_extension(
     tmp_path: Path, architecture: str, missing_module: str, import_name: str
 ) -> None:
-    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    environment, process_environment = fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
     (site_packages / missing_module).unlink()
-    _write_module(site_packages, "sitecustomize.py", f"import platform\nplatform.machine = lambda: {architecture!r}\n")
+    for shim in ("fixture-architecture.pth", "_fixture_architecture.py"):
+        shutil.copyfile(FIXTURES / shim, site_packages / shim)
+    process_environment["FIXTURE_ARCHITECTURE"] = architecture
+    process_environment["PYTHONPATH"] = str(FIXTURES / "site-packages")
 
     result = _run_bootstrap(environment, process_environment, "megatron")
 
@@ -170,13 +84,12 @@ def test_policy_bootstrap_rejects_runtime_without_flash_attention_extension(
 
 
 def test_export_bootstrap_does_not_require_rollout_or_telemetry_packages(tmp_path: Path) -> None:
-    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    environment, process_environment = fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
-    _write_module(site_packages, "ray.py")
-    _write_module(site_packages, "skyrl_train/checkpoint_exporter.py", "class CheckpointExporter: pass\n")
     (site_packages / "shellbox/backends/daytona/machine.py").unlink()
     (site_packages / "memray.py").unlink()
     (site_packages / "rolloutengine/engine.py").unlink()
+    shutil.rmtree(site_packages / "vllm")
 
     result = _run_bootstrap(environment, process_environment, "megatron-export")
 
@@ -185,18 +98,25 @@ def test_export_bootstrap_does_not_require_rollout_or_telemetry_packages(tmp_pat
 
 @pytest.mark.parametrize("publisher_installed", [False, True])
 def test_hub_publish_bootstrap_checks_cpu_publisher_without_cuda(tmp_path: Path, publisher_installed: bool) -> None:
-    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    environment, process_environment = fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
     shutil.rmtree(site_packages / "nvidia")
     shutil.rmtree(site_packages / "flash_attn")
     (site_packages / "flash_attn_interface.py").unlink()
-    if publisher_installed:
-        _write_module(site_packages, "skyrl_train/hf_publisher.py", "def publish_verified_hf_export(*args): pass\n")
+    if not publisher_installed:
+        (site_packages / "skyrl_train/hf_publisher.py").unlink()
 
-    result = _run_bootstrap(environment, process_environment, "hub-publish")
+    result = subprocess.run(
+        ["bash", BOOTSTRAP_SCRIPT.with_name("setup_task_runtime.sh"), "hub-publish", "printenv", "PATH"],
+        env=process_environment | {"IRIS_VENV": str(environment)},
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
 
     if publisher_installed:
         assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == f"{environment / 'bin'}{os.pathsep}{process_environment['PATH']}"
         assert not (environment / "lib/libcudart.so").exists()
     else:
         assert result.returncode != 0
@@ -204,7 +124,7 @@ def test_hub_publish_bootstrap_checks_cpu_publisher_without_cuda(tmp_path: Path,
 
 
 def test_bootstrap_uses_system_python_when_managed_pin_is_unresolvable(tmp_path: Path) -> None:
-    environment, process_environment = _fake_frozen_runtime(tmp_path, managed_python_pin_is_unresolvable=True)
+    environment, process_environment = fake_frozen_runtime(tmp_path, managed_python_pin_is_unresolvable=True)
 
     result = _run_bootstrap(environment, process_environment, "megatron")
 
@@ -212,14 +132,20 @@ def test_bootstrap_uses_system_python_when_managed_pin_is_unresolvable(tmp_path:
 
 
 def test_bootstrap_activation_exposes_runtime_commands(tmp_path: Path) -> None:
-    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    environment, process_environment = fake_frozen_runtime(tmp_path)
     ninja = environment / "bin" / "ninja"
-    ninja.write_text("#!/bin/sh\nexit 0\n")
-    ninja.chmod(0o755)
+    ninja.touch(mode=0o755)
+    for variable in ("LD_LIBRARY_PATH", "LIBRARY_PATH"):
+        process_environment[variable] = str(tmp_path / f"existing {variable} path")
 
     result = _run_bootstrap(environment, process_environment, "megatron")
     activation = subprocess.run(
-        ["bash", "-c", 'source "$1"; command -v ninja', "bash", environment / "runtime.sh"],
+        [
+            "bash",
+            FIXTURES / "activation.sh",
+            BOOTSTRAP_SCRIPT.with_name("load_runtime_environment.sh"),
+            environment / RUNTIME_FILE,
+        ],
         env=process_environment,
         capture_output=True,
         text=True,
@@ -227,11 +153,34 @@ def test_bootstrap_activation_exposes_runtime_commands(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert activation.stdout.strip() == str(ninja)
+    binary, libraries, linker, path = activation.stdout.splitlines()
+    assert binary == str(ninja)
+    assert path == f"{environment / 'bin'}{os.pathsep}{process_environment['PATH']}"
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
+    assert libraries.split(os.pathsep) == [
+        str(site_packages / "nvidia/cu13/lib"),
+        process_environment["LD_LIBRARY_PATH"],
+    ]
+    assert linker.split(os.pathsep) == [str(environment / "lib"), process_environment["LIBRARY_PATH"]]
+
+    runtime_file = environment / RUNTIME_FILE
+    complete = runtime_file.read_bytes()
+    runtime_file.write_bytes(complete[:-1])
+    failed = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
+    assert failed.returncode != 0
+    assert "Unterminated SkyRL runtime assignment" in failed.stderr
+    runtime_file.write_bytes(complete.split(b"\0", 1)[0] + b"\0")
+    partial = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
+    assert partial.returncode != 0
+    assert "Incomplete SkyRL runtime assignments" in partial.stderr
+    runtime_file.write_bytes(b"replace:EUID=1\0" + complete)
+    rejected = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
+    assert rejected.returncode != 0
+    assert "EUID: readonly variable" in rejected.stderr
 
 
 def test_bootstrap_exposes_cuda_linker_compatibility_paths(tmp_path: Path) -> None:
-    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    environment, process_environment = fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
     nvrtc = site_packages / "nvidia" / "cu13" / "lib" / "libnvrtc.so.13"
     nvrtc.touch()
@@ -256,7 +205,7 @@ def test_bootstrap_exposes_cuda_linker_compatibility_paths(tmp_path: Path) -> No
 def test_bootstrap_rejects_incomplete_agentic_debug_runtime(
     tmp_path: Path, missing_module: str, expected_error: str
 ) -> None:
-    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    environment, process_environment = fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
     missing_path = site_packages / missing_module
     if missing_path.is_dir():
@@ -271,26 +220,14 @@ def test_bootstrap_rejects_incomplete_agentic_debug_runtime(
 
 
 def test_parallel_bootstrap_waits_for_every_check_and_reports_failure(tmp_path):
-    environment, process_environment = _fake_frozen_runtime(tmp_path)
+    environment, process_environment = fake_frozen_runtime(tmp_path)
     site_packages = next((environment / "lib").glob("python*/site-packages"))
+    for module in ("flash_attn_interface.py", "flash_attn/cute/interface.py"):
+        shutil.copyfile(FIXTURES / "flash_attention_failure.py", site_packages / module)
+    shutil.copyfile(FIXTURES / "megatron_failure.py", site_packages / "transformer_engine/common/__init__.py")
     barrier = tmp_path / "imports-ready"
     os.mkfifo(barrier)
-    transformer_engine = site_packages / "transformer_engine/common/__init__.py"
-    transformer_engine.write_text(
-        transformer_engine.read_text()
-        + "import select\n"
-        + f"with open(os.open({str(barrier)!r}, os.O_RDONLY | os.O_NONBLOCK), 'rb', buffering=0) as gate:\n"
-        + "    assert select.select([gate], [], [], 8)[0], 'concurrent import never started'\n"
-        + "    assert gate.read(1) == b'r'\n"
-        + "raise RuntimeError('megatron import failed')\n"
-    )
-    for module in ("flash_attn_interface.py", "flash_attn/cute/interface.py"):
-        _write_module(
-            site_packages,
-            module,
-            f"with open({str(barrier)!r}, 'wb', buffering=0) as gate:\n    gate.write(b'r')\n"
-            + "raise RuntimeError('flash-attention import failed')\n",
-        )
+    process_environment["FIXTURE_IMPORT_BARRIER"] = str(barrier)
     descriptor = os.open(barrier, os.O_RDWR | os.O_NONBLOCK)
     try:
         result = _run_bootstrap(environment, process_environment, "megatron")
@@ -299,3 +236,39 @@ def test_parallel_bootstrap_waits_for_every_check_and_reports_failure(tmp_path):
     assert result.returncode != 0, result.stderr
     assert "flash-attention import failed" in result.stderr
     assert "megatron import failed" in result.stderr
+
+
+def test_node_entrypoint_checks_transport_before_starting_controller(tmp_path):
+    app = tmp_path / "app"
+    skyrl = app / "vendor/skyrl"
+    launcher = skyrl / "cloud/iris"
+    launcher.mkdir(parents=True)
+    for name in ("node_entrypoint.sh", "load_runtime_environment.sh", "bootstrap_runtime.sh",
+                 "runtime_checks.py", "setup_task_runtime.sh"):
+        (launcher / name).symlink_to(BOOTSTRAP_SCRIPT.with_name(name))
+    for relative in (".uv-version", ".python-version", "marinskyrl/environment_contract.py"):
+        target = skyrl / relative
+        target.parent.mkdir(exist_ok=True)
+        target.symlink_to(REPOSITORY_ROOT / relative)
+    stub = Path(__file__).with_name("node_command_fixture.py")
+    (launcher / "task_runtime.py").symlink_to(stub)
+    probe = app / "experiments/post_training/nccl_transport_probe.py"
+    probe.parent.mkdir(parents=True)
+    probe.symlink_to(stub)
+    runtime, environment = fake_frozen_runtime(tmp_path)
+    environment["IRIS_VENV"] = str(runtime)
+    subprocess.run(["bash", launcher / "setup_task_runtime.sh", "megatron"], env=environment, check=True, timeout=30)
+
+    command = ["bash", launcher / "node_entrypoint.sh", "launch.yaml", "s3://test/interconnect-gate", "--pynccl-init"]
+    result = subprocess.run(command, env=environment, check=True, capture_output=True, text=True, timeout=15)
+    transport, controller = map(json.loads, result.stdout.splitlines())
+    for record in (transport, controller):
+        assert record["cwd"] == record["skyrl_home"] == str(skyrl)
+        assert record["max_jobs"] == "8" and record["vllm_use_v1"] == "1"
+        assert record["python_path"].split(os.pathsep)[:3] == [str(app), str(skyrl), str(skyrl / "skyrl-train")]
+    assert transport["argv"] == ["--mode", "gate", "--gate-coverage", "all-gpus", "--gate-report-prefix",
+                                 "s3://test/interconnect-gate", "--pynccl-init"]
+    assert controller["argv"] == ["--config", "launch.yaml", "--environment-prepared"]
+    failed = subprocess.run(command, env=environment | {"EXIT_TRANSPORT_FIXTURE": "1"},
+                            capture_output=True, text=True, timeout=15)
+    assert failed.returncode == 19 and len(failed.stdout.splitlines()) == 1

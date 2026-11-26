@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from collections.abc import Mapping
 
+from finestore.rl.run_records import AttemptRecord, write_attempt
 from skyrl_gym.task_factories import EpisodeFactory
 
 from ray.util.placement_group import placement_group, PlacementGroup
@@ -392,10 +393,9 @@ class BasePPOExp:
                 max_completion_length=self.cfg.generator.sampling_params.max_generate_length,
             )
         prompts_dataset = self.task_dataset(self.cfg.data.train_data)
-        # make sure the dataset is large enough to train on
-        assert len(prompts_dataset) >= self.cfg.trainer.train_batch_size, (
-            f"dataset should be atleast as large as `train_batch_size` {self.cfg.trainer.train_batch_size}, got size {len(prompts_dataset)}"
-        )
+        batch_size = self.cfg.trainer.train_batch_size
+        if len(prompts_dataset) < batch_size:
+            raise ValueError(f"Training has {len(prompts_dataset)} prompts but needs {batch_size} for one batch")
         return prompts_dataset
 
     def task_dataset(self, data_files):
@@ -678,24 +678,38 @@ class BasePPOExp:
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
         started = time.monotonic()
-        with self.get_tracker() as tracker:
-            trainer = None
-            try:
-                trainer = self._setup_trainer(tracker)
-                asyncio.run(trainer.train())
-            finally:
-                # Release GPU actors before a Ray retry can start another attempt.
-                if trainer is not None:
-                    try:
-                        asyncio.run(trainer.shutdown())
-                    except Exception as e:
-                        logger.warning(f"Error shutting down trainer: {e}")
-
-        elapsed = time.monotonic() - started
-        logger.info(
-            "Training run completed: elapsed_excluding_eval_seconds={:.3f}",
-            elapsed - trainer.evaluation_wall_time,
-        )
+        trainer = None
+        try:
+            with self.get_tracker() as tracker:
+                try:
+                    trainer = self._setup_trainer(tracker)
+                    asyncio.run(trainer.train())
+                finally:
+                    if trainer is not None:
+                        try:
+                            asyncio.run(trainer.shutdown())
+                        except Exception as error:
+                            logger.warning("Error shutting down trainer: {}", error)
+        finally:
+            if trainer is not None:
+                elapsed = time.monotonic() - started - trainer.evaluation_wall_time
+                logger.info("Trainer time excluding evaluation: {:.3f} seconds", elapsed)
+                runtime = self.cfg.get("runtime") or {}
+                try:
+                    write_attempt(
+                        str(self.cfg.trainer.export_path),
+                        AttemptRecord(
+                            run_id=runtime["run_id"],
+                            attempt_id=runtime["attempt_id"],
+                            elapsed_excluding_eval_seconds=elapsed,
+                        ),
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "Could not store trainer time for attempt {} ({})",
+                        runtime.get("attempt_id", "unknown"),
+                        type(error).__name__,
+                    )
 
 
 @ray.remote(num_cpus=1, max_retries=0)
