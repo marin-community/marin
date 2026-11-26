@@ -63,15 +63,19 @@ class ChatAssistantMessage(BaseModel):
     tool_calls: list[ChatToolCall] | None = None
 
 
+def _normalize_text_blocks(message: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(message.get("content"), list):
+        return {**message, "content": message_text(message["content"])}
+    return message
+
+
 def assistant_message(message: dict[str, Any]) -> TextMessage | AssistantToolCalls:
     """Validate chat wire data and return protocol-independent submission evidence.
 
     Invalid JSON raises at this ingestion boundary. JSON arguments of the wrong
     shape remain evidence; execution and submission validation reject them.
     """
-    if isinstance(message.get("content"), list):
-        message = {**message, "content": message_text(message["content"])}
-    validated = ChatAssistantMessage.model_validate(message)
+    validated = ChatAssistantMessage.model_validate(_normalize_text_blocks(message))
     if validated.tool_calls:
         return AssistantToolCalls(
             calls=tuple(
@@ -90,8 +94,7 @@ def conversation_event(message: dict[str, Any]) -> ConversationEvent:
     role = message.get("role")
     if role == "assistant":
         return assistant_message(message)
-    if isinstance(message.get("content"), list):
-        message = {**message, "content": message_text(message["content"])}
+    message = _normalize_text_blocks(message)
     if role == "tool":
         return ToolResult(call_id=message["tool_call_id"], content=message["content"])
     return TextMessage.model_validate(message)
