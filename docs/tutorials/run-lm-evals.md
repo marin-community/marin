@@ -94,7 +94,7 @@ evaluations:
 ```
 
 Submit both with `--evaluation-config evaluations.yaml`. Add `--evals bounded-math`
-to select one entry from that document. Repeat `--harbor-config` to add Harbor jobs.
+to select one entry from that document.
 Ordinary benchmark defaults are available through `--evals math500,gsm8k` without
 a selection file. The repository's curated suite choices and run overrides live in
 `experiments/evaluation/configs/evaluations.yaml`.
@@ -138,9 +138,6 @@ the `econevals-o3` suite, which judges against o3's released answers. The `econe
 `econevals-sampled-o3` suites keep six questions from each category, about a tenth of the items,
 for development runs. The judge often prefers whichever answer it reads first, and such split items
 score 0.5, so treat score differences under about 0.1 as noise.
-
-Harbor files retain Harbor's `JobConfig` schema and `--harbor-config` option.
-Harbor execution is independent of curated TaskSpec evaluation.
 
 ### Curated agent benchmarks
 
@@ -218,11 +215,7 @@ historical evaluator.
 
 ## Daytona and verifier credentials
 
-Configure Daytona and verifier credentials through the secret references declared
-by the selected Harbor policy. `--judge-model` and `--judge-accelerator` configure
-Harbor's hosted verifier. See [Harbor integration](../harbor-integration.md).
-
-Curated agent benchmarks on Daytona use the same eval-org key as Harbor:
+Curated agent benchmarks on Daytona use the eval-org key:
 `DAYTONA_EVAL_API_KEY` from the launch environment, then the `DAYTONA_EVAL_API_KEY`
 secret in the `hai-gcp-models` GCP project. The evaluation worker receives it as its
 `DAYTONA_API_KEY` secret and may reach `app.daytona.io`. When the task machines are on

@@ -419,8 +419,6 @@ class EvaluationOverrides(BaseModel):
     wall-clock budget with the model's latency, which grows with load."""
     seed: int | None = None
     judge: JudgeIdentity | None = None
-    max_attempts: int | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
-    """Worker passes, including the initial pass. Unset uses the worker default."""
     judge_endpoint: str | None = None
     judge_api_key: tuple[str, ...] = ()
     task_machine: TaskMachineSettings | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -496,7 +494,6 @@ class CuratedSettings(BaseModel):
     seed: int | None = None
     judge: JudgeIdentity | None = None
     concurrency: int = Field(default=DEFAULT_EVALUATION_CONCURRENCY, gt=0)
-    max_attempts: int | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
     task_machine: TaskMachineSettings | None = Field(default=None, exclude_if=lambda value: value is None)
     """Required by agent episodes; part of the scoring identity."""
     task_evidence: TaskEvidenceSetting = TaskEvidence.EMBEDDED

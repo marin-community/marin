@@ -6,7 +6,6 @@
 import json
 import os
 import subprocess
-import tempfile
 from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
@@ -48,7 +47,7 @@ from experiments.evaluation.benchmarks import micro210
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.cli import cli
 from experiments.evaluation.curated import load_evaluations
-from experiments.evaluation.evals import DAYTONA_SECRET_ENV, HarborDefinition, resolve_evaluations
+from experiments.evaluation.evals import DAYTONA_SECRET_ENV, resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
 from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
@@ -92,114 +91,6 @@ def _command(tmp_path: Path) -> list[str]:
         "repeatable-evals",
         "--no-wait",
     ]
-
-
-@pytest.fixture
-def harbor_task_workspace():
-    with tempfile.TemporaryDirectory(prefix=".harbor-launch-", dir=Path(__file__).parents[2]) as directory:
-        root = Path(directory)
-        task = root / "dataset" / "task"
-        (task / "environment").mkdir(parents=True)
-        (task / "tests").mkdir()
-        (task / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
-        (task / "instruction.md").write_text("Complete the task.\n")
-        (task / "task.toml").write_text(
-            '[task]\nname = "test/launch"\n[environment]\n'
-            f'docker_image = "example.test/task@sha256:{"a" * 64}"\n'
-            'allow_internet = false\nworkdir = "/workspace"\n'
-        )
-        yield root
-
-
-def test_launch_preflights_prepared_task_with_hosted_judge(
-    tmp_path, submitted_batches, monkeypatch, harbor_task_workspace
-):
-    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
-    for key in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "TOGETHER_API_KEY", "CUSTOM_API_KEY"):
-        monkeypatch.delenv(key, raising=False)
-
-    root = harbor_task_workspace
-    task_config = root / "dataset" / "task" / "task.toml"
-    task_config.write_text(
-        task_config.read_text() + '[environment.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
-        'OPENAI_BASE_URL = "${OPENAI_BASE_URL}"\nTAU2_USER_MODEL = "${TAU2_USER_MODEL}"\n'
-        '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\n'
-        'OPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n'
-        'TAU2_NL_ASSERTIONS_MODEL = "${TAU2_NL_ASSERTIONS_MODEL}"\n'
-    )
-    policy = root / "policy.json"
-    policy.write_text(
-        json.dumps(
-            {
-                "environment": {"type": "local", "kwargs": {"judge_access": "runtime"}},
-                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
-                "datasets": [{"path": "dataset"}],
-            }
-        )
-    )
-    command = [
-        "launch",
-        "--model",
-        "qwen3-8b",
-        "--harbor-config",
-        str(policy),
-        "--platform",
-        "gpu",
-        "--accelerator",
-        "H100x1",
-        "--federated_cluster",
-        "cw-rno2a",
-        "--records-prefix",
-        str(tmp_path),
-        "--no-wait",
-    ]
-    runner = CliRunner()
-    rejected = runner.invoke(cli, command)
-    assert rejected.exit_code != 0
-    assert submitted_batches == []
-
-    accepted = runner.invoke(cli, [*command, "--judge-model", "qwen3-0.6b", "--judge-accelerator", "H100x1"])
-
-    assert accepted.exit_code == 0, accepted.output
-    batch = submitted_batches[0]
-    config = batch.evaluations[0].executor.config
-    assert config.benchmark.n_benchmark == 1
-    assert config.verifier_env_keys == ()
-    assert json.loads(config.stable_policy_json)["environment"]["kwargs"] == {"judge_access": "runtime"}
-    assert batch.judge.api_model == "qwen3-0.6b"
-
-
-def test_judge_deadline_change_preserves_launch_identity_and_saved_results(tmp_path, harbor_task_workspace):
-    policy = harbor_task_workspace / "policy.json"
-    policy.write_text(
-        json.dumps(
-            {
-                "environment": {"type": "local"},
-                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
-                "datasets": [{"path": "dataset"}],
-            }
-        )
-    )
-    judge = models()["qwen3-0.6b"]
-    spec = replace(
-        _pipeline_spec(tmp_path),
-        evals=(HarborDefinition(policy.stem, policy),),
-        judge_model=judge,
-        judge_accelerator="H100x1",
-        cache_key=None,
-        run_id="judge-resume",
-    )
-    before = prepare_evaluation_batch(spec)
-    identity = replace(before.evaluations[0].identity, output_dir=str(tmp_path / "saved-results"))
-    record_path = Path(_record(before, identity, RunStatus.INFRA_FAILED, "interrupted", {}, {}, {}))
-    record = json.loads(record_path.read_text())
-    record["judge"]["model"]["config"].pop("evaluation_request_timeout", None)
-    record_path.write_text(json.dumps(record))
-
-    after = prepare_evaluation_batch(replace(spec, judge_model=replace(judge, evaluation_request_timeout=21600)))
-
-    assert after.evaluations[0].identity.run_id == identity.run_id
-    assert after.evaluations[0].identity.output_dir == identity.output_dir
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
@@ -258,26 +149,11 @@ def test_waiting_launch_exits_nonzero_unless_every_evaluation_succeeds(tmp_path,
         assert "peer rejected the handoff" in result.output
 
 
-def test_launch_selects_across_documents_and_adds_harbor_configs(
-    tmp_path, submitted_batches, monkeypatch, harbor_task_workspace
-):
+def test_launch_selects_across_documents(tmp_path, submitted_batches, monkeypatch):
     ifeval = tmp_path / "ifeval.yaml"
     ifeval.write_text("evaluations:\n  ifeval:\n    benchmark: ifeval\n")
     math = tmp_path / "math.yaml"
     math.write_text("evaluations:\n  bounded-math:\n    benchmark: math500\n  omitted:\n    benchmark: gsm8k\n")
-    policies = []
-    for name in ("first-policy", "second-policy"):
-        policy = harbor_task_workspace / f"{name}.json"
-        policy.write_text(
-            json.dumps(
-                {
-                    "environment": {"type": "local"},
-                    "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
-                    "datasets": [{"path": "dataset"}],
-                }
-            )
-        )
-        policies.append(policy)
     monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
 
     command = _command(tmp_path)
@@ -288,10 +164,6 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
             str(ifeval),
             "--evaluation-config",
             str(math),
-            "--harbor-config",
-            str(policies[0]),
-            "--harbor-config",
-            str(policies[1]),
         ]
     )
     result = CliRunner().invoke(cli, command)
@@ -300,44 +172,7 @@ def test_launch_selects_across_documents_and_adds_harbor_configs(
     assert {evaluation.identity.eval_ref.name for evaluation in submitted_batches[0].evaluations} == {
         "ifeval",
         "bounded-math",
-        "first-policy",
-        "second-policy",
     }
-
-
-def test_daytona_launch_uses_the_eval_org_key_not_an_exported_daytona_key(tmp_path, monkeypatch, harbor_task_workspace):
-    monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
-    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
-    monkeypatch.setattr(launch_module, "_capability_origin", lambda _cluster: "https://iris.example")
-    submitted_env = []
-
-    class Client:
-        def submit(self, *, environment, **_kwargs):
-            submitted_env.append(environment.env_vars)
-            return SimpleNamespace(job_id="/test/eval")
-
-    @contextmanager
-    def client(**_kwargs):
-        yield Client()
-
-    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", client)
-    policy = harbor_task_workspace / "daytona-policy.json"
-    policy.write_text(
-        json.dumps(
-            {
-                "environment": {"type": "daytona"},
-                "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
-                "datasets": [{"path": "dataset"}],
-            }
-        )
-    )
-    command = _command(tmp_path)
-    command.extend(["--harbor-config", str(policy)])
-
-    result = CliRunner().invoke(cli, command)
-
-    assert result.exit_code == 0, result.output
-    assert submitted_env[0]["DAYTONA_API_KEY"] == "eval-org-key"
 
 
 @pytest.mark.parametrize("explicit_run_id", [True, False])

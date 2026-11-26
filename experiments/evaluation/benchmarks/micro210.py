@@ -179,7 +179,6 @@ def build_source(cohort: Cohort, variant: ProtocolVariant) -> tuple[RlDataSource
     )
     run = EvaluationOverrides(
         seed=evaluation["seed"],
-        max_attempts=1 + harbor["max_retries"],
         concurrency=harbor["n_concurrent_trials"] if pi else None,
         task_machine=TaskMachineSettings(image_build=harbor["daytona_provisioning"]),
         judge=JudgeIdentity(

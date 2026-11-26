@@ -3,7 +3,6 @@
 
 """Behavior of the endpoint-oriented evaluation loop and durable records."""
 
-import hashlib
 import json
 import threading
 from collections.abc import Callable, Mapping
@@ -20,11 +19,8 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from evalrecords.records import (
     EVALCHEMY_INFRASTRUCTURE_ERROR,
-    BenchmarkMetadataRef,
-    BenchmarkMetricRef,
     EvalRef,
     EvaluationSelection,
-    MetricKind,
     RunStatus,
     TaskCoverage,
     read_record,
@@ -33,13 +29,8 @@ from evalrecords.records import (
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
-from marin.evaluation.harbor.driver_config import (
-    HarborDatasetKind,
-    HarborErrorTaxonomy,
-    ValidatedHarborConfig,
-)
 from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.evaluation.model_config import GenerationConfig, ModelConfig, ResourceHint, ServeConfig
+from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.runner import (
     EndpointRoute,
     Evaluation,
@@ -52,7 +43,6 @@ from marin.evaluation.runner import (
     LaunchProvenance,
     run_with_inference_recovery,
 )
-from marin.evaluation.serving_config import inference_config_for_model
 from marin.execution.step_status import StatusFile
 from marin.inference.config import (
     EffectiveServing,
@@ -71,12 +61,10 @@ from prometheus_client.parser import text_string_to_metric_families
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.step_status import STATUS_FAILED, STATUS_SUCCESS
 from rigging.filesystem.storage_path import StoragePath
-from rigging.provenance import launch_provenance
 
 from experiments.evaluation.cli import cli, resolve_model_config
 from experiments.evaluation.evals import (
     EVALS,
-    HarborDefinition,
     resolve_evaluations,
 )
 from experiments.evaluation.launch import (
@@ -95,93 +83,6 @@ from experiments.evaluation.pipeline import (
 # model in these tests, so an assertion on them can only be satisfied by the preflight result.
 _PREFLIGHT_MAX_INPUT_TOKENS = 262144
 _PREFLIGHT_MAX_OUTPUT_TOKENS = 65536
-
-
-def _install_fake_harbor_preflight(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    verifier_env_keys: tuple[str, ...] = (),
-) -> list[Mapping[str, object]]:
-    received: list[Mapping[str, object]] = []
-
-    def preflight(requests, *, judge_model):
-        configs = []
-        for path, model_agent_kwargs in requests:
-            received.append(model_agent_kwargs)
-            policy = json.dumps({"source": path.name}, separators=(",", ":"))
-            configs.append(
-                ValidatedHarborConfig(
-                    stable_policy_json=policy,
-                    digest=f"sha256:{hashlib.sha256(policy.encode()).hexdigest()}",
-                    dataset_kind=HarborDatasetKind.HARBOR_REGISTRY,
-                    dataset_selector="aime",
-                    dataset_revision="1.0",
-                    workspace_dataset_path=None,
-                    agent="opencode",
-                    environment="daytona",
-                    verifier_env_keys=verifier_env_keys,
-                    error_taxonomy=HarborErrorTaxonomy(
-                        infrastructure=frozenset({"InfrastructureError"}),
-                        agent=frozenset({"AgentError"}),
-                        passthrough=frozenset({"PassthroughError"}),
-                        undecided=frozenset({"VerifierTimeoutError"}),
-                    ),
-                    max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
-                    max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
-                    benchmark=BenchmarkMetadataRef(
-                        schema_version=1,
-                        task="aime",
-                        primary_metric="reward",
-                        metric_kind=MetricKind.CONTINUOUS,
-                        metrics=(
-                            BenchmarkMetricRef(
-                                name="reward",
-                                source_name="reward",
-                                kind=MetricKind.CONTINUOUS,
-                                higher_is_better=True,
-                            ),
-                        ),
-                        n_benchmark=1,
-                        n_attempted=1,
-                    ),
-                    trials_per_task=1,
-                )
-            )
-        return tuple(configs)
-
-    monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", preflight)
-    return received
-
-
-def _write_harbor_config(path: Path) -> Path:
-    path.write_text("{}")
-    return path
-
-
-def test_harbor_cache_reuses_launch_tree_and_invalidates_changed_provenance(tmp_path, monkeypatch):
-    _install_fake_harbor_preflight(monkeypatch)
-    spec = LaunchSpec(
-        evals=(HarborDefinition("test", _write_harbor_config(tmp_path / "policy.yaml")),),
-        model=models()["qwen3-8b"],
-        platform=Platform.GPU,
-        accelerator="H100x8",
-        limit=1,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster=None,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        cache_key="same-pipeline",
-    )
-    provenance = LaunchProvenance(git_sha="abc", launch_host="host")
-    before = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
-    unchanged = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
-    assert unchanged == before
-    captured = launch_provenance()
-    monkeypatch.setattr(
-        "marin.evaluation.harbor.driver_config.launch_provenance", lambda: replace(captured, tree_hash="changed-tree")
-    )
-    changed = build_evaluation_batch(spec, provenance, "tester").evaluations[0].identity.run_id
-    assert changed != before
 
 
 def _write_model_config(path: Path) -> Path:
@@ -1076,32 +977,6 @@ def test_launch_group_uses_resolved_federated_cluster_and_priority(monkeypatch):
         assert marin_temp_bucket(14, prefix="eval") == "s3://marin-rno2a/tmp/ttl=14d/eval"
 
 
-def test_build_evaluation_batch_places_hosted_judge_with_candidate(tmp_path, monkeypatch):
-    _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    spec = LaunchSpec(
-        evals=(HarborDefinition("judged", _write_harbor_config(tmp_path / "policy.yaml")),),
-        model=models()["qwen3-8b"],
-        platform=Platform.GPU,
-        accelerator="H100x1",
-        limit=1,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster="cw-rno2a",
-        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
-        judge_model=models()["qwen3.5-122b-a10b-fp8"],
-        judge_accelerator="H100x8",
-    )
-
-    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
-
-    assert batch.accelerator.target_cluster == "cw-rno2a"
-    assert batch.judge is not None
-    assert batch.judge.accelerator.label == "H100x8"
-    assert batch.judge.accelerator.target_cluster == "cw-rno2a"
-    assert batch.judge.api_model == "qwen3.5-122b-a10b-fp8"
-
-
 def test_build_evaluation_batch_uses_submission_cluster_for_capability_origin(monkeypatch):
     monkeypatch.setattr(
         "experiments.evaluation.launch._capability_origin",
@@ -1122,69 +997,6 @@ def test_build_evaluation_batch_uses_submission_cluster_for_capability_origin(mo
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
     assert batch.capability_origin == "https://custom-controller.example"
-
-
-def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch, tmp_path):
-    _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    spec = LaunchSpec(
-        evals=tuple(HarborDefinition(name, _write_harbor_config(tmp_path / f"{name}.yaml")) for name in ("aime", "tb2")),
-        model=models()["qwen3-8b"],
-        platform=Platform.TPU,
-        accelerator=None,
-        limit=1,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster=None,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-    )
-
-    batch = build_evaluation_batch(
-        spec,
-        LaunchProvenance(git_sha="abc", launch_host="host"),
-        "tester",
-    )
-
-    assert batch.secret_env == {
-        "DAYTONA_API_KEY": (
-            "env:DAYTONA_EVAL_API_KEY",
-            "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
-        )
-    }
-    assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
-    assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
-    assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
-
-
-def test_build_evaluation_batch_routes_declared_verifier_host_secrets(monkeypatch, tmp_path):
-    _install_fake_harbor_preflight(monkeypatch, verifier_env_keys=("TOGETHER_API_KEY",))
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    config_path = _write_harbor_config(tmp_path / "simpleqa.yaml")
-    spec = LaunchSpec(
-        evals=(HarborDefinition("simpleqa", config_path),),
-        model=models()["qwen3-8b"],
-        platform=Platform.TPU,
-        accelerator=None,
-        limit=1,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster=None,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-    )
-
-    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
-
-    assert batch.secret_env == {
-        "DAYTONA_API_KEY": (
-            "env:DAYTONA_EVAL_API_KEY",
-            "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
-        ),
-        "TOGETHER_API_KEY": (
-            "env:TOGETHER_API_KEY",
-            "gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest",
-        ),
-    }
-    assert batch.evaluations[0].secret_env_keys == ("DAYTONA_API_KEY", "TOGETHER_API_KEY")
 
 
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
@@ -1221,70 +1033,6 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
             LaunchProvenance(git_sha="abc", launch_host="host"),
             "tester",
         )
-
-
-def test_build_evaluation_batch_gives_harbor_the_served_context_limits(tmp_path, monkeypatch):
-    preflight_requests = _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
-    checkpoint = tmp_path / "checkpoint"
-    checkpoint.mkdir()
-    checkpoint_config = checkpoint / "config.json"
-    checkpoint_config.write_text(json.dumps({"max_position_embeddings": 131072}))
-    spec = LaunchSpec(
-        evals=(HarborDefinition(name="aime-policy", config_path=config_path),),
-        model=replace(
-            models()["qwen3-8b"],
-            location=str(checkpoint),
-            resource_hint=ResourceHint(hbm_gb=21, memory="32g"),
-            serve=ServeConfig(max_model_len=1048576),
-            generation=GenerationConfig(max_gen_toks=8192),
-        ),
-        platform=Platform.TPU,
-        accelerator=None,
-        limit=None,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster=None,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-    )
-
-    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
-
-    served_limits = {"max_input_tokens": 131072, "max_output_tokens": 8192}
-    (evaluation,) = batch.evaluations
-    assert [request["model_info"] for request in preflight_requests] == [served_limits]
-    assert evaluation.executor.model_agent_kwargs["model_info"] == served_limits
-    harbor = evaluation.identity.eval_ref.harbor
-    assert (harbor.max_input_tokens, harbor.max_output_tokens) == (
-        _PREFLIGHT_MAX_INPUT_TOKENS,
-        _PREFLIGHT_MAX_OUTPUT_TOKENS,
-    )
-    checkpoint_config.unlink()
-    inference = inference_config_for_model(batch.model, batch.accelerator, env_vars={}, priority=batch.priority_band)
-    assert inference.model.max_model_len == served_limits["max_input_tokens"]
-
-
-def test_launch_dry_run_prints_the_resolved_harbor_agent_context(tmp_path, monkeypatch):
-    _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--harbor-config",
-            str(config_path),
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert f"max_input_tokens={_PREFLIGHT_MAX_INPUT_TOKENS}" in result.output
-    assert f"max_output_tokens={_PREFLIGHT_MAX_OUTPUT_TOKENS}" in result.output
 
 
 @pytest.mark.parametrize(
@@ -1350,40 +1098,6 @@ def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
 
 
-def test_launch_dry_run_accepts_hosted_judge(monkeypatch):
-    _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-0.6b",
-            "--judge-model",
-            "qwen3.5-122b-a10b-fp8",
-            "--judge-accelerator",
-            "H100x8",
-            "--harbor-config",
-            "experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml",
-            "--platform",
-            "gpu",
-            "--accelerator",
-            "H100x1",
-            "--federated_cluster",
-            "cw-rno2a",
-            "--limit",
-            "2",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "judge: qwen3.5-122b-a10b-fp8" in result.output
-    assert "accel=H100x8" in result.output
-    assert "region_or_cluster=cw-rno2a" in result.output
-
-
 def test_resolve_model_config_rejects_registry_and_file_selectors_together(tmp_path):
     config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
 
@@ -1394,152 +1108,6 @@ def test_resolve_model_config_rejects_registry_and_file_selectors_together(tmp_p
 def test_resolve_model_config_requires_one_selector():
     with pytest.raises(click.BadParameter):
         resolve_model_config(None, None)
-
-
-def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, monkeypatch):
-    config_path = tmp_path / "invalid.yaml"
-    config_path.write_text("{}")
-    iris_opened = False
-    error = "Harbor config must declare exactly one agent"
-
-    def reject_preflight(_requests, *, judge_model):
-        raise ValueError(error)
-
-    def open_iris_client(**_kwargs):
-        nonlocal iris_opened
-        iris_opened = True
-        raise AssertionError("Iris must not be opened for an invalid evaluator config")
-
-    monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", reject_preflight)
-    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--harbor-config",
-            str(config_path),
-            "--no-wait",
-        ],
-    )
-
-    assert result.exit_code == 2
-    assert not iris_opened
-
-
-def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
-    _install_fake_harbor_preflight(monkeypatch)
-    policy = _write_harbor_config(tmp_path / "aime-policy.yaml")
-    output_dir = f"memory://{tmp_path.name}/existing-harbor-results"
-    spec = LaunchSpec(
-        evals=(HarborDefinition(name="aime-policy", config_path=policy),),
-        model=models()["qwen3-8b"],
-        platform=Platform.TPU,
-        accelerator=None,
-        limit=None,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster=None,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-    )
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-
-    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "tester")
-    (StoragePath(output_dir) / "harbor_resume_identity.json").write_text(
-        batch.evaluations[0].executor.resume_identity.model_dump_json()
-    )
-    existing_trial = StoragePath(output_dir) / "scored-trial.json"
-    existing_trial.write_text('{"reward": 0.0}')
-    submitted = []
-
-    def launch(batch, _client):
-        evaluation = replace(batch.evaluations[0], executor=_successful_evaluation)
-        execution = replace(batch, records_prefix=str(tmp_path / "records"), evaluations=(evaluation,))
-        _evaluate_with_session(execution, _remote_session(), orchestrator_job_id="/test")
-        submitted.append(evaluation.identity)
-        return SimpleNamespace(
-            group_id=batch.group_id,
-            job=SimpleNamespace(job_id="/test/eval"),
-            records_prefix=batch.records_prefix,
-            model_name=batch.model.name,
-            evaluations=(),
-        )
-
-    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", lambda **_kwargs: nullcontext(object()))
-    monkeypatch.setattr("experiments.evaluation.cli.launch_group", launch)
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--harbor-config",
-            str(policy),
-            "--resume-results-path",
-            output_dir,
-            "--no-wait",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert (StoragePath(output_dir) / "endpoint.txt").read_text() == _remote_session().model.endpoint.base_url
-    assert json.loads(existing_trial.read_text()) == {"reward": 0.0}
-    record = read_record(str(tmp_path / "records" / submitted[0].run_id / "record.json"))
-    assert record.results_path == output_dir
-
-
-def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch, tmp_path):
-    _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--harbor-config",
-            str(_write_harbor_config(tmp_path / "aime.yaml")),
-            "--harbor-config",
-            str(_write_harbor_config(tmp_path / "tb2.yaml")),
-            "--resume-results-path",
-            "memory://existing-harbor-results",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 2
-    assert "requires exactly one Harbor evaluation" in result.output
-
-
-def test_policy_launch_rejects_resume_outside_an_evaldash_run(monkeypatch, tmp_path):
-    _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    finalization = (
-        Path(__file__).resolve().parents[2]
-        / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
-    )
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--harbor-config",
-            str(_write_harbor_config(tmp_path / "tb2.yaml")),
-            "--policy-finalization-config",
-            str(finalization),
-            "--resume-results-path",
-            "s3://marin-us-east-02a/marin/evals/recovery/swebench-20261022/results",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 2
-    assert "is not a run's results directory that EvalDash catalogs" in result.output
 
 
 def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):

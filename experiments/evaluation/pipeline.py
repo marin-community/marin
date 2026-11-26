@@ -29,13 +29,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from evalrecords.records import EvaluationOverrides, RLAttemptRef, read_record, record_path
+from evalrecords.records import RLAttemptRef, read_record, record_path
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.evaluation.model_config import ModelConfig
 from marin.execution.artifact import Artifact, is_mutable_version
-from marin.execution.fingerprint import register_fingerprint
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.execution.step_runner import StepRunner
 
@@ -53,18 +52,6 @@ _ACCELERATOR_RUNTIME_ARG = "accelerator"
 _SUBMISSION_CLUSTER_RUNTIME_ARG = "submission_cluster"
 _FEDERATED_CLUSTER_RUNTIME_ARG = "federated_cluster"
 _INSTANCES_RUNTIME_ARG = "instances"
-
-
-def _overrides_fingerprint(run: EvaluationOverrides) -> dict[str, object]:
-    """Preserve the established artifact fingerprint when the worker retry budget is unset."""
-    fields = dict(vars(run))
-    if "max_attempts" not in run.model_fields_set:
-        fields.pop("max_attempts")
-    kind = type(run)
-    return {"__repr__": f"{kind.__module__}.{kind.__qualname__}", "vars": fields}
-
-
-register_fingerprint(EvaluationOverrides, _overrides_fingerprint)
 
 
 @dataclass(frozen=True)

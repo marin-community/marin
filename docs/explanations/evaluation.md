@@ -82,8 +82,7 @@ preserved. Reproduction uses the recorded historical checkout and cohort.
 
 Levanter's in-loop training evaluation remains independent. Catalog agentic
 benchmarks lower Harbor task packages to curated corpora and run through RolloutEngine.
-Harbor policies passed with `--harbor-config` still run through Harbor's own runtime,
-using the shared inference lifecycle and record catalog. See
+The record catalog also includes archived Harbor policy runs with their runtime provenance. See
 [Harbor integration](../harbor-integration.md).
 
 Start with [running evaluations](../tutorials/run-lm-evals.md) for commands and

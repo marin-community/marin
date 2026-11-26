@@ -261,7 +261,6 @@ def settings_for(
     concurrency_bounds = [bound for bound in (model.evaluation_num_concurrent, run.concurrency) if bound is not None]
     return CuratedSettings(
         concurrency=min(concurrency_bounds, default=DEFAULT_EVALUATION_CONCURRENCY),
-        max_attempts=run.max_attempts,
         max_tokens=run.max_tokens,
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,
