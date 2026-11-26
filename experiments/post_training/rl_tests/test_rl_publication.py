@@ -790,7 +790,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     (sources[1] / "terminal.json").unlink()
     (sources[1] / "resolved-launch.yaml").unlink()
     missing_report, missing_gate = saved_gate()
-    assert missing_report.verdict == "invalid" and missing_report.run.attempt_ids == ("native-retry", None)
+    assert missing_report.verdict == "invalid" and missing_report.run.attempt_ids == ("native-retry",)
+    assert missing_report.run.replicates == 2
     missing = publish(missing_gate)
     assert str(sources[1]) in missing.unserved_records and any(
         "No stored native receipt" in error for error in missing.errors
