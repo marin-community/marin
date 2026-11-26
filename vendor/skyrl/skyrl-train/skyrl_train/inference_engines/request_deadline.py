@@ -5,7 +5,8 @@ from collections.abc import Awaitable, Callable
 
 
 async def finish_partial_on_timeout[T](
-    request: Awaitable[T], timeout: float | None, finish_partial: Callable[[], Awaitable[bool]]
+    request: Awaitable[T], timeout: float | None, finish_partial: Callable[[], Awaitable[bool]],
+    *, scheduled: asyncio.Event | None = None
 ) -> tuple[T, bool]:
     """Finish an active decode, leaving an unstarted request to its caller's timeout.
 
@@ -16,7 +17,10 @@ async def finish_partial_on_timeout[T](
     if timeout is None:
         return await request, False
     task = asyncio.ensure_future(request)
+    admission = None if scheduled is None else asyncio.create_task(scheduled.wait())
     try:
+        if admission is not None:
+            await asyncio.wait({task, admission}, return_when=asyncio.FIRST_COMPLETED)
         done, _ = await asyncio.wait({task}, timeout=timeout)
         if task in done:
             return task.result(), False
@@ -24,4 +28,6 @@ async def finish_partial_on_timeout[T](
         return await task, finished
     finally:
         task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        if admission is not None:
+            admission.cancel()
+        await asyncio.gather(task, *([] if admission is None else [admission]), return_exceptions=True)

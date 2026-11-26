@@ -1,3 +1,4 @@
+from rigging.inference_clock import remote_execution_watchdog, wait_execution
 import asyncio
 import contextlib
 import hashlib
@@ -649,7 +650,7 @@ class Trial(ABC):
             # cancel the local poll, not the detached remote process.
             with (
                 self.agent_environment.with_default_user(user),
-                self.agent_environment.with_agent_timeout(timeout_sec),
+                self.agent_environment.with_agent_timeout(remote_execution_watchdog(timeout_sec)),
             ):
                 error = AgentTimeoutError(
                     f"Agent execution timed out after {timeout_sec} seconds"
@@ -718,7 +719,7 @@ class Trial(ABC):
         """Bound a phase while preserving persistence failures and caller cancellation."""
         task = asyncio.ensure_future(awaitable)
         try:
-            done, _ = await asyncio.wait({task}, timeout=timeout_sec)
+            done, _ = await wait_execution(task, timeout_sec)
         except asyncio.CancelledError as cancellation:
             task.cancel()
             self._track_cleanup_task(task)

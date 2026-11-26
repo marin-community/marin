@@ -21,6 +21,8 @@ from skyrl_train.inference_engines.inference_engine_client_http_endpoint import 
 from skyrl_train.inference_engines.chat_template import template_error_from_exception
 from transformers import PreTrainedTokenizerBase
 import asyncio
+from contextlib import nullcontext
+from rigging.inference_clock import current_inference_clock
 from copy import deepcopy
 from typing import List, Any, Optional, Dict, Union, Hashable
 from skyrl_train.inference_engines.utils import (
@@ -1135,7 +1137,10 @@ class InferenceEngineClient(InferenceEngineInterface):
             event = self._resume_events.setdefault(asyncio.get_running_loop(), asyncio.Event())
             if not self.generation_paused_event.is_set():
                 return
-            await event.wait()
+            clock = current_inference_clock()
+            admission = nullcontext() if clock is None or clock.waiting else clock.queue()
+            async with admission:
+                await event.wait()
 
     def _release_generation_waiters(self) -> None:
         """Clear the pause and wake every parked request on every loop."""

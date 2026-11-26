@@ -18,7 +18,14 @@ from verifyit.reasoning_markup import ReasoningViolation
 
 GRADING_SECONDS_METRIC = "timing/grading"
 SETUP_SECONDS_METRIC = "timing/setup"
-TASK_TIMING_KEYS = (GRADING_SECONDS_METRIC, SETUP_SECONDS_METRIC)
+TASK_TIMING_KEYS = (
+    GRADING_SECONDS_METRIC,
+    SETUP_SECONDS_METRIC,
+    "timing/inference_queue_wait",
+    "timing/inference_generation",
+    "inference/queue_timeouts",
+    "inference/scheduled_requests",
+)
 
 LENGTH_STOP_REASON = "length"
 MAX_TURNS_STOP_REASON = "max_turns"

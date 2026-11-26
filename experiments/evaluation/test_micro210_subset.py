@@ -10,8 +10,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import yaml
+from datasets import Dataset
 from marin.execution.lazy import StepContext
 from rigging.filesystem.storage_path import StoragePath
+from skyrl_train.dataset.tasks import TaskDataset
 
 from experiments.evaluation.micro210 import micro210_step
 from experiments.evaluation.micro210_policy import Micro210Model
@@ -73,9 +75,13 @@ def test_recovery_selects_exact_original_rows_and_preserves_uid_mapping(tmp_path
     receipt = validate_subset(**inputs, subset=subset, selected_inputs=str(output))
     assert receipt["source_row_indices"] == [1, 2]
     assert pq.read_table(output / "rollouts.parquet").to_pylist() == [
-        {"benchmark": "skip", "prompt": "other", "seed": 8},
-        {"benchmark": "keep", "prompt": "last", "seed": 9},
+        {"benchmark": "skip", "prompt": "other", "seed": 8, "_source_uid": "1"},
+        {"benchmark": "keep", "prompt": "last", "seed": 9, "_source_uid": "2"},
     ]
+    dataset = TaskDataset.__new__(TaskDataset)
+    dataset.dataframe = Dataset.from_parquet(str(output / "rollouts.parquet"))
+    assert [dataset.uid(index) for index in range(len(dataset))] == ["1", "2"]
+    assert dataset.dataframe["seed"] == [8, 9]
     receipt["source_row_indices"] = [0, 2]
     (output / "selection.json").write_text(json.dumps(receipt))
     with pytest.raises(ValueError, match="differs from the frozen prepared rows"):

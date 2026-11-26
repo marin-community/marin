@@ -51,3 +51,33 @@ From the Marin repository root:
 ```bash
 uv run --package marin-rolloutengine --frozen --group test pytest -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests -q
 ```
+
+## Inference admission and execution clocks
+
+SkyRL task workers bind a scoped `InferenceClock` to each trial. The model transport
+returns a request-correlated engine `SCHEDULED` or first-token notice over the same
+cancellable Ray stream as the result. Submission alone does not start execution.
+The recorder's total-turn and model-turn budgets begin at that notice; the attempt
+clock still bounds setup before the first request and starts its execution budget
+afresh at the first admission. Later queue waits pause remaining execution budgets.
+Harbor's attempt and agent-phase deadlines use the same clock. Detached agent
+commands retain a hard setup + queue + execution safety watchdog, while their
+local active agent budget stays unchanged.
+
+`trajectory_runner.inference_queue_timeout` bounds cumulative admission wait
+separately (2280 seconds by default). A never-scheduled request becomes an
+`InferenceAdmissionTimeout`, not a total-turn timeout or a scored zero. The rollout
+reports `timing/inference_queue_wait` separately from `timing/inference_generation`,
+plus scheduled-request and queue-timeout counts. Engine `request_timing` logs retain
+`QUEUED`/`SCHEDULED`/first-token evidence. Missing traces are not evidence that no
+engine work occurred.
+
+Verifier-unavailable rows have zero token-loss masks and are excluded from RLOO-N
+baselines, with zero advantage. Any stored reward zero is an archive placeholder.
+The 1770-second active partial-output cutoff also starts after scheduling; it does
+not consume queue wait. Adopt these controls only with a fresh run version.
+
+Micro210 infrastructure recoveries select original row indices and carry a
+`_source_uid` column through filtering, so native trial identities and their frozen
+per-row settings survive subsetting. Merge only originally unavailable identities;
+keep every original graded outcome unchanged and the assigned cohort fixed.

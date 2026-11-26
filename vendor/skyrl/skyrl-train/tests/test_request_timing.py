@@ -1,4 +1,8 @@
-from skyrl_train.inference_engines.request_timing import RequestTimings
+import asyncio
+
+import pytest
+
+from skyrl_train.inference_engines.request_timing import RequestCompleted, RequestScheduled, RequestTimings, scheduled_results
 
 
 def test_request_evidence_distinguishes_queued_and_decoding_when_response_is_lost():
@@ -18,3 +22,25 @@ def test_request_evidence_distinguishes_queued_and_decoding_when_response_is_los
     assert (decoded["prompt_tokens"], decoded["context_tokens"]) == (32768, 33369)
     assert (queued["generated_tokens"], queued["first_token_at"]) == (0, None)
     assert (queued["prompt_tokens"], queued["context_tokens"]) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_only_scheduler_or_first_token_events_release_admission():
+    timings = RequestTimings(lambda _row: None)
+    scheduled = timings.scheduled_event("chatcmpl-queued")
+    result = asyncio.get_running_loop().create_future()
+    stream = scheduled_results(result, scheduled)
+    first = asyncio.create_task(anext(stream))
+    timings.start("queued", "sample")
+    timings.observe("chatcmpl-queued", [("QUEUED", 5.0)], 0, 5.0, prompt_tokens=10)
+    await asyncio.sleep(0)
+    assert not first.done()
+    timings.observe("chatcmpl-queued", [("SCHEDULED", 15.0)], 0, 15.0, prompt_tokens=10)
+    assert isinstance(await first, RequestScheduled)
+    result.set_result({"response_ids": [[7]]})
+    completed = await anext(stream)
+    assert isinstance(completed, RequestCompleted)
+    assert completed.value == {"response_ids": [[7]]}
+    await stream.aclose()
+    timings.finish("queued")
+    assert not timings._scheduled

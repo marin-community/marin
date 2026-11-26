@@ -67,3 +67,25 @@ async def test_failed_abort_does_not_leave_a_generation_running():
     with pytest.raises(ConnectionError, match="engine disconnected"):
         await finish_partial_on_timeout(pending, 0, finish)
     assert pending.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_partial_output_deadline_starts_after_engine_scheduling():
+    pending = asyncio.get_running_loop().create_future()
+    scheduled = asyncio.Event()
+    aborted = asyncio.Event()
+
+    async def finish():
+        aborted.set()
+        pending.set_result({"token_ids": [7], "finish_reason": "abort"})
+        return True
+
+    request = asyncio.create_task(finish_partial_on_timeout(pending, 0, finish, scheduled=scheduled))
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert not aborted.is_set()
+    assert not request.done()
+    scheduled.set()
+    output, ended = await request
+    assert output["token_ids"] == [7]
+    assert ended

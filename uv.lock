@@ -5985,6 +5985,7 @@ version = "0.1.0"
 source = { editable = "lib/rolloutengine" }
 dependencies = [
     { name = "httpx" },
+    { name = "marin-rigging" },
     { name = "marin-shellbox" },
     { name = "marin-taskcompendium" },
     { name = "openai" },
@@ -6003,6 +6004,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-shellbox", editable = "lib/shellbox" },
     { name = "marin-taskcompendium", editable = "lib/taskcompendium" },
     { name = "openai", specifier = ">=1.59.9" },

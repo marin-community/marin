@@ -16,6 +16,7 @@ from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from rigging.inference_clock import InferenceClock, current_inference_clock
 from rigging.redaction import redact_string
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
@@ -188,7 +189,10 @@ async def _model_turn(
                     max_prompt_length=max_prompt_length,
                 )
             model_input["priority"] = priority
-            output = await client.generate(model_input)
+            clock = current_inference_clock()
+            admission = nullcontext() if clock is None else clock.queue()
+            async with admission:
+                output = await client.generate(model_input)
     except GenerationBudgetExceededError as error:
         raise GenerationLimitReached(error.prompt_token_ids) from error
     if output["token_provenance"] != TokenProvenance.ENGINE:
@@ -449,6 +453,7 @@ class TaskRolloutWorker:
         sessions: Mapping[str, EpisodeFactory] | None = None,
         *,
         shutdown_timeout: float,
+        inference_queue_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
         retrieval_service: str | None = None,
@@ -467,6 +472,9 @@ class TaskRolloutWorker:
         self.active_requests: set[asyncio.Task] = set()
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
+        if inference_queue_timeout <= 0:
+            raise ValueError("inference_queue_timeout must be positive")
+        self.inference_queue_timeout = inference_queue_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
         self.harbor = harbor
         self.installed_agents = installed_agents
@@ -659,7 +667,9 @@ class TaskRolloutWorker:
                 try:
                     harbor_slot = nullcontext() if harbor_slots is None else harbor_slots.admit(batch_id)
                     async with harbor_slot, admission_slot("trajectory_tasks", self.task_slots):
-                        result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
+                        clock = InferenceClock(self.inference_queue_timeout)
+                        with clock.scope() if self.trajectory_runner_cfg.backend == "vllm" else nullcontext():
+                            result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
                 harness = engine.harnesses[lowered.harness]
@@ -882,6 +892,7 @@ class TaskRolloutWorkerSpec:
             concurrent_harbor_tasks=None if harbor is None else max(1, harbor.concurrent_trials // shard.count),
             sessions=self.sessions,
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
+            inference_queue_timeout=float(self.config.trajectory_runner.inference_queue_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
             retrieval_service=self.config.environment.task_sessions.get("retrieval_service"),

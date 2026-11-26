@@ -48,6 +48,8 @@ def prepared_subset(
     else:
         indices = benchmark_indices(table, subset.benchmarks)
     selected = table.take(pa.array(indices, type=pa.int64()))
+    if subset.row_indices:
+        selected = selected.append_column("_source_uid", pa.array([str(index) for index in indices]))
     buffer = io.BytesIO()
     pq.write_table(selected, buffer)
     payload = buffer.getvalue()

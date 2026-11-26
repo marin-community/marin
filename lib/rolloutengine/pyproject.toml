@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.27",
     "marin-taskcompendium",
     "marin-shellbox",
+    "marin-rigging",
     "openai>=1.59.9",
 ]
 

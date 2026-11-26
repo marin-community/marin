@@ -11,6 +11,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
+from rigging.inference_clock import InferenceAdmissionTimeout, current_inference_clock, execution_timeout
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
 
@@ -229,7 +230,12 @@ class _Recorder:
             self._stop_at_limit(self.step_observations, None)
         deadlines = self.deadlines
         assert deadlines is not None
-        if current is None and deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
+        if (
+            current is None
+            and deadlines.total.when() is None
+            and self.limits.total_turn_timeout is not None
+            and current_inference_clock() is None
+        ):
             deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
         conversation = _Conversation(prompt, self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
@@ -362,10 +368,15 @@ class _Recorder:
         task = asyncio.current_task()
         assert task is not None
         cancelling = task.cancelling()
-        call = self.model_call = asyncio.timeout(self.limits.model_turn_timeout)
+        call_context = execution_timeout(
+            self.limits.model_turn_timeout if current_inference_clock() is None else None,
+            first_schedule_budget=self.limits.model_turn_timeout,
+        )
+        call = None
         try:
             try:
-                async with call:
+                async with call_context as call:
+                    self.model_call = call
                     outcome: ModelTurn | Exception = await self.model(model_request)
             except Exception as error:
                 outcome = error
@@ -379,6 +390,9 @@ class _Recorder:
             raise
         finally:
             self.model_call = None
+        assert call is not None
+        if isinstance(outcome, InferenceAdmissionTimeout):
+            self.no_response_reason = str(outcome)
         if call.expired():
             # Also when the transport caught the deadline's cancellation and answered or failed in another way.
             outcome = TimeoutError("The model turn deadline expired")
@@ -505,6 +519,9 @@ class _Recorder:
         # The metrics of the last step, also when a new conversation failed before its first turn.
         steps = next((record.steps for record in reversed(conversations) if record.steps), ())
         metrics = dict(steps[-1].transition.metrics) if steps else {}
+        clock = current_inference_clock()
+        if clock is not None:
+            metrics.update(clock.metrics())
         if self.mode == TraceMode.MESSAGES:
             metrics[TRACE_METRIC] = TraceMode.MESSAGES.value
         return Rollout(run_id, tuple(conversations), self.stop_reason, metrics, outputs)
@@ -521,9 +538,10 @@ async def _run_harness(
     failure: Exception | None = None
     recorder.turn_ended = time.monotonic()
     # The recorder sets both deadlines: the total one at the first request, the tool one after each turn.
-    total, tool = asyncio.timeout(None), asyncio.timeout(None)
+    total_context = execution_timeout(None, first_schedule_budget=recorder.limits.total_turn_timeout)
+    tool_context = execution_timeout(None)
     try:
-        async with total, tool:
+        async with total_context as total, tool_context as tool:
             recorder.deadlines = _Deadlines(total, tool, attempt_deadline)
             try:
                 await harness.run(context, recorder)

@@ -1,3 +1,4 @@
+from rigging.inference_clock import wait_execution
 import asyncio
 import time
 from collections.abc import Coroutine, Mapping
@@ -340,7 +341,7 @@ class TrialQueue:
         if timeout_sec is None:
             return await attempt_task
 
-        done, _ = await asyncio.wait({attempt_task}, timeout=timeout_sec)
+        done, _ = await wait_execution(attempt_task, timeout_sec)
         if attempt_task in done:
             return await attempt_task
 

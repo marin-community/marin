@@ -89,6 +89,12 @@ class TaskDataset(PromptDataset):
     ) -> int:
         return task_prompt_token_count(tokenizer, row, prompt_key, chat_template_kwargs=chat_template_kwargs)
 
+    def uid(self, index: int) -> str:
+        """Recovery subsets retain the original prompt identity through filtering."""
+        if "_source_uid" in self.dataframe.column_names:
+            return self.dataframe[index]["_source_uid"]
+        return super().uid(index)
+
     def label(self, index: int) -> str:
         """The task id, which unlike the default row-number uid survives prompt-length filtering."""
         return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id

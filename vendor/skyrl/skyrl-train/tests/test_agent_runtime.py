@@ -247,7 +247,7 @@ OPENAI_BASE_URL = "https://original-provider.invalid/v1"
         None,
         {},
         harbor=harbor,
-        shutdown_timeout=5,
+        inference_queue_timeout=2280, shutdown_timeout=5,
         installed_agents=runtime,
         judge_connection=JudgeConnection("https://judge.invalid/v1", "judge-secret") if judge_declared else None,
     )

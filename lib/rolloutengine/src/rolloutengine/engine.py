@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from dataclasses import asdict, dataclass, replace
 
+from rigging.inference_clock import execution_timeout
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import AnswerType
@@ -161,13 +162,13 @@ class RolloutEngine:
 
     async def _attempt(self, attempt: _Attempt) -> tuple[RolloutOperation, BaseException] | None:
         """Run the attempt under its deadline and release its resources; return the failure, if any."""
-        deadline = asyncio.timeout(attempt.spec.limits.attempt_timeout)
+        deadline = execution_timeout(attempt.spec.limits.attempt_timeout)
         async with AsyncExitStack() as resources:
             try:
-                async with deadline:
-                    await self._run(attempt, resources, deadline)
+                async with deadline as active_deadline:
+                    await self._run(attempt, resources, active_deadline)
             except TimeoutError as error:
-                if not deadline.expired():
+                if not active_deadline.expired():
                     raise
                 return RolloutOperation.ATTEMPT, error
             except _Interrupted as interrupted:

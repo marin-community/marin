@@ -119,7 +119,7 @@ async def test_completed_harbor_trial_without_model_turn_keeps_actual_verdict(re
         raise ModelServerError(category="server_error", request_id="request", status_code=503)
 
     worker = TaskRolloutWorker(
-        config, projection, SimpleNamespace(generate=failed_generation), {}, shutdown_timeout=5,
+        config, projection, SimpleNamespace(generate=failed_generation), {}, inference_queue_timeout=2280, shutdown_timeout=5,
         harbor=HarborTaskSettings.from_config(OmegaConf.create({})),
         installed_agents=SimpleNamespace(
             original_harness=lambda *_: HarborTrialHarness(completed_trial, "reward"), shutdown=shutdown,
@@ -201,7 +201,7 @@ async def test_harbor_rows_score_under_the_inherited_generator_policy(exception_
         raise ModelServerError(category="server_error", request_id="request", status_code=503)
 
     worker = TaskRolloutWorker(
-        config, projection, SimpleNamespace(generate=failed_generation), {}, shutdown_timeout=5,
+        config, projection, SimpleNamespace(generate=failed_generation), {}, inference_queue_timeout=2280, shutdown_timeout=5,
         harbor=HarborTaskSettings.from_config(OmegaConf.create({})),
         installed_agents=SimpleNamespace(
             original_harness=lambda *_: HarborTrialHarness(completed_trial, "reward"), shutdown=shutdown,

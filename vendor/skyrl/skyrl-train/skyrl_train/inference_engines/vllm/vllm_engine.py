@@ -70,7 +70,7 @@ from marinskyrl.inference_placement import InferenceWorkerPlacement
 from skyrl_train.inference_engines.placement import inference_worker_placement
 from skyrl_train.inference_engines.vllm.numa import set_async_worker_numa_affinity
 from skyrl_train.inference_engines.policy_steps import PolicyStepStamps
-from skyrl_train.inference_engines.request_timing import RequestTimings
+from skyrl_train.inference_engines.request_timing import RequestTimings, scheduled_results
 from skyrl_train.inference_engines.request_deadline import finish_partial_on_timeout
 from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON
 from skyrl_train.inference_engines.inference_http_backend import OpenAIRequest
@@ -1385,6 +1385,24 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         result = await self.llm.add_lora(lora_request)
         return result
 
+    async def generate_with_scheduling(self, input_batch: InferenceEngineInput):
+        request_id = input_batch["request_ids"][0]
+        scheduled = self._request_timings.scheduled_event(request_id)
+        try:
+            async for item in scheduled_results(self.generate(input_batch), scheduled):
+                yield item
+        finally:
+            self._request_timings.forget_schedule(request_id)
+
+    async def chat_completion_with_scheduling(self, request_payload: Dict[str, Any]):
+        request_id = request_payload["headers"]["x-request-id"]
+        scheduled = self._request_timings.scheduled_event(request_id)
+        try:
+            async for item in scheduled_results(self.chat_completion(request_payload), scheduled):
+                yield item
+        finally:
+            self._request_timings.forget_schedule(request_id)
+
     async def _finish_partial_request(self, request_id: str) -> bool:
         key = self._request_timings.request_key(request_id)
         timing = self._request_timings.requests.get(key)
@@ -1435,7 +1453,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
 
         try:
             final_output, deadline_finished = await finish_partial_on_timeout(
-                collect(), self._request_timeout, lambda: self._finish_partial_request(request_id)
+                collect(), self._request_timeout, lambda: self._finish_partial_request(request_id),
+                scheduled=self._request_timings.scheduled_event(request_id)
             )
             if deadline_finished and final_output.outputs[0].finish_reason == "abort":
                 final_output.outputs[0].finish_reason = TOTAL_TURN_TIMEOUT_STOP_REASON
@@ -1475,6 +1494,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 request_id = uuid4().hex
             else:
                 request_id = request_id_for_session(session_ids[index])
+            if input_batch.get("request_ids") is not None:
+                request_id = input_batch["request_ids"][index]
             request_ids.append(request_id)
             self._request_timings.start(request_id, None if session_ids is None else str(session_ids[index]))
             task = asyncio.create_task(
@@ -1671,7 +1692,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                         request, minimal_request, exact_prompt_token_ids
                     )
                 generator, deadline_finished = await finish_partial_on_timeout(
-                    pending, self._request_timeout, lambda: self._finish_partial_request(request_id)
+                    pending, self._request_timeout, lambda: self._finish_partial_request(request_id),
+                    scheduled=self._request_timings.scheduled_event(request_id)
                 )
                 assert isinstance(generator, (ChatCompletionResponse, ErrorResponse))
             else:
@@ -1679,6 +1701,7 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                     self.openai_serving_completion.create_completion(request, minimal_request),
                     self._request_timeout,
                     lambda: self._finish_partial_request(request_id),
+                    scheduled=self._request_timings.scheduled_event(request_id),
                 )
                 assert isinstance(generator, (CompletionResponse, ErrorResponse))
             response = generator.model_dump()
