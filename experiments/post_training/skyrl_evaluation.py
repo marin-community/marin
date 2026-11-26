@@ -30,6 +30,9 @@ class EvaluationPreset:
     name: str
     recipe: EvaluationRecipe
 
+    def evaluated(self, model: SkyRLModelSource, *, version: str) -> ArtifactStep[EvaluationResult]:
+        return replace(self.recipe.evaluated(model, version=version), name=f"{model.step.name}/{self.name}")
+
 
 @dataclass(frozen=True)
 class CuratedEvaluation:
@@ -41,7 +44,7 @@ class CuratedEvaluation:
     max_concurrent: int = 1
 
     def evaluated(self, model: SkyRLModelSource, *, version: str) -> ArtifactStep[EvaluationResult]:
-        step = evaluate_model(
+        return evaluate_model(
             model,
             self.serving,
             self.evals,
@@ -52,7 +55,6 @@ class CuratedEvaluation:
             instances=self.instances,
             max_concurrent=self.max_concurrent,
         )
-        return replace(step, name=f"{model.step.name}/{step.name}")
 
 
 def model_rl_attempt(model: SkyRLModelSource, context: StepContext) -> RLAttemptRef | None:

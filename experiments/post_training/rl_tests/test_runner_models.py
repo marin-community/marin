@@ -237,7 +237,9 @@ def test_after_run_evaluations_bind_each_replicates_selected_export(selection, m
     left, right, *evaluations = handles
     assert [step.deps.count(left) for step in evaluations] == [1, 1, 0, 0]
     assert [step.deps.count(right) for step in evaluations] == [0, 0, 1, 1]
-    assert len({step.name for step in evaluations}) == 4
+    assert {step.name for step in evaluations} == {
+        f"{run.name}/{name}" for run in (left, right) for name in ("micro210", "standard")
+    }
 
 
 @pytest.mark.parametrize(

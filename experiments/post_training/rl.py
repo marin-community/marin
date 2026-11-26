@@ -1365,7 +1365,7 @@ def command(
         following = (
             *(preset.then(step) for step in run.runs if preset.then is not None),
             *(
-                evaluation.recipe.evaluated(SkyRLPolicyModel(step), version=step.version)
+                evaluation.evaluated(SkyRLPolicyModel(step), version=step.version)
                 for step in run.runs
                 for evaluation in after_run
             ),
@@ -1458,7 +1458,7 @@ def _evaluate_command(
         (evaluation,) = _selected_evaluations((evaluation_name,), evaluation_presets)
         model = recipe.published_model(init_name, preset=preset, initializers=table.initializers)
         version = resolve_version(f"{model.step.name}/{evaluation.name}", None)
-        return evaluation.recipe.evaluated(model, version=version)
+        return evaluation.evaluated(model, version=version)
 
     return click.command(help="Evaluate a published model export. --version defaults to the named export's version.")(
         build_options_with_runner(build, runner, default_version=initializer_version)
