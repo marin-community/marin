@@ -487,7 +487,7 @@ class TrainingContext:
             with observe_rollout_call(
                 step=job.lease.policy_step, mode=self.mode, enabled=self._rollout_spans
             ) as observation:
-                response_tokens = await self._workers.run_task(job, self._writer)
+                response_tokens = await self._workers.run_group_job(job, self._writer)
                 if observation is not None:
                     observation.response_tokens = response_tokens
         except Exception as error:

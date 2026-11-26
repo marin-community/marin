@@ -55,6 +55,7 @@ from marin.rl.skyrl_records import (
 )
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
+from skyrlrecipe import RecipePatch
 
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate, rl_publication
@@ -245,7 +246,7 @@ def build_experiment(
         "tasks": (selection.name, selection.version),
         "init": initializer.model_dump(mode="json") if initializer is not None else None,
         "layout": preset.recipe.layout.name,
-        "settings": sorted(recipe.override_document(settings).items()),
+        "settings": sorted(RecipePatch.settings_document(settings).items()),
         "evaluations": sorted(evaluation_inputs),
     }
     if resume is not None:

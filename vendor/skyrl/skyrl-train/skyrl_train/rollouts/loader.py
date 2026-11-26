@@ -194,6 +194,7 @@ class DatasetEntrySelector:
 
         Entries awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
         a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
+        Return None when no entry is currently eligible.
         """
 
         def eligible(uid: str) -> bool:

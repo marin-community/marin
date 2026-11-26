@@ -54,7 +54,7 @@ class PreferencePairTrajectoryRunner:
         self.generator_config = generator_config
         self.trajectory_sink: RetentionSink | None = None
 
-    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
+    async def run_group_job(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         batch = await self.run(job.request)
         return await write_trajectory_batch(job, writer, batch)
 

@@ -62,8 +62,10 @@ class RecipePatch(RecipeSections):
             document = merge_mappings(document, patch.to_skyrl())
         return type(self).from_document(document)
 
-    def with_settings(self, settings: Sequence[str]) -> Self:
-        document = self.to_skyrl()
+    @classmethod
+    def settings_document(cls, settings: Sequence[str], *, base: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Apply ordered typed settings to a sparse recipe document."""
+        document = dict(base) if base is not None else {}
         for setting in settings:
             key, separator, raw = setting.partition("=")
             if not separator or not key:
@@ -73,12 +75,15 @@ class RecipePatch(RecipeSections):
             set_path(patch, key, None)
             _reject_author_paths(patch)
             try:
-                value = parse_setting(type(self), key, raw)
+                value = parse_setting(cls, key, raw)
             except (ValidationError, json.JSONDecodeError) as error:
                 raise ValueError(f"setting {setting!r}: {error}") from error
             set_path(patch, key, value)
             document = merge_mappings(document, normalize_rollout_buffer_config(patch))
-        return type(self).from_document(document)
+        return document
+
+    def with_settings(self, settings: Sequence[str]) -> Self:
+        return type(self).from_document(self.settings_document(settings, base=self.to_skyrl()))
 
 
 class SkyRLRecipe(RecipePatch):

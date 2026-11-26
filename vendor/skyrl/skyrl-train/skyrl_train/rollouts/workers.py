@@ -31,7 +31,7 @@ _Result = TypeVar("_Result")
 class RolloutWorkers(Protocol):
     """The rollout processes that receive group jobs from dispatch."""
 
-    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
+    async def run_group_job(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         """Generate and write one group, returning its response token count."""
         ...
 
@@ -116,11 +116,11 @@ class RolloutWorker:
             output = await self._runner.run(input_batch)
         return output, None if observation is None else observation.timings()
 
-    async def run_task(
+    async def run_group_job(
         self, job: RolloutGroupJob, writer: RolloutWriter, observe: bool
     ) -> tuple[int, RolloutTimings | None]:
         with measure_rollout(enabled=observe) as observation:
-            response_tokens = await self._runner.run_task(job, writer)
+            response_tokens = await self._runner.run_group_job(job, writer)
         return response_tokens, None if observation is None else observation.timings()
 
     async def start_eval_session(
@@ -207,9 +207,9 @@ class RolloutWorkerPool:
             _training_phase(input_batch), lambda actor, observe: actor.run.remote(input_batch, observe)
         )
 
-    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
+    async def run_group_job(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         return await self._observed(
-            _training_phase(job.request), lambda actor, observe: actor.run_task.remote(job, writer, observe)
+            _training_phase(job.request), lambda actor, observe: actor.run_group_job.remote(job, writer, observe)
         )
 
     async def start_eval_session(

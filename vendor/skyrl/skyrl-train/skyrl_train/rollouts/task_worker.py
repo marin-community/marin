@@ -636,7 +636,7 @@ class TaskRolloutWorker:
     async def stop_eval_session(self) -> None:
         pass
 
-    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
+    async def run_group_job(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         with self._active_request():
             rollouts = await self.generate(job.request)
             batch = await self.training_batch(job.request, rollouts)

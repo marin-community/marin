@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import Provenance
 from scipy.stats import t
+from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import MISSING, get_path, normalize_rollout_buffer_config, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 from tabulate import tabulate
@@ -731,7 +732,7 @@ def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> s
 
 
 def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
-    values = recipe.override_document(inputs.settings)
+    values = RecipePatch.settings_document(inputs.settings)
     allowed = set()
     for key in keys:
         if key.startswith("skyrl."):

@@ -355,7 +355,7 @@ def compose_config_groups(config_groups: Mapping[str, str], *, config_name: str 
 
 
 def _resolve_max_outstanding_leases(config: DictConfig) -> None:
-    """Default the groups generating at once to OUTSTANDING_LEASE_BATCHES training batches."""
+    """Default the outstanding lease limit to a multiple of the training batch size."""
     rollout_buffer = config.trainer.rollout_buffer
     if rollout_buffer.max_outstanding_leases is not None:
         return

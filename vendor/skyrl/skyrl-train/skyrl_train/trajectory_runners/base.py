@@ -17,7 +17,7 @@ class TrajectoryRunner(Protocol):
 
     async def run(self, input_batch: TrajectoryRequestBatch) -> TrajectoryBatch: ...
 
-    async def run_task(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
+    async def run_group_job(self, job: RolloutGroupJob, writer: RolloutWriter) -> int:
         """Commit a leased prompt group and return its response token count."""
         ...
 

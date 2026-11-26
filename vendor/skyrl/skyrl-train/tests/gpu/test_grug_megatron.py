@@ -890,7 +890,7 @@ class _RecordedRollouts:
     def set_trajectory_sink(self, sink):
         sink.bind_runner(type(self).__name__)
 
-    async def run_task(self, job, writer):
+    async def run_group_job(self, job, writer):
         batch = copy.deepcopy(self.groups[job.entry["uid"]])
         async with self.ready:
             await self.ready.wait_for(lambda: self.order[0] == job.entry["uid"])

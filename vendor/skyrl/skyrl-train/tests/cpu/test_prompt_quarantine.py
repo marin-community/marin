@@ -67,7 +67,8 @@ def test_quarantine_warning_names_the_task(caplog):
     selector.record_disposition("2", UNUSABLE)
     logger.remove(handler)
 
-    assert "Quarantined entry 2 (task-2)" in caplog.text
+    assert "2" not in offered(selector, 5)
+    assert "task-2" in caplog.text
 
 
 def test_usable_group_resets_the_count():
