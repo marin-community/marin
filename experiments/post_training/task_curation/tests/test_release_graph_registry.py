@@ -23,11 +23,14 @@ from experiments.post_training.task_curation.release_stages import census as cen
 from experiments.post_training.task_curation.release_stages import graph as release_graph_module
 from experiments.post_training.task_curation.release_stages.graph import (
     GRAPH_RECEIPT_KIND,
+    REPO_ROOT,
     ComposeManifestDocument,
     StageReceipt,
     _execute_stage_node,
+    _plan_document_data,
     _seal_document,
     graph_nodes,
+    load_plan,
     release_graph,
     typed_inputs,
 )
@@ -716,3 +719,15 @@ def test_typed_inputs_coerce_reference_fields():
     assert isinstance(inputs.inputs, ArtifactRef)
     assert inputs.expected_sources == 2
     assert inputs.workers == 4
+
+
+def test_in_flight_r40_plan_reseals_its_recorded_plan_document():
+    """R40's sealed plan step pins its fingerprint; a plan-model edit must not move it.
+
+    The R40 plan still carries the prior oracle-inventory pin that the package no
+    longer reads; dropping the field from the model refused every R40 resume.
+    """
+    plan = load_plan(REPO_ROOT / "experiments/post_training/task_curation/release_stages/plans/r40.json")
+    assert release_graph(plan).plan_handle.fingerprint() == "c0088866"
+    without = plan.model_copy(update={"pins": plan.pins.model_copy(update={"oracle_inventory": None})})
+    assert "oracle_inventory" not in _plan_document_data(without)["pins"]

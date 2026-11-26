@@ -178,6 +178,9 @@ class ReleasePins(BaseModel):
     prior_coverage: ArtifactRef
     prior_manifest: ArtifactRef | None = None
     registry_index: ArtifactRef
+    # Plans cut before the package derived its inputs (R40) carry the prior oracle
+    # inventory. No stage reads it; it stays so their sealed plan documents reseal.
+    oracle_inventory: ArtifactRef | None = None
     source_counts: ArtifactRef
     exposure_input_check: ArtifactRef | None = None
     parity_receipt: ArtifactRef | None = None
@@ -329,6 +332,8 @@ def _plan_document_data(plan: ReleasePlan) -> dict:
     data = plan.model_dump(mode="json")
     if plan.main_source_sync is None:
         data.pop("main_source_sync", None)
+    if plan.pins.oracle_inventory is None:
+        data["pins"].pop("oracle_inventory", None)
     return data
 
 
