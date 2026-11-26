@@ -23,6 +23,7 @@ typed admission evidence.
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import logging
@@ -349,11 +350,13 @@ def save_digest_cache(uri: str) -> int:
 
 
 def _docker_hub_bearer() -> str | None:
-    """The authenticated Docker Hub token, when the runtime mounts one.
+    """The authenticated Docker Hub token source, when the runtime carries one.
 
-    Anonymous pulls carry Docker Hub's low rate limits; an authenticated token
-    raises them. The token is read from the standard mounted-secret or
-    environment names and is never logged.
+    Submit-time credentials arrive as DOCKERHUB_USERNAME/DOCKERHUB_TOKEN env vars
+    (the repair-candidate lane's established pattern — the Mac's Docker Desktop
+    credential, exchanged here for a pull token via auth.docker.io basic auth, which
+    raises the anonymous rate limit). Mounted secrets under the same names are the
+    fallback. The credentials are never logged.
     """
     global _DOCKER_HUB_TOKEN
     if _DOCKER_HUB_TOKEN is not None:
@@ -365,6 +368,15 @@ def _docker_hub_bearer() -> str | None:
         if value:
             _DOCKER_HUB_TOKEN = value.strip()
             return _DOCKER_HUB_TOKEN
+    return None
+
+
+def _docker_hub_credentials() -> tuple[str, str] | None:
+    """The username/secret pair for the pull-token exchange, when present."""
+    username = os.environ.get("DOCKERHUB_USERNAME")
+    secret = os.environ.get("DOCKERHUB_TOKEN") or _docker_hub_bearer()
+    if username and secret:
+        return username, secret
     return None
 
 
@@ -437,12 +449,20 @@ def _resolve_base_digest(reference: str) -> str:
         f"https://{token_host}/token?service={urllib.parse.quote(token_service)}"
         f"&scope=repository:{urllib.parse.quote(scope_repo)}:pull"
     )
-    bearer = _docker_hub_bearer()
-    if bearer:
-        token = bearer
-    else:
-        with _open_with_rate_limit_retry(token_url, f"{reference} token") as response:
+    credentials = _docker_hub_credentials()
+    if credentials:
+        username, secret = credentials
+        basic = base64.b64encode(f"{username}:{secret}".encode()).decode()
+        token_request = urllib.request.Request(token_url, headers={"Authorization": f"Basic {basic}"})
+        with _open_with_rate_limit_retry(token_request, f"{reference} token exchange") as response:
             token = json.loads(response.read())["token"]
+    else:
+        bearer = _docker_hub_bearer()
+        if bearer:
+            token = bearer
+        else:
+            with _open_with_rate_limit_retry(token_url, f"{reference} token") as response:
+                token = json.loads(response.read())["token"]
     request = urllib.request.Request(
         f"https://{registry_host}/v2/{scope_repo}/manifests/{urllib.parse.quote(tag)}",
         headers={"Authorization": f"Bearer {token}", "Accept": MANIFEST_ACCEPT},
