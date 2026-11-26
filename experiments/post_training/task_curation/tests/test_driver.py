@@ -17,6 +17,7 @@ from finestore.rl.curation import CurationCatalog
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Command, HostImage, Mount, NetworkPolicy
@@ -83,7 +84,7 @@ def catalog(monkeypatch, tmp_path):
     return pipelines
 
 
-STORE_NAME, STORE_VERSION = "fixture", "2026.11.26.1"
+STORE_NAME, STORE_VERSION, RETRY_VERSION = "fixture", "2026.11.26.1", "2026.11.26.2"
 STORE_OPTION = f"{STORE_NAME}@{STORE_VERSION}"
 
 
@@ -446,7 +447,8 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
     assert manifest["raw_population_count"] == 6 and manifest["raw_sample_count"] == 2
     assert len(review_server.requests) == 2
     assert (cache / "review-cache").exists()
-    repeated = runner.invoke(main, [*args, "--normalized-shards", "2"])
+    # The rebuilt source is another source set, so it needs another store version.
+    repeated = runner.invoke(main, [*args, "--normalized-shards", "2", "--task-store", f"{STORE_NAME}@{RETRY_VERSION}"])
     assert repeated.exit_code == 0, repeated.output
     rebuilt = json.loads((cache / "campaigns/campaign.json").read_text())["sources"][0]
     assert rebuilt["path"] != outcome["path"]
@@ -548,8 +550,9 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     ]
     result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
-    with artifact_prefix(str(cache)), pytest.raises(FileNotFoundError):
-        TaskStore.open(STORE_NAME, STORE_VERSION)
+    # The failed campaign still builds its store, without the incomplete source.
+    with artifact_prefix(str(cache)):
+        assert TaskStore.open(STORE_NAME, STORE_VERSION).sources == {}
     campaign = json.loads((cache / "campaigns/campaign.json").read_text())
     outcome = campaign["sources"][0]
     assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
@@ -567,13 +570,18 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     assert repeated.exit_code != 0
     assert review_server.requests == requests
     review_server.review_available = True
-    retried = CliRunner().invoke(main, [*args, "--curation-attempt", "1"])
+    # A recovered campaign has another source set, so the store version it already wrote refuses it.
+    stale = CliRunner().invoke(main, [*args, "--curation-attempt", "1"])
+    assert isinstance(stale.exception, FingerprintMismatchError)
+    retried = CliRunner().invoke(
+        main, [*args, "--curation-attempt", "1", "--task-store", f"{STORE_NAME}@{RETRY_VERSION}"]
+    )
     assert retried.exit_code == 0, retried.output
     recovered = json.loads((cache / "campaigns/campaign.json").read_text())
     assert recovered["sources"][0]["status"] == "completed"
     assert recovered["sources"][0]["path"] != outcome["path"]
     with artifact_prefix(str(cache)):
-        store = TaskStore.open(STORE_NAME, STORE_VERSION)
+        store = TaskStore.open(STORE_NAME, RETRY_VERSION)
     entry = store.sources[source.info.id]
     # The report records the assessment step; the store pins the curation artifact it assessed.
     assert isinstance(entry, CuratedSource) and Path(entry.root).parent.parent == cache / "data/rl"

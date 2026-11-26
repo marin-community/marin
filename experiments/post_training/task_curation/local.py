@@ -123,5 +123,5 @@ def run_local_steps(
     failed = any(outcome.status == OutcomeStatus.FAILED for outcome in outcomes.values())
     report(CampaignStatus.FAILED if failed else CampaignStatus.COMPLETED)
     if failed:
-        raise CampaignFailed(f"Quick conversion failed for some sources; see {report_path}")
+        raise CampaignFailed(f"Quick conversion failed for some sources; see {report_path}", tuple(outcomes.values()))
     return tuple(outcomes.values())

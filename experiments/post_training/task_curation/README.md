@@ -20,13 +20,14 @@ for the handoff to [Snowball RL experiments](../../../docs/recipes/rl-experiment
 ## Task store
 
 Every SAMPLE or FULL campaign takes `--task-store NAME@VERSION`. After the
-campaign succeeds, the driver builds that [`TaskStore`](task_store.py) from the
-run's sources. A store records where each source's tasks live and the SHA-256
+campaign, the driver builds that [`TaskStore`](task_store.py) from the run's
+sources that finished, then prints its path and the sources it left out; a source
+that failed or ended incomplete is left out, and the campaign still reports the
+failure. A store records where each source's tasks live and the SHA-256
 that pins them: a curation artifact's canonical `manifest.json`, or the bytes of
 a released Parquet file. It copies no task data and does not hash a curated
 source's `final/` files. A dataset-owned pipeline that writes no curation
-manifest admits no tasks, so the store leaves it out. A failed campaign builds
-no store.
+manifest admits no tasks, so the store leaves it out.
 
 ```python
 store = TaskStore.open("snowball", "2026.11.26.1")
@@ -39,8 +40,9 @@ raises `FileNotFoundError` when none is there. `to_dataset()` returns a Zephyr
 dataset of `TaskRow(source_id, task_id, task_spec)` over each curated source's
 admitted `final/` rows and each released file's `task_spec` rows; it fails when
 a pinned manifest or released file changed. `select_sources(...)` restricts the
-store to the named sources. An existing `NAME@VERSION` is reused, so a new set
-of sources needs a new version. A rerun of an earlier campaign reuses its
+store to the named sources. A store version keeps the sources it was first built
+with: a run with the same sources reuses it, and a run with other sources fails
+with `FingerprintMismatchError` until it names a new version. A rerun of an earlier campaign reuses its
 completed source artifacts, so building a store for it costs one manifest read
 per source. Training selection reads its sources through the same readers.
 `task_store_step(name, version, curated=..., released=...)` builds a store

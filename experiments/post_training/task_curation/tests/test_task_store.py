@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
+from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.lazy import ArtifactStep, resolve, run
 from taskcompendium.models import (
     AnswerType,
@@ -140,3 +141,16 @@ def test_store_reads_the_admitted_files_its_manifest_records_and_refuses_missing
         path.unlink()
     with pytest.raises(ValueError, match="admitted 2 tasks"):
         store.to_dataset()
+
+
+def test_a_store_version_keeps_the_sources_it_was_first_built_with(tmp_path):
+    math = curated_source(tmp_path / "math", ["m1"])
+    code = curated_source(tmp_path / "code", ["c1"])
+    run(task_store_step("fixture", "2026.11.26.1", curated={"fixture:math": math}, released={}))
+    run(task_store_step("fixture", "2026.11.26.1", curated={"fixture:math": math}, released={}))
+
+    with pytest.raises(FingerprintMismatchError):
+        run(
+            task_store_step("fixture", "2026.11.26.1", curated={"fixture:math": math, "fixture:code": code}, released={})
+        )
+    assert list(TaskStore.open("fixture", "2026.11.26.1").sources) == ["fixture:math"]

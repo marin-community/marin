@@ -12,7 +12,7 @@ import hashlib
 import io
 import json
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, Literal
 
 import pyarrow.parquet as pq
@@ -167,7 +167,7 @@ def task_store_step(
             released=dict(released),
         )
 
-    return ArtifactStep(
+    step = ArtifactStep(
         name=f"{TASK_STORE_PREFIX}/{name}",
         version=version,
         artifact_type=TaskStore,
@@ -175,6 +175,9 @@ def task_store_step(
         run=build_task_store,
         build_config=build_config,
     )
+    # A fixed version keeps the sources it was first built with: another set fails instead of
+    # silently reusing the older record.
+    return replace(step, expected_fingerprint=step.fingerprint())
 
 
 def task_store_path(name: str, version: str) -> str:

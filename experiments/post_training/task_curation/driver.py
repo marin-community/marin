@@ -5,7 +5,7 @@
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from functools import partial
@@ -47,10 +47,12 @@ from experiments.post_training.task_curation.assessment import (
     assessment_pipeline,
 )
 from experiments.post_training.task_curation.campaign import (
+    FAILED_OUTCOMES,
     CampaignArtifact,
     CampaignFailed,
     CampaignPool,
     CampaignRuntime,
+    SourceOutcome,
     campaign_plan,
     run_campaign,
 )
@@ -297,13 +299,22 @@ def _task_store_identity(value: str) -> tuple[str, str]:
     return name, version
 
 
-def _build_task_store(identity: tuple[str, str], curated: Mapping[str, ArtifactStep]) -> str:
-    """Build the campaign's task store from its sources that wrote a curation manifest; return its path."""
+def _build_task_store(
+    identity: tuple[str, str],
+    curated: Mapping[str, ArtifactStep],
+    outcomes: Sequence[SourceOutcome],
+    source_ids: Mapping[str, str],
+) -> dict[str, object]:
+    """Build the campaign's store from its finished sources that wrote a curation manifest."""
+    finished = {source_ids[outcome.name] for outcome in outcomes if outcome.status not in FAILED_OUTCOMES}
     # A dataset-owned pipeline without a curation manifest admits no tasks to pin.
     pinned = {
-        source_id: step for source_id, step in curated.items() if (StoragePath(step.path()) / MANIFEST_FILENAME).exists()
+        source_id: step
+        for source_id, step in curated.items()
+        if source_id in finished and (StoragePath(step.path()) / MANIFEST_FILENAME).exists()
     }
-    return run(task_store_step(*identity, curated=pinned, released={}), max_concurrent=1)[0].path
+    store = run(task_store_step(*identity, curated=pinned, released={}), max_concurrent=1)[0]
+    return {"path": store.path, "left_out": sorted(curated.keys() - pinned.keys())}
 
 
 def _step_plan(step: ArtifactStep) -> dict[str, object]:
@@ -851,23 +862,26 @@ def main(
         if assessment is not None:
             assert recipe_settings.review_cache is not None
             compact_query_cache(recipe_settings.review_cache)
+        source_ids = {step.name: source.info.id for step, source in zip(steps, selected.values(), strict=True)}
         try:
-            run_campaign(
+            outcomes = run_campaign(
                 steps,
                 runtime=runtime,
                 pool=pool,
                 report_path=report_path,
                 catalog_root=publication_root,
                 mode=processing_mode,
-                source_ids={step.name: source.info.id for step, source in zip(steps, selected.values(), strict=True)},
+                source_ids=source_ids,
                 assessments=assessments,
             )
-        except CampaignFailed:
+        except CampaignFailed as failure:
             _publish_campaign(report_path, selected, publication_root)
+            store = _build_task_store(store_identity, curated, failure.outcomes, source_ids)
+            click.echo(json.dumps({TASK_STORE_KEY: store}, indent=2))
             raise
-        else:
-            _publish_campaign(report_path, selected, publication_root)
-        click.echo(json.dumps({TASK_STORE_KEY: _build_task_store(store_identity, curated)}, indent=2))
+        _publish_campaign(report_path, selected, publication_root)
+        store = _build_task_store(store_identity, curated, outcomes, source_ids)
+        click.echo(json.dumps({TASK_STORE_KEY: store}, indent=2))
         if selection_step is not None or embedding is not None:
             roots = {source_id: step.path() for source_id, step in curated.items()}
             _write_corpus(roots, inventory, report_path, "admitted")

@@ -54,6 +54,10 @@ class OutcomeStatus(StrEnum):
     FAILED = "failed"
 
 
+FAILED_OUTCOMES = frozenset({OutcomeStatus.FAILED, SourceStatus.INCOMPLETE})
+"""Source outcomes that fail a campaign."""
+
+
 @dataclass
 class CampaignRuntime:
     """Bind source callbacks to the live pool without entering artifact identity."""
@@ -99,6 +103,10 @@ class SourceOutcome:
 
 class CampaignFailed(RuntimeError):
     """The campaign retained completed sources but at least one source failed."""
+
+    def __init__(self, message: str, outcomes: tuple[SourceOutcome, ...]) -> None:
+        super().__init__(message)
+        self.outcomes = outcomes
 
 
 class CampaignArtifact(Artifact):
@@ -282,8 +290,8 @@ def run_campaign(
         write_report(CampaignStatus.FAILED)
         raise
     ordered = tuple(outcomes[step.name] for step in steps)
-    failed = any(outcome.status in (OutcomeStatus.FAILED, SourceStatus.INCOMPLETE) for outcome in ordered)
+    failed = any(outcome.status in FAILED_OUTCOMES for outcome in ordered)
     write_report(CampaignStatus.FAILED if failed else CampaignStatus.COMPLETED)
     if failed:
-        raise CampaignFailed(f"Campaign failed; retained source outcomes at {report_path}")
+        raise CampaignFailed(f"Campaign failed; retained source outcomes at {report_path}", ordered)
     return ordered
