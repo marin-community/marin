@@ -239,7 +239,7 @@ def retained_source(info: SourceInfo, pin: RetainedPin, name: str) -> RlDataSour
         "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
         f"original oversight and quality evidence apply through this subset lineage: {pin.evidence_url}. "
     )
-    notes = info.notes if info.notes.startswith(prefix) else prefix + info.notes
+    notes = prefix + info.notes
     bound_info = replace(
         info,
         current_release=pin.release,
