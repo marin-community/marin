@@ -190,151 +190,55 @@ checkpoints or export; learner and engine token rates are descriptive telemetry.
 
 ## Qwen sampler development loop
 
-The Qwen3-0.6B loop runs on two colocated H100s at interactive priority. Its fixed pool contains
-4,608 training prompts across arithmetic, string transformations and list operations. Each family
-includes three complexity levels. A private script scores the extracted answer in ShellSim with
-guest networking disabled. The 36-task fast evaluation and 144-task full evaluation use a separate
-seed. The fast panel is a subset of the full panel.
+Use Qwen3-0.6B to check sampler behavior on two H100s. Its ShellSim grader scores arithmetic,
+string transformations and list operations with guest networking disabled. All arms reuse the
+same 4,608 training prompts, model, tokenizer and prepared-task cache.
 
-Publish the pool once, then reuse it across runs. Use the eastern CoreWeave storage prefix and
-the usual Iris hub and W&B credentials.
+Plan the ranked sampler and its uniform control from the same checkout with CoreWeave storage credentials:
 
 ```bash
 export MARIN_PREFIX=s3://marin-us-east-02a/marin
-uv run python -m experiments.post_training.task_curation.qwen_sampler_lab --run
-uv run python -m experiments.post_training.qwen_sampler --preset smoke-fixed \
-  --version 2026.11.25.6 --issue 12201 --priority interactive --plan
-```
-
-Replace `--plan` with `--run --wait` to execute. The `smoke-*` presets run four updates and the
-`pilot-*` presets run 32. Each update draws 16 groups of four completions. The fast panel runs
-at initialization and after the last update, with intermediate evaluations every eight updates
-for the pilots. The pinned Qwen tokenizer template enables thinking, with up to 4,096 output
-tokens in a 4,608-token window. The presets skip native checkpoints, model exports and trajectory
-retention.
-
-On Reno, the partial-node presets request two H100s, 16 CPUs, 64 GiB of RAM and 200 GiB of disk
-per gang. Submit independent presets concurrently through the Iris hub. The
-`rno-pair-budget-confirm-*` presets evaluate at initialization and at the first completed optimizer
-update reaching three million gross training response tokens. Compare the actual spend recorded
-in `rollout/gross_response_tokens_total`. Rejected training groups count toward the budget.
-
-The `rno-pair-source-smoke-within-source` preset first allocates slots according to the prepared
-reference shares, then ranks distinct prompts within each source by predicted useful signal and
-cost. Its `-random` control uses the same source schedule and draws prompts uniformly within each
-source. Both use the 36-task fast panel for wiring checks.
-The `rno-pair-source-confirm-*` presets evaluate on 288 new instances from the same nine
-strata at initialization and after crossing 5,242,880 gross training response tokens. Publish this
-held-out artifact once with the following command.
-
-```bash
-uv run python -m experiments.post_training.task_curation.qwen_sampler_lab \
-    --source-eval --run
-```
-
-The `rno-pair-source-pass-smoke-*` presets run four updates with the 36-task fast panel.
-They pair ranked and uniform picks at seed 83. Both use the same source schedule and restrict
-selection to the least-visited eligible prompts within the assigned source.
-The `rno-pair-source-pass-confirm-*` presets use seeds 83 and 97 and include both pass policies,
-the existing within-source ranking, and source Thompson sampling. The confirmation runs stop
-at the first update reaching 5,242,880 gross training response tokens, with a cap of 220 updates.
-They evaluate before training and at the stop on a separate 288-task panel that excludes all
-prior training and evaluation prompts. Publish the panel with the following command.
-
-```bash
-uv run python -m experiments.post_training.task_curation.qwen_sampler_lab \
-    --pass-eval --run
-```
-
-The model and tokenizer come from the regional Qwen artifact at revision `c1899de`. SkyRL caches
-the lowered and tokenized training rows across sampler policies with the same immutable data,
-tokenizer, task settings and preparation code. Compare elapsed time from submission, worker start
-and first optimizer update when measuring the cost of an iteration.
-
-For frozen-policy sampler replay, point the client at an existing Iris vLLM endpoint serving
-`s3://marin-us-east-02a/marin/models/Qwen--Qwen3-0-6B--c1899de`. Set the serving context limit
-above the largest generation cap plus the input prompt. The default panel uses 16 train-only
-prompts per family and difficulty, with two four-completion groups per prompt.
-
-```bash
-uv run python -m experiments.post_training.qwen_sampler_replay \
-  --endpoint /serve/qwen-sampler-replay --cap 4096 --seed 20261127 --output qwen-replay
-```
-
-The client writes scored responses and a manifest with the model URI and revision, tokenizer and template
-hashes, data version and sampling seeds. Use this bank to replay sampler decisions against fixed
-outcomes. Online RL generates fresh rollouts from the current policy.
-
-The first replay bank contains 1,152 responses from 144 distinct train-only prompts, covering 16
-prompts in each family and difficulty cell. Its manifest, per-cell counts, cap comparison, and
-ShellSim spot checks are at
-`s3://marin-us-east-02a/marin/rl-data/replay-banks/qwen-sampler-lab/2026.11.25.1/`.
-[Open the replay bank in Filer](https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Frl-data%2Freplay-banks%2Fqwen-sampler-lab%2F2026.11.25.1%2F).
-
-## Four-source Snowball sampler experiment
-
-The opt-in `experiments.post_training.snowball_sampler` entry trains the Datakit SFT checkpoint
-(`fe666478454e79fe6027a0bab0388d9abd68f51a`) on 1,024 tasks. The preparation step samples
-256 tasks each from generated arithmetic, scheduling, instruction-following calendar, and
-structured JSON. Arithmetic uses the named `chain_sum`, `base_conversion`, `basic_arithmetic`,
-and `leg_counting` generator contracts. The builder reuses the admitted source roots recorded in
-`snowball-100k@2026.11.19.1`, removes overlaps with its 910-task development panel and all 1,500
-`eval-lite@2026.11.17.1` tasks, and verifies each family quota before publication.
-
-Use the eastern CoreWeave credentials for the selection and plan, and the normal Snowball W&B
-credentials for submission. Prepare once from the branch containing the sampler:
-
-```bash
-export MARIN_PREFIX=s3://marin-us-east-02a/marin
-uv run python -m experiments.post_training.task_curation.snowball_sampler_selection --run
-uv run python -m experiments.post_training.snowball_sampler --preset smoke-fixed-sync-chunked \
-  --version 2026.11.25.4 --priority interactive --issue 12201 --plan
-```
-
-All arms use 40 H100s at interactive priority, 128 groups of four per optimizer update and up to
-32 simultaneous rollout groups. The asynchronous presets allow two updates of staleness.
-The fixed and adaptive arms use the same family-aware sampler and equal reference shares. The fixed arm puts all its
-draw probability on those reference shares. The adaptive arm uses 20% reference exploration,
-decay 0.95 and a Beta(1, 1) prior. The optional `pilot-thompson` uses the same verified
-groups, decay, prior, and draw windows. Each feedback batch redraws the family weights
-from their Beta posteriors with the existing Thompson policy’s 0.05 floor parameter.
-All arms evaluate EvalLite’s same 100 frozen active tasks with greedy decoding.
-
-Use `smoke-fixed-sync-chunked` for the paid four-update calibration. Its learner projects 1,024
-tokens at a time onto the 128,256-token vocabulary. A BF16 vocabulary tensor for one chunk
-occupies 0.245 GiB. The preset retains the 8,192-token response cap, scores the 100-task panel
-at initialization and completion, and saves and exports the terminal policy. Synchronous dispatch
-closes the 128 training groups before each optimizer update. To run, replace `--plan` with
-`--run --wait`. Sum `rollout/gross_response_tokens` over all four updates and reconcile it
-with all training leases, including failed and untrainable results with generated tokens,
-before using the total to select a common pilot budget.
-
-The paid revision `.4` used four-proposal Datakit DSpark and the vLLM wheel pinned by its
-launch bundle. When changing that wheel, requalify the fixed four-update wiring and use
-the same wheel and pinned draft in both arms of the ensuing sampler comparison.
-
-The source-preserving `within-source` and `within-source-random` arms use the prepared catalog's
-family shares. They respectively rank prompts by predicted useful groups per token with 5%
-exploration, or draw uniformly within the same source windows. Their asynchronous four-update
-smokes use revision `2026.11.25.3` and evaluate at steps 0, 2 and 4. Inspect actual dispatched
-family shares, closed leases and optimizer receipts before interpreting fixed-update pilots.
-
-```bash
-for arm in pilot-within-source pilot-within-source-random; do
-  uv run python -m experiments.post_training.snowball_sampler --preset "$arm" \
-    --version 2026.11.25.3 --priority interactive --issue 12201 --run --wait || break
+for arm in within-source-pass within-source-pass-random; do
+  uv run python -m experiments.post_training.qwen_sampler \
+    --preset "east02-pair-source-pass-smoke-${arm}" --version dev --priority interactive --plan
 done
 ```
 
-Compare paired task scores at steps 0, 10 and 20 with per-family coverage. The step-20 exports
-give a fixed-update comparison. Record GPU-hours, total generated tokens including rejected groups,
-and family shares for each arm. A second adaptive arm can set `--set data.sampling.epsilon=0.1`.
-For a token-matched comparison, set the common threshold to five times the reconciled gross
-training response tokens from the four-update fixed calibration. Run each arm synchronously
-with the same optimizer safety cap and evaluate at its stopping update. The final batch can
-overshoot the threshold. Report both totals and compare learning at matched cost only when
-they differ by at most 5% of the smaller total. Reserve the other 1,400 EvalLite tasks for
-independent confirmation.
+Replace `--plan` with `--run --wait` for an individual run. Each smoke runs four synchronous
+updates, 16 prompts per update and four completions per prompt, with thinking enabled and
+a 4,096-token response cap. The two arms use the same source schedule. They rank or uniformly
+sample among the least-visited eligible prompts in each source. Check dispatches, verifier
+results, optimizer joins and coverage on the 36-task panel at initialization and completion.
+
+For a learning comparison, `east02-pair-source-pass-confirm-<arm>-seed<seed>` adds source
+Thompson (`thompson`) and ranking with prompt reuse (`within-source`) to the two smoke policies.
+The presets use seeds 83 and 97, a separate 288-task panel and a common 5,242,880-token training
+budget. Compare each arm's change from initialization at its actual stopping update. Reconcile
+all dispatched training tokens, including rejected groups, and report actual spend and H100-hours.
+The protocol, earlier pilot and replay commands, per-seed results and costs are recorded in the
+[adaptive sampler study](https://github.com/marin-community/marin/pull/12313).
+
+## Four-source Snowball sampler experiment
+
+Use `smoke-fixed-sync-chunked` to calibrate training cost on the Datakit SFT initializer and
+the pinned four-source selection. It includes 256 tasks each from arithmetic, scheduling,
+instruction-following calendar and structured JSON. The selection excludes the full EvalLite panel.
+
+```bash
+export MARIN_PREFIX=s3://marin-us-east-02a/marin
+uv run python -m experiments.post_training.snowball_sampler \
+  --preset smoke-fixed-sync-chunked --version dev --priority interactive --plan
+```
+
+The fixed run uses 40 H100s, four synchronous updates, 128 groups of four completions per
+update and up to 32 active rollout groups. The learner projects 1,024 tokens at a time to
+retain the 8,192-token response cap. Replace `--plan` with `--run --wait` to execute. Check both
+100-task EvalLite evaluations, the step-4 native checkpoint and its HF export. Reconcile the
+sum of `rollout/gross_response_tokens` with all closed training leases before fixing a common
+budget for sampler comparisons. Keep the initializer, draft, vLLM wheel, task selection and
+concurrency identical across arms. The [calibration receipt](https://github.com/marin-community/marin/pull/12313#issuecomment-7179173363)
+records the verified export and the separate conversion cost.
+The [Mochi baseline issue](https://github.com/marin-community/marin/issues/12201) gives the transfer context.
 
 ## Dashboard publication
 
