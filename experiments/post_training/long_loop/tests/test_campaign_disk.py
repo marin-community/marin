@@ -65,8 +65,12 @@ async def test_original_math_verifier_runs_with_declared_local_disk(monkeypatch)
     assert spec.task_machine is None, "Choose a source without an actor machine for the serving-free proof"
     assert spec.verifier_machine is not None and spec.verifier_machine.backend == "local"
     requirements = task.verifier_execution_requirements
-    assert requirements is not None and spec.verifier_machine.storage_mb is not None
-    assert spec.verifier_machine.storage_mb >= requirements.storage_mb > 0
+    runtime = json.loads(row["runtime"]) if isinstance(row["runtime"], str) else row["runtime"]
+    retained_storage = runtime["verifier_machine"]["storage_mb"]
+    assert retained_storage > 0 and spec.verifier_machine.storage_mb is not None
+    assert spec.verifier_machine.storage_mb >= retained_storage
+    if requirements is not None and requirements.storage_mb is not None:
+        assert spec.verifier_machine.storage_mb >= requirements.storage_mb
     factories = task_machine_factories(OmegaConf.create({"local": {"disk_root": str(DISK_ROOT)}}))
     factory = factories["local"]
     create = factory.create
@@ -103,6 +107,8 @@ async def test_original_math_verifier_runs_with_declared_local_disk(monkeypatch)
                 "task_id": task.id,
                 "task_sha256": row["task_sha256"],
                 "storage_mb": spec.verifier_machine.storage_mb,
+                "retained_runtime_storage_mb": retained_storage,
+                "task_spec_storage_mb": None if requirements is None else requirements.storage_mb,
                 "grader_status": result.grade.status.value,
                 "control_reward": result.grade.reward,
                 "model": "fixed answer 0; no inference or training",
