@@ -82,9 +82,25 @@ def _qualify_local_pool() -> dict:
 
 def _qualify_daytona_storage() -> dict:
     """Acquire one real Daytona machine carrying the quota and verify the allocation."""
-    from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
     from shellbox.requirements import Requirement  # noqa: PLC0415
     from shellbox.survey import requirement_probe  # noqa: PLC0415
+
+    if os.environ.get("DAYTONA_DATA_API_KEY") is None:
+        return {"backend": "daytona", "qualified": False, "reason": "DAYTONA_DATA_API_KEY not configured"}
+    try:
+        import daytona  # noqa: F401,PLC0415 — the backend SDK the survey's stage installs
+    except ImportError:
+        installed = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "daytona==0.200.2"],
+            capture_output=True,
+            text=True,
+        )
+        if installed.returncode != 0:
+            return {"backend": "daytona", "qualified": False, "reason": (installed.stderr or "").strip()[-200:]}
+    try:
+        from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
+    except Exception as error:
+        return {"backend": "daytona", "qualified": False, "reason": f"{type(error).__name__}: {str(error)[:200]}"}
 
     if os.environ.get("DAYTONA_DATA_API_KEY") is None:
         return {"backend": "daytona", "qualified": False, "reason": "DAYTONA_DATA_API_KEY not configured"}
