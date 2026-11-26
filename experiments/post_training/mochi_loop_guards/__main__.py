@@ -5,6 +5,8 @@
 
 import os
 
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
 from experiments.post_training import rl, rl_compose
 from experiments.post_training.mochi_loop_guards.presets import (
     S0,
@@ -27,6 +29,7 @@ GUARDS = ModelPresets(
 
 
 if __name__ == "__main__":
+    configure_coreweave_s3()
     # These experiment selections are published in the execution region, rather than
     # task curation's canonical 02a root. Every stage uses the same regional binding.
     rl_compose.SELECTION_ROOT = f"{REGIONAL_ROOT}/rl-data/task-selection"
