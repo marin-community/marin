@@ -193,7 +193,6 @@ def _passes(program: str) -> bool:
         ("output", NESTED_ARGUMENTS, NESTED, f"assert f({NESTED_ARGUMENTS}) == [('u', 2)]{TURN_END}", False),
         ("output", "3, 4", "7", f"assert f(3, 4) == 7{TURN_END}", True),
         ("output", "3, 4", "7", f"assert f(3, 4) == 8{TURN_END}", False),
-        # An untagged answer inside a code fence is not read.
         ("output", "3, 4", "7", "```python\nassert f(3, 4) == 7\n```", False),
     ],
 )

@@ -559,7 +559,6 @@ def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, t
     monkeypatch.setattr(rl_compose, "marin_temp_bucket", lambda *_args, **_kwargs: str(scratch))
     result = plan(MOCHI, "train-medium-agentic")
     assert result.exit_code == 0, (result.output, result.exception)
-    # The plan prints the YAML status, then the lowered steps, then every artifact's name@version.
     status = printed_status(result.stdout)
     resolved = result.stdout.partition("\nResolved versions:\n")[2].split()
     (run,) = status["runs"]
