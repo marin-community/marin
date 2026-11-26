@@ -17,7 +17,6 @@ from finestore.rl.curation import CurationCatalog
 from finestore.rl.status_taxonomy import DataRestriction
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from marin.execution.artifact import FingerprintMismatchError
 from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Command, HostImage, Mount, NetworkPolicy
@@ -550,9 +549,8 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     ]
     result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
-    # The failed campaign still builds its store, without the incomplete source.
-    with artifact_prefix(str(cache)):
-        assert TaskStore.open(STORE_NAME, STORE_VERSION).sources == {}
+    with artifact_prefix(str(cache)), pytest.raises(FileNotFoundError):
+        TaskStore.open(STORE_NAME, STORE_VERSION)
     campaign = json.loads((cache / "campaigns/campaign.json").read_text())
     outcome = campaign["sources"][0]
     assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
@@ -570,18 +568,13 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     assert repeated.exit_code != 0
     assert review_server.requests == requests
     review_server.review_available = True
-    # A recovered campaign has another source set, so the store version it already wrote refuses it.
-    stale = CliRunner().invoke(main, [*args, "--curation-attempt", "1"])
-    assert isinstance(stale.exception, FingerprintMismatchError)
-    retried = CliRunner().invoke(
-        main, [*args, "--curation-attempt", "1", "--task-store", f"{STORE_NAME}@{RETRY_VERSION}"]
-    )
+    retried = CliRunner().invoke(main, [*args, "--curation-attempt", "1"])
     assert retried.exit_code == 0, retried.output
     recovered = json.loads((cache / "campaigns/campaign.json").read_text())
     assert recovered["sources"][0]["status"] == "completed"
     assert recovered["sources"][0]["path"] != outcome["path"]
     with artifact_prefix(str(cache)):
-        store = TaskStore.open(STORE_NAME, RETRY_VERSION)
+        store = TaskStore.open(STORE_NAME, STORE_VERSION)
     entry = store.sources[source.info.id]
     # The report records the assessment step; the store pins the curation artifact it assessed.
     assert Path(entry.root).parent.parent == cache / "data/rl"

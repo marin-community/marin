@@ -952,11 +952,11 @@ the campaign reports failure. `--curation-attempt N` selects a new curation key
 when controls need a retry; successful exact review requests and pinned downloads
 remain cached. Rerun the same campaign to reuse completed dependencies.
 
-`--task-store NAME@VERSION` is required for SAMPLE and FULL. After a campaign,
-the driver builds that
+`--task-store NAME@VERSION` is required for SAMPLE and FULL. After a campaign
+succeeds, the driver builds that
 [task store](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#task-store)
-from the sources that finished and prints its path and the sources it left out;
-`TaskStore.open(NAME, VERSION)` reads it. A version keeps the sources it was first
+from the run's sources and prints its path; `TaskStore.open(NAME, VERSION)` reads
+it. A failed campaign builds no store. A version keeps the sources it was first
 built with, so a rerun whose sources changed needs a new version.
 `--assessment-model-revision` changes the grading model revision separately from
 the curation review revision.

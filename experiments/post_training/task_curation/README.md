@@ -20,11 +20,12 @@ for the handoff to [Snowball RL experiments](../../../docs/recipes/rl-experiment
 ## Task store
 
 Every SAMPLE or FULL campaign takes `--task-store NAME@VERSION`. After the
-campaign, the driver builds that [`TaskStore`](task_store.py) from the sources
-that finished and prints its path and the sources it left out. A failed or
-incomplete source is left out, and the campaign still reports the failure. So is
-a dataset-owned pipeline that writes no curation manifest, since it admits no
-tasks. A store records each source's curation artifact and the SHA-256 of its
+campaign succeeds, the driver builds that [`TaskStore`](task_store.py) from the
+run's sources as its last step and prints the store's path and the sources it
+left out: a dataset-owned pipeline that writes no curation manifest admits no
+tasks. A failed campaign builds no store; rerun it once the failure is fixed, or
+rerun with `--source` for the sources that completed. Either rerun reuses the
+completed source artifacts. A store records each source's curation artifact and the SHA-256 of its
 canonical `manifest.json`; it copies no task data and does not hash the admitted
 files.
 
