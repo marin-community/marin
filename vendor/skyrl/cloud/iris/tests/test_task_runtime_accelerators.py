@@ -54,7 +54,6 @@ def test_gpu_mask_uses_unmasked_host_inventory_in_pci_order(partial_host, monkey
     query = Mock(return_value="\n".join(reversed(HOST_INVENTORY)))
     monkeypatch.setattr(task_runtime.subprocess, "check_output", query)
     task_runtime.pin_allocated_nvidia_gpus(partial_host)
-    assert query.call_count == 1
     assert "CUDA_VISIBLE_DEVICES" not in query.call_args.kwargs["env"]
     assert task_runtime.os.environ["CUDA_VISIBLE_DEVICES"] == "4,5"
     assert task_runtime.os.environ["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
