@@ -581,13 +581,14 @@ class TaggedEvaluator(Generic[Ex, M]):
                     "bt,bt,bk->k", bytes_per_pos, weights, tags, out_sharding=per_tag_out_sharding
                 )
 
-                bpb = this_loss / jnp.maximum(this_bytes, 1.0) * log2e
-                bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e
+                bpb = jnp.where(this_bytes > 0, this_loss / this_bytes, 0.0) * log2e
+                bpb_per_tag = jnp.where(bytes_per_tag > 0, this_loss_per_tag / bytes_per_tag, 0.0) * log2e
 
-                bpb_mean = state.bpb.add(bpb, this_weights)
+                # Weighting each batch's ratio by its bytes makes the running mean total bits over total bytes.
+                bpb_mean = state.bpb.add(bpb, this_bytes)
                 state = dataclasses.replace(state, bpb=bpb_mean)
                 if len(self.dataset.tag_to_index) > 0:
-                    bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_weights_per_tag)
+                    bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, bytes_per_tag)
                     state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
 
             return state
@@ -639,7 +640,9 @@ class TaggedEvaluator(Generic[Ex, M]):
 
             if self.bytes_per_token is not None:
                 tag_macro_bpb[parent] = np.mean(mean_bits_per_tag_cpu, where=mask)
-                tag_micro_bpb[parent] = np.average(mean_bits_per_tag_cpu, weights=total_bytes_per_tag_cpu * mask)
+                byte_weights = total_bytes_per_tag_cpu * mask
+                if byte_weights.sum() > 0:
+                    tag_micro_bpb[parent] = np.average(mean_bits_per_tag_cpu, weights=byte_weights)
 
         for tag, index in self.dataset.tag_to_index.items():
             if not scored_tags[index]:
