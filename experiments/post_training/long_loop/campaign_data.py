@@ -146,6 +146,15 @@ def write_parquet(destination: StoragePath, name: str, rows: list[dict]) -> str:
     return expected
 
 
+def retained_task(row: dict, label: str) -> TaskSpec:
+    """Verify the catalog's hash of the literal retained TaskSpec JSON bytes."""
+    encoded = row["task_spec"]
+    task = TaskSpec.model_validate_json(encoded)
+    if hashlib.sha256(encoded.encode()).hexdigest() != row["task_sha256"]:
+        raise ValueError(f"Task checksum changed: {label}/{task.id}")
+    return task
+
+
 def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_document: str) -> None:
     """Read the pinned retained cohorts only inside the destination region's CPU job."""
     if get_job_info() is None or not output.startswith("s3://marin-us-east-08a/"):
@@ -170,9 +179,7 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
             raise ValueError(f"Atlas population changed: {label}")
         logger.info("Verified campaign cohort %s: %d rows and exact parquet SHA", label, len(records))
         for row in records:
-            task = TaskSpec.model_validate_json(row["task_spec"])
-            if canonical_sha256(json.loads(row["task_spec"])) != row["task_sha256"]:
-                raise ValueError(f"Task checksum changed: {label}/{task.id}")
+            retained_task(row, label)
         with tempfile.TemporaryDirectory() as temporary:
             settings = Path(temporary) / "launch.yaml"
             settings.write_text(launch_document)

@@ -16,7 +16,7 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
 from experiments.post_training.long_loop import campaign
 from experiments.post_training.long_loop.campaign import REFERENCE, campaign_round
-from experiments.post_training.long_loop.campaign_data import CampaignMix, load_mix, partition_mix
+from experiments.post_training.long_loop.campaign_data import CampaignMix, load_mix, partition_mix, retained_task
 from experiments.post_training.long_loop.campaign_runtime import bind_runtime
 from experiments.post_training.long_loop.execution_policy import RlStopping, rl_training_callbacks
 from experiments.post_training.long_loop.round_runner import adopted_round_rl, load_round
@@ -73,6 +73,16 @@ def test_cross_source_holdout_leakage_is_rejected():
     rows = [{"task_spec": json.dumps({"id": f"shared-{i}"})} for i in range(180)]
     with pytest.raises(ValueError, match="Cross-source holdout leakage"):
         partition_mix(mix, {"first": rows, "second": rows}, "2026.11.26.501")
+
+
+def test_retained_checksum_uses_published_json_bytes_without_reserializing():
+    task = arithmetic_task()
+    encoded = json.dumps(json.loads(task.model_dump_json()), indent=2, ensure_ascii=False)
+    row = {"task_spec": encoded, "task_sha256": hashlib.sha256(encoded.encode()).hexdigest()}
+    assert retained_task(row, "fixture") == task
+    # Even semantically equivalent JSON must retain the publication's literal bytes.
+    with pytest.raises(ValueError, match="Task checksum changed"):
+        retained_task({**row, "task_spec": encoded + "\n"}, "fixture")
 
 
 def test_campaign_preserves_131_controls_and_disables_learning_clock():
