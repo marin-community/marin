@@ -206,43 +206,42 @@ def test_append_license_receipt_appends_a_new_part(tmp_path: Path, hub: dict, pr
     assert hub["files"]["part-000.json"] == original_root
 
 
-def test_append_license_receipt_upserts_the_row_in_place(tmp_path: Path, hub: dict):
+def test_append_license_receipt_refuses_a_source_that_already_holds_a_row(tmp_path: Path, hub: dict):
+    """A receipt binding is append-only: a source whose receipt sits in an existing
+    shard is refused with a typed error instead of rewriting that shared shard and
+    invalidating every concurrent writer's verify-current-head gate (coordinator
+    ruling 2026-11-26, the InverseIFEval receipts break)."""
     index_path = tmp_path / "index.json"
     first = _receipt("fixture:source", "fixture/dataset", "a" * 40)
+    seeded = json.dumps({"fixture:source": first.model_dump(mode="json")}, indent=2).encode()
     reference_data.create_reference_index(
         index_path,
         license_binding.LICENSE_RECEIPT_REPO,
-        {"part-000.json": json.dumps({"fixture:source": first.model_dump(mode="json")}, indent=2).encode()},
+        {"part-000.json": seeded},
         message="Seed",
     )
     updated = _receipt("fixture:source", "fixture/dataset", "c" * 40)
-    license_binding.append_license_receipt(index_path, updated, message="Update pin")
-    receipts = license_binding.read_license_receipts(index_path)
-    assert len(receipts) == 1
-    assert receipts["fixture:source"].revision == "c" * 40
+    with pytest.raises(license_binding.AppendWouldRewriteSharedShard):
+        license_binding.append_license_receipt(index_path, updated, message="Update pin")
+    assert hub["files"]["part-000.json"] == seeded
+    assert license_binding.read_license_receipts(index_path)["fixture:source"].revision == "a" * 40
 
 
-def test_append_license_receipt_preserves_other_rows_in_the_same_part(tmp_path: Path, hub: dict):
+def test_append_license_receipt_never_modifies_existing_shards(tmp_path: Path, hub: dict):
     index_path = tmp_path / "index.json"
-    original = {
-        f"fixture:source-{number}": (
-            _receipt(f"fixture:source-{number}", "fixture/dataset", "a" * 40).model_dump(mode="json")
-        )
-        for number in range(64)
-    }
+    seeded = json.dumps(
+        {"fixture:source": _receipt("fixture:source", "fixture/dataset", "a" * 40).model_dump(mode="json")}, indent=2
+    ).encode()
     reference_data.create_reference_index(
         index_path,
         license_binding.LICENSE_RECEIPT_REPO,
-        {"part-002.json": json.dumps(original).encode()},
+        {"part-000.json": seeded},
         message="Seed",
     )
-    updated = _receipt("fixture:source-0", "fixture/dataset", "b" * 40)
-    license_binding.append_license_receipt(index_path, updated, message="Update one receipt")
-    assert json.loads(hub["files"]["part-002.json"]) == {
-        **original,
-        updated.source_id: updated.model_dump(mode="json"),
-    }
-    assert set(license_binding.read_license_receipts(index_path)) == set(original)
+    second = _receipt("fixture:other", "fixture/dataset", "b" * 40)
+    license_binding.append_license_receipt(index_path, second, message="Append")
+    assert hub["files"]["part-000.json"] == seeded
+    assert set(license_binding.read_license_receipts(index_path)) == {"fixture:source", "fixture:other"}
 
 
 def test_append_license_receipt_cannot_replace_an_unindexed_part(tmp_path: Path, hub: dict):

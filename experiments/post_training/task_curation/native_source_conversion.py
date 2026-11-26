@@ -59,6 +59,7 @@ from experiments.post_training.task_curation.harbor_cohort_release import (
 )
 from experiments.post_training.task_curation.license_binding import (
     LICENSE_RECEIPT_INDEX,
+    AppendWouldRewriteSharedShard,
     append_license_receipt,
     read_license_receipts,
 )
@@ -728,11 +729,19 @@ def main() -> None:
         api.hf_hub_download(outcome.release_repo, "README.md", repo_type="dataset", revision=outcome.release_revision)
     )
     bound = release_receipt(source, outcome.release_repo, outcome.release_revision, card_path.read_bytes())
-    index_commit = append_license_receipt(
-        LICENSE_RECEIPT_INDEX,
-        bound,
-        message=f"Bind {source.info.id}'s native TaskSpec conversion release to its original upstream license",
-    )
+    try:
+        index_commit: str | None = append_license_receipt(
+            LICENSE_RECEIPT_INDEX,
+            bound,
+            message=f"Bind {source.info.id}'s native TaskSpec conversion release to its original upstream license",
+        )
+    except AppendWouldRewriteSharedShard as error:
+        # The bind is provenance: the card declares the original upstream and the
+        # checker resolves it directly. A source that already holds a receipt in a
+        # shared shard is refused by the append-only writer; the receipts owners'
+        # variant-family path re-pins it later.
+        LOGGER.warning("receipt append refused for %s: %s", source.info.id, error)
+        index_commit = None
     rebind_root = Path(args.output_root).parent / f"{Path(args.output_root).name}-rebind"
     if rebind_root.exists():
         import shutil  # noqa: PLC0415

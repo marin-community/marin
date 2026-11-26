@@ -58,12 +58,19 @@ def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
     return receipts
 
 
+class AppendWouldRewriteSharedShard(ValueError):
+    """An append that would rewrite a shared shard; the receipts owners own re-pinning."""
+
+
 def append_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message: str) -> str:
     """Register one reviewed receipt in the referenced registry and bump the committed index.
 
-    The receipt is an upsert: a source's row is rewritten in the shard that holds it,
-    or a first receipt lands in the next part file. Either way the write creates a new
-    immutable dataset revision and the index pins that revision.
+    The write is append-only: the receipt lands in a NEW part file and every existing
+    shard keeps its exact bytes. Rewriting a shared shard invalidates every concurrent
+    writer's verify-current-head gate (the 2026-11-26 InverseIFEval break); a source
+    whose receipt already exists in an older shard is refused with a typed error —
+    re-pinning it needs a variant shard family and a reader that resolves the newest
+    reference, which the receipts owners own.
     """
     key = canonical_source_id(receipt.source_id)
     if key != receipt.source_id:
@@ -71,11 +78,13 @@ def append_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message
     documents = load_referenced_json(index_path)
     existing = receipts_from_documents(documents, LicenseReceipt, "license receipt")
     row = json.dumps({key: receipt.model_dump(mode="json")}, indent=2, sort_keys=True) + "\n"
-    if existing and key in existing:
-        shard = next(name for name, document in documents.items() if key in document)
-        rewritten = {**documents[shard], key: receipt.model_dump(mode="json")}
-        payload = json.dumps(rewritten, indent=2, sort_keys=True) + "\n"
-        return commit_reference_documents(index_path, {shard: payload.encode()}, message=message)
+    if key in existing:
+        held = next(name for name, document in documents.items() if key in document)
+        raise AppendWouldRewriteSharedShard(
+            f"{key} already holds a receipt in {held}; appending its new pin would rewrite that shared "
+            "shard. Land the bind in a variant shard family with the receipts owners' newest-reference "
+            "reader instead."
+        )
     directories = {Path(name).parent for name in documents}
     if len(directories) > 1:
         raise ValueError("License receipt shards span multiple directories; select one complete shard family")
