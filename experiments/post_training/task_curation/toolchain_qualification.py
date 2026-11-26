@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 LOCAL_DISK_POOL_ROOT = Path("/var/lib/shellbox-disk-pool")
@@ -114,11 +115,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=None, help="Write the qualification summary here.")
     args = parser.parse_args()
-    summary = {"local": _qualify_local_pool(), "daytona": _qualify_daytona_storage()}
+    try:
+        summary = {"local": _qualify_local_pool(), "daytona": _qualify_daytona_storage()}
+    except Exception:
+        print(traceback.format_exc(), file=sys.stderr)
+        sys.stderr.flush()
+        raise
     document = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     sys.stdout.write(document)
-    if args.output is not None:
-        args.output.write_text(document)
+    sys.stdout.flush()
+    target = args.output or Path(os.environ.get("IRIS_OUTPUT_DIR", ".")) / "toolchain-qualification.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(document)
 
 
 if __name__ == "__main__":
