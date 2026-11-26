@@ -214,10 +214,11 @@ jobs:
       CONTROL_PRESETS: ${{ inputs.presets }}
     steps:
       - name: Require main for RL controls
-        if: github.repository != 'marin-community/marin' || github.ref != 'refs/heads/main'
         run: |
-          echo "RL controls require marin-community/marin main."
-          exit 1
+          if [ "$GITHUB_REPOSITORY" != "marin-community/marin" ] || [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "RL controls require marin-community/marin main."
+            exit 1
+          fi
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -240,7 +241,6 @@ jobs:
           project_id: hai-gcp-models
       - name: Authenticate Marina with the main-only deployment identity
         id: marina-auth
-        if: github.repository == 'marin-community/marin' && github.ref == 'refs/heads/main'
         uses: google-github-actions/auth@v3
         with:
           project_id: hai-gcp-models
