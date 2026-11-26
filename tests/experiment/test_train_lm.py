@@ -172,12 +172,10 @@ def test_lowers_to_a_runnable_graph():
 
 
 def test_train_only_mixture_builds_validation_caches_without_raising(tmp_path):
-    """A train-only cache in a mixture keeps Levanter's skip-a-missing-split behavior.
-
-    ``as_component()`` emits an empty-URL source for a built cache, so
-    ``build_caches("validation")`` skips the split a train-only cache does not have
-    (the path every default ``tokenized(...)`` mixture takes at eval setup). A
-    ``source=None`` component would make that call raise instead.
+    """A train-only cache in a mixture keeps Levanter's skip-a-missing-split behavior:
+    ``as_component()`` emits an empty-URL source, so ``build_caches("validation")`` skips
+    the missing split instead of raising (the path every default ``tokenized(...)``
+    mixture takes at eval setup).
     """
     corpus = _corpus()
     write_record(

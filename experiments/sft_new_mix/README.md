@@ -40,13 +40,3 @@ see the dataset card for attribution and provenance details.
 
 This directory defines sources for a future matched-token control and candidate
 comparison using the Snowball SFT launcher.
-
-## Exp3 V5 mix as an artifact graph
-
-`exp3_v5_mix.py` records the SFT mix Exp3 trained on (data release V5) as
-versioned handles. The release document and cache catalog are adopted at pinned
-digests. Each source has a `TokenizedCache` seal record that pins its catalog
-entry digest, counts, and loss mode. `exp3_v5_seal_check()` verifies the catalog
-and shard caches. `exp3_v5_data_config()` assembles the training config through
-`mixture()` with the release's weight schedule and shuffle settings. The offline
-test compares its resolved components with the release's `data.json` fixture.

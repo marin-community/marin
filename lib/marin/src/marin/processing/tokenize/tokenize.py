@@ -76,9 +76,8 @@ class TokenizedCache(Artifact):
     config, so a consumer (a training :func:`~marin.experiment.data.mixture`) builds a Levanter
     component from the artifact alone, never from the producing recipe. Adopted caches resolve
     through ``record.source``; their tokenizer/format come from the synthetic config recorded when
-    the cache is adopted. A seal record — registered beside a manifest rather than the data —
-    pins the underlying cache root as ``config.cache_dir`` and carries the packing fields
-    (``pack``/``split``/``flat_cache``) its component needs.
+    the cache is adopted. A seal record pins the underlying cache root as ``config.cache_dir``
+    and carries the packing fields (``pack``/``split``/``flat_cache``) its component needs.
     """
 
     @property
@@ -88,11 +87,8 @@ class TokenizedCache(Artifact):
     @property
     def cache_dir(self) -> str:
         """The Levanter cache directory: a recorded ``cache_dir`` pin, else an adopted
-        cache's source, else this artifact's path.
-
-        A seal record registered beside a manifest — not beside the data — pins the cache
-        root it describes in its recorded config, so the record's location need not be the
-        data's location.
+        cache's source, else this artifact's path. A seal record pins the cache root it
+        describes, so the record's location need not be the data's location.
         """
         pinned = self._config.get("cache_dir")
         if isinstance(pinned, str) and pinned:
@@ -155,11 +151,9 @@ class TokenizedCache(Artifact):
     def as_component(self) -> DatasetComponent:
         """A Levanter mixture component pointing at this built cache.
 
-        A built cache carries an empty-URL source rather than ``source=None``: Levanter
-        skips a split the cache does not have when the source has no URLs for it, but
-        raises when the source is ``None``. The component also carries the recorded
-        packing (``pack``/``split``/``flat_cache``) so a sealed or adopted cache describes
-        itself exactly as it was built.
+        The source is the empty-URL form, not ``None``: Levanter skips a split the cache
+        does not have in that case but raises on ``None``. The component also carries the
+        recorded packing (``pack``/``split``/``flat_cache``).
         """
         source = UrlDatasetSourceConfig(
             tags=self.tags, train_urls=[], validation_urls=[], cache_dir=self.cache_dir, format=self.format

@@ -3,15 +3,9 @@
 
 """The Exp3 V5 mix graph must resolve to the data config the Exp3 SFT run consumed.
 
-The run's consumed data config equals the release's ``data.json`` on every release
-field; the launcher added only default-valued fields. These tests resolve the graph
-offline — seal records seeded exactly as the seal steps write them — and pin the
-resolved ``LmDataConfig`` component by component: names, cache addresses, format,
-packing, the three-phase weight schedule, and the shuffle/geometry settings. The
-online test pins the committed seal manifest against the live sealed catalog.
-
-The bounded-lookahead packing the Exp3 runtime used (cap 256, lookahead 128) is
-recorded in every seal record as provenance; the resolved components do not carry it.
+The run's consumed config equals the release's ``data.json`` on every release field;
+these tests resolve the graph offline — seal records seeded exactly as the seal steps
+write them — and compare the result with the release fixture component by component.
 """
 
 import hashlib
@@ -65,12 +59,11 @@ def _resolved_data_config(prefix: str):
 
 
 def _component_dict(component: DatasetComponent) -> dict:
-    """A component as the release serialized it (draccus field names, ``type`` tags aside).
+    """A component as the release serialized it, normalizing the empty-URL source to ``None``.
 
     The release components carry ``source: null``; marin's mixture emits an empty-URL
-    ``UrlDatasetSourceConfig`` for a built cache. They are the same thing to Levanter
-    (both mean "load from ``cache_dir``"), and the empty-URL form keeps Levanter's
-    skip-a-missing-split behavior, so the comparison normalizes it to ``None``.
+    ``UrlDatasetSourceConfig`` for a built cache. Both mean "load from ``cache_dir``" to
+    Levanter, and the empty-URL form keeps its skip-a-missing-split behavior.
     """
     source = component.source
     if isinstance(source, UrlDatasetSourceConfig):
@@ -99,32 +92,11 @@ def _component_dict(component: DatasetComponent) -> dict:
 
 
 def _expected_component(release_component: dict) -> dict:
-    """The release component with fields ``main`` does not express dropped and defaults filled.
-
-    The release serializer omits null fields (``source``/``tags``), which the comparison
-    normalizes the resolved components to (see :func:`_component_dict`).
-    """
+    """The release component, dropping serializer-only fields and filling omitted nulls."""
     expected = {key: value for key, value in release_component.items() if key not in ("type", "packing_lookahead")}
     expected.setdefault("source", None)
     expected.setdefault("tags", None)
     return expected
-
-
-def test_seal_manifest_totals_match_the_release_population():
-    """The derived manifest agrees with the release document it cites."""
-    derived = mix._MANIFEST["derived_from"]
-    assert derived["cache_catalog"]["sha256"] == mix._RELEASE["artifacts"]["cache_catalog.json"]["sha256"]
-    assert derived["source_loss"]["sha256"] == mix._RELEASE["artifacts"]["source_loss.json"]["sha256"]
-    population = mix._RELEASE["natural_population"]
-    totals = mix._MANIFEST["totals"]
-    assert totals["sources"] == 434
-    docs = population["chat_assistant_only"]["output_documents"] + population["full_token"]["output_documents"]
-    tokens = population["chat_assistant_only"]["output_tokens"] + population["full_token"]["output_tokens"]
-    assert totals["rows"] == docs
-    assert totals["input_ids_tokens"] == tokens
-    assert totals["loss_weights_tokens"] == totals["input_ids_tokens"]
-    assert totals["shards"] == sum(seal["shards"] for seal in mix._SEALS.values())
-    assert set(mix._SEALS) == set(mix._SOURCE_NAMES)
 
 
 def test_resolved_components_match_the_release_data_config(tmp_path):

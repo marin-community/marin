@@ -4,35 +4,24 @@
 """The Exp3 SFT training mix — data release V5 — as a Marin artifact graph.
 
 Exp3's production SFT stage (job ``/benfeuer/long-loop-exp3-2026.11.16.51``, coordinator
-sign-off ``450bc8a4b24613c6b6f00e07da9b3953``) trained on data release V5
-(``release-complete-v5.json``, SHA-256 ``3e21619…``) under source revision
-``0f5721bbb4953e98898c847896110dee32a5b293``. This module expresses that exact mix as
+sign-off ``450bc8a4b24613c6b6f00e07da9b3953``) trained on data release V5 under source
+revision ``0f5721bbb4953e98898c847896110dee32a5b293``. This module expresses that mix as
 versioned handles so any run's mix is recoverable from its records:
 
-- **Release seal.** The release document and its cache catalog are adopted at their exact
-  URIs, with the pinned SHA-256 digests recorded in the handles' configs.
-- **One sealed-cache handle per source.** Each of the 434 mixture sources is a
-  ``TokenizedCache`` step whose fingerprinted config pins the digest of the source's
-  cache-catalog entry — the ledger that carries the source's exact content-addressed
-  shard caches — plus its row and token counts, shard count, and loss mode. The step's
+- The release document and its cache catalog are adopted at their exact URIs, with the
+  pinned SHA-256 digests recorded in the handles' configs.
+- Each of the 434 mixture sources is a ``TokenizedCache`` seal step whose fingerprinted
+  config pins its cache-catalog entry digest, row/token/shard counts, and loss mode. The
   record is the deliverable; no data is read or recomputed.
-- **The mixture.** :func:`exp3_v5_data_config` assembles the ``LmDataConfig`` through
-  :func:`marin.experiment.data.mixture`: the 434 sources at their natural weights, the
-  three-phase weight schedule (boundaries 0/250/500), the full-permutation feistel shuffle,
-  the release's cache catalog, and the per-source IID validation reservation.
+- :func:`exp3_v5_data_config` assembles the ``LmDataConfig`` through
+  :func:`marin.experiment.data.mixture` with the release's weights, weight schedule
+  (boundaries 0/250/500), feistel shuffle, cache catalog, and validation reservations.
 
-The training run's consumed data config is recorded in ``fixtures/exp3_v5_data.json``
-(byte-exact to the release member the run consumed, plus the hook-required trailing
-newline the loader strips and re-verifies); the per-source seal manifest in
-``fixtures/exp3_v5_source_seals.json`` pins each source's ledger digest, row and token
-counts, and loss mode. Both fixtures carry the SHA-256 digests they were verified against,
-checked at import. The exact content-addressed shard paths live in the SHA-pinned cache
-catalog, not in the repository; :func:`exp3_v5_seal_check` verifies every one of them at
-run time.
-
-The Exp3 runtime packed documents with bounded lookahead (cap 256, lookahead 128); every
-seal record pins that geometry so the run's packing stays recoverable. A consumer packs
-with its own policy; the mix definition does not set it.
+``fixtures/`` carries the consumed ``data.json`` and the per-source seal manifest, each
+verified against its pinned SHA-256 at import. The content-addressed shard paths live in
+the SHA-pinned cache catalog, not in the repository; :func:`exp3_v5_seal_check` verifies
+them at run time. Every seal record also pins the runtime's bounded-lookahead packing
+(cap 256, lookahead 128) as provenance.
 """
 
 import hashlib
@@ -71,11 +60,7 @@ def _load_fixture(filename: str, sha256: str) -> dict:
 
 
 def _load_release_data() -> dict:
-    """The release's ``data.json``, byte-exact after the fixture's trailing newline.
-
-    The newline hook requires a terminated last line, so the fixture stores the release
-    member plus one newline byte; the digest check covers the member's exact bytes.
-    """
+    """The release's ``data.json``, byte-exact modulo the fixture's trailing newline byte."""
     raw = (_FIXTURES / "exp3_v5_data.json").read_bytes()
     content = raw[:-1] if raw.endswith(b"\n") else raw
     expected = _RELEASE["artifacts"]["data.json"]["sha256"]
@@ -94,12 +79,9 @@ _MANIFEST = _load_fixture(
     "exp3_v5_source_seals.json",
     "782a6b8b25b758a4a32f10e9f419841ae5e975890f6f63e21043c9f18e1d3782",
 )
-"""Per-source seal manifest derived from the release's cache catalog.
-
-Each source pins its catalog-entry digest (the canonical entry JSON, sorted keys), row
-and token counts, shard count, and loss mode. The manifest is a pure function of the two
-SHA-pinned release members named in its ``derived_from`` block, so regenerating it from
-an unchanged release is byte-stable."""
+"""Per-source seal manifest: each source's catalog-entry digest (sorted-key canonical
+JSON), row/token counts, shard count, and loss mode — derived from the two SHA-pinned
+release members named in ``derived_from``."""
 
 _SEALS = _MANIFEST["sources"]
 
@@ -159,11 +141,8 @@ exp3_v5_cache_catalog = ArtifactStep.adopt(
 
 
 def _seal_config(name: str) -> dict:
-    """The fingerprinted seal record for one source: its exact sealed cache, as literals.
-
-    The entry digest pins the source's catalog entry — the ledger that carries the
-    content-addressed shard paths, per-shard row counts, and loss metadata.
-    """
+    """The fingerprinted seal record for one source, as literals; the entry digest pins
+    its catalog entry — the ledger carrying the content-addressed shard paths."""
     seal = _SEALS[name]
     return {
         "source_name": name,
@@ -192,8 +171,7 @@ def _entry_digest(entry: dict) -> str:
 
 
 def _register_seal(_config: dict) -> None:
-    """Register the sealed cache. The step's record is the deliverable; the data is
-    neither read nor moved. ``exp3_v5_seal_check`` verifies the sealed content."""
+    """No-op: the seal record is the deliverable; ``exp3_v5_seal_check`` verifies content."""
 
 
 def _verify_shard_paths(cache_dir: str, shards: list[str]) -> None:
@@ -214,15 +192,9 @@ def _verify_shard_paths(cache_dir: str, shards: list[str]) -> None:
 def _exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
     """One sealed-cache handle per release source, keyed by the mixture's component name.
 
-    Private on purpose: each seal record pins the shared release cache root, so the
-    per-source cache addresses only resolve through the catalog that
-    :func:`exp3_v5_data_config` attaches as ``cache_catalog``. Mixing these handles
-    directly (without that catalog) would point every component at the root.
-
-    Each handle is a ``TokenizedCache`` step that writes a seal record; its config is
-    pure literals (the entry digest, counts, and loss mode), so the fingerprint pins the
-    exact sealed content. The data is never copied or recomputed; the record is what
-    makes the source's cache addressable, and ``mixture`` reads it at run time.
+    Private on purpose: each record pins the shared release cache root, so the per-source
+    addresses resolve only through the catalog :func:`exp3_v5_data_config` attaches as
+    ``cache_catalog``; mixing these handles directly would point every component at the root.
     """
     return {
         name: ArtifactStep(
@@ -238,13 +210,9 @@ def _exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
 
 
 def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
-    """Verify the sealed release against the pinned digests and the seal manifest.
-
-    Reads the cache catalog once, checks its SHA-256 and every source's entry digest, and
-    cross-checks row counts, shard counts, and loss modes against the manifest and the
-    release totals; then verifies that every content-addressed shard cache exists. Declare
-    this handle among a consumer's dependencies so the seal is verified before the mix is
-    used.
+    """Verify the sealed release: catalog SHA-256, per-source entry digests, row/shard
+    counts, loss modes, and shard existence. Declare it among a consumer's dependencies
+    so the seal is verified before the mix is used.
     """
     expected = {
         name: {
@@ -324,9 +292,7 @@ def exp3_v5_data_config(ctx: StepContext) -> LmDataConfig:
     """The ``LmDataConfig`` the Exp3 SFT run consumed, assembled through ``mixture``.
 
     Call this inside a consumer's ``build_config`` whose ``deps`` include
-    :func:`exp3_v5_mix_deps`. ``mixture`` reads each source's seal record at run time for
-    its format and packing. The release catalog supplies the per-source cache addresses;
-    the schedule, shuffle, and validation reservations come from the release document.
+    :func:`exp3_v5_mix_deps`.
     """
     phase_weights = _SCHEDULE[0][1]
     train = {handle: phase_weights[handle.name] for handle in _exp3_v5_sources().values()}
