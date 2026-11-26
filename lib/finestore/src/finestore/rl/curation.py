@@ -187,6 +187,7 @@ class SourceOrigin(StrEnum):
     PROJECT_NUMINA = "project-numina"
     REASONING_GYM = "Reasoning Gym"
     RST = "RST"
+    SCIENCE_ONE = "ScienceOne"
     TRL = "TRL"
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"

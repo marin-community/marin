@@ -1,0 +1,31 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a deep research assistant. Your core function is to conduct thorough, multi-source investigations into any topic. Fixture system instruction for the S1 conversion tests."
+    },
+    {
+      "role": "user",
+      "content": "A philanthropic statesman from an Antipodean colony, who served as premier during the year of bicentennial celebrations in a former British possession: what was the maximum number of boys permitted to reside in the institution at any given time?"
+    },
+    {
+      "role": "assistant",
+      "content": "<think> Fixture generated reasoning that must stay private provenance. </think> The answer is: 30."
+    },
+    {
+      "role": "tool",
+      "content": "A Search for 'fixture query' found 10 results. Fixture tool content that must stay private provenance."
+    },
+    {
+      "role": "assistant",
+      "content": "<think> Final fixture reasoning. </think> Thus, the answer is: 30."
+    }
+  ],
+  "meta": {
+    "id": "3d975006-f294-5e27-b3bf-e4f49bd11994",
+    "question": "A philanthropic statesman from an Antipodean colony, who served as premier during the year of bicentennial celebrations in a former British possession: what was the maximum number of boys permitted to reside in the institution at any given time?",
+    "answer": "30",
+    "language": "en",
+    "type": "Closed-ended Multi-hop Resolution"
+  }
+}
