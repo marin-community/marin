@@ -392,12 +392,12 @@ def post_seal_waiver(*source_ids: str) -> ProjectionWaivers:
     )
 
 
-def test_post_seal_waiver_covers_only_named_sources_served_catalog_missing_gaps():
-    """Ruling 68: a source declared after the sealed refresh lands with a waiver naming its
-    exact ID, covering ONLY its served-catalog projection findings — a missing projection
-    for a new declaration and a stale-pin projection for a re-pinned source (the same
-    sealed-state class: the served catalog catches up at the next refresh the expiry
-    forces). Other projections stay blocking."""
+def test_post_seal_waiver_covers_named_sources_sealed_refresh_projections():
+    """Ruling 68 + ruling 2026-11-25 13:00 EST: a source declared after the sealed refresh
+    lands with a waiver naming its exact ID, covering its sealed-refresh projection
+    findings — the served-catalog, curriculum and derived-contract projections are the
+    same pending state (they all catch up in the one projection pass the expiry forces).
+    Other sources stay blocking."""
     source = declaration()
     gaps = [
         ProjectionGap(
@@ -409,12 +409,15 @@ def test_post_seal_waiver_covers_only_named_sources_served_catalog_missing_gaps(
         ProjectionGap(
             source_id=source.source_id, projection="derived-contract", state="stale-pin", last_computed_revision="9" * 40
         ),
+        ProjectionGap(source_id=source.source_id, projection="curriculum", state="missing", last_computed_revision=None),
     ]
     result = apply_projection_waivers(gaps, post_seal_waiver(source.source_id), None, None)
-    assert [gap for gap in result.blocking] == [gaps[2]]
+    assert not result.blocking
     assert [(record.projection, record.state) for record in result.waived] == [
         ("served-catalog", "missing"),
         ("served-catalog", "stale-pin"),
+        ("derived-contract", "stale-pin"),
+        ("curriculum", "missing"),
     ]
 
 
@@ -434,19 +437,21 @@ def test_post_seal_waiver_rejects_unnamed_sources():
 
 
 def test_post_seal_waiver_rejects_other_finding_classes():
-    """Ruling 68: no other finding class may be waived — the named source's derived-contract
-    stale-pin stays blocking; only its served-catalog findings ride the waiver."""
+    """Ruling 68 + ruling 2026-11-25 13:00 EST: the named sources' sealed-refresh
+    projections ride the waiver, but other finding classes stay blocking — a
+    served-catalog gap for a source the waiver does NOT name stays blocking."""
     source = declaration()
     gaps = [
         ProjectionGap(
-            source_id=source.source_id, projection="derived-contract", state="stale-pin", last_computed_revision="9" * 40
+            source_id=source.source_id, projection="served-catalog", state="stale-pin", last_computed_revision="9" * 40
         ),
         ProjectionGap(
-            source_id=source.source_id, projection="curriculum", state="stale-pin", last_computed_revision="9" * 40
+            source_id="Test:other-source", projection="served-catalog", state="missing", last_computed_revision=None
         ),
     ]
     result = apply_projection_waivers(gaps, post_seal_waiver(source.source_id), None, None)
-    assert len(result.blocking) == 2 and not result.waived
+    assert [gap.source_id for gap in result.blocking] == ["Test:other-source"]
+    assert [record.source_id for record in result.waived] == [source.source_id]
 
 
 def test_post_seal_waiver_without_named_source_ids_is_rejected():
