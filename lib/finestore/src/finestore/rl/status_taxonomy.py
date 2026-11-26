@@ -502,6 +502,16 @@ BACKEND_BLOCKER_EXPLANATIONS: dict[BackendBlockerReason, ValueExplanation] = {
 }
 
 
+def backend_blocker_reason_slugs(requirement_values: Sequence[str]) -> frozenset[str]:
+    """Every blocker-reason slug the served backend-reason table can render.
+
+    The backend-fit derivation labels each blocker it emits with one of these
+    slugs and fails closed on a blocker it cannot label, so the evidence pages
+    never meet a blocker the taxonomy has no reason for.
+    """
+    return frozenset({reason.value for reason in BackendBlockerReason} | set(requirement_values))
+
+
 def requirement_blocker_explanation(requirement: str) -> ValueExplanation:
     """The canonical explanation of one typed-demand blocker reason.
 

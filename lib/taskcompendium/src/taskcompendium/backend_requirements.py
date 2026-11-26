@@ -117,6 +117,13 @@ class BackendFit(BaseModel):
     """Genuine typed demands that fail on roles the backend can host."""
     not_applicable: dict[str, int] = Field(default_factory=dict)
     """Environment-kind exclusions, keyed ``role:<kind>`` with excluded task counts."""
+    blocker_reasons: dict[str, str] = Field(default_factory=dict)
+    """Every ``blockers`` and ``not_applicable`` key mapped to its canonical reason slug.
+
+    The derivation labels each blocker from the shared status taxonomy and fails
+    closed on a blocker it cannot label; the catalog load re-checks the sealed
+    survey so the evidence pages never meet an unmapped reason.
+    """
     validation_errors: dict[str, int]
 
 

@@ -40,6 +40,7 @@ from taskcompendium.backend_requirements import backend_schema_sha256
 import experiments.post_training.task_curation.release_stages.alerts as alerts
 import infra.marina.apps.rl_data_catalog.load as load_module
 import infra.marina.apps.rl_data_catalog.load_reviews as load_reviews_module
+from experiments.post_training.task_curation.backend_capabilities import verify_backend_blocker_reasons
 from experiments.post_training.task_curation.catalog_identity import (
     canonical_backend_survey,
     canonical_identity_survey,
@@ -181,6 +182,7 @@ def run_dry_run(inputs: CatalogLoadInputs) -> dict:
     snapshot_sources = read_catalog_state(inputs.catalog_root, inputs, publication)
     backend_document = read_ref(ArtifactRef(**publication["backend"]))
     survey = canonical_backend_survey(backend_document)
+    verify_backend_blocker_reasons(survey)
     review_admissions(
         {row.id: row.declaration.model_dump(mode="json") for row in snapshot_sources},
         survey,
@@ -273,6 +275,7 @@ def _run_write(
         raise ValueError(f"catalog snapshot moved to {catalog.current().snapshot_id!r}")
     publication = read_ref(inputs.publication)
     backend = canonical_backend_survey(read_ref(ArtifactRef(**publication["backend"])))
+    verify_backend_blocker_reasons(backend)
     identity = canonical_identity_survey(read_ref(ArtifactRef(**publication["identity"])))
     sources = [canonical_snapshot_source(row) for row in served_snapshot_sources(catalog, inputs.snapshot_id)]
     if len(sources) != inputs.expected_source_count or {row.id for row in sources} != set(identity.fingerprints):

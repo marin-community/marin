@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import CurationCatalog
+from finestore.rl.status_taxonomy import BackendBlockerReason, backend_blocker_reason_slugs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import MachineRuntimeSpec
@@ -271,6 +272,7 @@ def source_map(
     task_counts = defaultdict(Counter)
     role_counts = {backend: defaultdict(Counter) for backend in checkers}
     blockers = defaultdict(Counter)
+    blocker_reasons = defaultdict(dict)
     exclusions = defaultdict(Counter)
     errors = defaultdict(Counter)
     assignments = defaultdict(Counter)
@@ -328,6 +330,9 @@ def source_map(
                     role_counts[backend][role][FitSupport.VERIFY] += 1
                     for capability in error.capabilities:
                         blockers[backend][f"{role}:{capability}"] += 1
+                        blocker_reasons[backend][
+                            f"{role}:{capability}"
+                        ] = BackendBlockerReason.UNCLASSIFIED_CAPABILITY.value
                     errors[backend][str(error)] += 1
                     outcomes.append(FitSupport.VERIFY)
                     continue
@@ -337,6 +342,7 @@ def source_map(
                 if requirements.required_backend is not None and backend != requirements.required_backend.value:
                     role_counts[backend][role][FitSupport.UNSUPPORTED] += 1
                     blockers[backend][f"{role}:required_backend"] += 1
+                    blocker_reasons[backend][f"{role}:required_backend"] = BackendBlockerReason.REQUIRED_BACKEND.value
                     errors[backend][f"{role}: task requires {requirements.required_backend.value}"] += 1
                     outcomes.append(FitSupport.UNSUPPORTED)
                     continue
@@ -361,6 +367,9 @@ def source_map(
                 if cells[backend, kind].support == Support.UNSUPPORTED:
                     role_counts[backend][role][FitSupport.NOT_APPLICABLE] += 1
                     exclusions[backend][f"{role}:{kind.value}"] += 1
+                    blocker_reasons[backend][
+                        f"{role}:{kind.value}"
+                    ] = BackendBlockerReason.UNSUPPORTED_ENVIRONMENT_KIND.value
                     outcomes.append(FitSupport.NOT_APPLICABLE)
                     continue
                 if backend == "local":
@@ -372,6 +381,9 @@ def source_map(
                     # wait on the live qualification instead of blocking here.
                     if cells[backend, need].support not in {Support.SUPPORTED, Support.VERIFY}:
                         blockers[backend][f"{role}:{need.value}"] += 1
+                        # A typed demand renders as its own value; the served
+                        # backend-reason table carries every requirement value.
+                        blocker_reasons[backend][f"{role}:{need.value}"] = need.value
                 try:
                     check(requirements, spec)
                 except UnsupportedMachineSpec as error:
@@ -382,6 +394,15 @@ def source_map(
             task_counts[backend][combined_fit(outcomes)] += 1
     if not count:
         raise ValueError(f"Converted-spec census is empty: {source_id}")
+    reason_slugs = backend_blocker_reason_slugs([requirement.value for requirement in Requirement])
+    for backend in checkers:
+        stored = set(blockers[backend]) | set(exclusions[backend])
+        unmapped = sorted(key for key in stored if key not in blocker_reasons[backend])
+        if unmapped:
+            raise ValueError(f"Backend blockers with no mapped reason for {source_id}/{backend}: {unmapped}")
+        unknown = sorted(set(blocker_reasons[backend].values()) - reason_slugs)
+        if unknown:
+            raise ValueError(f"Backend blocker reasons outside the served taxonomy for {source_id}/{backend}: {unknown}")
     return BackendSourceMap(
         source_id=source_id,
         basis="converted_spec_census",
@@ -399,11 +420,50 @@ def source_map(
                 roles=dict(role_counts[backend]),
                 blockers=dict(blockers[backend]),
                 not_applicable=dict(exclusions[backend]),
+                blocker_reasons=dict(blocker_reasons[backend]),
                 validation_errors=dict(errors[backend]),
             )
             for backend in checkers
         },
     )
+
+
+def verify_backend_blocker_reasons(survey: BackendSurvey) -> None:
+    """Fail closed on any backend blocker the served taxonomy cannot label.
+
+    The Backend evidence page derives a blocker for every stored ``blockers`` and
+    ``not_applicable`` key (plus the unmeasured-role and incomplete-support keys it
+    synthesizes) and refuses to render one without a typed reason. The derivation
+    labels every blocker it stores; the catalog load re-checks the sealed survey
+    here, so a release whose survey drifted from the taxonomy refuses to load
+    instead of crashing the page (R40's crash class, found only at the final
+    browser sweep).
+    """
+    reason_slugs = backend_blocker_reason_slugs([requirement.value for requirement in Requirement])
+    for source in survey.sources:
+        if source.basis != "converted_spec_census":
+            continue
+        for backend, fit in source.backends.items():
+            stored = {**fit.blockers, **fit.not_applicable}
+            unmapped = sorted(set(stored) - set(fit.blocker_reasons))
+            if unmapped:
+                raise ValueError(f"Backend blockers with no mapped reason for {source.source_id}/{backend}: {unmapped}")
+            unknown = sorted(set(fit.blocker_reasons.values()) - reason_slugs)
+            if unknown:
+                raise ValueError(
+                    f"Backend blocker reasons outside the served taxonomy for {source.source_id}/{backend}: {unknown}"
+                )
+            for role in ("agent", "grader"):
+                if sum(fit.roles.get(role, {}).values()) != source.task_count:
+                    raise ValueError(
+                        f"Backend fit for {source.source_id}/{backend} leaves {role} outcomes unmeasured;"
+                        " the evidence page would derive an unlabelled not-measured blocker"
+                    )
+            if fit.support == FitSupport.PARTIAL and not stored:
+                raise ValueError(
+                    f"Backend fit for {source.source_id}/{backend} is partial with no stored blocker;"
+                    " the evidence page would derive an unlabelled incomplete-support blocker"
+                )
 
 
 def converted_specs(paths: list[Path], column: str, runtime_column: str | None = None) -> Iterable[dict]:

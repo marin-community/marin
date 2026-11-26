@@ -245,7 +245,12 @@ function blockerReasons(fit) {
   const reasons = new Set();
   for (const key of Object.keys(fit.blockers || {})) {
     const capability = key.split(':').slice(1).join(':');
-    if (capability === 'required_backend') reasons.add('required-backend');
+    // The derivation emits a canonical reason for every stored blocker and the
+    // catalog load refuses a survey with an unmapped one; surveys sealed before
+    // that guarantee keep the key-derived mapping below.
+    const emitted = (fit.blocker_reasons || {})[key];
+    if (emitted && AtlasTaxonomy.backendReason[emitted]) reasons.add(emitted);
+    else if (capability === 'required_backend') reasons.add('required-backend');
     // displayBackendFit derives these from the survey's not_applicable environment kinds.
     else if (capability.startsWith('unsupported_environment_kind:')) reasons.add('unsupported-environment-kind');
     else if (AtlasTaxonomy.backendReason[capability]) reasons.add(capability);

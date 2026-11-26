@@ -10,6 +10,7 @@ import json
 import threading
 
 import pytest
+from taskcompendium.backend_requirements import BackendFit, BackendSourceMap, BackendSurvey, FitSupport
 
 from experiments.post_training.task_curation.release_stages import catalog_load as cl
 from experiments.post_training.task_curation.release_stages import sizing
@@ -142,7 +143,7 @@ def _aligned_state(tmp_path, monkeypatch):
     )
     # The survey model itself is exercised in test_release_admission_check; this
     # test pins the load-level wiring.
-    monkeypatch.setattr(cl, "canonical_backend_survey", lambda document: object())
+    monkeypatch.setattr(cl, "canonical_backend_survey", lambda document: BackendSurvey.model_construct(sources=[]))
 
     backend_path = tmp_path / "backend.json"
     backend_path.write_text(json.dumps({"sources": [{"source_id": "s1"}, {"source_id": "s2"}]}))
@@ -183,6 +184,42 @@ def test_dry_run_refuses_a_blocked_admission(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cl, "review_admissions", blocked_review)
     with pytest.raises(ValueError, match="Admission blocked"):
+        cl.run_dry_run(inputs)
+
+
+def test_dry_run_refuses_a_backend_blocker_without_a_mapped_reason(tmp_path, monkeypatch):
+    """R41 (R40 item 47): the load fails closed on blockers the taxonomy cannot label.
+
+    The Backend evidence page refuses to render an unmapped blocker, so a survey
+    that drifted from the taxonomy must refuse the load — not crash the page the
+    way R40's unsupported-environment-kind blockers did at the final browser sweep.
+    """
+    inputs, _ = _aligned_state(tmp_path, monkeypatch)
+    unmapped = BackendSourceMap.model_construct(
+        source_id="s1",
+        basis="converted_spec_census",
+        task_count=2,
+        inputs={},
+        demands={},
+        resource_ranges={},
+        backends={
+            "local": BackendFit.model_construct(
+                support=FitSupport.UNSUPPORTED,
+                task_counts={FitSupport.UNSUPPORTED: 2},
+                roles={"agent": {FitSupport.UNSUPPORTED: 2}, "grader": {FitSupport.ROLE_ABSENT: 2}},
+                blockers={"agent:some_mystery_demand": 2},
+                not_applicable={},
+                blocker_reasons={},
+                validation_errors={},
+            )
+        },
+        role_backend_assignments={},
+        grading_environment=None,
+    )
+    monkeypatch.setattr(
+        cl, "canonical_backend_survey", lambda document: BackendSurvey.model_construct(sources=[unmapped])
+    )
+    with pytest.raises(ValueError, match="no mapped reason"):
         cl.run_dry_run(inputs)
 
 
