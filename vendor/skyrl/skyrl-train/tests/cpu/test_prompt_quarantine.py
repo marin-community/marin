@@ -8,7 +8,8 @@ import torch
 from loguru import logger
 
 from skyrl_train.adaptive_sampling import AdaptiveSourceOrder
-from skyrl_train.contextual_sampling import PromptAcquisition, PromptThompsonOrder, PublicPrompt
+from skyrl_train.config.sampling import PromptAcquisition
+from skyrl_train.contextual_sampling import PromptThompsonOrder, PublicPrompt
 from skyrl_train.dynamic_sampling import GroupSelectionResult
 from skyrl_train.group_admission import AdmissionRejection
 from skyrl_train.rollouts.buffer import (

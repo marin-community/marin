@@ -28,6 +28,7 @@ from skyrl_train.config.progress import ProgressSettings
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.reward_shaping import parse_trajectory_reward_shaping_config
 from skyrl_train.config.rollout_validation import EntrypointOperation, validate_rollout_launch
+from skyrl_train.config.sampling import validate_sampling_reversion
 from skyrl_train.config.trajectory_selection import best_of_n_sample_count, optimization_samples_per_prompt
 from skyrl_train.config.utils import generation_context_limit, model_expert_count, normalize_logging_backends
 from skyrl_train.config.validation import (
@@ -36,7 +37,6 @@ from skyrl_train.config.validation import (
     validate_training_settings,
 )
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
-from skyrl_train.curriculum import validate_sampling_reversion
 from skyrl_train.dynamic_sampling import resolve_dynamic_sampling_criteria
 from skyrl_train.group_admission import (
     BUILTIN_GROUP_ADVANTAGE_CONTRACTS,

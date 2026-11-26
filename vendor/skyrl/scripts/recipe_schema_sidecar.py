@@ -9,9 +9,10 @@ from skyrl_train.config.objective_spec import KLEstimator, LossReduction
 from skyrl_train.config.query_bias import GrugQueryBiasUpdateMode
 from skyrl_train.config.reasoning_span_penalty import ReasoningSpanPenaltyTarget
 from skyrl_train.config.rollout_validation import BatchPolicy
+from skyrl_train.config.sampling import SamplingKind
 from skyrl_train.config.trajectory_selection import TrajectorySelectorKind
 from skyrl_train.config.weight_sync_pause import WeightSyncPauseMode
-from skyrl_train.curriculum import SamplingKind, WeightingKind
+from skyrl_train.curriculum import WeightingKind
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat
 from skyrl_train.dynamic_sampling import DynamicSamplingRewardSource, DynamicSamplingType
 from skyrl_train.error_treatment import ErrorTreatment

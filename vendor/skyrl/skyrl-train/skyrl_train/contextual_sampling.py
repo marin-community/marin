@@ -7,7 +7,6 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from enum import StrEnum
 from functools import lru_cache
 import hashlib
 import json
@@ -18,6 +17,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from skyrl_train.config.sampling import PromptAcquisition
+
 _HASH_DIMENSION = 12
 _PRIOR_PRECISION = 2.0
 _CHECKPOINT_VERSION = 1
@@ -27,13 +28,6 @@ _MAX_COST_WEIGHT = 1.5
 _COST_EXPONENT = 0.6
 _WORDS = re.compile(r"\w+|[^\w\s]")
 _DIGITS = re.compile(r"\d+")
-
-
-class PromptAcquisition(StrEnum):
-    SOURCE = "prompt-thompson-source"
-    CONTEXTUAL = "prompt-thompson-contextual"
-    COST_AWARE = "prompt-thompson-cost-aware"
-    WITHIN_SOURCE_COST_AWARE = "prompt-thompson-within-source-cost-aware"
 
 
 @dataclass(frozen=True)

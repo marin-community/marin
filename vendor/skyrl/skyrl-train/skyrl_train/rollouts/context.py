@@ -34,20 +34,19 @@ from skyrl_train.config.rollout_validation import (
     validate_family_pools,
     validate_groups_per_family,
 )
-from skyrl_train.contextual_sampling import (
+from skyrl_train.config.sampling import (
+    ADAPTIVE_SOURCE_KINDS,
     PromptAcquisition,
+    SamplingKind,
+    validate_sampling_reversion,
+)
+from skyrl_train.contextual_sampling import (
     PromptFeedback,
     PromptThompsonOrder,
     PublicPrompt,
     public_prompt_digest,
 )
-from skyrl_train.curriculum import (
-    ADAPTIVE_SOURCE_KINDS,
-    CurriculumConfig,
-    CurriculumOrder,
-    SamplingKind,
-    validate_sampling_reversion,
-)
+from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.dataset.tasks import TaskDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder

@@ -7,7 +7,8 @@ from dataclasses import replace
 
 import pytest
 
-from skyrl_train.contextual_sampling import PromptAcquisition, PromptFeedback, PromptThompsonOrder, PublicPrompt
+from skyrl_train.config.sampling import PromptAcquisition
+from skyrl_train.contextual_sampling import PromptFeedback, PromptThompsonOrder, PublicPrompt
 
 
 @pytest.fixture
