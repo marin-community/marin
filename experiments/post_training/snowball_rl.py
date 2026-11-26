@@ -68,13 +68,9 @@ _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 _CATALOG_TASKS = "snowball-100k@2026.11.25.1"
 _CATALOG_EVAL_LITE = "eval-lite@2026.11.25.1"
 
-_DSPARK = sections.SpeculativeDecoding(
-    method="dspark",
-    model=sections.SpeculatorModel(
-        source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
-        source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
-    ),
-    num_speculative_tokens=4,
+_DSPARK = sections.SpeculatorModel(
+    source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
+    source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
 )
 
 _DEFAULT_MODEL = ArtifactHfModel(
@@ -256,7 +252,7 @@ _snowball = partial(
     Preset,
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
-    default_speculative_decoding=_DSPARK,
+    speculative_decoding_model=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",

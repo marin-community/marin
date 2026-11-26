@@ -44,6 +44,7 @@ from finestore.rl.strata import (
 )
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
+from fsspec.config import conf
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
@@ -75,6 +76,14 @@ from experiments.post_training.task_curation.selection import FULL_VALIDATION_FI
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
+
+
+def printed_status(output):
+    # CliRunner merges stderr into result.output; status is on result.stdout. A plan prints its
+    # lowered steps after the status, so the YAML ends where the first StepSpec begins.
+    output = output.partition("\nStepSpec(")[0]
+    marker = output.rfind("\npreset:")
+    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
 def write_json(path: Path, value) -> None:
@@ -119,6 +128,8 @@ def fake_s3(monkeypatch, *paths: str) -> None:
 
 
 def fake_s3_checkpoint(monkeypatch, uri: str, root: Path) -> None:
+    # Cached s3fs instances can carry sync wrappers created before the patch.
+    monkeypatch.setitem(conf, "s3", {**conf.get("s3", {}), "skip_instance_cache": True})
     prefix = uri.removeprefix("s3://")
 
     def local(path):

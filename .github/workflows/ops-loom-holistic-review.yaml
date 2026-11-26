@@ -1,9 +1,6 @@
 name: "Ops - Loom Holistic Review"
 
-# This workflow runs from the trusted default branch and never checks out or
-# executes pull-request code. It launches one whole-change review session for
-# a large pull request or one that adds a new abstraction, plus at most one
-# follow-up after a substantial commit. The gates use the GitHub API.
+# Keep one channel per PR and deduplicate deliveries of the same head.
 on:
   pull_request_target:
     types: [opened, ready_for_review, reopened, synchronize]
@@ -11,10 +8,6 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-
-env:
-  HOLISTIC_REVIEW_MIN_CHANGED_LINES: "250"
-  HOLISTIC_REVIEW_MIN_PARENT_CHANGED_LINES: "100"
 
 jobs:
   review:
@@ -26,7 +19,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      pull-requests: read
     steps:
       - name: Checkout trusted workflow actions
         uses: actions/checkout@v6
@@ -47,56 +39,13 @@ jobs:
             marin-ops-agent[bot]
             loom-oa-dev[bot]
 
-      - name: Gate on size or a new abstraction
-        id: gate
-        if: steps.author.outputs.allowed == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_ACTION: ${{ github.event.action }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          ADDITIONS: ${{ github.event.pull_request.additions }}
-          DELETIONS: ${{ github.event.pull_request.deletions }}
-        run: |
-          set -euo pipefail
-          if [[ "$EVENT_ACTION" == "synchronize" ]]; then
-            parent_changed=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.stats.total')
-            if (( parent_changed <= HOLISTIC_REVIEW_MIN_PARENT_CHANGED_LINES )); then
-              echo "run=false" >> "$GITHUB_OUTPUT"
-              echo "gate: $parent_changed changed lines against parent; skipping"
-              exit 0
-            fi
-          fi
-          changed=$((ADDITIONS + DELETIONS))
-          if (( changed >= HOLISTIC_REVIEW_MIN_CHANGED_LINES )); then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "gate: $changed changed lines"
-            exit 0
-          fi
-          # A smaller PR still qualifies when it adds a class, dataclass, or
-          # Protocol under a library source tree or the experiments tree. The
-          # API call runs on its own line so a failure stops the job instead
-          # of reading as a skipped PR.
-          patches="$RUNNER_TEMP/holistic-review-patches.txt"
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate \
-            --jq '.[] | select(.filename | test("^(lib/[^/]+/src/|experiments/)")) | .patch // ""' \
-            > "$patches"
-          if grep -Eq '^\+\s*(class |@dataclass)' "$patches"; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "gate: new abstraction in $changed changed lines"
-            exit 0
-          fi
-          echo "run=false" >> "$GITHUB_OUTPUT"
-          echo "gate: $changed changed lines, no new abstraction; skipping"
-
       - name: Launch Loom holistic review
-        if: steps.gate.outputs.run == 'true'
+        if: steps.author.outputs.allowed == 'true'
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_HOLISTIC_REVIEW_PROFILE }}
           channel: pr-holistic:${{ github.event.pull_request.number }}
-          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.action == 'synchronize' && 'followup' || 'initial' }}
+          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
           title: "Holistic review for #${{ github.event.pull_request.number }}"
           goal: >-
             Review pull request #${{ github.event.pull_request.number }} at head
@@ -106,9 +55,10 @@ jobs:
             read-only except for creating or replacing the original holistic
             overview comment and optionally creating one new top-level
             comment with new or materially changed actionable findings. Run
-            review-pr in holistic mode with --comment. Within this review,
-            assess responsibility, cohesion, abstractions, and agreement across
-            contracts. Support structural findings with consequences, concrete
-            replacements, and evidence. Publish a typed result.
+            review-pr in holistic mode with --comment. Read the skill and its
+            references from the workflow revision ${{ github.workflow_sha }}
+            with git show, fetching that commit from origin if needed. Use the
+            PR revisions for the code and its scoped project instructions.
+            Publish a typed result.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}
