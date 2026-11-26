@@ -117,6 +117,7 @@ function showDetails(run) {
   for (const text of run.evidence ?? []) evidence.append(element('li', text));
   body.append(evidence);
   if (!$('run-detail').open) $('run-detail').showModal();
+  $('run-detail').querySelector('.dialog-scroll').scrollTop = 0;
 }
 function followHash() {
   const run = selectedFromHash();
