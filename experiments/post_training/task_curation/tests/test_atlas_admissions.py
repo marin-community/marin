@@ -22,3 +22,5 @@ def test_every_admission_record_binds_to_its_sealed_pin_and_runs():
         assert source.pipeline is import_retained
         assert canonical_source_id(source.info.id) in declared
         source.require_license()
+    ifbench = next(s for s in sources if s.info.id == "AllenAI:IF_multi_constraints_upto5")
+    assert "Final-pin QA (2026-11-26" in ifbench.info.notes, "the IFBench grader-QA note was dropped"
