@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.local_backend import LocalClient
-from marin.execution.lazy import ArtifactStep, resolve
+from marin.execution.lazy import ArtifactStep, resolve, run
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -68,9 +68,9 @@ def read(store: TaskStore, tmp_path: Path) -> list[TaskRow]:
         return list(context.execute(store.to_dataset()).results)
 
 
-def test_store_reads_admitted_curated_and_released_tasks_as_one_dataset(tmp_path):
+def test_opened_store_reads_admitted_curated_and_released_tasks_as_one_dataset(tmp_path):
     release = tmp_path / "release.parquet"
-    store = resolve(
+    run(
         task_store_step(
             "fixture",
             "2026.11.26.1",
@@ -82,6 +82,7 @@ def test_store_reads_admitted_curated_and_released_tasks_as_one_dataset(tmp_path
         )
     )
 
+    store = TaskStore.open("fixture", "2026.11.26.1")
     rows = read(store, tmp_path)
 
     assert [(row.source_id, row.task_id) for row in rows] == [
@@ -95,6 +96,8 @@ def test_store_reads_admitted_curated_and_released_tasks_as_one_dataset(tmp_path
     assert all(row.task.id == row.task_id for row in rows)
     selected = read(store.select_sources(str(release), "fixture:math"), tmp_path)
     assert [row.task_id for row in selected] == ["r1", "r2", "m1", "m2", "m3"]
+    with pytest.raises(FileNotFoundError, match=r"No task store fixture@2026\.11\.26\.2"):
+        TaskStore.open("fixture", "2026.11.26.2")
 
 
 def test_store_refuses_sources_whose_pins_changed(tmp_path):

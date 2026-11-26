@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from typing import Annotated, Literal
 
 import pyarrow.parquet as pq
-from marin.execution.artifact import Artifact
+from marin.execution.artifact import Artifact, read_record
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict, Field
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from zephyr.dataset import Dataset
@@ -104,6 +105,14 @@ class TaskStore(Artifact):
     """A versioned set of sources whose tasks read as one dataset."""
 
     sources: dict[str, SourceEntry]
+
+    @classmethod
+    def open(cls, name: str, version: str) -> "TaskStore":
+        """The built store ``name@version``; raises ``FileNotFoundError`` if it was never built."""
+        path = prefix_join(marin_prefix(), f"{TASK_STORE_PREFIX}/{name}/{version}")
+        if read_record(path) is None:
+            raise FileNotFoundError(f"No task store {name}@{version} at {path}")
+        return cls.raw_load(path)
 
     def select_sources(self, *source_ids: str) -> "TaskStore":
         """The store restricted to ``source_ids``, in that order."""

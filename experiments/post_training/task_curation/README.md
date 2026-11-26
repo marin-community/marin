@@ -31,9 +31,15 @@ rows. It fails when a pinned manifest or released file changed.
 selection reads its sources through the same readers.
 
 ```python
-store = resolve(task_store_step("snowball", "2026.11.26.1", curated=curated, released={uri: sha256}))
+run(task_store_step("snowball", "2026.11.26.1", curated=curated, released={uri: sha256}))
+
+store = TaskStore.open("snowball", "2026.11.26.1")  # FileNotFoundError if never built
 rows = store.select_sources("MarinSkyRL:openscience").to_dataset()
 ```
+
+`TaskStore.open(name, version)` only reads: it loads the record that
+`task_store_step` wrote under `rl-data/task-store/<name>/<version>` of the
+artifact prefix.
 
 ## EvalLite
 
