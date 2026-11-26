@@ -3,24 +3,13 @@
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from marin.rl.skyrl import prepare_skyrl_cpu_python, run_skyrl_cpu, skyrl_project_root
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.post_training.rl_presets import ModelPresets
 from experiments.post_training.task_curation.selection import TRAIN_FILENAME
-
-
-def with_current_control_revisions(table: ModelPresets) -> ModelPresets:
-    return replace(
-        table,
-        control_pins={
-            name: replace(pin, revision=table.by_name[name].revision) for name, pin in table.control_pins.items()
-        },
-    )
 
 
 def selection_summary(full_rows: int) -> dict:

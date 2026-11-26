@@ -19,7 +19,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.rl_progress import Comparison, ComparisonRole, Invariant
-from finestore.rl.run_records import AttemptRecord, read_evaluations
+from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_evaluations
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
@@ -50,6 +50,49 @@ def read_recorded_launch(attempt: AttemptRecord) -> RecordedLaunch:
         return recorded_launch(attempt)
     except ValueError as error:
         raise InvalidComparison(str(error)) from None
+
+
+class NativeWindow(NamedTuple):
+    seconds: float
+    gpus: int
+
+
+def _native_window(attempt: AttemptRecord, launch: RecordedLaunch) -> NativeWindow | None:
+    result = attempt.native.result
+    if result.started_at is None or result.finished_at is None:
+        return None
+    seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
+    if seconds < 0:
+        raise ValueError("Native completion precedes its recorded start")
+    return NativeWindow(seconds, launch.num_nodes * launch.gpus_per_node)
+
+
+def lineage_windows(history: Sequence[LineageEntry]) -> list[NativeWindow] | None:
+    """Read the native windows and allocations for a complete checkpoint lineage."""
+    if not history or history[-1].record.resumed_step not in (None, 0):
+        return None
+    windows = []
+    for entry in history:
+        record = entry.record
+        if record.config is None:
+            return None
+        try:
+            launch = read_recorded_launch(record)
+        except InvalidComparison:
+            return None
+        window = _native_window(record, launch)
+        if window is None:
+            return None
+        windows.append(window)
+    return windows
+
+
+def lineage_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
+    """Sum native allocations over the complete recorded checkpoint lineage."""
+    if not attempt.native.result.state.is_terminal:
+        return None
+    windows = lineage_windows(attempt_lineage(launch.export_root, attempt.attempt_id))
+    return sum(window.seconds * window.gpus for window in windows) / 3600 if windows else None
 
 
 def _selected_evaluation_record(

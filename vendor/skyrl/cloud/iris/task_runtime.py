@@ -31,7 +31,6 @@ from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 import glob
 import json
-import math
 import os
 from pathlib import Path
 import queue
@@ -64,7 +63,6 @@ from cloud.iris.artifacts import (
     file_inventory,
     fs_and_path,
     materialize,
-    write_json,
 )
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
@@ -112,6 +110,7 @@ from cloud.iris.ray_storage import (
     validate_ray_spill_dir,
 )
 from cloud.iris.launch_config import RunMode, derive_launch_topology, hugging_face_models, load_launch_config
+from finestore.rl.run_records import RunIndexIdentity
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -1779,33 +1778,17 @@ class RayLogSyncSession:
         return stop
 
 
-_TRAINER_COMPLETION_MARKER = b"Training run completed: elapsed_excluding_eval_seconds="
-_TRAINER_COMPLETION_LINE = re.compile(
-    rb"skyrl_train\.entrypoints\.main_base:_run:\d+ - "
-    + _TRAINER_COMPLETION_MARKER
-    + rb"(\d+\.\d{3})\s*$"
-)
-_ANSI_COLOR = re.compile(rb"\x1b\[[0-9;]*m")
-
-
 @dataclass
 class DriverOutputActivity:
     """Track child output that provides evidence of training progress."""
 
     last_progress_at: float = field(default_factory=time.monotonic)
     condition: threading.Condition = field(default_factory=threading.Condition)
-    elapsed_excluding_eval: float | None = None
 
     def record(self, line: bytes) -> None:
         if not line.strip() or any(marker in line for marker in IGNORED_DRIVER_OUTPUT_MARKERS):
             return
         with self.condition:
-            if _TRAINER_COMPLETION_MARKER in line:
-                match = _TRAINER_COMPLETION_LINE.search(_ANSI_COLOR.sub(b"", line))
-                if match is not None:
-                    seconds = float(match[1])
-                    if math.isfinite(seconds) and seconds > 0:
-                        self.elapsed_excluding_eval = seconds
             self.last_progress_at = time.monotonic()
             self.condition.notify_all()
 
@@ -1913,7 +1896,6 @@ def run_head(
     derived_gloo_ifname: str | None = None,
     *,
     debug_mode: DebugMode = DebugMode.LIGHT,
-    trainer_timing_uri: str | None = None,
 ) -> int:
     ensure_task_debug_artifact_directory(debug_mode)
     num_tasks = _num_tasks()
@@ -2057,11 +2039,6 @@ def run_head(
             )
             ray_stop()
             return exit_code
-        if trainer_timing_uri is not None and not output_thread.is_alive() and driver_activity.elapsed_excluding_eval:
-            try:
-                write_json(trainer_timing_uri, {"elapsed_excluding_eval_seconds": driver_activity.elapsed_excluding_eval})
-            except Exception as error:
-                _log(f"Could not persist the trainer completion time: {error}")
         # Final flush of this node's Ray session logs before teardown reaps them.
         persist_runtime_artifacts(f"driver exit_code={exit_code} (head)")
     # Signal workers to unpark, then tear down.
@@ -2333,7 +2310,9 @@ def main() -> None:
     # would otherwise broadcast the head's name to every node.
     derived_gloo_ifname = pin_socket_ifname()
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
-    export_telemetry_environment(args.run_id, args.training_type, launch_config.run.get("model"))
+    index = launch_config.run.get("index")
+    run_id = RunIndexIdentity.model_validate(dict(index)).run_id if index is not None else args.run_id
+    export_telemetry_environment(run_id, args.training_type, launch_config.run.get("model"))
     # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
     # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.
     ensure_fr_dump_dir()
@@ -2369,8 +2348,7 @@ def main() -> None:
         )
         apply_policy_chat_template(model_path, args.policy_chat_template)
     rank = _rank()
-    trainer = launch_config.skyrl.get("trainer", {})
-    debug_mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
+    debug_mode = DebugMode(str(launch_config.skyrl.get("trainer", {}).get("debug_mode", DebugMode.LIGHT.value)))
     with resolve_ray_ports():
         if rank == 0:
             final_config_path = _write_final_config(
@@ -2379,12 +2357,7 @@ def main() -> None:
                 policy_tokenizer=policy_tokenizer,
                 draft_model=draft_model,
             )
-            timing_uri = None
-            if launch_config.run.mode == RunMode.TRAIN and trainer.get("dump_grader_report", False):
-                timing_uri = join_resource_path(str(trainer.grader_report_dir), "trainer_timing.json")
-            exit_code = run_head(
-                args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode, trainer_timing_uri=timing_uri
-            )
+            exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode)
         else:
             exit_code = run_worker(args, debug_mode=debug_mode)
     if exit_code != 0:

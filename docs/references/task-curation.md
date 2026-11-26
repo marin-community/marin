@@ -1050,4 +1050,3 @@ grader as unsupported on Daytona, independently of the task machine's image.
 A mixed deployment may run the agent on Daytona and the grader locally, but
 that does not qualify both machine slots for Daytona. CalibForge declares an
 image for its grader.
-

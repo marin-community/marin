@@ -6,22 +6,28 @@ import json
 
 import pytest
 
-from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
+from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, progress_record
 
 pytestmark = pytest.mark.integration
+
+
+def _projection(record: dict) -> dict:
+    projected = record.copy()
+    projected["has_grader_report"] = projected.pop("grader_report", None) is not None
+    return projected
 
 
 def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progress_client):
     client, request = rl_progress_client
     api = f"/a/{APPLET_ID}/api"
     record = progress_record()
-    report = {"evaluation": {"eval_lite/0": [{"environment": "script", "success_rate": 0.5}]}}
+    report = grader_report()
     assert client.post(f"{api}/runs", json=record | {"grader_report": report}).status_code == 200
     assert client.post(f"{api}/runs", json=record | {"attempt_id": "native-second"}).status_code == 200
     assert client.post(f"{api}/runs", json=record).status_code == 200
     first, second = client.get(f"{api}/runs").json()["runs"]
     assert first["has_grader_report"] is True and "grader_report" not in first
-    assert second.get("has_grader_report") is None
+    assert second["has_grader_report"] is False
     query = {"run_id": record["run_id"], "attempt_id": record["attempt_id"]}
     assert client.get(f"{api}/graders", params=query).json() == {"label": record["label"], "report": report}
     assert client.get(f"{api}/graders", params=query | {"attempt_id": "missing"}).status_code == 404
@@ -60,15 +66,38 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     sparse = {key: value for key, value in record.items() if value is not None}
     sparse.pop("evaluations")
     sparse.pop("failed_facts")
+    running = record | {"status": "running", "completed_at": None, "elapsed_seconds": None, "gate_result": None}
+    assert publish(running)["status"] == "running"
     assert publish(sparse) == record
+    assert publish(running) == record
+    main_publication = {
+        key: value
+        for key, value in record.items()
+        if key
+        not in {
+            "native_run_id",
+            "preset_version",
+            "is_control",
+            "user",
+            "branch",
+            "dirty",
+            "pr_number",
+            "coordinator_iris_job_id",
+            "elapsed_excluding_eval_seconds",
+        }
+    }
+    assert publish(main_publication).keys() == main_publication.keys()
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
         "completed_at": "2026-11-03T01:00:00+00:00",
         "status": "failed",
         "optimizer_steps": 0,
+        "failed_facts": ["native_attempt"],
     }
-    publish(failed)
+    assert publish(failed) == failed
+    delayed = failed | {"status": "running", "completed_at": None, "elapsed_seconds": None, "failed_facts": []}
+    assert publish(delayed) == failed
     changed = copy.deepcopy(record)
     changed.update(issue=456, label="corrected label", model="snowball", evaldash_run_ids=["eval-start", "eval-finish"])
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
@@ -101,12 +130,12 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             "parameters": {
                 "run_id": legacy["run_id"],
                 "attempt_id": "unknown",
-                "record": json.dumps(legacy | {"issue": "opted_out"}),
+                "record": json.dumps(legacy | {"issue": "opted_out", "future_fact": "stored"}),
             },
         },
     )
     for run_id, invalid in (
-        ("test/legacy", record | {"run_id": "test/legacy", "attempt_id": "bad", "evaluation": None}),
+        ("test/bad-status", record | {"run_id": "test/bad-status", "attempt_id": "bad", "status": "unknown"}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
         ("test/bad-scalar", "unexpected"),
@@ -154,13 +183,13 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     )
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-first"] == changed
-    assert rows["native-second"] == failed
-    assert rows["unknown"] == legacy | {"issue": None}
+    assert rows["native-first"] == _projection(changed)
+    assert rows["native-second"] == _projection(failed)
+    assert rows["unknown"] == _projection(legacy | {"issue": None, "future_fact": "stored"})
     assert len(rows) == 3
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
-    assert "evaluation: extra_forbidden" in skipped["test/legacy"]
+    assert "status: literal_error" in skipped["test/bad-status"]
     assert set(skipped) == {
         "test/bad-shape",
         "test/bad-scalar",
@@ -168,14 +197,14 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "test/huge-extra",
         "test/huge-gate",
         "test/wrong-sql-key",
-        "test/legacy",
+        "test/bad-status",
     }
 
     for run_id in ("test/bad-result", "test/huge-gate"):
         repaired = record | {"run_id": run_id, "attempt_id": "bad", "gate_result": None}
         assert publish(repaired | {"issue": None, "gate": None}) == repaired
         recovered = client.get(api_path).json()
-        assert repaired in recovered["runs"]
+        assert _projection(repaired) in recovered["runs"]
         assert run_id not in {row["run_id"] for row in recovered["skipped_records"]}
 
     before = client.get(api_path).json()

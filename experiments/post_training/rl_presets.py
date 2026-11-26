@@ -412,14 +412,12 @@ class Preset:
     """
 
     name: str
-    revision: str
     recipe: Recipe
     updates: int
     measured: range
     tasks_input: Literal["forbidden", "required", "optional"] = "forbidden"
     accepts_settings: bool = True
     accepts_init: bool = False
-    publishes: bool = False
     control_preset: str | None = None
     checkpoint_every: int | None = None
     checkpoints: CheckpointPolicy = "best"
@@ -510,7 +508,7 @@ class Preset:
 class ControlPin:
     preset: str
     commit: str
-    revision: str
+    version: str
     replicates: int
 
 

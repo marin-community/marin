@@ -9,6 +9,7 @@ import yaml
 from finestore.rl.run_records import (
     AttemptRecord,
     LaunchReceipt,
+    RunIndexIdentity,
     read_attempt,
     read_attempt_metrics,
     read_attempts,
@@ -159,7 +160,11 @@ def read_stored_skyrl_attempt(run_output: str) -> AttemptRecord | None:
         return None
     if record.run_id != config["run"]["id"]:
         raise ValueError(f"Stored attempt {attempt_id} belongs to a different native run")
-    return record.model_copy(update={"config": record.config if record.config is not None else config})
+    config = record.config if record.config is not None else config
+    index = record.index
+    if index is None and (raw_index := config["run"].get("index")) is not None:
+        index = RunIndexIdentity.model_validate(raw_index)
+    return record.model_copy(update={"config": config, "index": index})
 
 
 def read_skyrl_attempt_config(run_output: str, record: AttemptRecord | None) -> dict | None:
@@ -175,7 +180,15 @@ def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, A
     current = read_stored_skyrl_attempt(run_output)
     config = read_skyrl_attempt_config(run_output, current)
     if config is None:
-        return None, {}
+        # Indexed attempts are prepared before the native coordinator writes its resolved launch.
+        attempts = read_attempts(prefix_join(run_output, EXPORTS_SUBDIRECTORY))
+        return None, {
+            key: record
+            for key, record in attempts.items()
+            if record.index is not None
+            and record.config is not None
+            and record.config["run"]["mode"] != "checkpoint_export"
+        }
     attempts = {
         attempt_id: record
         for attempt_id, record in read_attempts(config["artifacts"]["export_root"]).items()
@@ -204,8 +217,9 @@ def attempt_tracking(record: AttemptRecord, config: RecordedLaunch) -> AttemptTr
         vllm_env={key: value for key, value in config.task_env.items() if key.startswith("VLLM_")},
         vllm_version=record.vllm_version,
     )
+    project = record.index.wandb_project if record.index is not None else config.project_name
     wandb_url = (
-        f"https://wandb.ai/{config.wandb_entity}/{config.project_name}/runs/{record.attempt_id}"
+        f"https://wandb.ai/{config.wandb_entity}/{project}/runs/{record.attempt_id}"
         if config.wandb_entity and "wandb" in config.logger
         else None
     )

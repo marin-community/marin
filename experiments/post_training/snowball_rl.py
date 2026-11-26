@@ -248,7 +248,6 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.24.1",
     tasks=_DEFAULT_TASKS,
     model=DATAKIT_SFT_2026_09_21,
     speculative_decoding_model=_DSPARK,
@@ -271,7 +270,6 @@ _LEARNING_MEDIUM = _snowball(
     measured=range(21, 26),
     checkpoint_every=26,
     accepts_init=True,
-    publishes=True,
     control_preset="learning-medium",
     data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
@@ -322,7 +320,6 @@ _TRAIN_LONG = _snowball(
     measured=range(1, 101),
     tasks_input="optional",
     accepts_init=True,
-    publishes=True,
     checkpoint_every=10,
     data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(_TASK_SET, every=10, at_start=True),),
@@ -512,7 +509,7 @@ _PRESETS = (
         control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
-    replace(_TRAIN_LONG, revision="2026.11.25.1", recipe=_PACKED_TRAIN_LONG_RECIPE),
+    replace(_TRAIN_LONG, recipe=_PACKED_TRAIN_LONG_RECIPE),
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
     _TRAIN_MEDIUM_TOOLS,
@@ -552,12 +549,16 @@ SNOWBALL = ModelPresets(
     },
 )
 
-if __name__ == "__main__":
 
+def main() -> int:
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
         from experiments.post_training.snowball_sft import SNOWBALL_SFT  # noqa: PLC0415
 
         return SNOWBALL_SFT
 
-    raise SystemExit(rl.main(SNOWBALL, sft_presets=sft_presets))
+    return rl.main(SNOWBALL, sft_presets=sft_presets)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

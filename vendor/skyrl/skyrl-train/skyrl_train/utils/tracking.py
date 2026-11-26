@@ -40,6 +40,7 @@ from finestore.rl.run_records import (
     write_attempt,
     CheckpointReference,
     MetricRow,
+    RunIndexIdentity,
     read_attempt,
     register_run_tables,
     run_records_root,
@@ -146,7 +147,13 @@ class Tracking:
         if "wandb" in backends:
             import wandb
 
-            group_name = _wandb_group_name(tracking_config["run_id"])
+            raw_index = runtime.get("run_index")
+            index = RunIndexIdentity.model_validate(raw_index) if raw_index is not None else None
+            project = index.wandb_project if index is not None else project_name
+            wandb_name = index.run_id if index is not None else experiment_name
+            wandb_group = _wandb_group_name(index.run_id if index is not None else tracking_config["run_id"])
+            if index is not None:
+                tracking_config["run_index"] = index.model_dump(mode="json")
             current_node_ip = "head"
             if ray.is_initialized():
                 try:
@@ -155,12 +162,12 @@ class Tracking:
                     logger.warning(f"Failed to get node IP address, defaulting to 'head'. Error: {e}")
 
             run = wandb.init(
-                project=project_name,
-                name=experiment_name,
+                project=project,
+                name=wandb_name,
                 id=tracking_config["attempt_id"],
                 config=tracking_config,
-                group=group_name,
-                tags=[model] if model is not None else None,
+                group=wandb_group,
+                tags=index.wandb_tags if index is not None else [model] if model is not None else None,
                 resume="allow",
                 settings=wandb.Settings(
                     api_key=require_secret("WANDB_API_KEY"),
@@ -176,7 +183,7 @@ class Tracking:
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
             self._prepare_worker_nodes_systems_logging_wandb(
-                project_name, experiment_name, run_id, group_name, tracking_config, current_node_ip
+                project, wandb_name, run_id, wandb_group, tracking_config, current_node_ip
             )
 
         if "mlflow" in backends:

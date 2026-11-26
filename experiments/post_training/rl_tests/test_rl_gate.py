@@ -33,7 +33,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
-from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
+from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics, read_stored_skyrl_attempts
 from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
@@ -45,6 +45,7 @@ from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_measurements as measurements
+from experiments.post_training import rl_publication as publication
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
@@ -180,25 +181,22 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         control_roots.append(root)
     candidates = []
     for index, value in enumerate((0, 0.01)):
-        name = f"users/test/requirements-{index}"
+        name = f"users/test/requirements-r{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
-        candidates.append(ArtifactStep.adopt(name, preset.revision, str(root), kind=SkyRLRun))
-    report = run(
-        gate.gate_step(
+        candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
+
+    def gate_for_candidates():
+        return gate.gate_step(
             preset,
             tuple(candidates),
             inputs=RunInputs(
                 preset_name=preset.name,
-                requirements=(
-                    key + "<=control",
-                    key + "<=control",
-                    key + "<=0",
-                    "speed/update_seconds<=control",
-                ),
+                requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
             ),
             table=snowball_model.SNOWBALL,
         )
-    )[0]
+
+    report = run(gate_for_candidates())[0]
     assert report.verdict == "fail" and report.effect == "regression"
     speed_guard = next(row for row in report.comparisons if row.metric == "speed/update_seconds")
     assert speed_guard.passes is False
@@ -211,22 +209,12 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         (1, False),
     ]
 
-    table = snowball_model.SNOWBALL
-    pin = table.control_pins[preset.control_preset]
     for root in control_roots:
-        shutil.copytree(root, root.with_name("stale"))
-    stale_table = replace(
-        table, control_pins={**table.control_pins, preset.control_preset: replace(pin, revision="stale")}
-    )
-    stale = run(
-        gate.gate_step(
-            preset,
-            tuple(candidates),
-            table=stale_table,
-            inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
-        )
-    )[0]
-    assert stale.verdict == "invalid" and "recorded control revision=stale" in stale.reason
+        with edit_receipt(root) as receipt:
+            receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
+    stale = run(gate_for_candidates())[0]
+    assert stale.path != report.path
+    assert stale.verdict == "invalid" and "control config differs from current preset defaults" in stale.reason
 
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):
@@ -263,7 +251,7 @@ def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, p
 
 def test_budget_stop_uses_the_actual_final_evaluation(recorded_runs, preset_table):
     preset = replace(snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3))
-    preset_table(preset)
+    table = preset_table(preset)
     root = recorded_runs(preset.name, "users/test/early-budget-stop")
     append_metrics(
         root,
@@ -283,6 +271,10 @@ def test_budget_stop_uses_the_actual_final_evaluation(recorded_runs, preset_tabl
     facts = {fact.name: fact for fact in data.invariants}
     assert facts["gross_rollout_budget_reached"].holds and facts["planned_updates"].value == 2
     assert any(metric.metric.startswith("eval_lite@2/") for metric in data.evaluations)
+    attempt = read_stored_skyrl_attempts(str(root))[1]["recorded-attempt"]
+    row = publication.build_record(str(root), preset, table=table, attempt=attempt)
+    assert row.status == "succeeded" and row.failed_facts == []
+    assert (row.planned_updates, row.optimizer_steps, row.measured_updates) == (12, 2, [1, 2])
     metrics = measurements.read_skyrl_metrics(str(root), attempt_id="recorded-attempt")
     _, invalid = measurements.measured_training(preset.with_updates(12), metrics, 100)
     assert not next(fact for fact in invalid if fact.name == "gross_rollout_budget_reached").holds
