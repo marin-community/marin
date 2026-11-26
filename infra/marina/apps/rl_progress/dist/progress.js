@@ -10,10 +10,11 @@ const isControl = (run) => run.is_control === true && run.dirty === false
 export function controlHistory(runs) {
   const branches = new Map();
   for (const run of runs.filter(isControl).sort((a, b) => time(b) - time(a))) {
-    if (!run.branch || run.branch === 'main' && !isCleanMain(run)) continue;
+    if (!run.branch || run.branch === 'main' && !run.is_main_control) continue;
     if (!branches.has(run.branch)) branches.set(run.branch, new Map());
     const outputs = branches.get(run.branch);
-    if (!outputs.has(run.artifact_uri)) outputs.set(run.artifact_uri, run);
+    const key = run.branch === 'main' ? JSON.stringify([run.run_id, run.attempt_id]) : run.artifact_uri;
+    if (!outputs.has(key)) outputs.set(key, run);
   }
   return new Map([...branches].map(([branch, outputs]) => [
     branch, [...outputs.values()].reverse().filter(hasProgress),

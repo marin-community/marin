@@ -275,11 +275,11 @@ def _record_prepared_attempt(config: DictConfig) -> None:
     """Store a publishable attempt and its coordinator ownership in one update."""
     export_root = str(config.artifacts.export_root)
     attempt_id = str(config.run.attempt_id)
+    raw_index = config.run.get("index")
+    index = RunIndexIdentity.model_validate(OmegaConf.to_container(raw_index)) if raw_index is not None else None
     record = read_attempt(export_root, attempt_id)
     if record is not None and record.config is not None:
         return
-    raw_index = config.run.get("index")
-    index = RunIndexIdentity.model_validate(OmegaConf.to_container(raw_index)) if raw_index is not None else None
     write_attempt(
         export_root,
         AttemptRecord(

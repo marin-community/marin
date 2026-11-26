@@ -11,10 +11,11 @@ from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, pr
 pytestmark = pytest.mark.integration
 
 
-def _projection(record: dict) -> dict:
+def _projection(record: dict, *, main_control: bool = False) -> dict:
     projected = record.copy()
     projected["has_grader_report"] = projected.pop("grader_report", None) is not None
     projected.pop("launch_config", None)
+    projected["is_main_control"] = main_control
     return projected
 
 
@@ -111,16 +112,24 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert publish(delayed) == failed
     changed = copy.deepcopy(record)
     changed.update(
-        issue=456, label="corrected label", model="snowball", launch_config={"skyrl": {"trainer": {"max_steps": 25}}}
+        issue=456,
+        label="corrected label",
+        model="snowball",
+        launch_config={"skyrl": {"trainer": {"max_steps": 25}}},
+        branch="main",
+        dirty=False,
+        is_control=True,
+        preset_version="current",
+        commit="abcdef1234",
+        base_commit="abcdef1234567890abcdef1234567890abcdef12",
     )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
     config_query = {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"]}
     assert client.get(f"/a/{APPLET_ID}/api/configuration", params=config_query).json() == changed["launch_config"]
-    control_row = changed | {"is_control": True}
-    assert publish(control_row) == control_row
-    assert publish(changed) == control_row
-    changed = control_row
+    legacy_link = changed | {"evaldash_run_ids": ["existing-evaluation"]}
+    assert publish(legacy_link) == changed
+    assert publish(changed | {"is_control": None})["is_control"] is True
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
         for field in ("issue", "gate", "gate_result", "model", "launch_config"):
@@ -202,7 +211,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     )
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-first"] == _projection(changed)
+    assert rows["native-first"] == _projection(changed, main_control=True)
     assert rows["native-second"] == _projection(failed)
     assert rows["unknown"] == _projection(legacy | {"issue": None, "future_fact": "stored"})
     assert len(rows) == 3
@@ -242,6 +251,8 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         assert served["issue"] == changed["issue"]
         assert (served["commit"], served["settings"], served["is_control"]) == (rich["commit"], rich["settings"], True)
         assert served["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
+    unclassified = main_publication | {"attempt_id": "unclassified", "is_control": None}
+    assert publish(unclassified | {"evaldash_run_ids": None})["is_control"] is None
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
     assert "status: literal_error" in skipped["test/bad-status"]

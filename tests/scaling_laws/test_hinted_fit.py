@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from marin.scaling_laws import hinted_fit
 from marin.scaling_laws.hinted_fit import (
     ForecastKind,
     HintMethod,
@@ -92,20 +93,23 @@ def test_joint_law_reproduces_paper_table1(pair: str, method: HintMethod):
     assert mae_pp == pytest.approx(paper_mae_pp, abs=0.005)
 
 
-@pytest.mark.parametrize("pair", list(PAPER_FORECAST_ERRORS))
-def test_forecast_errors_reproduce_paper(pair: str):
+@pytest.mark.parametrize(
+    ("pair", "fitted_models"),
+    [(pair, fitted_models) for pair, errors in PAPER_FORECAST_ERRORS.items() for fitted_models in errors],
+)
+def test_forecast_errors_reproduce_paper(pair: str, fitted_models: int):
     ladder = _ladder(pair)
     capability = ladder.unhinted.capability
     target, observed = capability[-1], ladder.unhinted.accuracy[-1]
 
-    for fitted_models, (paper_baseline, paper_ensemble) in PAPER_FORECAST_ERRORS[pair].items():
-        forecasts = fit_ladder(ladder.up_to(capability[fitted_models - 1])).forecasts(target)
-        assert abs(forecasts[ForecastKind.SIGMOID_BASELINE] - observed) == pytest.approx(
-            paper_baseline, abs=PRINTED_ERROR_TOLERANCE
-        )
-        assert abs(forecasts[ForecastKind.HINTED_ENSEMBLE] - observed) == pytest.approx(
-            paper_ensemble, abs=PRINTED_ERROR_TOLERANCE
-        )
+    paper_baseline, paper_ensemble = PAPER_FORECAST_ERRORS[pair][fitted_models]
+    forecasts = fit_ladder(ladder.up_to(capability[fitted_models - 1])).forecasts(target)
+    assert abs(forecasts[ForecastKind.SIGMOID_BASELINE] - observed) == pytest.approx(
+        paper_baseline, abs=PRINTED_ERROR_TOLERANCE
+    )
+    assert abs(forecasts[ForecastKind.HINTED_ENSEMBLE] - observed) == pytest.approx(
+        paper_ensemble, abs=PRINTED_ERROR_TOLERANCE
+    )
 
 
 def test_two_stage_baseline_reproduces_paper_on_delphi():
@@ -142,7 +146,11 @@ def _sampled_ladder(n_problems: int, rng: np.random.Generator) -> LadderScores:
     )
 
 
-def test_bootstrap_intervals_cover_truth_and_narrow_with_more_problems():
+def test_bootstrap_intervals_cover_truth_and_narrow_with_more_problems(monkeypatch):
+    # The paper checks cover the full optimizer grid. Use six starts to exercise resampling here.
+    grid = tuple(hinted_fit._joint_starts())
+    starts = grid[:: len(grid) // 6]
+    monkeypatch.setattr(hinted_fit, "_joint_starts", lambda: iter(starts))
     rng = np.random.default_rng(0)
     truth = float(BOOTSTRAP_LAW.predict(BOOTSTRAP_TARGET, 0.0))
 

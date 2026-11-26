@@ -19,13 +19,12 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from finestore.rl.rl_progress import Comparison, ComparisonRole, EvaluationScore, Invariant
-from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_evaluations
+from finestore.rl.run_records import AttemptRecord, LineageEntry, attempt_lineage, read_attempt_metrics, read_evaluations
 from marin.rl.skyrl import read_skyrl_attempt
 from marin.rl.skyrl_records import (
     RecordedLaunch,
     RecordedSource,
     attempt_tracking,
-    read_skyrl_metrics,
     read_stored_skyrl_attempt,
     recorded_launch,
 )
@@ -93,11 +92,17 @@ def lineage_windows(history: Sequence[LineageEntry]) -> list[NativeWindow] | Non
     return windows
 
 
+def recorded_lineage(attempt: AttemptRecord, launch: RecordedLaunch) -> tuple[LineageEntry, ...]:
+    """Use the selected terminal receipt for the head of the stored checkpoint lineage."""
+    history = attempt_lineage(launch.export_root, attempt.attempt_id)
+    return (replace(history[0], record=attempt), *history[1:]) if history else ()
+
+
 def lineage_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
     """Sum native allocations over the complete recorded checkpoint lineage."""
     if not attempt.native.result.state.is_terminal:
         return None
-    windows = lineage_windows(attempt_lineage(launch.export_root, attempt.attempt_id))
+    windows = lineage_windows(recorded_lineage(attempt, launch))
     return sum(window.seconds * window.gpus for window in windows) / 3600 if windows else None
 
 
@@ -434,6 +439,7 @@ class RunMeasurements:
     evaluations: tuple[Comparison, ...]
     slices: dict[str, int]
     evaluation_identity: dict[str, tuple[str | None, dict]]
+    scoring_groups: dict[tuple[str, str], tuple[str | None, str | None]]
     gpu_hours: float | None
     engine: dict
     attempt_id: str
@@ -540,8 +546,8 @@ def read_measurements(
         raise InvalidComparison(f"native job {terminal.native.result.iris_job_id} is {terminal.native.result.state}")
     if terminal.native.result.provenance is None:
         raise InvalidComparison(f"run has no recorded source provenance: {path}")
-    metrics = read_skyrl_metrics(path, attempt_id=terminal.attempt_id)
     launch = read_recorded_launch(terminal)
+    metrics = read_attempt_metrics(launch.export_root, terminal.attempt_id)
     preset, training_facts = measured_training(preset, metrics, launch.rollout_token_budget)
     workload = preset.recipe.layout.workload
     planned = workload.planned_steps(preset.updates)
@@ -565,6 +571,7 @@ def read_measurements(
     task_set = preset.held_out_tasks if preset.held_out is not None else None
     scores, initial_scores = [ANSWER_SCHEMA.empty_table()], []
     evaluations = []
+    scoring_groups = {}
     response_token_counts: set[int | None] = set()
     primary_answers = 0
     for index, evaluation in enumerate(profiles):
@@ -583,6 +590,12 @@ def read_measurements(
         ids = frozenset(table["task_id"].to_pylist())
         intended_step = workload.metric_step(preset.updates)
         sessions = [(evaluation.name, table, intended_step)]
+        if evaluation.held_out:
+            for row in all_scores.select(("task_id", "family", "aai_category")).to_pylist():
+                task = (evaluation.name, row["task_id"])
+                assignment = (row["family"], row["aai_category"])
+                if scoring_groups.setdefault(task, assignment) != assignment:
+                    raise InvalidComparison(f"held-out evaluation scoring groups differ: {task}")
         if evaluation.at_start:
             if initial.num_rows and frozenset(initial["task_id"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
@@ -686,6 +699,7 @@ def read_measurements(
         evaluations=tuple(evaluations),
         slices=slices,
         evaluation_identity=identities,
+        scoring_groups=scoring_groups,
         gpu_hours=gpu_hours,
         engine=tracking.get("engine", {}),
         attempt_id=terminal.attempt_id,
