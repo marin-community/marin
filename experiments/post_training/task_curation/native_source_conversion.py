@@ -93,8 +93,7 @@ MANIFEST_ACCEPT = (
     "application/vnd.oci.image.manifest.v1+json"
 )
 DIGEST_PATTERN = r"sha256:[0-9a-f]{64}"
-RATE_LIMIT_ATTEMPTS = 8
-RATE_LIMIT_MAX_WAIT_SECONDS = 60.0
+RATE_LIMIT_MAX_WAIT_SECONDS = 600.0
 _FROM = re.compile(r"\s+")
 
 
@@ -370,9 +369,16 @@ def _docker_hub_bearer() -> str | None:
 
 
 def _open_with_rate_limit_retry(request: urllib.request.Request, what: str):
-    """Open a registry URL, retrying bounded on 429 with the server's Retry-After."""
-    last_error: urllib.error.URLError | None = None
-    for attempt in range(RATE_LIMIT_ATTEMPTS):
+    """Open a registry URL, honoring the server's rate-limit windows.
+
+    A 429 sleeps out the throttle window — Retry-After verbatim when the server
+    names one, otherwise a doubling wait capped at the window cap — and retries
+    without a failure ceiling: the conversion job stays alive until the registry
+    admits the request (coordinator ruling 2026-11-26, the anonymous-limit rerun).
+    Any other error propagates immediately.
+    """
+    attempt = 0
+    while True:
         try:
             return urllib.request.urlopen(request, timeout=60)
         except urllib.error.HTTPError as error:
@@ -382,18 +388,12 @@ def _open_with_rate_limit_retry(request: urllib.request.Request, what: str):
             seconds = (
                 float(delay)
                 if delay and delay.replace(".", "", 1).isdigit()
-                else min(2.0**attempt, RATE_LIMIT_MAX_WAIT_SECONDS)
+                else min(2.0 ** min(attempt, 10), RATE_LIMIT_MAX_WAIT_SECONDS)
             )
             seconds = min(seconds, RATE_LIMIT_MAX_WAIT_SECONDS)
-            LOGGER.warning(
-                "registry rate limited on %s; retry %d/%d in %.0fs", what, attempt + 1, RATE_LIMIT_ATTEMPTS, seconds
-            )
-            last_error = error
+            attempt += 1
+            LOGGER.warning("registry rate limited on %s; wait %.0fs (attempt %d) then retry", what, seconds, attempt)
             time.sleep(seconds)
-        except urllib.error.URLError as error:
-            last_error = error
-            raise
-    raise last_error if last_error else RuntimeError(f"registry retry exhausted for {what}")
 
 
 def resolve_base_digest(reference: str) -> str:
