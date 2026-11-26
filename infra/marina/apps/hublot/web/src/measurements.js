@@ -3,6 +3,7 @@ import { startupPhases } from './phases.js';
 
 export const BUCKET_MS = 10_000;
 export const MAX_COUNTER_GAP_MS = 15_000;
+export const MIN_SUMMARY_BUCKET_MS = 2 * MAX_COUNTER_GAP_MS;
 const MAX_ENGINES = 64;
 
 function parseObject(value) {

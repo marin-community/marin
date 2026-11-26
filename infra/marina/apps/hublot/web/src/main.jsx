@@ -6,12 +6,12 @@ import { NodeInfo } from './NodeInfo.jsx';
 import { ChartLegend, FlowLegend, TimeLegend } from './Legends.jsx';
 import {
   BACKGROUND_READ_PAUSE_MS, cards, deferredCards, FIRST_SAMPLE_BATCH_SIZE, FLEET_CARD,
-  flowGraph, GRAPH_SAMPLE_LIMIT, inferenceMetricCards, inferenceTabGroups, metricCards, METRIC_POINTS, MIN_WINDOW_MS,
+  flowGraph, GRAPH_SAMPLE_LIMIT, inferenceMetricCards, inferenceTabGroups, metricCards, MIN_WINDOW_MS,
   RAW_METRIC_WINDOW_MS, SAMPLE_BATCH_SIZE,
 } from './contracts.js';
 import { cardsWithSamples, elapsed, hasValues, shortName, utc } from './display.js';
 import {
-  BUCKET_MS, createDetailSeries, createSampledSeries, createSummarySeries, MAX_COUNTER_GAP_MS, sampleEnds,
+  createDetailSeries, createSampledSeries, createSummarySeries, MIN_SUMMARY_BUCKET_MS, sampleEnds,
 } from './measurements.js';
 import { createRunModel } from './run.js';
 import './style.css';
@@ -63,7 +63,7 @@ async function readApi(path, search, signal) {
   return data;
 }
 
-function busyWait(error) {
+function retryDelayMs(error) {
   return error instanceof RunRequestError && error.retryMs > 0 ? error.retryMs + Math.random() * 250 : 0;
 }
 
@@ -73,7 +73,7 @@ async function readForeground(path, search, { signal, active = () => true } = {}
     try {
       return await readApi(path, search, signal);
     } catch (error) {
-      const wait = busyWait(error);
+      const wait = retryDelayMs(error);
       if (!wait || signal?.aborted || performance.now() + wait > retryUntil) throw error;
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
@@ -93,17 +93,46 @@ function sameRange(left, right) {
   return left?.from === right?.from && left?.to === right?.to;
 }
 
-function summaryResolution(range) {
-  return Math.max(2 * MAX_COUNTER_GAP_MS, Math.ceil((range.to - range.from) / (METRIC_POINTS * BUCKET_MS)) * BUCKET_MS);
+function covers(view, range) {
+  return view && range && view.window.from <= range.from && view.window.to >= range.to;
 }
 
-function detailResolution(range) {
-  return range.to - range.from <= RAW_METRIC_WINDOW_MS ? 0 : summaryResolution(range);
+function coversDetail(view, range) {
+  return covers(view, range) && (view.bucketMs == null || sameRange(view.window, range) ||
+    (view.bucketMs === MIN_SUMMARY_BUCKET_MS && range.to - range.from > RAW_METRIC_WINDOW_MS));
 }
 
-function covers(detail, range, resolution = Infinity) {
-  return detail && range && detail.window.from <= range.from && detail.window.to >= range.to &&
-    (detail.bucketMs ?? 0) <= resolution;
+function appendSamplePage(page, previous, window, card, gpus) {
+  const samples = previous ? [...previous.samples, ...page.samples] : page.samples;
+  const buckets = previous ? [...previous.buckets, ...page.buckets] : page.buckets;
+  const series = createSampledSeries(buckets, samples, card, gpus);
+  return { window, sampled: true, samples, buckets, series };
+}
+
+function appendDetailPage(page, previous, window, card, gpus) {
+  const { bucketMs, next } = page;
+  if (page.rows) return { window, bucketMs, series: createDetailSeries(page.rows, window, card, gpus) };
+  const buckets = previous ? [...previous.buckets, ...page.buckets] : page.buckets;
+  if (next != null) return { window, bucketMs, next, buckets };
+  const group = inferenceTabGroups[card];
+  if (group) {
+    const seriesByCard = Object.fromEntries(group.map((id) =>
+      [id, createSummarySeries(buckets, window, bucketMs, id, gpus)]));
+    return { window, bucketMs, seriesByCard };
+  }
+  return { window, bucketMs, series: createSummarySeries(buckets, window, bucketMs, card, gpus) };
+}
+
+function deferBackgroundRetry(error, pace, key, range) {
+  const wait = retryDelayMs(error);
+  if (!wait) return false;
+  const now = performance.now();
+  const retry = pace.retry;
+  const since = retry?.key === key && sameRange(retry.window, range) ? retry.since : now;
+  if (now + wait >= since + busyRetryLimitMs) return false;
+  pace.retry = { key, window: range, since };
+  pace.nextStart = Math.max(pace.nextStart, now + wait);
+  return true;
 }
 
 function sampledKey(card) {
@@ -266,8 +295,7 @@ function App() {
   const chartOrder = useMemo(() => selected && !pins.includes(selected) ? [selected, ...pins] : pins, [selected, pins]);
   const fineViews = useMemo(() => {
     if (!range) return {};
-    const resolution = detailResolution(range);
-    const complete = (id) => metricCache[id]?.find((entry) => entry.next == null && covers(entry, range, resolution));
+    const complete = (id) => metricCache[id]?.find((entry) => entry.next == null && coversDetail(entry, range));
     return Object.fromEntries([...metricCards].map((id) => {
       const shared = complete(metricGroupByCard[id]);
       return [id, complete(id) ?? (shared && {
@@ -472,10 +500,7 @@ function App() {
             const page = await readSamplePage(windowQuery, samplePlan.slice(offset, Math.min(offset + batchSize, limit)));
             backgroundPace.current.retry = null;
             if (!active()) return;
-            const samples = offset ? [...view.samples, ...page.samples] : page.samples;
-            const buckets = offset ? [...view.buckets, ...page.buckets] : page.buckets;
-            const series = createSampledSeries(buckets, samples, card, inferenceGpus);
-            remember({ window: range, sampled: true, samples, buckets, series });
+            remember(appendSamplePage(page, offset ? view : null, range, card, inferenceGpus));
             return;
           }
           if (partial) windowQuery.set('after', partial.next);
@@ -484,35 +509,13 @@ function App() {
             : await readForeground('window', windowQuery, { active });
           if (background) backgroundPace.current.retry = null;
           if (request.cancelled || !page) return;
-          const { bucketMs, next } = page;
-          const buckets = partial ? [...partial.buckets, ...page.buckets] : page.buckets;
-          if (next != null) {
-            remember({ window: range, bucketMs, next, buckets });
-            return;
+          const entry = appendDetailPage(page, partial, range, card, inferenceGpus);
+          if (entry.series && active()) {
+            setPoint((current) => metricCard(current?.id, inferenceUnit) === card ? null : current);
           }
-          if (inferenceTabGroups[card]) {
-            const seriesByCard = Object.fromEntries(inferenceTabGroups[card].map((id) =>
-              [id, createSummarySeries(buckets, range, bucketMs, id, inferenceGpus)]));
-            remember({ window: range, bucketMs, seriesByCard });
-            return;
-          }
-          const series = page.rows ? createDetailSeries(page.rows, range, card, inferenceGpus)
-            : createSummarySeries(buckets, range, bucketMs, card, inferenceGpus);
-          if (active()) setPoint((current) => metricCard(current?.id, inferenceUnit) === card ? null : current);
-          remember({ window: range, bucketMs, series });
+          remember(entry);
         } catch (error) {
-          const wait = background ? busyWait(error) : 0;
-          if (wait && active()) {
-            const now = performance.now();
-            const pace = backgroundPace.current;
-            const retry = pace.retry;
-            const since = retry?.key === nextRead && sameRange(retry.window, range) ? retry.since : now;
-            if (now + wait < since + busyRetryLimitMs) {
-              pace.retry = { key: nextRead, window: range, since };
-              pace.nextStart = Math.max(pace.nextStart, now + wait);
-              return;
-            }
-          }
+          if (background && active() && deferBackgroundRetry(error, backgroundPace.current, nextRead, range)) return;
           if (!request.cancelled) setMetricErrors((current) => ({
             ...current,
             [nextRead]: { range, message: error instanceof RunRequestError ? error.message : 'Hublot could not load these metrics.' },

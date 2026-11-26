@@ -33,14 +33,17 @@ _RUN_LINK = re.compile(rf"([a-z0-9-]+)@({_UID})(?:@(.*))?")
 _SERVICE_FILTER = "service = 'marinskyrl'"
 CONFIG_EVENT = "async_run_configuration"
 CAPACITY_EVENT = "rollout_capacity"
+TRAINING_METRIC_EVENT = "training_metric_value"
 GPU_METRICS = {
     "async/performance/configured_inference_gpus": "inferenceGpus",
     "async/performance/configured_policy_gpus": "policyGpus",
 }
 GRADING_METRICS = {"eval/all/timing/grading/mean", "eval/all/outcome/graded", "generate/outcome/graded"}
 _CONTROLLER = "json_get(attributes_json, 'role') = 'controller'"
-_START = f"name = 'lifecycle' AND {_CONTROLLER} AND json_get(body_json, 'state') = 'started'"
-_END = f"name = 'terminal' AND {_CONTROLLER}"
+_LIFECYCLE_EVENT = "lifecycle"
+_TERMINAL_EVENT = "terminal"
+_START = f"name = '{_LIFECYCLE_EVENT}' AND {_CONTROLLER} AND json_get(body_json, 'state') = 'started'"
+_END = f"name = '{_TERMINAL_EVENT}' AND {_CONTROLLER}"
 
 
 @dataclass(frozen=True)
@@ -85,10 +88,10 @@ def _literal(value: str) -> str:
 
 
 def _run_predicate(run: str) -> str:
+    if execution := Execution.from_link_id(run):
+        return execution.predicate
     if match := _RUN_LINK.fullmatch(run):
-        cluster, uid, job = match.groups()
-        if job is not None:
-            return Execution(cluster, uid, job).predicate
+        cluster, uid, _ = match.groups()
         return f"{_CLUSTER} = {_literal(cluster)} AND execution_uid = {_literal(uid)}"
     if _UID_PATTERN.fullmatch(run):
         return f"execution_uid = {_literal(run)}"
@@ -115,7 +118,8 @@ ORDER BY last_ms DESC LIMIT {CHOICE_LIMIT + 1}"""
 
 
 def lifecycle_sql(run: str, search: Window) -> str:
-    return _execution_bounds_sql(run, search, f"name IN ('lifecycle', 'terminal') AND (({_START}) OR ({_END}))")
+    names = _names((_LIFECYCLE_EVENT, _TERMINAL_EVENT))
+    return _execution_bounds_sql(run, search, f"name IN ({names}) AND (({_START}) OR ({_END}))")
 
 
 def activity_sql(run: str, search: Window) -> str:
@@ -128,8 +132,9 @@ def activity_sql(run: str, search: Window) -> str:
         "work_completed",
     )
     names = _names(markers)
+    candidates = _names((_LIFECYCLE_EVENT, _TERMINAL_EVENT, *markers))
     return _execution_bounds_sql(
-        run, search, f"name IN ('lifecycle', 'terminal', {names}) AND (name IN ({names}) OR ({_START}) OR ({_END}))"
+        run, search, f"name IN ({candidates}) AND (name IN ({names}) OR ({_START}) OR ({_END}))"
     )
 
 
@@ -144,7 +149,7 @@ def telemetry_sql(
         samples = f"""name IN ({names})
   AND (name IN ('async_phase_window', 'rollout_call', 'weight_sync_completed') OR ({DISPATCH_WAITS})
        OR (timestamp_ms < {end} AND (name IN ('rollout_groups', {metadata_names}) OR ({OVERVIEW_SIGNALS})
-           OR (name = 'training_metric_value'
+           OR (name = '{TRAINING_METRIC_EVENT}'
                AND json_get(attributes_json, 'metric') IN ({_names(tuple(GPU_METRICS))})))))"""
         end = visible.end + SPAN_LOOKAHEAD_MS
     else:
@@ -257,7 +262,8 @@ ORDER BY bucket_start, name, reason"""
 
 
 def sampled_summary_sql(execution: Execution, windows: list[Window], card: str, slice_ms: int) -> str:
-    """Give each slice its own time predicate so Finelog can skip the intervening data."""
+    """Build a fleet summary query for the supplied time slices."""
+    # Give Finelog a separate time predicate for each slice so it can skip the gaps.
     return " UNION ALL ".join(
         f"SELECT * FROM ({detail_summary_sql(execution, window, card, slice_ms)}) AS sample_{index}"
         for index, window in enumerate(windows)

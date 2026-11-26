@@ -180,9 +180,7 @@ def test_full_window_reads_every_update_for_the_selected_execution(api: TestClie
     assert [row["value"] for row in other.json()["rows"] if row["name"] == "work_completed"] == [99.0]
 
 
-def test_long_run_overview_and_selected_metrics_use_different_windows(
-    api: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_long_run_overview_uses_recorded_window(api: TestClient) -> None:
     resolved = api.get("/run", params={"run": "iris:fixture"})
     assert resolved.status_code == 200, resolved.json()
     payload = resolved.json()
@@ -201,6 +199,10 @@ def test_long_run_overview_and_selected_metrics_use_different_windows(
         "bufferCapacity": 256,
         "separateGrading": True,
     }
+
+
+def test_long_range_inference_summaries_match_their_tab_metrics(api: TestClient) -> None:
+    params = {"run": f"fixture@iris:fixture@{JOB}", "from": START, "to": RUN_END + 1}
     summary = api.get("/window", params={**params, "card": "generation"})
     assert summary.status_code == 200, summary.json()
     assert summary.json()["bucketMs"] == 30_000
@@ -236,6 +238,9 @@ def test_long_run_overview_and_selected_metrics_use_different_windows(
     assert {row["name"] for row in buckets} == {"generation_tokens_total"}
     assert [row["value"] for row in buckets] == pytest.approx([300, 150])
 
+
+def test_sampled_reads_share_the_background_cooldown(api: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    params = {"run": f"fixture@iris:fixture@{JOB}", "from": START, "to": RUN_END + 1}
     monkeypatch.setattr(app, "BACKGROUND_READ_PAUSE_MS", 60_000)
     sample_params = {**params, "card": "fleet", "until": f"{START + 30_000},{START + 120_000}"}
     samples = api.get("/samples", params=sample_params)

@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypedDict, cast
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -32,13 +32,13 @@ from .queries import Execution, Window
 from .query_contract import (
     BACKGROUND_READ_PAUSE_MS,
     BUCKET_MS,
-    COUNTER_MARGIN_MS,
     DETAIL_NAMES,
     DETAIL_SERIES_COUNTS,
     FLEET_CARD,
     INFERENCE_TAB_GROUPS,
     MAX_OVERVIEW_MS,
     METRIC_POINTS,
+    MIN_SUMMARY_BUCKET_MS,
     MIN_WINDOW_MS,
     RAW_METRIC_WINDOW_MS,
     SAMPLE_BATCH_SIZE,
@@ -65,6 +65,19 @@ NO_STORE = {"Cache-Control": "private, no-store"}
 
 type ReadRows = Callable[[str, int], list[dict[str, Any]]]
 type RunChoice = dict[str, str | int | None]
+
+
+class SummaryRow(TypedDict):
+    bucket_start: int
+    name: str
+    reason: str | None
+    value: float
+    requests: float | None
+    engines: int | None
+
+
+class ReadPace(TypedDict):
+    next_start: float
 
 
 @dataclass(frozen=True)
@@ -128,11 +141,21 @@ def _requested_window(start: str | None, end: str | None) -> Window | None:
     )
 
 
-def _run_id(run: str) -> str:
+def _validated_run_lookup(run: str) -> str:
     run = run.strip()
     if not run or len(run) > 1024 or re.search(r"[\x00-\x1f\x7f]", run):
         raise RunError(400, "Enter an exact Finelog run ID, Iris job path, or execution UID.")
     return run
+
+
+def _metrics_scope(run: str, start: str | None, end: str | None, card: str | None) -> tuple[Execution, Window]:
+    execution = Execution.from_link_id(_validated_run_lookup(run))
+    visible = _requested_window(start, end)
+    if execution is None or visible is None:
+        raise RunError(400, "Open a run before loading its metrics.")
+    if card is not None and card not in DETAIL_NAMES:
+        raise RunError(400, "Unknown metrics card.")
+    return execution, visible
 
 
 def _search_window(date_hint: str | None) -> Window:
@@ -271,9 +294,9 @@ def _window_response(payload: dict[str, Any]) -> JSONResponse:
     return response
 
 
-def _summary_rows(read: ReadRows, sql: str, max_rows: int) -> list[dict[str, Any]]:
+def _summary_rows(read: ReadRows, sql: str, max_rows: int) -> list[SummaryRow]:
     return [
-        row
+        cast(SummaryRow, row)
         for row in read(sql, max_rows)
         if math.isfinite(row["value"]) and (row["requests"] is None or math.isfinite(row["requests"]))
     ]
@@ -288,7 +311,7 @@ def _read_metrics(
         rows = _read_telemetry(read, execution, visible, card)
         return _window_response({"rows": telemetry_rows(rows)})
 
-    bucket_ms = max(2 * COUNTER_MARGIN_MS, math.ceil(duration / (METRIC_POINTS * BUCKET_MS)) * BUCKET_MS)
+    bucket_ms = max(MIN_SUMMARY_BUCKET_MS, math.ceil(duration / (METRIC_POINTS * BUCKET_MS)) * BUCKET_MS)
     start = visible.start if after is None else after
     if not visible.start <= start < visible.end or (start - visible.start) % bucket_ms:
         raise RunError(400, "Use Hublot's next time range to continue loading metrics.")
@@ -313,7 +336,8 @@ def create_api(_services: Services) -> FastAPI:
     url = os.environ.get("HUBLOT_FINELOG_URL")
     client = process_cache.get_or_create("hublot.finelog.v1", (url, RPC_TIMEOUT), lambda: _connect(url))
     slot = process_cache.get_or_create("hublot.read_slot", (), lambda: threading.BoundedSemaphore(1))
-    pace = process_cache.get_or_create("hublot.sample_pace", (url,), lambda: {"next_start": 0.0})
+    # Keep a plain, typed record that all loaded app revisions can share.
+    pace = process_cache.get_or_create("hublot.sample_pace", (url,), lambda: ReadPace(next_start=0.0))
 
     @contextmanager
     def finelog_reader(*, background: bool = False) -> Iterator[ReadRows]:
@@ -361,7 +385,7 @@ def create_api(_services: Services) -> FastAPI:
 
     @api.get("/run")
     def get_run(run: str = "", date: str | None = None) -> JSONResponse:
-        run = _run_id(run)
+        run = _validated_run_lookup(run)
         search = _search_window(date)
         with finelog_reader() as read:
             return JSONResponse(_run_metadata(read, run, search, date), headers=NO_STORE)
@@ -377,12 +401,7 @@ def create_api(_services: Services) -> FastAPI:
         run_end: int | None = None,
         background: bool = False,
     ) -> JSONResponse:
-        execution = Execution.from_link_id(_run_id(run))
-        visible = _requested_window(start, end)
-        if execution is None or visible is None:
-            raise RunError(400, "Open a run before loading its metrics.")
-        if card is not None and card not in DETAIL_NAMES:
-            raise RunError(400, "Unknown metrics card.")
+        execution, visible = _metrics_scope(run, start, end, card)
         with finelog_reader(background=background) as read:
             if card is not None:
                 return _read_metrics(read, execution, visible, card, after, background=background)
@@ -398,12 +417,7 @@ def create_api(_services: Services) -> FastAPI:
         card: str = "",
         until: str = "",
     ) -> JSONResponse:
-        execution = Execution.from_link_id(_run_id(run))
-        visible = _requested_window(start, end)
-        if execution is None or visible is None:
-            raise RunError(400, "Open a run before loading its metrics.")
-        if card not in DETAIL_NAMES:
-            raise RunError(400, "Unknown metrics card.")
+        execution, visible = _metrics_scope(run, start, end, card)
         times = until.split(",")
         if len(times) > SAMPLE_BATCH_SIZE or any(re.fullmatch(r"[0-9]{13}", time) is None for time in times):
             raise RunError(400, "Choose sample times within the selected range.")

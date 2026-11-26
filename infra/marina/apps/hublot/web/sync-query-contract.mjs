@@ -4,7 +4,7 @@ import {
   METRIC_POINTS, metricSignals, MIN_WINDOW_MS, RAW_METRIC_WINDOW_MS, SAMPLE_BATCH_SIZE, SAMPLE_SLICE_MS, signals,
   SPAN_LOOKAHEAD_MS,
 } from './src/contracts.js';
-import { BUCKET_MS, MAX_COUNTER_GAP_MS } from './src/measurements.js';
+import { BUCKET_MS, MAX_COUNTER_GAP_MS, MIN_SUMMARY_BUCKET_MS } from './src/measurements.js';
 import { driverLinePatterns, driverPhaseMarkers, driverTimestamp } from './src/phases.js';
 
 // Keep the backend's fixed predicates in step with the signals used by the browser.
@@ -17,7 +17,8 @@ const predicate = ({ name, countName, filter, metricPattern }) => {
   return '(' + terms.join(' AND ') + ')';
 };
 const dispatch = [signals.slotWait, signals.promptWait];
-const readSeparately = new Set(['async_phase_window', 'rollout_call', 'rollout_groups', 'async_run_configuration', 'weight_sync_completed']);
+const overviewEvents = ['async_phase_window', 'rollout_call', 'rollout_groups', 'weight_sync_completed'];
+const readSeparately = new Set([...overviewEvents, 'async_run_configuration']);
 const regular = Object.values(signals)
   .filter((s) => s.name && !readSeparately.has(s.name) && !dispatch.includes(s));
 const overview = regular.filter((s) => s.filter.metric_source !== 'vllm');
@@ -63,6 +64,7 @@ MAX_OVERVIEW_MS = ${MAX_OVERVIEW_DAYS * 86_400_000}
 MIN_WINDOW_MS = ${MIN_WINDOW_MS}
 BUCKET_MS = ${BUCKET_MS}
 COUNTER_MARGIN_MS = ${MAX_COUNTER_GAP_MS}
+MIN_SUMMARY_BUCKET_MS = ${MIN_SUMMARY_BUCKET_MS}
 RAW_METRIC_WINDOW_MS = ${RAW_METRIC_WINDOW_MS}
 METRIC_POINTS = ${METRIC_POINTS}
 FLEET_CARD = ${JSON.stringify(FLEET_CARD)}
@@ -71,8 +73,7 @@ SAMPLE_BATCH_SIZE = ${SAMPLE_BATCH_SIZE}
 BACKGROUND_READ_PAUSE_MS = ${BACKGROUND_READ_PAUSE_MS}
 SAMPLE_SLICE_MS = ${SAMPLE_SLICE_MS}
 SPAN_LOOKAHEAD_MS = ${SPAN_LOOKAHEAD_MS}
-OVERVIEW_NAMES = ${tuple(new Set([...overview, ...dispatch].map((s) => s.name).concat(
-  ['async_phase_window', 'rollout_call', 'rollout_groups', 'weight_sync_completed'])))}
+OVERVIEW_NAMES = ${tuple(new Set([...overview, ...dispatch].map((s) => s.name).concat(overviewEvents)))}
 OVERVIEW_SIGNALS = ${sql([...new Set(overview.map(predicate))])}
 DETAIL_SIGNALS = {
 ${details.map(([id, fields]) => '    ' + JSON.stringify(id) + ': ' +

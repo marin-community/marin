@@ -8,7 +8,7 @@ import math
 import re
 from typing import Any
 
-from .queries import CAPACITY_EVENT, CONFIG_EVENT, GPU_METRICS, GRADING_METRICS
+from .queries import CAPACITY_EVENT, CONFIG_EVENT, GPU_METRICS, GRADING_METRICS, TRAINING_METRIC_EVENT
 from .query_contract import (
     ATTRIBUTE_FIELDS,
     BODY_FIELDS,
@@ -72,7 +72,7 @@ def run_facts(rows: list[dict[str, Any]]) -> dict[str, Any]:
             configurations.add(row["body_json"])
         elif name == CAPACITY_EVENT and value is not None:
             counts["bufferCapacity"].add(value)
-        elif name == "training_metric_value":
+        elif name == TRAINING_METRIC_EVENT:
             metric = (_object(row["attributes_json"]) or {}).get("metric")
             if not isinstance(metric, str):
                 continue
