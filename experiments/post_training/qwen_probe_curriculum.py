@@ -78,7 +78,7 @@ def probe_preset(seed: int, arm: Literal["balanced", "randomized", "adaptive"]) 
         preset,
         tasks=TRAIN,
         checkpoints="latest",
-        checkpoint_every=8,
+        checkpoint_every=24,
         accepts_settings=False,
         evaluations=(*preset.evaluations, replace(EVAL, name="confirmation", at_start=False, selection=CONFIRMATION)),
         recipe=replace(preset.recipe, config=config, layout=replace(preset.recipe.layout, job_timeout_seconds=4_200)),
