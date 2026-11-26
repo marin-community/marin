@@ -136,6 +136,7 @@ except ImportError as error:
 RENDEZVOUS_FILENAME = "ray_head.json"
 DONE_FILENAME = "ray_head.done"
 HEAD_RESULT_SUCCEEDED = "succeeded"
+_NVIDIA_DEVICE_MOUNT = Path("/var/run/nvidia-container-devices")
 
 
 @dataclass(frozen=True)
@@ -2319,12 +2320,35 @@ def _print_env_snapshot() -> None:
         print(f"  {key}={os.environ.get(key, '<unset>')}", flush=True)
 
 
+def pin_allocated_nvidia_gpus(expected: int) -> None:
+    """Constrain privileged jobs to the devices mounted by the NVIDIA plugin."""
+    device_mount = _NVIDIA_DEVICE_MOUNT
+    if expected == 0 or os.environ.get("NVIDIA_VISIBLE_DEVICES") != str(device_mount):
+        return
+    assigned = {path.name for path in device_mount.iterdir() if path.name.startswith("GPU-")}
+    if len(assigned) != expected:
+        raise RuntimeError(f"Iris reserved {expected} GPUs, but the NVIDIA plugin mounted {len(assigned)}")
+    listing = subprocess.check_output(
+        ["nvidia-smi", "--query-gpu=pci.bus_id,uuid", "--format=csv,noheader"],
+        text=True,
+        timeout=15,
+    )
+    devices = [tuple(field.strip() for field in line.split(",")) for line in listing.splitlines()]
+    # CUDA PCI ordering maps NVML's physical UUIDs to the numeric IDs Ray and SkyRL expect.
+    mask = ",".join(str(index) for index, (_, uid) in enumerate(sorted(devices)) if uid in assigned)
+    if len(mask.split(",")) != expected:
+        raise RuntimeError("The NVIDIA plugin's GPU allocation does not match visible devices")
+    os.environ.update(CUDA_DEVICE_ORDER="PCI_BUS_ID", CUDA_VISIBLE_DEVICES=mask)
+    _log(f"[accelerators] using {expected} allotted GPUs in PCI order: {mask}")
+
+
 def main() -> None:
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
     launch_config = load_launch_config(config_path)
     args = _runtime_namespace(launch_config)
     os.environ.update(args.task_env)
+    pin_allocated_nvidia_gpus(int(launch_config.iris.allocation.gpus_per_node))
     if args.role_topology is not None:
         args.ray_labels = {
             **args.role_topology.node_labels(_rank()),

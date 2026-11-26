@@ -6,6 +6,8 @@
 from dataclasses import replace
 from fractions import Fraction
 
+from skyrlrecipe import RecipePatch, sections
+
 from experiments.post_training import rl
 from experiments.post_training.qwen_realistic_sampler import readiness
 from experiments.post_training.qwen_realistic_sampler_training import MAX_RESPONSE_TOKENS, realistic_smoke
@@ -13,10 +15,12 @@ from experiments.post_training.qwen_sampler import ROLE_PLAN, with_rollout_token
 from experiments.post_training.rl_presets import BatchMix, ModelPresets, Preset
 from experiments.post_training.task_curation.qwen_realistic_sampler import TRAIN_FAMILIES
 
-REVISION = "2026.11.26.6"
+REVISION = "2026.11.26.7"
 SEEDS = (26633, 26639)
 GROSS_TOKENS = 2_097_152
 MAX_UPDATES = 120
+KV_CACHE_BYTES_PER_REPLICA = 11 * 1024**3
+CHECKPOINT_EVERY = 16
 # Frozen from the independent development probe's mixed rewards (10, 2, 1, 7 out of 24).
 REFERENCE_COUNTS = (4, 4, 4, 4)
 VARIANCE_COUNTS = (7, 2, 2, 5)
@@ -44,7 +48,15 @@ def realistic_study(arm: str, epsilon: float, counts: tuple[int, ...], seed: int
             for family, count in zip(TRAIN_FAMILIES, counts, strict=True)
         }
     )
-    recipe = replace(smoke.recipe, layout=replace(smoke.recipe.layout, job_timeout_seconds=7200))
+    config = smoke.recipe.config.merge(
+        RecipePatch(
+            generator=sections.Generator(
+                gpu_memory_utilization=0.35,
+                engine_init_kwargs={"kv_cache_memory_bytes": KV_CACHE_BYTES_PER_REPLICA},
+            )
+        )
+    )
+    recipe = replace(smoke.recipe, config=config, layout=replace(smoke.recipe.layout, job_timeout_seconds=7200))
     preset = replace(
         smoke,
         name=f"realistic-study-{arm}-seed{seed}",
@@ -56,6 +68,8 @@ def realistic_study(arm: str, epsilon: float, counts: tuple[int, ...], seed: int
         evaluations=(evaluation,),
         held_out_tasks=panel.held_out_tasks,
         batch_mix=mix,
+        checkpoint_every=CHECKPOINT_EVERY,
+        retention=replace(smoke.retention, resume_checkpoint_count=2),
         accepts_settings=False,
     )
     return with_rollout_token_budget(preset, GROSS_TOKENS)
