@@ -216,6 +216,12 @@ class CatalogReader:
         self.cache: dict[str, Any] = {}
         self.releases: dict[str, Any] = {}
         self.candidate_api = CandidateApi(query) if query is not None else None
+        self._key_locks: dict[str, threading.Lock] = {}
+        self._key_locks_guard = threading.Lock()
+
+    def _key_lock(self, key: str) -> threading.Lock:
+        with self._key_locks_guard:
+            return self._key_locks.setdefault(key, threading.Lock())
 
     @staticmethod
     def cache_key(path: str) -> str:
@@ -226,83 +232,89 @@ class CatalogReader:
     def get(self, path: str) -> Any:
         url = urlsplit(path)
         key = self.cache_key(path)
-        if key not in self.cache:
-            params = dict(parse_qsl(url.query))
-            if self.candidate_api is not None and url.path in {
-                "api/sources",
-                "api/source-statuses",
-                "api/source",
-                "api/assessment",
-                "api/evidence",
-                "api/qc/defects",
-                "api/qc/inventory",
-                "api/difficulty-attempts",
-                "api/difficulty-rollout",
-            }:
-                data = self.candidate_api.get(key)
-            elif self.candidate_api is not None and url.path == "api/taxonomy":
-                # The candidate's pages render from the tables its own API will serve;
-                # the preceding revision may serve an older table set (R40: v39 had no
-                # backend tables, so every Backends page failed the sweep).
-                data = candidate_taxonomy()
-            elif self.query is not None and url.path == "api/source-labels":
-                catalog = self.get("api/sources")
-                data = {
-                    "sources": [
-                        {key: row[key] for key in ("id", "display_name", "origin", "build_path")}
-                        for row in catalog["sources"]
-                    ],
-                    "snapshot_id": catalog["snapshot_id"],
-                }
-            elif self.query is not None and url.path in {
-                "api/curriculum",
-                "api/curriculum/area",
-                "api/curriculum/tasks",
-                "api/curriculum/invariants",
-            }:
-                release = params.get("release", "")
-                if release not in self.releases:
-                    self.releases[release] = self.query(RELEASE_SQL, {"release": release})["rows"][0]
-                metadata = self.releases[release]
-                filters = CoverageQuery(
-                    params.get("intended_use", "all"), params.get("source_id", ""), params.get("release", "")
-                )
-                subject, node, scope = (
-                    params.get("subject_id", ""),
-                    params.get("node_id", ""),
-                    params.get("scope", "all"),
-                )
-                if url.path == "api/curriculum/invariants":
-                    data = invariant_document(lambda sql, bound: self.query(sql, bound)["rows"], metadata)
-                elif url.path == "api/curriculum":
-                    data = coverage_document(
-                        lambda sql, bound: self.query(sql, bound)["rows"], metadata, filters, subject
+        # The sweep runs units on a bounded page pool: the pool's pages miss the cache for
+        # the same heavy document together, and without coalescing they all fire the same
+        # computation at once until one hits the client's timeout (R40 #62).
+        with self._key_lock(key):
+            if key not in self.cache:
+                params = dict(parse_qsl(url.query))
+                if self.candidate_api is not None and url.path in {
+                    "api/sources",
+                    "api/source-statuses",
+                    "api/source",
+                    "api/assessment",
+                    "api/evidence",
+                    "api/qc/defects",
+                    "api/qc/inventory",
+                    "api/difficulty-attempts",
+                    "api/difficulty-rollout",
+                }:
+                    data = self.candidate_api.get(key)
+                elif self.candidate_api is not None and url.path == "api/taxonomy":
+                    # The candidate's pages render from the tables its own API will serve;
+                    # the preceding revision may serve an older table set (R40: v39 had no
+                    # backend tables, so every Backends page failed the sweep).
+                    data = candidate_taxonomy()
+                elif self.query is not None and url.path == "api/source-labels":
+                    catalog = self.get("api/sources")
+                    data = {
+                        "sources": [
+                            {key: row[key] for key in ("id", "display_name", "origin", "build_path")}
+                            for row in catalog["sources"]
+                        ],
+                        "snapshot_id": catalog["snapshot_id"],
+                    }
+                elif self.query is not None and url.path in {
+                    "api/curriculum",
+                    "api/curriculum/area",
+                    "api/curriculum/tasks",
+                    "api/curriculum/invariants",
+                }:
+                    release = params.get("release", "")
+                    if release not in self.releases:
+                        self.releases[release] = self.query(RELEASE_SQL, {"release": release})["rows"][0]
+                    metadata = self.releases[release]
+                    filters = CoverageQuery(
+                        params.get("intended_use", "all"), params.get("source_id", ""), params.get("release", "")
                     )
-                elif url.path == "api/curriculum/area":
-                    bound = area_parameters(metadata, filters, subject, node, scope)
-                    rows = self.query(AREA_SQL, bound)["rows"]
-                    data = area_response(metadata, rows)
-                    if metadata["manifest"].get("confidence"):
-                        bound["levels"] = len(metadata["manifest"]["confidence"]["levels"])
-                        data["confidence_sources"] = self.query(CONFIDENCE_AREA_SQL, bound)["rows"]
+                    subject, node, scope = (
+                        params.get("subject_id", ""),
+                        params.get("node_id", ""),
+                        params.get("scope", "all"),
+                    )
+                    if url.path == "api/curriculum/invariants":
+                        data = invariant_document(lambda sql, bound: self.query(sql, bound)["rows"], metadata)
+                    elif url.path == "api/curriculum":
+                        data = coverage_document(
+                            lambda sql, bound: self.query(sql, bound)["rows"], metadata, filters, subject
+                        )
+                    elif url.path == "api/curriculum/area":
+                        bound = area_parameters(metadata, filters, subject, node, scope)
+                        rows = self.query(AREA_SQL, bound)["rows"]
+                        data = area_response(metadata, rows)
+                        if metadata["manifest"].get("confidence"):
+                            bound["levels"] = len(metadata["manifest"]["confidence"]["levels"])
+                            data["confidence_sources"] = self.query(CONFIDENCE_AREA_SQL, bound)["rows"]
+                    else:
+                        limit = int(params.get("limit", "50"))
+                        bound = task_parameters(
+                            metadata,
+                            filters,
+                            subject,
+                            node,
+                            scope,
+                            params.get("outcome", "all"),
+                            params.get("cursor", ""),
+                            limit,
+                            params.get("sample_pool") == "true",
+                        )
+                        rows = self.query(TASKS_SQL, bound)["rows"]
+                        data = task_response(metadata, rows, limit, source_restrictions(rows))
                 else:
-                    limit = int(params.get("limit", "50"))
-                    bound = task_parameters(
-                        metadata,
-                        filters,
-                        subject,
-                        node,
-                        scope,
-                        params.get("outcome", "all"),
-                        params.get("cursor", ""),
-                        limit,
-                        params.get("sample_pool") == "true",
+                    data = marina_request(
+                        self.root, "GET", "/" + key, session=self.session, token_provider=self.provider
                     )
-                    rows = self.query(TASKS_SQL, bound)["rows"]
-                    data = task_response(metadata, rows, limit, source_restrictions(rows))
-            else:
-                data = marina_request(self.root, "GET", "/" + key, session=self.session, token_provider=self.provider)
-            self.cache[key] = data
+                self.cache[key] = data
         return self.cache[key]
 
 

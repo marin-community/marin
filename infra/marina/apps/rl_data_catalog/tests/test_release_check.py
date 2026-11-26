@@ -6,6 +6,8 @@ import json
 import re
 import subprocess
 import sys
+import threading
+import time
 from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
@@ -338,6 +340,33 @@ def test_representative_evidence_smoke_takes_precomputed_cases(monkeypatch):
     sources = [{"id": "Marin:a", "assessment": {"pipeline_key": "k"}}]
     release_browser.evidence_smoke(None, "https://x/", sources, cases=[{"id": "Marin:a"}])
     assert captured["cases"] == sources
+
+
+def test_reader_coalesces_concurrent_identical_reads(monkeypatch):
+    """R40 #62: the pool's pages miss the cache for the same heavy document together, and
+    without coalescing they all fire the same computation until one hits the client's 60 s
+    timeout. Identical first reads now share one computation."""
+    calls = {"count": 0}
+
+    def _slow_fetch(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        calls["count"] += 1
+        time.sleep(0.3)
+        return {"ok": True}
+
+    monkeypatch.setattr(release_check, "marina_request", _slow_fetch)
+    reader = release_check.CatalogReader("https://x/", requests.Session())
+    results: dict[int, Any] = {}
+
+    def read(index: int) -> None:
+        results[index] = reader.get("measurements/pending-filtered-releases.json")
+
+    threads = [threading.Thread(target=read, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert calls["count"] == 1
+    assert all(results[index] == {"ok": True} for index in range(8))
 
 
 def test_full_sweep_splits_into_bounded_parallel_units(tmp_path, monkeypatch):
