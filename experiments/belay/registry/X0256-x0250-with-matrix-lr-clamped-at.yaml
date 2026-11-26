@@ -4,7 +4,7 @@ name: X0250 with matrix LR clamped at schedule floor
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7122322467
@@ -12,3 +12,19 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 6d749e099c8f84a1091d8c38e5fa10221eae0e17
+trials:
+- id: t001
+  variant: X0250 + late matrix LR clamped at min_lr_ratio*lr_max
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0256
+  date: '2026-11-26'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0256
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_anneal_lr_floor: 'true'
+  commit: ec7f97fde2
+  priority: interactive
