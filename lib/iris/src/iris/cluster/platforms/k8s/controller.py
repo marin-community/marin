@@ -668,7 +668,7 @@ class K8sControllerProvider:
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
     def preflight_controller(self, config: IrisClusterConfig) -> tuple[str, str] | None:
-        """Resolve controller-only secrets without changing Kubernetes resources.
+        """Resolve deploy-side secrets without changing Kubernetes resources.
 
         Returns the configured S3 key ID and secret when needed, so the caller
         can use the same pair for rollout record I/O.

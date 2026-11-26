@@ -22,7 +22,7 @@ uv run python scripts/iris/rollout_controllers.py smoke --cluster <name>
 ```
 
 `preflight` checks the tree, credentials, Docker, SSH, Kubernetes context, and injected secrets.
-CoreWeave controller configs pin a Secret Manager version under
+Production CoreWeave controller configs pin a Secret Manager version under
 `controller.coreweave.storage_credentials_ref`. Use Application Default Credentials
 with access to that version. To rotate the pair, add a version containing both
 `CW_KEY_ID` and `CW_KEY_SECRET`, point the cluster configs at it, then use the
