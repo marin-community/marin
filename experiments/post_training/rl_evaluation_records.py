@@ -52,16 +52,12 @@ def publish_skyrl_evaluation(
         raise ValueError("SkyRL evaluation rows must belong to one attempt and session")
     source = "\n".join(row.model_dump_json() for row in sorted(rows, key=lambda row: row.task_id)) + "\n"
     digest = hashlib.sha256(source.encode()).hexdigest()
-    answer_scores = [answer.verifier_score for row in rows for answer in row.answers]
-    if score is None:
-        scored_answers = [value for value in answer_scores if value is not None and math.isfinite(value)]
-        if scored_answers:
-            score = math.fsum(scored_answers) / len(scored_answers)
-    values = answer_scores if answer_coverage else [row.score for row in rows]
+    answers = [answer for row in rows for answer in row.answers]
+    items = answers if answer_coverage else rows
+    values = [answer.verifier_score for answer in answers] if answer_coverage else [row.score for row in rows]
     key = json.dumps((attempt.run_id, attempt.attempt_id, evaluation.name, rows[0].evaluation, step, digest, score))
+    run_id = "skyrl-" + hashlib.sha256(key.encode()).hexdigest()[:24]
     native = attempt.native
-    run_scope = "skyrl-training" if native.config["run"]["mode"] == "train" else "skyrl"
-    run_id = f"{run_scope}-{hashlib.sha256(key.encode()).hexdigest()[:24]}"
     iris = native.config["iris"]
     cluster, allocation = iris["cluster"], iris["allocation"]
     prefix = CW_RECORDS_PREFIX if cluster.startswith("cw-") else DEFAULT_RECORDS_PREFIX
@@ -79,7 +75,7 @@ def publish_skyrl_evaluation(
             raise ValueError(f"Published SkyRL evaluation archive is unsealed for {run_id}")
         return existing
 
-    errors = Counter(answer.error_type for row in rows for answer in row.answers if answer.error_type is not None)
+    errors = Counter(item.error_type for item in items if item.error_type is not None)
     coverage = TaskCoverage(
         n_attempted=len(values),
         n_scored=sum(value is not None and math.isfinite(value) for value in values),

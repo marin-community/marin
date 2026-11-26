@@ -318,7 +318,9 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     if producer_kind != "rl":
         return
     Path(record_path(evaluation.records_prefix, run_id)).unlink()
-    assert run_micro210(config) == evaluation
+    with monkeypatch.context() as published_attempt:
+        published_attempt.setattr("experiments.evaluation.micro210.run_skyrl", lambda *_args, **_kwargs: None)
+        assert run_micro210(config) == evaluation
     assert ReadView(record.results_path).token == archive.token
     assert read_eval_record(record_path(evaluation.records_prefix, run_id)).rl_attempt == record.rl_attempt
     assert (

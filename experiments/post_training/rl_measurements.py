@@ -397,9 +397,10 @@ def _declared_evaluations(preset: presets.Preset) -> tuple[StoredEvaluation, ...
     )
 
 
-def _recorded_evaluations(
+def recorded_evaluations(
     preset: presets.Preset, launch: RecordedLaunch, inputs: RunInputs, *, gate_profiles: bool = False
 ) -> tuple[StoredEvaluation, ...]:
+    """Recover the evaluation names and schedule from the original run inputs and launch."""
     declarations = inputs.evaluation_profiles
     if declarations is None and gate_profiles:
         declarations = _declared_evaluations(preset)
@@ -472,7 +473,7 @@ def evaluation_status(
             except FileNotFoundError:
                 inputs = RunInputs(preset_name=preset.name)
         data = read_measurements(path, effective, inputs, attempt=attempt)
-        names = tuple(profile.name + "/" for profile in _recorded_evaluations(effective, launch, inputs))
+        names = tuple(profile.name + "/" for profile in recorded_evaluations(effective, launch, inputs))
         return EvaluationStatus(
             evaluations=data.evaluations,
             evaluation_invariants=tuple(fact for fact in data.invariants if fact.name.startswith(names)),
@@ -517,7 +518,7 @@ def read_measurements(
     planned = workload.planned_steps(preset.updates)
     training = [row for step, row in sorted(metrics.items()) if step in planned]
     invariants = list(training_invariants(preset, metrics))
-    profiles = _recorded_evaluations(preset, launch, inputs, gate_profiles=gate_profiles)
+    profiles = recorded_evaluations(preset, launch, inputs, gate_profiles=gate_profiles)
     tracking = attempt_tracking(terminal, launch)
     try:
         recorded_task_sets = {

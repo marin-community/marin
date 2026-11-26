@@ -225,14 +225,17 @@ def run_micro210(config: Micro210Run) -> EvaluationResult:
     attempt = read_attempt(export_root, attempt_id)
     rows = read_evaluations(export_root, attempt_id=attempt_id, evaluation="eval/", step=-1)
     answers = [answer for row in rows for answer in row.answers]
+    answer_scores = [answer.verifier_score for answer in answers if answer.verifier_score is not None]
     if (
         attempt is None
-        or len({answer.ordinal for answer in answers}) != expected
-        or sum(answer.verifier_score is not None and math.isfinite(answer.verifier_score) for answer in answers)
-        != expected
+        or {answer.ordinal for answer in answers} != set(range(expected))
+        or len(answer_scores) != expected
+        or any(not math.isfinite(value) for value in answer_scores)
         or len(answers) != expected
     ):
         raise ValueError(f"Micro210 is missing the receipt or {expected} native answer rows for {attempt_id}")
+    if not math.isclose(math.fsum(answer_scores) / expected, score, rel_tol=1e-6, abs_tol=1e-9):
+        raise ValueError(f"Micro210 tracker score disagrees with the native answers for {attempt_id}")
     record = publish_skyrl_evaluation(
         attempt=attempt,
         evaluation=EvalRef(

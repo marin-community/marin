@@ -18,7 +18,6 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from evalrecords.records import RLAttemptRef, list_records
-from finestore.rl.rl_progress import AttemptSummary
 from finestore.rl.rl_progress import AttemptSummary, Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
@@ -476,6 +475,65 @@ def test_control_comment_checks_repository_access_and_dispatches_main(
 
 
 @pytest.mark.integration
+@pytest.mark.timeout(90)
+def test_training_publication_links_first_and_last_sessions(rl_progress_client, recorded_runs, tmp_path):
+    client, _ = rl_progress_client
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["learning-medium"]
+    source = recorded_runs(preset.name, "tests/evaluation-sessions", attempt_id="native-0")
+    export_root = str(source / "exports")
+    primary_rows = read_evaluations(export_root, attempt_id="native-0", evaluation="eval/")
+    with edit_receipt(source) as receipt:
+        config = receipt["config"]
+        inputs = config["inputs"]
+        inputs.setdefault("evaluation_data", {})["checkpoint-cohort"] = inputs["validation_data"]
+        callback = next(row for row in config["skyrl"]["trainer"]["callbacks"] if row["type"] == "evaluation")
+        generator = config["skyrl"]["generator"]
+        callback.setdefault("additional_evaluations", {})["checkpoint-cohort"] = {
+            "sampling_params": generator["eval_sampling_params"],
+            "n_samples_per_prompt": generator["eval_n_samples_per_prompt"],
+        }
+    cohort_steps = (0, 1, preset.updates)
+    cohort_rows = [row for row in primary_rows if row.step == preset.updates]
+    write_evaluations(
+        export_root,
+        [
+            row.model_copy(update={"evaluation": "eval/checkpoint-cohort/", "step": step})
+            for step in cohort_steps
+            for row in cohort_rows
+        ],
+    )
+    append_metrics(
+        source,
+        {
+            step: {
+                "step": step,
+                "attempt_id": "native-0",
+                "eval/checkpoint-cohort/all/num_attempted": sum(len(row.answers) for row in cohort_rows),
+                "eval/checkpoint-cohort/all/avg_verifier_score": 0.5,
+            }
+            for step in cohort_steps
+        },
+    )
+
+    def published_ids():
+        result = publication.publish_runs([str(source)], preset, table=table, service_url="http://localhost")
+        assert result.served_records and not result.errors
+        [row] = client.get(f"/a/{APPLET_ID}/api/runs").json()["runs"]
+        return row["native_run_id"], row["evaluation_run_ids"]
+
+    native_run_id, ids = published_ids()
+    records = {record.run_id: record for record in list_records(str(tmp_path / "evaldash"))}
+    linked = [records[run_id] for run_id in ids]
+    assert {item.rl_attempt for item in linked} == {RLAttemptRef(run_id=native_run_id, attempt_id="native-0")}
+    assert {(item.evaluation.name, item.evaluation.postprocessing["skyrl_step"]) for item in linked} == {
+        (profile, step) for profile in ("eval_lite", "checkpoint-cohort") for step in ("0", str(preset.updates))
+    }
+    assert len(linked) == len(records) == 4
+    assert published_ids() == (native_run_id, ids)
+
+
+@pytest.mark.integration
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(
     preset_table, rl_progress_client, recorded_runs, monkeypatch, cache_native_compositions
@@ -499,19 +557,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         )
         for i in range(2)
     ]
-    export_root = str(sources[0] / "exports")
-    primary_rows = read_evaluations(export_root, attempt_id="native-0", evaluation="eval/")
-    with edit_receipt(sources[0]) as receipt:
-        inputs = receipt["config"]["inputs"]
-        inputs.setdefault("evaluation_data", {})["checkpoint-cohort"] = inputs["validation_data"]
-    write_evaluations(
-        export_root,
-        [
-            row.model_copy(update={"evaluation": "eval/checkpoint-cohort/", "step": step})
-            for step in (0, 1, preset.updates)
-            for row in primary_rows[:1]
-        ],
-    )
     handles = tuple(
         ArtifactStep.adopt(f"tests/publication-r{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
@@ -608,17 +653,6 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    records = {record.run_id: record for record in list_records(str(sources[0].parents[2] / "evaldash"))}
-    for attempt_id, row in rows.items():
-        linked = [records[run_id] for run_id in row["evaluation_run_ids"]]
-        assert {item.rl_attempt for item in linked} == {
-            RLAttemptRef(run_id=row["native_run_id"], attempt_id=attempt_id)
-        }
-        profiles = {"eval_lite", "checkpoint-cohort"} if attempt_id == "native-0" else {"eval_lite"}
-        assert {(item.evaluation.name, item.evaluation.postprocessing["skyrl_step"]) for item in linked} == {
-            (profile, step) for profile in profiles for step in ("0", str(preset.updates))
-        }
-        assert len(linked) == 2 * len(profiles)
     assert rows["native-0"]["evaluation_data_identity"].endswith("/full_validation.parquet")
     assert repeated.urls[str(sources[0])].endswith(f"#run={logical_id}&attempt=native-0")
 

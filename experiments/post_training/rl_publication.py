@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
@@ -29,7 +28,6 @@ from finestore.rl.rl_progress import (
 from finestore.rl.run_records import (
     METRIC_ATTEMPT_IDS,
     AttemptRecord,
-    EvaluationTaskRow,
     read_attempt,
     read_attempt_metrics,
     read_attempts,
@@ -64,6 +62,7 @@ from experiments.post_training.rl_measurements import (
     lineage_windows,
     native_prefix,
     read_run_inputs,
+    recorded_evaluations,
     recorded_lineage,
     training_invariants,
 )
@@ -416,14 +415,18 @@ def _prepare_publication_attempts(
     return _OutputAttempts(current, attempts)
 
 
-def _publish_training_evaluations(preset: presets.Preset, attempt: AttemptRecord) -> tuple[str, ...]:
+def _publish_training_evaluations(run_output: str, preset: presets.Preset, attempt: AttemptRecord) -> tuple[str, ...]:
     if attempt.evaluation_storage_version != 1:
         return ()
     launch = recorded_launch(attempt)
-    if launch.run_mode != "train":
+    if launch.run_mode != "train" or not launch.train_data:
         return ()
     result = attempt.native.result
-    names = dict.fromkeys((*(evaluation.name for evaluation in preset.evaluations[:1]), *launch.evaluation_data))
+    try:
+        inputs = read_run_inputs(run_output)
+    except FileNotFoundError:
+        inputs = RunInputs(preset_name=preset.name)
+    profiles = recorded_evaluations(preset, launch, inputs, gate_profiles=True)
     attempt_ref = RLAttemptRef(run_id=attempt.run_id, attempt_id=attempt.attempt_id)
     exported_model = result.model
     metrics = {
@@ -431,21 +434,18 @@ def _publish_training_evaluations(preset: presets.Preset, attempt: AttemptRecord
         for step, values in read_attempt_metrics(launch.export_root, attempt.attempt_id).items()
     }
     ids = []
-    for name in names:
+    for profile in profiles:
+        name = profile.name
         prefix = native_prefix(launch, name)
-        sessions: dict[int, list[EvaluationTaskRow]] = defaultdict(list)
-        for row in read_evaluations(launch.export_root, attempt_id=attempt.attempt_id, evaluation=prefix):
-            sessions[row.step].append(row)
         attempted_key = f"{prefix}all/num_attempted"
-        complete_steps = []
-        for step, rows in sessions.items():
-            attempted = metrics.get(step, {}).get(attempted_key)
-            if attempted == sum(len(row.answers) for row in rows) or (attempted is None and result.state == "succeeded"):
-                complete_steps.append(step)
-        if not complete_steps:
+        recorded_steps = [step for step, values in metrics.items() if values.get(attempted_key, 0) > 0]
+        if not recorded_steps:
             continue
-        for step in dict.fromkeys((min(complete_steps), max(complete_steps))):
-            session_metrics = metrics.get(step, {})
+        for step in dict.fromkeys((min(recorded_steps), max(recorded_steps))):
+            rows = read_evaluations(launch.export_root, attempt_id=attempt.attempt_id, evaluation=prefix, step=step)
+            session_metrics = metrics[step]
+            if sum(len(row.answers) for row in rows) != session_metrics[attempted_key]:
+                continue
             score = session_metrics.get(f"{prefix}all/avg_verifier_score")
             record = publish_skyrl_evaluation(
                 attempt=attempt,
@@ -463,7 +463,7 @@ def _publish_training_evaluations(preset: presets.Preset, attempt: AttemptRecord
                     ),
                     backend=launch.engine.backend,
                 ),
-                rows=sessions[step],
+                rows=rows,
                 rl_attempt=attempt_ref,
                 score=score if score is not None and math.isfinite(score) else None,
             )
@@ -572,7 +572,7 @@ def publish_runs(
                     record = record.model_copy(update={"issue": assigned})
                 if record.status != "running":
                     try:
-                        evaluation_ids = _publish_training_evaluations(table.by_name[record.series], receipt)
+                        evaluation_ids = _publish_training_evaluations(path, table.by_name[record.series], receipt)
                     except Exception as error:
                         result.errors.append(f"EvalDash publication for {receipt.run_id}/{selected_id}: {error}")
                     else:

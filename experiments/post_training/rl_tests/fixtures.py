@@ -667,13 +667,15 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 )
                 write_evaluations(str(root / "exports"), task_rows)
                 values = stored_metrics.setdefault(max(step, 0), {"step": max(step, 0)})
-                prefix = f"eval/{evaluation.name}/all/outcome/" if index else "eval/all/outcome/"
+                prefix = f"eval/{evaluation.name}/all/" if index else "eval/all/"
                 values.update(
                     {
-                        prefix + value: len(rows) if value == Outcome.GRADED else 0
+                        prefix + "outcome/" + value: len(rows) if value == Outcome.GRADED else 0
                         for value in (*Outcome, "rollout_failure")
                     }
                 )
+                values[prefix + "num_attempted"] = len(rows)
+                values[prefix + "avg_verifier_score"] = average
         for values in stored_metrics.values():
             values.update(metrics or {})
             values["attempt_id"] = attempt
