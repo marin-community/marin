@@ -18,14 +18,86 @@ import yaml
 from iris.client.client import IrisClient
 from marin.execution.lazy import StepContext
 from rigging.secrets import SecretResolutionError
+from taskcompendium.models import (
+    AnswerType,
+    ConversationInput,
+    EnvironmentRequirements,
+    NoGrader,
+    PlainText,
+    Source,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+)
+from verifyit.modes.grade_judge import JudgeConnection
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
 from experiments.evaluation.micro210 import micro210_step
 from experiments.evaluation.micro210_policy import Micro210Model
 from experiments.post_training.long_loop import launch_validation
 from experiments.post_training.long_loop.eval_runtime import judge
+from experiments.post_training.long_loop.judge_route import judge_route_verdict
 from experiments.post_training.long_loop.serving import serving_release
 from tests.rl.micro210_fixture import policy_fixture_reference
+
+
+def _gate_task(model: str):
+    """A minimal judge-graded task declaring ``model`` (empty string means the served fallback)."""
+    return TaskSpec(
+        id="gate-fixture",
+        source=Source(dataset="fixture/gate", revision="1", row="0", importer_revision="1"),
+        context=ConversationInput(events=(TextMessage(role="user", content="Grade me."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=VerifyitGrader(
+            mode="judge",
+            parameters={
+                "references": ["12"],
+                "rubric": "labels",
+                "prompt_template": "Reference: {reference}\nCandidate: {candidate}",
+                "label_scores": {"PASS": 1.0, "FAIL": 0.0},
+                "model": model,
+            },
+        ),
+    )
+
+
+def test_judge_route_gate_refuses_unservable_declared_judges():
+    """The CPU gate classifies declared judges and refuses the unservable-no-substitute class.
+
+    A declared judge must be the deployment's served model, mapped in ``substitute_models``
+    (a self-map records a served model), or empty for the served fallback; anything else is the
+    marin #12374 class and fails the launch before GPU allocation.
+    """
+    served = JudgeConnection(
+        "https://judge.invalid",
+        "fixture-key",
+        default_model="zai-org/GLM-5.3-Flash",
+        substitute_models={
+            "MiniMaxAI/MiniMax-M3-MXFP8": "zai-org/GLM-5.3-Flash",
+            "glm-5.3": "zai-org/GLM-5.3-Flash",
+            "openai/gpt-oss-120b": "openai/gpt-oss-120b",
+        },
+    )
+    worker = served
+    assert judge_route_verdict(_gate_task(""), worker) == "default_fallback"
+    assert judge_route_verdict(_gate_task("zai-org/GLM-5.3-Flash"), worker) == "served"
+    assert judge_route_verdict(_gate_task("glm-5.3"), worker) == "substituted"
+    assert judge_route_verdict(_gate_task("MiniMaxAI/MiniMax-M3-MXFP8"), worker) == "substituted"
+    assert judge_route_verdict(_gate_task("openai/gpt-oss-120b"), worker) == "substituted"
+    with pytest.raises(ValueError, match=r"glm-4\.6"):
+        judge_route_verdict(_gate_task("glm-4.6"), worker)
+    # Without any deployed connection a declared judge is still refused.
+    with pytest.raises(ValueError, match="declares judge model"):
+        judge_route_verdict(_gate_task("glm-4.6"), None)
+
+
+def test_judge_route_gate_passes_tasks_without_judges():
+    """Tasks without a judge grader carry no judge-route obligation."""
+    task = _gate_task("")
+    plain = task.model_copy(update={"grader": NoGrader(reason="no judge")})
+    assert judge_route_verdict(plain, SimpleNamespace(judge_connection=None)) == "no_judge"
 
 
 @pytest.mark.timeout(120)

@@ -358,18 +358,25 @@ def _failed_rollout(
 class RemoteJudgeSettings:
     """The deployed judge endpoint and the declared judge models it cannot serve.
 
+    ``model`` is the judge model the endpoint serves; declared tasks without a model fall back
+    to it, and the launch gate treats it as the only other servable judge.
     ``substitute_models`` maps each unservable declared judge model to the model the endpoint
     serves instead; the substitution is recorded in grading evidence as a protocol difference.
+    An entry mapping a model to itself records that the endpoint serves it without substitution.
     """
 
     base_url: str
     api_key_env: str
+    model: str | None = None
     substitute_models: Mapping[str, str] = field(default_factory=dict)
 
     def connection(self) -> JudgeConnection:
         """Resolve the judge credential on the rollout worker, outside task data."""
         return JudgeConnection(
-            self.base_url, require_secret(self.api_key_env), substitute_models=MappingProxyType(self.substitute_models)
+            self.base_url,
+            require_secret(self.api_key_env),
+            default_model=self.model,
+            substitute_models=MappingProxyType(self.substitute_models),
         )
 
 

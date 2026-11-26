@@ -75,6 +75,7 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
+    VerifyitGrader,
 )
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, RawRow
@@ -648,6 +649,68 @@ def test_script_judge_substitutes_only_the_declared_unservable_model(
         }
     else:
         assert "judge_protocol" not in result.diagnostics
+
+
+@pytest.mark.parametrize(
+    "declared_model,substitutions,expected_served",
+    [
+        ("glm-5.3", {"glm-5.3": "served-glm"}, "served-glm"),
+        ("glm-5.3", {"other-judge": "served-glm"}, "glm-5.3"),
+    ],
+)
+def test_verifyit_judge_substitutes_only_the_declared_unservable_model(
+    tmp_path, shell_task, judge_server, declared_model, substitutions, expected_served
+):
+    """The Ultra sources' route: a verifyit judge-mode grader declaring an unservable model.
+
+    The host judge resolves the declared model through the connection's substitution map, names
+    the served model on the wire, and records the declared-to-served difference in the grading
+    evidence; a declared model outside the map is sent unchanged.
+    """
+    task = shell_task.model_copy(
+        update={
+            "answer_type": AnswerType.TEXT,
+            "output_paths": (),
+            "grader": VerifyitGrader(
+                mode="judge",
+                parameters={
+                    "references": ["12"],
+                    "rubric": RUBRIC_LABELS,
+                    "exact_gate": False,
+                    "prompt_template": "Reference: {reference}\nCandidate: {candidate}",
+                    "label_scores": {"PASS": 1.0, "FAIL": 0.0},
+                    "model": declared_model,
+                },
+            ),
+        }
+    )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
+    connection = JudgeConnection(
+        f"http://127.0.0.1:{judge_server.server_port}/v1",
+        "runtime-private-key",
+        default_model="pinned-judge",
+        substitute_models=substitutions,
+    )
+    result = grade_task(
+        task,
+        GradingAttempt(
+            ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="twelve")))
+        ),
+        machine_factory=LocalGradingMachines(tmp_path),
+        machine_spec=GRADER_MACHINE,
+        judge_connection=connection,
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
+    [request] = judge_server.requests
+    assert request["model"] == expected_served
+    if expected_served == "served-glm":
+        assert result.detail["judge_protocol"] == {
+            "declared_model": "glm-5.3",
+            "served_model": "served-glm",
+        }
+        assert result.diagnostics["judge_protocol"] == result.detail["judge_protocol"]
+    else:
+        assert "judge_protocol" not in (result.detail or {}) and "judge_protocol" not in result.diagnostics
 
 
 @pytest.mark.asyncio

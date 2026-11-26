@@ -39,6 +39,8 @@ from skyrl_train.tokenizer import tokenizer_from_config, tokenizer_vocabulary_fi
 from skyrl_train.trajectory_runners.harbor.configuration import HarborConfigBuilder
 from taskcompendium.models import TaskSpec
 
+from experiments.post_training.long_loop.judge_route import judge_route_verdict as judge_route_verdict_for_connection
+
 
 def validate_policy_vocabulary(launch) -> dict:
     """Exercise the production metadata/tokenizer staging and vocabulary guard on CPU."""
@@ -91,6 +93,11 @@ def validate_policy_vocabulary(launch) -> dict:
     }
 
 
+def judge_route_verdict(task: TaskSpec, worker: TaskRolloutWorkerSpec) -> str:
+    """Classify a task's declared judge against the deployed judge route, refusing broken ones."""
+    return judge_route_verdict_for_connection(task, worker.judge_connection)
+
+
 def validate_source_tasks(launch, worker) -> list[dict]:
     """Check one task per training input and per validation source without allocating machines."""
     receipts = []
@@ -130,6 +137,7 @@ def validate_source_tasks(launch, worker) -> list[dict]:
                                 "source": source,
                                 "task_id": lowered.task.id,
                                 "uri": uri,
+                                "judge_route": judge_route_verdict(lowered.task, worker),
                                 "task_machine": (
                                     None
                                     if prepared.spec.task_machine is None
