@@ -50,30 +50,9 @@ def init_worker_process_group_with_device(
 ) -> None:
     """Initialize the default process group with the prebound rendezvous store.
 
-    For NCCL, pin the CUDA device to the resolved ``LOCAL_RANK`` and pass an explicit
-    ``device_id`` so ProcessGroupNCCL never
-    falls back to *"Guessing device ID based on global rank"*.
-
-    ``LOCAL_RANK`` is resolved upstream by ``resolve_pinned_local_rank`` (workers/worker.py) for
-    all three CUDA_VISIBLE_DEVICES regimes, so it is the correct ``set_device`` index in each.
-
-    Why ``device_id`` matters: without it, ProcessGroupNCCL falls back to guessing the device
-    from the global rank at first-collective time. That guess is not reliably correct across our
-    clusters — on cw-rno2a the FIRST collective (the weight-init barrier) DEADLOCKED: rank 0 raced
-    ahead into weight-loading while the other ranks stalled at the barrier (observed on
-    keep-6 / cw-rno2a, 2026-07-20). NOTE — an earlier hypothesis blamed a masked-vs-unmasked CVD
-    difference between clusters (rno2a supposedly leaving all GPUs visible); the live ``[pg-init]``
-    logs DISPROVED it: Ray masks CVD to a single device on BOTH cw-us-east-02a AND cw-rno2a
-    (``visible_device_count=1``, ``LOCAL_RANK=0``). The surviving explanation is init ordering — the
-    barrier firing before an explicit ``set_device`` on rno2a's bring-up. Pinning ``set_device`` AND
-    passing ``device_id`` makes the device explicit and correct regardless of CVD masking or init
-    ordering, which is what unblocked both clusters (validated 2026-07-20: both progress past the
-    weight-init collective into vLLM engine bring-up).
-
-    Exports the given address and port as MASTER_ADDR and MASTER_PORT.
-
-    Rank zero uses the store it opened before publishing its port. Other ranks connect to
-    that store. For NCCL this always pins the CUDA device, even if the group already exists.
+    NCCL binds to the Ray-assigned CUDA device before the first collective. Inferring
+    that device from the global rank previously stalled weight initialization on Reno.
+    The worker also publishes MASTER_ADDR and MASTER_PORT for downstream setup.
     """
     os.environ["MASTER_ADDR"] = master_addr
     os.environ["MASTER_PORT"] = str(master_port)
