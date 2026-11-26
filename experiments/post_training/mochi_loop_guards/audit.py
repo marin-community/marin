@@ -65,7 +65,7 @@ def main() -> None:
     output.mkdirs()
     manifest_path = str(output / "resolved-manifest.json")
     (output / "resolved-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    pattern = str(StoragePath(args.run_output) / "exports/dumped_evals/*/eval_only/*.jsonl")
+    pattern = str(StoragePath(args.run_output) / "exports/**/dumped_evals/*/eval_only/*.jsonl")
     command = skyrl_cpu_command(
         "python",
         "vendor/skyrl/scripts/loop_audit.py",
