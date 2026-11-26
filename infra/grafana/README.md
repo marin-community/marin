@@ -32,6 +32,7 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/{cluster}/v1/{node,training,runs,rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
+GET /finelog/{cluster}/v1/node/jobs              one node's task attempts and their usage
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
 GET /finelog/{cluster}/v1/rl/execution           selected job's executions

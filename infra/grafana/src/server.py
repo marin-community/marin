@@ -13,6 +13,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
 
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
     GET /finelog/{cluster}/v1/node/overview       bounded shared Node Details dataset
+    GET /finelog/{cluster}/v1/node/jobs           bounded Node Details job-row dataset
     GET /finelog/{cluster}/v1/training/overview   bounded shared Training dataset
     GET /finelog/{cluster}/v1/runs/overview       bounded shared multi-run dataset
     GET /finelog/{cluster}/v1/rl/overview         bounded shared RL core/engine dataset
@@ -160,6 +161,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
+from node_jobs_observability import node_jobs_dataset
 from node_observability import node_overview_dataset
 from relay_health import relay_alert_rows
 from rl_execution_observability import rl_execution_dataset
@@ -750,6 +752,19 @@ def create_app(
             lambda params, start_ms, end_ms: node_overview_dataset(
                 _csv_values(params, "clusters"),
                 _csv_values(params, "nodes"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
+    def node_jobs(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "node jobs",
+            lambda params, start_ms, end_ms: node_jobs_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "node"),
                 start_ms,
                 end_ms,
                 int(_require(params, "bucket_ms")),
@@ -1497,6 +1512,7 @@ def create_app(
             Route("/finelog/{cluster}/query", finelog_queries.query),
             Route("/finelog/{cluster}/alerts/query", finelog_queries.alert_query),
             Route("/finelog/{cluster}/v1/node/overview", node_overview),
+            Route("/finelog/{cluster}/v1/node/jobs", node_jobs),
             Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
             Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
             Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
