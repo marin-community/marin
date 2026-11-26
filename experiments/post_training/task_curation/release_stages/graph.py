@@ -2054,7 +2054,9 @@ def _release_check_step(
 ) -> ArtifactStep[StageReceipt]:
     deps = tuple(handle for handle in (package, preflight, hosted, marina) if handle is not None)
     spec = _STAGE_SPECS[f"release_check_{phase}"]
-    identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count", "service")
+    identity = _identity_fields(
+        plan, "release_id", "source_revision", "expected_source_count", "service", "package_output_root"
+    )
 
     def build_inputs(ctx: StepContext) -> dict:
         inputs: dict[str, Any] = {
@@ -2062,6 +2064,8 @@ def _release_check_step(
             "source_revision": plan.source_revision,
             "phase": phase,
             "output_root": stage_output_root(plan, f"release-check-{phase}"),
+            # The checker runs on the workstation that holds the package.
+            "work_root": plan.package_output_root,
             "service_url": plan.service.service_url,
             "applet_id": plan.service.applet_id,
             "expected_source_count": plan.expected_source_count,

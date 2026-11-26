@@ -673,9 +673,25 @@ def _release_check_inputs(
         "applet_id": "12345678-1234-5678-1234-567812345678",
         "expected_source_count": 2,
         "production_version": 41,
+        "work_root": str(tmp_path / "work" / name),
     }
     defaults.update(overrides)
     return release_check.ReleaseCheckInputs(**defaults)
+
+
+def _preflight_stage_receipt(
+    tmp_path: Path, name: str = "preflight", production_version: int = 41, **overrides
+) -> ArtifactRef:
+    """A sealed preflight stage receipt binding its sealed maintained checker receipt."""
+    checker = _seal_json(tmp_path, f"{name}-checker.json", _preflight_receipt_document(REVISION, production_version))
+    document = {
+        "phase": "preflight",
+        "passed": True,
+        "source_revision": REVISION,
+        "checker_receipt": {"uri": checker.uri, "sha256": checker.sha256},
+        **overrides,
+    }
+    return _seal_json(tmp_path, f"{name}-stage.json", document)
 
 
 def test_release_check_preflight_dry_run_plans_without_execution(tmp_path):
@@ -692,11 +708,13 @@ def test_release_check_preflight_dry_run_plans_without_execution(tmp_path):
     assert planned["module"] == release_check.CHECKER_MODULE
     argv = planned["arguments"]
     assert argv[argv.index("--dist") + 1] == str(package_dir)
-    assert argv[argv.index("--source-counts") + 1] == counts_ref.uri
-    assert argv[argv.index("--oracle-inventory") + 1] == oracle_ref.uri
+    staged = tmp_path / "work" / "release-check" / "release-check-preflight" / "inputs"
+    assert argv[argv.index("--source-counts") + 1] == str(staged / "source-counts.json")
+    assert argv[argv.index("--oracle-inventory") + 1] == str(staged / "oracle-inventory.json")
     assert argv[argv.index("--production-version") + 1] == "41"
     assert not (tmp_path / "release" / "release-check" / "checker").exists()
     assert not (tmp_path / "release" / "release-check" / "release-check-preflight.json").exists()
+    assert not (tmp_path / "work").exists()
 
 
 def test_release_check_passes_the_bundle_attestation_to_the_checker(tmp_path, monkeypatch):
@@ -726,10 +744,20 @@ def test_release_check_preflight_write_delegates_and_seals(tmp_path):
     proof = release_check.run_release_check(
         inputs, dry_run=False, repo_root=repo, feeds=_feeds(tmp_path), checker=checker
     )
-    repo_arg, _argv, receipt_path = checker.calls[0]
+    repo_arg, argv, receipt_path = checker.calls[0]
     assert repo_arg == repo
-    assert receipt_path == str(tmp_path / "release" / "release-check" / "checker" / "preflight.json")
+    # The checker reads and writes local files: digest-verified inputs staged beside its receipt.
+    work = tmp_path / "work" / "release-check" / "release-check-preflight"
+    assert receipt_path == str(work / "checker" / "preflight.json")
+    for flag, ref in (("--source-counts", counts_ref), ("--oracle-inventory", oracle_ref)):
+        assert Path(argv[argv.index(flag) + 1]).read_bytes() == Path(ref.uri).read_bytes()
     stage_receipt = json.loads((tmp_path / "release" / "release-check" / "release-check-preflight.json").read_text())
+    sealed_checker = tmp_path / "release" / "release-check" / "checker" / "preflight.json"
+    assert sealed_checker.read_bytes() == Path(receipt_path).read_bytes()
+    assert stage_receipt["checker_receipt"] == {
+        "uri": str(sealed_checker),
+        "sha256": hashlib.sha256(sealed_checker.read_bytes()).hexdigest(),
+    }
     assert stage_receipt["kind"] == f"atlas-{RELEASE_ID}-release-check"
     assert stage_receipt["phase"] == "preflight" and stage_receipt["passed"] is True
     assert stage_receipt["target"] == {
@@ -742,7 +770,7 @@ def test_release_check_preflight_write_delegates_and_seals(tmp_path):
 
 def test_release_check_phase_gating_refusals(tmp_path):
     package_ref, oracle_ref, counts_ref, _ = _package_receipt(tmp_path)
-    preflight_ref = _seal_json(tmp_path, "preflight-receipt.json", _preflight_receipt_document(REVISION))
+    preflight_ref = _preflight_stage_receipt(tmp_path)
     with pytest.raises(ValueError, match="requires the package, oracle-inventory and source-counts"):
         release_check.run_release_check(
             _release_check_inputs(tmp_path, "preflight", package=package_ref),
@@ -788,7 +816,7 @@ def test_release_check_phase_gating_refusals(tmp_path):
 
 
 def test_release_check_hosted_delegates_with_baseline_and_seals(tmp_path):
-    preflight_ref = _seal_json(tmp_path, "preflight-receipt.json", _preflight_receipt_document(REVISION))
+    preflight_ref = _preflight_stage_receipt(tmp_path)
     checker = _FakeChecker("hosted", REVISION)
     inputs = _release_check_inputs(tmp_path, "hosted", preflight_receipt=preflight_ref, published_revision=7)
     release_check.run_release_check(
@@ -796,7 +824,11 @@ def test_release_check_hosted_delegates_with_baseline_and_seals(tmp_path):
     )
     _, argv, receipt_path = checker.calls[0]
     assert argv[argv.index("--revision") + 1] == "7"
-    assert argv[argv.index("--baseline") + 1] == preflight_ref.uri
+    baseline = Path(argv[argv.index("--baseline") + 1])
+    assert (
+        baseline == tmp_path / "work" / "release-check" / "release-check-hosted" / "inputs" / "preflight-baseline.json"
+    )
+    assert json.loads(baseline.read_text()) == _preflight_receipt_document(REVISION)
     assert "--dist" not in argv
     assert receipt_path.endswith("checker/hosted.json")
     stage_receipt = json.loads((tmp_path / "release" / "release-check" / "release-check-hosted.json").read_text())
@@ -805,7 +837,7 @@ def test_release_check_hosted_delegates_with_baseline_and_seals(tmp_path):
 
 
 def test_release_check_postpublish_plans_full_sweep(tmp_path):
-    preflight_ref = _seal_json(tmp_path, "preflight-receipt.json", _preflight_receipt_document(REVISION))
+    preflight_ref = _preflight_stage_receipt(tmp_path)
     hosted_ref = _seal_json(
         tmp_path, "hosted-receipt.json", {"phase": "hosted", "passed": True, "source_revision": REVISION}
     )
@@ -825,8 +857,7 @@ def test_release_check_postpublish_plans_full_sweep(tmp_path):
 
 
 def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
-    preflight_document = _preflight_receipt_document(REVISION)
-    failed = _seal_json(tmp_path, "failed-preflight.json", {**preflight_document, "passed": False})
+    failed = _preflight_stage_receipt(tmp_path, "failed", passed=False)
     with pytest.raises(ValueError, match="did not pass"):
         release_check.run_release_check(
             _release_check_inputs(tmp_path, "hosted", preflight_receipt=failed, published_revision=7),
@@ -834,7 +865,7 @@ def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
         )
-    stale = _seal_json(tmp_path, "stale-preflight.json", {**preflight_document, "source_revision": "d" * 40})
+    stale = _preflight_stage_receipt(tmp_path, "stale", source_revision="d" * 40)
     with pytest.raises(ValueError, match="pins revision"):
         release_check.run_release_check(
             _release_check_inputs(tmp_path, "hosted", preflight_receipt=stale, published_revision=7),
@@ -842,7 +873,7 @@ def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
         )
-    wrong_phase = _seal_json(tmp_path, "wrong-phase.json", {**preflight_document, "phase": "hosted"})
+    wrong_phase = _preflight_stage_receipt(tmp_path, "wrong-phase", phase="hosted")
     with pytest.raises(ValueError, match="prior receipt phase is"):
         release_check.run_release_check(
             _release_check_inputs(tmp_path, "hosted", preflight_receipt=wrong_phase, published_revision=7),
@@ -850,9 +881,7 @@ def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
         )
-    drifted = _seal_json(
-        tmp_path, "drifted-preflight.json", _preflight_receipt_document(REVISION, production_version=42)
-    )
+    drifted = _preflight_stage_receipt(tmp_path, "drifted", production_version=42)
     with pytest.raises(ValueError, match="different production version"):
         release_check.run_release_check(
             _release_check_inputs(tmp_path, "hosted", preflight_receipt=drifted, published_revision=7),
