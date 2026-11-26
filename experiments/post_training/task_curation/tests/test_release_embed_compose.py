@@ -526,3 +526,17 @@ def test_end_to_end_targets_scoped_and_removals_dropped(tmp_path):
     overlap_document, overlap_expected = _composition(tmp_path, overlap=True)
     with pytest.raises(ValueError, match="also a planned removal"):
         compose.compose_plan(overlap_document, overlap_expected, (_declaration("retained").id,))
+
+
+def test_archived_assignment_counts_cover_planned_removals(tmp_path):
+    """The filter counts the archive before projection, so a removed source still counts."""
+    document, _ = _composition(tmp_path, removed=True)
+    archived = compose.read_retained_release(document["old_release"]).sources
+    retained_id, removed_id = _declaration("retained").id, _declaration("removed").id
+    files = [
+        {"counts": [{"source_id": retained_id, "status": "described", "count": 3}]},
+        {"counts": [{"source_id": removed_id, "status": "described", "count": 1}]},
+    ]
+    compose.check_archived_assignment_counts(files, archived)
+    with pytest.raises(ValueError, match="retained assignment counts disagree"):
+        compose.check_archived_assignment_counts(files[:1], archived)

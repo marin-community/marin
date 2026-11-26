@@ -415,6 +415,21 @@ def run_compose(
         raise
 
 
+def check_archived_assignment_counts(retained_files: list[dict], archived_sources) -> None:
+    """Every archived source's assignment rows must match its release task count.
+
+    ``filter_assignment_file`` counts the archived file before projection, so the
+    counts cover planned removals too; the projected rows are verified separately by
+    readback.
+    """
+    measured: Counter[str] = Counter()
+    for result in retained_files:
+        for row in result["counts"]:
+            measured[row["source_id"]] += row["count"]
+    if measured != Counter({source.source_id: source.task_count for source in archived_sources}):
+        raise ValueError("retained assignment counts disagree with the retained release sources")
+
+
 def _finish_compose(inputs, plan, document, release, context, root, alert_feeds, mode) -> dict:
     """The write-mode tail: retained pass, coverage recompute, exact unions, seals."""
     old_sources = {source.source_id: source for source in plan.old_release.sources}
@@ -433,12 +448,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
     ).results
     if not all(row["all_retained_values_verified"] for row in retained_files):
         raise ValueError("retained assignment readback diverged")
-    measured: Counter[str] = Counter()
-    for result in retained_files:
-        for row in result["counts"]:
-            measured[row["source_id"]] += row["count"]
-    if measured != Counter({sid: old_sources[sid].task_count for sid in selected}):
-        raise ValueError("retained assignment counts disagree with the retained release sources")
+    check_archived_assignment_counts(retained_files, plan.old_release.sources)
     assignment_paths = [row["output"] for row in retained_files] + list(plan.fresh_release.paths)
     release = release.model_copy(update={"paths": assignment_paths})
     release = AlignmentRelease.model_validate(release.model_dump(mode="json"))
