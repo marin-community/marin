@@ -12,12 +12,14 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
+from shellbox.backends.local.cgroup import delegated_cgroup_parent
 from shellbox.backends.local.disk import LocalDiskPool, verified_local_disk_pool
 from shellbox.backends.local.machine import LocalMachineFactory, check_local_environment
 from shellbox.machine import (
     Command,
     CommandSemantics,
     DiskLimitExceeded,
+    ExitReason,
     MachineSpec,
     MachineTerminated,
     ResourceLimit,
@@ -58,6 +60,37 @@ async def test_local_disk_verified_pool_is_shared_by_concurrent_host_requests(tm
     )
     assert first is second
     assert disk_state(first.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+async def test_local_disk_command_timeout_releases_spools_before_unmount(tmp_path, executable_oci_image, monkeypatch):
+    monkeypatch.setattr("shellbox.backends.local.machine.delegated_cgroup_parent", lambda: None)
+    pool = LocalDiskPool(tmp_path / "disks")
+    factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images")
+    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+    try:
+        result = await machine.run(Command(("/bin/sleep", "60"), timeout=1))
+        assert result.reason is ExitReason.TIMED_OUT
+    finally:
+        await machine.close()
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
+
+
+async def test_local_disk_exhaustion_does_not_prevent_command_quiescence(tmp_path, executable_oci_image):
+    parent = delegated_cgroup_parent()
+    if parent is None:
+        pytest.skip("Command quiescence requires a delegated worker cgroup")
+    pool = LocalDiskPool(tmp_path / "disks")
+    factory = LocalMachineFactory(disk_pool=pool, image_cache=tmp_path / "images", cgroup_parent=parent)
+    machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+    try:
+        with pytest.raises(DiskLimitExceeded):
+            await machine.run(Command(("/bin/sh", "-c", "sleep 60 & " + OVERFLOW_SCRIPT, "sh", "/app/fill")))
+        assert any(group.populated for group in machine._background_cgroups)
+        await machine.quiesce_commands()
+        assert not any(group.populated for group in machine._background_cgroups)
+    finally:
+        await machine.close()
+    assert disk_state(pool.root) == {"loops": [], "mounts": [], "allocations": []}
 
 
 @pytest.mark.parametrize("path", ["/app/fill", "/tmp/fill", "/dev/shm/fill", "/usr/fill"])

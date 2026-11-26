@@ -935,7 +935,8 @@ class LocalMachine:
         Requires delegated cgroups. Call after stopping agent command submission,
         before collecting outputs or starting verification in this machine.
         """
-        self._check_open()
+        if self._closed:
+            raise MachineTerminated("Machine is closed")
         if self._cgroup is None:
             raise UnsupportedMachineSpec("Command quiescence requires delegated cgroups")
 
@@ -1040,6 +1041,11 @@ class LocalMachine:
                             scope._commands.pop(group, None)
                         await self._stop_command(process, group)
                     elif not self._closed:
+                        # Teardown unmounts the quota filesystem after killing
+                        # the child. Release our spool references before then.
+                        stdout_file.close()
+                        stderr_file.close()
+                        stdin_file.close()
                         await self.close()
                     await process.wait()
 
