@@ -31,7 +31,7 @@ def policy_data_weights(
     """Return loss eligibility weighted by the configured THINK-token contribution."""
     if response_span_tags is None or think_token_weight == 1.0:
         return loss_mask
-    # Tags and loss masks share response positions; span_tagger uses 1 for THINK.
+    # Tags and loss masks share response positions.
     tags = torch.zeros_like(loss_mask)
     width = min(response_span_tags.shape[-1], loss_mask.shape[-1])
     tags[..., :width] = response_span_tags[..., :width]

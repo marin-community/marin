@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow
 from finestore.rl.strata import MembershipState, SelectionManifest
 
@@ -131,6 +132,22 @@ def score_slices(scores: pa.Table) -> dict[str, list[dict]]:
             # A task set without both kinds of task has no agentic split; its one slice repeats the overall mean.
             del groups[agentic[0]]
     return dict(groups)
+
+
+def score_membership(session: pa.Table, statistic: str) -> dict:
+    """Describe the answers contributing to a plotted score."""
+    columns = ("task_id", "answer")
+    if statistic == "family_mean" or statistic.startswith("family/"):
+        columns = ("task_id", "family", "answer")
+    session = session.filter(session["scored"])
+    if statistic.startswith("family/"):
+        family = statistic.removeprefix("family/").removesuffix("/mean")
+        session = session.filter(pc.equal(session["family"], family))
+    members = {tuple(row[column] for column in columns) for row in session.select(columns).to_pylist()}
+    return {
+        "members": sorted(members, key=lambda values: tuple("" if value is None else str(value) for value in values)),
+        "weights": None,
+    }
 
 
 def score_answers(scores: pa.Table) -> dict[str, float]:

@@ -20,7 +20,7 @@ class ResolvedPolicyEvaluation:
     evaluation: PolicyEvaluation
     context: int
     max_output: int | None
-    seed: int
+    seed: int | None
 
     def __post_init__(self) -> None:
         if self.context > self.candidate.max_context:

@@ -9,6 +9,7 @@ export const phaseTypes = {
 
 const timerMarkers = [
   { method: '_run_pretraining_evaluation', timer: 'eval_before_train', kind: 'evaluation', reason: 'Pre-training evaluation' },
+  { method: '_run_step_end_callbacks', timer: 'eval', kind: 'evaluation', reason: 'Periodic evaluation' },
   { method: '_finalize_training', timer: 'eval', kind: 'evaluation', reason: 'Final evaluation' },
   { method: '_finalize_training', timer: 'save_checkpoints', kind: 'checkpoint', reason: 'Final checkpoint' },
 ].map((marker) => ({

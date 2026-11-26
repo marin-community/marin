@@ -3,6 +3,7 @@
 
 """LAMBADA continuation-likelihood evaluation."""
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     LikelihoodMetric,
@@ -24,15 +25,18 @@ from taskcompendium.pipeline.models import IntendedUse
 from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmarks
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, prepare_evaluation
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 
 def benchmarks() -> list[EvaluationBenchmark]:
     source = RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:lambada_openai",
-            title="lambada_openai",
-            origin="Evalchemy",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset="lambada_openai",
+            upstream_name="lambada_openai",
+            subset=None,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="likelihood-continuation",
             tags=("eval", "source:evalchemy", "benchmark"),
             count=5153,

@@ -20,7 +20,6 @@ from marin.evaluation.task_worker import (
     SOLVER_API_KEY,
     SOLVER_ENDPOINT,
     WORKER_TIMEOUT,
-    daytona_connection,
     execute_with_retries,
     execution_config,
     machine_backends,
@@ -33,6 +32,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from rigging.timing import Duration
+from shellbox.backends.daytona.connection import DaytonaConnection
 from shellbox.machine import Backend
 from verifyit.modes.grade_judge import JudgeConnection
 
@@ -124,7 +124,7 @@ def main() -> None:
     api_key = require_secret(arguments.api_key_env)
     daytona = None
     if Backend.DAYTONA in machine_backends(execution_config(config)):
-        daytona = daytona_connection(require_secret(arguments.daytona_api_key_env))
+        daytona = DaytonaConnection(api_key=require_secret(arguments.daytona_api_key_env))
         # Reject an incomplete account before any worker starts.
         daytona.client_factory()
     if arguments.local:

@@ -3,6 +3,7 @@
 export const MAX_COMPARE = 4
 export const COMPARISON_MODELS_ENDPOINT = 'api/comparison-models'
 export const PANEL_ENDPOINT = 'api/panel'
+export const RL_PROGRESS_APPLET_ID = '6c971887-1e22-45b1-9dcb-dd775829df57'
 
 // Run properties a panel or comparison request can be filtered on. Mirrors metrics.RUN_FACETS; the
 // server rejects nothing it does not recognize, it simply ignores it, so drift is inert.

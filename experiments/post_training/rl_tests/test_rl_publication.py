@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import json
 from copy import deepcopy
 from dataclasses import replace
@@ -9,6 +10,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import click
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.rl.rl_progress import AttemptSummary
@@ -16,6 +19,7 @@ from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
     LaunchReceipt,
+    RunIndexIdentity,
     read_attempts,
     read_evaluations,
     run_records_root,
@@ -28,7 +32,7 @@ from fsspec.core import url_to_fs
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
-from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts
+from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts, recorded_launch
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl as runner
@@ -37,7 +41,7 @@ from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours, run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
     copy_evaluations,
@@ -49,6 +53,8 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
+from experiments.post_training.skyrl_test_support import selection_summary
+from infra.marina.tests.rl_progress_fixtures import grader_report
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
 
@@ -57,13 +63,15 @@ pytestmark = pytest.mark.usefixtures("source_provenance")
     "case, expected_updates, expected_time, expected_facts",
     [
         ("native-composed", 2, 3600, []),
-        ("versioned-missing-evaluation", None, None, ["evaluation_records_available"]),
+        ("native-no-evaluation", 2, 3600, []),
+        ("versioned-missing-evaluation", None, 3600, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
+        ("lineage-unknown-allocation", 2, None, []),
         (
             "untracked-native",
             None,
-            None,
+            3600,
             ["eval_lite/grader_error_fraction", "eval_lite/initial/grader_error_fraction"],
         ),
         ("updates-override", 1, 3600, []),
@@ -98,8 +106,15 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         tokenizer_revision=preset.model.tokenizer_revision,
         iris_job_id="/tests/initializer",
     )
-    inputs = RunInputs(
-        preset_name=name,
+    native_table = table
+    if case == "native-no-evaluation":
+        without_evaluation = replace(preset, evaluations=(), checkpoints="none", checkpoint_every=None, export="none")
+        native_table = replace(
+            table, presets=tuple(without_evaluation if row.name == name else row for row in table.presets)
+        )
+    inputs = run_inputs(
+        name,
+        preset=native_table.by_name[name],
         settings=("trainer.policy.optimizer_config.lr=2e-06", "trainer.policy.optimizer_config.weight_decay=0.01")
         + ((f"trainer.max_steps={expected_updates}",) if name == "train-long" else ()),
         tasks=f"snowball-100k@{snowball_model.DEFAULT_SELECTION_VERSION}",
@@ -110,8 +125,10 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         "tests/stored-progress",
         attempt_id="native-attempt",
         inputs=inputs,
+        table=native_table,
     )
     with edit_receipt(source) as receipt:
+        receipt["result"]["provenance"]["branch"] = "fixture/branch"
         if case in ("untracked-native", "versioned-missing-evaluation"):
             receipt["config"]["skyrl"]["trainer"]["logger"] = ["console", "files"]
     metrics = read_skyrl_metrics(str(source))
@@ -119,10 +136,13 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     if case in {
         "checkpoint-lineage",
         "lineage-unknown-grandparent",
+        "lineage-unknown-allocation",
         "negative-duration",
     }:
         ancestor = deepcopy(receipt)
         ancestor["config"]["run"]["attempt_id"] = "ancestor"
+        if case == "lineage-unknown-allocation":
+            ancestor["config"]["iris"]["allocation"].pop("gpus_per_node")
         ancestor["result"].update(
             state="failed",
             started_at="2026-11-06T16:40:00+00:00",
@@ -135,6 +155,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
             config=native_ancestor.config,
             result=native_ancestor.result,
             metrics_started_at=native_ancestor.result.started_at,
+            elapsed_excluding_eval_seconds=123.0,
         )
         if case == "lineage-unknown-grandparent":
             records["ancestor"] = records["ancestor"].model_copy(
@@ -148,6 +169,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         records["native-attempt"] = records["native-attempt"].model_copy(
             update={
                 "resumed_step": 1,
+                "elapsed_excluding_eval_seconds": 321.0,
                 "parent": CheckpointReference(export_root=str(source / "exports"), attempt_id="ancestor", step=1),
             }
         )
@@ -177,37 +199,110 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
                 attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
             )
         return
+    report = grader_report()
+    report_root = source / "exports" / "grader_reports"
+    write_json(report_root / "other-attempt" / "grader_report.json", {"evaluation": {}})
+    if case == "native-composed":
+        write_json(report_root / "native-attempt" / "grader_report.json", report)
+    attempt = read_stored_skyrl_attempts(str(source))[1]["native-attempt"]
     row = publication.build_record(
         str(source),
         table.by_name["data-medium"],
         table=table,
-        attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
+        attempt=attempt,
     ).model_dump(mode="json")
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
     assert row["iris_job_id"] == "/tests/native-run"
     assert row["run_id"] == receipt["config"]["run"]["id"] and row["series"] == name
-    preset_label, *settings = row["label"].split()
-    assert preset_label == name
-    assert set(settings) == {*inputs.settings, f"tasks={inputs.tasks}", "init=weights@2026.11.10"}
+    assert row["label"] == " ".join((name, *inputs.settings, f"tasks={inputs.tasks}", "init=weights@2026.11.10"))
     assert row["issue"] is None and row["gate_result"] is None
+    assert row["branch"] == "fixture/branch"
     assert (row["optimizer_steps"], row["elapsed_seconds"]) == (expected_updates, expected_time)
     assert (row["planned_updates"], row["measured_updates"]) == ((1, [1]) if case == "updates-override" else (2, [1, 2]))
     assert row["timing_scope"] == "checkpoint_lineage_native_jobs"
     assert row["status"] == ("failed" if expected_facts else "succeeded"), (row["failed_facts"], row["evidence"])
     assert row["failed_facts"] == expected_facts, (row["failed_facts"], row["evidence"])
+    if case == "native-no-evaluation":
+        assert row["evaluations"] == []
+    if case in {"checkpoint-lineage", "lineage-unknown-grandparent", "lineage-unknown-allocation"}:
+        assert lineage_gpu_hours(attempt, recorded_launch(attempt)) == (80.0 if case == "checkpoint-lineage" else None)
+    if case == "checkpoint-lineage":
+        assert row["elapsed_excluding_eval_seconds"] == 444.0
     if case == "native-composed":
         assert row["engine"]["vllm_version"] == "fixture-vllm"
+        assert row["grader_report"] == report
+    else:
+        assert row["grader_report"] is None
 
 
-@pytest.mark.parametrize("name", ["speed-short", "speed-medium", "speed-long", "data-short"])
-def test_control_publication_rejects_presets_without_dashboard_controls(monkeypatch, capsys, name):
-    def fail_storage_setup():
-        pytest.fail("Control publication configured storage for an unsupported preset")
+def test_stored_evaluation_keeps_its_original_selection_and_comparability(preset_table, recorded_runs):
+    preset = replace(snowball_model.SNOWBALL.by_name["learning-medium"], updates=2, measured=range(1, 3))
+    table = preset_table(preset)
+    built = runner.build_experiment(preset, table=table)
+    source = recorded_runs(preset.name, "tests/eval-coverage", attempt_id="recorded", inputs=built.inputs)
+    attempt = read_stored_skyrl_attempts(str(source))[1]["recorded"]
+    baseline = publication.build_record(str(source), preset, table=table, attempt=attempt)
+    newer = replace(
+        preset,
+        held_out_tasks="eval-lite@2026.11.24.99",
+        evaluations=(replace(preset.evaluations[0], name="renamed_eval", every=preset.checkpoint_every),),
+    )
+    write_json(Path(recipe.selection_artifact(newer.held_out_tasks).path()) / "summary.json", selection_summary(40))
+    row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt)
+    assert row.status == "succeeded" and row.failed_facts == []
+    native = recorded_launch(attempt)
+    (selection,) = native.validation_data
+    expected_source = f"{selection.identity}/{selection.relative_path}"
+    assert row.evaluation_data_identity == baseline.evaluation_data_identity == expected_source
+    assert {item.evaluation_score.profile for item in row.evaluations if item.evaluation_score} == {"eval_lite"}
+    assert {
+        item.evaluation_score.step for item in row.evaluations if item.evaluation_score and item.evaluation_score.final
+    } == {preset.updates}
 
-    monkeypatch.setattr(publication, "configure_coreweave_s3", fail_storage_setup)
-    result = runner.main(snowball_model.SNOWBALL, argv=["publish", "--preset", name])
-    assert result == 4
-    assert "Choose a dashboard preset with controls" in capsys.readouterr().err
+    def family_identity(summary):
+        digest = next(
+            score.comparability
+            for entry in summary.evaluations
+            if (score := entry.evaluation_score) and score.final and score.statistic == "family_mean"
+        )
+        assert digest is not None
+        return digest
+
+    assert family_identity(row) == family_identity(baseline)
+    outputs = read_evaluations(native.export_root, attempt_id=attempt.attempt_id, evaluation="eval/")
+    index, item = next((i, item) for i, item in enumerate(outputs) if item.step == preset.updates)
+    unanswered = item.answers[0].model_copy(update={"verification_status": "unavailable", "verifier_score": None})
+    rewritten = item.model_copy(update={"answers": [unanswered, *item.answers[1:]]})
+    replace_evaluations(source, [*outputs[:index], rewritten, *outputs[index + 1 :]])
+    fewer_answers = publication.build_record(str(source), preset, table=table, attempt=attempt)
+    assert family_identity(fewer_answers) != family_identity(baseline)
+
+    changed = [
+        (
+            item.model_copy(update={"strata": item.strata.model_copy(update={"family": "alternate-family"})})
+            if item.task_id == outputs[0].task_id
+            else item
+        )
+        for item in outputs
+    ]
+    replace_evaluations(source, changed)
+    differently_grouped = publication.build_record(str(source), preset, table=table, attempt=attempt)
+    assert family_identity(differently_grouped) != family_identity(baseline)
+
+    source_path = Path(selection.uri) / selection.relative_path
+    samples = pq.read_table(source_path).to_pylist()
+    task = json.loads(samples[0]["task_spec"])
+    task.setdefault("labels", {})["comparison_fixture"] = "changed-content-with-same-id"
+    samples[0]["task_spec"] = json.dumps(task)
+    pq.write_table(pa.Table.from_pylist(samples), source_path)
+    changed_tasks = publication.build_record(str(source), preset, table=table, attempt=attempt)
+    assert family_identity(changed_tasks) != family_identity(differently_grouped)
+
+    altered_config = copy.deepcopy(attempt.native.config)
+    altered_config["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.314
+    altered = attempt.model_copy(update={"config": altered_config})
+    changed_protocol = publication.build_record(str(source), preset, table=table, attempt=altered)
+    assert family_identity(changed_protocol) != family_identity(changed_tasks)
 
 
 @pytest.mark.integration
@@ -234,6 +329,11 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         )
 
     controls = write_controls(write_control, preset.name)
+    for control in controls:
+        path = control / RUN_INPUTS_FILENAME
+        old_inputs = json.loads(path.read_text())
+        del old_inputs["evaluation_profiles"]
+        write_json(path, old_inputs)
     sources = [
         recorded_runs(
             preset.name, f"tests/publication-{i}", metrics={"policy/entropy": float(i)}, attempt_id=f"native-{i}"
@@ -241,7 +341,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         for i in range(2)
     ]
     handles = tuple(
-        ArtifactStep.adopt(f"tests/publication-{i}", preset.revision, str(root), kind=SkyRLRun)
+        ArtifactStep.adopt(f"tests/publication-r{i}", recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
     )
 
@@ -260,13 +360,17 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     def saved_gate(requirements=()):
         report = run(
             gate.gate_step(
-                preset, handles, table=table, inputs=RunInputs(preset_name=preset.name, requirements=requirements)
+                preset,
+                handles,
+                table=table,
+                inputs=run_inputs(preset.name, requirements=requirements, preset=preset),
             )
         )[0]
         return report, str(report.path)
 
     report, first_gate = saved_gate()
     interrupted = {"once": True}
+    logical_id = "snowball-learning-medium-tester-1234abcd"
 
     def unavailable_readback(origin, method, path, *, json_body=None, **kwargs):
         response = request(origin, method, path, json_body=json_body)
@@ -281,11 +385,39 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         attempt = read_stored_skyrl_attempts(str(source))[1][attempt_id]
         write_attempt(
             str(source / "exports"),
-            AttemptRecord(run_id=attempt.run_id, attempt_id=attempt_id, issue=73 if index == 0 else None),
+            AttemptRecord(
+                run_id=attempt.run_id,
+                attempt_id=attempt_id,
+                issue=73 if index == 0 else None,
+                index=(
+                    RunIndexIdentity(
+                        run_id=logical_id,
+                        model=table.model,
+                        preset=preset.name,
+                        preset_version="1234abcd",
+                        user="tester",
+                        branch="fixture",
+                        source_revision="fixture",
+                        base_preset_version="1234abcd",
+                        dirty=False,
+                    )
+                    if index == 0
+                    else None
+                ),
+            ),
         )
+    input_record = sources[0] / RUN_INPUTS_FILENAME
+    declared_inputs = RunInputs.model_validate_json(input_record.read_text())
+    sentinel = "fixture-private-setting-value"
+    input_record.write_text(
+        declared_inputs.model_copy(update={"settings": (f'trainer.api_key="{sentinel}"',)}).model_dump_json()
+    )
     first = publish(first_gate)
     assert len(first.served_records) == 1 and first.errors == ["Response unavailable after insert"]
     persisted = stored()
+    assert sentinel not in persisted["native-0"]["label"]
+    assert "trainer.api_key=[REDACTED]" in persisted["native-0"]["label"]
+    input_record.write_text(declared_inputs.model_dump_json())
     assert set(persisted) == {"native-0", "native-1"} and persisted["native-0"]["issue"] == 73
     # A numeric bound is stored only as an invariant, with distinct replicate outcomes.
     relative_key = "eval_lite/aai_category/coding/mean"
@@ -295,13 +427,14 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         receipt["result"]["finished_at"] = (
             datetime.fromisoformat(receipt["result"]["started_at"]) + timedelta(hours=2)
         ).isoformat()
-    monkeypatch.setattr("marina.client.marina_request", request)
+
     repeated = publish(second_gate)
     assert repeated.unserved_records == [] and repeated.errors == []
     payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert repeated.urls[str(sources[0])].endswith(f"#run=tests%2Fpublication-0-{preset.revision}&attempt=native-0")
+    assert rows["native-0"]["evaluation_data_identity"].endswith("/full_validation.parquet")
+    assert repeated.urls[str(sources[0])].endswith(f"#run={logical_id}&attempt=native-0")
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
         response = request(origin, method, path, json_body=json_body)
@@ -310,29 +443,31 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         return response
 
     monkeypatch.setattr("marina.client.marina_request", wrong_returned_key)
+    returned_row = {key: value for key, value in rows["native-0"].items() if key != "has_grader_report"}
     with pytest.raises(RuntimeError, match="different returned identity"):
         publication.publish_result(
-            AttemptSummary.model_validate_json(json.dumps(rows["native-0"]), strict=True), "http://localhost"
+            AttemptSummary.model_validate_json(json.dumps(returned_row), strict=True), "http://localhost"
         )
     monkeypatch.setattr("marina.client.marina_request", request)
+    expected_metrics = {
+        "eval_lite/family_mean": "objective",
+        "eval_lite/family_mean/gain_per_gpu_hour": "objective",
+        "policy/entropy": "guard",
+        relative_key: "requirement",
+        "eval_lite/mean": "slice",
+        "eval_lite/family/small/mean": "slice",
+        "eval_lite/family/large/mean": "slice",
+    }
     expected = report.model_dump(mode="json", include={"verdict", "effect", "reason", "invariants"}) | {
         "comparisons": [
-            row.model_dump(mode="json")
-            for row in report.comparisons
-            if row.role in ("objective", "guard", "requirement")
+            row.model_dump(mode="json") for row in report.comparisons if expected_metrics.get(row.metric) == row.role
         ],
         "attempt_ids": ["native-0", "native-1"],
         "replicates": 2,
     }
     assert rows["native-0"]["gate_result"] == rows["native-1"]["gate_result"] == expected
-    assert {(item["metric"], item["role"]) for item in rows["native-0"]["gate_result"]["comparisons"]} == {
-        ("eval_lite/family_mean", "objective"),
-        ("eval_lite/family_mean/gain_per_gpu_hour", "objective"),
-        ("policy/entropy", "guard"),
-        (relative_key, "requirement"),
-    }
+    assert {item["metric"]: item["role"] for item in rows["native-0"]["gate_result"]["comparisons"]} == expected_metrics
 
-    run_ids = ("eval-initial-policy", "eval-terminal-policy")
     for index in range(2):
 
         @click.command()
@@ -350,7 +485,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
                         str(sources[index]),
                         "--attempt",
                         f"native-{index}",
-                        *[value for run_id in run_ids for value in ("--evaldash-run-id", run_id)],
+                        "--issue",
+                        str(73 + index),
                     ],
                     init=ArtifactHfModel(
                         ArtifactStep.adopt("tests/unbuilt-init", "2026.11.17", "s3://unused/init", kind=Artifact)
@@ -362,8 +498,8 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         assert republished.exit_code == 0, (republished.output, republished.exception)
         retained = stored()[f"native-{index}"]
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
-        assert retained["issue"] == (73 if index == 0 else None)
-        assert retained["evaldash_run_ids"] == list(run_ids)
+        assert retained["issue"] == 73 + index
+        assert publication.lineage_issue(str(sources[index] / "exports")) == 73 + index
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
             rows[f"native-{index}"]["status"],
@@ -372,10 +508,27 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert rows["native-0"]["status"] == "succeeded" and rows["native-0"]["failed_facts"] == []
     assert rows["native-1"]["status"] == "failed" and rows["native-1"]["failed_facts"] == ["require/policy/entropy"]
     assert rows["native-0"]["elapsed_seconds"] == 7200 and rows["native-0"]["issue"] == 73
+    conflict = CliRunner().invoke(
+        publication.command(table),
+        [
+            "--preset",
+            preset.name,
+            "--marina-url",
+            "http://localhost",
+            "--run-output",
+            str(sources[0]),
+            "--attempt",
+            "native-0",
+            "--issue",
+            "74",
+        ],
+    )
+    assert conflict.exit_code == 1 and "conflicting lineage issues" in conflict.output
+    assert publication.lineage_issue(str(sources[0] / "exports")) == 73
     grafana = urlparse(rows["native-0"]["grafana_url"])
     assert grafana.path == "/d/marin-rl-runs/rl-post-training"
     query = parse_qs(grafana.query)
-    assert query["var-run"] == [receipt["config"]["run"]["id"]]
+    assert query["var-run"] == [logical_id]
     assert query["var-cluster"] == [receipt["config"]["iris"]["cluster"]]
     assert query["to"] == ["1793997600000"]
     evaluation = {item["metric"]: item for item in rows["native-0"]["evaluations"]}
@@ -408,20 +561,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert fresh.unserved_records == [] and fresh.errors == []
     assert fresh_report.run.attempt_ids == ("native-retry", "native-1")
     historical = stored()["native-0"]
-    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == list(run_ids)
-    with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
-        publication.publish_runs([str(sources[0])], preset, table=table, evaldash_run_ids=run_ids)
-    with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
-        publication.publish_runs(
-            list(map(str, sources)), preset, table=table, attempt_id="native-retry", evaldash_run_ids=run_ids
-        )
-    linked = publication.publish_runs(
-        [str(sources[0])], preset, table=table, attempt_id="native-retry", evaldash_run_ids=("eval-for-retry",)
-    )
-    assert linked.served_records == [(receipt["config"]["run"]["id"], "native-retry")] and not linked.errors
-    linked_rows = stored()
-    assert linked_rows["native-retry"]["evaldash_run_ids"] == ["eval-for-retry"]
-    assert linked_rows["native-0"]["evaldash_run_ids"] == list(run_ids)
+    assert historical["issue"] == 73
     saved_evaluations = {}
     for root in sources:
         current_id, _ = read_stored_skyrl_attempts(str(root))
@@ -480,7 +620,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert blocked.unserved_records == [(receipt["config"]["run"]["id"], "native-retry")]
     assert blocked.errors == ["Gate storage unavailable"]
     assert set(blocked.served_records) == {
-        (receipt["config"]["run"]["id"], "native-0"),
+        (logical_id, "native-0"),
         (second_receipt["config"]["run"]["id"], "native-1"),
     }
     failed_row = stored()["native-1"]
@@ -530,13 +670,13 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         ],
     )
     assert command.exit_code == 0, (command.output, command.exception)
-    assert json.loads(command.output)["served_records"] == [[receipt["config"]["run"]["id"], "native-0"]]
+    assert json.loads(command.output)["served_records"] == [[logical_id, "native-0"]]
     after = stored()
     assert after["native-retry"] == before["native-retry"] and after["native-1"] == before["native-1"]
     assert after["native-0"]["evaluations"] == before["native-0"]["evaluations"]
     assert after["native-0"]["gate_result"] == before["native-0"]["gate_result"]
-    for root in controls:
-        (root / RUN_INPUTS_FILENAME).unlink()
+    with edit_receipt(controls[0]) as receipt:
+        receipt["result"]["provenance"].update(branch="main", dirty=False, base_commit=pin.commit)
     command = CliRunner().invoke(
         publication.command(table), ["--preset", "data-medium", "--marina-url", "http://localhost"]
     )
@@ -548,20 +688,17 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         if row["attempt_id"].startswith("pinned-")
     ]
     assert len(served_controls) == pin.replicates
+    assert all(row["is_control"] for row in served_controls)
+    assert all(row.get("base_commit") is None for row in served_controls)
     assert all(
         row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
     )
     before_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }
-    stale_table = replace(
-        table,
-        presets=tuple(
-            replace(row, revision="2026.11.12.2") if row.name == preset.name else row for row in table.presets
-        ),
-    )
-    with pytest.raises(click.UsageError, match="control"):
-        publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
+    stale_table = replace(table, control_pins={**table.control_pins, pin.preset: replace(pin, version="unavailable")})
+    missing_controls = publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
+    assert not missing_controls.served_records and len(missing_controls.unserved_records) == pin.replicates
     after_ids = {
         (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
     }

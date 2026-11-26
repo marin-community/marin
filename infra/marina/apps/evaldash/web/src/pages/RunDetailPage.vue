@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
+import { RL_PROGRESS_APPLET_ID } from '@/constants'
 import {
   formatDuration,
   formatInterval,
@@ -28,6 +29,10 @@ const activeSection = computed(() => sections.find(label => label.toLowerCase() 
 const props = defineProps<{ runId: string }>()
 
 const { data, loading, error, refresh } = useApi<EvalRecord>(() => `api/runs/${props.runId}`)
+const rlAttemptUrl = computed(() => {
+  const attempt = data.value?.rl_attempt
+  return attempt ? `/a/${RL_PROGRESS_APPLET_ID}/#${new URLSearchParams({ run: attempt.run_id, attempt: attempt.attempt_id })}` : null
+})
 
 onMounted(refresh)
 watch(() => props.runId, refresh)
@@ -157,6 +162,9 @@ async function copyPath() {
           <span>{{ data.user }}</span>
         </div>
         <p v-if="data.description" class="text-sm text-text-secondary">{{ data.description }}</p>
+        <p v-if="data.rl_attempt && rlAttemptUrl" class="text-sm text-text-secondary">
+          <a :href="rlAttemptUrl" class="text-accent hover:underline">RL attempt {{ data.rl_attempt.attempt_id }}</a>
+        </p>
       </div>
 
       <div v-if="data.error" class="rounded border border-status-danger-border bg-status-danger-bg text-status-danger text-sm px-3 py-2">

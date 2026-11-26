@@ -25,6 +25,24 @@ import megatron.core.parallel_state as mpu
 from skyrl_train.stable_softmax import token_entropy, token_logprobs
 
 
+def packed_next_token_targets(
+    target: torch.Tensor,
+    cu_seqlens_padded: torch.Tensor,
+    cp_group: Optional[torch.distributed.ProcessGroup],
+) -> torch.Tensor:
+    """Shift each packed sequence before applying the mirrored CP token partition."""
+    target = target.squeeze(0)
+    cp_size = 1 if cp_group is None else torch.distributed.get_world_size(cp_group)
+    cp_rank = 0 if cp_group is None else torch.distributed.get_rank(cp_group)
+    rolled = torch.zeros(target.shape[0] // cp_size, dtype=target.dtype, device=target.device)
+    offsets = cu_seqlens_padded.tolist()
+    for start, end in zip(offsets[:-1], offsets[1:], strict=True):
+        rolled[start // cp_size : end // cp_size] = _get_tokens_on_this_cp_rank(
+            target[start:end].roll(shifts=-1, dims=0), cp_rank, cp_size, seq_dim=0
+        )
+    return rolled.unsqueeze(0)
+
+
 def from_parallel_logits_to_logprobs(
     vocab_parallel_logits: torch.Tensor,
     target: torch.Tensor,
@@ -115,27 +133,10 @@ def from_parallel_logits_to_logprobs_packed_sequences(
     """
     # Remove batch dimension to work with [T, vocab_size] and [T]
     vocab_parallel_logits = vocab_parallel_logits.squeeze(0)
-    target = target.squeeze(0)
-
     batch_size = cu_seqlens_padded.shape[0] - 1
     cp_size = 1 if cp_group is None else torch.distributed.get_world_size(cp_group)
-    cp_rank = 0 if cp_group is None else torch.distributed.get_rank(cp_group)
 
-    # Roll each sequence individually
-    rolled_targets = torch.zeros(target.shape[0] // cp_size, dtype=target.dtype, device=target.device)
-    for i in range(batch_size):
-        start_idx = cu_seqlens_padded[i].item()
-        end_idx = cu_seqlens_padded[i + 1].item()
-
-        # Get the sequence targets and roll by -1
-        seq_targets = target[start_idx:end_idx]
-        rolled_seq_targets = seq_targets.roll(shifts=-1, dims=0)
-        rolled_targets[start_idx // cp_size : end_idx // cp_size] = _get_tokens_on_this_cp_rank(
-            rolled_seq_targets, cp_rank, cp_size, seq_dim=0
-        )
-
-    # Logprob kernels consume [batch, sequence, vocabulary] tensors.
-    rolled_targets = rolled_targets.unsqueeze(0)
+    rolled_targets = packed_next_token_targets(target, cu_seqlens_padded, cp_group)
     vocab_parallel_logits = vocab_parallel_logits.unsqueeze(0)
 
     # Apply distributed log probability computation

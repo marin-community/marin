@@ -188,10 +188,13 @@ dclm_tokenized = ArtifactStep.adopt(
 
 `kind` selects the handle's typed result, so a raw checkpoint path becomes a typed handle a
 consumer can read metrics from — e.g. `ArtifactStep.adopt(name, version, "gs://…", kind=LevanterCheckpoint)`.
-A consumer that depends on `dclm_tokenized` resolves to the source path. Lowering writes
+A consumer that depends on `dclm_tokenized` resolves to the source path. Running the adoption writes
 a provenance record at the canonical `{prefix}/{name}/{version}` path so the advisory drift
 check governs the alias — re-adopting the same `name@version` from a different source logs
 a warning.
+
+Pass `read_only=True` for a published input that already has a stable address. The runner checks
+the source exists and leaves all artifact and execution metadata to its producer.
 
 Use `ArtifactStep.adopt` for datasets tokenized outside the current experiment graph, for
 checkpoints produced by a separate run, or for any pre-existing artifact that needs to appear

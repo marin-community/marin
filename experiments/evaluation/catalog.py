@@ -9,11 +9,14 @@ from functools import cache, partial
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks import (
     agentic,
+    arc_agi,
     biomedical,
+    chembench,
     code,
     commonsense,
     econevals,
     facts_grounding,
+    facts_parametric,
     financebench,
     frontierscience,
     genomeqa,
@@ -24,6 +27,7 @@ from experiments.evaluation.benchmarks import (
     lambada,
     lexam,
     livecodebench,
+    livecodebench_pro,
     long_context,
     longbench,
     math,
@@ -32,11 +36,14 @@ from experiments.evaluation.benchmarks import (
     multichallenge,
     multiple_choice,
     nupa,
+    pdbthink,
     physics_verified,
     question_answering,
     reasoning,
     simpleqa,
     supergpqa,
+    swebench_science,
+    truthfulqa,
 )
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.post_training.task_curation.source import RlDataSource
@@ -63,8 +70,10 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             lexam,
             code,
             livecodebench,
+            livecodebench_pro,
             commonsense,
             biomedical,
+            chembench,
             instruction_following,
             jee,
             math,
@@ -72,6 +81,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             reasoning,
             financebench,
             facts_grounding,
+            facts_parametric,
             frontierscience,
             genomeqa,
             simpleqa,
@@ -82,7 +92,11 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             nupa,
             agentic,
             supergpqa,
+            pdbthink,
+            swebench_science,
             physics_verified,
+            arc_agi,
+            truthfulqa,
         )
         for benchmark in family.benchmarks()
     ]

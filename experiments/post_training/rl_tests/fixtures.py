@@ -44,6 +44,7 @@ from finestore.rl.strata import (
 )
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
+from fsspec.config import conf
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
@@ -66,16 +67,27 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, run_inputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
-    with_current_control_revisions,
     write_training_families,
 )
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
+from experiments.post_training.task_curation.selection import (
+    FULL_VALIDATION_FILENAME,
+    TASK_MANIFEST_FILENAME,
+    VALIDATION_FILENAME,
+)
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
+
+
+def printed_status(output):
+    # CliRunner merges stderr into result.output; status is on result.stdout. A plan prints its
+    # lowered steps after the status, so the YAML ends where the first StepSpec begins.
+    output = output.partition("\nStepSpec(")[0]
+    marker = output.rfind("\npreset:")
+    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
 def write_json(path: Path, value) -> None:
@@ -93,8 +105,12 @@ def cache_native_compositions(monkeypatch) -> None:
     def compose(paths, *, validate_driver=False):
         documents = [Path(path).read_text() for path in paths]
         attempts = [yaml.safe_load(document)["run"]["attempt_id"] for document in documents]
-        key = validate_driver, tuple(
-            document.replace(attempt, attempt_placeholder) for document, attempt in zip(documents, attempts, strict=True)
+        key = (
+            validate_driver,
+            tuple(
+                document.replace(attempt, attempt_placeholder)
+                for document, attempt in zip(documents, attempts, strict=True)
+            ),
         )
         if key not in cached:
             configs = compose_configs(paths, validate_driver=validate_driver)
@@ -116,6 +132,8 @@ def fake_s3(monkeypatch, *paths: str) -> None:
 
 
 def fake_s3_checkpoint(monkeypatch, uri: str, root: Path) -> None:
+    # Cached s3fs instances can carry sync wrappers created before the patch.
+    monkeypatch.setitem(conf, "s3", {**conf.get("s3", {}), "skip_instance_cache": True})
     prefix = uri.removeprefix("s3://")
 
     def local(path):
@@ -296,7 +314,7 @@ def append_metrics(root: Path, metrics: dict[int, dict]) -> None:
 
 def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(command, "configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path))
+    monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path / recipe.SELECTION_PREFIX))
     monkeypatch.setattr(recipe, "artifact_prefix", lambda cluster: str(tmp_path))
     training = {preset.tasks for preset in snowball_model.SNOWBALL.by_name.values()}
     task_sets = {preset.held_out_tasks for preset in snowball_model.SNOWBALL.presets if preset.held_out_tasks}
@@ -387,7 +405,9 @@ def evaluation_task_rows(
 
 
 def recorded_runs(selection, tmp_path, monkeypatch, request):
-    monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
+    table = snowball_model.SNOWBALL
+    pins = {name: replace(pin, version=recipe.RUN_ARTIFACT_VERSION) for name, pin in table.control_pins.items()}
+    monkeypatch.setattr(snowball_model, "SNOWBALL", replace(table, control_pins=pins))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -397,9 +417,10 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         spec=ExactSpec(("cat",)),
     )
 
+    panel_size = getattr(request, "param", None)
     for binding in {preset.held_out_tasks for preset in snowball_model.SNOWBALL.presets if preset.held_out_tasks}:
         task_set = Path(recipe.selection_artifact(binding).path())
-        tasks = [task.model_copy(update={"id": f"task-{i}"}) for i in range(100)]
+        tasks = [task.model_copy(update={"id": f"task-{i}"}) for i in range(panel_size or 100)]
         rows = [
             SelectionTaskRow(
                 task_id=value.id,
@@ -412,14 +433,17 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             )
             for i, value in enumerate(tasks)
         ]
-        pq.write_table(
-            pa.table({"task_spec": [value.model_dump_json() for value in tasks]}), task_set / "validation.parquet"
-        )
+        validation = pa.table({"task_spec": [value.model_dump_json() for value in tasks]})
+        pq.write_table(validation, task_set / VALIDATION_FILENAME)
+        if panel_size is not None:
+            pq.write_table(validation, task_set / FULL_VALIDATION_FILENAME)
         pq.write_table(
             pa.Table.from_pylist([row.model_dump(mode="json") for row in rows], schema=arrow_schema(SelectionTaskRow)),
             task_set / TASK_MANIFEST_FILENAME,
         )
         summary = json.loads((task_set / "summary.json").read_text())
+        if panel_size is not None:
+            summary.update(validation_rows=validation.num_rows, full_validation_rows=validation.num_rows)
         summary["selection_strata"] = SelectionDefinition(
             name=recipe.selection_artifact(binding).name,
             version=recipe.selection_artifact(binding).version,
@@ -441,8 +465,8 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
 
     templates = {}
 
-    def composed(preset, inputs):
-        key = (repr(preset), inputs.model_dump_json())
+    def composed(preset, inputs, model):
+        key = (model, repr(preset), inputs.model_dump_json())
         if key not in templates:
             source_prefix = tmp_path / "composed" / str(len(templates))
             spec = recipe.run_spec(
@@ -451,6 +475,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 tasks=recipe.selection_artifact(inputs.tasks) if inputs.tasks else None,
                 init=recipe.model_from_reference(inputs.init) if inputs.init else None,
                 settings=inputs.settings,
+                model_name=model,
             )
             step = recipe.run_step(preset, spec)
             source_root = Path(step.path(str(source_prefix)))
@@ -479,15 +504,17 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         fingerprint="",
         missing_steps=(),
         attempt_id="recorded-attempt",
+        table=None,
     ):
-        preset = snowball_model.SNOWBALL.by_name[preset_name]
-        root = tmp_path / name / preset.revision
+        table = table or snowball_model.SNOWBALL
+        preset = table.by_name[preset_name]
+        root = tmp_path / name / recipe.RUN_ARTIFACT_VERSION
         root.mkdir(parents=True, exist_ok=True)
-        inputs = inputs or RunInputs(preset_name=preset.name)
-        source_root, config = composed(preset, inputs)
+        inputs = inputs or run_inputs(preset.name, preset=preset)
+        source_root, config = composed(preset, inputs, table.model)
         old_id, old_attempt = config["run"]["id"], config["run"]["attempt_id"]
         attempt = attempt_id
-        run_id = f"{name}-{preset.revision}"
+        run_id = f"{name}-{recipe.RUN_ARTIFACT_VERSION}"
 
         def relocate(value):
             if isinstance(value, dict):
@@ -502,7 +529,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         launch, result = native["config"], native["result"]
         max_steps = launch["skyrl"]["trainer"]["max_steps"]
         generating = isinstance(preset.recipe.layout.workload, presets.Generation)
-        pin = gate.control_pin(preset, table=snowball_model.SNOWBALL) if preset.gated else None
+        pin = gate.control_pin(preset, table=table) if preset.gated else None
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
@@ -516,7 +543,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         write_receipt(root, native)
         write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
-            root, name, preset.revision, fingerprint=fingerprint, global_step=0 if generating else max_steps
+            root, name, recipe.RUN_ARTIFACT_VERSION, fingerprint=fingerprint, global_step=0 if generating else max_steps
         )
         (root / ".executor_status").write_text("SUCCESS")
         stored_metrics = {}

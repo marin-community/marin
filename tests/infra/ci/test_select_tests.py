@@ -453,12 +453,16 @@ def test_skyrl_changes_select_native_launch_and_snowball_owners(tmp_path: Path) 
     runner = "experiments/post_training/rl_tests/test_rl.py"
     for path in (census, runner):
         write(tmp_path, path, "def test_launch(): pass\n")
-    for changed in (
+    native_changes = (
         "vendor/skyrl/uv.lock",
         "lib/skyrlrecipe/src/skyrlrecipe/recipe.py",
         "vendor/skyrl/skyrl-train/skyrl_train/callbacks/builtin.py",
-    ):
+    )
+    for changed in native_changes:
         assert sorted(leg_paths(select_matrix([changed], tmp_path), "marin")) == [runner, census]
+    matrix = select_matrix([*native_changes, runner], tmp_path)
+    paths = [path for leg in matrix if leg.package == UV_PACKAGE["marin"] for path in leg.test_paths.split()]
+    assert sorted(paths) == [runner, census]
 
 
 @pytest.mark.parametrize(
@@ -516,8 +520,8 @@ def test_skyrl_changes_select_native_launch_and_snowball_owners(tmp_path: Path) 
                 "taskforge-unit",
             ],
         ),
-        ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
-        ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
+        ("vendor/harbor/src/harbor/job.py", ["harbor-unit"]),
+        ("vendor/harbor/uv.lock", ["harbor-unit"]),
         ("lib/finestore/src/finestore/table.py", ["harbor-unit", "skyrl-wheel", "taskforge-unit"]),
         ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
@@ -539,15 +543,13 @@ def test_execution_dependencies_select_isolated_suites(tmp_path: Path, changed_p
 @pytest.mark.parametrize(
     "path",
     [
-        "experiments/post_training/task_curation/harbor_hub.py",
-        "experiments/post_training/task_curation/tests/test_harbor_hub.py",
         "experiments/post_training/task_curation/calibforge_rebuild.py",
         "experiments/post_training/task_curation/tests/test_calibforge_rebuild.py",
         "experiments/post_training/task_curation/daytona_identity.py",
         "experiments/post_training/task_curation/tests/test_daytona_identity.py",
     ],
 )
-def test_harbor_acquisition_changes_select_isolated_runtime(tmp_path: Path, path: str) -> None:
+def test_harbor_curation_changes_select_isolated_runtime(tmp_path: Path, path: str) -> None:
     selection = select_changed_tests([path], tmp_path)
 
     assert "harbor-unit" in selection.suites
@@ -574,9 +576,9 @@ def test_required_unit_check_propagates_isolated_suite_result(suite: str, suite_
     assert result.returncode == expected_exit
 
 
-@pytest.mark.parametrize("lock_status,test_status,hub_status", [(0, 0, 0), (0, 7, 0), (0, 0, 8), (3, 0, 0)])
+@pytest.mark.parametrize("lock_status,test_status,rebuild_status", [(0, 0, 0), (0, 7, 0), (0, 0, 8), (3, 0, 0)])
 def test_local_runner_executes_harbor_only_changes_and_propagates_failures(
-    tmp_path: Path, lock_status: int, test_status: int, hub_status: int
+    tmp_path: Path, lock_status: int, test_status: int, rebuild_status: int
 ) -> None:
     source_root = Path(run_tests.__file__).resolve().parents[2]
     for name in ("run_tests.py", "run_harbor_tests.py", "select_tests.py"):
@@ -600,10 +602,10 @@ def test_local_runner_executes_harbor_only_changes_and_propagates_failures(
         #!/bin/sh
         if [ "$1" = lock ]; then exit {lock_status}; fi
         case " $* " in
-          *" experiments/post_training/task_curation/tests/test_harbor_hub.py "*)
+          *" experiments/post_training/task_curation/tests/test_calibforge_rebuild.py "*)
             case " $* " in *" --noconftest "*) ;; *) exit 9 ;; esac
-            touch harbor-hub-tests-ran
-            exit {hub_status}
+            touch harbor-rebuild-tests-ran
+            exit {rebuild_status}
             ;;
         esac
         touch harbor-tests-ran
@@ -620,9 +622,9 @@ def test_local_runner_executes_harbor_only_changes_and_propagates_failures(
         check=False,
     )
 
-    assert result.returncode == (lock_status or test_status or hub_status), result.stderr
+    assert result.returncode == (lock_status or test_status or rebuild_status), result.stderr
     assert (tmp_path / "harbor-tests-ran").exists() == (lock_status == 0)
-    assert (tmp_path / "harbor-hub-tests-ran").exists() == (lock_status == 0 and test_status == 0)
+    assert (tmp_path / "harbor-rebuild-tests-ran").exists() == (lock_status == 0 and test_status == 0)
 
 
 @pytest.mark.parametrize("changed_file", ["pyproject.toml", "uv.lock"])

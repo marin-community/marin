@@ -40,6 +40,16 @@ submitting user. FineStore stores the author as given and does not verify it.
 On a non-empty archive, a transaction with no writes returns the checked
 commit token without publishing a new commit.
 
+`transaction.read(table, keys)` returns the newest rows for those primary keys from
+the transaction's pinned snapshot. It also guards the keys, as `require_unchanged`
+guards a whole table: if another writer commits any of them after that snapshot,
+whether the key existed or not, the commit raises `RowConflict` instead of replacing
+the newer row. A drop or replacement of the table raises `CommitConflict`. Rows the
+transaction writes without reading them are not checked. `store.update(table, keys, edit, message=...)`
+is the read-modify-write form for `OnConflict.SUPERSEDE` tables. It reads the rows,
+writes `edit(row)` for each, and on `RowConflict` backs off and runs `edit` again on the
+newer rows, so `edit` must be safe to repeat.
+
 Appends to registered tables and named object writes retain their Arrow buffers
 in memory. Each appended table produces one level-zero Parquet shard. FineStore
 writes every shard and an immutable full manifest before it conditionally advances
@@ -165,9 +175,9 @@ need no migration. Existing larger inline values remain readable.
 convenience API that returns a complete `bytes` value, while `open_blob` returns a
 forward-only binary file object for incremental reads. Chunk-count and declared-size
 validation completes when the stream reaches EOF; closing it early intentionally skips
-whole-object validation. Each part occupies its own Parquet row group, and blob scans
-request one row with one batch of readahead, so a streaming reader does not materialize
-all of an object's parts. File-set materialization streams committed parts into the
+whole-object validation. Each part occupies its own Parquet row group, and a part read
+holds one row group and reads at most one more ahead, so a streaming reader does not
+materialize all of an object's parts. File-set materialization streams committed parts into the
 destination file to avoid another complete copy. A transaction's `max_bytes` limit
 still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
 and admits one larger file.
@@ -179,12 +189,12 @@ native files and their metadata together, including chunked files that exceed th
 normal transaction buffer limit. A caller can publish completion after this method
 returns; a failed transaction publishes none of its files.
 
-Blob descriptor shards use at most 1024 rows per row group; ordinary tables retain
-their 16,384-row limit. Named-object lookups scan descriptors in 64-row batches
+Blob descriptor shards use at most 1024 rows per row group; ordinary tables use at most
+16,384 rows and 4 MB of Arrow data. Named-object lookups scan descriptors in 64-row batches
 with one batch and one fragment of readahead per shard, single-threaded decoding,
-and no Parquet pre-buffering. This bounds decoding of unrequested inline values after compaction. Descriptor and part
-files also disable fsspec read-ahead so a small column read does not fetch adjacent
-blob payloads. Ordinary table reads keep their filesystem caching behavior. Returned values
+and no Parquet pre-buffering. This bounds decoding of unrequested inline values after compaction. Shard files open
+without fsspec read-ahead, so a small column read does not fetch adjacent blob payloads.
+Returned values
 still occupy memory, and dispersed keys can require reading most row groups;
 bounded decoding does not remove row-group read amplification. `read_blobs` reads
 all requested descriptors together and gathers chunked parts in one parts scan.
@@ -214,6 +224,8 @@ Two adapters build cache behavior on this primitive:
 - `finestore.fileset.FineStoreDirectory` materializes a committed named-object set
   into a local directory and publishes newly created files in payload-bounded batches.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
+  A fetch preserves a regular local file when its bytes match the committed blob;
+  missing or different files are atomically replaced.
 
 Both adapters are caches: failures may be treated as misses by their callers. Cache
 cleanup does not acknowledge persistence or return a commit token. Use
@@ -294,16 +306,16 @@ by primary key. An unsorted input, such as a flush with a row missing a key colu
 shard migrated from format 1, is sorted whole in memory, and a compaction holds all of
 its unsorted inputs at once. The merge keeps only the newest version of each key, so
 the output shards of one compaction hold disjoint, ascending key ranges, and the seal
-records the superseded rows it removed. Otherwise memory holds about one decoded row
-group per input plus the rows at the merge frontier; Parquet pre-buffering is disabled
-and a small fsspec file buffer limits speculative byte reads. When the compressed inputs
+records the superseded rows it removed. Otherwise memory holds, per input, the decoded row
+group being merged and up to 4 MB of later groups read ahead on a thread pool, plus the
+rows at the merge frontier. When the compressed inputs
 total at most 16 MiB, compaction prefetches whole shards with up to 16 concurrent reads
 and caches them for both schema and row reads. Larger compactions retain bounded streaming
 reads. Output shards are cut at about `compaction_target_bytes` of decoded data, configurable on `DataStore` or as
 `target_bytes` on `compact_table`; one row group always fits, so a single large row
 group or row can exceed it. Reads apply the same newest-version rule: `iter_rows`
-streams the merge across a view's shards in primary-key order, and `scan` resolves
-versions in one vectorised pass.
+streams the merge across a view's shards in primary-key order, reading each shard as
+compaction does, and `scan` resolves versions in one vectorised pass.
 The manifest replaces the input paths with the output shards through the same `HEAD`
 compare and swap. If another compactor removes an input first, the losing output remains
 unreferenced and the operation is a benign no-op. If another writer adds a shard,

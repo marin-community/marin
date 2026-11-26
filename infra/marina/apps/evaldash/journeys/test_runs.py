@@ -91,3 +91,11 @@ def test_run_search_draft_preserves_pagination_history(journey: Journey) -> None
     page.get_by_role("button", name="Launches", exact=True).click()
     expect(page).to_have_url(re.compile(r"[?&]q=tootsie(?:&|$)"))
     expect(page).not_to_have_url(re.compile(r"[?&]offset="))
+
+
+def test_eval_detail_links_to_the_native_marina_attempt(journey: Journey) -> None:
+    journey.visit("/runs/snowball-2026.07.20-mmlu")
+    link = journey.page.get_by_role("link", name="RL attempt wanted")
+    expect(link).to_have_attribute(
+        "href", "/a/6c971887-1e22-45b1-9dcb-dd775829df57/#run=native%2Ffixture&attempt=wanted"
+    )

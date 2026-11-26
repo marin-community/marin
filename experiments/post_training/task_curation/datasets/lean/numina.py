@@ -31,6 +31,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.convert.answers import EVIDENCE_PATH, source_defect, unsupported
 from taskcompendium.models import TaskSpec
@@ -48,7 +49,7 @@ from experiments.post_training.task_curation.datasets.lean.proofs import (
     statement_contract,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, UrlSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 NUMINA_REVISION = "51fa67f1f647ae1ecd81eef9f19306aa8a7b3a94"
 NUMINA_FILE = "data/train-00000-of-00001.parquet"
@@ -219,9 +220,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Hugging Face:project-numina/NuminaMath-LEAN",
-                title="project-numina/NuminaMath-LEAN",
-                origin="Hugging Face",
+                data_restriction=DataRestriction.OPEN,
+                origin=SourceOrigin.PROJECT_NUMINA,
+                upstream_dataset="NuminaMath-LEAN",
+                upstream_name="NuminaMath-LEAN",
+                build_path="Lean kernel replay",
                 family="math-proof",
                 tags=("lean", "theorem-proving", "single-turn", "license:apache-2.0"),
                 count=9475,

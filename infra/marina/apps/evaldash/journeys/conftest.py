@@ -13,7 +13,7 @@ import httpx
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, results_db
-from evalrecords.records import EvalRunRecord, RunStatus, record_path
+from evalrecords.records import EvalRunRecord, RLAttemptRef, RunStatus, read_record, record_path, write_record
 from marina.db import DatabaseSpec, engine_for
 from marina.journeys import Kernel
 
@@ -47,6 +47,10 @@ def seeded_records(marina_database: DatabaseSpec) -> Iterator[str]:
         env.setenv(evaldash_app.STORE_ENV, evaldash_app.StoreMode.POSTGRES.value)
         env.delenv(evaldash_app.INGEST_JOB_ENV, raising=False)
         fixtures.build_fixtures(prefix)
+        record = read_record(record_path(prefix, "snowball-2026.07.20-mmlu"))
+        write_record(
+            record.model_copy(update={"rl_attempt": RLAttemptRef(run_id="native/fixture", attempt_id="wanted")}), prefix
+        )
         fixtures.build_native_fixtures(prefix)
         _ingest_fixture_records(marina_database, prefix)
         yield prefix

@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+import fcntl
 import json
 import math
 import shutil
@@ -7,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -30,11 +32,11 @@ from finestore.schema import arrow_schema
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
-from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
+from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
-from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
+from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 
@@ -45,10 +47,9 @@ from experiments.post_training import rl_measurements as measurements
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunOptions, read_run_inputs, run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
-    cache_native_compositions,
     controls,
     edit_receipt,
     evaluation_task_rows,
@@ -110,6 +111,58 @@ def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):
         assert (result["verdict"], result["effect"]) == (verdict, effect), result
 
 
+def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):
+    preset = "speed-short"
+    control_roots = controls(recorded_runs, preset)
+    candidate = recorded_runs(preset, "users/test/staged-metadata", speed=102)
+    wrong_tokenizer = recorded_runs(preset, "users/test/wrong-staged-tokenizer", speed=102)
+    for root in (*control_roots, candidate, wrong_tokenizer):
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            model = launch["inputs"]["model"]
+            staging_root = Path("/tmp/skyrl-worker")
+            model_path = str(staging_root / model_metadata_relative_path(model["uri"], model["identity"]))
+            tokenizer_revision = (
+                "different" if root == wrong_tokenizer else model["tokenizer_revision"] or DEFAULT_TOKENIZER_REVISION
+            )
+            tokenizer_path = str(staging_root / model_metadata_relative_path(model["tokenizer_uri"], tokenizer_revision))
+            for role in ("policy", "ref"):
+                launch["skyrl"]["trainer"][role]["model"].update(
+                    path=model_path, tokenizer_path=tokenizer_path, tokenizer_revision=None
+                )
+
+    assert compare(preset, "--candidate", "users/test/staged-metadata")["verdict"] == "pass"
+    invalid = compare(preset, "--candidate", "users/test/wrong-staged-tokenizer")
+    assert invalid["verdict"] == "invalid" and "skyrl.trainer.policy.model.tokenizer_path" in invalid["reason"]
+
+
+def test_compare_checks_hf_draft_mirror_against_the_requested_revision(recorded_runs):
+    preset = "speed-short"
+    control_roots = controls(recorded_runs, preset)
+    candidate = recorded_runs(preset, "users/test/mirrored-draft", speed=102)
+    wrong_mirror = recorded_runs(preset, "users/test/wrong-draft-mirror", speed=102)
+    for root in (*control_roots, candidate, wrong_mirror):
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            draft = launch["skyrl"]["generator"]["speculative_decoding"]["model"]
+            commit = draft["source_identity"]
+            uri, identity = "s3://test-bucket/draft-mirror", "sha256:" + "f" * 64
+            launch["inputs"]["hugging_face_models"] = [
+                {
+                    "model_id": draft["source_uri"].removeprefix("hf://"),
+                    "revision": commit,
+                    "resolved_revision": "a" * 40 if root == wrong_mirror else commit,
+                    "uri": uri,
+                    "identity": identity,
+                }
+            ]
+            draft.update(source_uri=uri, source_identity=identity)
+
+    assert compare(preset, "--candidate", "users/test/mirrored-draft")["verdict"] == "pass"
+    invalid = compare(preset, "--candidate", "users/test/wrong-draft-mirror")
+    assert invalid["verdict"] == "invalid" and "skyrl.generator.speculative_decoding.model" in invalid["reason"]
+
+
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     preset = snowball_model.SNOWBALL.by_name["speed-medium"]
     key = "policy/raw_grad_norm"
@@ -125,25 +178,23 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         control_roots.append(root)
     candidates = []
     for index, value in enumerate((0, 0.01)):
-        name = f"users/test/requirements-{index}"
+        name = f"users/test/requirements-r{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
-        candidates.append(ArtifactStep.adopt(name, preset.revision, str(root), kind=SkyRLRun))
-    report = run(
-        gate.gate_step(
+        candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
+
+    def gate_for_candidates():
+        return gate.gate_step(
             preset,
             tuple(candidates),
-            inputs=RunInputs(
-                preset_name=preset.name,
-                requirements=(
-                    key + "<=control",
-                    key + "<=control",
-                    key + "<=0",
-                    "speed/update_seconds<=control",
-                ),
+            inputs=run_inputs(
+                preset.name,
+                requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
+                preset=preset,
             ),
             table=snowball_model.SNOWBALL,
         )
-    )[0]
+
+    report = run(gate_for_candidates())[0]
     assert report.verdict == "fail" and report.effect == "regression"
     speed_guard = next(row for row in report.comparisons if row.metric == "speed/update_seconds")
     assert speed_guard.passes is False
@@ -156,22 +207,12 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         (1, False),
     ]
 
-    table = snowball_model.SNOWBALL
-    pin = table.control_pins[preset.control_preset]
     for root in control_roots:
-        shutil.copytree(root, root.with_name("stale"))
-    stale_table = replace(
-        table, control_pins={**table.control_pins, preset.control_preset: replace(pin, revision="stale")}
-    )
-    stale = run(
-        gate.gate_step(
-            preset,
-            tuple(candidates),
-            table=stale_table,
-            inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
-        )
-    )[0]
-    assert stale.verdict == "invalid" and "recorded control revision=stale" in stale.reason
+        with edit_receipt(root) as receipt:
+            receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
+    stale = run(gate_for_candidates())[0]
+    assert stale.path != report.path
+    assert stale.verdict == "invalid" and "control config differs from current preset defaults" in stale.reason
 
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):
@@ -557,6 +598,76 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
 
 
+@pytest.mark.timeout(15)
+@pytest.mark.parametrize("exit_early", [False, True], ids=["timeout", "nonzero-exit"])
+def test_native_failure_stops_build_child(tmp_path, exit_early):
+    lock = tmp_path / "build.lock"
+    lock.touch()
+    worker = Path(__file__).with_name("native_build_child.py")
+    deadline = monotonic() + 6
+    command = [sys.executable, "-I", str(worker), "exit" if exit_early else "wait", str(lock)]
+    if exit_early:
+        result = run_skyrl_cpu(command, timeout=2, stream_stderr=True)
+        assert result.returncode == 7
+        assert "build child ready" in result.stderr
+    else:
+        with pytest.raises(subprocess.TimeoutExpired, match="timed out after 2") as error:
+            run_skyrl_cpu(command, timeout=2)
+        assert b"build child ready" in error.value.stderr
+    with lock.open("r+") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+    assert monotonic() < deadline, "native failure waited for the build child to finish"
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (subprocess.TimeoutExpired("compose", 120, stderr="sk\x1b-fixture-abcdefghijklmnopqrstuvwxyz"), "[REDACTED]"),
+        (subprocess.TimeoutExpired("compose", 120), "timed out after 120 s"),
+        (subprocess.CompletedProcess([], 0, "", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 0, "{", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 1, "", ""), "exited with status 1"),
+        (FileNotFoundError("native composer executable missing"), "native composer executable missing"),
+    ],
+    ids=["redacted-timeout", "timeout", "empty", "invalid-json", "nonzero", "missing-executable"],
+)
+def test_native_composition_reports_failure(monkeypatch, outcome, expected):
+    monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", lambda *args, **kwargs: sys.executable)
+
+    def compose(command, *, timeout):
+        Path(command[command.index("--progress-file") + 1]).write_text("Compose document 1/1")
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(gate, "run_skyrl_cpu", compose)
+    with pytest.raises(gate.InvalidComparison) as failure:
+        gate.compose_configs(["launch.yaml"])
+    message = str(failure.value)
+    assert expected in message and "native configuration cannot be composed" in message
+    if isinstance(outcome, Exception) or outcome.returncode:
+        assert "Compose document 1/1" in message
+    assert "fixture-abcdefghijklmnopqrstuvwxyz" not in message
+
+
+def test_native_composition_reports_environment_preparation_timeout(monkeypatch):
+    def prepare(timeout, **kwargs):
+        raise subprocess.TimeoutExpired("prepare", timeout)
+
+    monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", prepare)
+    with pytest.raises(gate.InvalidComparison, match=r"Prepare SkyRL CPU environment.*timed out after 300 s"):
+        gate.compose_configs(["launch.yaml"])
+
+
+@pytest.mark.timeout(15)
+def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
+    marker = tmp_path / "cancellation"
+    worker = Path(__file__).with_name("native_build_child.py")
+    with pytest.raises(KeyboardInterrupt):
+        run_skyrl_cpu([sys.executable, "-I", str(worker), "interrupt", str(marker)], stream_stderr=True)
+    assert marker.read_text() == "cancelled"
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -574,7 +685,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "omitted-current-nondefault",
         "omitted-schema-nondefault",
         "omitted-candidate-default",
-        "schema-timeout",
         "protocol-temperature",
         "evaluation-cadence",
         "malformed-seed",
@@ -594,11 +704,10 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             "omitted-current-nondefault",
             "omitted-schema-nondefault",
             "omitted-candidate-default",
-            "schema-timeout",
         )
         else (setting,)
     )
-    inputs = RunInputs(preset_name=preset.name, settings=settings)
+    inputs = run_inputs(preset.name, settings=settings, preset=preset)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
         root = tmp_path / name / version
@@ -668,7 +777,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         "omitted-current-nondefault": {"config.skyrl.generator.chat_template_kwargs": {}},
         "omitted-schema-nondefault": {"config.skyrl.trainer.policy.optimizer_config.weight_decay": 0.0},
         "omitted-candidate-default": {"config.skyrl.generator.chat_template_kwargs": {}},
-        "schema-timeout": {"config.skyrl.generator.chat_template_kwargs": {}},
     }.get(case, {})
     if omissions:
         omitted = [candidate] if case == "omitted-candidate-default" else control_roots
@@ -677,34 +785,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 for path, original in omissions.items():
                     parent, key = path.rsplit(".", 1)
                     assert get_path(receipt, parent).pop(key) == original
-    if case == "schema-timeout":
-        cache_native_compositions(monkeypatch)
-        original_subprocess = subprocess.run
-        for diagnostic in ("timeout", "empty", "whitespace", "oserror"):
-            with monkeypatch.context() as unavailable:
-                unavailable.setattr(
-                    Provenance,
-                    "capture",
-                    lambda *_, tag=diagnostic: Provenance(tag, "commit-one", False, "branch", "test"),
-                )
-
-                def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if any("OmegaConf.structured(launch_config.SkyRLLaunchConfig)" in str(value) for value in command):
-                        if diagnostic == "timeout":
-                            raise subprocess.TimeoutExpired(command, 120)
-                        if diagnostic == "oserror":
-                            raise FileNotFoundError("native composer executable missing")
-                        return subprocess.CompletedProcess(command, 1 if diagnostic == "whitespace" else 0, "", "\n")
-                    return original_subprocess(command, *args, **kwargs)
-
-                unavailable.setattr(subprocess, "run", unavailable_defaults)
-                report = compare(preset.name, "--candidate", name)
-                assert (
-                    report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
-                ), report
-                if diagnostic == "timeout":
-                    assert "timed out after 120 s" in report["reason"]
-        return
     reasons = {
         "stale-default": ("control config differs",),
         "zero-spread": ("variation is zero",),
@@ -903,6 +983,8 @@ def test_python_run_saves_typed_inputs_for_comparison(
         fingerprint=built.runs[0].fingerprint(),
         inputs=built.inputs,
     )
+    with edit_receipt(source) as receipt:
+        receipt["result"]["started_at"] = "2026-11-06T17:40:00+00:00"
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / RUN_INPUTS_FILENAME).unlink()

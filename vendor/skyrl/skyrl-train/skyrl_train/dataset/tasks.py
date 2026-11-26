@@ -10,11 +10,15 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from datasets import Dataset
+from loguru import logger
+from marinskyrl.task_sources import PreparedTaskCacheSource
+from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.harness.shell import task_prompt as marin_task_prompt
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
-from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from rolloutengine.models import TASK_ROLLOUT_COLUMN, MachineRuntimeSpec, TaskRolloutSpec
 from rolloutengine.validation import task_machine_reason
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
@@ -28,19 +32,25 @@ from taskcompendium.models import (
     TextMessage,
     grader_environment,
     grades_with_judge,
+    task_subset,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
 
-from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc
+from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count, dataset_num_proc, read_prompt_files
+from skyrl_train.dataset.prepared_tasks import (
+    PREPARED_TASK_BATCH_SIZE,
+    PROMPT_LENGTH_COLUMN,
+    load_prepared_tasks,
+    prepared_task_cache_key,
+    write_prepared_tasks,
+)
 from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
-from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
 from finestore.rl.strata import SelectionManifest, TaskEvaluationIdentity, TaskStrata, read_selection_manifest
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
-TASK_ROLLOUT_COLUMN = "task_rollout_spec"
 TASK_SPEC_COLUMN = "task_spec"
 TASK_EVALUATION_IDENTITY = "task_evaluation_identity"
 TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=False)])
@@ -59,7 +69,8 @@ def task_evaluation_identity(task: dict, selection: SelectionManifest | None) ->
 
 def with_evaluation_identities(dataset: Dataset, identities: Iterable[TaskEvaluationIdentity | None]) -> Dataset:
     return dataset.add_column(
-        TASK_EVALUATION_IDENTITY, [identity.model_dump_json() if identity is not None else None for identity in identities]
+        TASK_EVALUATION_IDENTITY,
+        [identity.model_dump_json() if identity is not None else None for identity in identities],
     )
 
 
@@ -96,11 +107,7 @@ class TaskDataset(PromptDataset):
         inputs = []
         for _, environment, extras, uid in rows:
             lowered = TaskRolloutSpec.model_validate_json(extras[TASK_ROLLOUT_COLUMN])
-            if (
-                isinstance(lowered.task.grader, NoGrader)
-                and lowered.harness != HARBOR_TRIAL_SESSION
-                and {"extras", "config"} <= lowered.task.grader.contract.keys()
-            ):
+            if isinstance(lowered.task.grader, NoGrader) and {"extras", "config"} <= lowered.task.grader.contract.keys():
                 extras = {**session_parameters(lowered.task).extras, **extras}
             extra_info = extras.get("extra_info") or {}
             ultra = extra_info.get("nemotron_ultra")
@@ -108,6 +115,13 @@ class TaskDataset(PromptDataset):
                 (f"nemotron_ultra/coverage/{ultra['blend']}/{ultra['agent']}",)
                 if ultra is not None and "blend" in ultra and "agent" in ultra
                 else ()
+            )
+            stored_identity = extras.get(TASK_EVALUATION_IDENTITY)
+            identity = TaskEvaluationIdentity.model_validate_json(stored_identity) if stored_identity else None
+            subset = (
+                identity.strata.source
+                if identity is not None and identity.panel_name is not None
+                else task_subset(lowered.task)
             )
             inputs.append(
                 {
@@ -120,11 +134,9 @@ class TaskDataset(PromptDataset):
                             data_source=extra_info.get("data_source") or extras.get("data_source"),
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
-                            evaluation_identity=(
-                                TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
-                                if extras.get(TASK_EVALUATION_IDENTITY) is not None
-                                else None
-                            ),
+                            task_id=lowered.task.id,
+                            subset_id=subset,
+                            evaluation_identity=identity,
                         ),
                         group_grader=task_group_grader(lowered),
                     ),
@@ -277,7 +289,7 @@ def cache_tasks(records: Iterable[TaskRolloutSpec], cache_dir: Path) -> Path:
 
 
 class SourceTaskDataset(TaskDataset):
-    """Prepare source rows as in-memory prompts and private lowered tasks."""
+    """Prepare source rows as prompts and private lowered tasks."""
 
     def __init__(
         self,
@@ -288,8 +300,10 @@ class SourceTaskDataset(TaskDataset):
         environment_configs: Mapping[str, dict],
         num_workers: int = 8,
         chat_template_kwargs: dict | None = None,
+        prepared_cache: PreparedTaskCacheSource | None = None,
     ):
         self.environment_configs = environment_configs
+        self.prepared_cache = prepared_cache
         identities: dict[str, TaskEvaluationIdentity | None] = {}
 
         def prepare_source(source: str, dataset: Dataset) -> Dataset:
@@ -307,7 +321,7 @@ class SourceTaskDataset(TaskDataset):
                 task_id = task["id"]
                 identity = task_evaluation_identity(task, selection)
                 if selection is not None and TASK_SPEC_COLUMN in row:
-                    carried = {key: row[key] for key in TaskStrata.model_fields if key in row}
+                    carried = {key: row[key] for key in TaskStrata.model_fields if row.get(key) is not None}
                     if carried != identity.strata.model_dump(include=set(carried)):
                         raise ValueError(f"training row strata differ from selection manifest: {task_id}")
                 if task_id in identities and identities[task_id] != identity:
@@ -325,6 +339,74 @@ class SourceTaskDataset(TaskDataset):
             prepare_source=prepare_source,
         )
 
+    def _read_files_and_tokenize(self):
+        prepared = self._prepared_rows_with_lengths()
+        if prepared is None:
+            return super()._read_files_and_tokenize()
+        lengths = prepared.data.column(PROMPT_LENGTH_COLUMN)
+        prepared = prepared.remove_columns(PROMPT_LENGTH_COLUMN).with_transform(_restore_task_prompts)
+        logger.info("Total dataset size: {}", len(prepared))
+        eligible = pc.indices_nonzero(pc.less_equal(lengths, self.max_prompt_length))
+        self.prompts_dropped_too_long = len(prepared) - len(eligible)
+        self.dataframe = prepared.select(eligible.to_numpy()) if self.prompts_dropped_too_long else prepared
+        logger.info("Filtered dataset size: {}", len(self.dataframe))
+
+    def _prepared_rows_with_lengths(self) -> Dataset | None:
+        cache = self.prepared_cache
+        task_settings = self.environment_configs.get("task_spec")
+        if cache is None or self.datasets != [cache.path] or task_settings is None:
+            return None
+        key = prepared_task_cache_key(cache, self.tokenizer, task_settings, self.chat_template_kwargs)
+        if key is None:
+            return None
+        with pq.ParquetFile(cache.path) as source:
+            source_columns = source.schema_arrow.names
+            source_rows = source.metadata.num_rows
+        if not source_rows or TASK_SPEC_COLUMN not in source_columns or TASK_ROLLOUT_COLUMN in source_columns:
+            return None
+
+        path = StoragePath(cache.cache_dir) / f"{key}.parquet"
+        required_columns = {
+            TASK_ROLLOUT_COLUMN,
+            TASK_EVALUATION_IDENTITY,
+            FAMILY_COLUMN,
+            PROMPT_LENGTH_COLUMN,
+            self.prompt_key,
+            self.env_class_key,
+        }
+        # Keep the backing files openable for the lifetime of the trainer's dataset.
+        directory = TemporaryDirectory(prefix="skyrl-prepared-tasks-")
+        arrow_path = Path(directory.name) / "prepared.arrow"
+        prepared = load_prepared_tasks(path, key, required_columns, source_rows, arrow_path)
+        if prepared is None:
+            logger.info("Prepared task cache miss: {}", path)
+            prepared = self._prepare_cached_rows(arrow_path)
+            # Dataset.map returns the contiguous worker shards in source order.
+            write_prepared_tasks(path, key, prepared.data.schema, (shard["filename"] for shard in prepared.cache_files))
+        else:
+            logger.info("Prepared task cache hit: {}", path)
+        self._prepared_directory = directory
+        return prepared
+
+    def _prepare_cached_rows(self, arrow_path: Path) -> Dataset:
+        source = read_prompt_files(self.datasets, prepare_source=self._prepare_source)
+        environment_configs = self.environment_configs
+        tokenizer = self.tokenizer
+        prompt_key = self.prompt_key
+        template_kwargs = self.chat_template_kwargs
+
+        def prepare(row: dict, index: int) -> dict:
+            result = _canonical_task_prompt(row, index, environment_configs=environment_configs)
+            result[PROMPT_LENGTH_COLUMN] = task_prompt_token_count(
+                tokenizer,
+                {**result, prompt_key: json.loads(result[prompt_key])},
+                prompt_key,
+                chat_template_kwargs=template_kwargs,
+            )
+            return result
+
+        return self._map_task_rows(source, prepare, cache_file_name=str(arrow_path))
+
     def prepare_dataset(self, dataset: Dataset) -> Dataset:
         if TASK_ROLLOUT_COLUMN in dataset.column_names:
             return super().prepare_dataset(dataset)
@@ -340,7 +422,9 @@ class SourceTaskDataset(TaskDataset):
             ),
         )
 
-    def _map_task_rows(self, dataset: Dataset, mapper: Callable[[dict, int], dict]) -> Dataset:
+    def _map_task_rows(
+        self, dataset: Dataset, mapper: Callable[[dict, int], dict], *, cache_file_name: str | None = None
+    ) -> Dataset:
         def prepare(row: dict, index: int) -> dict:
             carrier = row.get(TASK_EVALUATION_IDENTITY)
             result = mapper({key: value for key, value in row.items() if key != TASK_EVALUATION_IDENTITY}, index)
@@ -352,5 +436,7 @@ class SourceTaskDataset(TaskDataset):
             with_indices=True,
             remove_columns=dataset.column_names,
             num_proc=dataset_num_proc(len(dataset), self.num_workers),
-            keep_in_memory=True,
+            keep_in_memory=cache_file_name is None,
+            cache_file_name=cache_file_name,
+            writer_batch_size=PREPARED_TASK_BATCH_SIZE,
         )
