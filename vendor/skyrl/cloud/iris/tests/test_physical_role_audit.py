@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pynvml
 import pytest
+from ray._private.label_utils import validate_node_label_syntax
 from skyrlrecipe.locality import LocalityPlan
 
 from cloud.iris import task_runtime
@@ -42,7 +43,8 @@ def test_fabric_probe_passes_writable_nvml_result_storage(monkeypatch):
 
     monkeypatch.setattr(pynvml, "_nvmlGetFunctionPointer", lambda name: read_fabric)
     labels = node_physical_labels(rank=0, gpus_per_node=4, host="host", fabric_info=probe_fabric_info())
-    assert labels[FABRIC_LABEL] == f"{CLUSTER_UUID}:7"
+    validate_node_label_syntax(labels)
+    assert labels[FABRIC_LABEL] == f"{CLUSTER_UUID}.7"
 
 
 def fabric_info(**overrides):
@@ -92,7 +94,7 @@ def test_healthy_single_node_writes_a_verified_report(audit):
     topology = RoleTopology(("policy",), LocalityPlan((1,), (0,)))
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 1
-    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}:1"
+    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}.1"
 
 
 def test_healthy_multi_node_groups_may_share_a_fabric(audit):
@@ -100,11 +102,11 @@ def test_healthy_multi_node_groups_may_share_a_fabric(audit):
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 3
     assert len({row["host"] for row in report["nodes"]}) == 3
-    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}:1"}
+    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}.1"}
 
 
 @pytest.mark.parametrize(
-    "label,value", [(FABRIC_LABEL, f"{CLUSTER_UUID}:2"), (HOST_LABEL, "host-0")], ids=["split-group", "duplicate-host"]
+    "label,value", [(FABRIC_LABEL, f"{CLUSTER_UUID}.2"), (HOST_LABEL, "host-0")], ids=["split-group", "duplicate-host"]
 )
 def test_invalid_physical_placement_is_rejected(audit, tmp_path, label, value):
     topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))

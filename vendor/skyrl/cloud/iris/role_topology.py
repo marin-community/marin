@@ -117,7 +117,7 @@ def node_physical_labels(
     for sample in fabric_info:
         if sample.state != pynvml.NVML_GPU_FABRIC_STATE_COMPLETED or sample.status != pynvml.NVML_SUCCESS:
             raise ValueError("Every GPU must report a completed, healthy NVLink fabric")
-        fabrics.add(f"{sample.cluster_uuid}:{sample.clique_id}")
+        fabrics.add(f"{sample.cluster_uuid}.{sample.clique_id}")
     if len(fabrics) != 1:
         raise ValueError("A physical node must fit inside one NVLink domain")
     return {RANK_LABEL: str(rank), HOST_LABEL: host, FABRIC_LABEL: fabrics.pop()}
