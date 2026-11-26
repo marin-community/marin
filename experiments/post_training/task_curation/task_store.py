@@ -108,7 +108,7 @@ class TaskStore(Artifact):
 
     @classmethod
     def open(cls, name: str, version: str) -> "TaskStore":
-        """The built store ``name@version``; raises ``FileNotFoundError`` if it was never built."""
+        """Load a store record from the configured artifact prefix."""
         path = prefix_join(marin_prefix(), f"{TASK_STORE_PREFIX}/{name}/{version}")
         if read_record(path) is None:
             raise FileNotFoundError(f"No task store {name}@{version} at {path}")

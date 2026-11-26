@@ -33,13 +33,12 @@ selection reads its sources through the same readers.
 ```python
 run(task_store_step("snowball", "2026.11.26.1", curated=curated, released={uri: sha256}))
 
-store = TaskStore.open("snowball", "2026.11.26.1")  # FileNotFoundError if never built
+store = TaskStore.open("snowball", "2026.11.26.1")
 rows = store.select_sources("MarinSkyRL:openscience").to_dataset()
 ```
 
-`TaskStore.open(name, version)` only reads: it loads the record that
-`task_store_step` wrote under `rl-data/task-store/<name>/<version>` of the
-artifact prefix.
+`TaskStore.open(name, version)` reads an existing record under
+`rl-data/task-store/<name>/<version>` of the configured artifact prefix.
 
 ## EvalLite
 
