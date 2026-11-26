@@ -13,9 +13,9 @@ from dataclasses import replace
 
 from taskcompendium.importers.harbor.package import JobSettings
 
-from experiments.evaluation.benchmarks.harbor import HarborDataset, PackageCopy, PackageEdit, github_packages
+from experiments.evaluation.benchmarks.harbor import HarborDataset, PackageEdit, github_packages
 
-VERSION = "2026.11.26.1"
+VERSION = "2026.11.26.2"
 WORKSPACE_TREE = "/opt/marin/workspace-tree"
 """The git tree of the image's workspace, untracked files included, that the agent's changes are diffed against."""
 PATCH = "/logs/artifacts/model.patch"
@@ -39,16 +39,16 @@ TEST_WORKDIR = (
     'cd /app 2>/dev/null || cd /testbed 2>/dev/null || { echo "ERROR: Neither /app nor /testbed exists"; exit 1; }\n'
 )
 # The packages grade in the agent's container, whose tests need the network the offline agent lacks. They now
-# record the image's workspace before the agent starts, and grade in Harbor's separate verifier: a fresh machine
-# from the same image and resources, which applies the agent's changes before the package's tests run.
+# record the image's workspace before the agent starts, and grade in Harbor's separate verifier: a copy of the
+# task's environment, so a fresh machine from the same prebuilt image, which applies the agent's changes before
+# the package's tests run.
 SWEBENCH_PRO_EDITS = (
-    PackageCopy("environment/Dockerfile", "tests/Dockerfile"),
     PackageEdit(
         "task.toml",
         VERIFIER + "collect = []\n",
         VERIFIER
-        + f"\n[[verifier.collect]]\ncommand = '{COLLECT_PATCH}'\ntimeout_sec = 600\n"
-        + "\n[verifier.environment]\ncpus = 1\nmemory_mb = 4096\nstorage_mb = 10240\n",
+        + 'environment_mode = "separate"\n'
+        + f"\n[[verifier.collect]]\ncommand = '{COLLECT_PATCH}'\ntimeout_sec = 600\n",
     ),
     PackageEdit(
         "task.toml",
