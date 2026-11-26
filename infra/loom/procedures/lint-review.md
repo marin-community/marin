@@ -7,9 +7,9 @@ Run the `infra/lint/` catalog review (`./infra/pre-commit.py --review`)
 over a pull request's branch diff and surface every finding — as `file:line`
 inline review comments where the finding's line is available, and as a
 single fallback comment for the rest.
-The prose lane reads the current RL Loop Glossary from Google Docs and checks
-the PR title and description fetched by the review runner. A CI run fails if it
-cannot read the glossary; do not report such a run as clean.
+The prose lane reads the current RL Loop Glossary from its public Google Doc
+and checks the PR title and description fetched by the review runner. A CI run
+fails if it cannot read the glossary; do not report such a run as clean.
 
 ## Your contract
 

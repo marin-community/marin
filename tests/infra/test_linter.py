@@ -7,13 +7,13 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
-import requests.exceptions
 
 from infra import linter
-from infra.lint.rl_glossary import GlossarySource, glossary_from_document
+from infra.lint.rl_glossary import GlossarySource, glossary_from_markdown
 
 
 def _pr_text_from_prompt(prompt: str) -> dict:
@@ -57,6 +57,11 @@ def review_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
     monkeypatch.setenv("REVIEW_TEST_CALL", str(call_path))
     monkeypatch.setattr(linter, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(linter, "LINT_REVIEW_LOG_ROOT", tmp_path / "logs")
+
+    def unexpected_fetch() -> GlossarySource:
+        raise AssertionError("only a lane with the RL vocabulary rule reads the glossary")
+
+    monkeypatch.setattr(linter, "fetch_glossary", unexpected_fetch)
     return agents, call_path
 
 
@@ -111,7 +116,7 @@ def test_review_includes_current_glossary_and_draft_pr_text_in_prose_lane(
     review_workspace: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ):
     agents, _ = review_workspace
-    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("RL Loop Glossary", "rev-1", "~~Old~~ New"))
+    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("rev-1", "~~Old~~ New"))
     workspace = agents.parent
     body_file = workspace / "pr-body.md"
     body_file.write_text("First line\nSecond line\n")
@@ -143,7 +148,7 @@ def test_review_includes_published_pr_text_in_prose_lane(
     gh.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"title":"Published title","body":"Published description"}\'\n')
     gh.chmod(0o755)
     monkeypatch.setenv("MARIN_REVIEW_PR_NUMBER", "123")
-    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("RL Loop Glossary", "rev-1", "terms"))
+    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("rev-1", "terms"))
 
     assert (
         linter.run_lint_review(
@@ -161,7 +166,7 @@ def test_review_fails_when_glossary_is_unavailable(review_workspace: tuple[Path,
     agents, _ = review_workspace
 
     def unavailable() -> GlossarySource:
-        raise requests.exceptions.HTTPError("access denied")
+        raise urllib.error.URLError("access denied")
 
     monkeypatch.setattr(linter, "fetch_glossary", unavailable)
     assert (
@@ -170,28 +175,14 @@ def test_review_fails_when_glossary_is_unavailable(review_workspace: tuple[Path,
     )
 
 
-def test_glossary_preserves_proposed_renames_from_google_doc():
-    document = {
-        "title": "RL Loop Glossary",
-        "tabs": [
-            {
-                "documentTab": {
-                    "body": {
-                        "content": [
-                            {
-                                "paragraph": {
-                                    "elements": [
-                                        {"textRun": {"content": "RolloutTask", "textStyle": {"strikethrough": True}}},
-                                        {"textRun": {"content": " RolloutGroupJob\n"}},
-                                    ]
-                                }
-                            }
-                        ]
-                    }
-                }
-            }
-        ],
-    }
+def test_glossary_keeps_proposed_renames_and_drops_inline_images():
+    markdown = (
+        "# RL Loop Glossary\n\n"
+        "Dispatch sends a rollout group job (~~`RolloutTask`~~ `RolloutGroupJob`).\n\n"
+        "![][image1]\n\n"
+        "[image1]: <data:image/png;base64,iVBORw0KGgo=>\n"
+    )
 
-    glossary = glossary_from_document(document)
-    assert glossary.text == "~~RolloutTask~~ RolloutGroupJob"
+    glossary = glossary_from_markdown(markdown)
+    assert "(~~`RolloutTask`~~ `RolloutGroupJob`)" in glossary.text
+    assert "data:image" not in glossary.text

@@ -6,9 +6,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "click",
-#     "google-auth",
 #     "pyyaml",
-#     "requests",
 # ]
 # ///
 """

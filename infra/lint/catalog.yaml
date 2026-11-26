@@ -71,10 +71,6 @@ shared_prompt: |-
   findings, where description lines are 1-indexed. These virtual paths are
   reported as PR comments rather than file comments.
 
-  The prose lane reads the current RL Loop Glossary from its source Google Doc.
-  It uses that live text for `ml-rl-loop-vocabulary`; review fails when the doc
-  is unavailable.
-
   Skip files you can't usefully review — emit nothing for them: binary, lock files (`uv.lock`, `*.lock`), generated stubs (`*_pb2.py`, `*_pb2_grpc.py`, `*_connect.py`), and oversized vendored/generated files. If nothing reviewable changed, emit nothing and stop.
 
   Scan added/modified hunks plus enough surrounding context to judge intent (usually the enclosing function/class). Do not flag pre-existing code in unchanged regions. Migrations, `__init__.py` exports, proto definitions, and test fixtures all count.
