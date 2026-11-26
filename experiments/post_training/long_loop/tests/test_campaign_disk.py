@@ -26,15 +26,14 @@ from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import ReplayModel
 from skyrl_gym.rollout_specs import shell_harness
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import grades_with_judge
+from taskcompendium.models import TaskSpec, grades_with_judge
 
-from experiments.post_training.long_loop.campaign import REFERENCE
-from experiments.post_training.long_loop.campaign_data import CAMPAIGN, retained_task
 from experiments.post_training.long_loop.campaign_runtime import bind_runtime
 
 pytestmark = [pytest.mark.manual, pytest.mark.asyncio]
 SOURCE = "TaskTrove:laion__nemotron-gym-math-v5"
 DISK_ROOT = Path("/var/lib/shellbox-disk-pool")
+REPOSITORY = Path(__file__).resolve().parents[4]
 
 
 @pytest.mark.timeout(600)
@@ -42,7 +41,8 @@ async def test_original_math_verifier_runs_with_declared_local_disk():
     assert get_job_info() is not None, "Run this proof inside the regional privileged CPU job"
     configure_coreweave_s3()
     subprocess.run(["bash", "-c", local_disk_setup_script(str(DISK_ROOT))], check=True)
-    pin = json.loads((CAMPAIGN / "source_pins.json").read_text())["sources"][SOURCE]
+    pins = REPOSITORY / "experiments/post_training/long_loop/campaign/source_pins.json"
+    pin = json.loads(pins.read_text())["sources"][SOURCE]
     release = pin["current_release"]
     token = require_secret("HF_TOKEN")
     metadata = get_hf_file_metadata(
@@ -55,12 +55,11 @@ async def test_original_math_verifier_runs_with_declared_local_disk():
         cohort_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
     assert cohort_sha256 == metadata.etag
     row = next(pq.ParquetFile(local).iter_batches(batch_size=1)).to_pylist()[0]
-    task = retained_task(row, SOURCE)
+    assert hashlib.sha256(row["task_spec"].encode()).hexdigest() == row["task_sha256"]
+    task = TaskSpec.model_validate_json(row["task_spec"])
     assert not grades_with_judge(task.grader), "This proof requires a programmatic verifier"
     settings = yaml.safe_load(
-        (
-            REFERENCE.parents[4] / "vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml"
-        ).read_text()
+        (REPOSITORY / "vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml").read_text()
     )["task_spec"]
     spec = TaskRolloutSpec.model_validate_json(bind_runtime(row, settings)["task_rollout_spec"])
     assert spec.task_machine is None, "Choose a source without an actor machine for the serving-free proof"
