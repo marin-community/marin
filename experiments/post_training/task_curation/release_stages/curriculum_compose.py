@@ -4,10 +4,10 @@
 """Curriculum compose: add or replace admitted populations in the retained curriculum.
 
 One maintained module replaces the per-release curriculum composition workers (see
-INVENTORY.md). The composed release carries every retained assignment value byte for
-byte, adds the fresh aligned populations, recomputes statistics/samples/confidence
-from the full assignments, and verifies the statistics and confidence vectors as
-exact unions of the retained and fresh coverages.
+INVENTORY.md). The composed release preserves verified retained scores, applies current task
+identities and explicit removals, and adds fresh alignment. Statistics, samples
+and confidence are rebuilt from the resulting assignments; unaffected values
+match exactly and reduced populations satisfy subset bounds.
 
 Every release-identifying value arrives as typed :class:`CurriculumComposeInputs`;
 the fresh task total comes from the census receipt, never a worker literal. The dry
@@ -159,8 +159,9 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
     """Verify retained populations and the fresh alignment for additions or replacements.
 
     The plan's removed sources leave the retained curriculum: their release sources,
-    inventory rows, assignments and coverage statistics are not carried. Replacement
-    sources also leave the retained set; their current alignment supplies every row.
+    inventory rows, assignments and coverage statistics are not carried. Sources
+    with fresh alignment leave the retained set. Verified rebindings keep their
+    scored rows with current provenance and any proven retention.
     """
     declared_rebound = document.get("rebound")
     if declared_rebound:
@@ -443,8 +444,8 @@ def run_compose(
                 ) as zephyr,
                 CampaignRuntime().activate(zephyr),
             ):
-                return _finish_compose(inputs, plan, document, release, zephyr, root, alert_feeds, mode)
-        return _finish_compose(inputs, plan, document, release, context, root, alert_feeds, mode)
+                return _finish_compose(inputs, plan, release, zephyr, root, alert_feeds, mode)
+        return _finish_compose(inputs, plan, release, context, root, alert_feeds, mode)
     except Exception as error:
         alerts.stage_failed(
             inputs.release_id, "curriculum_compose", {"mode": mode, "error": str(error)[:500]}, alert_feeds
@@ -475,7 +476,7 @@ def check_archived_assignment_counts(retained_files: list[dict], archived_source
             raise ValueError(f"Archived assignment readiness differs from its release: {source.source_id}")
 
 
-def _finish_compose(inputs, plan, document, release, context, root, alert_feeds, mode) -> dict:
+def _finish_compose(inputs, plan, release, context, root, alert_feeds, mode) -> dict:
     """The write-mode tail: retained pass, coverage recompute, exact unions, seals."""
     old_sources = {source.source_id: source for source in plan.old_release.sources}
     removed = frozenset(plan.removed_sources)

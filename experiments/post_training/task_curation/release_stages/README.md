@@ -340,8 +340,8 @@ mapping with null new IDs. The entire archived source must have uniform readines
 requires fresh alignment, since source-level counts cannot establish the retained split.
 Changed public inputs or ambiguous archived matches cannot reuse scores.
 
-Composition applies these proofs while reading the archive once, removes obsolete
-assignments, and adds fresh alignment for changed public inputs. It rebuilds
+Composition applies these proofs in one transformation, verifies assignment
+publication by readback, removes obsolete rows, and adds fresh alignment for changed public inputs. It rebuilds
 statistics, confidence and review samples. Unaffected sources and complete
 rebindings preserve their exact statistics; reduced populations must have the
 new denominator and componentwise subset bounds. The loader checks each pinned

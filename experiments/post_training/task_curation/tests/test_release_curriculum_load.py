@@ -124,7 +124,7 @@ def test_verify_text_scan_refuses_wrong_handoff(tmp_path):
     }
     inputs = _inputs(tmp_path)
     with pytest.raises(ValueError, match="different handoff"):
-        cul.verify_text_scan(inputs, handoff, inputs.handoff, scan, {"sample_task_count": 7})
+        cul.verify_text_scan(handoff, inputs.handoff, scan, {"sample_task_count": 7})
 
 
 def test_verify_text_scan_refuses_codec_drift(tmp_path):
@@ -142,7 +142,7 @@ def test_verify_text_scan_refuses_codec_drift(tmp_path):
     handoff = json.loads((tmp_path / "handoff.json").read_text())
     scan = json.loads((tmp_path / "text-scan.json").read_text())
     with pytest.raises(ValueError, match="loader codec"):
-        cul.verify_text_scan(inputs, handoff, inputs.handoff, scan, {"sample_task_count": 7})
+        cul.verify_text_scan(handoff, inputs.handoff, scan, {"sample_task_count": 7})
 
 
 def test_dry_run_validates_with_zero_sql(tmp_path):

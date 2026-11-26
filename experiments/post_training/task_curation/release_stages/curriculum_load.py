@@ -81,7 +81,7 @@ def read_ref(ref: ArtifactRef) -> dict:
 
 
 def verify_handoff(inputs: CurriculumLoadInputs, handoff: dict) -> None:
-    """The composition handoff must describe a complete, unchanged composition."""
+    """Verify composition counts, unchanged scopes and pinned identity rewrites."""
     # The compose handoff's vocabulary: ``source_count`` counts the aligned (matched)
     # sources, ``inventory_count`` the catalog sources the plan declares.
     if handoff["source_count"] != inputs.expected_aligned_sources:
@@ -151,9 +151,7 @@ def verify_public_input_rebindings(handoff: dict) -> None:
             raise ValueError(f"Rebound task mapping does not cover the selected population: {source_id}")
 
 
-def verify_text_scan(
-    inputs: CurriculumLoadInputs, handoff: dict, handoff_ref: ArtifactRef, scan: dict, coverage: dict
-) -> None:
+def verify_text_scan(handoff: dict, handoff_ref: ArtifactRef, scan: dict, coverage: dict) -> None:
     """The text scan must be a passing scan of exactly this handoff and coverage."""
     if scan["status"] != "PASS":
         raise ValueError(f"text scan status is {scan['status']!r}, expected PASS")
@@ -193,7 +191,7 @@ def run_curriculum_load(
         coverage = read_ref(ArtifactRef(**handoff["coverage"]))
         scan_ref = ManifestReference(uri=inputs.text_scan.uri, sha256=inputs.text_scan.sha256)
         scan = json.loads(manifest_bytes(scan_ref))
-        verify_text_scan(inputs, handoff, handoff_ref, scan, coverage)
+        verify_text_scan(handoff, handoff_ref, scan, coverage)
 
         if dry_run:
             proof = {
