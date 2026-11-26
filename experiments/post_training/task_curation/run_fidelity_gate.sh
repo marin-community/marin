@@ -59,6 +59,11 @@ uv run --frozen --prerelease=allow --with-editable ./lib/taskcompendium[pipeline
   --per-base "$PER_BASE" \
   --concurrency "$CONCURRENCY" \
   "${BASE_ARGS[@]+"${BASE_ARGS[@]}"}" \
-  "${SEED_ARGS[@]+"${SEED_ARGS[@]}"}"
+  "${SEED_ARGS[@]+"${SEED_ARGS[@]}"}" || GATE_STATUS=$?
 
+# Stage the per-row evidence before propagating the gate's verdict: a failed
+# gate is exactly when its evidence matters.
 uv run --no-sync fsutil cp -r "$REPORT" "$REPORT_ROOT/"
+if [ -n "${GATE_STATUS:-}" ] && [ "$GATE_STATUS" != "0" ]; then
+  exit "$GATE_STATUS"
+fi
