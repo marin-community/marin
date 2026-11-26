@@ -943,8 +943,9 @@ def test_megatron_worker_batches_match_driver_update(tmp_path, pp, cp):
     cfg.trainer.rollout_buffer.max_in_flight = 3
     cfg.generator.trajectory_retention.enabled = False
     cfg.data.shuffle = False
+    dataset_path = write_gsm8k_dataset(tmp_path / "data/train.jsonl", cfg.trainer.train_batch_size + 1, max_turns=1)
     dataset = SourceTaskDataset(
-        datasets=[str(write_gsm8k_dataset(tmp_path / "data/train.jsonl", cfg.trainer.train_batch_size + 1, max_turns=1))],
+        datasets=[str(dataset_path)],
         environment_configs=OmegaConf.to_container(cfg.environment.task_sessions, resolve=True),
         tokenizer=tokenizer,
         max_prompt_length=cfg.trainer.max_prompt_length,
