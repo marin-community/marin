@@ -21,6 +21,7 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.harbor import (
     IMAGE_LOCKS,
     PI_MAX_OUTPUT_TOKENS,
+    TMUX_INSTALL,
     HarborDataset,
     PackageCopy,
     PackageEdit,
@@ -553,9 +554,15 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             job=CAMPAIGN_JOB,
             protocol=CAMPAIGN_PROTOCOL,
         ),
-        # Terminus 2 as Harbor ran it, with the 16,384-token replies of the Harbor runs this port reproduces.
+        # Terminus 2 as Harbor ran it, with the 16,384-token replies of the Harbor runs this port reproduces,
+        # and tmux in the image because the agent's machine is offline.
         *(
-            harbor_source(dataset, terminus, max_output_tokens=LONG_MAX_OUTPUT_TOKENS)
+            harbor_source(
+                dataset,
+                terminus,
+                max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+                job=JobSettings(agent_install=TMUX_INSTALL),
+            )
             for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
         ),
         harbor_source(DS_1000_MINI_200, terminus, max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS, job=CAMPAIGN_JOB),

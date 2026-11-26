@@ -330,6 +330,14 @@ def harbor_source(
     )
 
 
+TMUX_INSTALL = (
+    "RUN if ! command -v tmux >/dev/null; then apt-get update"
+    " && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux"
+    " && rm -rf /var/lib/apt/lists/*; fi\n"
+)
+"""Dockerfile instructions that install tmux, which Terminus 2 otherwise installs at startup, needing the network."""
+
+
 def pi_install(agent: PiAgent) -> str:
     """Dockerfile instructions that install ``agent``'s Pi version as ``pi``, with its own Node.js.
 
