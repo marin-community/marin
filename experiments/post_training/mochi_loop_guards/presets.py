@@ -311,7 +311,10 @@ GUARD_ARM_LAYOUT = replace(
     workload=Generation(replace(GUARDS_LAYOUT.workload.plan, num_inference_engines=4)),
 )
 S1_STOP = panel_preset("s1-stop", repeat_stall_batches=3, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS)
-S1_RP = panel_preset("s1-rp", repetition_penalty=1.1, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS)
+S1_RP = replace(
+    panel_preset("s1-rp", repetition_penalty=1.1, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS),
+    revision="2026.11.26.2",
+)
 S2_CONTROL = rl_arm("s2-antithrash-control", antithrash=False, updates=8)
 S2_TREATMENT = rl_arm("s2-antithrash-treatment", antithrash=True, updates=8)
 
