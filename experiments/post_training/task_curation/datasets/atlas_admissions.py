@@ -118,7 +118,12 @@ RECORDS = (
             "oversight and quality evidence apply through this subset lineage: "
             "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/retained-publications/ifbench/2026.11.16.1/7"
             "bcdabaf57071c23bcdc/result.json. Original IFEvalG scorer 28c1816664491493242d453c2c7280ee56e6c20"
-            "a; no released oracle; pending final-pin QA."
+            "a; no released oracle; pending final-pin QA. Final-pin QA (2026-11-26, #12321 comment "
+            "7189616682): the embedded grader mis-grades 29 of 53 probed instruction types - 4.5 percent of "
+            "rows fail their plainest compliant reply, 49 percent pay a minimal violation; verifyit on main "
+            "grades nearly all probes right. The declaration stands (the Atlas admitted with the weakness "
+            "documented); grade these rows in process only after #11985-style check coverage and the two "
+            "verifyit defects are fixed."
         ),
         tags=("license:odc-by",),
         count=95357,
