@@ -6,6 +6,7 @@
 import dataclasses
 import hashlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -90,6 +91,22 @@ def test_dry_run_verifies_the_campaign_records_against_the_census_artifact(tmp_p
     proof = stage.run_backend_validation(inputs, dry_run=True, repo_root=tmp_path)
     assert proof["release_id"] == "testrelease" and proof["dry_run"] is True
     assert proof["task_count"] == 10
+
+
+def test_cli_dry_run_reads_the_pinned_census_manifest(tmp_path, monkeypatch, capsys):
+    inputs = _inputs(tmp_path)
+    path = tmp_path / "backend-inputs.json"
+    document = dataclasses.asdict(inputs)
+    document["census_inputs"] = inputs.census_inputs.model_dump(mode="json")
+    path.write_text(json.dumps(document))
+    monkeypatch.setattr(sys, "argv", ["backend_validation", "--inputs", str(path), "--mode", "dry-run"])
+
+    stage.main()
+
+    proof = json.loads(capsys.readouterr().out)
+    assert proof["task_count"] == 10
+    assert proof["sql_writes"] == 0
+    assert not Path(inputs.output_root).exists()
 
 
 def test_dry_run_refuses_a_grading_record_that_disagrees_with_the_census(tmp_path):

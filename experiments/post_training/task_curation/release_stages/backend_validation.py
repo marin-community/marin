@@ -321,7 +321,9 @@ def main() -> None:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd(), help="Checkout the validation runs from")
     parser.add_argument("--mode", choices=("dry-run", "write"), default="dry-run")
     args = parser.parse_args()
-    inputs = BackendValidationInputs(**json.loads(args.inputs.read_text()))
+    document = json.loads(args.inputs.read_text())
+    document["census_inputs"] = ArtifactRef(**document["census_inputs"])
+    inputs = BackendValidationInputs(**document)
     proof = run_backend_validation(inputs, dry_run=args.mode == "dry-run", repo_root=args.repo_root)
     print(json.dumps(proof), flush=True)
 
