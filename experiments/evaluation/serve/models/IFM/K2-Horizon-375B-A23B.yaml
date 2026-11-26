@@ -1,0 +1,32 @@
+# K2 Horizon 375B-A23B: text MoE, 758 GB bf16, 512k context. The bf16 weights exceed one 4x GB200
+# node, so this serves the vLLM recipe's expert-parallel layout as TP4 on each of two pipeline stages.
+# Each stage loads half the weights, so host memory is set below the launcher's full-checkpoint
+# estimate, which exceeds a GB200 node's 960 GB. Its config needs remote code, which Marin's vLLM fork
+# cannot pickle across nodes (#12215), so this serves upstream vLLM 0.34.0. The template cannot
+# disable reasoning; it takes reasoning_effort high (the default and IFM's reported setting), medium or
+# low, so thinking-off benchmarks use low.
+name: k2-horizon-375b-a23b
+location: IFM/K2-Horizon-375B-A23B
+revision: 7a17b47a74b9371e71ed64b4080192e01caa6174
+apply_chat_template: true
+generation:
+  thinking_off_template_kwargs:
+    reasoning_effort: low
+resource_hint:
+  gpu:
+    GB200: 4
+  memory: 768g
+serve:
+  tensor_parallel_size: 4
+  pipeline_parallel_size: 2
+  max_model_len: 73728
+  reasoning_parser: k2_horizon
+  vllm_source: upstream
+  vllm_version: 0.34.0
+  tool_call_parser: k2_horizon
+  vllm_extra_args:
+  - --enable-prefix-caching
+  - --enable-expert-parallel
+  - --trust-remote-code
+  - --chat-template-content-format
+  - string
