@@ -129,7 +129,7 @@ def control_ground_questions(config: ControlGroundingConfig) -> ControlGroundedQ
     local_index(bm25, Path(config.workdir) / "bm25")
     output = StoragePath(config.output_path)
     grounding_config = GroundingConfig(
-        question_receipt_uri=config.question_receipt_uri,
+        question_receipt=config.question_receipt_uri,
         question_receipt_sha256=config.question_receipt_sha256,
         index_receipt=config.bm25_index_uri,
         index_receipt_sha256=config.bm25_index_sha256,
