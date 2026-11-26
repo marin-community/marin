@@ -3,12 +3,10 @@ import json
 import platform
 import signal
 import socket
-import tarfile
 from types import SimpleNamespace
 
 import pytest
 import ray
-import zstandard
 
 from cloud.iris import task_runtime
 from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV
@@ -155,14 +153,10 @@ def test_worker_exits_zero_after_current_head_succeeds(tmp_path, monkeypatch, ir
     assert task_runtime.run_worker(_worker_args(tmp_path)) == 0
 
 
-def test_worker_termination_preserves_debug_archive_and_fails(tmp_path, monkeypatch, iris_ray_ports):
+def test_worker_termination_without_current_head_success_is_nonzero(tmp_path, monkeypatch, iris_ray_ports):
     payload = _head_payload()
     handlers = _isolate_worker_runtime(tmp_path, monkeypatch, payload)
     write_head_result(str(tmp_path), "prior-epoch")
-    debug_root = tmp_path / "debug"
-    dump = debug_root / "flight_recorder" / "nccl_fr_rank1"
-    dump.parent.mkdir(parents=True)
-    dump.write_bytes(b"flight recorder data")
 
     monkeypatch.setattr(
         task_runtime.time,
@@ -170,15 +164,4 @@ def test_worker_termination_preserves_debug_archive_and_fails(tmp_path, monkeypa
         lambda _duration: handlers[signal.SIGTERM](signal.SIGTERM, None),
     )
 
-    assert task_runtime.run_worker(_worker_args(tmp_path), debug_artifact_root=debug_root) == 128 + signal.SIGTERM
-    archive = tmp_path / "debug_artifacts" / payload.gang_epoch / "rank-1.tar.zst"
-    with archive.open("rb") as compressed, zstandard.ZstdDecompressor().stream_reader(compressed) as stream:
-        with tarfile.open(fileobj=stream, mode="r|") as reader:
-            for entry in reader:
-                if entry.name == "flight_recorder/nccl_fr_rank1":
-                    extracted = reader.extractfile(entry)
-                    assert extracted is not None
-                    assert extracted.read() == b"flight recorder data"
-                    break
-            else:
-                pytest.fail("Flight recorder dump is missing from the archive")
+    assert task_runtime.run_worker(_worker_args(tmp_path)) == 128 + signal.SIGTERM

@@ -47,12 +47,9 @@ import huggingface_hub.constants
 from filelock import FileLock
 from finestore.rl.run_records import RunIndexIdentity
 from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV, IRIS_OUTPUT_DIR_ENV
-from iris.cluster.runtime.output_capture import ResolvedOutputDestination, TaskOutputLimits, capture_task_outputs
-from iris.rpc.job_pb2 import TaskOutputArchive
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
-from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import Deadline, RateLimiter
+from rigging.timing import RateLimiter
 from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
@@ -85,7 +82,6 @@ from marinskyrl.environment_contract import (
     TRAINING_TYPE_ENV,
     TrainingType,
     ray_cluster_owner_environment,
-    safe_artifact_component,
 )
 from marinskyrl.hf_model import (
     MODEL_CACHE_SUFFIXES,
@@ -226,8 +222,6 @@ RENDEZVOUS_WRITE_TIMEOUT = 30  # seconds per attempt
 RAY_START_HEAD_TIMEOUT = 300  # seconds
 # Failure reporting must never keep an Iris task alive after its driver exits.
 FAILURE_DIAGNOSTICS_TIMEOUT = 30
-INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT = 8
-INTERRUPTED_DEBUG_ARCHIVE_LIMITS = TaskOutputLimits(max_bytes=2 * 1024**3, max_entries=10_000)
 
 
 def _log(msg: str) -> None:
@@ -1388,43 +1382,6 @@ def log_failure_diagnostics(reason: str) -> None:
         _log(f"Failure diagnostics exceeded {FAILURE_DIAGNOSTICS_TIMEOUT}s; continuing task teardown")
 
 
-def archive_interrupted_task_debug(
-    artifact_root: Path | None, rendezvous_dir: str | None, gang_epoch: str, rank: int
-) -> None:
-    """Preserve diagnostics when Iris stops a task and skips its output capture."""
-    if artifact_root is None or not rendezvous_dir:
-        return
-    if not artifact_root.is_dir():
-        return
-
-    destination = StoragePath(rendezvous_dir) / "debug_artifacts" / safe_artifact_component(gang_epoch)
-    destination = destination / f"rank-{rank}.tar.zst"
-    stop = threading.Event()
-
-    def upload() -> None:
-        if not any(path.is_file() for path in artifact_root.rglob("*")):
-            return
-        result = capture_task_outputs(
-            artifact_root,
-            ResolvedOutputDestination(destination, TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_UNSPECIFIED),
-            INTERRUPTED_DEBUG_ARCHIVE_LIMITS,
-            Deadline.from_seconds(INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT),
-            stop,
-        )
-        if result.uri:
-            _log(f"Archived rank {rank} debug files to {result.uri}")
-        elif result.error:
-            _log(f"Could not archive rank {rank} debug files: {result.error}")
-
-    # Storage requests may outlast the archive deadline. Leave time for task teardown.
-    thread = threading.Thread(target=upload, daemon=True, name="interrupted-debug-archive")
-    thread.start()
-    thread.join(INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT)
-    if thread.is_alive():
-        stop.set()
-        _log(f"Rank {rank} debug archive exceeded the {INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT}s shutdown budget")
-
-
 class _HeadInterrupted(BaseException):
     def __init__(self, signum: int):
         super().__init__(signum)
@@ -1463,8 +1420,6 @@ def run_head(
     args: argparse.Namespace,
     config_path: Path,
     derived_gloo_ifname: str | None = None,
-    *,
-    debug_artifact_root: Path | None = None,
 ) -> int:
     num_tasks = _num_tasks()
     gang_epoch = uuid.uuid4().hex
@@ -1530,7 +1485,6 @@ def run_head(
         if process is not None and process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGTERM)
-        archive_interrupted_task_debug(debug_artifact_root, args.rendezvous_dir, gang_epoch, 0)
         log_failure_diagnostics(f"signal {signum} (head rank 0)")
         if process is not None:
             try:
@@ -1545,7 +1499,7 @@ def run_head(
         signal.signal(signal.SIGTERM, previous_sigterm)
 
 
-def run_worker(args: argparse.Namespace, *, debug_artifact_root: Path | None = None) -> int:
+def run_worker(args: argparse.Namespace) -> int:
     worker_start = time.time()
     rank = _rank()
     num_tasks = _num_tasks()
@@ -1588,7 +1542,6 @@ def run_worker(args: argparse.Namespace, *, debug_artifact_root: Path | None = N
             return
         termination_signal = signum
         _log(f"Worker rank {rank} received signal {signum}; stopping Ray.")
-        archive_interrupted_task_debug(debug_artifact_root, args.rendezvous_dir, payload.gang_epoch, rank)
         # A SIGTERM on a worker node is often a k8s eviction/OOM of that node (it
         # hosts the training actors' GPUs); capture its disk/GPU state before reap.
         log_failure_diagnostics(f"signal {signum} (worker rank {rank})")
@@ -1839,9 +1792,9 @@ def main() -> None:
             policy_tokenizer=policy_tokenizer,
             draft_model=draft_model,
         )
-        exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_artifact_root=debug_artifact_root)
+        exit_code = run_head(args, final_config_path, derived_gloo_ifname)
     else:
-        exit_code = run_worker(args, debug_artifact_root=debug_artifact_root)
+        exit_code = run_worker(args)
     if debug_artifact_root is not None:
         prune_empty_debug_directories(debug_artifact_root)
     if exit_code != 0:

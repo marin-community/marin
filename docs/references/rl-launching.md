@@ -370,16 +370,14 @@ Each Ray node writes to its own Iris task's stdout and stderr. Use the job
 logs to see output across the gang. Set `IrisSkyRLExecution.job_timeout_seconds`
 to bound the total runtime in Iris.
 
-SkyRL writes crash receipts and NCCL flight recorder dumps under `skyrl-debug/`
-in the [Iris attempt archive](https://github.com/marin-community/marin/blob/main/lib/iris/docs/task-outputs.md).
+SkyRL writes crash receipts and NCCL flight recorder dumps to
+`$IRIS_OUTPUT_DIR/skyrl-debug/` for the
+[Iris attempt archive](https://github.com/marin-community/marin/blob/main/lib/iris/docs/task-outputs.md).
+Check the attempt's archive status when Iris cancels a task.
 Fatal stacks and termination summaries go to the task log. Distributed debug
 mode adds process manifests, on-demand stacks, and collective phase traces.
 Set `trainer.collective_phase_diagnostics: true` to collect the phase traces
 with light debug mode.
-
-When Iris stops a task, SkyRL makes a bounded attempt to save its debug files
-under `<rendezvous_dir>/debug_artifacts/<gang_epoch>/rank-<rank>.tar.zst`.
-Check the task log for the archive location.
 
 Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
 Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`
