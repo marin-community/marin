@@ -250,6 +250,13 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         (1, True),
     ]
 
+    other = cohort_from_fixtures(roots[0]).attempts[1]
+    with edit_receipt(Path(other.path)) as receipt:
+        receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
+    stale = run(gate_for_candidates())[0]
+    assert stale.path != updated.path
+    assert stale.verdict == "invalid" and "stored control config version" in stale.reason
+
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):
     preset = replace(snowball_model.SNOWBALL.by_name["speed-long"], updates=3, measured=range(2, 4))
@@ -641,10 +648,11 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
         (subprocess.TimeoutExpired("compose", 120), "timed out after 120 s"),
         (subprocess.CompletedProcess([], 0, "", ""), "returned invalid JSON"),
         (subprocess.CompletedProcess([], 0, "{", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 0, "[null]", ""), "expected 1 configuration objects"),
         (subprocess.CompletedProcess([], 1, "", ""), "exited with status 1"),
         (FileNotFoundError("native composer executable missing"), "native composer executable missing"),
     ],
-    ids=["redacted-timeout", "timeout", "empty", "invalid-json", "nonzero", "missing-executable"],
+    ids=["redacted-timeout", "timeout", "empty", "invalid-json", "invalid-shape", "nonzero", "missing-executable"],
 )
 def test_native_composition_reports_failure(monkeypatch, outcome, expected):
     monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", lambda *args, **kwargs: sys.executable)

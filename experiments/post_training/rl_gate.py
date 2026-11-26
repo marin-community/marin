@@ -182,6 +182,14 @@ def read_control_measurements(
         raise InvalidComparison(
             f"control update budget {launch.max_steps} differs from preset budget {preset.updates}: {path}"
         )
+    actual_version = config_version(attempt.native.config, launch)
+    if attempt.index is None or actual_version != attempt.index.preset_version:
+        authored = deepcopy(attempt.native.config)
+        _normalize_draft_mirror(authored)
+        if attempt.index is None or config_version(authored, launch) != attempt.index.preset_version:
+            raise InvalidComparison(
+                f"stored control config version {actual_version} disagrees with the run index: {path}"
+            )
     data = with_objectives(read_measurements(path, preset, inputs, attempt=attempt, gate_profiles=True), preset)
     missing = [
         metric.key
@@ -234,7 +242,7 @@ class RunMetadata(RunInputs):
     replicates: int
     held_out_tasks: str | None = None
     engines: tuple[dict, ...] = ()
-    attempt_ids: tuple[str, ...] = ()
+    attempt_ids: tuple[str | None, ...] = ()
     config_changes: tuple[str, ...] = ()
 
 
@@ -662,14 +670,14 @@ def _comparison_document(launch: dict, recorded: RecordedLaunch | None = None) -
     return config
 
 
-def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
+def _normalize_draft_mirror(config: dict, expected_launch: dict | None = None) -> None:
     """Restore the immutable Hub reference from a verified draft mirror."""
     path = "skyrl.generator.speculative_decoding.model"
     draft = get_path(config, path)
     if not isinstance(draft, dict):
         return
-    expected = get_path(expected_launch, path)
-    if not isinstance(expected, dict):
+    expected = get_path(expected_launch, path) if expected_launch is not None else None
+    if expected_launch is not None and not isinstance(expected, dict):
         return
     mirrors = config["inputs"].get("hugging_face_models", [])
     matches = [
@@ -678,7 +686,10 @@ def _normalize_draft_mirror(config: dict, expected_launch: dict) -> None:
         if mirror.uri == draft["source_uri"]
         and mirror.identity == draft["source_identity"]
         and mirror.revision == mirror.resolved_revision
-        and (expected["source_uri"], expected["source_identity"]) == (f"hf://{mirror.model_id}", mirror.revision)
+        and (
+            expected is None
+            or (expected["source_uri"], expected["source_identity"]) == (f"hf://{mirror.model_id}", mirror.revision)
+        )
     ]
     if len(matches) == 1:
         index, mirror = matches[0]
@@ -802,7 +813,14 @@ def _native_config(operation: str, *args: str):
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
     options = ("--validate-driver",) if validate_driver else ()
-    return _native_config("Compose native launch configurations", "compose", *options, "--", *paths)
+    configs = _native_config("Compose native launch configurations", "compose", *options, "--", *paths)
+    if (
+        not isinstance(configs, list)
+        or len(configs) != len(paths)
+        or any(not isinstance(config, dict) for config in configs)
+    ):
+        raise InvalidComparison(f"{_NATIVE_ERROR}: expected {len(paths)} configuration objects")
+    return configs
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:

@@ -189,7 +189,7 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         reason=report.reason,
         invariants=list(report.invariants),
         comparisons=[*decisions, *history_scores],
-        attempt_ids=list(report.run.attempt_ids),
+        attempt_ids=[attempt for attempt in report.run.attempt_ids if attempt is not None],
         replicates=report.run.replicates,
     )
 
