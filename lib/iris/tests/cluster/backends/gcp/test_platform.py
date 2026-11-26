@@ -410,7 +410,10 @@ def test_gcp_validate_vm_slice_config_rejects_num_vms_not_one():
         _validate_slice_config(cfg)
 
 
-def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
+@pytest.mark.parametrize(
+    "disk_config,expected_disk_type", [({}, "pd-standard"), ({"boot_disk_type": "pd-ssd"}, "pd-ssd")]
+)
+def test_gcp_create_vm_slice_mode_produces_single_worker_slice(disk_config, expected_disk_type):
     """VM slice mode creates a single-worker slice that is discoverable and terminable."""
     gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
     gcp_config = GcpPlatformConfig(project_id="test-project", zones=["us-central2-b"])
@@ -421,12 +424,19 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice():
         num_vms=1,
         accelerator_type=AcceleratorType.CPU,
         capacity_type=CapacityType.ON_DEMAND,
-        gcp=GcpSliceConfig(zone="us-central2-b", mode=GcpSliceMode.VM, machine_type="n2-standard-4"),
+        disk_size_gb=512,
+        gcp=GcpSliceConfig.model_validate(
+            {"zone": "us-central2-b", "mode": "vm", "machine_type": "n2-standard-4", **disk_config}
+        ),
     )
     cfg.labels[Labels("iris").iris_managed] = "true"
     cfg.labels[Labels("iris").iris_scale_group] = "cpu-vm"
 
-    handle = platform.create_slice(cfg)
+    with unittest.mock.patch.object(gcp_service, "vm_create", wraps=gcp_service.vm_create) as create_vm:
+        handle = platform.create_slice(cfg)
+    request = create_vm.call_args.args[0]
+    assert request.boot_disk_type == expected_disk_type
+    assert request.disk_size_gb == 512
     status = handle.describe()
     assert status.worker_count == 1
     assert len(status.workers) == 1

@@ -288,6 +288,7 @@ class GcpSliceConfig(_Config):
     runtime_version: str = ""
     topology: str = ""
     machine_type: str = ""  # required for mode=vm
+    boot_disk_type: Literal["pd-standard", "pd-balanced", "pd-ssd"] = "pd-standard"  # mode=vm only
     service_account: str = ""
     # None means "default" (True): provision with an external IP. Set False to
     # provision without one (honored only for TPU-mode slices).

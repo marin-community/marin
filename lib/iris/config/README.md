@@ -49,3 +49,8 @@ changes. ConfigMaps and VM bootstrap configs retain the references.
 Pass application credentials explicitly through `EnvironmentSpec.secrets`; see
 [secret delivery](../docs/secrets.md). Cluster configs have no application secret
 defaults. `task_env`, `.marin.yaml` and job `-e` values use environment delivery.
+
+For a GCP CPU scale group with `slice_template.gcp.mode: vm`, set
+`slice_template.gcp.boot_disk_type: pd-ssd` for image unpacking or other
+I/O-heavy workloads. The default is `pd-standard`; `pd-balanced` is also
+supported. The group's `resources.disk` sets the boot disk size.
