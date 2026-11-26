@@ -117,10 +117,10 @@ trials:
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
 potential:
   score: 7
-  rationale: −0.0203 at equal time (step within 1%); d512 rung −0.0178, d768-d1280 rungs killed; ladder incomplete, MFU not
-    run → 7
+  rationale: −0.0203 at equal time (step within 1%); d512 rung −0.0178, d768 −0.013, d1024/d1280 no result; MFU not run →
+    7
   model: claude-opus-5-5
-  date: '2026-11-22'
-  inputs_digest: 2f2d58939e5e
+  date: '2026-11-26'
+  inputs_digest: 8c82a27eb955
 code_commits:
 - 7a52fd90052952608c6a5f0f99b1011c8148e41e
