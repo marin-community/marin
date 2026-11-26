@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import shutil
+import sys
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, nullcontext
@@ -17,6 +18,9 @@ import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
+from click.testing import CliRunner
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finestore.reader import ReadView
 from finestore.rl.rl_progress import AttemptSummary
 from finestore.rl.run_records import (
@@ -51,9 +55,10 @@ from fsspec.config import conf
 from iris.client.client import IrisClient
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
+from iris.resources.state import JobState, is_job_finished
 from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
-from marin.execution.lazy import StepContext
+from marin.execution.lazy import StepContext, materialized_config
 from marin.rl.skyrl import SkyRLRun
 from marin.rl.skyrl_records import read_stored_skyrl_attempt
 from rigging.filesystem.storage_path import StoragePath
@@ -69,7 +74,7 @@ from experiments.post_training import rl as runner
 from experiments.post_training import rl_command as command
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
-from experiments.post_training import rl_index, rl_publication
+from experiments.post_training import rl_index, rl_nightly_controls, rl_publication
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, run_inputs
@@ -100,6 +105,21 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value))
 
 
+def cli(table, preset, *options, **kwargs):
+    """Drive a model launcher with the test's preset and explicit options."""
+    args = ("--preset", preset, "--version", recipe.RUN_ARTIFACT_VERSION, *options)
+    return CliRunner().invoke(runner.command(table, argv=args, **kwargs), args)
+
+
+def compose_steps(directory, steps, *, prefix=None):
+    paths = []
+    for index, step in enumerate(steps):
+        path = directory / f"launch-{index}.yaml"
+        path.write_text(materialized_config(step, prefix or str(directory)).launch_config_yaml)
+        paths.append(str(path))
+    return gate.compose_configs(paths)
+
+
 def native_compositions():
     """Cache real native compositions of equivalent fixture documents."""
     compose_configs = gate.compose_configs
@@ -109,8 +129,9 @@ def native_compositions():
         documents = [Path(path).read_text() for path in paths]
         attempts = [yaml.safe_load(document)["run"]["attempt_id"] for document in documents]
         token = "<fixture-attempt>"
-        key = validate_driver, tuple(
-            document.replace(attempt, token) for document, attempt in zip(documents, attempts, strict=True)
+        key = (
+            validate_driver,
+            tuple(document.replace(attempt, token) for document, attempt in zip(documents, attempts, strict=True)),
         )
         if key not in cached:
             configs = compose_configs(paths, validate_driver=validate_driver)
@@ -163,6 +184,12 @@ def fake_s3_checkpoint(monkeypatch, uri: str, root: Path) -> None:
     )
 
 
+def write_hf_export(path: Path) -> None:
+    path.mkdir(parents=True)
+    for name in ("config.json", "tokenizer_config.json"):
+        write_json(path / name, {})
+
+
 def write_artifact_record(root: Path, name: str, version: str, kind: type, **fields) -> None:
     record = ArtifactRecord(name=name, version=version, result_type=result_type_name(kind), **fields)
     write_json(root / RECORD_FILENAME, record.model_dump(mode="json"))
@@ -203,6 +230,101 @@ def fake_publication(monkeypatch, capture, origin):
         return (service_url or origin) + "/#" + urlencode({"run": record.run_id, "attempt": record.attempt_id})
 
     monkeypatch.setattr("experiments.post_training.rl_publication.publish_result", publish)
+
+
+class FakeIris:
+    def __init__(self, monkeypatch, *, on_submit=None):
+        self.jobs = {}
+        self.tasks = {}
+        self.on_submit = on_submit
+        monkeypatch.setenv("IRIS_USER", "test-user")
+        monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+        monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_: nullcontext(self))
+        monkeypatch.setattr(rl_nightly_controls, "open_iris_client", lambda **_: nullcontext(self))
+
+    def set_job(self, name, state, *, tasks=None, reason=""):
+        job = JobName.from_wire(name)
+        self.jobs[job] = SimpleNamespace(job_id=job, state=state, task_state_counts=tasks or {}, error_message="")
+        self.tasks[job] = [SimpleNamespace(error_message=reason)] if reason else []
+        return job
+
+    def submit(self, **request):
+        job = JobName.root("test-user", request["name"])
+        if self.on_submit:
+            self.on_submit(job, request)
+        return self.jobs[self.set_job(str(job), JobState.PENDING)]
+
+    def job_status(self, job):
+        if job not in self.jobs:
+            raise ConnectError(Code.NOT_FOUND, f"Job {job} not found")
+        return self.jobs[job]
+
+    def job_state(self, job):
+        return self.job_status(job).state
+
+    def list_tasks(self, job):
+        return self.tasks[job]
+
+    def list_jobs(self, *, state):
+        return [job for job in self.jobs.values() if job.state == state]
+
+    def active_job_names_for_prefix(self, prefix):
+        return [
+            job for job, status in self.jobs.items() if str(job).startswith(prefix) and not is_job_finished(status.state)
+        ]
+
+
+class FakeMarina:
+    def __init__(self, monkeypatch):
+        self.rows = {}
+        self.fail_once = set()
+        monkeypatch.setattr(rl_index, "list_attempts", lambda _url=None: list(self.rows.values()))
+        monkeypatch.setattr(rl_publication, "publish_result", self.publish)
+
+    def publish(self, record, _url):
+        if record.attempt_id in self.fail_once:
+            self.fail_once.remove(record.attempt_id)
+            raise RuntimeError("Marina temporarily unavailable")
+        self.rows[record.run_id, record.attempt_id] = record
+        return "https://progress.test"
+
+    def by_attempt(self, attempt):
+        return next(row for row in self.rows.values() if row.attempt_id == attempt)
+
+
+class FakeLauncher:
+    def __init__(self, monkeypatch, *, table=None):
+        self.monkeypatch = monkeypatch
+        self.table = table
+        self.requests = {}
+        monkeypatch.setattr(rl_nightly_controls, "subprocess", SimpleNamespace(run=self.run))
+
+    def run(self, argv, *, env, check):
+        module, args = argv[2], argv[3:]
+        preset = args[args.index("--preset") + 1]
+        batch = args[args.index("--control") + 1]
+        self.requests[preset, batch] = int(args[args.index("--replicates") + 1])
+        code = 0
+        if self.table is not None:
+            with self.monkeypatch.context() as environment:
+                path = rl_publication.CONTROL_SUBMISSION_ENV
+                environment.setenv(path, env[path])
+                code = runner.main(self.table, argv=args, entry_module=module)
+        return SimpleNamespace(returncode=code)
+
+
+def nightly_tick(monkeypatch, directory, batch, presets=""):
+    monkeypatch.setattr(sys, "argv", ["nightly", "--batch", batch, "--presets", presets, "--state-dir", str(directory)])
+    return rl_nightly_controls.main()
+
+
+def set_receipt_fields(document, fields):
+    for path, value in fields.items():
+        *parents, name = path.split(".")
+        target = document
+        for parent in parents:
+            target = target[int(parent)] if isinstance(target, list) else target[parent]
+        target[int(name) if isinstance(target, list) else name] = value
 
 
 def write_receipt(root: Path, receipt: dict) -> None:
@@ -520,6 +642,10 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         cohort_run_id=None,
         completed_at="2026-11-06T19:40:00+00:00",
         table=None,
+        state="succeeded",
+        coordinator=None,
+        receipt=None,
+        retry_attempt=None,
     ):
         table = table or snowball_model.SNOWBALL
         preset = table.by_name[preset_name]
@@ -545,15 +671,19 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         max_steps = launch["skyrl"]["trainer"]["max_steps"]
         generating = isinstance(preset.recipe.layout.workload, presets.Generation)
         result.update(
-            iris_job_id="/tests/native-run",
+            state=state,
+            iris_job_id=f"{coordinator}/training" if coordinator else "/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
-            finished_at=completed_at,
+            finished_at=completed_at if state in {"succeeded", "failed"} else None,
         )
+        if coordinator:
+            launch["run"]["coordinator_iris_job_id"] = coordinator
         result["provenance"].update(
             base_commit="commit-one",
             dirty=False,
             command_line=["unrelated-command", "--preset", "train-long"],
         )
+        set_receipt_fields(native, receipt or {})
         write_receipt(root, native)
         version = gate.config_version(config)
         if control:
@@ -572,6 +702,13 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             dirty=False,
         )
         write_attempt(str(root / "exports"), AttemptRecord(run_id=run_id, attempt_id=attempt, index=identity))
+        if retry_attempt:
+            alternate = deepcopy(launch)
+            alternate["run"]["attempt_id"] = retry_attempt
+            write_attempt(
+                str(root / "exports"),
+                AttemptRecord(run_id=run_id, attempt_id=retry_attempt, config=alternate, index=identity),
+            )
         write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
             root,

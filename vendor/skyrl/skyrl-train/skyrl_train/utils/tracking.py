@@ -16,16 +16,13 @@
 # limitations under the License.
 
 import dataclasses
-import os
-import threading
-from contextlib import contextmanager
 from enum import Enum
 from functools import partial
 from pathlib import Path
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any, Dict, Self
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from uuid import uuid4
 from loguru import logger
 from rigging.secrets import require_secret
@@ -53,25 +50,6 @@ from finestore.store import DataStore
 _WANDB_STEP_METRIC = "trainer/global_step"
 # Bound SDK uploads too: timing out a Ray get alone leaves the primary finish unbounded.
 _WANDB_LOGGER_SHUTDOWN_TIMEOUT = 30
-_RECORDS_WRITE_TIMEOUT = 120
-
-
-@contextmanager
-def records_write_deadline(operation: str) -> Iterator[None]:
-    """Bound synchronous FineStore teardown I/O for this training process."""
-
-    def expire() -> None:
-        logger.error("{} exceeded {}s; exiting the training process", operation, _RECORDS_WRITE_TIMEOUT)
-        os._exit(1)
-
-    watchdog = threading.Timer(_RECORDS_WRITE_TIMEOUT, expire)
-    watchdog.daemon = True
-    watchdog.start()
-    try:
-        yield
-    finally:
-        watchdog.cancel()
-        watchdog.join()
 
 
 @ray.remote
@@ -352,8 +330,7 @@ class _RecordsAdapter:
         self.store.flush()
 
     def finish(self) -> None:
-        with records_write_deadline("Records tracker close"):
-            self.store.close()
+        self.store.close()
 
 
 class ConsoleLogger:

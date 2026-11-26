@@ -174,8 +174,7 @@ def _run_name(
     if control:
         if replicate is None:
             raise ValueError("a control output requires a replicate")
-        prefix = recipe.control_run_name_prefix(table.namespace, preset.name)
-        return f"{prefix}{provenance.tree_hash}-{control}-r{replicate}"
+        return f"checkpoints/{table.namespace}/controls/{preset.name}-{provenance.tree_hash}-{control}-r{replicate}"
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
         name += f"-resume-step-{resume_step}"
@@ -678,10 +677,7 @@ def _watch_publication(
         while True:
             state = parent.state_only()
             for output in watch.outputs:
-                try:
-                    rl_publication.publish_running(output, preset, table, watch.job, watch.service_url, published)
-                except Exception as error:
-                    logger.warning("Running row publication will retry for %s (%s)", output, type(error).__name__)
+                rl_publication.publish_running(output, preset, table, watch.job, watch.service_url, published)
             if is_job_finished(state):
                 break
             if time.monotonic() >= deadline:
@@ -831,24 +827,11 @@ def _submit_from_launcher(
         environment["GIT_COMMIT"] = revision
     if preset.output_ttl_days is not None:
         environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
-    # The coordinator reuses argv. The handoff path belongs to the launcher environment.
+    job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
     submission_path = os.environ.get(rl_publication.CONTROL_SUBMISSION_ENV)
-
-    submit = partial(submit_or_run, module, handles, max_concurrent, environment, argv=argv)
     if submission_path:
-        if not index.is_control or context.params["wait"]:
-            raise click.UsageError("the nightly control submission path requires a detached control run")
-        path = StoragePath(submission_path)
-
-        def record_control_submission(job: JobName) -> None:
-            submission = rl_publication.ControlSubmission(
-                job=str(job), outputs=tuple(native_ids), recorded_at=datetime.now(UTC)
-            )
-            path.write_text(submission.model_dump_json())
-
-        job = submit(before_submit=record_control_submission)
-    else:
-        job = submit()
+        submission = rl_publication.ControlSubmission(job=str(job), outputs=tuple(native_ids))
+        StoragePath(submission_path).write_text(submission.model_dump_json())
     submitted = [
         {
             "name": step.name,

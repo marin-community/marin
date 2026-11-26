@@ -353,24 +353,15 @@ under the preset's output root.
 
 3. The SkyRL nightly workflow on main runs each gated preset with its default inputs. A version
    with fewer than five completed controls gets enough runs to reach five. Otherwise the workflow
-   starts one run per preset. Each workflow submits controls to Iris and observes their startup
-   briefly. Later main workflow runs publish any pending results before filling a preset's
-   remaining slots. Snowball's gated presets use Reno H100s. The Mochi speed and learning presets
-   each use one GB200 rack.
+   starts one run per preset. Later workflow runs publish pending results before refilling. Snowball's
+   gated presets use Reno H100s. Each Mochi attempt uses one GB200 rack, with up to three in flight
+   across presets. Later workflow runs fill the remaining slots.
 
    To refresh selected controls, dispatch the workflow on `main` with `controls=true` and a space-separated
    `presets` list. With repository write access, comment `/rl-controls snowball/learning-medium mochi`
    on a merged pull request to dispatch the same workflow and receive its run link. Use `model` for
    all gated presets of a model, or `model/preset` for one. Every selector must name a gated target.
    The workflow replies with the reason if it refuses a comment.
-
-   Pending submissions are stored at
-   `s3://marin-us-east-08a/marin/ci/rl-controls/pending/<model>-<preset>.json`. If a record is
-   blocking refresh, save a copy and use the workflow's launch log to verify the coordinator and
-   output paths. Wait for any active workflow or coordinator for that preset to finish. For a missing
-   coordinator, wait at least 15 minutes from the recording time and confirm that Iris still cannot
-   find it. Publish any recoverable terminal receipts first. Then delete only that preset's pending
-   object and dispatch a refresh for `model/preset` on `main`.
 
 ## Tasks and evaluation
 

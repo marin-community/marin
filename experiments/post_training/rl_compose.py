@@ -259,10 +259,6 @@ def artifact_prefix(cluster: str) -> str:
     return config["defaults"]["task_env"]["MARIN_PREFIX"]
 
 
-def control_run_name_prefix(namespace: str, preset: str) -> str:
-    return f"checkpoints/{namespace}/controls/{preset}-"
-
-
 def run_prefix(preset: Preset) -> str:
     cluster = preset.recipe.layout.cluster
     prefix = artifact_prefix(cluster)

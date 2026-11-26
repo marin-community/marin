@@ -20,7 +20,6 @@ import ray
 from skyrl_train import trainer as trainer_module
 from skyrl_train.entrypoints import main_base
 from skyrl_train.entrypoints.main_base import BasePPOExp
-from skyrl_train.utils import tracking as tracking_module
 from skyrl_train.utils.tracking import Tracking
 
 
@@ -145,7 +144,7 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
 
 
 @pytest.mark.parametrize("training_fails", [False, True])
-def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path, monkeypatch, training_fails):
+def test_training_exit_renews_watchdog_for_records_and_timing(tmp_path, monkeypatch, training_fails):
     times = iter((100.0, 125.0))
     monkeypatch.setattr(main_base, "time", SimpleNamespace(monotonic=lambda: next(times)))
     failure = RuntimeError("training failed")
@@ -174,8 +173,6 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
     clock = SimpleNamespace(Timer=Timer)
     monkeypatch.setattr(trainer_module, "threading", clock)
     monkeypatch.setattr(trainer_module, "os", SimpleNamespace(_exit=exits.append))
-    monkeypatch.setattr(tracking_module, "threading", clock)
-    monkeypatch.setattr(tracking_module, "os", SimpleNamespace(_exit=exits.append))
 
     trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
     trainer.evaluation_wall_time = 7.0
@@ -186,7 +183,7 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
             super().shutdown(*args, **kwargs)
 
     async def train():
-        trainer._start_exit_watchdog()
+        trainer.start_exit_watchdog()
         asyncio.get_running_loop().set_default_executor(RecordingExecutor())
         if training_fails:
             raise failure
@@ -226,7 +223,7 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
     close = store.close
 
     def close_records():
-        close_exits.append(expire_active_timers())
+        close_exits.append(tuple(timer.armed for timer in timers))
         close()
 
     monkeypatch.setattr(store, "close", close_records)
@@ -238,8 +235,8 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
     else:
         BasePPOExp._run(experiment)
     assert executor_shutdown and all(executor_shutdown)
-    assert close_exits == [(1,)]
-    assert timing_exits == [(1, 1)]
-    assert expire_active_timers() == (1, 1)
+    assert close_exits == [(False, True)]
+    assert timing_exits == [(1,)]
+    assert expire_active_timers() == (1,)
     assert (attempt := read_attempt(str(tmp_path), "native-attempt")) is not None
     assert attempt.elapsed_excluding_eval_seconds == 18.0

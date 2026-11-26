@@ -40,7 +40,7 @@ from marin.rl.skyrl_records import (
     read_stored_skyrl_attempts,
     recorded_launch,
 )
-from pydantic import AwareDatetime, BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.redaction import redact_value
@@ -62,16 +62,12 @@ from experiments.post_training.rl_measurements import (
 
 logger = logging.getLogger(__name__)
 
-
 CONTROL_SUBMISSION_ENV = "MARIN_RL_CONTROL_SUBMISSION"
 
 
 class ControlSubmission(BaseModel, frozen=True):
-    """Pending control outputs saved by the main workflow before Iris submission."""
-
     job: str
     outputs: tuple[str, ...] = Field(min_length=1)
-    recorded_at: AwareDatetime | None = None
 
 
 class PublicationOutcome(BaseModel):
@@ -360,18 +356,19 @@ def publish_running(
     coordinator: str,
     service_url: str | None,
     published: set[tuple[str, str]],
-) -> bool:
-    """Upsert prepared attempts and report whether this output has a visible receipt."""
-    _, stored = read_stored_skyrl_attempts(path)
-    attempts = _coordinator_attempts(stored, coordinator)
-    for attempt in attempts.values():
-        key = (attempt.index_run_id, attempt.attempt_id)
-        if key in published or attempt.native.result.state.is_terminal or attempt.interruption is not None:
-            continue
-        url = publish_result(build_record(path, preset, table=table, attempt=attempt), service_url)
-        published.add(key)
-        click.echo(f"RL progress {url}")
-    return any((attempt.index_run_id, attempt.attempt_id) in published for attempt in attempts.values())
+) -> None:
+    """Upsert the prepared attempt for this coordinator while native work runs."""
+    try:
+        _, stored = read_stored_skyrl_attempts(path)
+        for attempt in _coordinator_attempts(stored, coordinator).values():
+            key = (attempt.index_run_id, attempt.attempt_id)
+            if key in published or attempt.native.result.state.is_terminal or attempt.interruption is not None:
+                continue
+            url = publish_result(build_record(path, preset, table=table, attempt=attempt), service_url)
+            published.add(key)
+            click.echo(f"RL progress {url}")
+    except Exception as error:
+        logger.warning("Running row publication will retry for %s (%s)", path, type(error).__name__)
 
 
 @dataclass(frozen=True)
@@ -433,7 +430,6 @@ def publish_runs(
     interrupted: bool = False,
     submitted_gate: gate.GateAddress | None = None,
     allow_unprepared: bool = False,
-    fail_incomplete_control: bool = False,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     if coordinator is None and issue is not None and (len(outputs) != 1 or attempt_id is None):
@@ -476,8 +472,7 @@ def publish_runs(
         if current_id in attempts:
             result.attempts[path] = attempts[current_id]
         if attempt_id is None and current_id not in attempts:
-            if allow_unprepared and interrupted and not attempts:
-                result.errors.append(f"Coordinator ended before preparing a native attempt at {path}")
+            if allow_unprepared and not attempts:
                 continue
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
@@ -494,16 +489,11 @@ def publish_runs(
                 and receipt.native.config["run"].get("coordinator_iris_job_id") != coordinator
             ):
                 continue
-            nonterminal = not receipt.native.result.state.is_terminal and receipt.interruption is None
-            current_control = allow_unprepared and selected_id == current_id
-            recover_incomplete = (
-                nonterminal and fail_incomplete_control and receipt.index is not None and receipt.index.is_control
-            )
-            if attempt_id is None and nonterminal and not (current_control or recover_incomplete):
+            if attempt_id is None and not receipt.native.result.state.is_terminal and receipt.interruption is None:
                 continue
             destination = (receipt.index_run_id, selected_id)
             try:
-                if nonterminal and not recover_incomplete:
+                if not receipt.native.result.state.is_terminal and receipt.interruption is None:
                     raise ValueError("Publication requires a terminal native attempt")
                 current_report = report if selected_id == current_id else None
                 missing_gate = (
@@ -525,15 +515,13 @@ def publish_runs(
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     gate_failure=missing_gate,
                 )
-                if recover_incomplete:
-                    record = record.model_copy(update={"status": "failed", "failed_facts": ["missing_terminal_receipt"]})
                 if issue is not None:
                     assigned = assign_issue(recorded_launch(receipt).export_root, receipt.run_id, selected_id, issue)
                     record = record.model_copy(update={"issue": assigned})
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if (
-                    (selected_id == current_id or attempt_id is not None or recover_incomplete)
+                    (selected_id == current_id or attempt_id is not None)
                     and record.is_control
                     and record.status != "succeeded"
                 ):

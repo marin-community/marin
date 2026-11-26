@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Iterator, Mapping
-from contextlib import asynccontextmanager, contextmanager, nullcontext
+from collections.abc import Mapping
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import replace
 import io as stdlib_io
 import json
@@ -538,7 +538,7 @@ class RayPPOTrainer:
         """
         # Teacher cleanup can block or resist cancellation. Arm the process guard
         # before any teardown awaits, including executor shutdown after asyncio.run.
-        self._start_exit_watchdog()
+        self.start_exit_watchdog()
         if self._expert_block_sync is not None:
             await self._guarded_async(
                 self._expert_block_sync.close(),
@@ -592,21 +592,16 @@ class RayPPOTrainer:
                 await self._teardown()
                 self._shutdown_complete = True
 
-    @contextmanager
-    def teardown_deadline(self) -> Iterator[None]:
-        """Keep the watchdog armed through event-loop shutdown."""
-        try:
-            yield
-        finally:
-            if watchdog := getattr(self, "_teardown_watchdog", None):
-                watchdog.cancel()
-                watchdog.join()
-                self._teardown_watchdog = None
+    def stop_exit_watchdog(self) -> None:
+        """Cancel the current process deadline and wait for its timer thread."""
+        if timer := getattr(self, "_exit_watchdog", None):
+            timer.cancel()
+            timer.join()
+            self._exit_watchdog = None
 
-    def _start_exit_watchdog(self, timeout: int = 120) -> None:
-        """Start a daemon thread that force-exits the process after *timeout* seconds."""
-        if getattr(self, "_teardown_watchdog", None) is not None:
-            return
+    def start_exit_watchdog(self, timeout: int = 120) -> None:
+        """Replace the process watchdog with a fresh deadline."""
+        self.stop_exit_watchdog()
 
         def _force_exit():
             logger.error(
@@ -614,10 +609,9 @@ class RayPPOTrainer:
             )
             os._exit(1)
 
-        watchdog = threading.Timer(timeout, _force_exit)
-        self._teardown_watchdog = watchdog
-        watchdog.daemon = True
-        watchdog.start()
+        self._exit_watchdog = threading.Timer(timeout, _force_exit)
+        self._exit_watchdog.daemon = True
+        self._exit_watchdog.start()
 
     async def train(self):
         """Run the rollout-buffer training loop, then release every resource it started."""

@@ -644,8 +644,7 @@ class BasePPOExp:
             if distillation_runtime is not None:
                 trainer.configure_distillation(distillation_runtime)
         except BaseException:
-            with trainer.teardown_deadline():
-                asyncio.run(trainer.shutdown())
+            asyncio.run(trainer.shutdown())
             raise
         return trainer
 
@@ -659,8 +658,6 @@ class BasePPOExp:
             return self._run()
 
     def _run(self):
-        from skyrl_train.utils.tracking import records_write_deadline  # noqa: PLC0415
-
         # Force the orchestrator onto CPython's stock asyncio event loop (epoll),
         # NOT uvloop. Ray installs uvloop globally in every worker by default
         # (RAY_USE_UVLOOP defaults True -> default_worker.py:221 try_install_uvloop).
@@ -684,36 +681,38 @@ class BasePPOExp:
         trainer = None
         try:
             with self.get_tracker() as tracker:
-                trainer = self._setup_trainer(tracker)
-                with trainer.teardown_deadline():
-                    try:
-                        asyncio.run(trainer.train())
-                    finally:
+                try:
+                    trainer = self._setup_trainer(tracker)
+                    asyncio.run(trainer.train())
+                finally:
+                    if trainer is not None:
                         try:
                             asyncio.run(trainer.shutdown())
                         except Exception as error:
                             logger.warning("Error shutting down trainer: {}", error)
+                        trainer.start_exit_watchdog()
         finally:
             if trainer is not None:
                 elapsed = time.monotonic() - started - trainer.evaluation_wall_time
                 logger.info("Trainer time excluding evaluation: {:.3f} seconds", elapsed)
                 runtime = self.cfg.get("runtime") or {}
                 try:
-                    with records_write_deadline("Trainer timing write"):
-                        write_attempt(
-                            str(self.cfg.trainer.export_path),
-                            AttemptRecord(
-                                run_id=runtime["run_id"],
-                                attempt_id=runtime["attempt_id"],
-                                elapsed_excluding_eval_seconds=elapsed,
-                            ),
-                        )
+                    write_attempt(
+                        str(self.cfg.trainer.export_path),
+                        AttemptRecord(
+                            run_id=runtime["run_id"],
+                            attempt_id=runtime["attempt_id"],
+                            elapsed_excluding_eval_seconds=elapsed,
+                        ),
+                    )
                 except Exception as error:
                     logger.warning(
                         "Could not store trainer time for attempt {} ({})",
                         runtime.get("attempt_id", "unknown"),
                         type(error).__name__,
                     )
+                finally:
+                    trainer.stop_exit_watchdog()
 
 
 @ray.remote(num_cpus=1, max_retries=0)
