@@ -17,6 +17,16 @@ class Stateful(Protocol):
     def load_state_dict(self, state: dict) -> Any: ...
 
 
+def sizing_replay_routes(batch_size: int, response_tokens: int, layers: int, experts: int, topk: int) -> torch.Tensor:
+    """Fill each token's choices with distinct expert IDs and balance them across tokens."""
+    if topk > experts:
+        raise ValueError("Synthetic replay topk exceeds the number of experts")
+    tokens = torch.arange(batch_size * response_tokens).view(batch_size, response_tokens, 1, 1)
+    layer_ids = torch.arange(layers).view(1, 1, -1, 1)
+    choices = torch.arange(topk).view(1, 1, 1, -1)
+    return ((tokens + layer_ids + choices) % experts).to(torch.int16)
+
+
 def _cpu_snapshot(state: dict) -> dict:
     return tree_map(lambda value: value.detach().cpu().clone() if isinstance(value, torch.Tensor) else copy.deepcopy(value), state)
 
