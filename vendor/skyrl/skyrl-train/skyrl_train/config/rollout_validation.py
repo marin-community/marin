@@ -11,6 +11,7 @@ from skyrl_train.config.sampling import PromptAcquisition
 
 GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
 FAMILY_COLUMN = "family"
+SPARE_PROMPTS_PER_POOL = 1
 
 
 class BatchPolicy(StrEnum):
@@ -51,14 +52,16 @@ def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
 
 
 def minimum_family_pool_sizes(groups_per_family: Mapping[str, int], max_staleness_steps: int) -> dict[str, int]:
-    """Return the number of distinct prompts each family needs across its open batches."""
-    return {family: (max_staleness_steps + 1) * count for family, count in groups_per_family.items()}
+    """Return the minimum distinct prompt count for each family, including one spare."""
+    return {
+        family: (max_staleness_steps + 1) * count + SPARE_PROMPTS_PER_POOL for family, count in groups_per_family.items()
+    }
 
 
 def validate_family_pools(
     groups_per_family: Mapping[str, int], family_counts: Mapping[str | None, int], max_staleness_steps: int
 ) -> None:
-    """Check that every family can supply its full window of distinct groups."""
+    """Check that every family can fill its open batches and keep one spare."""
     if family_counts.get(None, 0) or family_counts.get("", 0):
         raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires a family on every training row")
     if family_counts.keys() != groups_per_family.keys():
@@ -69,7 +72,10 @@ def validate_family_pools(
     for family, needed in minimum_family_pool_sizes(groups_per_family, max_staleness_steps).items():
         available = family_counts[family]
         if available < needed:
-            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires {needed} rows for family {family!r}, found {available}")
+            raise ValueError(
+                f"{GROUPS_PER_FAMILY_KEY} requires {needed} distinct prompts for family {family!r} "
+                f"to fill its open batches and keep one spare, found {available}"
+            )
 
 
 def validate_rollout_launch(

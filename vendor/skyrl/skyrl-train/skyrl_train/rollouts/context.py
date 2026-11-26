@@ -29,6 +29,7 @@ from skyrl_train.adaptive_sampling import AdaptiveSourceOrder
 from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
+    SPARE_PROMPTS_PER_POOL,
     BatchPolicy,
     minimum_family_pool_sizes,
     validate_family_pools,
@@ -412,6 +413,7 @@ class TrainingContext:
                 dataset,
                 order,
                 batch_size=batch_size,
+                minimum_pool_size=buffer_config.max_untrained_groups + SPARE_PROMPTS_PER_POOL,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
                 families=families,

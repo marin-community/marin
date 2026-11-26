@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Submit sized Iris drivers over stable SHA256 proposal-key buckets.
+"""Submit sized Iris drivers over stable SHA256 input-key buckets.
 
 --drivers N partitions 4096 buckets; --driver-range a:b launches only that half-open
 range of drivers. To resize the last quarter of 32 drivers to 16, cancel 24:32 and
@@ -18,7 +18,7 @@ SECRETS = ("CW_KEY_ID", "CW_KEY_SECRET", "GLM_API_KEY", "PARALLEL_API_KEY")
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("proposals", "output", "policy", "job-prefix"):
+    for name in ("inputs", "output", "policy", "job-prefix"):
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--arm", choices=("S", "T"), required=True)
     for name in ("drivers", "concurrency", "cpu"):
@@ -49,7 +49,7 @@ def main() -> None:
         "max-retries": "3",
         "sync-package": "marin-taskforge",
     }
-    driver = {name: str(getattr(args, name)) for name in ("proposals", "output", "policy", "arm", "concurrency")}
+    driver = {name: str(getattr(args, name)) for name in ("inputs", "output", "policy", "arm", "concurrency")}
     driver["buckets"] = "4096"
     if args.ranks:
         driver["ranks"] = args.ranks

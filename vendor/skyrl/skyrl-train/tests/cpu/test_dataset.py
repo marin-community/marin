@@ -227,9 +227,9 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     [
         (None, "requires a family column"),
         ([None] * 4 + ["math"] * 3 + ["agentic"], "requires a family on every training row"),
-        (["math"] * 4 + ["agentic"] * 4, "requires 2 rows for family 'agentic', found 1"),
+        (["math"] * 3 + ["agentic"] * 5, "requires 3 distinct prompts for family 'agentic'"),
     ],
-    ids=["missing-column", "null-before-named", "undersized-after-filtering"],
+    ids=["missing-column", "null-before-named", "no-spare-after-filtering"],
 )
 def test_training_context_checks_family_pools_on_prepared_rows(tmp_path, monkeypatch, families, error):
     monkeypatch.setattr("skyrl_train.dataset.dataset.PARALLEL_DATASET_MIN_ROWS", 4)

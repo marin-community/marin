@@ -1077,15 +1077,15 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
 @pytest.mark.parametrize(
     ("remaining_families", "error"),
     [
-        (["code"] * 7, "requires 8 rows for family 'code', found 7"),
-        (["code"] * 8 + ["other"], r"names .* but training rows have families .*'other'"),
-        (["code"] * 8, None),
+        (["code"] * 8, "requires 9 distinct prompts for family 'code'.*found 8"),
+        (["code"] * 9 + ["other"], r"names .* but training rows have families .*'other'"),
+        (["code"] * 9, None),
     ],
-    ids=["insufficient", "unlisted-family", "valid-pool"],
+    ids=["no-spare", "unlisted-family", "pool-with-spare"],
 )
 def test_launch_preflights_groups_per_family(tmp_path, remaining_families, error):
     data_path = tmp_path / "tasks.parquet"
-    pq.write_table(pa.table({"family": ["math"] * 8 + remaining_families}), data_path)
+    pq.write_table(pa.table({"family": ["math"] * 9 + remaining_families}), data_path)
     raw = raw_launch_config()
     raw["inputs"]["data_kind"] = "parquet"
     raw["inputs"]["train_data"] = [

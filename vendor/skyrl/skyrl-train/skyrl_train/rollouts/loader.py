@@ -146,8 +146,8 @@ class PromptLoader:
     A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
     every sample, is quarantined: the loader does not offer it for the next ``QUARANTINE_STEPS`` training steps, then
     offers it again with a fresh count. The same rejections follow an infrastructure failure, so a prompt must be
-    able to return. Quarantine keeps enough prompts for one batch, or enough in each family for every open batch
-    when batches specify groups per family. Family-conditioned learned orders checkpoint availability and retry budgets.
+    able to return. Quarantine keeps enough eligible prompts to fill the open batches and one spare per pool.
+    Family-conditioned learned orders and source passes checkpoint availability and retry budgets.
 
     The sequence never ends; the trainer decides when to stop.
     """
@@ -158,6 +158,7 @@ class PromptLoader:
         order: PromptOrder,
         *,
         batch_size: int,
+        minimum_pool_size: int,
         max_stale_retries: int,
         max_unusable_groups: int,
         families: Mapping[str, str] | None = None,
@@ -170,10 +171,10 @@ class PromptLoader:
             raise ValueError(f"max_unusable_groups must be positive, got {max_unusable_groups}")
         self._uid_rows = {dataset.uid(index): index for index in reversed(range(len(dataset)))}
         self._uid_count = len(self._uid_rows)
-        if self._uid_count < batch_size:
+        if self._uid_count < minimum_pool_size:
             raise ValueError(
-                f"the training dataset has {self._uid_count} distinct prompt uids, fewer than one batch of "
-                f"{batch_size}; a batch trains each uid at most once"
+                f"the training dataset has {self._uid_count} distinct prompts and needs {minimum_pool_size} "
+                "to fill the open batches and keep one spare"
             )
         self._dataset = dataset
         self._families = dict(families or {})
@@ -190,7 +191,7 @@ class PromptLoader:
             if not isinstance(order, SeededPasses):
                 raise ValueError("family prompt pools require seeded passes or a family-conditioned order")
             self._family_orders = {family: order.for_pool(len(rows)) for family, rows in self._family_rows.items()}
-        self._batch_size = batch_size
+        self._minimum_pool_size = minimum_pool_size
         self._draw_limit = 2 * batch_size
         self._max_stale_retries = max_stale_retries
         self._max_unusable_groups = max_unusable_groups
@@ -286,16 +287,18 @@ class PromptLoader:
         family = self._families.get(uid)
         if family is not None and family in self._family_minimums:
             minimum = self._family_minimums[family]
-            usable = len(self._family_rows[family]) - sum(self._families.get(uid) == family for uid in self._quarantined)
+            eligible = len(self._family_rows[family]) - sum(
+                self._families.get(uid) == family for uid in self._quarantined
+            )
             scope = f" in family {family!r}"
         else:
-            minimum = self._batch_size
-            usable = self._uid_count - len(self._quarantined)
+            minimum = self._minimum_pool_size
+            eligible = self._uid_count - len(self._quarantined)
             scope = ""
-        if usable <= minimum:
+        if eligible <= minimum:
             logger.warning(
                 "Prompt {} produced {} unusable groups in a row (last: {}) and stays in rotation: "
-                "requires {} usable prompts{}",
+                "requires {} eligible prompts{}",
                 self._log_name(uid),
                 count,
                 disposition,
@@ -305,12 +308,13 @@ class PromptLoader:
             return
         self._quarantined[uid] = self._step + QUARANTINE_STEPS
         logger.warning(
-            "Quarantined prompt {} for {} steps after {} unusable groups in a row (last: {}); {} usable prompts remain{}",
+            "Quarantined prompt {} for {} steps after {} unusable groups in a row (last: {}). "
+            "{} eligible prompts remain{}",
             self._log_name(uid),
             QUARANTINE_STEPS,
             count,
             disposition,
-            usable - 1,
+            eligible - 1,
             scope,
         )
 

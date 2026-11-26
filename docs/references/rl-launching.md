@@ -291,11 +291,14 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+A rollout window holds `max_staleness_steps + 1` batches. The training pool needs a distinct
+prompt for each group slot in the window and one spare after dataset preparation.
+
 Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
 each training batch. Each Parquet training row supplies its `family`. The counts must sum to
 `trainer.train_batch_size`. Use `batch_policy: full_batch`.
-Each family needs its group count times `max_staleness_steps + 1` usable rows so that every batch in
-the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
+Each family needs one distinct usable prompt per open group slot in that family and one spare.
+A rejected group releases a slot in its own family.
 Leave `data.sampling.kind` unset for seeded passes within each family. A `prompt-thompson-*` order
 ranks eligible prompts within the leased family and learns from completed optimizer steps. The
 within-source variant allocates each family's draw window using the reference row weights in that

@@ -13,12 +13,15 @@ import httpx
 import pytest
 from experiments.taskforge import run_taskforge
 from iris.cluster.types import JobName
+from rolloutengine.test_support import arithmetic_task
 from shellbox.backends.iris.machine import IrisMachineFactory
+from taskcompendium.models import GraderMachine, ScriptGrader, StdoutReward
 
 from taskforge import wiring
-from taskforge.driver import eligible, inputs, proposal_bucket, proposal_key
+from taskforge.driver import eligible, input_bucket, input_key, inputs, run_policy, seed, source_images
+from taskforge.lowering import requirements
 from taskforge.model.proposal import Environment, TaskProposal, Verification
-from taskforge.policy import load_policy
+from taskforge.policy import GRADER_BASE_IMAGE, load_policy
 from taskforge.policy.defaults import DEFAULTS_DIR
 from taskforge.resources.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 
@@ -51,7 +54,7 @@ def test_manifest_selects_ranks_and_path_list_preserves_output_identity(tmp_path
         )
     )
     assert inputs(str(sample), (0, 2)) == (paths[0], paths[2])
-    assert str(proposal_key(paths[0])) == "d02.swe.repair/15"
+    assert str(input_key(paths[0])) == "d02.swe.repair/15"
     manifest = tmp_path / "proposals.txt"
     manifest.write_text("\n".join(paths) + "\n")
     assert inputs(str(manifest)) == paths
@@ -60,6 +63,17 @@ def test_manifest_selects_ranks_and_path_list_preserves_output_identity(tmp_path
     manifest.write_text(f"{paths[0]}\n{paths[0]}\n")
     with pytest.raises(ValueError, match="duplicate output"):
         inputs(str(manifest))
+
+
+def test_prefix_lists_proposals_and_source_tasks_under_distinct_identities(tmp_path: Path) -> None:
+    run = tmp_path / "swe-rebench"
+    run.mkdir()
+    for name in ("slot-1.proposal.json", "astropy-1.task.json", "notes.json"):
+        (run / name).write_text("{}")
+    paths = inputs(str(run))
+    assert [Path(path).name for path in paths] == ["astropy-1.task.json", "slot-1.proposal.json"]
+    assert [str(input_key(path)) for path in paths] == ["swe-rebench/astropy-1", "swe-rebench/1"]
+    assert str(input_key("s3://bucket/run/slot-1.task.json")) == "run/slot-1", "a source task keeps its whole name"
 
 
 def test_empty_prefix_fails_instead_of_reporting_a_successful_empty_run(tmp_path: Path) -> None:
@@ -75,7 +89,7 @@ def test_launcher_passes_secrets_by_reference_only(monkeypatch: pytest.MonkeyPat
     commands: list[list[str]] = []
     monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
     argv = ["launcher", "--arm", "S", "--drivers", "2", "--concurrency", "4", "--cpu", "8"]
-    argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
+    argv += [item for name in ("inputs", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
     monkeypatch.setattr(sys, "argv", argv)
     run_taskforge.main()
     assert len(commands) == 2
@@ -94,7 +108,7 @@ def test_launcher_bucket_coverage(monkeypatch: pytest.MonkeyPatch, drivers: int,
     commands: list[list[str]] = []
     monkeypatch.setattr(run_taskforge.subprocess, "run", lambda command, **_: commands.append(command))
     argv = ["launcher", "--arm", "S", "--drivers", str(drivers), "--concurrency", "4", "--cpu", "8"]
-    argv += [item for name in ("proposals", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
+    argv += [item for name in ("inputs", "output", "policy", "job-prefix") for item in (f"--{name}", "test")]
     monkeypatch.setattr(sys, "argv", argv + (["--driver-range", span] if span else []))
     run_taskforge.main()
     ranges = [tuple(map(int, command[command.index("--bucket-range") + 1].split(":"))) for command in commands]
@@ -104,8 +118,8 @@ def test_launcher_bucket_coverage(monkeypatch: pytest.MonkeyPatch, drivers: int,
     assert max(end - start for start, end in ranges) - min(end - start for start, end in ranges) <= 1
     assert (
         3998
-        == proposal_bucket("s3://old/cap/slot-8.proposal.json", 4096)
-        == proposal_bucket("s3://new/prefix/cap/slot-8.proposal.json", 4096)
+        == input_bucket("s3://old/cap/slot-8.proposal.json", 4096)
+        == input_bucket("s3://new/prefix/cap/slot-8.proposal.json", 4096)
     )
 
 
@@ -168,3 +182,38 @@ def test_relay_reresolves_by_job_and_model_without_exposing_token(monkeypatch: p
         wiring.endpoint_source("http://fixed/v1", "/user/relay", "secret-token", "glm-5.3", pool)
     with pytest.raises(ValueError, match="exactly one"):
         wiring.endpoint_source(None, None, "secret-token", "glm-5.3", pool)
+
+
+def test_source_images_are_the_source_tasks_own_task_and_grader_images(tmp_path: Path) -> None:
+    task_image = "ghcr.io/example/swe-task@sha256:" + "a" * 64
+    grader_image = "ghcr.io/example/swe-grader@sha256:" + "b" * 64
+    grader = ScriptGrader(
+        argv=("bash", "/tests/test.sh"),
+        reward=StdoutReward(),
+        placement=GraderMachine(environment=requirements(image=grader_image, workdir="/testbed")),
+        answer_path=None,
+        timeout=600,
+    )
+    policy = load_policy(DEFAULTS_DIR)
+    for name, grading, expected in (
+        ("separate", grader, (task_image, grader_image)),
+        (
+            "pinned",
+            grader.model_copy(update={"placement": GraderMachine(environment=requirements(image=GRADER_BASE_IMAGE))}),
+            (task_image, GRADER_BASE_IMAGE),
+        ),
+    ):
+        path = tmp_path / f"{name}.task.json"
+        task = arithmetic_task(
+            environment_requirements=requirements(image=task_image, workdir="/testbed"), grader=grading
+        )
+        path.write_text(task.model_dump_json())
+        workpiece = seed(str(path), policy)
+        assert workpiece is not None and source_images(workpiece) == tuple(sorted(expected))
+
+
+def test_policy_overlay_may_not_set_the_driver_owned_source_images(tmp_path: Path) -> None:
+    overlay = tmp_path / "policy.json"
+    overlay.write_text(json.dumps({"sandbox.source_images": ["registry.example/any@sha256:" + "e" * 64]}))
+    with pytest.raises(ValueError, match=r"sets sandbox\.source_images"):
+        run_policy(str(overlay))
