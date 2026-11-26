@@ -26,6 +26,7 @@ from experiments.post_training.task_curation.datasets import (
     nemo_structured,
     qa_abstention_admitted,
     repair_releases,
+    s1_deepresearch_admitted,
     structure_closure,
     tasktrove_structured_native,
     terminus_pivot,
@@ -219,6 +220,7 @@ R41_PENDING_SOURCE_IDS = (
         "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
         "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
         "Nvidia:Nemotron-RL-QA-Abstention-v1",
+        "ScienceOne:S1-DeepResearch-15k",
         "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
         # The native TaskTrove structured-output cohort qualified after the R40 freeze.
@@ -246,6 +248,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *inverse_ifeval_admitted.sources(),
     *qa_abstention_admitted.sources(),
     *edge_websearch_admitted.sources(),
+    *s1_deepresearch_admitted.sources(),
     *freeform_formatting_admitted.sources(),
     *citation_formatting_admitted.sources(),
     *(
@@ -334,6 +337,8 @@ def configured_sources() -> list[RlDataSource]:
         *inverse_ifeval_admitted.sources(),
         *qa_abstention_admitted.sources(),
         *edge_websearch_admitted.sources(),
+        *s1_deepresearch_admitted.sources(),
+        *s1_deepresearch_admitted.sources(),
         *freeform_formatting_admitted.sources(),
         *citation_formatting_admitted.sources(),
         *freeform_formatting_admitted.sources(),

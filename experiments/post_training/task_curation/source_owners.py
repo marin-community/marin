@@ -297,6 +297,10 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
         note="admitted R41 intake; surfaces at the load",
     ),
+    "ScienceOne:S1-DeepResearch-15k": SourceOwner(
+        owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+        note="admitted R41 intake; surfaces at the load",
+    ),
     "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1": SourceOwner(
         owner="ingest B · OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
         note="admitted R41 intake; surfaces at the load",

@@ -59,6 +59,7 @@
     "Nvidia:Nemotron-RL-QA-Abstention-v1",
     "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
     "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
-    "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1"
+    "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
+    "ScienceOne:S1-DeepResearch-15k"
   ]
 }
