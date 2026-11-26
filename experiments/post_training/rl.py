@@ -946,6 +946,10 @@ def _run_command(
         rl_handles = handles[:count]
         if options["through"] == "sft":
             execution = context.meta["sft_execution"]
+            if get_job_info() is not None:
+                validate_coordinator_graph(handles, execution=execution)
+                build_artifacts(*handles, max_concurrent=max_concurrent)
+                return
             environment = dict(os.environ)
             if revision := context.meta.get("sft_source_revision"):
                 environment["GIT_COMMIT"] = revision

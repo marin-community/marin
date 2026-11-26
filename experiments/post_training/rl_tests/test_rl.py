@@ -1671,7 +1671,6 @@ def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
     monkeypatch.setenv("MARIN_PREFIX", SFT_ARM_TEST_PREFIX)
     fake_s3_checkpoint(monkeypatch, SFT_ARM_TEST_PREFIX, tmp_path / "cloud")
     monkeypatch.setattr(snowball, "read_skyrl_attempt", lambda _path: None)
-    monkeypatch.setattr(snowball, "read_skyrl_metrics", lambda _path: {})
     monkeypatch.setattr(recipe, "artifact_prefix", lambda _cluster: SFT_ARM_TEST_PREFIX)
     sft = mochi_sft_presets["periodic"] if model == "mochi" else MIXTURE_262K_32NODE
     table = MOCHI if model == "mochi" else snowball_model.SNOWBALL
@@ -1757,7 +1756,6 @@ def test_sft_only_arm_exports_without_starting_rl(tmp_path, monkeypatch, selecti
     fake_s3_checkpoint(monkeypatch, SFT_ARM_TEST_PREFIX, tmp_path / "cloud")
     monkeypatch.setattr(snowball, "read_skyrl_attempt", lambda _path: None)
     monkeypatch.setattr(snowball, "read_stored_skyrl_attempt", lambda _path: None)
-    monkeypatch.setattr(snowball, "read_skyrl_metrics", lambda _path: {})
     monkeypatch.setattr(recipe, "artifact_prefix", lambda _cluster: SFT_ARM_TEST_PREFIX)
     tokenizer = MIXTURE_262K_32NODE.recipe.model.tokenizer_cache_key()
     (tmp_path / "data.json").write_text(json.dumps(draccus.encode(LmDataConfig(tokenizer=tokenizer))))
