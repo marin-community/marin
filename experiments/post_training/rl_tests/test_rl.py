@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-import importlib.util
 import json
-import runpy
 import shutil
 import subprocess
 import sys
 from copy import deepcopy
 from dataclasses import replace
+from importlib.util import find_spec
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse, urlsplit
@@ -43,6 +43,7 @@ from experiments.post_training.mochi_assets import (
     MOCHI_TOKENIZER_URI,
 )
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
@@ -54,23 +55,18 @@ from experiments.post_training.rl_tests.fixtures import (
     fake_publication,
     fake_s3,
     fake_s3_checkpoint,
+    printed_status,
     replace_evaluations,
     write_published_artifact,
     write_receipt,
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import native_json
+from experiments.post_training.skyrl_test_support import run_native_test
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
-
-
-def printed_status(output):
-    # CliRunner merges stderr into result.output; status is on result.stdout.
-    marker = output.rfind("\npreset:")
-    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
 def test_preset_table_rejects_duplicate_names():
@@ -105,7 +101,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
         if preset.name == "eval-short":
-            status = printed_status(result.stdout.partition("\nStepSpec(")[0])
+            status = printed_status(result.stdout)
             assert status["inputs"]["model"].partition(":")[0] == initializer
             assert status["updates"] == 0 and status["guards"] == []
         elif preset.name in ("speed-short", "data-short"):
@@ -120,6 +116,14 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
 
     # Published train-long controls still contain defaults removed by the TaskSpec migration.
     planned = configs["train-long"]
+    trainer = planned["skyrl"]["trainer"]
+    assert trainer["use_sample_packing"]
+    for role in ("policy", "ref"):
+        geometry = trainer[role]["megatron_config"]
+        assert geometry["context_parallel_size"] == 2
+        assert geometry["transformer_config_kwargs"]["cp_comm_type"] == "all_gather"
+    for name in ("train-medium-tools", "train-long-checkpoint-eval"):
+        assert configs[name]["skyrl"]["trainer"]["policy"]["megatron_config"]["context_parallel_size"] == 1
     recorded = deepcopy(planned)
     recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])
     del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
@@ -172,13 +176,13 @@ def test_plan_rejects_gated_preset_without_control_pin(selection):
             "--plan",
             ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
             "trainer.train_batch_size=2",
-            "lcm_dp_size=16",
+            "lcm_dp_size=8",
         ),
         (
             "--run",
             ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
             "trainer.train_batch_size=2",
-            "lcm_dp_size=16",
+            "lcm_dp_size=8",
         ),
     ],
     ids=["plan-batch-size", "run-batch-size"],
@@ -402,48 +406,7 @@ def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path
     step = recipe.run_step(preset, spec)
     path = tmp_path / "checkpoint-evaluation.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
-    results = native_json()(
-        """
-import asyncio, json, sys
-from pathlib import Path
-from types import SimpleNamespace
-from cloud.iris.launch_config import load_launch_config
-from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
-from skyrl_train.callbacks.builtin import create_callbacks_from_config
-
-path = Path(sys.argv[1])
-config = load_launch_config(path)
-assert not config.skyrl.generator.enable_http_endpoint
-state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
-scenarios = ((100, 99, 30, 27), (100, 98, 30, 30), (100, 100, 30, 26),
-             (100, 100, 29, 29), (99, 99, 31, 30))
-results = []
-for index, (primary_attempted, primary_scored, bfcl_attempted, bfcl_scored) in enumerate(scenarios):
-    directory = path.parent / f"coverage-{index}"
-    config.skyrl.trainer.ckpt_path = str(directory)
-    config.skyrl.trainer.export_path = str(directory / "exports")
-    metrics = {
-        "eval/all/num_attempted": primary_attempted,
-        "eval/all/num_scored": primary_scored,
-        "eval/all/avg_verifier_score": 0.25,
-    }
-    for name, attempted, scored, average in (
-        ("bfcl_parity", bfcl_attempted, bfcl_scored, 1.0),
-        ("swebench_verified", 30, 28, 0.5),
-        ("openthoughts_tblite", 30, 30, 0.0),
-    ):
-        prefix = f"eval/{name}/all/"
-        metrics.update({prefix + "num_attempted": attempted, prefix + "num_scored": scored,
-                        prefix + "avg_verifier_score": average})
-    handler = CallbackHandler(create_callbacks_from_config(config.skyrl))
-    asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
-                                         trainer=SimpleNamespace(cfg=config.skyrl)))
-    record = directory / "best_checkpoint.json"
-    results.append(json.loads(record.read_text()) if record.exists() else None)
-print(json.dumps(results))
-""",
-        [str(path)],
-    )
+    results = run_native_test("cloud.iris.tests.native_checkpoint_coverage", [str(path)])
     chosen, *rejected = results
     assert chosen["attempted"] == 190
     assert chosen["scored"] == 184
@@ -582,11 +545,10 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
     task_set_name = snowball_model.DEFAULT_EVAL_LITE_NAME
     task_set_version = snowball_model.DEFAULT_EVAL_LITE_VERSION
-    new_task_set = tmp_path / task_set_name / "2026.11.05"
+    original_task_set = Path(recipe.selection_artifact(f"{task_set_name}@{task_set_version}").path())
+    new_task_set = Path(recipe.selection_artifact(f"{task_set_name}@2026.11.05").path())
     new_task_set.mkdir(parents=True)
-    (new_task_set / "summary.json").write_bytes(
-        (tmp_path / task_set_name / task_set_version / "summary.json").read_bytes()
-    )
+    (new_task_set / "summary.json").write_bytes((original_task_set / "summary.json").read_bytes())
     changed_task_set = replace(
         learning,
         held_out_tasks=f"{task_set_name}@2026.11.05",
@@ -888,6 +850,7 @@ def test_submission_exit_codes_and_publication_retries(
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
     if "candidate-compose" in case:
         assert "native configuration cannot be composed:" in result.output and "gspo" in result.output.lower()
+        assert "Compose document 1/1" in result.output
     if case == "unexpected":
         assert "KeyError" in result.output and "grader_kind_counts" in result.output
     if case == "child":
@@ -1024,14 +987,15 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         assert "use the preset's declared owned keys" in result.output
 
 
+@pytest.mark.parametrize("recorded_runs", [2], indirect=True, ids=["one-task-per-family"])
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
     preset = snowball_model.SNOWBALL.by_name["train-long"]
     preset = replace(
         preset,
-        checkpoints="best",
-        export="best",
+        checkpoint_every=2,
+        evaluations=(replace(preset.evaluations[0], every=2),),
         recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, host_disk="3TB")),
     )
     table = preset_table(preset)
@@ -1046,38 +1010,44 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
+    published_selections = Path(recipe.SELECTION_ROOT)
+
+    def selection_files():
+        return {
+            path: (path.stat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+            for path in (published_selections, *published_selections.rglob("*"))
+        }
+
+    before_launch = selection_files()
     built = snowball.build_experiment(
-        preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
+        preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
     )
     source = recorded_runs(preset.name, built.runs[0].name, fingerprint=built.runs[0].fingerprint(), inputs=built.inputs)
-    _json(source / "exports/best_checkpoint.json", {"step": 10})
+    _json(source / "exports/best_checkpoint.json", {"step": 2})
     staged = source.with_name("before-native-execution")
     source.rename(staged)
     native_calls = []
 
+    compose = gate.compose_configs
+
     def native(command, *, env_vars=None):
-        inspection = native_json()(
-            "import json,sys\nfrom cloud.iris import launch\n"
-            "args=launch.create_parser().parse_args(sys.argv[1:])\n"
-            "config=launch.load_launch_config(args.config)\n"
-            "print(json.dumps({'forward_env':args.forward_env,'disk':config.iris.allocation.disk,"
-            "'tokenizer':config.inputs.model.tokenizer_uri,'model':config.run.model,"
-            "'attempt':config.run.attempt_id,'export':config.artifacts.export_root}))\n",
-            command[command.index("marinskyrl") + 1 :],
-        )
-        assert (inspection["forward_env"], inspection["disk"], inspection["tokenizer"]) == (
+        (config,) = compose([command[command.index("--config") + 1]])
+        forward_env = [value for flag, value in pairwise(command) if flag == "--forward-env"]
+        assert (forward_env, config["iris"]["allocation"]["disk"], config["inputs"]["model"]["tokenizer_uri"]) == (
             ["HF_TEST_KEY"],
             "3TB",
             "tests/python-tokenizer",
         )
-        assert read_attempt(inspection["export"], inspection["attempt"]) is None
+        run = config["run"]
+        export_root = config["artifacts"]["export_root"]
+        assert read_attempt(export_root, run["attempt_id"]) is None
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
         stored = json.loads((source / "terminal.json").read_text())
-        stored["config"]["run"]["model"] = inspection["model"]
+        stored["config"]["run"]["model"] = run["model"]
         write_receipt(source, stored)
         write_attempt(
-            inspection["export"],
+            export_root,
             AttemptRecord(
                 run_id=stored["config"]["run"]["id"],
                 attempt_id=stored["config"]["run"]["attempt_id"],
@@ -1086,7 +1056,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         response = stored["result"]
         response["model"] = dict(
             policy_export_uri=str(source / "policy"),
-            global_step=12,
+            global_step=3,
             tokenizer_uri="tests/python-tokenizer",
             tokenizer_revision="python-tokenizer-revision",
             checkpoint_root=str(source / "checkpoints"),
@@ -1110,10 +1080,19 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "--max-concurrent",
         "3",
         "--set",
-        "trainer.max_steps=12",
+        "trainer.max_steps=3",
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
-    mode, coordinator_module = "valid", "first_model_entry"
+    first_entry = "experiments.post_training.snowball_rl"
+    second_entry = "experiments.post_training.mochi_rl"
+    mode, coordinator_module = "valid", first_entry
+    entries = {}
+
+    def invoke_entry(name, patch):
+        module_spec = find_spec(name)
+        assert module_spec is not None and module_spec.loader is not None
+        patch.setattr(sys.modules["__main__"], "__spec__", module_spec)
+        return model_entry_fixture.main(entries[name], arguments)
 
     def submit(**kwargs):
         assert kwargs["entrypoint"].command == ["python", "-m", coordinator_module, *arguments]
@@ -1127,15 +1106,14 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             for key, value in environment.items():
                 child.setenv(key, value)
             child.setenv("IRIS_TASK_ID", "/test-user/train-coordinator/0")
-            child.setattr(sys, "argv", [coordinator_module, *arguments])
             child.setattr(
                 "experiments.post_training.rl_publication.publish_result",
                 lambda *args: pytest.fail("Coordinator contacted Marina"),
             )
             info = JobInfo(task_id=JobName.from_wire("/test-user/train-coordinator/0"))
-            with iris_ctx_scope(IrisContext.from_job_info(info)), pytest.raises(SystemExit) as completed:
-                runpy.run_module(coordinator_module, run_name="__main__", alter_sys=True)
-            assert completed.value.code == {"valid": 0, "failed-following": 3}.get(mode, 4)
+            with iris_ctx_scope(IrisContext.from_job_info(info)):
+                code = invoke_entry(coordinator_module, child)
+            assert code == {"valid": 0, "failed-following": 3}.get(mode, 4)
         set_job_info(None)
         return SimpleNamespace(job_id=job)
 
@@ -1150,50 +1128,23 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setattr(SkyRLRun, "raw_load", lambda path: raw_load(str(policy_path) if path == policy_uri else path))
 
     def module(
-        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, following="None"
+        name, *, entry_module=None, use_init=True, forward_env=("HF_TEST_KEY",), policy_forward=None, following=False
     ):
-        path = tmp_path / (name + ".py")
-        dependency = ""
-        if policy_forward is not None:
-            dependency = (
-                f"producer=rl.build_experiment(snowball_rl.SNOWBALL.by_name['train-long'],table=snowball_rl.SNOWBALL,"
-                f"settings=('trainer.max_steps=2',),forward_env={policy_forward!r}).runs[0]\n"
-                f"result=SkyRLRun.raw_load({str(source)!r}).model_copy(update={{'hf_model_uri':'s3://marin-test/models/python-init'}})\n"
-                f"directory=Path({str(policy_path)!r});directory.mkdir(parents=True,exist_ok=True)\n"
-                "record=ArtifactRecord(name=producer.name,version=producer.version,fingerprint=producer.fingerprint(),"
-                "result_type=result_type_name(SkyRLRun),result=result.result_payload())\n"
-                "(directory/RECORD_FILENAME).write_text(record.model_dump_json())\n"
-                f"init=SkyRLPolicyModel(replace(producer,override_path={policy_uri!r}))\n"
-            )
-        path.write_text(
-            "from dataclasses import replace\nfrom pathlib import Path\n"
-            "from marin.execution.lazy import ArtifactStep, apply\n"
-            "from marin.execution.artifact import Artifact,ArtifactRecord,RECORD_FILENAME,result_type_name\n"
-            "from marin.rl.skyrl import ArtifactHfModel,SkyRLRun,SkyRLPolicyModel\n"
-            "from experiments.post_training import rl, snowball_rl\n"
-            "step=ArtifactStep.adopt('tests/python-init','2026.11.17','s3://marin-test/models/python-init',kind=Artifact)\n"
-            "init=ArtifactHfModel(step,'tests/python-tokenizer','python-tokenizer-revision',relative_path='')\n"
-            "def fail_following():\n    raise RuntimeError('following stage failed')\n"
-            + dependency
-            + f"following={following}\n"
-            "table=snowball_rl.SNOWBALL\n"
-            "if following is not None:\n"
-            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
-            + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
-            f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
-        )
-        # Same-size rewrites within one timestamp tick must load the new module.
-        Path(importlib.util.cache_from_source(str(path))).unlink(missing_ok=True)
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None
-        monkeypatch.setitem(sys.modules, name, importlib.util.module_from_spec(spec))
+        entries[name] = {
+            "entry_module": entry_module,
+            "use_init": use_init,
+            "policy_forward": policy_forward,
+            "forward_env": forward_env,
+            "source": str(source),
+            "policy_path": str(policy_path),
+            "policy_uri": policy_uri,
+            "following": following,
+        }
 
     @click.command()
     def entry():
-        monkeypatch.setattr(sys, "argv", ["first_model_entry", *arguments])
-        with pytest.raises(SystemExit) as completed:
-            runpy.run_module("first_model_entry", run_name="__main__", alter_sys=True)
-        raise click.exceptions.Exit(completed.value.code)
+        with monkeypatch.context() as driver:
+            raise click.exceptions.Exit(invoke_entry(first_entry, driver))
 
     def invoke_with_preflight_stub(command, args=()):
         # Native preflight has its own tests. Use the real composer to create
@@ -1204,17 +1155,18 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             )
             return CliRunner().invoke(command, args)
 
-    for override in (None, "second_model_entry"):
-        coordinator_module = override or "first_model_entry"
-        module("first_model_entry", entry_module=override)
+    for override in (None, second_entry):
+        coordinator_module = override or first_entry
+        module(first_entry, entry_module=override)
         if override is not None:
             module(override)
         result = invoke_with_preflight_stub(entry)
         assert result.exit_code == 0, (result.output, result.exception)
-        assert "best_checkpoint_step: 10" in result.output and f"{preset.evaluations[0].name}@12/scored" in result.output
+        assert "best_checkpoint_step: 2" in result.output and f"{preset.evaluations[0].name}@3/scored" in result.output
         assert "http://127.0.0.1:55777/" in result.output and "test-initializer-credential" not in result.output
     assert len(native_calls) == 1
-    assert published[-1].optimizer_steps == published[-1].planned_updates == 12
+    assert selection_files() == before_launch
+    assert published[-1].optimizer_steps == published[-1].planned_updates == 3
     assert (published[-1].model, published[-1].issue) == ("snowball", None)
 
     for mode in (
@@ -1223,9 +1175,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "overlapping-environment-mismatch",
         "dependency-environment-mismatch",
     ):
-        coordinator_module = "second_model_entry"
+        coordinator_module = second_entry
         module(
-            "first_model_entry",
+            first_entry,
             entry_module=coordinator_module,
             forward_env=("WANDB_API_KEY",) if mode == "overlapping-environment-mismatch" else ("HF_TEST_KEY",),
             policy_forward=("WANDB_API_KEY",) if mode == "dependency-environment-mismatch" else None,
@@ -1243,8 +1195,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         )
         assert "test-initializer-credential" not in result.output and len(native_calls) == 1
 
-    mode, coordinator_module = "failed-following", "first_model_entry"
-    module(coordinator_module, following="lambda _: apply('tests/following', fail_following, version='2026.11.20.1')")
+    mode, coordinator_module = "failed-following", first_entry
+    module(coordinator_module, following=True)
     result = invoke_with_preflight_stub(entry)
     assert result.exit_code == 3 and "post_run_error:" in result.output, (result.output, result.exception)
     assert "RL has a committed result" in result.output
@@ -1259,7 +1211,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
                 }
             )
             for row in evaluations
-            if row.step != 10
+            if row.step != 2
         ],
     )
     (source / "exports/best_checkpoint.json").unlink()
@@ -1267,7 +1219,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         receipt["result"]["model"] = None
     step = built.runs[0]
     write_skyrl_run_record(source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None)
-    planning_args = ["--preset", preset.name, "--version", preset.revision, "--set", "trainer.max_steps=12"]
+    planning_args = ["--preset", preset.name, "--version", preset.revision, "--set", "trainer.max_steps=3"]
     result = invoke_with_preflight_stub(
         snowball.command(table, argv=tuple(planning_args), init=initializer, forward_env=("HF_TEST_KEY",)),
         planning_args,
@@ -1276,10 +1228,10 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     [status] = printed_status(result.stdout)["runs"]
     assert status["best_checkpoint_step"] == "none eligible"
     facts = {fact["name"]: fact for fact in status["evaluation_invariants"]}
-    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
     assert not facts[f"{preset.evaluations[0].name}/task_coverage"]["holds"]
 
-    mode, coordinator_module = "valid", "first_model_entry"
+    mode, coordinator_module = "valid", first_entry
     module(coordinator_module)
     resumed = invoke_with_preflight_stub(entry)
     assert resumed.exit_code == 1 and len(native_calls) == 1, (resumed.output, resumed.exception)
@@ -1289,7 +1241,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
 
     live_preset = replace(preset, checkpoints="none", checkpoint_every=None, export="none")
     live = snowball.build_experiment(
-        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=12",)
+        live_preset, table=table, init=initializer, forward_env=("HF_TEST_KEY",), settings=("trainer.max_steps=3",)
     )
     assert live.runs[0].name != built.runs[0].name
     with monkeypatch.context() as live_record:
@@ -1303,10 +1255,10 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     facts = {
         fact["name"]: fact for row in printed_status(result.stdout)["runs"] for fact in row["evaluation_invariants"]
     }
-    assert not facts[f"{preset.evaluations[0].name}/step-10/answers_complete"]["holds"]
+    assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
 
-    mode, coordinator_module = "failed-native", "first_model_entry"
-    module("first_model_entry")
+    mode, coordinator_module = "failed-native", first_entry
+    module(first_entry)
     with edit_receipt(source) as receipt:
         receipt["result"]["state"] = "failed"
     result = invoke_with_preflight_stub(entry)

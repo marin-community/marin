@@ -207,6 +207,12 @@ This shape keeps validation mechanical. Adding a launch setting means adding one
 reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
 forwarding tests at every process boundary.
 
+Iris invokes SkyRL's checked-in task setup script with the selected runtime
+profile. The GPU node entry point loads the runtime and runs the transport probe
+before starting the controller. The controller prepares Ray spill storage. Training
+and generation include the vLLM transport check. Checkpoint export runs the
+PyTorch transport check with its export profile.
+
 ## Publish a checkpoint export
 
 The checkpoint-export GPU job stops after writing and verifying the object-store

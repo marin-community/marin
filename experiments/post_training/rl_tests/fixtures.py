@@ -73,10 +73,22 @@ from experiments.post_training.skyrl_test_support import (
     with_current_control_revisions,
     write_training_families,
 )
-from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
+from experiments.post_training.task_curation.selection import (
+    FULL_VALIDATION_FILENAME,
+    TASK_MANIFEST_FILENAME,
+    VALIDATION_FILENAME,
+)
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
+
+
+def printed_status(output):
+    # CliRunner merges stderr into result.output; status is on result.stdout. A plan prints its
+    # lowered steps after the status, so the YAML ends where the first StepSpec begins.
+    output = output.partition("\nStepSpec(")[0]
+    marker = output.rfind("\npreset:")
+    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
 
 
 def write_json(path: Path, value) -> None:
@@ -299,7 +311,7 @@ def append_metrics(root: Path, metrics: dict[int, dict]) -> None:
 
 def selection(tmp_path, monkeypatch):
     monkeypatch.setattr(command, "configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path))
+    monkeypatch.setattr(recipe, "SELECTION_ROOT", str(tmp_path / recipe.SELECTION_PREFIX))
     monkeypatch.setattr(recipe, "artifact_prefix", lambda cluster: str(tmp_path))
     training = {preset.tasks for preset in snowball_model.SNOWBALL.by_name.values()}
     task_sets = {preset.held_out_tasks for preset in snowball_model.SNOWBALL.presets if preset.held_out_tasks}
@@ -400,9 +412,10 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         spec=ExactSpec(("cat",)),
     )
 
+    panel_size = getattr(request, "param", None)
     for binding in {preset.held_out_tasks for preset in snowball_model.SNOWBALL.presets if preset.held_out_tasks}:
         task_set = Path(recipe.selection_artifact(binding).path())
-        tasks = [task.model_copy(update={"id": f"task-{i}"}) for i in range(100)]
+        tasks = [task.model_copy(update={"id": f"task-{i}"}) for i in range(panel_size or 100)]
         rows = [
             SelectionTaskRow(
                 task_id=value.id,
@@ -415,14 +428,17 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             )
             for i, value in enumerate(tasks)
         ]
-        pq.write_table(
-            pa.table({"task_spec": [value.model_dump_json() for value in tasks]}), task_set / "validation.parquet"
-        )
+        validation = pa.table({"task_spec": [value.model_dump_json() for value in tasks]})
+        pq.write_table(validation, task_set / VALIDATION_FILENAME)
+        if panel_size is not None:
+            pq.write_table(validation, task_set / FULL_VALIDATION_FILENAME)
         pq.write_table(
             pa.Table.from_pylist([row.model_dump(mode="json") for row in rows], schema=arrow_schema(SelectionTaskRow)),
             task_set / TASK_MANIFEST_FILENAME,
         )
         summary = json.loads((task_set / "summary.json").read_text())
+        if panel_size is not None:
+            summary.update(validation_rows=validation.num_rows, full_validation_rows=validation.num_rows)
         summary["selection_strata"] = SelectionDefinition(
             name=recipe.selection_artifact(binding).name,
             version=recipe.selection_artifact(binding).version,

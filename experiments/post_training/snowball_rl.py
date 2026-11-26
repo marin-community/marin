@@ -278,11 +278,37 @@ _LEARNING_MEDIUM = _snowball(
     guards=(Metric("eval_lite/family_mean", True),),
     objectives=(
         Metric("eval_lite/family_mean", True),
-        Metric("eval_lite/family_mean/gain_per_gpu_hour", True, WindowStatistic.GAIN_PER_GPU_HOUR),
+        Metric(
+            "eval_lite/family_mean/gain_per_gpu_hour",
+            True,
+            WindowStatistic.GAIN_PER_GPU_HOUR,
+            source="eval_lite/family_mean/gain",
+        ),
     ),
     budget="asynchronous runtime unmeasured",
 )
 
+
+# KV all-gather supports packed sliding windows with Grug's five KV heads.
+_TRAIN_LONG_MEGATRON_KWARGS = {"cp_comm_type": "all_gather"}
+
+_PACKED_TRAIN_LONG_RECIPE = replace(
+    _REPORTING_P40,
+    layout=replace(P40, megatron=replace(P40.megatron, context_parallel_size=2)),
+    config=_REPORTING_P40.config.merge(
+        RecipePatch(
+            trainer=sections.Trainer(
+                use_sample_packing=True,
+                policy=sections.Policy(
+                    megatron_config=sections.PolicyMegatronConfig(transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS)
+                ),
+                ref=sections.Ref(
+                    megatron_config=sections.RefMegatronConfig(transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS)
+                ),
+            ),
+        ),
+    ),
+)
 
 _TRAIN_LONG = _snowball(
     held_out_tasks=_DEFAULT_EVAL_LITE,
@@ -486,7 +512,7 @@ _PRESETS = (
         control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
-    _TRAIN_LONG,
+    replace(_TRAIN_LONG, revision="2026.11.25.1", recipe=_PACKED_TRAIN_LONG_RECIPE),
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
     _TRAIN_MEDIUM_TOOLS,

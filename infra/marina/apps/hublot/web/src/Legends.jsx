@@ -20,6 +20,8 @@ export function ChartLegend({ phases }) {
   return <div className="chart-legend" aria-label="Chart markers">
     {Object.entries(phaseTypes).filter(([kind]) => known.has(kind)).map(([kind, meta]) =>
       <LegendItem key={kind} kind={kind} {...meta} />)}
+    <LegendItem kind="unmarked" color="#fff" label="No phase recorded"
+      detail="White areas fall outside the recorded phase timers. Rollouts and inference can still be active." />
     <LegendItem kind="step" label="Step complete" detail="The trainer recorded a completed optimizer step here." />
   </div>;
 }

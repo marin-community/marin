@@ -542,8 +542,8 @@ def read_measurements(
             values[key + "/gain"] = values[key] - value
     result = terminal.native.result
     gpu_hours = None
-    if result.started_at and result.finished_at:
-        seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(result.started_at)) / 1000
+    if terminal.started_at and result.finished_at:
+        seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(terminal.started_at)) / 1000
         if seconds > 0:
             gpu_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
     slices = {key: len({row["task_id"] for row in rows}) for key, rows in score_slices(final).items()}

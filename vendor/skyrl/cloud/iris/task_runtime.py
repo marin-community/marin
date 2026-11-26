@@ -1355,32 +1355,19 @@ def capture_termination_artifacts(rendezvous_dir: str | None, reason: str) -> No
     """
     if not rendezvous_dir:
         return
-    import subprocess as _sp
-
     task_id = os.environ.get("IRIS_TASK_ID", "unknown").replace("/", "_")
     ts = int(time.time())
-
-    def _run(cmd: str, timeout: int = 7) -> str:
-        try:
-            return _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout
-        except Exception as exc:  # noqa: BLE001 - best-effort
-            return f"<{cmd!r} failed: {exc}>"
-
-    summary = "\n".join(
-        [
-            f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===",
-            "--- df -h /tmp /dev/shm ---",
-            _run("df -h /tmp /dev/shm 2>&1"),
-            "--- top /tmp disk hogs (ephemeral-storage eviction cause) ---",
-            _run("du -sh /tmp/* /tmp/ray/session*/logs /tmp/ray/session*/*spill* 2>/dev/null | sort -rh | head -25", 9),
-            "--- nvidia-smi (VRAM OOM cause) ---",
-            _run("nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv 2>&1"),
-            "--- top RSS procs (host-RAM OOM cause) ---",
-            _run("ps -eo pid,rss,comm --sort=-rss 2>/dev/null | head -12"),
-            "--- dmesg OOM/kill tail ---",
-            _run("dmesg 2>/dev/null | grep -iE 'oom|killed process|out of memory|Xid' | tail -10"),
-        ]
-    )
+    summary = f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===\n"
+    try:
+        diagnostics = Path(__file__).with_name("termination_diagnostics.sh")
+        summary += subprocess.run(
+            ["bash", str(diagnostics)], capture_output=True, text=True, errors="replace", timeout=40
+        ).stdout
+    except subprocess.TimeoutExpired as exc:
+        summary += (exc.stdout or b"").decode(errors="replace")
+        summary += "\n<termination diagnostics timed out>\n"
+    except OSError as exc:
+        summary += f"<termination diagnostics failed: {exc}>\n"
     try:
         uri = f"{rendezvous_dir.rstrip('/')}/term_artifacts/{task_id}_{ts}.txt"
         fs, path = fs_and_path(uri)
@@ -2183,7 +2170,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     model = config.inputs.model
     skyrl = config.skyrl
     checkpoint_export = config.run.mode == RunMode.CHECKPOINT_EXPORT
-    task_env = {str(key): str(value) for key, value in config.runtime.task_env.items()}
     model_uri = str(model.uri)
     model_identity = str(model.identity)
     train_data = [] if checkpoint_export else _container(config.inputs.train_data)
@@ -2198,7 +2184,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         draft_model = SpeculatorModelConfig.from_mapping(
             _container(draft_mapping), context="generator.speculative_decoding.model"
         )
-    offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
+    offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
         role_topology=derive_launch_topology(_container(config)).role_topology,
@@ -2212,7 +2198,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         driver_liveness_timeout=int(config.ray.driver_liveness_timeout),
         run_id=str(config.run.id),
         training_type=None if config.runtime.training_type is None else TrainingType(config.runtime.training_type),
-        task_env=task_env,
         data_sources_json=_json_list(data_sources) if data_sources else "",
         prestage_model=prestage_model,
         model_source_uri=model_uri if is_cloud_uri(model_uri) else "",
@@ -2299,6 +2284,7 @@ def _write_final_config(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bootstrap Ray and run one typed MarinSkyRL launch config.")
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--environment-prepared", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -2323,8 +2309,9 @@ def main() -> None:
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
     launch_config = load_launch_config(config_path)
+    if not cli_args.environment_prepared:
+        os.environ.update({str(key): str(value) for key, value in launch_config.runtime.task_env.items()})
     args = _runtime_namespace(launch_config)
-    os.environ.update(args.task_env)
     if args.role_topology is not None:
         args.ray_labels = {
             **args.role_topology.node_labels(_rank()),
