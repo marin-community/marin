@@ -32,6 +32,7 @@ from marin.rl.skyrl_records import (
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.models import TASK_ROLLOUT_COLUMN
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import rl_compose as recipe
@@ -87,12 +88,16 @@ class RecordedTaskSet(NamedTuple):
 def _task_specs(path: StoragePath) -> Iterator[tuple[str, str]]:
     fs, key = filesystem_for(str(path))
     with fs.open(key, "rb") as stream:
-        for raw in pq.read_table(stream, columns=[TASK_SPEC_COLUMN])[TASK_SPEC_COLUMN].to_pylist():
-            yield json.loads(raw)["id"], raw
+        parquet = pq.ParquetFile(stream)
+        column = TASK_SPEC_COLUMN if TASK_SPEC_COLUMN in parquet.schema_arrow.names else TASK_ROLLOUT_COLUMN
+        for raw in parquet.read(columns=[column])[column].to_pylist():
+            document = json.loads(raw)
+            task = document if column == TASK_SPEC_COLUMN else document["task"]
+            yield task["id"], raw
 
 
 def read_recorded_task_set(launch: RecordedLaunch, name: str) -> RecordedTaskSet:
-    """Read evaluation task IDs and a hash of the sorted raw TaskSpec strings."""
+    """Read evaluation task IDs and a hash of the sorted raw task-source payloads."""
     pairs = [
         pair
         for source in recorded_sources(launch, name)

@@ -33,11 +33,13 @@ from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
+from rolloutengine.models import TASK_ROLLOUT_COLUMN, RolloutLimits, TaskRolloutSpec
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
@@ -883,6 +885,44 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
             pq.write_table(pa.Table.from_pylist(pool), copied / filename)
     report = compare(preset, "--candidate", "users/test/task-content-edited")
     assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
+
+
+def test_native_rollout_evaluation_sources_preserve_task_ids_and_full_content_hash(recorded_runs):
+    source = recorded_runs("learning-medium", "users/test/rollout-evaluation-identity")
+    receipt = json.loads((source / "terminal.json").read_text())
+    launch = RecordedLaunch.from_document(receipt["config"], attempt=receipt["config"]["run"]["attempt_id"])
+    descriptor = receipt["config"]["inputs"]["validation_data"][0]
+    path = Path(descriptor["uri"]) / descriptor["relative_path"]
+    specs = [
+        TaskRolloutSpec(
+            task=TaskSpec.model_validate_json(raw),
+            harness="assistant_prefix",
+            task_machine=None,
+            verifier_machine=None,
+            limits=RolloutLimits(
+                max_turns=1,
+                max_total_tokens=None,
+                model_turn_timeout=10,
+                tool_turn_timeout=10,
+                total_turn_timeout=30,
+                attempt_timeout=60,
+                verifier_timeout=30,
+                cleanup_timeout=30,
+            ),
+        )
+        for raw in pq.read_table(path)["task_spec"].to_pylist()
+    ]
+    pq.write_table(pa.table({TASK_ROLLOUT_COLUMN: [spec.model_dump_json() for spec in specs]}), path)
+    measured = measurements.read_recorded_task_set(launch, "eval_lite_100")
+    assert set(measured.task_ids) == {spec.task.id for spec in specs}
+    pq.write_table(pa.table({TASK_ROLLOUT_COLUMN: [spec.model_dump_json() for spec in reversed(specs)]}), path)
+    reordered = measurements.read_recorded_task_set(launch, "eval_lite_100")
+    assert reordered.task_set_sha256 == measured.task_set_sha256
+    specs[0] = specs[0].model_copy(update={"limits": specs[0].limits.model_copy(update={"max_turns": 2})})
+    pq.write_table(pa.table({TASK_ROLLOUT_COLUMN: [spec.model_dump_json() for spec in specs]}), path)
+    changed = measurements.read_recorded_task_set(launch, "eval_lite_100")
+    assert set(changed.task_ids) == set(measured.task_ids)
+    assert changed.task_set_sha256 != measured.task_set_sha256
 
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
