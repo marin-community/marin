@@ -22,12 +22,12 @@ from experiments.post_training.nccl_transport_probe import (
     WorkerProcess,
     all_to_all_element_count,
     collect_worker,
-    gate_endpoint_name,
     gate_verdict,
     mapped_nccl_libraries,
     parse_nccl_census,
     parse_worker_result,
     publish_gate_report,
+    rendezvous_endpoint_name,
     resolve_gloo_socket_ifname,
     worker_traceback,
     write_worker_result,
@@ -134,13 +134,17 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures(tmp_path, monkeypatch
     assert verdict(True) == "missing_transport_evidence"
 
 
-def test_sibling_gpu_gangs_get_separate_gate_rendezvous():
-    first_head = JobInfo(JobName.from_wire("/test/coordinator/control-r0/0"))
-    first_worker = JobInfo(JobName.from_wire("/test/coordinator/control-r0/1"))
-    second_head = JobInfo(JobName.from_wire("/test/coordinator/control-r1/0"))
-    assert first_head.job_id.namespace == second_head.job_id.namespace
-    assert gate_endpoint_name(first_head) == gate_endpoint_name(first_worker)
-    assert gate_endpoint_name(first_head) != gate_endpoint_name(second_head)
+@pytest.mark.parametrize("mode", ["launcher", "gate"])
+def test_sibling_gpu_gangs_get_separate_rendezvous(mode):
+    coordinator = JobName.root("test-user", "coordinator")
+    first, second = coordinator.child("first"), coordinator.child("second")
+
+    def endpoint(job, rank, attempt=0):
+        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host="127.0.0.1", attempt_id=attempt)
+        return rendezvous_endpoint_name(info, mode=mode)
+
+    assert endpoint(first, 0) == endpoint(first, 1)
+    assert len({endpoint(first, 0), endpoint(second, 0), endpoint(first, 0, attempt=1)}) == 3
 
 
 def test_mapped_nccl_libraries_parses_proc_maps(tmp_path):
