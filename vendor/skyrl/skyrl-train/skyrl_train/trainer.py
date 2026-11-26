@@ -193,6 +193,8 @@ class CheckpointSnapshot:
 
 
 _MODEL_INITIALIZATION_TIMEOUT = 60 * 60
+_ROLLOUT_GROSS_TOTAL_CHECKPOINT_KEY = "rollout_gross_response_tokens_total"
+_ROLLOUT_LAST_UPDATE_CHECKPOINT_KEY = "rollout_gross_response_tokens_last_update"
 
 
 def _active_online_eagle_results(results: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -2878,9 +2880,9 @@ class RayPPOTrainer:
             "domain_gradient_balance_state": self._domain_balancer.state_dict() if self._domain_balancer else None,
         }
         if self.cfg.trainer.get("rollout_token_budget") is not None:
-            trainer_state["rollout_gross_response_tokens_total"] = self.rollout_gross_response_tokens_total
+            trainer_state[_ROLLOUT_GROSS_TOTAL_CHECKPOINT_KEY] = self.rollout_gross_response_tokens_total
             if self.cfg.trainer.get("rollout_token_eval_milestones"):
-                trainer_state["rollout_gross_response_tokens_last_update"] = self.rollout_gross_response_tokens_last_update
+                trainer_state[_ROLLOUT_LAST_UPDATE_CHECKPOINT_KEY] = self.rollout_gross_response_tokens_last_update
         trainer_state_path = os.path.join(global_step_folder, TRAINER_STATE_FILENAME)
         trainer_state_buffer = stdlib_io.BytesIO()
         torch.save(trainer_state, trainer_state_buffer)
@@ -3014,7 +3016,7 @@ class RayPPOTrainer:
         reset_step = not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False)
         budget = self.cfg.trainer.get("rollout_token_budget")
         if budget is not None:
-            total = 0 if reset_step else trainer_state.get("rollout_gross_response_tokens_total")
+            total = 0 if reset_step else trainer_state.get(_ROLLOUT_GROSS_TOTAL_CHECKPOINT_KEY)
             if total is None and global_step == saved_global_step == 0:
                 total = 0
             elif not reset_step and (
@@ -3034,7 +3036,7 @@ class RayPPOTrainer:
                 raise ValueError("A rollout token budget checkpoint requires the same evaluation milestones")
             if milestones:
                 tokens = 0 if reset_step or global_step == 0 else trainer_state.get(
-                    "rollout_gross_response_tokens_last_update"
+                    _ROLLOUT_LAST_UPDATE_CHECKPOINT_KEY
                 )
                 if type(tokens) is not int or not 0 <= tokens <= total:
                     raise ValueError("A rollout token milestone checkpoint requires the saved last update's gross tokens")

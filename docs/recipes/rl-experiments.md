@@ -215,12 +215,13 @@ Thompson (`thompson`) and ranking with prompt reuse (`within-source`) to the two
 The presets use seeds 83 and 97, a separate 288-task panel and a common 5,242,880-token training
 budget. Compare each arm's change from initialization at its actual stopping update. Reconcile
 all dispatched training tokens, including rejected groups, and report actual spend and H100-hours.
+The protocol, earlier pilot and replay commands, per-seed results and costs are recorded in the
+[adaptive sampler study](https://github.com/marin-community/marin/pull/12313).
+
 Set `trainer.rollout_token_eval_milestones` to evaluate the primary panel at the first
 completed update to reach each listed token count. List the milestones in increasing order
 below `trainer.rollout_token_budget`. The terminal evaluation uses the stopping update,
 including when that update also crosses an earlier milestone.
-The protocol, earlier pilot and replay commands, per-seed results and costs are recorded in the
-[adaptive sampler study](https://github.com/marin-community/marin/pull/12313).
 
 For training-loop timing, use the 1,024-prompt subset covering five-letter reversal and
 odd-position extraction followed by reversal. The timing presets run 12 synchronous updates
