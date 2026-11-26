@@ -24,6 +24,8 @@ NODE_JOBS_MAX_ATTEMPTS = 5_000
 # 545 rows over 3 h for 3 attempts on the busy node (2026-11-26).
 NODE_JOBS_MAX_USAGE_ROWS = 200_000
 NODE_JOBS_MAX_RESULT_ROWS = 250_000
+# iris.task and the controller rows arrive about once a minute, so a finer bucket shows only gaps.
+NODE_JOBS_MIN_BUCKET_MS = 60_000
 
 # A Kubernetes node name or an Iris worker id.
 _NODE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -43,6 +45,11 @@ def _validate_node_scope(clusters: tuple[str, ...], node: str) -> None:
         raise ValueError("node must be a node name or worker id")
 
 
+def _controller_window(start_ms: int, end_ms: int) -> str:
+    """Controller rows written from the lookback before the range to its end."""
+    return f"ts >= to_timestamp_millis({start_ms - NODE_JOBS_LOOKBACK_MS}) AND ts < to_timestamp_millis({end_ms})"
+
+
 def _attempts_on_node(clusters: tuple[str, ...], node: str, start_ms: int, end_ms: int) -> str:
     """The newest row of each attempt on the node that overlaps the range."""
     return f"""
@@ -53,8 +60,7 @@ FROM (
     FROM "iris.controller_db__task_attempts"
     WHERE (node_name = {sql_string(node)} OR worker_id = {sql_string(node)})
       AND "cluster" IN ({sql_values(clusters)})
-      AND ts >= to_timestamp_millis({start_ms - NODE_JOBS_LOOKBACK_MS})
-      AND ts < to_timestamp_millis({end_ms})
+      AND {_controller_window(start_ms, end_ms)}
 )
 WHERE rn = 1 AND started_at IS NOT NULL
   AND started_at < to_timestamp_millis({end_ms})
@@ -77,11 +83,11 @@ def node_jobs_dataset(
         requested_bucket_ms,
         max_window_ms=NODE_MAX_WINDOW_MS,
         max_window_error="node jobs range must not exceed 7 days",
-        min_bucket_ms=max(NODE_MIN_BUCKET_MS, 60_000),
+        min_bucket_ms=max(NODE_MIN_BUCKET_MS, NODE_JOBS_MIN_BUCKET_MS),
         max_points=NODE_MAX_POINTS,
     )
     attempts = _attempts_on_node(clusters, node, start_ms, end_ms)
-    lookback = f"ts >= to_timestamp_millis({start_ms - NODE_JOBS_LOOKBACK_MS}) AND ts < to_timestamp_millis({end_ms})"
+    lookback = _controller_window(start_ms, end_ms)
     attempts_sql = f"""
 WITH attempt AS ({attempts}),
 job AS (
