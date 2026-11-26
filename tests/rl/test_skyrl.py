@@ -7,12 +7,13 @@ import dataclasses
 import json
 import os
 import platform
+import resource
 import shutil
 import subprocess
 import sys
 import traceback
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1208,6 +1209,22 @@ def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     completed = run_launcher_for_test([sys.executable, _PROCESS_FIXTURE, "invalid-stderr"])
 
     assert completed.returncode == 4
+    assert "bad" in completed.stderr
+
+
+def test_launcher_retains_stderr_tail_for_high_descriptors(capsys) -> None:
+    soft_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    if 0 <= soft_limit <= 1032:
+        pytest.skip("File descriptor limit too low to exercise a high-numbered pipe")
+    with ExitStack() as files:
+        while files.enter_context(open(os.devnull, "rb")).fileno() < 1024:
+            pass
+        completed = run_launcher_for_test(
+            [sys.executable, "-c", "import sys; sys.stderr.write('old' + 'x' * 200000 + 'last'); sys.exit(4)"]
+        )
+    assert completed.returncode == 4
+    assert completed.stderr == "x" * (64 * 1024 - 4) + "last"
+    assert capsys.readouterr().err == "old" + "x" * 200000 + "last"
 
 
 def test_megatron_microbatch_mismatch_fails_before_launch() -> None:

@@ -173,6 +173,10 @@ def test_bootstrap_activation_exposes_runtime_commands(tmp_path: Path) -> None:
     partial = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
     assert partial.returncode != 0
     assert "Incomplete SkyRL runtime assignments" in partial.stderr
+    runtime_file.write_bytes(b"replace:EUID=1\0complete\0")
+    rejected = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
+    assert rejected.returncode != 0
+    assert "EUID: readonly variable" in rejected.stderr
 
 
 def test_bootstrap_exposes_cuda_linker_compatibility_paths(tmp_path: Path) -> None:
