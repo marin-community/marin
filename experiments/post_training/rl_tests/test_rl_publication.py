@@ -403,6 +403,64 @@ def test_nightly_fills_current_main_cohorts_and_waits_for_each_child(monkeypatch
     assert all(name != "data-medium" for _, name in requests)
 
 
+def test_control_presets_select_multiple_models_without_duplicates():
+    selected = nightly.select_presets("snowball/learning-medium mochi mochi/learning-medium snowball/speed-medium")
+    assert sorted((model, preset.name) for model, preset in selected) == [
+        ("mochi", "learning-medium"),
+        ("mochi", "speed-medium"),
+        ("snowball", "learning-medium"),
+        ("snowball", "speed-medium"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "merged, permission, selection, error",
+    [
+        (False, "admin", "mochi", "merged pull request"),
+        (True, "read", "mochi", "write permission"),
+        (True, "write", "mochi snowball/data-medium", "snowball/data-medium"),
+        (True, "write", "mochi unknown", "unknown"),
+        (True, "write", "", "at least one model"),
+        (True, "write", "mochi snowball/learning-medium", None),
+    ],
+)
+def test_control_comment_checks_repository_access_and_dispatches_main(
+    monkeypatch, tmp_path, merged, permission, selection, error
+):
+    event = tmp_path / "comment.json"
+    event.write_text(
+        json.dumps(
+            {
+                "issue": {"number": 14, "pull_request": {}},
+                "comment": {"body": f"/rl-controls {selection}", "user": {"login": "contributor"}},
+            }
+        )
+    )
+    monkeypatch.setenv("GITHUB_REPOSITORY", "example/marin")
+    writes = []
+
+    def github(command, **options):
+        if "repos/example/marin/pulls/14" in command:
+            return json.dumps({"merged": merged}).encode()
+        if "repos/example/marin/collaborators/contributor/permission" in command:
+            return json.dumps({"permission": permission}).encode()
+        writes.append((command, options.get("input")))
+        return b'{"html_url":"https://github.com/example/marin/actions/runs/145"}'
+
+    monkeypatch.setattr(nightly.subprocess, "check_output", github)
+    if error:
+        with pytest.raises(ValueError, match=error):
+            nightly.dispatch_comment(event)
+        assert writes == []
+    else:
+        nightly.dispatch_comment(event)
+        (dispatch, payload), (reply, _) = writes
+        assert "repos/example/marin/actions/workflows/marin-skyrl-nightly.yaml/dispatches" in dispatch
+        assert json.loads(payload) == {"ref": "main", "inputs": {"controls": "true", "presets": selection}}
+        assert "repos/example/marin/issues/14/comments" in reply
+        assert reply[-1] == "body=🤖 [RL control run](https://github.com/example/marin/actions/runs/145)"
+
+
 @pytest.mark.integration
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(

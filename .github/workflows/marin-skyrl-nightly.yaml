@@ -5,12 +5,18 @@ on:
   schedule:
     - cron: "0 9 * * 1-6"
     - cron: "0 9 * * 0"
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       controls:
-        description: Run the RL controls, including branch proof runs
+        description: Run the RL controls
         type: boolean
         default: false
+      presets:
+        description: "Control selectors: space-separated models or model/preset pairs (blank for all)"
+        type: string
+        default: ""
       grug_cutlass:
         description: Include the weekly Grug CUTLASS case alongside nightly Triton
         type: boolean
@@ -24,12 +30,35 @@ on:
         default: ""
 
 concurrency:
-  group: marin-nightly
+  group: ${{ github.event_name == 'issue_comment' && format('marin-rl-controls-comment-{0}', github.event.comment.id) || 'marin-nightly' }}
   cancel-in-progress: false
 
 jobs:
+  dispatch-controls-comment:
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/rl-controls ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Dispatch controls from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run --frozen --all-packages --extra cpu --no-default-groups \
+            python -m experiments.post_training.rl_nightly_controls --comment-event "$GITHUB_EVENT_PATH"
+
   gpu-gate:
-    if: ${{ !(inputs.controls) }}
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.controls)
     name: ${{ matrix.lane }}
     strategy:
       fail-fast: false
@@ -169,7 +198,7 @@ jobs:
           if-no-files-found: ignore
 
   rl-controls:
-    if: github.event_name == 'schedule' || inputs.controls
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.controls)
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
@@ -180,6 +209,7 @@ jobs:
       CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
       CONTROL_BATCH: ${{ github.run_id }}-${{ github.run_attempt }}
+      CONTROL_PRESETS: ${{ inputs.presets }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -201,6 +231,7 @@ jobs:
           set -eo pipefail
           uv run --frozen --all-packages --extra cpu --no-default-groups \
             python -m experiments.post_training.rl_nightly_controls --batch "$CONTROL_BATCH" \
+            --presets="$CONTROL_PRESETS" \
             2>&1 | tee rl-controls.log
       - uses: actions/upload-artifact@v7
         if: always()
