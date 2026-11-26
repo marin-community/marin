@@ -30,7 +30,11 @@ ENGLISH_TAGGER = Archive(
 )
 COMMON_REQUIREMENTS = ("nltk==3.10.3", "tomli-w==1.2.0")
 PUNKT_FILES = {NLTK_DATA_ROOT + "/tokenizers/punkt_tab/english": PUNKT_TAB}
-IFEVAL_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "langdetect==1.0.9"))
+IFEVAL_GRADER = Environment(
+    requirements=(*COMMON_REQUIREMENTS, "langdetect==1.0.9", "immutabledict==4.3.1"),
+    files=PUNKT_FILES,
+    env={"NLTK_DATA": NLTK_DATA_ROOT},
+)
 IFBENCH_GRADER = Environment(
     requirements=(*COMMON_REQUIREMENTS, "emoji==2.16.0", "syllapy==0.8.0"),
     files={
