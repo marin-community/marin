@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,10 +32,12 @@ from experiments.post_training.task_curation.census_binding import (
     receipt_from_census,
     write_receipt_shards,
 )
+from experiments.post_training.task_curation.content_identity import artifact_spec_digest
 from experiments.post_training.task_curation.daytona_census import (
     EnvelopeCensus,
     measure_envelopes,
 )
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 
 LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +68,15 @@ def pq_read(path: Path) -> list[tuple[dict, dict]]:
     return documents
 
 
+def population_documents(population: SourceTextPopulation) -> Iterator[tuple[dict, dict]]:
+    """Stream (task, runtime-shapes) pairs from a staged population's spec partitions."""
+    for path in sorted(StoragePath(f"{population.specs_output_dir}/*.parquet").glob(), key=str):
+        with path.open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=16):
+                for row in batch.to_pylist():
+                    yield json.loads(row["task_spec"]), json.loads(row.get("runtime") or "{}")
+
+
 @dataclass(frozen=True)
 class StagedCensus:
     """The measured census record for one staged release population."""
@@ -92,6 +104,8 @@ def measure_staged_population(
     converter_version: str,
     converter_revision: str,
     acceptance_job: str,
+    population_record: str | None = None,
+    content_identity_proof: str | None = None,
 ) -> StagedCensus:
     """Measure the release's declared Daytona demands and classify through the declarative path.
 
@@ -102,23 +116,74 @@ def measure_staged_population(
     declared measurement's unbuilt-image classifications. The launcher
     verifies the passing acceptance run at submission; a cohort without one is
     never submitted and stays Pending for the repair cycle.
+
+    With ``population_record`` the census measures the staged lexical population
+    artifact instead of the release's ``tasks.parquet``: the same task bytes
+    (per-task sha256 equality is verified against the record's own declared
+    digest), the release pin preserved through the population's
+    ``dataset_id``/``dataset_revision``, and the digest semantics the lexical
+    registration and SAMPLE panel freezing expect. Coordinator ruling
+    2026-11-25 ~21:05 EST (option A).
     """
     evidence_uri = acceptance_evidence_uri(acceptance_job)
-    path = Path(hf_hub_download(release_repo, "tasks.parquet", repo_type="dataset", revision=release_revision))
-    documents = pq_read(path)
-    result: EnvelopeCensus = measure_envelopes(documents)
-    if result.converted == 0:
-        raise ValueError(f"The release population is empty: {release_repo}@{release_revision[:12]}")
-    task_specs_sha256 = file_sha256(StoragePath(str(path)))
+    if population_record is None:
+        path = Path(hf_hub_download(release_repo, "tasks.parquet", repo_type="dataset", revision=release_revision))
+        documents = pq_read(path)
+        result: EnvelopeCensus = measure_envelopes(documents)
+        if result.converted == 0:
+            raise ValueError(f"The release population is empty: {release_repo}@{release_revision[:12]}")
+        task_specs_sha256 = file_sha256(StoragePath(str(path)))
+        input_artifact = f"https://huggingface.co/datasets/{release_repo}/tree/{release_revision}"
+        measured_basis = (
+            f"Declared demands measured from the carrier rows without provider calls: {result.machine_slots} "
+            f"machine slots, {len(result.snapshot_sizes)} distinct contexts"
+        )
+    else:
+        population = SourceTextPopulation.raw_load(population_record)
+        if population.dataset_id != release_repo or population.dataset_revision != release_revision:
+            raise ValueError(
+                f"The staged population binds another release pin: {population.dataset_id}@"
+                f"{population.dataset_revision[:12]} != {release_repo}@{release_revision[:12]}"
+            )
+        if population.source_version != converter_version:
+            raise ValueError(
+                f"The staged population carries another converter version: {population.source_version} "
+                f"!= {converter_version}"
+            )
+        if population.converter_revision != converter_revision:
+            raise ValueError(
+                f"The staged population carries another converter revision: {population.converter_revision[:12]} "
+                f"!= {converter_revision[:12]}"
+            )
+        declared_digest = artifact_spec_digest(population)
+        if declared_digest != population.task_specs_sha256:
+            raise ValueError(
+                f"The staged population record declares {population.task_specs_sha256[:12]} but its spec "
+                f"partitions digest to {declared_digest[:12]}"
+            )
+        result = measure_envelopes(population_documents(population))
+        if result.converted == 0:
+            raise ValueError(f"The staged population is empty: {population_record}")
+        if result.converted != population.task_count:
+            raise ValueError(
+                f"The staged population differs from its measured task count: {result.converted} != "
+                f"{population.task_count}"
+            )
+        task_specs_sha256 = population.task_specs_sha256
+        input_artifact = population.path
+        measured_basis = (
+            f"Declared demands measured from the staged population artifact ({population_record}) without "
+            f"provider calls: {result.machine_slots} machine slots, {len(result.snapshot_sizes)} distinct "
+            f"contexts; the staged population holds the release's task specs byte-identically (per-task "
+            f"sha256 equality; proof {content_identity_proof or 'staged beside the receipts'})"
+        )
     basis = (
         "Coordinator ruling 2026-11-25 13:00 EST: declarative build contexts are acceptable for "
         "admission with execution evidence. This cohort's passing acceptance run ("
         f"{acceptance_job}) built and executed its contexts through Daytona's declarative path "
         "without named snapshots; the declared measurement's unbuilt-image classifications "
-        f"({result.execution_failure_tasks} tasks) are superseded by that evidence. Declared "
-        f"demands measured from the carrier rows without provider calls: {result.machine_slots} "
-        f"machine slots, {len(result.snapshot_sizes)} distinct contexts; converter checkout "
-        f"{converter_revision}; release {release_repo}@{release_revision[:12]}; protocol "
+        f"({result.execution_failure_tasks} tasks) are superseded by that evidence. {measured_basis}; "
+        f"converter checkout {converter_revision}; release {release_repo}@{release_revision[:12]}; protocol "
         f"{converter_version}; execution evidence {evidence_uri}"
     )
     record = {
@@ -127,7 +192,7 @@ def measure_staged_population(
         "dataset_revision": release_revision,
         "converter_version": converter_version,
         "converter_revision": converter_revision,
-        "input_artifact": f"https://huggingface.co/datasets/{release_repo}/tree/{release_revision}",
+        "input_artifact": input_artifact,
         "task_specs_sha256": task_specs_sha256,
         "task_count": result.converted,
         "daytona_safety": "safe",
@@ -211,6 +276,17 @@ def main() -> None:
         required=True,
         help="The cohort's passing acceptance Iris job name (the declarative execution evidence).",
     )
+    parser.add_argument(
+        "--population-record",
+        help="Measure the staged lexical population artifact at this path instead of the release's "
+        "tasks.parquet; the release pin is preserved through the population's dataset pin (ruling "
+        "2026-11-25 ~21:05 EST, option A).",
+    )
+    parser.add_argument(
+        "--content-identity-proof",
+        help="The staged per-task sha256 equality proof between the release's task specs and the "
+        "staged population (referenced in the census basis).",
+    )
     parser.add_argument("--output", required=True, type=Path, help="The staged census artifact directory.")
     parser.add_argument("--receipts-output", required=True, type=Path, help="The staged receipt shard directory.")
     parser.add_argument("--report", type=Path, help="Write the census result JSON here.")
@@ -225,6 +301,8 @@ def main() -> None:
         converter_version=args.converter_version,
         converter_revision=revision,
         acceptance_job=args.acceptance_job,
+        population_record=args.population_record,
+        content_identity_proof=args.content_identity_proof,
     )
     record, census = staged.record, staged.census
     args.output.mkdir(parents=True, exist_ok=True)

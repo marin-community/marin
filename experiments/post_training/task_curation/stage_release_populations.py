@@ -22,6 +22,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, required=True, help="The cohort build plan JSON (source_id, release_repo).")
     parser.add_argument("--artifact-version", required=True, help="The release version the populations stage from.")
+    parser.add_argument(
+        "--converter-revision",
+        required=True,
+        help="The converter revision the census receipts carry; the population records must declare the "
+        "same converter identity for the lexical registration and SAMPLE panel freezing to bind.",
+    )
     parser.add_argument("--workdir", type=Path, required=True, help="Local scratch for the staged populations.")
     parser.add_argument(
         "--text-root", required=True, help="The lexical text root the staged populations copy to (object storage)."
@@ -74,6 +80,7 @@ def main() -> None:
             path=f"{text_uri}/",
             dataset_id=repo,
             dataset_revision=head,
+            converter_revision=args.converter_revision,
             main_output_dir=f"{nested}/outputs/main",
             specs_output_dir=f"{nested}/specs",
         )
