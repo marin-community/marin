@@ -347,7 +347,6 @@ def _dump_eval_results(
     global_step: int | None,
     tokenizer: AutoTokenizer,
     rollouts: _EvaluationRollouts,
-    metrics: Dict[str, float],
     *,
     val_set_name: str | None,
 ) -> None:
@@ -375,7 +374,6 @@ def _dump_eval_results(
             tokenizer,
             rollouts.batch,
             rollouts.metadata,
-            metrics,
             rollouts.uids,
             attempt_id=str(cfg.runtime.attempt_id),
             step=global_step if global_step is not None else -1,
@@ -441,7 +439,7 @@ async def evaluate(
             cfg.generator.eval_n_samples_per_prompt,
         )
         _persist_evaluation(cfg, global_step, val_set_name, rollouts, records_export_root)
-        _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics, val_set_name=val_set_name)
+        _dump_eval_results(cfg, global_step, tokenizer, rollouts, val_set_name=val_set_name)
 
         return eval_metrics
     finally:
@@ -516,6 +514,6 @@ async def evaluate_step_wise(
         final_rollouts.batch, final_rollouts.uids, final_rollouts.data_sources, cfg.generator.eval_n_samples_per_prompt
     )
     _persist_evaluation(cfg, global_step, val_set_name, final_rollouts, records_export_root)
-    _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics, val_set_name=val_set_name)
+    _dump_eval_results(cfg, global_step, tokenizer, rollouts, val_set_name=val_set_name)
 
     return eval_metrics

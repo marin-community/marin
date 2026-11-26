@@ -268,14 +268,13 @@ def dump_per_dataset_eval_results(
     tokenizer: AutoTokenizer,
     trajectory_batch: TrajectoryBatch,
     metadata: List[TrajectoryMetadata],
-    eval_metrics: Dict[str, float],
     uids: List[str],
     *,
     attempt_id: str,
     step: int,
     ordinals: List[int],
 ):
-    """Dump evaluation results per dataset and overall aggregated results."""
+    """Write detailed evaluation answers grouped by data source."""
 
     # Prepare common data
     input_prompts = [tokenizer.decode(prompt) for prompt in trajectory_batch["prompt_token_ids"]]
@@ -343,14 +342,6 @@ def dump_per_dataset_eval_results(
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
         logger.info(f"Dumped eval data for {data_source} to {filename}")
-
-    # Dump aggregated results file
-    aggregated_filename = join_resource_path(dump_dir_path, "aggregated_results.jsonl")
-    with io.open_file(aggregated_filename, "w") as f:
-        f.write(json.dumps(eval_metrics, ensure_ascii=False) + "\n")
-
-    logger.info(f"Dumped aggregated eval metrics to {aggregated_filename}")
-
 
 def _evaluation_dataset(dataset: PromptDataset, num_prompts: int | None, seed: int) -> Dataset:
     if num_prompts is None:

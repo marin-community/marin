@@ -61,7 +61,6 @@ from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.types import EndpointAccess
-from rigging.filesystem.factory import open_url
 from rigging.network import interface_for_ipv4
 
 logger = logging.getLogger("nccl_transport_probe")
@@ -639,24 +638,7 @@ def run_gate(args: argparse.Namespace) -> None:
             "ib_ports": collect_ib_port_inventory(),
         }
     }
-    report_json = json.dumps(report)
-    print(report_json)
-    # Persist alongside stdout: the pod-local copy is the durable evidence for
-    # an offline postmortem when the task exits nonzero.
-    (RESULT_DIR / f"gate-results-task{task_index}.json").write_text(report_json)
-    if args.gate_report_prefix:
-        # The pod-local copy is deleted with the terminal pod; publish to the
-        # regional evidence prefix before the nonzero exit. A publish failure
-        # is reported loudly but never changes the verdict.
-        try:
-            report_uri = publish_gate_report(args.gate_report_prefix, job_info.attempt_id, task_index, report_json)
-            logger.info("gate: published report to %s", report_uri)
-        except Exception as publish_error:
-            print(
-                f"gate: report publish under {args.gate_report_prefix} failed: "
-                f"{type(publish_error).__name__}: {publish_error}",
-                file=sys.stderr,
-            )
+    print(json.dumps(report), flush=True)
     if verdict != "pass":
         for result in results:
             for rank in result["ranks"]:
@@ -665,19 +647,6 @@ def run_gate(args: argparse.Namespace) -> None:
                 for line in rank["error_tail"]:
                     print(line, file=sys.stderr)
         raise SystemExit(f"gate: interconnect check failed ({verdict}); refusing to start the trainer")
-
-
-def publish_gate_report(report_prefix: str, attempt_id: str, task_index: int, report_json: str) -> str:
-    """Publish the full gate report to the regional evidence prefix.
-
-    The pod-local copy is deleted with the terminal GPU pod, so the report is
-    written to the launch-provided prefix (``rendezvous_dir``/interconnect-gate)
-    before the task exits. Returns the published URI.
-    """
-    uri = f"{report_prefix.rstrip('/')}/attempt-{attempt_id}/gate-results-task{task_index}.json"
-    with open_url(uri, "wb") as report_file:
-        report_file.write(report_json.encode())
-    return uri
 
 
 def collect_ib_port_inventory() -> list[dict[str, str]]:
@@ -904,10 +873,6 @@ def main() -> None:
         choices=("first-pair", "all-gpus"),
         default="first-pair",
         help="Gate mode: first-pair checks tasks 0+1 one GPU each; all-gpus joins every task with all local GPUs",
-    )
-    parser.add_argument(
-        "--gate-report-prefix",
-        help="Gate mode: regional evidence prefix (rendezvous_dir/interconnect-gate) for the full report JSON",
     )
     parser.add_argument(
         "--gate-single-nvlink-domain",

@@ -259,15 +259,14 @@ def test_node_entrypoint_checks_transport_before_starting_controller(tmp_path):
     environment["IRIS_VENV"] = str(runtime)
     subprocess.run(["bash", launcher / "setup_task_runtime.sh", "megatron"], env=environment, check=True, timeout=30)
 
-    command = ["bash", launcher / "node_entrypoint.sh", "launch.yaml", "s3://test/interconnect-gate", "--pynccl-init"]
+    command = ["bash", launcher / "node_entrypoint.sh", "launch.yaml", "--pynccl-init"]
     result = subprocess.run(command, env=environment, check=True, capture_output=True, text=True, timeout=15)
     transport, controller = map(json.loads, result.stdout.splitlines())
     for record in (transport, controller):
         assert record["cwd"] == record["skyrl_home"] == str(skyrl)
         assert record["max_jobs"] == "8" and record["vllm_use_v1"] == "1"
         assert record["python_path"].split(os.pathsep)[:3] == [str(app), str(skyrl), str(skyrl / "skyrl-train")]
-    assert transport["argv"] == ["--mode", "gate", "--gate-coverage", "all-gpus", "--gate-report-prefix",
-                                 "s3://test/interconnect-gate", "--pynccl-init"]
+    assert transport["argv"] == ["--mode", "gate", "--gate-coverage", "all-gpus", "--pynccl-init"]
     assert controller["argv"] == ["--config", "launch.yaml", "--environment-prepared"]
     failed = subprocess.run(command, env=environment | {"EXIT_TRANSPORT_FIXTURE": "1"},
                             capture_output=True, text=True, timeout=15)

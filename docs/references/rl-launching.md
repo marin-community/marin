@@ -371,6 +371,9 @@ logs to see output across the gang. Ray's C++ and Python services default to
 warning-level logs. Set `IrisSkyRLExecution.job_timeout_seconds` to bound the
 total runtime in Iris.
 
+Before Ray starts on a multi-node launch, the NCCL preflight prints its JSON
+report to each participating Iris task's log.
+
 SkyRL writes crash receipts and NCCL flight recorder dumps to
 `$IRIS_OUTPUT_DIR/skyrl-debug/` for the
 [Iris attempt archive](https://github.com/marin-community/marin/blob/main/lib/iris/docs/task-outputs.md).
