@@ -54,18 +54,26 @@ class PullMetadata(TypedDict):
     reviews: list[ReviewFact]
 
 
+class ReviewedPull(TypedDict):
+    number: int
+    title: str | None
+    lines: int
+    submitted_at: str
+
+
 @dataclass
 class ReviewerHistory:
-    reviewed: int = 0
     lines: int = 0
     responses: list[float] = field(default_factory=list)
+    pulls: list[ReviewedPull] = field(default_factory=list)
 
     def summary(self) -> dict:
         return {
-            "reviewed": self.reviewed,
+            "reviewed": len(self.pulls),
             "lines_per_week": round(self.lines / (HISTORY_WINDOW / timedelta(weeks=1))),
             "avg_response_hours": sum(self.responses) / len(self.responses) if self.responses else None,
             "response_count": len(self.responses),
+            "pulls": sorted(self.pulls, key=lambda pull: pull["submitted_at"], reverse=True),
         }
 
 
@@ -184,13 +192,12 @@ async def pr_metadata(client: httpx.AsyncClient, number: int) -> PullMetadata:
 
 
 def pending_metadata(snapshot: Row, versions: dict[int, str]) -> list[int]:
+    """Return missing or stale metadata IDs in sync order."""
     pending = [pr for pr in snapshot.open_prs if pr["requested_reviewers"] or pr["requested_teams"]]
-    # Mix pending PRs with recently updated PRs (including closed ones) so either can make progress.
+    # Interleave requests and recent reviews before checking older open PRs.
+    prioritized = (pr for pair in zip_longest(pending, snapshot.recent_prs) for pr in pair if pr is not None)
     numbers = dict.fromkeys(
-        pr["number"]
-        for pair in zip_longest(pending, snapshot.recent_prs)
-        for pr in pair
-        if pr is not None and versions.get(pr["number"], "") < pr["updated_at"]
+        pr["number"] for pr in (*prioritized, *snapshot.open_prs) if versions.get(pr["number"], "") < pr["updated_at"]
     )
     return list(numbers)
 
@@ -276,13 +283,15 @@ async def sync_batch(connection: Connection) -> int:
 
 
 def queue_payload(connection: Connection) -> dict:
-    snapshot = connection.execute(text("SELECT refreshed_at, open_prs FROM queue_snapshot")).one()
+    snapshot = connection.execute(text("SELECT * FROM queue_snapshot")).one()
     records = connection.execute(text("SELECT number, updated_at, lines, reviews FROM review_metadata")).all()
     metadata = {row.number: row for row in records}
     for pr in snapshot.open_prs:
         cached = metadata.get(pr["number"])
         pr["lines"] = cached.lines if cached and cached.updated_at >= pr["updated_at"] else None
+        pr["reviewed_reviewers"] = [{"login": review["login"]} for review in cached.reviews] if cached else []
     cutoff = datetime.now(UTC) - HISTORY_WINDOW
+    titles = {pr["number"]: pr["title"] for pr in snapshot.open_prs + snapshot.recent_prs}
     stats: dict[str, ReviewerHistory] = {}
     for row in records:
         reviews: list[ReviewFact] = row.reviews
@@ -291,15 +300,25 @@ def queue_payload(connection: Connection) -> dict:
             if submitted < cutoff:
                 continue
             item = stats.setdefault(review["login"], ReviewerHistory())
-            item.reviewed += 1
             item.lines += row.lines
+            item.pulls.append(
+                {
+                    "number": row.number,
+                    "title": titles.get(row.number),
+                    "lines": row.lines,
+                    "submitted_at": review["submitted_at"],
+                }
+            )
             response_at, hours = review["response_at"], review["response_hours"]
             if response_at and hours is not None and datetime.fromisoformat(response_at) >= cutoff:
                 item.responses.append(hours)
+    versions = {row.number: row.updated_at for row in records}
+    total = len(pending_metadata(snapshot, {}))
     return {
         "refreshed_at": snapshot.refreshed_at,
         "prs": snapshot.open_prs,
         "stats": {login: history.summary() for login, history in stats.items()},
+        "sync": {"completed": total - len(pending_metadata(snapshot, versions)), "total": total},
     }
 
 

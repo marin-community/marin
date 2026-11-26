@@ -12,38 +12,66 @@
     <main class="shell">
       <header class="masthead">
         <div class="brand"><span class="brand-mark" aria-hidden="true">M</span><span>MARIN <span class="brand-light">/ COLLABORATION</span></span></div>
-        <a class="repo-link" href="https://github.com/marin-community/marin/pulls" target="_blank" rel="noopener noreferrer">Open GitHub ↗</a>
+        <a class="repo-link" href="https://github.com/marin-community/marin/pulls" target="_blank" rel="noopener noreferrer">GitHub pull requests ↗</a>
       </header>
 
       <section class="intro" aria-labelledby="page-title">
         <div class="intro-copy">
           <h1 id="page-title">Review queue<span class="title-period">.</span></h1>
-          <p class="lede">See who has an open review request before asking for another.</p>
+          <p class="lede">See who is reviewing open PRs before asking for another.</p>
         </div>
         <div class="controls">
+          <div class="sync-status">
+            <span id="sync-count">Loading PRs…</span>
+            <progress id="sync-progress" value="0" max="1" aria-label="PR metadata synced" hidden></progress>
+            <span id="updated" class="updated" aria-live="polite"></span>
+          </div>
           <button id="refresh" type="button">Refresh</button>
-          <span id="updated" class="updated" aria-live="polite">Loading open pull requests…</span>
         </div>
       </section>
 
       <section class="queue" aria-labelledby="queue-title">
         <div class="section-heading">
-          <div><h2 id="queue-title">Requested reviewers</h2><p class="section-note">Favorites stay at the top of this browser's queue.</p></div>
-          <label class="search-label">Find or star a GitHub handle <input id="search" type="search" placeholder="Search reviewers" autocomplete="off"></label>
+          <div class="view-switch" role="group" aria-label="Reviewer view">
+            <button id="queue-view" type="button" aria-pressed="true">Open reviews</button>
+            <button id="load-view" type="button" aria-pressed="false">Reviewer load</button>
+          </div>
+          <div class="filters">
+            <label class="filter-label">Find or star a handle <input id="search" type="search" placeholder="Search reviewers" autocomplete="off"></label>
+            <label class="filter-label mobile-sort">Sort by
+              <select id="sort">
+                <option value="name">Name</option>
+                <option value="pending">Pending PRs</option>
+                <option value="lines">Pending lines</option>
+                <option value="response">Avg response</option>
+                <option value="load">Lines / week</option>
+              </select>
+            </label>
+            <button class="mobile-sort" id="sort-direction" type="button" aria-label="Reverse sort order">↑</button>
+          </div>
         </div>
+        <h2 class="sr-only" id="queue-title">Reviewer queue and load</h2>
+        <p class="load-note" id="load-note" hidden>Compare <span class="pending-key">pending diff size</span> and <span class="weekly-key">weekly reviewed lines</span>. Bar lengths compare reviewers within each column.</p>
         <div id="favorite-suggestion" class="favorite-suggestion" hidden></div>
-        <div class="column-headings" aria-hidden="true"><span>Reviewer</span><span>Pending PRs</span><span>Pending lines</span><span>Avg response</span><span>Lines / week</span><span></span></div>
+        <div class="column-headings" role="group" aria-label="Sort reviewer rows">
+          <button type="button" data-sort="name" data-direction="ascending" aria-label="Reviewer, ascending" aria-pressed="true">Reviewer</button>
+          <button type="button" data-sort="pending" aria-pressed="false">Pending PRs</button>
+          <button type="button" data-sort="lines" aria-pressed="false">Pending lines</button>
+          <button type="button" data-sort="response" aria-pressed="false">Avg response</button>
+          <button type="button" data-sort="load" aria-pressed="false">Lines / week</button>
+        </div>
         <div id="reviewers" class="reviewers" aria-live="polite"><p class="empty">Loading reviewer requests…</p></div>
         <details class="data-note">
           <summary>How these numbers are calculated</summary>
           <p>Pending lines count additions plus deletions. A plus sign means some PR sizes are still loading. Multiple reviewers can receive the same PR.</p>
-          <p>Avg response measures time from an individual request to a submitted review. Lines per week uses current diff sizes for PRs each person reviewed in the last 14 days, divided by two. These figures cover the PRs synced so far.</p>
+          <p>Open PRs stay with their reviewers after a review is submitted. Avg response measures time from request to submission. Lines per week uses the diff sizes of synced PRs reviewed in the last 14 days, divided by two.</p>
+          <p>Sync progress covers open PRs and the 100 most recently updated PRs. Reviewer assignments, diff sizes, and review history fill in as PR details are synced.</p>
         </details>
       </section>
 
       <section class="other-queues" aria-label="Other open pull requests">
         <details id="team-section" hidden><summary>Team requests <span id="team-count">—</span></summary><div id="teams" class="other-list"></div></details>
-        <details id="unassigned-section"><summary>Open PRs without a review request <span id="unassigned-count">—</span></summary><p class="data-note">Includes drafts. These PRs have no individual or team request.</p><div id="unassigned" class="other-list"></div></details>
+        <details id="unassigned-section"><summary>Open PRs without a known reviewer <span id="unassigned-count">—</span></summary><p class="data-note">Includes drafts. Additional reviewers may appear as PR details are synced.</p><div id="unassigned" class="other-list"></div></details>
       </section>
 
       <footer>Source: GitHub. Marina shares the cached queue across viewers and fills in missing review data while the page is open.</footer>
