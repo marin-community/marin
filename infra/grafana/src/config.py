@@ -270,9 +270,9 @@ class BridgeConfig:
         )
 
 
-# The cluster a local bridge serves: its IAP route is the marin controller's
-# finelog endpoint, the federation hub, which sees the whole fleet.
-LOCAL_FINELOG_CLUSTER = "marin"
+# The finelog federation hub's cluster: it sees the whole fleet, serves the fleet-wide
+# routes, and is the one cluster a local bridge reaches (through its IAP route).
+FINELOG_HUB_CLUSTER = "marin"
 # Set together to give a workstation bridge its route to finelog (see LocalFinelog).
 LOCAL_FINELOG_URL_ENV = "GRAFANA_BRIDGE_LOCAL_FINELOG_URL"
 LOCAL_FINELOG_MAX_QUERIES_ENV = "GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES"

@@ -9,7 +9,7 @@ the controller-row queries here cost nothing until someone opens the job row.
 
 import re
 
-from config import CLUSTERS, K8S_CLUSTERS
+from config import CLUSTERS, FINELOG_HUB_CLUSTER, K8S_CLUSTERS
 from dashboard_dataset import DashboardDataset, SourceQuery, bounded_bucket_ms, validate_values
 from node_observability import NODE_IDENTITY_MAX_LENGTH, NODE_MAX_POINTS, NODE_MAX_WINDOW_MS, NODE_MIN_BUCKET_MS
 from vllm_observability import sql_string, sql_values
@@ -28,8 +28,6 @@ NODE_JOBS_MAX_RESULT_ROWS = 250_000
 # A Kubernetes node name or an Iris worker id.
 _NODE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _JOB_KEY = '"cluster", root_job_id, root_submitted_at_ms, job_id, submitted_at_ms'
-# iris.task rows the hub's own cluster writes carry an empty cluster; the controller rows name it.
-_HUB_CLUSTER = "marin"
 
 
 def _validate_node_scope(clusters: tuple[str, ...], node: str) -> None:
@@ -110,13 +108,14 @@ SELECT a.attempt_uid, a.task_id, a.attempt_id, a.job_id, j.name AS job_name, a.s
        r.accelerators_per_task
 FROM attempt a LEFT JOIN job j USING ({_JOB_KEY}) LEFT JOIN request r USING ({_JOB_KEY})
 """
+    # iris.task rows the hub's own cluster writes carry an empty cluster; the controller rows name it.
     usage_sql = f"""
 WITH attempt AS ({attempts})
 SELECT date_bin(INTERVAL '{bucket_ms} milliseconds', t.ts) AS bucket,
        t.task_id || ':' || CAST(t.attempt_id AS VARCHAR) AS attempt,
        avg(t.cpu_millicores) / 1000.0 AS cpu_cores, avg(t.memory_mb) * 1048576 AS memory_bytes
 FROM "iris.task" t JOIN attempt a
-  ON COALESCE(NULLIF(t."cluster", ''), {sql_string(_HUB_CLUSTER)}) = a."cluster"
+  ON COALESCE(NULLIF(t."cluster", ''), {sql_string(FINELOG_HUB_CLUSTER)}) = a."cluster"
  AND t.task_id = a.task_id AND t.attempt_id = a.attempt_id
  AND t.ts >= a.started_at AND t.ts <= COALESCE(a.finished_at, to_timestamp_millis({end_ms}))
 WHERE t.ts >= to_timestamp_millis({start_ms}) AND t.ts < to_timestamp_millis({end_ms})
