@@ -138,12 +138,18 @@ SAMPLE_SQL = (
 , selected_tasks AS (
     SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status
     FROM curriculum_tasks t JOIN selected_sources s USING (load_id, source_id)
-    -- An uncorrelated IN list is hashed once. The correlated EXISTS under this OR ran one
-    -- index probe per task of the load (R40, 1.7 s of every sample-pool page).
-    WHERE (:node_id='' OR (t.source_id, t.task_id) IN (
-        SELECT area_match.source_id, area_match.task_id FROM curriculum_matches area_match
-        WHERE area_match.load_id=:load_id AND area_match.subject_id=:subject_id
-            AND area_match.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)))
+    WHERE :node_id=''
+    UNION ALL
+    -- An area selection starts from the subject's matches (the area index) and joins
+    -- its tasks by key. A filter under an OR has no row estimate, so the planner sized
+    -- the selection at half the load and scanned it (R40, over 60 s at worst).
+    SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status
+    FROM curriculum_matches area_match
+    JOIN curriculum_tasks t ON t.load_id=area_match.load_id
+        AND t.source_id=area_match.source_id AND t.task_id=area_match.task_id
+    JOIN selected_sources s ON s.load_id=t.load_id AND s.source_id=t.source_id
+    WHERE :node_id<>'' AND area_match.load_id=:load_id AND area_match.subject_id=:subject_id
+        AND area_match.membership_similarity >= CAST(:subject_similarity AS DOUBLE PRECISION)
 ), members AS (
     SELECT t.source_id, t.task_id, t.content_hash, m.subject_id, m.capability_id,
         m.capability_similarity
