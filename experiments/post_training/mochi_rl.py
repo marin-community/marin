@@ -37,6 +37,18 @@ _MODEL = ArtifactHfModel(
     relative_path="hf",
 )
 
+_V5 = ArtifactHfModel(
+    ArtifactStep.adopt(
+        "models/mochi-v5",
+        "2026.11.24.128",
+        "s3://marin-us-east-08a/marin/users/benfeuer/mochi-long-loop/"
+        "long-loop-mochi-sft-exp3-v5-bankadam-128/sft/2026.11.24.128/exports/step-2100",
+    ),
+    tokenizer_uri="marin-community/marin-tokenizer-tools",
+    tokenizer_revision="3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+    relative_path="",
+)
+
 _ONE_RACK_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=12,
@@ -251,6 +263,7 @@ MOCHI = ModelPresets(
     ),
     namespace="mochi-rl",
     control_pins={},
+    initializers={"mochi-v5": _V5},
     needs_completed_default_export=True,
 )
 

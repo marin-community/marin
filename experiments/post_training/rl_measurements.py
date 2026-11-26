@@ -162,6 +162,7 @@ class RunOptions(BaseModel, frozen=True):
     checkpoint_every: int | None
     export: presets.CheckpointPolicy
     priority: str
+    excluded_nvlink_domains: tuple[str, ...] = ()
 
     @classmethod
     def from_preset(cls, preset: presets.Preset) -> RunOptions:
@@ -170,6 +171,7 @@ class RunOptions(BaseModel, frozen=True):
             checkpoint_every=preset.checkpoint_every,
             export=preset.export,
             priority=preset.recipe.layout.priority,
+            excluded_nvlink_domains=preset.recipe.layout.excluded_nvlink_domains,
         )
 
 
@@ -307,9 +309,9 @@ def _session_invariants(
             Invariant(
                 name=f"{name}/task_coverage",
                 value=coverage,
-                limit=presets.MINIMUM_TASK_COVERAGE,
+                limit=preset.minimum_task_coverage,
                 comparator=">=",
-                holds=coverage >= presets.MINIMUM_TASK_COVERAGE,
+                holds=coverage >= preset.minimum_task_coverage,
             )
         )
     return result

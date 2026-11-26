@@ -507,7 +507,7 @@ class MismatchProbe(Section):
 
 
 class Trainer(Section):
-    hf_export_checkpoint: Literal["latest", "best"] = field("latest")
+    hf_export_checkpoint: Literal["latest", "best", "best_and_final"] = field("latest")
     """Best selection queues only the final export, after the last evaluation. latest or best native checkpoint for
     HF export"""
     batch_builder: Literal["driver", "worker"] = field("driver")
@@ -596,7 +596,7 @@ class Trainer(Section):
     step_wise_training: bool = field(False)
     mismatch_probe: MismatchProbe = Field(default_factory=MismatchProbe)
     enable_db_registration: bool = field(True)
-    checkpoint_retention: Literal["latest", "best"] | None = field(None)
+    checkpoint_retention: Literal["latest", "best", "best_and_final"] | None = field(None)
     checkpoint_keep_every: PositiveInt | None = field(None)
     hf_hub_repo_id: str | None = field(None)
     hf_hub_private: bool = field(False)

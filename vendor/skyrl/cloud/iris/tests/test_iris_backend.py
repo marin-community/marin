@@ -8,7 +8,7 @@ from iris.client.client import IrisContext, iris_ctx_scope
 from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY
 from iris.cluster.types import JobName
-from iris.rpc import controller_pb2
+from iris.rpc import controller_pb2, job_pb2
 from omegaconf import OmegaConf
 
 from cloud.iris import launch
@@ -81,6 +81,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     document["skyrl"]["trainer"]["placement"].update(policy_num_nodes=2, ref_num_nodes=2)
     if groups:
         document["iris"]["role_topology"] = "nvlink.domain"
+        document["iris"]["excluded_nvlink_domains"] = ["DH1-136-US-EAST-08A"]
         document["iris"]["allocation"].update(num_nodes=24, gpus_per_node=4, gpu_variant="GB200")
         document["skyrl"]["trainer"].update(train_batch_size=64, policy_mini_batch_size=64)
         document["skyrl"]["trainer"]["placement"].update(
@@ -143,6 +144,13 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     assert tuple(request.coscheduling.group_sizes) == groups
     assert request.coscheduling.group_by == ("nvlink.domain" if groups else "leafgroup")
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)
+    domains = [constraint for constraint in request.constraints if constraint.key == "nvlink.domain"]
+    if groups:
+        [domain] = domains
+        assert domain.op == job_pb2.CONSTRAINT_OP_NE
+        assert domain.value.string_value == "DH1-136-US-EAST-08A"
+    else:
+        assert domains == []
     expected_interface = interface or (
         "^ibs,ibp,lo,docker,veth,cilium,lxc" if config.iris.cluster == "cw-rno2a" else None
     )

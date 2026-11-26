@@ -28,7 +28,9 @@ from omegaconf import DictConfig, OmegaConf
 from loguru import logger
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
-from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
+from cloud.iris.launch_config import (
+    RunMode, SubmissionMode, hugging_face_models, load_launch_config, validate_launch_driver_config,
+)
 from cloud.iris.hf_model_cache import UnsupportedHuggingFaceSnapshot, ensure_hugging_face_model_cache
 from marinskyrl.distillation import TeacherSource, compile_distillation_plan_from_config
 from marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE, policy_export_path, selected_export_checkpoint
@@ -38,6 +40,7 @@ from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.provenance import launch_provenance
 from skyrl_train.checkpoint_listing import (
     best_checkpoint_step,
@@ -192,6 +195,7 @@ def _exported_policy(config: DictConfig) -> ExportedPolicy | None:
         tokenizer_revision=config.inputs.model.tokenizer_revision,
         checkpoint_root=checkpoint_root,
         terminal_manifest_uri=str(config.artifacts.terminal_manifest_uri),
+        used_final_fallback=selected.used_final_fallback,
     )
 
 
@@ -204,11 +208,13 @@ def _retain_terminal_checkpoints(config: DictConfig) -> None:
     if not marker.exists():
         return
     latest = terminal_checkpoint_step(root)
-    best = best_checkpoint_step(root) if selection == "best" else None
+    best = best_checkpoint_step(root) if selection in ("best", "best_and_final") else None
     selected = latest if best is None else best
     kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest, strict=True)
     if selected > 0:
         kept.add(selected)
+    if selection == "best_and_final":
+        kept.add(latest)
     protected = protected_hf_export_steps(root, strict=True)
     if protected:
         kept.update(committed_checkpoint_steps(root, latest, strict=True) & protected)
@@ -363,11 +369,23 @@ def create_parser() -> argparse.ArgumentParser:
     launch = iris_commands.add_parser("launch")
     launch.add_argument("--config", required=True, type=Path)
     launch.add_argument("--forward-env", action="append", default=[], metavar="NAME")
+    compose = iris_commands.add_parser("compose", help="Print validated native launch documents as JSON")
+    compose.add_argument("configs", nargs="+", type=Path)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
+    if args.action == "compose":
+        configure_coreweave_s3()
+        with contextlib.redirect_stdout(sys.stderr):
+            documents = []
+            for path in args.configs:
+                config = load_launch_config(path)
+                validate_launch_driver_config(config)
+                documents.append(OmegaConf.to_container(config, resolve=True))
+        print(json.dumps(documents))
+        return 0
     with contextlib.redirect_stdout(sys.stderr):
         result = execute_launch(args.config, forward_env=tuple(args.forward_env))
     json.dump(result.model_dump(mode="json"), sys.stdout, sort_keys=True)

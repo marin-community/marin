@@ -125,7 +125,9 @@ def _run_locally(handles: list[ArtifactStep], max_concurrent: int) -> None:
     run(*handles, max_concurrent=max_concurrent)
 
 
-def build_options_with_runner(fn: Callable[..., BuildResult], runner: BuildRunner) -> Callable[..., None]:
+def build_options_with_runner(
+    fn: Callable[..., BuildResult], runner: BuildRunner, *, show_plan: Callable[[], bool] | None = None
+) -> Callable[..., None]:
     """Add shared build options and delegate ``--run`` to a domain-specific runner."""
 
     @click.option(
@@ -161,7 +163,8 @@ def build_options_with_runner(fn: Callable[..., BuildResult], runner: BuildRunne
                 param_hint="--override",
             )
         if not do_run:
-            _print_plan(handles)
+            if show_plan is None or not show_plan():
+                _print_plan(handles)
             return
         runner(handles, max_concurrent)
 

@@ -46,6 +46,7 @@ class ExportedPolicy(BaseModel):
     tokenizer_revision: str | None
     checkpoint_root: str
     terminal_manifest_uri: str
+    used_final_fallback: bool = False
 
 
 class LaunchResult(BaseModel):

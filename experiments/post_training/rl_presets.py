@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from fractions import Fraction
 from typing import Annotated, ClassVar, Literal
@@ -22,6 +22,7 @@ from marin.rl.skyrl import (
     SkyRLGenerationPlan,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
+    SkyRLRun,
 )
 from pydantic import BaseModel, Field, PositiveInt
 from rolloutengine.agents.pi.agent import PI_HARNESS
@@ -219,7 +220,7 @@ class Training:
             callbacks.append(
                 CheckpointCallback(type="checkpoint", save_steps=preset.checkpoint_every or preset.updates + 1)
             )
-        minimum_scored_tasks = math.ceil(MINIMUM_TASK_COVERAGE * expected_tasks)
+        minimum_scored_tasks = math.ceil(preset.minimum_task_coverage * expected_tasks)
         checkpoint_scores = None
         if preset.checkpoint_evaluation:
             cohorts = {
@@ -247,7 +248,7 @@ class Training:
                     **({"checkpoint_scores": checkpoint_scores} if checkpoint_scores is not None else {}),
                 )
             )
-        if preset.checkpoints == "best":
+        if preset.checkpoints in ("best", "best_and_final"):
             assert initial_model_uri is not None
             callbacks.append(
                 BestCheckpointCallback(
@@ -343,6 +344,7 @@ class Layout:
     coordinator_timeout_hours: int
     job_timeout_seconds: int
     role_topology: RoleTopologyMode | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -395,15 +397,12 @@ def validate_agentic_recipe(config: RecipePatch) -> None:
         raise ValueError("group_admission.stall_timeout must cover the Pi attempt and one retry")
 
 
-CheckpointPolicy = Literal["none", "latest", "best"]
+CheckpointPolicy = Literal["none", "latest", "best", "best_and_final"]
 
 
 @dataclass(frozen=True, kw_only=True)
 class Preset:
-    """Describe an RL preset with an export policy of ``none``, ``latest``, or ``best``.
-
-    The runner enables ``skyrl_step``'s ``export_hf`` flag for ``latest`` and ``best``.
-    """
+    """Describe an RL preset's workload, checkpoint retention, and export."""
 
     name: str
     revision: str
@@ -433,16 +432,19 @@ class Preset:
     batch_mix: BatchMix | None = None
     held_out_tasks: str | None = None
     checkpoint_evaluation: tuple[CheckpointCohort, ...] = ()
-    then: Callable[[ArtifactStep], ArtifactStep] | None = None
+    then: Callable[[ArtifactStep[SkyRLRun]], ArtifactStep] | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()
     budget: str = "hours to days"
     best_window: int = 1
+    minimum_task_coverage: float = MINIMUM_TASK_COVERAGE
 
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
             raise ValueError("measured window must lie within the planned steps")
+        if not 0 < self.minimum_task_coverage <= 1:
+            raise ValueError("minimum_task_coverage must be in (0, 1]")
         if self.gated and not self.guards:
             raise ValueError("gated presets require guards")
         if self.held_out is not None and not self.held_out_tasks:
@@ -459,14 +461,16 @@ class Preset:
         if self.checkpoints == "none":
             if cadence is not None or self.keep_every is not None:
                 raise ValueError('checkpoints="none" requires checkpoint_every and keep_every to be unset')
-        elif self.checkpoints == "best":
+        elif self.checkpoints in ("best", "best_and_final"):
             if cadence is None:
-                raise ValueError('checkpoints="best" requires checkpoint_every')
+                raise ValueError(f'checkpoints="{self.checkpoints}" requires checkpoint_every')
             if not self.evaluations:
-                raise ValueError('checkpoints="best" requires an evaluation')
+                raise ValueError(f'checkpoints="{self.checkpoints}" requires an evaluation')
             every = self.evaluations[0].every
             if every and every % cadence:
-                raise ValueError('scheduled evaluations for checkpoints="best" must fall on checkpoint steps')
+                raise ValueError(
+                    f'scheduled evaluations for checkpoints="{self.checkpoints}" must fall on checkpoint steps'
+                )
         validate_agentic_recipe(self.recipe.config)
         if self.checkpoint_evaluation:
             if not isinstance(self.recipe.layout.workload, Training) or not self.evaluations:
@@ -516,6 +520,7 @@ class ModelPresets:
     namespace: str
     control_pins: Mapping[str, ControlPin]
     needs_completed_default_export: bool = False
+    initializers: Mapping[str, ArtifactHfModel] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         names: set[str] = set()

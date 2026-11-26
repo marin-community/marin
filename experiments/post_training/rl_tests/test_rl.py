@@ -1,5 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
+import hashlib
 import importlib.util
 import json
 import runpy
@@ -36,6 +37,7 @@ from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from s3fs import S3FileSystem
 from skyrlrecipe.documents import merge_mappings, set_path
 from taskcompendium.models import (
     AnswerType,
@@ -474,6 +476,15 @@ print(json.dumps(results))
     assert rejected == [None] * 4
 
 
+def test_checkpoint_callback_uses_preset_coverage(selection, tmp_path):
+    preset = replace(snowball_model.SNOWBALL.by_name["train-long-checkpoint-eval"], minimum_task_coverage=0.90)
+    spec = recipe.run_spec(preset, name="checkpoint-coverage", model_name="snowball")
+    step = recipe.run_step(preset, spec)
+    trainer = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)["skyrl"]["trainer"]
+    callback = next(callback for callback in trainer["callbacks"] if callback["type"] == "best_checkpoint")
+    assert callback["minimum_scored_tasks"] == 90
+
+
 @pytest.mark.parametrize(
     ("kind", "record_config", "tokenizer", "revision"),
     [
@@ -513,6 +524,63 @@ def test_published_init_binds_export_tokenizer(
         tokenizer,
         revision,
     )
+
+
+@pytest.mark.parametrize("embedded", [True, False], ids=["embedded", "missing-tokenizer"])
+def test_show_config_composes_portable_storage_initializer(selection, tmp_path, monkeypatch, request, embedded):
+    uri = "s3://marin-test/models/policy"
+    for filename in ("config.json", "model.safetensors"):
+        (tmp_path / filename).touch()
+    (tmp_path / "model.safetensors").write_bytes(b"weights")
+    if embedded:
+        for filename in ("tokenizer.json", "tokenizer_config.json"):
+            (tmp_path / filename).touch()
+    fake_s3_checkpoint(monkeypatch, uri, tmp_path)
+
+    def list_export(_fs, path, *, detail):
+        assert path == uri.removeprefix("s3://") and detail
+        return [
+            {
+                "name": f"{path}/{file.name}",
+                "type": "file",
+                "size": file.stat().st_size,
+                "ETag": hashlib.sha256(file.read_bytes()).hexdigest(),
+            }
+            for file in tmp_path.iterdir()
+            if file.name in {"config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json"}
+        ]
+
+    monkeypatch.setattr("s3fs.S3FileSystem.ls", list_export)
+    S3FileSystem.clear_instance_cache()
+    request.addfinalizer(S3FileSystem.clear_instance_cache)
+    args = [
+        "--preset",
+        "train-long",
+        "--version",
+        "2026.11.25",
+        "--init",
+        uri,
+        "--set",
+        "trainer.max_steps=7",
+        "--show-config",
+    ]
+    table = snowball_model.SNOWBALL
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
+    if not embedded:
+        assert result.exit_code == 4 and "tokenizer" in result.output
+        return
+    assert result.exit_code == 0, (result.output, result.exception)
+    document = yaml.safe_load(result.stdout)
+    assert document["inputs"]["model"]["uri"] == uri
+    assert document["skyrl"]["trainer"]["max_steps"] == 7
+    assert document["run"]["model"] == table.model
+    assert "/train-long-" in document["artifacts"]["terminal_manifest_uri"]
+    (tmp_path / "model.safetensors").write_bytes(b"changed")
+    changed = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
+    assert changed.exit_code == 0, (changed.output, changed.exception)
+    later = yaml.safe_load(changed.stdout)
+    assert later["inputs"]["model"]["identity"] != document["inputs"]["model"]["identity"]
+    assert later["artifacts"]["terminal_manifest_uri"] != document["artifacts"]["terminal_manifest_uri"]
 
 
 def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path, mochi_sft_presets):
@@ -1190,8 +1258,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             + f"following={following}\n"
             "table=snowball_rl.SNOWBALL\n"
             "if following is not None:\n"
-            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
-            + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
+            "    table=replace(table,presets=tuple(replace(preset,then=following) "
+            "for preset in table.presets))\n" + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
         # Same-size rewrites within one timestamp tick must load the new module.

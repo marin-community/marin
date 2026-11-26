@@ -686,6 +686,7 @@ class IrisSkyRLExecution:
     required_env_vars: tuple[str, ...] = ()
     container_profile: job_pb2.ContainerProfile | None = None
     role_topology: RoleTopologyMode | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours < 0:
@@ -696,6 +697,8 @@ class IrisSkyRLExecution:
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
             raise ValueError("SkyRL target_cluster must match the execution cluster")
+        if any(not domain.strip() for domain in self.excluded_nvlink_domains):
+            raise ValueError("SkyRL excluded NVLink domains must be nonempty labels")
 
 
 _FINGERPRINT_EXECUTION = IrisSkyRLExecution(
@@ -1038,6 +1041,8 @@ def _launch_config_yaml(
         if callback["type"] == _BEST_CHECKPOINT_CALLBACK:
             callback["initial_model_uri"] = model.uri
     num_nodes = spec.topology.num_nodes
+    if execution.excluded_nvlink_domains and not is_rack_based(spec.topology.gpu_variant):
+        raise ValueError("Excluding an NVLink domain requires an NVL72 GPU variant")
     if execution.role_topology is not None:
         if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
             raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
@@ -1087,6 +1092,11 @@ def _launch_config_yaml(
             "job_name": sanitize_job_name(f"{run_id}-{attempt_id}"),
             "wandb_entity": execution.wandb_entity,
             "role_topology": execution.role_topology.value if execution.role_topology is not None else None,
+            **(
+                {"excluded_nvlink_domains": list(execution.excluded_nvlink_domains)}
+                if execution.excluded_nvlink_domains
+                else {}
+            ),
             "allocation": {
                 "num_nodes": num_nodes,
                 "gpus_per_node": spec.topology.gpus_per_node,
