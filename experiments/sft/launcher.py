@@ -102,6 +102,7 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact, is_mutable_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext, lower
+from marin.execution.remote import FailureBudget
 from marin.execution.step_runner import StepRunner
 from marin.experiment.checkpoints import HfToLevanterCheckpoint
 from marin.experiment.train import train_job
@@ -370,8 +371,7 @@ class HFModel(_LevanterModelSource):
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
     task_timeout_seconds: int | None = None
     priority: int = 0
-    max_retries_failure: int = 0
-    max_task_failures: int = 0
+    failure_budget: FailureBudget = field(default_factory=FailureBudget)
     # Built once: ArtifactStep compares by identity, so init_deps and build_train_config must share it.
     _mirror: ArtifactStep[LevanterCheckpoint] | None = field(init=False, repr=False, compare=False)
 
@@ -394,8 +394,7 @@ class HFModel(_LevanterModelSource):
             train_job,
             timeout=timeout,
             priority=self.priority,
-            max_retries_failure=self.max_retries_failure,
-            max_task_failures=self.max_task_failures,
+            failure_budget=self.failure_budget,
         )
 
     def init_deps(self) -> tuple[ArtifactStep, ...]:
@@ -637,6 +636,7 @@ class SFTSpec:
     datasets: Sequence[DatasetSpec | ArtifactDatasetSpec]  # the instruction mixture
     optimizer: OptimizerConfig  # e.g. AdamConfig for the Levanter backend
     trainer_config: TrainerConfig | None = None
+    """Backend template; SFTSpec owns batch, steps, parallelism, mesh and checkpoint policy."""
     z_loss_weight: float = 0.0
     global_gradient_clip: float | None = None
     initial_eval_match: InitialEvalMatchConfig | None = None
@@ -871,10 +871,11 @@ def _trainer(
     spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
 ) -> TrainerConfig:
     """Trainer config. ``gpu_allocator`` adds the GPU-only cuda_async PJRT allocator."""
+    jax_config = dict(spec.trainer_config.jax_config if spec.trainer_config is not None else DEFAULT_JAX_CONFIG)
+    if gpu_allocator:
+        # GPU-only: TPU PJRT rejects the cuda_async allocator option.
+        jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     if spec.trainer_config is not None:
-        jax_config = dict(spec.trainer_config.jax_config)
-        if gpu_allocator:
-            jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
         return replace(
             spec.trainer_config,
             id=sft_run_id(spec),
@@ -886,11 +887,6 @@ def _trainer(
             checkpointer=spec.checkpointer,
             jax_config=jax_config,
         )
-    jax_config = dict(DEFAULT_JAX_CONFIG)
-    if gpu_allocator:
-        # The cuda_async allocator is the resume-OOM defrag fix (marin #7115), GPU-only: passing
-        # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
-        jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
         id=sft_run_id(spec),
         train_batch_size=spec.batch_size,

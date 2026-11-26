@@ -40,7 +40,7 @@ from rigging.timing import Duration
 from marin.evaluation.evaluation_config import EvalTaskConfig, convert_to_levanter_task_config
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.execution.remote import remote
+from marin.execution.remote import FailureBudget, remote
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -87,8 +87,7 @@ def train_job(
     *,
     timeout: Duration | None = None,
     priority: int = 0,
-    max_retries_failure: int = 0,
-    max_task_failures: int = 0,
+    failure_budget: FailureBudget = FailureBudget(),
 ) -> None:
     """Dispatch the assembled config as its own Fray training job."""
     # GPU: resolve the env now so XLA_FLAGS is in the pod environment before the
@@ -105,8 +104,7 @@ def train_job(
         env_vars=env_vars,
         timeout=timeout,
         priority=priority,
-        max_retries_failure=max_retries_failure,
-        max_task_failures=max_task_failures,
+        failure_budget=failure_budget,
     )(pod_config)
 
 

@@ -34,7 +34,10 @@ class InitialEvalMatchConfig:
 
 
 def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[int, ...]) -> dict:
-    """Hash frozen evaluation tokens, masks and their prediction-weight sum."""
+    """Hash frozen evaluation tokens, masks and their prediction-weight sum.
+
+    The frozen reference wire field ``scored_tokens`` stores the sum of weights.
+    """
     tokens_hash = hashlib.sha256()
     weights_hash = hashlib.sha256()
     segments_hash = hashlib.sha256()
@@ -84,7 +87,10 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
 
 
 def initial_eval_match(reference: dict, metrics: dict, audit: dict, absolute_tolerance: float) -> dict:
-    """Reject changed evaluation inputs or an initial loss outside the specified tolerance."""
+    """Return reference/measured losses, their difference and the verified input audit.
+
+    Raise when inputs change or the initial loss exceeds the specified tolerance.
+    """
     if reference["input_audit"] != audit:
         raise ValueError("Initial evaluation inputs do not match the reference token stream and masks")
     expected = float(reference["metrics"][EVAL_LOSS_METRIC])

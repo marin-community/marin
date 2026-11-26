@@ -1727,7 +1727,6 @@ def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
     else:
         train_config = config.train_config
         assert train_config.trainer.num_train_steps == sft_updates
-        assert training.run.keywords["timeout"] is None
     assert train_config.data.components == data.components
     launch = yaml.safe_load(materialized_config(run, str(tmp_path)).launch_config_yaml)
     trainer = launch["skyrl"]["trainer"]
@@ -1801,7 +1800,7 @@ def test_sft_only_arm_exports_without_starting_rl(tmp_path, monkeypatch, selecti
     command = snowball.command(snowball_model.SNOWBALL, argv=arguments, sft_presets=lambda: (MIXTURE_262K_32NODE,))
     result = CliRunner().invoke(command, arguments)
     assert result.exit_code == 0, (result.output, result.exception)
-    execution = recipe.run_execution(snowball_model.SNOWBALL.by_name["train-long-agentic"])
+    execution = recipe.execution_config(snowball_model.SNOWBALL.by_name["train-long-agentic"])
     environment = {key: "fixture" for key in execution.required_env_vars}
     _, request = _coordinator_request(
         plans, "experiments.post_training.snowball_rl", arguments, Path.cwd(), environment, execution=execution

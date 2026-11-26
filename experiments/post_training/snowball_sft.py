@@ -28,6 +28,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.remote import FailureBudget
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
@@ -194,8 +195,7 @@ EXP7_SPEC = replace(
         ),
         eos_token_ids=(128001, 128009),
         priority=priority_band_value("production"),
-        max_retries_failure=2,
-        max_task_failures=64,
+        failure_budget=FailureBudget(max_retries_failure=2, max_task_failures=64),
     ),
     prepared_data=PreparedData(
         ArtifactStep.adopt("sft-mixes/exp3-v10-1/release", "2026.11.25", _EXP7_RELEASE),

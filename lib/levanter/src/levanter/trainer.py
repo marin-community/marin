@@ -97,6 +97,8 @@ from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import ComputeLossFunction, FilterSpec
 
 logger = pylogging.getLogger(__name__)
+_DEFAULT_LOADER_FETCH_BATCH_SIZE = 32
+_DEFAULT_LOADER_MAX_BUFFERED_BATCHES = 128
 
 X = TypeVar("X")  # Input
 M = TypeVar("M")  # Model
@@ -912,8 +914,13 @@ class TrainerConfig:
     the compute dtype. In YAML: ``field_dtype_overrides: {router_bias: float32}``.
     """
     offload_opt_state: bool = field(default=False, metadata={"fingerprint_omit_value": False})
-    loader_fetch_batch_size: int = field(default=32, metadata={"fingerprint_omit_value": 32})
-    loader_max_buffered_batches: int = field(default=128, metadata={"fingerprint_omit_value": 128})
+    loader_fetch_batch_size: int = field(
+        default=_DEFAULT_LOADER_FETCH_BATCH_SIZE, metadata={"fingerprint_omit_value": _DEFAULT_LOADER_FETCH_BATCH_SIZE}
+    )
+    loader_max_buffered_batches: int = field(
+        default=_DEFAULT_LOADER_MAX_BUFFERED_BATCHES,
+        metadata={"fingerprint_omit_value": _DEFAULT_LOADER_MAX_BUFFERED_BATCHES},
+    )
     gradient_accumulation_dtype: str | None = field(default=None, metadata={"fingerprint_omit_value": None})
 
     quantization: Optional[QuantizationConfig] = None

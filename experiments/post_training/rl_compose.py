@@ -708,12 +708,12 @@ def run_step(
     config = yaml.safe_load(spec.config_yaml)
     return skyrl_step(
         spec,
-        run_execution(preset, wandb_entity=wandb_entity, forward_env=(*forward_env, *_recipe_env(config))),
+        execution_config(preset, wandb_entity=wandb_entity, forward_env=(*forward_env, *_recipe_env(config))),
         export_hf=preset.export != "none",
     )
 
 
-def run_execution(
+def execution_config(
     preset: presets.Preset, *, wandb_entity: str | None = None, forward_env: tuple[str, ...] = ()
 ) -> IrisSkyRLExecution:
     """Return the preset's Iris placement, limits and required environment names."""

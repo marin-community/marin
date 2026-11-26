@@ -1246,7 +1246,7 @@ def command(
                 materialized_config(initializer.step, recipe.run_prefix(preset))
             context = click.get_current_context()
             context.meta["rl_handle_count"] = 1
-            context.meta["sft_execution"] = recipe.run_execution(
+            context.meta["sft_execution"] = recipe.execution_config(
                 preset, wandb_entity=os.environ.get(_WANDB_ENTITY_ENV), forward_env=forward_env
             )
             _print_status(

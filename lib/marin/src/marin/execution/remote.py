@@ -42,6 +42,14 @@ def sanitize_job_name(name: str) -> str:
 
 
 @dataclass(frozen=True)
+class FailureBudget:
+    """Independent Fray limits for per-task retries and cumulative failed attempts."""
+
+    max_retries_failure: int = 0
+    max_task_failures: int = 0
+
+
+@dataclass(frozen=True)
 class RemoteCallable(Generic[P, R]):
     """A callable wrapper that submits its function to Fray when called.
 
@@ -58,8 +66,7 @@ class RemoteCallable(Generic[P, R]):
     name: str | None = None
     timeout: Duration | None = None
     priority: int = 0
-    max_retries_failure: int = 0
-    max_task_failures: int = 0
+    failure_budget: FailureBudget = field(default_factory=FailureBudget)
 
     def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
@@ -85,8 +92,8 @@ class RemoteCallable(Generic[P, R]):
                 resources=self.resources,
                 timeout=self.timeout,
                 priority=self.priority,
-                max_retries_failure=self.max_retries_failure,
-                max_task_failures=self.max_task_failures,
+                max_retries_failure=self.failure_budget.max_retries_failure,
+                max_task_failures=self.failure_budget.max_task_failures,
                 environment=create_environment(
                     extras=dependency_groups,
                     pip_packages=self.pip_packages,
@@ -108,8 +115,7 @@ def remote(
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
     priority: int = 0,
-    max_retries_failure: int = 0,
-    max_task_failures: int = 0,
+    failure_budget: FailureBudget = FailureBudget(),
 ) -> RemoteCallable[P, R]: ...
 
 
@@ -123,8 +129,7 @@ def remote(
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
     priority: int = 0,
-    max_retries_failure: int = 0,
-    max_task_failures: int = 0,
+    failure_budget: FailureBudget = FailureBudget(),
 ) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
@@ -138,8 +143,7 @@ def remote(
     pip_packages: list[str] | None = None,
     timeout: Duration | None = None,
     priority: int = 0,
-    max_retries_failure: int = 0,
-    max_task_failures: int = 0,
+    failure_budget: FailureBudget = FailureBudget(),
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
@@ -160,8 +164,7 @@ def remote(
             name=name,
             timeout=timeout,
             priority=priority,
-            max_retries_failure=max_retries_failure,
-            max_task_failures=max_task_failures,
+            failure_budget=failure_budget,
         )
 
     if fn is not None:
