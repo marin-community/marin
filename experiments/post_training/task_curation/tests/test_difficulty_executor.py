@@ -22,6 +22,7 @@ from experiments.post_training.task_curation.difficulty.executor import (
     CONCURRENT_JOB_CAP,
     EscalationLog,
     Job,
+    action_job_slots,
     collect_finished,
     execute_plan,
     reconcile_once,
@@ -65,7 +66,12 @@ class JobStore:
         target = StoragePath(self.root) / (key + ".json")
         target.parent.mkdirs()
         target.write_text(StoragePath(manifest_uri).read_text())
-        job = Job("/owner/controller/difficulty-reconcile-" + key[:24], JobState.RUNNING, None)
+        job = Job(
+            "/owner/controller/difficulty-reconcile-" + key[:24],
+            JobState.RUNNING,
+            action.solver if isinstance(action, AttemptBatch) else None,
+            action_job_slots(action),
+        )
         self.existing.append(job)
         return job.job_id
 
@@ -317,20 +323,36 @@ def test_tpu_batches_fill_shared_pools_without_exceeding_attempt_or_repair_slots
     version.mkdir(parents=True)
     identity = identity_bundle()
     (version / "campaign.json").write_text(json.dumps({"identity": identity, "campaign_id": digest(identity)}))
-    sources = [replace(SOURCE, source_id=f"source-{i}") for i in range(5)]
-    actions = plan([cell_state([], source, solver, CoveragePolicy()) for source in sources for solver in Solver], [])
+    sources = [replace(SOURCE, source_id=f"source-{i}") for i in range(15)]
+    repair_sources = [replace(SOURCE, source_id=f"repair-{i}") for i in range(9)]
+    repairs = [
+        RebuildEnvironmentArtifact(f"s3://fixtures/environment-{i}", ((source.source_id, Solver.SMALL),), ())
+        for i, source in enumerate(repair_sources)
+    ]
+    actions = repairs + plan(
+        [cell_state([], source, solver, CoveragePolicy()) for source in sources for solver in Solver], []
+    )
     backend = JobStore(str(tmp_path / "jobs"))
-    result = execute_plan(actions, [], sources, ledger, backend, EscalationLog(ledger))
-    accepted = [json.loads(path.read_text())["solver"] for path in (tmp_path / "jobs").glob("*.json")]
+    catalog = sources + repair_sources
+    result = execute_plan(actions, [], catalog, ledger, backend, EscalationLog(ledger))
+    accepted = [
+        payload["solver"]
+        for path in (tmp_path / "jobs").glob("*.json")
+        if (payload := json.loads(path.read_text()))["kind"] == "AttemptBatch"
+    ]
     assert {solver: accepted.count(solver) for solver in ("small", "large", "snowball", "hosted")} == {
-        "small": 4,
-        "large": 4,
-        "snowball": 2,
+        "small": 7,
+        "large": 14,
+        "snowball": 7,
         "hosted": 4,
     }
-    assert len(result["submitted"]) == 14
-    assert result["active_job_slots"] == 56
-    assert result["active_job_slots"] + 8 <= CONCURRENT_JOB_CAP
+    assert len(accepted) * 4 == 128
+    assert len(result["submitted"]) == 40
+    assert result["active_job_slots"] == 136
+    assert action_id(repairs[-1]) in result["deferred"]
+    restarted = execute_plan(actions, read_rows(ledger), catalog, ledger, backend, EscalationLog(ledger))
+    assert restarted["submitted"] == []
+    assert restarted["active_job_slots"] == 136
 
 
 def test_rolling_controllers_share_the_lease_without_duplicate_submission(tmp_path):

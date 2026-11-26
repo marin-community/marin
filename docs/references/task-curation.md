@@ -2708,6 +2708,17 @@ batch runs at most four grader workers. The required `device-type=cpu` constrain
 image extraction and workspace files off TPU hosts' boot disks. Serving remains
 on TPUs, with the frozen TaskSpecs and source deadlines preserved.
 
+The TPU scheduler admits at most 32 attempt batches (128 grader workers):
+14 Large, 7 Small, 7 Snowball and 4 Hosted. The self-hosted worker ceilings
+follow the 128/64/64-chip allocation; Hosted stays on the provider. Eight
+additional scheduling slots remain available for repairs. These admission
+ceilings do not allocate CPU capacity; ramp owned workers against observed
+throughput and retain the slice cleanup guard.
+
+Solver readiness probes retain pinned tokenization, tools and sampling while
+limiting diagnostic output to 512 tokens. Graded trials retain their original
+16,384-token completion budget. Probe receipts record the diagnostic request.
+
 The versioned `swe-rebench-daytona-cap-20261125-v1` exception runs the pinned
 SWE-rebench native tasks on Daytona at 4 vCPU, 8 GiB RAM and 10 GiB disk,
 instead of their declared 6/24/32 shape. Its immutable authority binds the

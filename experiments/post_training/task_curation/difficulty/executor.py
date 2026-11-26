@@ -70,7 +70,9 @@ ATTEMPT_JOBS_PER_SOLVER = MappingProxyType(
         Solver.HOSTED: 2,
     }
 )
-TPU_ATTEMPT_JOBS_PER_SOLVER = MappingProxyType({Solver.SMALL: 4, Solver.LARGE: 4, Solver.SNOWBALL: 2, Solver.HOSTED: 4})
+# Reserve 16 provider workers; split the remaining 112 in the 128/64/64-chip ratio.
+TPU_ATTEMPT_JOBS_PER_SOLVER = MappingProxyType({Solver.SMALL: 7, Solver.LARGE: 14, Solver.SNOWBALL: 7, Solver.HOSTED: 4})
+TPU_CONCURRENT_JOB_CAP = sum(TPU_ATTEMPT_JOBS_PER_SOLVER.values()) * ATTEMPT_JOB_SLOTS + REPAIR_JOB_SLOT_CAP
 LOGGER = logging.getLogger(__name__)
 
 
@@ -165,6 +167,7 @@ def execute_plan(
     spent = budget.recorded_gpu_hours(rows) if budget else 0.0
     reserved = budget.reserved_gpu_hours(rows, ledger) if budget else 0.0
     tpu_campaign = campaign_record(ledger) is not None
+    concurrent_job_cap = TPU_CONCURRENT_JOB_CAP if tpu_campaign else CONCURRENT_JOB_CAP
     for action in actions:
         key = action_id(action)
         if key in recorded:
@@ -199,7 +202,7 @@ def execute_plan(
                 # solver reservation without adding scored receipts.
                 deferred.append(key)
                 continue
-        if slots + required_slots > CONCURRENT_JOB_CAP:
+        if slots + required_slots > concurrent_job_cap:
             deferred.append(key)
             continue
         if not isinstance(action, AttemptBatch) and repair_slots + required_slots > REPAIR_JOB_SLOT_CAP:
@@ -246,7 +249,7 @@ def execute_plan(
         "escalated": escalated,
         "deferred": deferred,
         "active_job_slots": slots,
-        "concurrent_job_cap": CONCURRENT_JOB_CAP,
+        "concurrent_job_cap": concurrent_job_cap,
         "recorded_gpu_hours": spent,
         "reserved_gpu_hours": reserved,
         "budget_gpu_hours": budget.limit_gpu_hours if budget else None,

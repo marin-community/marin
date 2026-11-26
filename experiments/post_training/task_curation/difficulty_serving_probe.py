@@ -23,6 +23,8 @@ from experiments.post_training.task_curation.difficulty_sampling import request_
 from experiments.post_training.task_curation.harmony_probe import harmony_prompt_tokens
 from experiments.post_training.task_curation.judges import JudgeTierDefinition
 
+SOLVER_PROBE_OUTPUT_TOKENS = 512
+
 PROBE_MESSAGES = [
     {"role": "user", "content": "Look up record A."},
     {
@@ -63,7 +65,7 @@ def probe_endpoint(solver: Solver, endpoint: str, api_model: str, api_key: str, 
         "model": api_model,
         "messages": PROBE_MESSAGES,
         "tools": PROBE_TOOLS,
-        "max_tokens": settings.output_tokens,
+        "max_tokens": min(settings.output_tokens, SOLVER_PROBE_OUTPUT_TOKENS),
         **{key: value for key, value in parameters.items() if key != "extra_body"},
         **parameters.get("extra_body", {}),
     }
