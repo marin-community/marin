@@ -56,7 +56,8 @@ def _normalized_message(message: dict[str, Any]) -> dict[str, Any]:
     result = {
         key: value
         for key, value in message.items()
-        if value is not None and (key not in {"reasoning", "reasoning_content", "content"} or value != "")
+        if value is not None
+        and (key not in {"reasoning", "reasoning_content", "content", "annotations"} or value not in ("", []))
     }
     if result.get("tool_calls"):
         result["tool_calls"] = [_normalized_tool_call(call) for call in result["tool_calls"]]

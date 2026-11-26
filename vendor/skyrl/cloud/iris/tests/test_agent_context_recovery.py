@@ -306,3 +306,39 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
     assert result.failure is not None
     assert result.failure.diagnostics["setup_exit_code"] == exit_code
     assert result.metrics["rollout_retries"] == retries
+
+
+@pytest.mark.asyncio
+async def test_native_worker_retains_observations_when_chat_annotations_are_empty(agent_harnesses, worker_config):
+    async def agent(_context, complete):
+        messages = [{"role": "user", "content": "Start"}]
+        for index in range(3):
+            turn = await complete(Prompt(tuple(messages), {}))
+            messages.extend([
+                {"role": "assistant", "content": turn.message["content"]},
+                {"role": "user", "content": f"observation {index}"},
+            ])
+
+    replies = [sampled_reply(content) for content in ("Working", "Working", "12")]
+    for index, reply in enumerate(replies):
+        reply["assistant_messages"][0]["annotations"] = []
+        reply["prompt_ids"] = [[1, 2] + [3, 4, 5] * index]
+    request = TaskRequestBatch(
+        rows=(task_input(lowered_task(text_task(), "pi", max_turns=4)),),
+        sampling_params={"seed": 20261125},
+    )
+    worker = TaskRolloutWorker(
+        worker_config, WholeTaskProjection(worker_config, WorkerTokenizer()), ScriptedClient(replies), {},
+        agents=agent_harnesses(agent), shutdown_timeout=5,
+    )
+    try:
+        (result,) = await worker.generate(request)
+        batch = await worker.training_batch(request, [result])
+    finally:
+        await worker.shutdown()
+    assert result.failure is None
+    assert len(result.conversations) == 1
+    assert [message["content"] for message in batch["evidence_messages"][0]] == [
+        "Start", "Working", "observation 0", "Working", "observation 1", "12",
+    ]
+    assert batch["assistant_turn_token_ids"] == [[[3], [3], [3]]]

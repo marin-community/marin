@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from rolloutengine.harness.core import HarnessContext, ModelSession
+from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import ContextRecovery, LimitReached, ModelTurn, Prompt, RolloutLimits
 from rolloutengine.test_support import arithmetic_task, engine, rollout_spec
 
@@ -183,3 +184,39 @@ def test_limits_reject_a_non_positive_stall_batch_count():
                 "cleanup_timeout": 5,
             }
         )
+
+
+@pytest.mark.parametrize("changed_observation", [False, True])
+async def test_external_agent_preserves_observations_with_empty_chat_annotations(changed_observation):
+    content = terminus_message("cat notes.txt")
+    calls = []
+
+    async def complete(request):
+        calls.append(request)
+        served = request.continuation.served_token_ids if request.continuation is not None else (10, 11)
+        return ModelTurn(
+            {"role": "assistant", "content": content, "annotations": [], "audio": None, "refusal": None},
+            served,
+            (20,),
+            (-0.5,),
+            "stop",
+        )
+
+    async def agent(_context, completion):
+        messages = [{"role": "user", "content": "Read the notes."}]
+        for index in range(8):
+            turn = await completion(Prompt(tuple(messages), {}))
+            messages.extend(
+                [
+                    {"role": "assistant", "content": turn.message["content"]},
+                    {"role": "user", "content": f"output {index}" if changed_observation else "unchanged output"},
+                ]
+            )
+
+    result = await run_stall(AgentHarness(agent), ModelAdapter(complete), STALL_LIMITS)
+    assert result.rollout.stop_reason == ("stop" if changed_observation else "repeat_stall")
+    assert len(calls) == (8 if changed_observation else 3)
+    assert len(result.rollout.conversations) == 1
+    assert result.rollout.conversations[0].steps[0].transition.observations == (
+        {"role": "user", "content": "output 0" if changed_observation else "unchanged output"},
+    )
