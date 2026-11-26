@@ -446,8 +446,8 @@ the nightly learning gates to assess learning behavior.
 
 ### Stop at a rollout token budget
 
-Set `trainer.rollout_token_budget` on a fresh run with `trainer.resume_mode=none`
-and `trainer.rollout_buffer.max_staleness_steps=0`. SkyRL counts every training
+Set `trainer.rollout_token_budget` with
+`trainer.rollout_buffer.max_staleness_steps=0`. SkyRL counts every training
 group's generated response tokens, including groups the admission policy discards.
 After the first optimizer update that reaches the budget, SkyRL evaluates
 `data.val_data` with the updated policy and closes training. Put the full held-out
@@ -456,6 +456,15 @@ budget. The final total can exceed the budget by up to one update's generation.
 Use `rollout/gross_response_tokens` and `rollout/gross_response_tokens_total` to
 check the stopping update and compare actual spend. A run ending below budget
 fails.
+
+With `trainer.resume_mode=latest`, the budget resumes from the gross total
+saved alongside the policy and optimizer. Use the same budget when continuing
+a checkpoint. A nonzero checkpoint needs a saved total for its step. Import
+older checkpoints without a total as a new stage with
+`trainer.reset_global_step_on_resume=true`. A retry that restores a checkpoint
+already at the budget runs the terminal evaluation without another training
+update. Generation after the last complete checkpoint is tracked by attempt
+and falls outside the restored total.
 
 ## Author typed recipes
 

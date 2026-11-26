@@ -101,7 +101,5 @@ def validate_rollout_launch(
             raise ValueError("trainer.rollout_token_budget requires a training entrypoint")
         if cfg.trainer.rollout_buffer.max_staleness_steps != 0:
             raise ValueError("trainer.rollout_token_budget requires synchronous generation (max_staleness_steps=0)")
-        if cfg.trainer.resume_mode != "none":
-            raise ValueError("trainer.rollout_token_budget requires a fresh run (resume_mode=none)")
         if not cfg.data.val_data:
             raise ValueError("trainer.rollout_token_budget requires a primary evaluation panel in data.val_data")

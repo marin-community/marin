@@ -364,6 +364,7 @@ class RayPPOTrainer:
         self._distillation_tickets: dict[str, AsyncRoutedTeacherScoreTicket] = {}
         self._domain_balancer: DomainGradientBalancer | None = None
         self.distillation_scored_tokens_total = 0
+        self.rollout_gross_response_tokens_total = 0
 
         self.reward_kl_controller: Optional[Union[FixedKLController, AdaptiveKLController]] = None
         configure_ray_worker_logging()
@@ -1724,6 +1725,8 @@ class RayPPOTrainer:
             self.all_timings["train_critic_and_policy"] = 0.0
             self.all_metrics["policy/policy_update_steps"] = 0.0
             self.all_metrics["ftpo/empty_batch"] = 1.0
+            if sampling_batch is not None:
+                self.all_metrics.update(self.context.finish_sampling_step(sampling_batch, None))
             return {"policy_update_steps": 0.0}
         # The drain after the last weight sync can go stale while the rollout buffer fills, so align the
         # policy actor loops immediately before every forward.
@@ -2873,6 +2876,8 @@ class RayPPOTrainer:
             "ftpo_stopped": self._ftpo_stopped,
             "domain_gradient_balance_state": self._domain_balancer.state_dict() if self._domain_balancer else None,
         }
+        if self.cfg.trainer.get("rollout_token_budget") is not None:
+            trainer_state["rollout_gross_response_tokens_total"] = self.rollout_gross_response_tokens_total
         trainer_state_path = os.path.join(global_step_folder, TRAINER_STATE_FILENAME)
         trainer_state_buffer = stdlib_io.BytesIO()
         torch.save(trainer_state, trainer_state_buffer)
@@ -3003,6 +3008,23 @@ class RayPPOTrainer:
             trainer_state = torch.load(f, map_location="cpu", weights_only=False)
         saved_global_step = trainer_state.get("global_step", global_step)
         saved_config = trainer_state["config"]
+        reset_step = not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False)
+        budget = self.cfg.trainer.get("rollout_token_budget")
+        if budget is not None:
+            total = 0 if reset_step else trainer_state.get("rollout_gross_response_tokens_total")
+            if total is None and global_step == saved_global_step == 0:
+                total = 0
+            elif not reset_step and (
+                type(total) is not int
+                or total < 0
+                or saved_global_step != global_step
+                or saved_config["trainer"].get("rollout_token_budget") != budget
+            ):
+                raise ValueError(
+                    "A rollout token budget can only continue from a checkpoint with the same budget "
+                    "and a valid saved gross rollout token total for its step"
+                )
+            self.rollout_gross_response_tokens_total = total
         saved_attempt = saved_config.get("runtime", {}).get("attempt_id")
         if saved_attempt is not None:
             self._resume_checkpoint = CheckpointReference(
@@ -3058,7 +3080,7 @@ class RayPPOTrainer:
         logger.info(f"Successfully loaded complete checkpoint state from global_step_{global_step}")
         if recovering_own_checkpoint:
             self._last_saved_step = global_step
-        if not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False):
+        if reset_step:
             logger.info("Resetting the trainer step to 0 at the explicit stage boundary")
             global_step = 0
         return global_step, str(checkpoint_path)

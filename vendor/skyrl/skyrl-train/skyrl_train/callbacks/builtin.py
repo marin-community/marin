@@ -197,31 +197,46 @@ class DistillationTokenBudgetCallback(TrainerCallback):
 
 
 class RolloutTokenBudgetCallback(TrainerCallback):
-    """Stop a fresh synchronous run after its first complete update at the requested gross spend."""
+    """Stop synchronous training at the first completed update that reaches the gross spend."""
 
     error_behavior = CallbackErrorBehavior.RAISE
 
     def __init__(self, budget: int):
         self.budget = budget
-        self.total = 0
 
-    def on_step_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
-        self.total += state.metrics[GROSS_ROLLOUT_TOKENS_METRIC]
-        trainer.all_metrics[CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC] = self.total
-        if self.total >= self.budget:
-            logger.info(
-                "Reached rollout token budget at update {}: {} >= {}", state.global_step, self.total, self.budget
-            )
+    def on_train_begin(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        if state.global_step > 0:
+            control.should_evaluate = False
+        if trainer.rollout_gross_response_tokens_total >= self.budget:
             control.should_training_stop = True
-            control.should_evaluate = True
         return control
 
-    def on_train_end(self, state: TrainerState, control: TrainerControl, **kwargs) -> TrainerControl:
-        if self.total < self.budget:
+    def on_step_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        gross = state.metrics[GROSS_ROLLOUT_TOKENS_METRIC]
+        tokens = int(gross)
+        if tokens < 0 or tokens != gross:
+            raise ValueError(f"{GROSS_ROLLOUT_TOKENS_METRIC} must be a non-negative integer, got {gross!r}")
+        trainer.rollout_gross_response_tokens_total += tokens
+        total = trainer.rollout_gross_response_tokens_total
+        trainer.all_metrics[CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC] = total
+        if total >= self.budget:
+            logger.info(
+                "Reached rollout token budget at update {}: {} >= {}", state.global_step, total, self.budget
+            )
+            control.should_training_stop = True
+            # Publish the stopping update's metrics before the terminal evaluation can fail.
+            control.should_evaluate = False
+        return control
+
+    def on_train_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        total = trainer.rollout_gross_response_tokens_total
+        if total < self.budget:
             raise ValueError(
-                f"Training ended at update {state.global_step} with {self.total} gross rollout tokens "
+                f"Training ended at update {state.global_step} with {total} gross rollout tokens "
                 f"before reaching the configured budget of {self.budget}"
             )
+        # A retry can restore a checkpoint written before the stopping update's evaluation.
+        control.should_evaluate = True
         return control
 
 

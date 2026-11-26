@@ -221,7 +221,6 @@ def test_colocated_expert_block_accepts_only_the_four_gpu_verified_layout() -> N
     ("key", "value", "message"),
     [
         ("trainer.rollout_buffer.max_staleness_steps", 1, "synchronous"),
-        ("trainer.resume_mode", "latest", "fresh run"),
         ("data.val_data", [], "primary evaluation panel"),
     ],
 )
@@ -229,7 +228,6 @@ def test_rollout_budget_rejects_incompatible_launch(key, value, message):
     cfg = get_default_config()
     cfg.trainer.rollout_token_budget = 450
     cfg.trainer.rollout_buffer.max_staleness_steps = 0
-    cfg.trainer.resume_mode = "none"
     OmegaConf.update(cfg, key, value)
     with pytest.raises(ValueError, match=message):
         validate_rollout_launch(cfg)
@@ -239,9 +237,10 @@ def test_rollout_budget_fails_an_underfunded_horizon():
     callback = RolloutTokenBudgetCallback(10)
     control = TrainerControl()
     state = TrainerState(1, 0, 1, 1, metrics={GROSS_ROLLOUT_TOKENS_METRIC: 9})
-    callback.on_step_end(state, control, trainer=SimpleNamespace(all_metrics={}))
+    trainer = SimpleNamespace(all_metrics={}, rollout_gross_response_tokens_total=0)
+    callback.on_step_end(state, control, trainer=trainer)
     with pytest.raises(ValueError, match="configured budget"):
-        callback.on_train_end(state, control)
+        callback.on_train_end(state, control, trainer=trainer)
 
 
 def test_colocated_expert_block_rejects_generation_before_ray_starts() -> None:
