@@ -178,7 +178,7 @@ def admitted_source(root: Path, tasks: list[TaskSpec], intended_use: str = "trai
     (root / "normalize").mkdir()
     (root / "manifest.json").write_text(json.dumps({"intended_use": intended_use, "mode": mode}))
     pq.write_table(
-        pa.Table.from_pylist([{"task_json": task.model_dump_json()} for task in tasks]),
+        pa.Table.from_pylist([{"task_id": task.id, "task_json": task.model_dump_json()} for task in tasks]),
         root / "final/part-00000.parquet",
     )
     pq.write_table(

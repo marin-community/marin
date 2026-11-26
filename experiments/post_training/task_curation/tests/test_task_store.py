@@ -97,7 +97,7 @@ def test_store_reads_admitted_curated_and_released_tasks_as_one_dataset(tmp_path
     assert [row.task_id for row in selected] == ["r1", "r2", "m1", "m2", "m3"]
 
 
-def test_store_refuses_sources_that_changed_after_it_pinned_them(tmp_path):
+def test_store_refuses_sources_whose_pins_changed(tmp_path):
     release = tmp_path / "release.parquet"
     store = resolve(
         task_store_step(
@@ -109,9 +109,9 @@ def test_store_refuses_sources_that_changed_after_it_pinned_them(tmp_path):
     )
 
     released_file(release, "r1", "replaced")
-    with pytest.raises(Exception, match="Released file changed after the task store pinned it"):
+    with pytest.raises(Exception, match="Released source SHA-256 mismatch"):
         read(store.select_sources(str(release)), tmp_path)
 
     (tmp_path / "math/manifest.json").write_text(json.dumps({"intended_use": "train", "mode": "sample"}))
-    with pytest.raises(ValueError, match="Curated source changed after the task store pinned it"):
+    with pytest.raises(ValueError, match="Curated source manifest changed after the task store pinned it"):
         store.select_sources("fixture:math").to_dataset()

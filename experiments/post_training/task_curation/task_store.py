@@ -3,9 +3,9 @@
 
 """Curated sources and released task files bound into one versioned set of tasks.
 
-A ``TaskStore`` records where each source's tasks live and the SHA-256 that pins them; it copies
-no task data. ``to_dataset`` reads every task as a Zephyr dataset and fails on a source that
-changed after the store pinned it.
+A ``TaskStore`` records where each source's tasks live and what pins them; it copies no task data.
+A curated source is pinned by its canonical ``manifest.json`` and a released file by its bytes.
+``to_dataset`` reads every task as a Zephyr dataset and fails on a source whose pin changed.
 """
 
 import hashlib
@@ -13,12 +13,12 @@ import io
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from enum import StrEnum
+from typing import Annotated, Literal
 
 import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
@@ -27,29 +27,10 @@ from zephyr.dataset import Dataset
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
 
 TASK_STORE_PREFIX = "rl-data/task-store"
-CURATED_TASK_FILES = "final/*.parquet"
-CURATED_COLUMNS = ("task_id", "task_json")
-RELEASED_COLUMN = "task_spec"
+TASK_ID_COLUMN = "task_id"
+TASK_JSON_COLUMN = "task_json"
+TASK_SPEC_COLUMN = "task_spec"
 PARQUET_BATCH_ROWS = 256
-
-
-class SourceKind(StrEnum):
-    CURATED = "curated"
-    """A curation artifact; its tasks are the admitted rows under ``final/``."""
-    RELEASED = "released"
-    """One published Parquet file with a ``task_spec`` column."""
-
-
-class SourceEntry(BaseModel):
-    """Where one source's tasks live and the digest that pins them."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: SourceKind
-    path: str
-    """The curation artifact root, or the released file."""
-    sha256: str
-    """SHA-256 of the canonical ``manifest.json`` of a curated source, or of a released file's bytes."""
 
 
 @dataclass(frozen=True)
@@ -64,6 +45,49 @@ class TaskRow:
     @property
     def task(self) -> TaskSpec:
         return TaskSpec.model_validate_json(self.task_spec)
+
+
+class CuratedSource(BaseModel):
+    """A curation artifact; its tasks are the admitted rows under ``final/``."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["curated"] = "curated"
+    root: str
+    manifest_sha256: str
+    """SHA-256 of the artifact's canonical ``manifest.json``. The ``final/`` files are not hashed."""
+
+    def task_files(self) -> tuple[str, ...]:
+        if manifest_sha256(self.root) != self.manifest_sha256:
+            raise ValueError(f"Curated source manifest changed after the task store pinned it: {self.root}")
+        return curated_task_files(self.root)
+
+    def rows(self, source_id: str, path: str) -> Iterator[TaskRow]:
+        for task_id, task_json in curated_rows(path):
+            yield TaskRow(source_id, task_id, task_json)
+
+
+class ReleasedFile(BaseModel):
+    """One published Parquet file with a ``task_spec`` column."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["released"] = "released"
+    uri: str
+    sha256: str
+    """SHA-256 of the file's bytes."""
+
+    def task_files(self) -> tuple[str, ...]:
+        return (self.uri,)
+
+    def rows(self, source_id: str, path: str) -> Iterator[TaskRow]:
+        parquet = released_parquet(path, self.sha256)
+        for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
+            for raw in batch.column(0).to_pylist():
+                yield TaskRow(source_id, json.loads(raw)["id"], raw)
+
+
+SourceEntry = Annotated[CuratedSource | ReleasedFile, Field(discriminator="kind")]
 
 
 class TaskStore(Artifact):
@@ -81,11 +105,10 @@ class TaskStore(Artifact):
     def to_dataset(self) -> Dataset[TaskRow]:
         """Every task of every source, one shard per task file, in source and file order.
 
-        Curated sources are checked against their manifest pins here; released files are checked
-        when a worker reads them.
+        Curated manifests are checked here, released files when a worker reads them.
         """
-        files = [(source_id, entry, path) for source_id, entry in self.sources.items() for path in _task_files(entry)]
-        return Dataset.from_list(files).flat_map(lambda item: _file_rows(*item))
+        files = [(source_id, entry, path) for source_id, entry in self.sources.items() for path in entry.task_files()]
+        return Dataset.from_list(files).flat_map(lambda item: item[1].rows(item[0], item[2]))
 
 
 @dataclass(frozen=True)
@@ -100,13 +123,11 @@ def build_task_store(config: TaskStoreConfig) -> TaskStore:
     """Pin each curated source by its current manifest and each released file by its declared digest."""
     if overlap := sorted(config.curated.keys() & config.released.keys()):
         raise ValueError(f"Task store sources are both curated and released: {', '.join(overlap)}")
-    sources = {
-        source_id: SourceEntry(kind=SourceKind.CURATED, path=root, sha256=_manifest_sha256(root))
+    sources: dict[str, CuratedSource | ReleasedFile] = {
+        source_id: CuratedSource(root=root, manifest_sha256=manifest_sha256(root))
         for source_id, root in sorted(config.curated.items())
     }
-    sources.update(
-        {uri: SourceEntry(kind=SourceKind.RELEASED, path=uri, sha256=sha256) for uri, sha256 in config.released.items()}
-    )
+    sources.update({uri: ReleasedFile(uri=uri, sha256=sha256) for uri, sha256 in config.released.items()})
     return TaskStore(sources=sources)
 
 
@@ -131,29 +152,26 @@ def task_store_step(
     )
 
 
-def _manifest_sha256(root: str) -> str:
+def manifest_sha256(root: str) -> str:
     return canonical_sha256(json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text()))
 
 
-def _task_files(entry: SourceEntry) -> tuple[str, ...]:
-    if entry.kind == SourceKind.RELEASED:
-        return (entry.path,)
-    if _manifest_sha256(entry.path) != entry.sha256:
-        raise ValueError(f"Curated source changed after the task store pinned it: {entry.path}")
-    return tuple(str(path) for path in sorted((StoragePath(entry.path) / CURATED_TASK_FILES).glob(), key=str))
+def curated_task_files(root: str) -> tuple[str, ...]:
+    """The admitted task files of a curation artifact, in name order."""
+    return tuple(str(path) for path in sorted((StoragePath(root) / "final" / "*.parquet").glob(), key=str))
 
 
-def _file_rows(source_id: str, entry: SourceEntry, path: str) -> Iterator[TaskRow]:
-    if entry.kind == SourceKind.CURATED:
-        with StoragePath(path).open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=CURATED_COLUMNS):
-                for row in batch.to_pylist():
-                    yield TaskRow(source_id, row["task_id"], row["task_json"])
-        return
-    contents = StoragePath(path).read_bytes()
-    if hashlib.sha256(contents).hexdigest() != entry.sha256:
-        raise ValueError(f"Released file changed after the task store pinned it: {path}")
-    parquet = pq.ParquetFile(io.BytesIO(contents))
-    for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[RELEASED_COLUMN]):
-        for raw in batch.column(0).to_pylist():
-            yield TaskRow(source_id, json.loads(raw)["id"], raw)
+def curated_rows(path: str) -> Iterator[tuple[str, str]]:
+    """The ``(task_id, task_json)`` rows of one admitted task file."""
+    with StoragePath(path).open("rb") as stream:
+        columns = [TASK_ID_COLUMN, TASK_JSON_COLUMN]
+        for batch in pq.ParquetFile(stream).iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=columns):
+            yield from zip(batch.column(0).to_pylist(), batch.column(1).to_pylist(), strict=True)
+
+
+def released_parquet(uri: str, sha256: str) -> pq.ParquetFile:
+    """The released file at ``uri``, after checking its bytes against ``sha256``."""
+    contents = StoragePath(uri).read_bytes()
+    if hashlib.sha256(contents).hexdigest() != sha256:
+        raise ValueError(f"Released source SHA-256 mismatch: {uri}")
+    return pq.ParquetFile(io.BytesIO(contents))
