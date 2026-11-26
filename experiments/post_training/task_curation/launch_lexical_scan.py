@@ -74,7 +74,7 @@ def main() -> None:
     command = (
         f"mkdir -p /workspace && curl -fsSL {script_uri} -o /workspace/run_lexical_scan.sh && "
         f"bash /workspace/run_lexical_scan.sh {args.revision} {populations_uri} {source_ids_uri} "
-        f"{args.population_version} {args.artifact_version} {args.max_workers}"
+        f"{args.population_version} {args.artifact_version} {args.max_workers} {report_uri}"
     )
     args_list = [
         "uv",
