@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.models.agent.context import AgentContext
+from rigging.inference_clock import execution_timeout, remote_execution_watchdog
 from rolloutengine.models import ModelTurn, Prompt
 
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
@@ -51,8 +52,8 @@ async def run_installed_agent(
         try:
             async with asyncio.timeout(setup_timeout):
                 await agent.setup(environment)
-            with environment.with_agent_timeout(run_timeout):
-                async with asyncio.timeout(run_timeout):
+            with environment.with_agent_timeout(remote_execution_watchdog(run_timeout)):
+                async with execution_timeout(run_timeout):
                     await agent.run(instruction=instruction, environment=environment, context=context)
         finally:
             async with asyncio.timeout(cleanup_timeout):

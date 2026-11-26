@@ -60,7 +60,9 @@ cancellable Ray stream as the result. Submission alone does not start execution.
 The recorder's total-turn and model-turn budgets begin at that notice; the attempt
 clock still bounds setup before the first request and starts its execution budget
 afresh at the first admission. Later queue waits pause remaining execution budgets.
-Harbor's attempt and agent-phase deadlines use the same clock. Detached agent
+Harbor's attempt and agent-phase deadlines use the same clock. Installed-agent HTTP
+callbacks restore the registering trial's clock; proxy and client transport
+watchdogs and bearer lifetimes include the bounded queue allowance. Detached agent
 commands retain a hard setup + queue + execution safety watchdog, while their
 local active agent budget stays unchanged.
 

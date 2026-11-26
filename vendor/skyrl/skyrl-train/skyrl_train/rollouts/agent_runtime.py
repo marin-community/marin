@@ -33,6 +33,7 @@ from marinskyrl.harbor_environments import (
 )
 from marinskyrl.resource_locator import join_resource_path
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from rigging.inference_clock import remote_execution_watchdog, current_inference_clock
 from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
@@ -139,7 +140,9 @@ class InstalledAgentRuntime:
             self.port = None
             set_global_state(None, None)
 
-    def serving_agent_config(self, source: AgentConfig, api_base: str) -> AgentConfig:
+    def serving_agent_config(
+        self, source: AgentConfig, api_base: str, *, transport_watchdog: float | None = None
+    ) -> AgentConfig:
         """Bind an installed agent to the model relay without widening its turn limit."""
         return source.model_copy(
             update={
@@ -149,6 +152,7 @@ class InstalledAgentRuntime:
                     **source.kwargs,
                     "api_base": api_base,
                     "api_key": "EMPTY",
+                    **({"http_idle_timeout": transport_watchdog} if source.name == "pi" and transport_watchdog is not None else {}),
                     "collect_rollout_details": True,
                     "model_info": {
                         **source.kwargs.get("model_info", {}),
@@ -308,10 +312,12 @@ class InstalledAgentRuntime:
                 environment = environment.model_copy(update=binding.environment_resources.model_dump(exclude_none=True))
             run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
             assert config.trial_attempt_timeout_sec is not None
+            capability_budget = remote_execution_watchdog(config.trial_attempt_timeout_sec)
+            assert capability_budget is not None
             async with self._served_agent(
                 evidence,
                 run_timeout,
-                capability_lifetime=config.trial_attempt_timeout_sec + lowered.limits.cleanup_timeout,
+                capability_lifetime=capability_budget + lowered.limits.cleanup_timeout,
                 agent=config.agent,
             ) as agent_config:
                 trial_config = TrialConfig.model_validate(
@@ -351,8 +357,10 @@ class InstalledAgentRuntime:
     async def _served_agent(
         self, trial_dir: Path, run_timeout: float, *, capability_lifetime: float, agent: AgentConfig | None = None
     ) -> AsyncIterator[AgentConfig]:
+        transport_watchdog = remote_execution_watchdog(run_timeout)
+        assert transport_watchdog is not None
         proxy = RecordProxy(
-            f"http://127.0.0.1:{self.port}", trial_dir / "engine" / "literal.jsonl", timeout=run_timeout
+            f"http://127.0.0.1:{self.port}", trial_dir / "engine" / "literal.jsonl", timeout=transport_watchdog
         )
         async with (
             aclosing(proxy),
@@ -362,11 +370,13 @@ class InstalledAgentRuntime:
                 startup_timeout=self.settings.service_startup_timeout,
                 shutdown_timeout=self.settings.service_shutdown_timeout,
             ) as port,
-            registered_agent_endpoint(port, request_timeout=run_timeout) as endpoint,
+            registered_agent_endpoint(port, request_timeout=transport_watchdog) as endpoint,
         ):
             api_base = await endpoint.api_base(required_lifetime=capability_lifetime)
             source = self.settings.agent if agent is None else agent
-            yield self.serving_agent_config(source, api_base)
+            yield self.serving_agent_config(
+                source, api_base, transport_watchdog=transport_watchdog if current_inference_clock() is not None else None
+            )
 
     async def _run_trial(
         self,
@@ -378,10 +388,12 @@ class InstalledAgentRuntime:
         attempt_id: str,
     ) -> None:
         run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
+        capability_budget = remote_execution_watchdog(run_timeout)
+        assert capability_budget is not None
         async with self._served_agent(
             trial_dir,
             run_timeout,
-            capability_lifetime=self.settings.setup_timeout + run_timeout + self.settings.cleanup_timeout,
+            capability_lifetime=self.settings.setup_timeout + capability_budget + self.settings.cleanup_timeout,
         ) as config:
             host_capabilities = HostCapabilities(protected_values=self.protected_values)
             agent = AgentFactory.create_agent_from_config(

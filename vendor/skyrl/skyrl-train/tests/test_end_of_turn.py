@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from contextvars import Context
+
+from rigging.inference_clock import InferenceClock, current_inference_clock
 
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
@@ -9,7 +12,7 @@ from transformers import PreTrainedTokenizerFast
 import pytest
 
 from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
-from rolloutengine.models import ModelRequest
+from rolloutengine.models import ModelRequest, ModelTurn
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend, TRIAL_HEADER
 from skyrl_train.rollouts.task_worker import _model_turn
 from skyrl_train.inference_engines.base import InferenceEngineInput
@@ -266,3 +269,24 @@ async def test_model_turn_preserves_phase_priority_through_chat_transport(priori
     )
     assert turn.response_token_ids == (PLAN, END_OF_TURN)
     assert serving.chat_requests[0]["priority"] == priority
+
+
+@pytest.mark.asyncio
+async def test_agent_http_callback_restores_the_registering_trial_clock():
+    clock = InferenceClock(2280)
+
+    async def tokenize(_request):
+        raise AssertionError("A completed turn does not need tokenization")
+
+    async def complete(_prompt):
+        assert current_inference_clock() is clock
+        return ModelTurn({"role": "assistant", "content": "12"}, (1,), (2,), None, "stop")
+
+    backend = AgentInferenceBackend("fixture", 1024, tokenize, _LlamaStyleTokenizer())
+    with clock.scope(), backend.session("trial", complete):
+        callback = asyncio.create_task(backend.chat_completion({
+            "headers": {TRIAL_HEADER: "trial"}, "json": {"messages": [{"role": "user", "content": "six plus six"}]},
+        }), context=Context())
+        result = await callback
+    assert current_inference_clock() is None
+    assert result["choices"][0]["message"]["content"] == "12"
