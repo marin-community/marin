@@ -14,6 +14,7 @@ import logging
 
 import pytest
 from marin.execution.artifact import (
+    EXECUTOR_INFO_FILENAME,
     Artifact,
     FingerprintMismatchError,
     StepRecordIdentity,
@@ -84,7 +85,7 @@ def test_cold_step_ignores_incomplete_executor_info(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     output_path = tmp_path / "datasets" / "toy" / V
     output_path.mkdir(parents=True)
-    (output_path / ".executor_info").write_text('{"name":')
+    (output_path / EXECUTOR_INFO_FILENAME).write_text('{"name":')
 
     result = run(_toy(V, "a"))
 

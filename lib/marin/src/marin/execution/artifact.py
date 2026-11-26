@@ -52,8 +52,8 @@ RECORD_FILENAME = ".artifact.json"
 # The old Ray executor wrote a per-step ``.executor_info`` sidecar (the ``ExecutorStepInfo``
 # schema) instead of an ``.artifact.json``. Caches built that way — e.g. the pinned llama3
 # Nemotron-CC caches — carry their materialized ``config`` (tokenizer, format, tags) only there,
-# so we read it as a last resort to recover the record. Never written.
-_LEGACY_EXECUTOR_INFO_FILENAME = ".executor_info"
+# so we read it as a last resort to recover the record. This module never writes it.
+EXECUTOR_INFO_FILENAME = ".executor_info"
 
 # The lazy ``StepRunner`` also writes a ``.executor_info`` — but at *schedule* time, before the
 # step runs — tagged with this ``executor_version``. Unlike a genuine legacy Ray sidecar, its
@@ -304,7 +304,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
     text = _read_text(output_path, RECORD_FILENAME)
     if text is not None and text.strip() != "null":
         return _parse_record(text)
-    executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
+    executor_info = _read_text(output_path, EXECUTOR_INFO_FILENAME)
     if executor_info is not None:
         return _record_from_executor_info(executor_info)
     return None
