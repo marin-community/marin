@@ -54,8 +54,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
-from typing import IO
+from typing import IO, Literal
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
