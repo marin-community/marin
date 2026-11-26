@@ -9,8 +9,10 @@ characters, reserved-prefix literals, binary payloads) — and run the real regi
 scan and merge paths, including the dry-run slice and every refusal.
 """
 
+import dataclasses
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pyarrow as pa
@@ -173,6 +175,23 @@ def test_regional_scan_dry_run_writes_only_under_slice_root(tmp_path):
     assert (slice_root / "regional-scan-receipt.json").exists()
     # Diagnostics names carry the document index of the file within the release paths.
     assert (slice_root / "diagnostics" / "full-00001.parquet").exists()
+
+
+def test_cli_scans_a_pinned_handoff_into_the_slice_root(tmp_path, monkeypatch, capsys):
+    inputs = _inputs(tmp_path, _handoff(tmp_path), max_files=1)
+    document = dataclasses.asdict(inputs)
+    document["handoff"] = inputs.handoff.model_dump(mode="json")
+    path = tmp_path / "scan-inputs.json"
+    path.write_text(json.dumps(document))
+    monkeypatch.setattr(sys, "argv", ["text_scans", "--inputs", str(path), "--step", "scan", "--region", REGION_A])
+
+    text_scans.main()
+
+    proof = json.loads(capsys.readouterr().out.removeprefix("TEXT-SCAN-PREFLIGHT "))
+    assert proof["file_results"][0]["rows"] == {SOURCE_ALPHA: 2}
+    assert proof["bad_rows"] == {SOURCE_ALPHA: 1}
+    assert (tmp_path / "slice" / f"text-scan-{REGION_A}" / "regional-scan-receipt.json").exists()
+    assert not (tmp_path / "scans").exists()
 
 
 def test_regional_scan_refuses_file_outside_region_prefix(tmp_path):

@@ -452,6 +452,7 @@ def main() -> None:
     args = parser.parse_args()
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
     receipts = tuple(ArtifactRef(**reference) for reference in document.pop("receipts", []))
+    document["handoff"] = ArtifactRef(**document["handoff"])
     inputs = TextScanInputs(**document)
     if args.step == "scan":
         if not args.region:
