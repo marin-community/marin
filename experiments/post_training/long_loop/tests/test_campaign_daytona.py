@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
+from shellbox.backends.daytona import usage as daytona_usage
 from shellbox.backends.daytona.usage import AccountUsage, ResourceCapacity
 
 from experiments.post_training.long_loop import campaign_daytona as maintenance
@@ -61,7 +62,7 @@ def account_clients(monkeypatch):
             sandbox_states=(("started", 1),),
         )
 
-    monkeypatch.setattr(maintenance, "account_usage_from_client", provider_usage)
+    monkeypatch.setattr(daytona_usage, "account_usage_from_client", provider_usage)
     return clients
 
 
@@ -135,7 +136,7 @@ def test_purge_records_deletions_before_quota_failure_and_refuses_blind_retry(tm
     async def quota_unavailable(_client):
         raise RuntimeError("Provider quota API unavailable")
 
-    monkeypatch.setattr(maintenance, "account_usage_from_client", quota_unavailable)
+    monkeypatch.setattr(daytona_usage, "account_usage_from_client", quota_unavailable)
 
     with pytest.raises(RuntimeError, match="Provider quota API unavailable"):
         invoke_prelaunch(tmp_path, protection_registry())

@@ -4,6 +4,10 @@
 import dataclasses
 import hashlib
 import json
+import os
+import subprocess
+import sys
+import textwrap
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -311,6 +315,38 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, 
     assert not any(
         constraint.key == "cluster" for resource in dispatched for constraint in convert_constraints(resource)
     )
+
+    # Reproduce the regional CPU failure with the provider SDK absent. The pool
+    # worker still needs a materialized, CPU-only graph payload before dispatch.
+    script = textwrap.dedent(
+        """
+        import json
+        from pathlib import Path
+        import sys
+        sys.modules['daytona'] = None
+        sys.modules['daytona_api_client_async'] = None
+        from marin.execution.lazy import materialized_config
+        from experiments.post_training.long_loop import campaign
+        from experiments.post_training.long_loop.campaign_data import load_mix
+        campaign.REFERENCE = Path(sys.argv[1])
+        mix = load_mix('v2-mix-032')
+        spec = campaign.campaign_round(mix, '2026.11.26.501', max_steps=50)
+        graph = campaign.campaign_graph(mix, spec)
+        pool = next(dep for dep in graph.training.deps if dep.name.endswith('/pools'))
+        config = materialized_config(pool, str(Path(sys.argv[1]).parent / 'outputs'))
+        print(json.dumps({'arguments': sorted(config)}))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(authored)],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["arguments"] == ["launch_document", "mix", "output", "pool_version"]
 
 
 def test_retained_runtime_lowering_preserves_grader_and_declared_resources():

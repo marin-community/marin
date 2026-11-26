@@ -16,8 +16,6 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from shellbox.backends.daytona.connection import DaytonaConnection
-from shellbox.backends.daytona.snapshot import purge_stale_snapshots
-from shellbox.backends.daytona.usage import account_usage_from_client
 
 PROTECTION_MAX_AGE = timedelta(minutes=5)
 PURGE_RUNTIME_ARG = "campaign_snapshot_purge"
@@ -71,6 +69,10 @@ def current_snapshot_protections(
 
 async def purge_campaign_snapshots(config: CampaignSnapshotPurge) -> dict:
     """Use Shellbox's one-hour purge for both campaign accounts and retain quota receipts."""
+    # CPU pool workers compile this graph without the optional provider SDK.
+    from shellbox.backends.daytona.snapshot import purge_stale_snapshots  # noqa: PLC0415
+    from shellbox.backends.daytona.usage import account_usage_from_client  # noqa: PLC0415
+
     if not config.target:
         raise ValueError("Campaign snapshot purge requires --daytona-target or DAYTONA_TARGET")
     protected, evidence = current_snapshot_protections(config.registry_uris, now=datetime.now(UTC))
