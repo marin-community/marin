@@ -520,13 +520,14 @@ Credentials have separate owners and scopes:
 | `iris-controller-secrets` Secret | Controller-only credentials such as the cluster signing key; task Pods do not mount it. |
 | `defaults.task_env` | Non-secret cluster defaults written into task Pod environments. |
 
-CoreWeave controller deploys use Application Default Credentials to resolve
+Production CoreWeave controller deploys use Application Default Credentials to resolve
 the configured Secret Manager version. The payload is one JSON object with
 `CW_KEY_ID` and `CW_KEY_SECRET`. For a rotation, validate a new pair against the
 controller-state, bundle, and node-health paths, store both values in a new
 version, and update the pinned version before the next controller rollout.
-Development and CI configs can supply the pair through the operator's Rigging
-secret files or environment.
+Development configs can supply the pair through the operator's Rigging secret
+files or environment. The West 04a CI workflows supply the pair through their
+environment.
 
 The Iris CLI loads `.marin.yaml` only when run from that checkout. SDK
 submissions and commands from another directory must pass checkout-local values
