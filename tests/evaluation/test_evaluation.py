@@ -81,8 +81,6 @@ from experiments.evaluation.pipeline import (
 
 # Stand-in agent limits the fake driver reports back. They match neither Harbor's defaults nor any
 # model in these tests, so an assertion on them can only be satisfied by the preflight result.
-_PREFLIGHT_MAX_INPUT_TOKENS = 262144
-_PREFLIGHT_MAX_OUTPUT_TOKENS = 65536
 
 
 def _write_model_config(path: Path) -> Path:

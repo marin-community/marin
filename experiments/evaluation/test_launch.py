@@ -38,6 +38,7 @@ from marin.evaluation.runner import (
 from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS, EPISODE_HARNESS_REVISIONS
 from marin.execution.step_runner import StepRunner
 from marin.inference.iris import RemoteInferenceStartupError
+from rigging.secrets import resolve_secret_spec
 from taskcompendium.evaluation.spec import PiAgent
 
 import experiments.evaluation.launch as launch_module
@@ -47,7 +48,7 @@ from experiments.evaluation.benchmarks import micro210
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.cli import cli
 from experiments.evaluation.curated import load_evaluations
-from experiments.evaluation.evals import DAYTONA_SECRET_ENV, resolve_evaluations
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
 from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
@@ -688,7 +689,11 @@ def test_a_backend_override_drops_the_daytona_image_build(agent_command, agent_s
 
 
 @pytest.mark.parametrize("backend", [None, "docker", "local"])
-def test_agent_launch_binds_daytona_credentials_only_to_daytona_task_machines(agent_command, submitted_batches, backend):
+def test_agent_launch_binds_daytona_credentials_only_to_daytona_task_machines(
+    agent_command, submitted_batches, backend, monkeypatch
+):
+    monkeypatch.setenv("DAYTONA_API_KEY", "rl-org-key")
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "eval-org-key")
     command = agent_command if backend is None else [*agent_command, "--task-machine-backend", backend]
 
     result = CliRunner().invoke(cli, command)
@@ -706,7 +711,9 @@ def test_agent_launch_binds_daytona_credentials_only_to_daytona_task_machines(ag
         max_output_tokens=4096,
     )
     daytona = backend is None
-    assert (batch.secret_env.get(DAYTONA_API_KEY) == DAYTONA_SECRET_ENV[DAYTONA_API_KEY]) is daytona
+    assert (DAYTONA_API_KEY in batch.secret_env) is daytona
+    if daytona:
+        assert resolve_secret_spec(batch.secret_env[DAYTONA_API_KEY]).value == "eval-org-key"
     assert (DAYTONA_API_KEY in evaluation.secret_env_keys) is daytona
     assert set(DAYTONA_EGRESS).issubset(batch.egress_allow) is daytona
 

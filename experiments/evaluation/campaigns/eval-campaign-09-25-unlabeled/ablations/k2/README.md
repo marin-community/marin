@@ -59,12 +59,8 @@ trial per task. Pair each model config with the indicated Harbor config; omit
 These are unlabeled diagnostics. The eager arms require Marin's explicit
 slow-serving acknowledgement, which is pinned in their model configs.
 
-For example, launch A from the Marin checkout with:
-
-For this screening run, use the recorded Marin checkout with
-`tb2-ten-old-wins-output8k.yaml` and its matching model config.
-
-Replace only the two config paths and arm letter for B–F as mapped above.
+To reproduce an arm, use its recorded Marin checkout and the model and
+Harbor config pair listed in the table.
 
 ## Selected policy-compatible candidate
 
