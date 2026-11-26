@@ -83,5 +83,5 @@ class CheckReport(Record):
         return self
 
     def save(self, output_path: str) -> None:
-        """Write a typed Marin artifact record at the caller's chosen directory."""
+        """Write the typed report to ``output_path/.artifact.json``."""
         write_artifact(self, output_path)

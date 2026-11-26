@@ -60,7 +60,7 @@ def test_prompt_token_outside_top_k_does_not_understate_probability_error():
     difference = distribution_difference(expected, response_top_distribution(wire))
     # The full normalized distributions provide an independent error oracle.
     true_error = max(abs(a - b) for a, b in zip(reference, actual, strict=True))
-    assert difference.max_probability_error_lower_bound <= true_error <= difference.max_probability_error
+    assert difference.max_probability_error_lower_bound <= true_error <= difference.max_probability_error_upper_bound
     # Decode rescoring still needs the observed prompt token outside the top k.
     returned = response_distribution(wire)
     assert dict(zip(returned.token_ids, returned.logprobs, strict=True))[79] == pytest.approx(math.log(actual[79]))
@@ -219,7 +219,9 @@ class HttpEngine:
         if self.mode == "bad-scores" or (cached and (self.mode == "corrupt-cache" or tokens in self.corrupted)):
             probabilities[1] = math.log(0.1)
             probabilities[2] = math.log(0.7)
-        if self.mode == "non-finite":
+        if self.mode == "non-finite" or (
+            self.mode == "non-finite-repeat" and request.headers["X-Request-Id"] == "cache-matched-second"
+        ):
             probabilities[1] = float("nan")
         top = {f"token_id:{token}": value for token, value in probabilities.items()}
         winner = max(probabilities, key=probabilities.get)
@@ -351,6 +353,7 @@ async def http_endpoint(engine: HttpEngine):
         ("wrong-weights", "failed", "reference"),
         ("bad-scores", "failed", "reference"),
         ("non-finite", "failed", "reference"),
+        ("non-finite-repeat", "failed", "cache"),
         ("reference-error", "failed", "reference"),
         ("cache-error", "failed", "cache"),
         ("prefill-only", "incomplete", "cache"),

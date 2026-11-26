@@ -39,11 +39,10 @@ class DistributionDifference:
     """Probability-error bounds over top-k lists, including missing tokens."""
 
     max_probability_error_lower_bound: float
-    # The report retains this field name for the conservative upper bound.
-    max_probability_error: float
+    max_probability_error_upper_bound: float
     shared_tokens: int
     # A diagnostic comparison of the first listed IDs; supplied order breaks ties.
-    same_greedy_token: bool
+    same_top_token: bool
 
 
 def distribution_difference(first: TokenDistribution, second: TokenDistribution) -> DistributionDifference:
@@ -66,9 +65,9 @@ def distribution_difference(first: TokenDistribution, second: TokenDistribution)
             upper.append(max(known, abs(known - floor)))
     return DistributionDifference(
         max_probability_error_lower_bound=max(lower),
-        max_probability_error=max(upper),
+        max_probability_error_upper_bound=max(upper),
         shared_tokens=len(a.keys() & b.keys()),
-        same_greedy_token=first.token_ids[0] == second.token_ids[0],
+        same_top_token=first.token_ids[0] == second.token_ids[0],
     )
 
 

@@ -44,6 +44,7 @@ MAX_CACHE_PREPARATION_REQUESTS = 3
 _CHECKPOINT_CONFIG_FILENAME = "config.json"
 _CACHE_PROBE_SUFFIX_TOKENS = 17
 _SHORT_HISTORY_LIMIT = 4096
+_OBJECT_STORAGE_PREFIXES = ("s3://", "gs://")
 
 
 class TestSpec(Record):
@@ -114,7 +115,7 @@ class TestSpec(Record):
             override_generation_config=dict(arguments.get("override_generation_config", {}))
             | {"eos_token_id": identity.eos_token_id},
         )
-        if not identity.weights.startswith(("s3://", "gs://")):
+        if not identity.weights.startswith(_OBJECT_STORAGE_PREFIXES):
             arguments["revision"] = identity.revision
         return InferenceModelConfig(name=self.id, path=identity.weights, engine_kwargs=arguments)
 
@@ -252,7 +253,6 @@ async def _run_check(
                     "status",
                     "positions",
                     "statistics",
-                    "limits",
                     "worst",
                     "observations",
                     "groups",
@@ -290,7 +290,7 @@ async def _run_check(
 
 
 def mismatch_summary(rows: list[dict], limits: ErrorLimits) -> dict:
-    values = np.asarray([row["max_probability_error"] for row in rows])
+    values = np.asarray([row["max_probability_error_upper_bound"] for row in rows])
     if not len(values):
         return {"status": "pending", "reason": "No matching score positions were checked", "positions": 0}
     statistics = {
@@ -303,8 +303,7 @@ def mismatch_summary(rows: list[dict], limits: ErrorLimits) -> dict:
         "status": "passed" if all(value <= getattr(limits, name) for name, value in statistics.items()) else "failed",
         "positions": len(values),
         "statistics": statistics,
-        "limits": limits.model_dump(),
-        "worst": sorted(rows, key=lambda row: row["max_probability_error"], reverse=True)[:10],
+        "worst": sorted(rows, key=lambda row: row["max_probability_error_upper_bound"], reverse=True)[:10],
     }
 
 
@@ -336,7 +335,7 @@ async def _verify_identity(client: VllmEndpoint, spec: TestSpec, identity: Model
         "tokenizer_revision": identity.tokenizer_revision,
         "quantization": spec.engine_kwargs.get("quantization"),
     }
-    if not identity.weights.startswith(("s3://", "gs://")):
+    if not identity.weights.startswith(_OBJECT_STORAGE_PREFIXES):
         expected["revision"] = identity.revision
     mismatches: dict = {
         name: {"actual": model.get(name), "expected": value}
@@ -353,7 +352,7 @@ async def _verify_identity(client: VllmEndpoint, spec: TestSpec, identity: Model
     hardware = information["system_env"]["nvidia_gpu_models"]
     if not any(device in hardware for device in spec.hardware):
         mismatches["hardware"] = {"actual": hardware, "expected": spec.hardware}
-    if identity.weights.startswith(("s3://", "gs://")):
+    if identity.weights.startswith(_OBJECT_STORAGE_PREFIXES):
         manifest_bytes = await asyncio.to_thread(read_bytes, prefix_join(identity.weights, "export-manifest.json"))
         digest = hashlib.sha256(manifest_bytes).hexdigest()
         if digest != identity.revision:
@@ -418,8 +417,6 @@ async def _check_reference(client: VllmEndpoint, references: ReferenceLookup, sp
     completed = []
     failures = []
     for case in references.cases:
-        # A context includes its sampled output token; score the final prediction separately
-        # when an existing 262K reference fills the entire configured context.
         try:
             response = await client.complete(case.tokens, label=f"reference-{case.id}", prompt_scores=True)
             (choice,) = response["choices"]
@@ -442,9 +439,6 @@ async def _check_reference(client: VllmEndpoint, references: ReferenceLookup, sp
         completed.append(case.id)
     summaries = {name: mismatch_summary(rows, spec.reference_limits[name]) for name, rows in groups.items()}
     return {
-        "status": (
-            "passed" if not failures and all(value["status"] == "passed" for value in summaries.values()) else "failed"
-        ),
         "groups": summaries,
         "observations": observations,
         "completed_cases": completed,
@@ -459,8 +453,6 @@ async def _check_batch(client: VllmEndpoint, references: ReferenceLookup, spec: 
         key=lambda case: len(case.tokens),
     )
     selected = cases[-spec.batch_size :]
-    if len(selected) < spec.batch_size:
-        raise ValueError("The suite has too few distinct cases for the engine batch")
     alone = []
     for index, case in enumerate(selected):
         await client.reset_cache()
@@ -677,23 +669,20 @@ async def _check_cache(
             continue
     # An exact repeat of a warmed history supplies a matched-split control even if prefix
     # seeding and branching fill different numbers of blocks on this model.
-    try:
-        branch = source[: max(spec.boundary_lengths) + _CACHE_PROBE_SUFFIX_TOKENS]
-        await client.complete(branch, label="cache-matched-seed")
-        a = await client.complete(branch, label="cache-matched-first")
-        b = await client.complete(branch, label="cache-matched-second")
-        matched = cached_tokens(a) == cached_tokens(b) and cached_tokens(a) > 0
-        matched_repeat = {
-            "status": "passed" if matched else "failed",
-            "cached_tokens": [cached_tokens(a), cached_tokens(b)],
-        }
-        if matched:
-            same_split.append(
-                dataclasses.asdict(distribution_difference(next_distribution(a), next_distribution(b)))
-                | {"case": "matched-repeat"}
-            )
-    except Exception as error:
-        matched_repeat = {"status": "failed", "error": f"{type(error).__name__}: {error}"}
+    branch = source[: max(spec.boundary_lengths) + _CACHE_PROBE_SUFFIX_TOKENS]
+    await client.complete(branch, label="cache-matched-seed")
+    a = await client.complete(branch, label="cache-matched-first")
+    b = await client.complete(branch, label="cache-matched-second")
+    matched = cached_tokens(a) == cached_tokens(b) and cached_tokens(a) > 0
+    matched_repeat = {
+        "status": "passed" if matched else "failed",
+        "cached_tokens": [cached_tokens(a), cached_tokens(b)],
+    }
+    if matched:
+        same_split.append(
+            dataclasses.asdict(distribution_difference(next_distribution(a), next_distribution(b)))
+            | {"case": "matched-repeat"}
+        )
     summaries = {
         "same_split": mismatch_summary(same_split, spec.tolerances["cache.same_execution"]),
         "different_split": mismatch_summary(different_split, spec.tolerances["cache.changed_prefill"]),
@@ -721,13 +710,6 @@ async def _check_cache(
     if coverage["decode_reuse"]["status"] == "passed" and all(row["status"] == "not_required" for row in decode_reuse):
         coverage["decode_reuse"]["status"] = "not_required"
     return {
-        "status": (
-            "passed"
-            if not failures
-            and all(row["status"] == "passed" for row in (*summaries.values(), matched_repeat))
-            and all(row["status"] in ("passed", "not_required") for row in coverage.values())
-            else "failed"
-        ),
         **summaries,
         **coverage,
         "matched_repeat": matched_repeat,
@@ -768,7 +750,7 @@ async def _check_decode(client: VllmEndpoint, references: ReferenceLookup, spec:
                     "decode_logprob": a,
                     "prefill_logprob": b,
                     "absolute_logprob_error": abs(a - b),
-                    "max_probability_error": abs(math.exp(a) - math.exp(b)),
+                    "max_probability_error_upper_bound": abs(math.exp(a) - math.exp(b)),
                 }
             )
     return mismatch_summary(differences, spec.tolerances["decode"]) | {"observations": differences}

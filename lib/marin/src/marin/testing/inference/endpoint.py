@@ -21,7 +21,7 @@ RANK_HEADER = "X-data-parallel-rank"
 
 
 class HttpObservation(Record):
-    """One completion response; ``body_gzip`` retains its exact uncompressed bytes."""
+    """One completion response, with its exact body retained in gzip form."""
 
     model_config = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
 

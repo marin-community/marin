@@ -54,6 +54,7 @@ from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmT
 from marin.testing.inference.endpoint import VllmEndpoint
 from marin.testing.inference.endpoint_checks import read_test_spec
 from marin.testing.inference.results import CheckStatus
+from rigging.filesystem.storage_path import prefix_join
 from rigging.timing import Duration
 
 
@@ -79,7 +80,8 @@ def run_check(spec_path: str, output: str) -> None:
 spec_path = "experiments/evaluation/inference_correctness/specs/snowball-v0.1.1-vllm-h100.json"
 spec = read_test_spec(spec_path)
 run_id = f"correctness-{uuid4().hex[:12]}"
-output = f"s3://marin-us-east-02a/marin/inference/correctness/runs/{run_id}"
+output = prefix_join("s3://marin-us-east-02a/marin/inference/correctness/runs", run_id)
+timeout = 10800
 with connect_controller(cluster_name="cw-us-east-02a") as connection:
     with IrisClient.remote(connection.url, workspace=Path.cwd(), credentials=connection.credentials) as client:
         job = client.submit(
@@ -88,10 +90,10 @@ with connect_controller(cluster_name="cw-us-east-02a") as connection:
             environment=EnvironmentSpec(sync_packages=["marin-core"], extras=["cpu"],
                                         env_vars={"VLLM_SERVER_DEV_MODE": "1"}),
             priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
-            timeout=Duration.from_seconds(10800),
+            timeout=Duration.from_seconds(timeout),
         )
         try:
-            job.wait(timeout=10800)
+            job.wait(timeout=timeout)
         except BaseException:
             job.cancel()
             raise
@@ -173,6 +175,10 @@ those compressed bytes as base64. No request files are written while checking.
 | `details.identity` | Observed checkpoint, tokenizer, device, dtype and cache configuration checks. |
 | `run_metadata` | Caller provenance, observed server version, and Unix start/finish times in seconds. |
 | `seconds` | Wall-clock seconds; request duration includes response capture. |
+
+Raw distribution rows retain `max_probability_error_lower_bound` and
+`max_probability_error_upper_bound`. Their `same_top_token` diagnostic compares
+the first listed token IDs; it does not compare emitted tokens under tied scores.
 
 `cache.same_execution` compares prepared branches and matched repeats with the
 same execution geometry. Its retained bounds require exact equality.
