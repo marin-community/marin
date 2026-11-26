@@ -1,14 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
-from pathlib import Path
+from dataclasses import replace
 
 import pytest
-from marin.evaluation.hardware import AcceleratorChoice, Platform
-from marin.inference.config import EffectiveServing
-from marin.inference.types import OpenAIEndpoint, RunningModel
 from taskcompendium.pipeline.reviewer_spec import JudgeEndpoint
 from verifyit.grade import Status
 from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
@@ -19,7 +14,6 @@ from experiments.post_training.task_curation.judges import (
     JUDGE_TIERS,
     HostedJudgeEndpoint,
     JudgeTier,
-    LocalJudgeEndpoint,
     RelayJudgeEndpoint,
 )
 from experiments.post_training.task_curation.tests.review_server import JudgeReply

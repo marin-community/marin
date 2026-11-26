@@ -97,6 +97,18 @@ def test_main_pins_match_the_atlas_admitted_pins():
     unknown = sorted(set(waivers) - set(fixture["required_ids"]) - set(blockers))
     assert unknown == []
 
+    # The grader re-seal (#12329 review comment 7190184244) re-pins these ahead of the
+    # sealed fixture; the next release cut projects the new pin and drops the waiver.
+    reseal_waivers = {
+        "AllenAI:rlvr_ifeval": {
+            "dataset_repo": "open-athena/marinskyrl-rlvr-ifeval-00227508-retained-20261126-v1",
+            "dataset_revision": "d95028e2c46a1c6dfa4543a08a3335f8044a3393",
+            "pipeline_files": ["tasks.parquet"],
+            "pipeline_name": "rlvr_ifeval-retained",
+            "pipeline_version": "2026.11.13.1",
+        }
+    }
+
     sources = {canonical_source_id(source.info.id): source for source in all_sources().values()}
     stale_waivers, unwaived = [], []
     for source_id, atlas_ref in fixture["pins"].items():
@@ -108,6 +120,8 @@ def test_main_pins_match_the_atlas_admitted_pins():
         if key in waivers:
             if current == atlas_ref:
                 stale_waivers.append(source_id)
+        elif key in reseal_waivers:
+            assert current == reseal_waivers[key], (key, current)
         elif current != atlas_ref:
             unwaived.append(source_id)
 

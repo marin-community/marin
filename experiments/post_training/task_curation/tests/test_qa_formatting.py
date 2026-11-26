@@ -2,17 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements, Source, TaskSpec, judge_spec
-from taskcompendium.pipeline.inputs import ConversionContext
-from taskcompendium.pipeline.models import RawRow
-from taskcompendium.runtime.resources import resource_bytes
-
-from experiments.post_training.task_curation.datasets import qa_formatting
 
 # The converter tests whose grader construction needs the atlas runtime stack (the
 # fresh-machine ScriptGrader contract) run on the atlas lanes; this catalog branch
@@ -47,4 +39,3 @@ def test_formatter_counts_lines_once_and_rejects_spurious_citations():
     verifier = {"type": "string_match", "patterns": [r"\[ref:\d+\]"], "expected_markers": ["[ref:2]"]}
     assert format_verification.grade_format("[ref:2]", verifier)[0] == 1
     assert format_verification.grade_format("[ref:2] [ref:3]", verifier)[0] == 0
-

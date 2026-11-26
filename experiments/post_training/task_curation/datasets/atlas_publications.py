@@ -19,6 +19,7 @@ from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from experiments.post_training.task_curation.admission import require_lexical_qualification
+from experiments.post_training.task_curation.datasets.grader_reseal_releases import resealed_source
 from experiments.post_training.task_curation.datasets.skyrl.hardmath_lineage import LICENSE_RECEIPT
 from experiments.post_training.task_curation.frozen_atlas import FrozenAtlasConversion, import_frozen_atlas
 from experiments.post_training.task_curation.retained_release import RetainedCohort, import_retained
@@ -42,6 +43,12 @@ ASSUMED_ADMISSION_SOURCES = frozenset(
 catalog's pre-admission retirement. Their Atlas admissions are in flight (the swesmith
 taskspec SAMPLE QC and the SWE-rebench repair lane); the catalog binds them at their
 current Atlas pins and every consumer reads their assumed-admission status note."""
+
+RESEALED_SOURCES = ("AllenAI:rlvr_ifeval",)
+"""Sources whose grader re-seal landed (the #12329 review comment 7190184244; the
+re-seal worker's releases). The sealed catalog still projects their stale pins, so
+the binding re-pins them to the re-sealed releases from their registry receipt
+chains after the sealed publications bind."""
 
 
 class AtlasPublication(BaseModel):
@@ -137,4 +144,8 @@ def bind_publications(sources: list[RlDataSource]) -> list[RlDataSource]:
         or source.info.id in ASSUMED_ADMISSION_SOURCES
     }
     selected.update({source_id: publication.source() for source_id, publication in publications.items()})
+    # The re-sealed releases replace their sealed pins (the #12329 review items).
+    selected.update(
+        {source_id: resealed_source(selected[source_id]) for source_id in RESEALED_SOURCES if source_id in selected}
+    )
     return list(selected.values())

@@ -18,8 +18,10 @@ from finestore.rl.status_taxonomy import DataRestriction
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.atlas_publications import (
+    RESEALED_SOURCES,
     bind_publications,
 )
+from experiments.post_training.task_curation.datasets.skyrl.ifeval import sources as ifeval_sources
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     DECLARED_LIMITS_DEVIATION,
@@ -414,6 +416,27 @@ def test_swesmith_retained_cohort_declares_the_atlas_pin():
     assert any(
         decision.kind.value == "exception" and decision.approved for decision in source.info.license_receipt.decisions
     )
+
+
+def test_rlvr_ifeval_repin_binds_the_resealed_release():
+    """The grader re-seal replaces the sealed pin: the catalog serves the new release
+    at its receipt chain (registry tip b6b19498, license union 20261126_b_v1), and
+    the re-measurement the #12329 review set as the acceptance criteria is recorded."""
+    source = all_sources()["AllenAI:rlvr_ifeval"]
+    dataset = source.dataset
+    assert dataset.name == "open-athena/marinskyrl-rlvr-ifeval-00227508-retained-20261126-v1"
+    assert dataset.revision == "d95028e2c46a1c6dfa4543a08a3335f8044a3393"
+    assert source.info.count == 14352
+    assert source.version == "2026.11.13.1"
+    source.require_license()
+    assert source.info.license_receipt.dataset_id == dataset.name
+    assert source.info.lexical_contamination.receipt.status.value == "remediated"
+    assert source.info.lexical_contamination.receipt.retained_tasks == 14352
+    assert "0 false passes" in source.info.oversight.verification
+    assert RESEALED_SOURCES == ("AllenAI:rlvr_ifeval",)
+    # the version-3 conversion declaration rides behind the served retained cohort
+    (raw,) = [s for s in ifeval_sources() if s.info.id == "AllenAI:rlvr_ifeval"]
+    assert raw.version == "3"
 
 
 def test_binding_preserves_the_declaration_over_retirement():

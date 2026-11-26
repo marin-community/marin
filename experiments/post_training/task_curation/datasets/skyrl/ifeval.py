@@ -24,7 +24,7 @@ from verifyit.spec import DEFAULT_OUTPUT, Constraint
 
 from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 HERE = Path(__file__).parent
 IFEVAL_GRADE = grade_script(HERE / "nemotron_if_grade.py")
@@ -182,8 +182,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
+                task_format=TaskFormat.TASKSPEC,
                 upstream_dataset="nemotron_if",
-                upstream_name="nvidia/Llama-Nemotron-Post-Training-Dataset · RL/instruction_following",
+                upstream_name="nemotron_if",
                 subset=None,
                 build_path="MarinSkyRL",
                 origin=SourceOrigin.NEMOTRON,
@@ -199,7 +200,11 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.JSONL,
                 ),
                 convert=convert_nemotron_if,
-                version="2",
+                # Held at the sealed version: this source's receipts are re-cut by
+                # its own re-seal (the last of the five), whose admission landing
+                # bumps it to "2" with them. Bumping it earlier would fail the
+                # within-source dedup binding, which refuses any pin mismatch.
+                version="1",
                 intended_use=IntendedUse.TRAIN,
                 rubric=NEMOTRON_RUBRIC,
                 controls=CONTROLS,
@@ -210,8 +215,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
             pipeline=process_rows,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
+                task_format=TaskFormat.TASKSPEC,
                 upstream_dataset="rlvr_ifeval",
-                upstream_name="allenai/RLVR-IFeval",
+                upstream_name="rlvr_ifeval",
                 subset=None,
                 build_path="MarinSkyRL",
                 origin=SourceOrigin.ALLENAI,
@@ -227,6 +233,8 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.PARQUET,
                 ),
                 convert=convert_rlvr_ifeval,
+                # The admission landing (L2) ships this bump together with the
+                # refreshed receipt families bound at this version.
                 version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
