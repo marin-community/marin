@@ -151,6 +151,7 @@ _SYNCHRONOUS_PHASE_INTERVAL = 0.0
 _WORKER_FAILING_EVENT = "worker_failing"
 _WORKER_RECONCILE_TEARDOWN_REASON = "worker reconcile failure threshold exceeded"
 _SLICE_SIBLING_TEARDOWN_REASON = "unhealthy worker failed, slice terminated"
+_CHECKPOINT_UPLOAD_SUCCESS = telemetry.gauge("iris_controller_checkpoint_upload_success")
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -984,9 +985,11 @@ class Controller:
                 break
             try:
                 write_checkpoint(self._db, self._config.remote_state_dir)
-                logger.info("Periodic checkpoint written")
             except Exception:
                 logger.exception("Periodic checkpoint failed")
+                _CHECKPOINT_UPLOAD_SUCCESS.set(0)
+            else:
+                _CHECKPOINT_UPLOAD_SUCCESS.set(1)
 
     # =========================================================================
     # Unified control tick

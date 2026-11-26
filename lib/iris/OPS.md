@@ -98,7 +98,7 @@ check [controller storage and placement](docs/coreweave.md#controller-state).
 ### Controller checkpoint storage
 
 `IrisControllerCheckpointFailed` pages when the latest periodic checkpoint
-attempt logged by a CoreWeave controller failed. The controller retries at its
+outcome reported by a CoreWeave controller failed. The controller retries at its
 configured interval; the next successful upload clears the alert. Check the
 controller log for the exception under `Periodic checkpoint failed`, then verify
 the controller's storage credentials and write access to `storage.remote_state_dir`

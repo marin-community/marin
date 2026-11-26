@@ -1172,16 +1172,15 @@ groups:
                   - key: sql
                     value: >-
                       WITH latest AS (
-                        SELECT "cluster", data,
-                               ROW_NUMBER() OVER (PARTITION BY "cluster" ORDER BY epoch_ms DESC, seq DESC) AS row_rank
-                        FROM "log"
-                        WHERE key = '/system/controller'
-                          AND "cluster" IN ('cw-us-east-02a', 'cw-us-east-08a', 'cw-rno2a')
-                          AND epoch_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT)
-                          AND (data LIKE '%Periodic checkpoint failed%'
-                               OR data LIKE '%Periodic checkpoint written%')
+                        SELECT "cluster", value,
+                               ROW_NUMBER() OVER (PARTITION BY "cluster" ORDER BY timestamp_ms DESC, seq DESC) AS row_rank
+                        FROM "telemetry_v1.iris"
+                        WHERE service = 'iris-controller'
+                          AND name = 'iris_controller_checkpoint_upload_success'
+                          AND "cluster" LIKE 'cw-%'
+                          AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT)
                       )
-                      SELECT "cluster", CASE WHEN data LIKE '%Periodic checkpoint failed%' THEN 1 ELSE 0 END AS value
+                      SELECT "cluster", 1 - value AS value
                       FROM latest WHERE row_rank = 1
               columns:
                 - { selector: cluster, text: cluster, type: string }

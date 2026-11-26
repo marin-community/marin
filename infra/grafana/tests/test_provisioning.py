@@ -137,13 +137,13 @@ def test_alert_rules_have_resolvable_datasources_and_refids():
 
 def test_alert_rules_define_nodata_and_error_behavior():
     # Most alert endpoints return explicit zeros when healthy. Optional storage
-    # telemetry and the checkpoint log rule stay normal without matching rows.
+    # telemetry and checkpoint metrics stay normal without matching rows.
     for rule in _rules():
-        optional_metrics = rule["uid"].startswith("coreweave-storage-") or rule["uid"] in {
+        no_data_ok = rule["uid"].startswith("coreweave-storage-") or rule["uid"] in {
             "node-runtime-filesystem-full",
             "iris-controller-checkpoint-failed",
         }
-        expected_no_data = "OK" if optional_metrics else "Alerting"
+        expected_no_data = "OK" if no_data_ok else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
         assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
@@ -186,7 +186,7 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
-        if 'FROM "log"' in sql and "Periodic checkpoint failed" in sql:
+        if "iris_controller_checkpoint_upload_success" in sql:
             return pa.table({"cluster": ["cw-rno2a"], "value": [0]})
         if "node_filesystem_available_bytes" in sql:
             return pa.table(
@@ -247,20 +247,26 @@ def test_controller_checkpoint_alert_tracks_latest_attempt_per_cluster():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "iris-controller-checkpoint-failed"]
     sql = rule["data"][0]["model"]["url_options"]["params"][0]["value"]
     database = duckdb.connect()
-    database.execute('CREATE TABLE "log" (cluster VARCHAR, key VARCHAR, data VARCHAR, epoch_ms BIGINT, seq BIGINT)')
+    database.execute(
+        'CREATE TABLE "telemetry_v1.iris" '
+        "(cluster VARCHAR, service VARCHAR, name VARCHAR, value DOUBLE, timestamp_ms BIGINT, seq BIGINT)"
+    )
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
     database.executemany(
-        'INSERT INTO "log" VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO "telemetry_v1.iris" VALUES (?, ?, ?, ?, ?, ?)',
         [
-            ("cw-rno2a", "/system/controller", "Periodic checkpoint failed", now_ms - 120_000, 1),
-            ("cw-rno2a", "/system/controller", "Periodic checkpoint written", now_ms - 60_000, 2),
-            ("cw-us-east-02a", "/system/controller", "Periodic checkpoint failed", now_ms - 30_000, 3),
-            ("cw-us-east-08a", "/system/controller", "Periodic checkpoint failed", now_ms - 3_600_000, 4),
-            ("cw-rno2a", "/user/job", "Periodic checkpoint failed", now_ms, 5),
+            ("cw-rno2a", "iris-controller", "iris_controller_checkpoint_upload_success", 0, now_ms - 120_000, 1),
+            ("cw-rno2a", "iris-controller", "iris_controller_checkpoint_upload_success", 1, now_ms - 60_000, 2),
+            ("cw-us-east-02a", "iris-controller", "iris_controller_checkpoint_upload_success", 0, now_ms - 30_000, 3),
+            ("cw-us-east-08a", "iris-controller", "iris_controller_checkpoint_upload_success", 0, now_ms - 3_600_000, 4),
+            ("cw-rno2a", "iris-controller", "unrelated_metric", 0, now_ms, 5),
         ],
     )
 
     assert dict(database.execute(sql).fetchall()) == {"cw-rno2a": 0, "cw-us-east-02a": 1}
+    database.execute('DELETE FROM "telemetry_v1.iris"')
+    assert database.execute(sql).fetchall() == []
+    assert rule["noDataState"] == "OK"
 
 
 def test_configured_finelog_query_dependent_alerts_stay_normal_when_query_path_is_unavailable():
