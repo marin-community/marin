@@ -231,6 +231,35 @@ def test_spec_model_overrides_the_environment(tmp_path, fake_judge):
     assert (reward.reward, reward.status, reward.detail["model"]) == (0.0, Status.SCORED, "override/judge-70b")
 
 
+def test_substitute_models_replaces_only_the_declared_unservable_model(fake_judge):
+    """A declared judge model the endpoint cannot serve is substituted and recorded as a protocol difference."""
+    fake_judge.replies = ["Matches the reference.\nSCORE: 1"]
+    spec = JudgeSpec(references=(REFERENCE,), model="MiniMaxAI/MiniMax-M3-MXFP8", exact_gate=False)
+    connection = grade_judge.JudgeConnection(
+        f"http://127.0.0.1:{fake_judge.server_port}/v1",
+        "private-test-key",
+        substitute_models={"MiniMaxAI/MiniMax-M3-MXFP8": "zai-org/GLM-5.3-Flash"},
+    )
+    reward = grade_judge.grade_judge_candidate(spec, "The moon is made of cheese.", connection=connection)
+    assert (reward.reward, reward.status) == (1.0, Status.SCORED)
+    assert all(request["model"] == "zai-org/GLM-5.3-Flash" for request in fake_judge.requests)
+    assert reward.detail["model"] == "zai-org/GLM-5.3-Flash"
+    mini_max = replace(spec, chat_template_kwargs={"thinking_mode": "adaptive"})
+    assert grade_judge.judge_substitution(mini_max, connection) == {
+        "declared_model": "MiniMaxAI/MiniMax-M3-MXFP8",
+        "served_model": "zai-org/GLM-5.3-Flash",
+        "unhonored_chat_template_kwargs": {"thinking_mode": "adaptive"},
+    }
+    assert grade_judge.judge_substitution(spec, connection) == {
+        "declared_model": "MiniMaxAI/MiniMax-M3-MXFP8",
+        "served_model": "zai-org/GLM-5.3-Flash",
+    }
+    # A declared model the endpoint serves, no connection, and no declared model never substitute.
+    assert grade_judge.judge_substitution(replace(spec, model="zai-org/GLM-5.3-Flash"), connection) is None
+    assert grade_judge.judge_substitution(spec, None) is None
+    assert grade_judge.judge_substitution(JudgeSpec(), connection) is None
+
+
 @pytest.mark.parametrize("rubric", ["reference", "checklist"])
 def test_unparseable_reply_is_retried_once_then_masks_candidate(tmp_path, fake_judge, rubric):
     fake_judge.replies = ["I cannot grade this."]

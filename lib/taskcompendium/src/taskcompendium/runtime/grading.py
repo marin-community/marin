@@ -24,8 +24,8 @@ from typing import Any
 from uuid import uuid4
 
 from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
-from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
-from verifyit.spec import Spec, render_spec
+from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection, judge_substitution
+from verifyit.spec import JudgeSpec, Spec, render_spec
 
 from taskcompendium.grading import answer_submission, gradeable_empty_text, parse_grade_result, terminal_grade
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -294,7 +294,9 @@ def _reward_value(data: bytes, file_format: RewardFileFormat, key: str) -> tuple
     return reward, detail
 
 
-async def _file_reward(machine: Machine, reward: FileReward, timeout: float, diagnostics: dict[str, Any]) -> GradeResult:
+async def _file_reward(
+    machine: Machine, reward: FileReward, timeout: float | None, diagnostics: dict[str, Any]
+) -> GradeResult:
     for file in reward.files:
         result = await machine.run(
             Command(
@@ -331,7 +333,7 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 
 
-async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float) -> GradeResult:
+async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float | None) -> GradeResult:
     result = await machine.run(
         Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
     )
@@ -363,7 +365,7 @@ async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float)
     return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics)
 
 
-async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout: float) -> GradeResult:
+async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout: float | None) -> GradeResult:
     result = await machine.run(
         Command(
             (
@@ -403,7 +405,7 @@ class _SandboxGrading:
     spec: Spec | None
     environment: EnvironmentRequirements
     workspace: str
-    limit: float
+    limit: float | None
     collect: tuple[VerifierCommand, ...]
     artifacts: tuple[VerifierArtifact, ...]
 
@@ -417,7 +419,10 @@ def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: floa
             grader, verifyit_spec(grader), grader.environment, grader_workspace(grader), limit, (), ()
         )
     elif isinstance(grader, ScriptGrader):
-        limit = grader.timeout if timeout is None else min(timeout, grader.timeout)
+        # The session cap and the task's declared cap both bound grading; a None side imposes no cap.
+        # When neither side caps grading, the runtime's standing sandbox default applies.
+        caps = [cap for cap in (timeout, grader.timeout) if cap is not None]
+        limit = min(caps) if caps else GRADING_TIMEOUT
         grading = _SandboxGrading(grader, None, grader.environment, grader.cwd, limit, grader.collect, grader.artifacts)
     else:
         raise TypeError(
@@ -429,8 +434,40 @@ def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: floa
     return grading
 
 
+def _sandbox_judge_contract(grading: _SandboxGrading, connection: JudgeConnection | None) -> JudgeSpec | None:
+    """The judge contract the sandbox sees: a declared model the endpoint cannot serve is substituted.
+
+    The substituted contract is what ``judge.toml`` renders and what ``VERIFYIT_JUDGE_MODEL`` pins,
+    so the grader's own consistency check stays intact while the wire request carries the served
+    model. The declared-to-served difference is recorded in the grading diagnostics.
+    """
+    if not isinstance(grading.grader, ScriptGrader) or grading.grader.judge is None:
+        return None
+    declared = grading.grader.judge
+    substitution = judge_substitution(declared, connection)
+    if substitution is None:
+        return declared
+    return replace(declared, model=substitution["served_model"])
+
+
+def _with_judge_protocol(
+    result: GradeResult, grading: _SandboxGrading, connection: JudgeConnection | None
+) -> GradeResult:
+    """Record a declared-to-served judge substitution in the grading diagnostics."""
+    if not isinstance(grading.grader, ScriptGrader) or grading.grader.judge is None:
+        return result
+    substitution = judge_substitution(grading.grader.judge, connection)
+    if substitution is None:
+        return result
+    return replace(result, diagnostics={**result.diagnostics, "judge_protocol": substitution})
+
+
 def _grading_files(
-    task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrading, submissions: list[StagedFile]
+    task: TaskSpec,
+    attempt: GradingAttempt,
+    grading: _SandboxGrading,
+    submissions: list[StagedFile],
+    judge: JudgeSpec | None,
 ) -> list[StagedFile]:
     """Resources, metadata and the extracted conversation answer installed before setup."""
     files = [
@@ -444,8 +481,8 @@ def _grading_files(
     if isinstance(grading.grader, ScriptGrader):
         messages = conversation_messages(attempt.conversation.events)
         files.append(StagedFile(grading.grader.conversation_path, json.dumps(messages, allow_nan=False).encode()))
-        if grading.grader.judge is not None:
-            files.append(StagedFile(JUDGE_SPEC_PATH, render_spec(grading.grader.judge).encode()))
+        if judge is not None:
+            files.append(StagedFile(JUDGE_SPEC_PATH, render_spec(judge).encode()))
     if task.answer_type in CONVERSATION_ANSWERS:
         if grading.spec is not None:
             answer_path = verifyit_answer_file(grading.spec)
@@ -552,7 +589,8 @@ async def _grade_staged(
     judge_connection: JudgeConnection | None,
 ) -> GradeResult:
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
-    files = _grading_files(task, attempt, grading, submissions)
+    sandbox_judge = _sandbox_judge_contract(grading, judge_connection)
+    files = _grading_files(task, attempt, grading, submissions, sandbox_judge)
     try:
         for command in grading.collect:
             assert task_machine is not None
@@ -594,10 +632,10 @@ async def _grade_staged(
                     prepared = replace(prepared, workdir=grading.workspace)
                 if attempt.stop_reason is not None:
                     prepared = replace(prepared, env={**prepared.env, "TASKCOMPENDIUM_STOP_REASON": attempt.stop_reason})
-                if isinstance(grading.grader, ScriptGrader) and grading.grader.judge is not None:
+                if sandbox_judge is not None:
                     if judge_connection is None:
                         raise ValueError("A script judge requires an explicit connection")
-                    model = grading.grader.judge.model.strip() or (judge_connection.default_model or "").strip()
+                    model = sandbox_judge.model.strip() or (judge_connection.default_model or "").strip()
                     if not model:
                         raise ValueError("A script judge requires an explicit model")
                     prepared = replace(
@@ -640,7 +678,11 @@ async def _grade_staged(
                         preparation_timeout=machine_spec.startup_timeout,
                         user=setup_user(factory.backend),
                     )
-                    return replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds)
+                    return _with_judge_protocol(
+                        replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds),
+                        grading,
+                        judge_connection,
+                    )
             finally:
                 await machine.close()
     except _StepFailed as failure:
@@ -657,7 +699,7 @@ async def _grade_on(
     environment: EnvironmentRequirements,
     spec: Spec | None,
     grader: VerifyitGrader | ScriptGrader,
-    timeout: float,
+    timeout: float | None,
     *,
     preparation_timeout: float | None,
     user: str | None,

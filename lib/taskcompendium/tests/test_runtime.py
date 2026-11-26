@@ -574,6 +574,82 @@ def test_script_judge_receives_explicit_connection_without_serializing_credentia
     )
 
 
+@pytest.mark.parametrize(
+    "declared_model,substitutions,expected_served",
+    [
+        ("declared-judge", {"declared-judge": "served-judge"}, "served-judge"),
+        ("declared-judge", {"other-judge": "served-judge"}, "declared-judge"),
+    ],
+)
+def test_script_judge_substitutes_only_the_declared_unservable_model(
+    tmp_path, shell_task, judge_server, declared_model, substitutions, expected_served
+):
+    """A declared judge model the endpoint cannot serve is substituted and recorded end to end.
+
+    The sandbox's judge.toml and VERIFYIT_JUDGE_MODEL both carry the served model, so the grader's
+    own model pin stays consistent while the wire request names the served model; the grading
+    evidence records the declared-to-served difference only when a substitution applied.
+    """
+    script = (
+        b"import json, os, sys, tomllib\nfrom dataclasses import asdict\nfrom pathlib import Path\n"
+        b"from verifyit.spec import parse_spec\n"
+        b"from verifyit.modes.grade_judge import grade_judge_candidate\n"
+        b"raw = tomllib.loads((Path(__file__).parent / 'judge.toml').read_text())\n"
+        b"assert os.environ['VERIFYIT_JUDGE_MODEL'] == raw['model']\n"
+        b"spec = parse_spec((Path(__file__).parent / 'judge.toml').read_text())\n"
+        b"result = grade_judge_candidate(spec, Path(sys.argv[1]).read_text())\n"
+        b"Path(sys.argv[2]).write_text(json.dumps(asdict(result)))\n"
+    )
+    task = shell_task.model_copy(
+        update={
+            "answer_type": AnswerType.TEXT,
+            "output_paths": (),
+            "resources": ResourceGroups(verifier=(inline_resource("grade.py", script),)),
+            "grader": ScriptGrader(
+                argv=("python3", "/tests/grade.py", "/app/answer.txt", "/logs/verifier/verdict.json"),
+                environment=GRADER_ENVIRONMENT,
+                reward=FileReward(
+                    files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
+                ),
+                judge=JudgeSpec(
+                    model=declared_model,
+                    references=("12",),
+                    rubric=RUBRIC_LABELS,
+                    exact_gate=False,
+                    prompt_template="Reference: {reference}\nCandidate: {candidate}",
+                    label_scores={"PASS": 1.0, "FAIL": 0.0},
+                ),
+            ),
+        }
+    )
+    task = TaskSpec.model_validate_json(task.model_dump_json())
+    connection = JudgeConnection(
+        f"http://127.0.0.1:{judge_server.server_port}/v1",
+        "runtime-private-key",
+        default_model="pinned-judge",
+        substitute_models=substitutions,
+    )
+    result = grade_task(
+        task,
+        GradingAttempt(
+            ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content="twelve")))
+        ),
+        machine_factory=LocalGradingMachines(tmp_path),
+        machine_spec=GRADER_MACHINE,
+        judge_connection=connection,
+    )
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
+    [request] = judge_server.requests
+    assert request["model"] == expected_served
+    if expected_served == "served-judge":
+        assert result.diagnostics["judge_protocol"] == {
+            "declared_model": "declared-judge",
+            "served_model": "served-judge",
+        }
+    else:
+        assert "judge_protocol" not in result.diagnostics
+
+
 @pytest.mark.asyncio
 async def test_daytona_native_script_judge_uses_host_transport(tmp_path, script_grading_task, judge_server):
     class DaytonaGradingMachines(LocalGradingMachines):

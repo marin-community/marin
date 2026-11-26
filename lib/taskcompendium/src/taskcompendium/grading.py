@@ -10,11 +10,12 @@ validation and scoring.
 
 import json
 import math
+from dataclasses import replace
 
 from openai import APIError
 from verifyit.candidate import Candidate, grade_candidate, grade_ejection_candidate
 from verifyit.grade import GradingInfraError, InvalidTask, Reward, Status, empty_output_policy
-from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate
+from verifyit.modes.grade_judge import JudgeConnection, grade_judge_candidate, judge_substitution
 from verifyit.reasoning_markup import COMPLETED_STOP_REASON, ReasoningReply
 from verifyit.spec import (
     EmptyOutputPolicy,
@@ -230,4 +231,12 @@ def grade_remote_judge_answer(
         return GradeResult(Outcome.INFRA_ERROR, None, str(error), detail={"provider_error": error.body})
     except (RuntimeError, OSError) as error:
         return GradeResult(Outcome.INFRA_ERROR, None, str(error))
-    return grade_result(verifier, verdict)
+    result = grade_result(verifier, verdict)
+    substitution = judge_substitution(verifier, connection)
+    if substitution is None:
+        return result
+    return replace(
+        result,
+        detail={**(result.detail or {}), "judge_protocol": substitution},
+        diagnostics={**result.diagnostics, "judge_protocol": substitution},
+    )

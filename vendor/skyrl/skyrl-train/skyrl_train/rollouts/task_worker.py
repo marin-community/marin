@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -355,12 +356,21 @@ def _failed_rollout(
 
 @dataclass(frozen=True)
 class RemoteJudgeSettings:
+    """The deployed judge endpoint and the declared judge models it cannot serve.
+
+    ``substitute_models`` maps each unservable declared judge model to the model the endpoint
+    serves instead; the substitution is recorded in grading evidence as a protocol difference.
+    """
+
     base_url: str
     api_key_env: str
+    substitute_models: Mapping[str, str] = field(default_factory=dict)
 
     def connection(self) -> JudgeConnection:
         """Resolve the judge credential on the rollout worker, outside task data."""
-        return JudgeConnection(self.base_url, require_secret(self.api_key_env))
+        return JudgeConnection(
+            self.base_url, require_secret(self.api_key_env), substitute_models=MappingProxyType(self.substitute_models)
+        )
 
 
 class HarborSlots:

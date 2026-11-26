@@ -631,7 +631,9 @@ class ScriptGrader(BaseModel):
     answer_path: str | None = "/app/answer.txt"
     conversation_path: str = "/tests/conversation.json"
     reward: Annotated[StdoutReward | ExitCodeReward | FileReward, Field(discriminator="kind")] = StdoutReward()
-    timeout: float = Field(default=600.0, gt=0)
+    timeout: float | None = Field(default=600.0, gt=0)
+    """The grader's own deadline in seconds; ``None`` declares no source-imposed deadline and leaves
+    the runtime's sandbox cap in charge."""
     empty_output: EmptyOutputPolicy = EmptyOutputPolicy.ZERO
     judge: JudgeSpec | None = None
 

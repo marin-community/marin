@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import pytest
+from pydantic import ValidationError
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
@@ -28,7 +29,7 @@ from shellbox.machine import (
     Result,
 )
 from verifyit.grade import main as verifyit_main
-from verifyit.spec import NumericSpec
+from verifyit.spec import EmptyOutputPolicy, JudgeCompletionPolicy, JudgeSpec, NumericSpec
 
 import taskcompendium.runtime.grading as grading
 from taskcompendium.grader import verifyit_package
@@ -133,6 +134,89 @@ def answered(task: TaskSpec, answer: str) -> GradingAttempt:
     return GradingAttempt(
         ConversationTrace(events=(*task.context.events, TextMessage(role="assistant", content=answer)))
     )
+
+
+@pytest.mark.parametrize(
+    "declared,session,expected",
+    [
+        (30.0, None, 30.0),
+        (30.0, 10.0, 10.0),
+        (None, 10.0, 10.0),
+    ],
+)
+def test_sandbox_grading_combines_the_session_and_declared_deadlines(declared, session, expected):
+    """The effective grading cap is the tighter of the session and declared caps; a None side imposes none."""
+    grader = ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADER_ENVIRONMENT, timeout=declared)
+    task = arithmetic_task(grader)
+    assert grading._sandbox_grading(task, None, session).limit == expected
+
+
+def test_sandbox_grading_without_any_deadline_uses_the_standing_sandbox_cap():
+    """A declared no-deadline grader in an uncapped session still runs under the runtime's sandbox cap."""
+    grader = ScriptGrader(argv=("python3", "/tests/grade.py"), environment=GRADER_ENVIRONMENT, timeout=None)
+    task = arithmetic_task(grader)
+    assert grading._sandbox_grading(task, None, None).limit == grading.GRADING_TIMEOUT
+
+
+MEDIUM_LABELS_JUDGE = dict(
+    references=("Evaluate each original private check independently; all expected verdicts must match.",),
+    rubric="labels",
+    exact_gate=False,
+    system_prompt="You are an impartial grader. Return exactly one of CORRECT, INCORRECT, NOT_ATTEMPTED.",
+    prompt_template=(
+        "Question:\n{question}\n\nAuxiliary context:\n<context>\n{context}\n</context>\n\n"
+        "Rubric or reference:\n<rubric>\n{reference}\n</rubric>\n\n"
+        "Candidate:\n<candidate>\n{candidate}\n</candidate>\n\nReturn only the verdict label."
+    ),
+    label_scores={"CORRECT": 1.0, "INCORRECT": 0.0, "NOT_ATTEMPTED": 0.0},
+    label_scan="whole",
+    label_case="sensitive",
+    strip_reasoning_blocks=True,
+    strip_candidate_reasoning_blocks=True,
+    completion_policy=JudgeCompletionPolicy.COMPLETED_TEXT,
+    api="chat_completions",
+    context_char_limit=60_000,
+    max_turns=1,
+    temperature=0.7,
+    parse_attempts=1,
+    chat_template_kwargs={"thinking_mode": "adaptive"},
+    model="MiniMaxAI/MiniMax-M3-MXFP8",
+    max_completion_tokens=10_000,
+    request_timeout=300.0,
+    transport_attempts=6,
+    transport_budget=1800.0,
+)
+
+
+def declared_script_judge_task() -> TaskSpec:
+    """The exact Nemotron source declaration: no-deadline script grader with the bound MEDIUM judge."""
+    grader = ScriptGrader(
+        argv=("python3", "/tests/grade.py"),
+        cwd="/",
+        environment=GRADER_ENVIRONMENT,
+        timeout=None,
+        reward=FileReward(files=(RewardFile(path="/app/verdict.json", format=RewardFileFormat.VERDICT_JSON),)),
+        judge=JudgeSpec(**MEDIUM_LABELS_JUDGE),
+        empty_output=EmptyOutputPolicy.GRADE,
+    )
+    return arithmetic_task(grader)
+
+
+def test_declared_no_deadline_script_judge_task_parses_and_round_trips():
+    """The Nemotron sources' declared shape parses: timeout=None, five judge fields, {context} template."""
+    task = declared_script_judge_task()
+    restored = TaskSpec.model_validate_json(task.model_dump_json())
+    assert restored.grader.timeout is None
+    assert restored.grader.judge.model == "MiniMaxAI/MiniMax-M3-MXFP8"
+    assert restored.grader.judge.chat_template_kwargs == {"thinking_mode": "adaptive"}
+    assert restored.grader.judge.context_char_limit == 60_000
+
+
+def test_non_null_integrity_contract_still_fails_closed():
+    """The runtime reserves integrity contracts for sources that need them; non-null stays rejected."""
+    task = declared_script_judge_task().model_copy(update={"integrity_contract": {"id": "root-delivery"}})
+    with pytest.raises(ValidationError):
+        TaskSpec.model_validate_json(task.model_dump_json())
 
 
 @pytest.fixture

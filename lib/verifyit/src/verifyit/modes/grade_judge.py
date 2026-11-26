@@ -26,7 +26,7 @@ import statistics
 import string
 import time
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -110,7 +110,7 @@ Give at most 25 words of reasoning, then end with a final line of exactly this f
 SCORE: <0|1>
 """
 
-LABEL_FIELDS = frozenset({"question", "reference", "candidate"})
+LABEL_FIELDS = frozenset({"question", "reference", "candidate", "context"})
 PAIRWISE_METRIC = "win_rate"
 PAIRWISE_FIELDS = frozenset({"question", "answer_a", "answer_b"})
 
@@ -125,11 +125,36 @@ class JudgeConnection:
 
     ``default_model=None`` permits the environment fallback for generic callers.
     An explicit string supplies that fallback; an empty string disables it.
+
+    ``substitute_models`` maps declared task judge models the endpoint cannot serve to the model
+    it does serve. A declared model in the map is substituted and recorded as a protocol
+    difference; every other declared model is sent unchanged.
     """
 
     base_url: str
     api_key: str = field(repr=False)
     default_model: str | None = field(default=None, kw_only=True)
+    substitute_models: Mapping[str, str] = field(default_factory=dict, kw_only=True)
+
+
+def judge_substitution(spec: JudgeSpec, connection: JudgeConnection | None) -> dict[str, Any] | None:
+    """The recorded declared-to-served judge model difference, or ``None`` when none applies.
+
+    A substitution requires an explicit connection whose ``substitute_models`` names the task's
+    declared judge model; the record travels into grading evidence. The declared judge's
+    model-specific ``chat_template_kwargs`` are forwarded unchanged but are not interpreted by
+    the substituted model, so the record names them as unhonored.
+    """
+    declared = spec.model.strip()
+    if connection is None or not declared:
+        return None
+    served = connection.substitute_models.get(declared, "").strip()
+    if not served or served == declared:
+        return None
+    record: dict[str, Any] = {"declared_model": declared, "served_model": served}
+    if spec.chat_template_kwargs:
+        record["unhonored_chat_template_kwargs"] = dict(spec.chat_template_kwargs)
+    return record
 
 
 @dataclass(frozen=True)
@@ -362,7 +387,7 @@ def grade_judge_candidate(
         if spec.rubric == RUBRIC_REFERENCE:
             return _judge_reference(spec, validated.references, candidate, client, model)
         if spec.rubric == RUBRIC_LABELS:
-            return _judge_labels(spec, validated.references[0], candidate, client, model)
+            return _judge_labels(spec, validated.references[0], candidate, client, model, context)
         if spec.rubric == RUBRIC_PAIRWISE:
             return _judge_pairwise(spec, spec.references[0], candidate, client, model)
         return _judge_checklist(spec, validated.criteria, context, candidate, client, model)
@@ -477,8 +502,12 @@ def _answer_text(
     return text.strip().removesuffix("<|eot_id|>").strip()
 
 
-def _judge_labels(spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str) -> Reward:
-    messages = _judge_messages(spec, {"question": spec.question, "reference": reference, "candidate": candidate})
+def _judge_labels(
+    spec: JudgeSpec, reference: str, candidate: str, client: openai.OpenAI, model: str, context: str
+) -> Reward:
+    messages = _judge_messages(
+        spec, {"question": spec.question, "reference": reference, "candidate": candidate, "context": context}
+    )
     labels = _case_normalized(spec, spec.label_scores)
     label_metrics = _case_normalized(spec, spec.label_metrics)
     for parse_attempt in range(spec.parse_attempts or 1):
@@ -791,7 +820,8 @@ def _client(spec: JudgeSpec, connection: JudgeConnection | None) -> tuple[openai
         if connection is not None and connection.default_model is not None
         else os.environ.get(MODEL_ENV, "")
     )
-    model = spec.model.strip() or fallback.strip()
+    substitution = judge_substitution(spec, connection)
+    model = (substitution["served_model"] if substitution else "") or spec.model.strip() or fallback.strip()
     if not base_url:
         raise InvalidTask(f"no judge endpoint: set {BASE_URL_ENV}")
     if not model:

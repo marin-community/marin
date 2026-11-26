@@ -23,6 +23,8 @@ environment:
     remote_judge:
       base_url: https://api.together.xyz/v1
       api_key_env: TOGETHER_API_KEY
+      substitute_models:
+        MiniMaxAI/MiniMax-M3-MXFP8: zai-org/GLM-5.3-Flash
 trainer:
   strategy: megatron
   flash_attn: true
