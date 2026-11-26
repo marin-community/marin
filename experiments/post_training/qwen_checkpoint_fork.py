@@ -21,6 +21,8 @@ FORK_REVISION = "2026.11.26.6"
 ENDPOINT = "qwen-string-fork384@2026.11.26.1"
 FORKS: tuple[tuple[str, Literal[6, 10]], ...] = (("easy10", 10), ("easy06", 6))
 FORK_SEEDS = (SEED, 163, 167)
+EXTENSION_SEEDS = (173, 179)
+EXTENSION_REVISION = "2026.11.26.7"
 
 
 def warmup_preset():
@@ -98,7 +100,15 @@ def fork_preset(name: str, easy_quota: Literal[6, 10], seed: int) -> Preset:
 QWEN_FORK = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-checkpoint-fork",
-    presets=(warmup_preset(), *(fork_preset(name, quota, seed) for seed in FORK_SEEDS for name, quota in FORKS)),
+    presets=(
+        warmup_preset(),
+        *(fork_preset(name, quota, seed) for seed in FORK_SEEDS for name, quota in FORKS),
+        *(
+            replace(fork_preset(name, quota, seed), revision=EXTENSION_REVISION)
+            for seed in EXTENSION_SEEDS
+            for name, quota in FORKS
+        ),
+    ),
     control_pins={},
 )
 
