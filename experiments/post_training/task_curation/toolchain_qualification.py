@@ -28,6 +28,8 @@ import sys
 import traceback
 from pathlib import Path
 
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+
 LOCAL_DISK_POOL_ROOT = Path("/var/lib/shellbox-disk-pool")
 QUALIFICATION_QUOTA_MB = 2048
 """The family's smallest quota: the probe allocation proves the path end to end."""
@@ -82,9 +84,6 @@ def _qualify_local_pool() -> dict:
 
 def _qualify_daytona_storage() -> dict:
     """Acquire one real Daytona machine carrying the quota and verify the allocation."""
-    from shellbox.requirements import Requirement  # noqa: PLC0415
-    from shellbox.survey import requirement_probe  # noqa: PLC0415
-
     if os.environ.get("DAYTONA_DATA_API_KEY") is None:
         return {"backend": "daytona", "qualified": False, "reason": "DAYTONA_DATA_API_KEY not configured"}
     try:
@@ -103,13 +102,30 @@ def _qualify_daytona_storage() -> dict:
         from shellbox.backends.daytona.machine import DaytonaMachineFactory  # noqa: PLC0415
     except Exception as error:
         return {"backend": "daytona", "qualified": False, "reason": f"{type(error).__name__}: {str(error)[:200]}"}
+    # The probe machine is the real grader environment: the composed toolchain
+    # image the lock-only roles bind, carrying the family's quota. Acquiring it
+    # qualifies the storage cell exactly as the graders will run.
+    from shellbox.machine import MachineSpec, RegistryImage  # noqa: PLC0415
 
-    if os.environ.get("DAYTONA_DATA_API_KEY") is None:
-        return {"backend": "daytona", "qualified": False, "reason": "DAYTONA_DATA_API_KEY not configured"}
-    probe = requirement_probe(Requirement.STORAGE, "daytona")
-    if probe is None:
-        return {"backend": "daytona", "qualified": False, "reason": "the survey generates no storage probe for daytona"}
-    _requirements, spec = probe
+    from experiments.post_training.task_curation.toolchain_binding import (  # noqa: PLC0415
+        resolved_toolchain_image,
+    )
+
+    configure_coreweave_s3()
+    lock_url = "s3://marin-us-east-02a/marin/images/env-278169f50750da36/2026.10.08/requirements.lock"
+    image = resolved_toolchain_image(lock_url)
+    if image is None:
+        return {"backend": "daytona", "qualified": False, "reason": "the composed toolchain image is not recorded"}
+    spec = MachineSpec(
+        source=RegistryImage(image),
+        workdir="/workspace",
+        network="deny",
+        memory_mb=2048,
+        cpus=1,
+        storage_mb=QUALIFICATION_QUOTA_MB,
+        gpus=0,
+        startup_timeout=600,
+    )
     factory = DaytonaMachineFactory()
     import asyncio  # noqa: PLC0415
 
