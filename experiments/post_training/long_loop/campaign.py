@@ -117,7 +117,6 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
                 cpu=16,
                 ram="128GB",
                 disk="500GB",
-                target_cluster="cw-us-east-08a",
             ),
             timeout=Duration.from_hours(4),
         ),
@@ -173,7 +172,7 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
         f"{spec.name}/storage",
         remote(
             retain_campaign_checkpoints,
-            resources=ResourceConfig.with_cpu(cpu=8, ram="32GB", disk="64GB", target_cluster="cw-us-east-08a"),
+            resources=ResourceConfig.with_cpu(cpu=8, ram="32GB", disk="64GB"),
             timeout=Duration.from_hours(6),
         ),
         version=spec.version,

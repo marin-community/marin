@@ -7,12 +7,14 @@ import json
 
 import pytest
 import yaml
+from fray.iris_backend import convert_constraints
 from marin.execution.lazy import materialized_config
 from marin.rl.curriculum import validation_payload
 from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
+from experiments.post_training.long_loop import campaign
 from experiments.post_training.long_loop.campaign import REFERENCE, campaign_round
 from experiments.post_training.long_loop.campaign_data import CampaignMix, load_mix, partition_mix
 from experiments.post_training.long_loop.campaign_runtime import bind_runtime
@@ -121,7 +123,7 @@ def test_unpublished_source_does_not_fall_back_to_raw_converter(tmp_path):
         load_mix("v2-fixture", tmp_path)
 
 
-def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path):
+def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, monkeypatch):
     mix = load_mix("v2-anchor-exp5-01")
     spec = campaign_round(mix, "2026.11.26.501", max_steps=50)
     rows = {
@@ -170,6 +172,23 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path):
     assert native["skyrl"]["generator"]["speculative_decoding"]["num_speculative_tokens"] == 4
     # Rendering must not open the intentionally absent parquet bodies on the Mac.
     assert not (pools / "validation.parquet").exists()
+    dispatched = []
+    real_remote = campaign.remote
+
+    def capture_remote(*args, **kwargs):
+        wrapped = real_remote(*args, **kwargs)
+        dispatched.append(wrapped.resources)
+        return wrapped
+
+    monkeypatch.setattr(campaign, "REFERENCE", authored)
+    monkeypatch.setattr(campaign, "remote", capture_remote)
+    campaign.campaign_graph(mix, spec)
+    # The production coordinator is already regional. A child cluster constraint
+    # becomes a second federation request, which an 08a controller rejects.
+    assert len(dispatched) == 2
+    assert not any(
+        constraint.key == "cluster" for resource in dispatched for constraint in convert_constraints(resource)
+    )
 
 
 def test_retained_runtime_lowering_preserves_grader_and_declared_resources():
