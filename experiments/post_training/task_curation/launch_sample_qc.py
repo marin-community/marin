@@ -21,6 +21,13 @@ def main() -> None:
     parser.add_argument("--output-root", required=True, help="The review artifacts' output root.")
     parser.add_argument("--review-cache", required=True, help="The reviewer request cache root.")
     parser.add_argument("--job-name", default="atlas-taskspec-sample-qc")
+    parser.add_argument(
+        "--target-cluster",
+        default="cw-rno2a",
+        help="The cluster the campaign runs on; the judge serving needs the GPU flavors "
+        "(coordinator ruling 3:08 AM EST: cw-rno2a H100s first, else cw-us-east-08a GB200s - the "
+        "CPU-only interactive flavors at cw-us-east-02a cannot schedule the 4x-GPU vLLM serve).",
+    )
     parser.add_argument("--cpu", default="16")
     parser.add_argument("--memory", default="64GB")
     parser.add_argument("--disk", default="300GB")
@@ -45,7 +52,7 @@ def main() -> None:
         "job",
         "run",
         "--no-wait",
-        "--target-cluster=cw-us-east-02a",
+        f"--target-cluster={args.target_cluster}",
         "--no-sync",
         "--secret",
         "HF_TOKEN",
