@@ -27,7 +27,7 @@ from experiments.post_training import mochi_rl, rl, rl_compose, rl_gate, snowbal
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
-from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, write_published_artifact
+from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, fake_s3, write_published_artifact
 from experiments.post_training.snowball_rl import SNOWBALL
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
 
@@ -404,6 +404,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     else:
         monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: durable)
+    fake_s3(monkeypatch)
     monkeypatch.setattr(rl, "_status", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(sys, "argv", [module, *argv])
     monkeypatch.setattr(sys.modules["__main__"], "__spec__", ModuleSpec(module, loader=None))
