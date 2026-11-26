@@ -121,8 +121,9 @@ class Controls:
     known-invalid submission, which must score zero unless ``negative_reward(task)`` supplies the
     expected partial reward. When neither callable supplies a submission,
     the task is graded on an empty submission, which must score zero; a sandbox grader grades it in
-    a fresh grading machine. ``memory_mb`` sizes each fresh grading machine and
-    ``storage_mb``, when set, its disk; an image too large for the backend's default disk needs it.
+    a fresh grading machine. ``memory_mb`` requests memory for each grading machine.
+    ``storage_mb``, when set, sizes image grading machines' disks; local and simulated
+    graders ignore it.
     Judge-graded tasks use the campaign's explicit remote judge connection rather than a network-denied
     grading machine.
     """

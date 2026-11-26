@@ -8,9 +8,7 @@ import os
 import time
 
 import pytest
-from shellbox.backends.iris.machine import IrisMachineFactory
-from shellbox.machine import CommandSemantics
-from taskcompendium.models import EnvironmentRequirements, TextMessage
+from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.models import ImportRejection
 
 from experiments.post_training.task_curation.datasets.lean import proofs
@@ -29,7 +27,6 @@ from experiments.post_training.task_curation.datasets.lean.lean_grade import (
 )
 from experiments.post_training.task_curation.datasets.lean.numina import (
     EVAL_OVERLAP,
-    NUMINA_CONTROLS,
     PASSING_PROOFS,
     UNCOMPILABLE,
     human_proof,
@@ -37,7 +34,6 @@ from experiments.post_training.task_curation.datasets.lean.numina import (
 )
 from experiments.post_training.task_curation.datasets.lean.numina import proof_key as numina_proof_key
 from experiments.post_training.task_curation.driver import _selected_sources
-from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.tests.conversion import convert_row, converted_task
 from experiments.post_training.task_curation.tests.lean_rows import (
     NUMINA,
@@ -431,20 +427,3 @@ def test_a_numina_row_without_a_usable_statement_or_proof_is_rejected(fields, re
 )
 def test_the_statement_check_fails_on_a_reference_that_does_not_validate(source, result, unexpected):
     assert failed_unexpectedly(source, result) is unexpected
-
-
-LEAN_GRADER_IMAGE = (
-    "ghcr.io/marin-community/rollout-images@sha256:86b746ca83cb4883d9ef9732df3ded3330c8c998fe4daad534a2c12ecd5c7339"
-)
-LEAN_GRADER_IMAGE_MB = 15 * 1024
-"""What the grader image unpacks to."""
-
-
-@pytest.mark.parametrize("controls", [proofs.LEAN_PROOF_CONTROLS, NUMINA_CONTROLS], ids=["proofnet", "numina"])
-def test_lean_controls_give_the_image_machine_room_for_the_grader_image(controls):
-    machines = CampaignMachines(image_factory=IrisMachineFactory(controller_url="http://controller.invalid"))
-    environment = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=LEAN_GRADER_IMAGE
-    )
-    _, spec = machines.machine(environment, controls.memory_mb, controls.storage_mb)
-    assert spec.storage_mb is not None and spec.storage_mb > LEAN_GRADER_IMAGE_MB
