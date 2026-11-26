@@ -35,6 +35,15 @@ from experiments.post_training.long_loop.round_runner import (
 
 REFERENCE = Path(__file__).with_name("campaign") / "mochi131.yaml"
 REFERENCE_SOURCE = "fe4695fbcd27e365284dccab649a40d6caa9fb2b"
+CAMPAIGN_SECRET_NAMES = (
+    "CW_KEY_ID",
+    "CW_KEY_SECRET",
+    "HF_TOKEN",
+    "WANDB_API_KEY",
+    "DAYTONA_RL_API_KEY",
+    "DAYTONA_EVAL_API_KEY",
+    "TOGETHER_API_KEY",
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,7 +82,11 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
             max_steps=max_steps,
             stopping=RlStopping.MAX_STEPS,
             native_checkpoint_storage=SkyRLCheckpointStorage.TEMPORARY,
-            execution={**reference.rl.execution, "coordinator_name": f"mochi-campaign-{mix.id}-{version}"},
+            execution={
+                **reference.rl.execution,
+                "coordinator_name": f"mochi-campaign-{mix.id}-{version}",
+                "coordinator_secret_sources": tuple((name, f"env:{name}") for name in CAMPAIGN_SECRET_NAMES),
+            },
             pools={"uri": prefix_join(reference.storage.output_prefix, f"rl-data-campaign/{mix.id}/pools/{version}")},
         ),
     )

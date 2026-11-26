@@ -44,15 +44,16 @@ keeps the final native checkpoint without making a second final HF export or
 evaluating it.
 
 The CSV snapshot is configuration metadata copied byte-for-byte from
-`experiments/human/long-loop-data-ablation/mix-candidates/mix_candidates_v2.csv`.
+`experiments/human/long-loop-data-ablation/mix-candidates/mix_candidates_v{2,3}.csv`.
 `source_pins.json` binds its sources to the pinned Atlas
 publication registry, including full parquet hashes, counts, licenses and
-source-route evidence. Two repaired SWE sources still lack sealed retained
-publications in this cut: `TaskTrove:swesmith-verifier-repaired-v5` and
-`SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119`.
-Affected mixes refuse to substitute their raw
-converters. A v3 CSV or re-sealed grader release needs a fresh reviewed catalog
-binding before use.
+source-route evidence. SWE-smith binds its existing retained release under the
+canonical catalog's user-assumed-admission override; its QC status is recorded
+without changing the source bytes. Raw converters for
+`SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119` and
+`AllenAI:Dolci-Think-SFT-Clean-v2/precise-if` still require published TaskSpecs.
+Affected mixes fail closed. A re-sealed grader release needs a fresh reviewed
+catalog binding before use.
 
 The coordinator owns the rated queue and watchdog. Take candidates in
 `experiments/human/long-loop-data-ablation/campaign/queue.json` order, keep three

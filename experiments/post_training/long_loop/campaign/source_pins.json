@@ -6,7 +6,8 @@
     "sha256": "082676b2b0f4518a92d7f97b0b64a175c950e241c64cdb14dad6015680a92c35"
   },
   "candidate_sha256": {
-    "v2": "cc583ac9c45c969122444e31562ca8aff585151bb359a25bbdd403e19a752448"
+    "v2": "cc583ac9c45c969122444e31562ca8aff585151bb359a25bbdd403e19a752448",
+    "v3": "ea6c1776c1a1e3ca809408498cb9a9ef74989b21aede09fbeaf41546ff86c207"
   },
   "sources": {
     "AI-MO:numina_math": {
@@ -2107,10 +2108,12 @@
       "files": [
         "tasks.parquet"
       ],
-      "sha256": null,
-      "admission": "pending-publication",
+      "sha256": "bc8f505af1ef502c25bcc3a1f5677cd61bb4f48479b015cbed0f7d0c06eb095e",
+      "admission": "catalog",
       "route": "agentic",
-      "route_basis": "Atlas family=swe-repo; declared type=Agentic; source identity=TaskTrove:swesmith-verifier-repaired-v5"
+      "route_basis": "Atlas family=swe-repo; declared type=Agentic; source identity=TaskTrove:swesmith-verifier-repaired-v5",
+      "admission_basis": "Canonical catalog user-assumed-admission override (2026-11-26); SAMPLE QC still in flight; existing retained release/census pinned unchanged",
+      "publication_evidence": "s3://marin-us-east-02a/marin/rl-data/atlas/private-retention/2026.11.16.1/0bfcd894f5d3f6676595/result.json"
     },
     "TaskTrove:tasktrove-codeforces-rebuilt-v1": {
       "repo": "open-athena/campaign-release-tasktrove-codeforces-rebuilt-v1-e8ef857d-retained-20261117-b-v1",
@@ -2396,6 +2399,275 @@
       "admission": "catalog",
       "route": "nonagentic",
       "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=pafitis:hardmath@rhs"
+    },
+    "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if": {
+      "repo": "allenai/Dolci-Think-SFT-Clean-v2",
+      "revision": "b83abf4073b66569ba788ba25f4a092f9ad2a116",
+      "version": "dolci-precise-if-prompt-judge-v1",
+      "name": "dolci-precise-if",
+      "count": 132159,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/dolci-precise-if/2026.11.25.1/conversion-census-v1/actor/.artifact.json",
+      "license": [
+        "odc-by"
+      ],
+      "files": [
+        "data/train-00000-of-00128.parquet",
+        "data/train-00001-of-00128.parquet",
+        "data/train-00002-of-00128.parquet",
+        "data/train-00003-of-00128.parquet",
+        "data/train-00004-of-00128.parquet",
+        "data/train-00005-of-00128.parquet",
+        "data/train-00006-of-00128.parquet",
+        "data/train-00007-of-00128.parquet",
+        "data/train-00008-of-00128.parquet",
+        "data/train-00009-of-00128.parquet",
+        "data/train-00010-of-00128.parquet",
+        "data/train-00011-of-00128.parquet",
+        "data/train-00012-of-00128.parquet",
+        "data/train-00013-of-00128.parquet",
+        "data/train-00014-of-00128.parquet",
+        "data/train-00015-of-00128.parquet",
+        "data/train-00016-of-00128.parquet",
+        "data/train-00017-of-00128.parquet",
+        "data/train-00018-of-00128.parquet",
+        "data/train-00019-of-00128.parquet",
+        "data/train-00020-of-00128.parquet",
+        "data/train-00021-of-00128.parquet",
+        "data/train-00022-of-00128.parquet",
+        "data/train-00023-of-00128.parquet",
+        "data/train-00024-of-00128.parquet",
+        "data/train-00025-of-00128.parquet",
+        "data/train-00026-of-00128.parquet",
+        "data/train-00027-of-00128.parquet",
+        "data/train-00028-of-00128.parquet",
+        "data/train-00029-of-00128.parquet",
+        "data/train-00030-of-00128.parquet",
+        "data/train-00031-of-00128.parquet",
+        "data/train-00032-of-00128.parquet",
+        "data/train-00033-of-00128.parquet",
+        "data/train-00034-of-00128.parquet",
+        "data/train-00035-of-00128.parquet",
+        "data/train-00036-of-00128.parquet",
+        "data/train-00037-of-00128.parquet",
+        "data/train-00038-of-00128.parquet",
+        "data/train-00039-of-00128.parquet",
+        "data/train-00040-of-00128.parquet",
+        "data/train-00041-of-00128.parquet",
+        "data/train-00042-of-00128.parquet",
+        "data/train-00043-of-00128.parquet",
+        "data/train-00044-of-00128.parquet",
+        "data/train-00045-of-00128.parquet",
+        "data/train-00046-of-00128.parquet",
+        "data/train-00047-of-00128.parquet",
+        "data/train-00048-of-00128.parquet",
+        "data/train-00049-of-00128.parquet",
+        "data/train-00050-of-00128.parquet",
+        "data/train-00051-of-00128.parquet",
+        "data/train-00052-of-00128.parquet",
+        "data/train-00053-of-00128.parquet",
+        "data/train-00054-of-00128.parquet",
+        "data/train-00055-of-00128.parquet",
+        "data/train-00056-of-00128.parquet",
+        "data/train-00057-of-00128.parquet",
+        "data/train-00058-of-00128.parquet",
+        "data/train-00059-of-00128.parquet",
+        "data/train-00060-of-00128.parquet",
+        "data/train-00061-of-00128.parquet",
+        "data/train-00062-of-00128.parquet",
+        "data/train-00063-of-00128.parquet",
+        "data/train-00064-of-00128.parquet",
+        "data/train-00065-of-00128.parquet",
+        "data/train-00066-of-00128.parquet",
+        "data/train-00067-of-00128.parquet",
+        "data/train-00068-of-00128.parquet",
+        "data/train-00069-of-00128.parquet",
+        "data/train-00070-of-00128.parquet",
+        "data/train-00071-of-00128.parquet",
+        "data/train-00072-of-00128.parquet",
+        "data/train-00073-of-00128.parquet",
+        "data/train-00074-of-00128.parquet",
+        "data/train-00075-of-00128.parquet",
+        "data/train-00076-of-00128.parquet",
+        "data/train-00077-of-00128.parquet",
+        "data/train-00078-of-00128.parquet",
+        "data/train-00079-of-00128.parquet",
+        "data/train-00080-of-00128.parquet",
+        "data/train-00081-of-00128.parquet",
+        "data/train-00082-of-00128.parquet",
+        "data/train-00083-of-00128.parquet",
+        "data/train-00084-of-00128.parquet",
+        "data/train-00085-of-00128.parquet",
+        "data/train-00086-of-00128.parquet",
+        "data/train-00087-of-00128.parquet",
+        "data/train-00088-of-00128.parquet",
+        "data/train-00089-of-00128.parquet",
+        "data/train-00090-of-00128.parquet",
+        "data/train-00091-of-00128.parquet",
+        "data/train-00092-of-00128.parquet",
+        "data/train-00093-of-00128.parquet",
+        "data/train-00094-of-00128.parquet",
+        "data/train-00095-of-00128.parquet",
+        "data/train-00096-of-00128.parquet",
+        "data/train-00097-of-00128.parquet",
+        "data/train-00098-of-00128.parquet",
+        "data/train-00099-of-00128.parquet",
+        "data/train-00100-of-00128.parquet",
+        "data/train-00101-of-00128.parquet",
+        "data/train-00102-of-00128.parquet",
+        "data/train-00103-of-00128.parquet",
+        "data/train-00104-of-00128.parquet",
+        "data/train-00105-of-00128.parquet",
+        "data/train-00106-of-00128.parquet",
+        "data/train-00107-of-00128.parquet",
+        "data/train-00108-of-00128.parquet",
+        "data/train-00109-of-00128.parquet",
+        "data/train-00110-of-00128.parquet",
+        "data/train-00111-of-00128.parquet",
+        "data/train-00112-of-00128.parquet",
+        "data/train-00113-of-00128.parquet",
+        "data/train-00114-of-00128.parquet",
+        "data/train-00115-of-00128.parquet",
+        "data/train-00116-of-00128.parquet",
+        "data/train-00117-of-00128.parquet",
+        "data/train-00118-of-00128.parquet",
+        "data/train-00119-of-00128.parquet",
+        "data/train-00120-of-00128.parquet",
+        "data/train-00121-of-00128.parquet",
+        "data/train-00122-of-00128.parquet",
+        "data/train-00123-of-00128.parquet",
+        "data/train-00124-of-00128.parquet",
+        "data/train-00125-of-00128.parquet",
+        "data/train-00126-of-00128.parquet",
+        "data/train-00127-of-00128.parquet"
+      ],
+      "type": "RLVR",
+      "sha256": null,
+      "admission": "pending-publication",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=; declared type=unspecified; source identity=AllenAI:Dolci-Think-SFT-Clean-v2/precise-if"
+    },
+    "Nemotron:Nemotron-RL-knowledge-mcqa": {
+      "repo": "open-athena/nemotron-knowledge-mcqa-prepared-images-20261125-b-v1",
+      "revision": "e9e0c3b8b273a0d6f7121a2b22220d02a5a836a4",
+      "version": "2026.11.13.1",
+      "name": "nemotron-knowledge-mcqa-prepared-native",
+      "count": 612282,
+      "count_basis": "Pinned HF parquet footer, metadata-only; canonical catalog Available TRAIN/licensed source",
+      "license": [
+        "cc-by-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "type": "RLVR",
+      "sha256": "90003ddc6edecf858f3bf5f3d88c102ec3336d3e7a3502124802ca7670b483d8",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=multiple-choice; declared type=unspecified; source identity=Nemotron:Nemotron-RL-knowledge-mcqa"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {
+      "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-mult-6d1481e0-retained-20261113-v1",
+      "revision": "b41bd6a505fcb3c48203f0f6a1bcbf04ee4b9991",
+      "version": "2026.11.13.1",
+      "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_multichallenge_len40k-retained",
+      "count": 1184,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/retained-census/2026.11.13.1/6d1481e09c78d2b34509/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "type": "RLVR",
+      "sha256": "225a2d378f301ca837ce963c21ac3b36a4b02c698650c1d7e5074b8350493729",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=instruction-following; declared type=RLVR; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k"
+    },
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot": {
+      "repo": "open-athena/tau-pivot-rlvr2-taskcompendium-20261113",
+      "revision": "b290f14c7cda51bd398b6964e184f2cb83b11f66",
+      "version": "2026.11.13.1",
+      "name": "tau-pivot-rlvr2-retained",
+      "count": 20035,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/tau-repair/2026.11.13.1/retained-census/818bba4ee034a6f8f50b/actor/.artifact.json",
+      "license": [
+        "cc-by-4.0",
+        "cc-by-sa-4.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "type": "RLVR",
+      "sha256": "5ef11af9be0c95e42f9877a19bd78155ba703634f2745afed48e79c93736b0f9",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=tool-use; declared type=unspecified; source identity=Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_tau_pivot"
+    },
+    "TaskTrove:laion__nemotron-gym-structured-outputs-v4": {
+      "repo": "open-athena/tasktrove-native-structured-nop-qualified-20261125-b-v1",
+      "revision": "b2ac6f4387cda36e97b0a8b7d74a842deb39673a",
+      "version": "2026.11.13.1",
+      "name": "tasktrove-structured-outputs-native",
+      "count": 53766,
+      "count_basis": "Pinned HF parquet footer, metadata-only; canonical catalog Available TRAIN/licensed source",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "type": "Agentic",
+      "sha256": "b108371ef5ad5dd14d1ddb3d8a51ad36d5efdb6b215ed15d6fc1d13e43144947",
+      "admission": "catalog",
+      "route": "agentic",
+      "route_basis": "Atlas family=instruction-following; declared type=Agentic; source identity=TaskTrove:laion__nemotron-gym-structured-outputs-v4"
+    },
+    "TaskTrove:tasktrove-math_oracle-qa": {
+      "repo": "open-athena/campaign-release-tasktrove-math-oracle-qa-7f7f7b29-oracle-filtered-20261114-v2",
+      "revision": "6656fc7bfaa524198f8a52ae7db3165c69ab5301",
+      "version": "2026.11.14.2-final-private",
+      "name": "math_oracle-qa-retained-oracle-filtered",
+      "count": 57419,
+      "count_basis": "s3://marin-us-east-02a/marin/rl-data/atlas/oracle-filter-qa/2026.11.14.2-final-private/7f7f7b292c811b9e2d3d/actor/.artifact.json",
+      "license": [
+        "apache-2.0"
+      ],
+      "files": [
+        "tasks.parquet"
+      ],
+      "type": "RLVR",
+      "sha256": "e3f5418f92da21a09a53eaaf25595c13a3e5f5cd92547a65d3061bff18ee900c",
+      "admission": "catalog",
+      "route": "nonagentic",
+      "route_basis": "Atlas family=math-answer; declared type=RLVR; source identity=TaskTrove:tasktrove-math_oracle-qa"
     }
-  }
+  },
+  "supplementary_registry_refs": [
+    {
+      "repo": "open-athena/marin-rl-data-atlas-registry",
+      "revision": "26a647986cfe508d81ab17facec52cfce9ed8f05",
+      "path": "experiments/post_training/task_curation/datasets/retained_release_receipts_facet_hold_20261125_v1/part-000.json",
+      "sha256": "8d45341e2b9fe6c290268dff9fa0713cfa1f6c1948b3cc19b5b0c7ac9aee08f9"
+    },
+    {
+      "repo": "open-athena/marin-rl-data-atlas-registry",
+      "revision": "26a647986cfe508d81ab17facec52cfce9ed8f05",
+      "path": "experiments/post_training/task_curation/datasets/retained_release_receipts_facet_hold_20261125_v1/part-001.json",
+      "sha256": "bdf83d790629e586681372a14ba1ba12468f523f28f8cc165c3c752e283b964b"
+    },
+    {
+      "repo": "open-athena/marin-rl-data-atlas-registry",
+      "revision": "26a647986cfe508d81ab17facec52cfce9ed8f05",
+      "path": "experiments/post_training/task_curation/datasets/retained_release_receipts_facet_hold_20261125_v1/part-002.json",
+      "sha256": "c631c434530078ce094de7c45101716dfa3a9f97b67e858ed77e97a5c53fce70"
+    },
+    {
+      "repo": "open-athena/marin-rl-data-atlas-registry",
+      "revision": "26a647986cfe508d81ab17facec52cfce9ed8f05",
+      "path": "experiments/post_training/task_curation/datasets/retained_release_receipts_facet_hold_20261125_v1/part-003.json",
+      "sha256": "f8d9489669120ff244abc1a9423f0bbed6f69e71fc646e4c1c2f2535447b248b"
+    }
+  ]
 }

@@ -6,6 +6,7 @@
 import csv
 import hashlib
 import json
+import logging
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -24,6 +25,7 @@ from marin.rl.curriculum import (
     validation_payload,
 )
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import require_secret
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 
@@ -33,6 +35,7 @@ from experiments.post_training.long_loop.rl_terminal_evaluation import native_co
 CAMPAIGN = Path(__file__).with_name("campaign")
 SEED = 20261020
 VALIDATION_SIZE = 200
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -149,13 +152,23 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
         raise ValueError("Campaign pools must be materialized inside an 08a Iris CPU job")
     rows = {}
     for label, pin in mix.sources.items():
-        local = Path(hf_hub_download(pin["repo"], "tasks.parquet", revision=pin["revision"], repo_type="dataset"))
+        logger.info("Reading campaign cohort %s at %s@%s", label, pin["repo"], pin["revision"])
+        local = Path(
+            hf_hub_download(
+                pin["repo"],
+                "tasks.parquet",
+                revision=pin["revision"],
+                repo_type="dataset",
+                token=require_secret("HF_TOKEN"),
+            )
+        )
         with local.open("rb") as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != pin["sha256"]:
                 raise ValueError(f"Atlas release changed: {label}")
         records = pq.read_table(local).to_pylist()
         if len(records) != pin["count"]:
             raise ValueError(f"Atlas population changed: {label}")
+        logger.info("Verified campaign cohort %s: %d rows and exact parquet SHA", label, len(records))
         for row in records:
             task = TaskSpec.model_validate_json(row["task_spec"])
             if canonical_sha256(json.loads(row["task_spec"])) != row["task_sha256"]:
@@ -176,6 +189,7 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
                 ]
             )
             rows[label] = pq.read_table(lowered).to_pylist()
+        logger.info("Lowered campaign cohort %s through the native runtime", label)
     prepared = partition_mix(mix, rows, pool_version)
     curriculum, training, validation = prepared.curriculum, prepared.training, prepared.validation
     destination = StoragePath(output)
@@ -203,3 +217,9 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
         "mix": asdict(mix),
     }
     (destination / "manifest.json").write_text(json.dumps(document, indent=2))
+    logger.info(
+        "Campaign pools published: %s, holdout=%d, training=%d",
+        output,
+        len(validation),
+        sum(len(records) for records in training.values()),
+    )

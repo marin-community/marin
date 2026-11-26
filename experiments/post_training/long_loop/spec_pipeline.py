@@ -64,6 +64,7 @@ def runtime_execution(value: dict) -> IrisSkyRLExecution:
             **value,
             "coordinator_gpu": GpuConfig(**gpu) if gpu is not None else None,
             "required_env_vars": tuple(value["required_env_vars"]),
+            "coordinator_secret_sources": tuple(tuple(pair) for pair in value.get("coordinator_secret_sources", ())),
             "excluded_nvlink_domains": tuple(value.get("excluded_nvlink_domains", ())),
             "role_topology": (
                 RoleTopologyMode(value["role_topology"]) if value.get("role_topology") is not None else None

@@ -21,6 +21,8 @@ from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from marin.rl.skyrl import skyrl_cpu_command
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.cluster_config import StoreType
+from rigging.filesystem.s3_compat import s3_credentials
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SecretBehavior, get_secret
 from rigging.timing import Duration
@@ -81,6 +83,9 @@ def regional_preflight(
     """Read evaluation dependencies and construct its worker in an isolated CPU task."""
     launch = yaml.safe_load(document)
     inputs = launch["inputs"]
+    if check_vocabulary and (credentials := s3_credentials(StoreType.COREWEAVE)):
+        key, secret = credentials
+        os.environ.update(AWS_ACCESS_KEY_ID=key, AWS_SECRET_ACCESS_KEY=secret)
     for uri in (
         *readable_uris,
         *(str(StoragePath(item["uri"]) / item["relative_path"]) for item in inputs["validation_data"]),

@@ -83,6 +83,7 @@ def test_campaign_preserves_131_controls_and_disables_learning_clock():
     for field in ("max_steps", "stopping", "native_checkpoint_storage", "pools"):
         after["rl"][field] = before["rl"][field]
     after["rl"]["execution"]["coordinator_name"] = before["rl"]["execution"]["coordinator_name"]
+    after["rl"]["execution"].pop("coordinator_secret_sources")
     after["rl"]["recipe"]["trainer"]["callbacks"] = before["rl"]["recipe"]["trainer"]["callbacks"]
     after["rl"]["recipe"]["trainer"]["rollout_buffer"]["source_routes"] = before["rl"]["recipe"]["trainer"][
         "rollout_buffer"
@@ -105,9 +106,19 @@ def test_campaign_preserves_131_controls_and_disables_learning_clock():
     assert campaign.rl.stopping is RlStopping.MAX_STEPS
 
 
-def test_unpublished_swe_mix_does_not_fall_back_to_raw_converter():
-    with pytest.raises(ValueError, match=r"Awaiting sealed retained publications.*swesmith"):
-        load_mix("v2-anchor-exp4-01")
+def test_unpublished_source_does_not_fall_back_to_raw_converter(tmp_path):
+    candidates = b"mix_id,k,sources\nfixture,1,tests:raw\n"
+    (tmp_path / "mix_candidates_v2.csv").write_bytes(candidates)
+    (tmp_path / "source_pins.json").write_text(
+        json.dumps(
+            {
+                "candidate_sha256": {"v2": hashlib.sha256(candidates).hexdigest()},
+                "sources": {"tests:raw": {"admission": "pending-publication", "files": ["raw.parquet"]}},
+            }
+        )
+    )
+    with pytest.raises(ValueError, match=r"Awaiting sealed retained publications.*tests:raw"):
+        load_mix("v2-fixture", tmp_path)
 
 
 def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path):
