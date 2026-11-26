@@ -25,13 +25,19 @@ run's sources as its last step and prints the store's path and the sources it
 left out: a dataset-owned pipeline that writes no curation manifest admits no
 tasks. A failed campaign builds no store; rerun it once the failure is fixed, or
 rerun with `--source` for the sources that completed. Either rerun reuses the
-completed source artifacts. A store records each source's curation artifact and the SHA-256 of its
-canonical `manifest.json`; it copies no task data and does not hash the admitted
-files.
+completed source artifacts.
+
+A store records each source's curation artifact, the SHA-256 of its canonical
+`manifest.json` and its `intended_use`; it copies no task data and does not hash
+the admitted files. Only SAMPLE and FULL curation admits tasks, so a store
+refuses other artifacts. A FULL campaign also curates evaluation populations
+such as `aime24` and `gpqa`, so a training reader selects its sources by
+`intended_use`:
 
 ```python
-store = TaskStore.open("snowball", "2026.11.26.1")
-rows = store.select_sources("MarinSkyRL:openscience").to_dataset()
+store = TaskStore.open("main", "2026.11.27.1")
+training = [source_id for source_id, source in store.sources.items() if source.intended_use == IntendedUse.TRAIN]
+rows = store.select_sources(*training).to_dataset()
 ```
 
 `TaskStore.open` reads the record under `rl-data/task-store/<name>/<version>` of
