@@ -90,7 +90,7 @@ def agentic_preset(preset: Preset, *, name: str, limits: RecipePatch) -> Preset:
         tasks_input="required",
         batch_mix=_BATCH_MIX,
         checkpoint_evaluation=CHECKPOINT_EVALUATION if preset.evaluations else (),
-        then=(task_health_step,),
+        then=task_health_step,
         recipe=_task_recipe(preset.recipe, _AGENTIC_RECIPE, limits, max_turns=128),
     )
 

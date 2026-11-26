@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import sys
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -24,7 +23,7 @@ from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
 
-from experiments.evaluation.micro210 import micro210_command, micro210_preset
+from experiments.evaluation.micro210 import Micro210SkyRL
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import (
     NO_AGENTIC_TASKS,
@@ -51,6 +50,7 @@ from experiments.post_training.rl_presets import (
     Training,
     WindowStatistic,
 )
+from experiments.post_training.skyrl_evaluation import CuratedEvaluation, EvaluationPreset
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TRAIN_FILENAME,
@@ -423,7 +423,18 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     name="train-medium-tools",
 )
 
-_TRAIN_LONG_MICRO210 = micro210_preset(_TRAIN_LONG_AGENTIC, serving=MICRO210_RECIPE)
+_TRAIN_LONG_MICRO210 = replace(
+    _TRAIN_LONG_AGENTIC,
+    name="train-long-agentic-micro210",
+    checkpoints="best_and_final",
+    export="best_and_final",
+    temporary_output=False,
+    retention=replace(_TRAIN_LONG_AGENTIC.retention, checkpoints_in_run_output=True),
+    recipe=replace(
+        _TRAIN_LONG_AGENTIC.recipe, layout=replace(_TRAIN_LONG_AGENTIC.recipe.layout, coordinator_timeout_hours=146)
+    ),
+    after_run=("micro210",),
+)
 
 _PRESETS = (
     _snowball(
@@ -548,17 +559,33 @@ SNOWBALL = ModelPresets(
 )
 
 
-def main() -> int:
-    if sys.argv[1:2] == ["micro210"]:
-        micro210_command(MICRO210_RECIPE, entry_module="experiments.post_training.snowball_rl").main(args=sys.argv[2:])
+def evaluation_presets() -> tuple[EvaluationPreset, ...]:
+    from experiments.evaluation.evals import resolve_evaluations  # noqa: PLC0415
+    from experiments.evaluation.models import models  # noqa: PLC0415
 
+    grug = models()["grug-67b-a2b-datakit-sft-262k-2026-09-21"]
+    serving = replace(grug, name="snowball", location="", revision=None, tokenizer=None, tokenizer_revision=None)
+    return (
+        EvaluationPreset("micro210", Micro210SkyRL(MICRO210_RECIPE, "snowball")),
+        EvaluationPreset(
+            "standard", CuratedEvaluation(resolve_evaluations("standard-local"), serving, "H100x8", "cw-us-east-02a")
+        ),
+    )
+
+
+def main() -> int:
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
         from experiments.post_training.snowball_sft import SNOWBALL_SFT  # noqa: PLC0415
 
         return SNOWBALL_SFT
 
-    return rl.main(SNOWBALL, sft_presets=sft_presets)
+    return rl.main(
+        SNOWBALL,
+        sft_presets=sft_presets,
+        evaluation_presets=evaluation_presets,
+        entry_module="experiments.post_training.snowball_rl",
+    )
 
 
 if __name__ == "__main__":

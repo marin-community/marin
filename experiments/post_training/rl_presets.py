@@ -434,7 +434,8 @@ class Preset:
     batch_mix: BatchMix | None = None
     held_out_tasks: str | None = None
     checkpoint_evaluation: tuple[CheckpointCohort, ...] = ()
-    then: tuple[Callable[[ArtifactStep[SkyRLRun]], ArtifactStep], ...] = ()
+    then: Callable[[ArtifactStep[SkyRLRun]], ArtifactStep] | None = None
+    after_run: tuple[str, ...] = ()
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()

@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import click
 import pytest
 from click.testing import CliRunner
+from evalrecords.records import RLAttemptRef, list_records
 from finestore.rl.rl_progress import AttemptSummary
 from finestore.rl.run_records import (
     AttemptRecord,
@@ -221,7 +222,7 @@ def test_control_publication_rejects_presets_without_dashboard_controls(monkeypa
 @pytest.mark.integration
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(
-    preset_table, rl_progress_client, recorded_runs, monkeypatch
+    preset_table, rl_progress_client, recorded_runs, monkeypatch, tmp_path
 ):
     client, request = rl_progress_client
     preset = replace(
@@ -230,6 +231,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     )
     table = preset_table(preset)
     monkeypatch.setattr(publication, "configure_coreweave_s3", lambda: None)
+    records_prefix = str(tmp_path / "evaldash")
     pin = gate.control_pin(preset, table=table)
 
     def write_control(name, artifact_name, **kwargs):
@@ -248,6 +250,19 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         )
         for i in range(2)
     ]
+    export_root = str(sources[0] / "exports")
+    primary_rows = read_evaluations(export_root, attempt_id="native-0", evaluation="eval/")
+    with edit_receipt(sources[0]) as receipt:
+        inputs = receipt["config"]["inputs"]
+        inputs.setdefault("evaluation_data", {})["checkpoint-cohort"] = inputs["validation_data"]
+    write_evaluations(
+        export_root,
+        [
+            row.model_copy(update={"evaluation": "eval/checkpoint-cohort/", "step": step})
+            for step in (0, 1, preset.updates)
+            for row in primary_rows[:1]
+        ],
+    )
     handles = tuple(
         ArtifactStep.adopt(f"tests/publication-{i}", preset.revision, str(root), kind=SkyRLRun)
         for i, root in enumerate(sources)
@@ -309,6 +324,20 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
+    records = {record.run_id: record for record in list_records(records_prefix)}
+    native_run_ids = {key: row["evaldash_run_ids"] for key, row in rows.items()}
+    for attempt_id, ids in native_run_ids.items():
+        linked = [records[run_id] for run_id in ids]
+        assert {record.rl_attempt for record in linked} == {
+            RLAttemptRef(run_id=rows[attempt_id]["run_id"], attempt_id=attempt_id)
+        }
+        expected_sessions = {("eval_lite", "0"), ("eval_lite", str(preset.updates))}
+        if attempt_id == "native-0":
+            expected_sessions |= {("checkpoint-cohort", "0"), ("checkpoint-cohort", str(preset.updates))}
+        assert {(record.evaluation.name, record.evaluation.postprocessing["skyrl_step"]) for record in linked} == (
+            expected_sessions
+        )
+        assert len(linked) == len(expected_sessions)
     assert repeated.urls[str(sources[0])].endswith(f"#run=tests%2Fpublication-0-{preset.revision}&attempt=native-0")
 
     def wrong_returned_key(origin, method, path, *, json_body=None, **kwargs):
@@ -371,7 +400,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
         retained = stored()[f"native-{index}"]
         assert retained["gate_result"] == expected and retained["gate"] == rows[f"native-{index}"]["gate"]
         assert retained["issue"] == (73 if index == 0 else None)
-        assert retained["evaldash_run_ids"] == list(run_ids)
+        assert retained["evaldash_run_ids"] == [*native_run_ids[f"native-{index}"], *run_ids]
         assert retained["wandb_url"] == rows[f"native-{index}"]["wandb_url"]
         assert (retained["status"], retained["failed_facts"]) == (
             rows[f"native-{index}"]["status"],
@@ -416,7 +445,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert fresh.unserved_records == [] and fresh.errors == []
     assert fresh_report.run.attempt_ids == ("native-retry", "native-1")
     historical = stored()["native-0"]
-    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == list(run_ids)
+    assert historical["issue"] == 73 and historical["evaldash_run_ids"] == [*native_run_ids["native-0"], *run_ids]
     with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
         publication.publish_runs([str(sources[0])], preset, table=table, evaldash_run_ids=run_ids)
     with pytest.raises(ValueError, match="one output and its explicit attempt ID"):
@@ -428,8 +457,12 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     )
     assert linked.served_records == [(receipt["config"]["run"]["id"], "native-retry")] and not linked.errors
     linked_rows = stored()
-    assert linked_rows["native-retry"]["evaldash_run_ids"] == ["eval-for-retry"]
-    assert linked_rows["native-0"]["evaldash_run_ids"] == list(run_ids)
+    *retry_native_ids, retry_explicit_id = linked_rows["native-retry"]["evaldash_run_ids"]
+    assert retry_explicit_id == "eval-for-retry" and len(retry_native_ids) == 4
+    assert {item.rl_attempt.attempt_id for item in list_records(records_prefix) if item.run_id in retry_native_ids} == {
+        "native-retry"
+    }
+    assert linked_rows["native-0"]["evaldash_run_ids"] == [*native_run_ids["native-0"], *run_ids]
     saved_evaluations = {}
     for root in sources:
         current_id, _ = read_stored_skyrl_attempts(str(root))

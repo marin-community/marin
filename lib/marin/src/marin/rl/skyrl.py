@@ -551,7 +551,7 @@ def resolve_skyrl_policy(ctx: StepContext, source: ArtifactStep[SkyRLRun]) -> Re
     else:
         result = ctx.resolved(source)
         if result.hf_model_uri is None:
-            raise ValueError("A completed SkyRL policy requires export_hf=True")
+            raise ValueError(f"SkyRL run {source.name}@{source.version} has no selected Hugging Face export")
         uri, tokenizer, revision = result.hf_model_uri, result.tokenizer_uri, result.tokenizer_revision
     return ResolvedModelLocator(
         uri=uri,

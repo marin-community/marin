@@ -43,6 +43,7 @@ from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactHfModel,
     SkyRLModelSource,
+    SkyRLPolicyModel,
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLRunConfig,
@@ -55,6 +56,7 @@ from marin.rl.skyrl_records import (
     read_skyrl_metrics,
     read_stored_skyrl_attempt,
 )
+from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance, git_output
 
@@ -76,11 +78,13 @@ from experiments.post_training.rl_measurements import (
     read_recorded_launch,
     run_inputs,
 )
+from experiments.post_training.skyrl_evaluation import EvaluationPreset
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     VALIDATION_FILENAME,
     TrainingHoldout,
 )
+from vendor.skyrl.marinskyrl.resource_locator import is_cloud_uri
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
@@ -673,6 +677,7 @@ def command(
     argv: tuple[str, ...],
     init: SkyRLModelSource | None = None,
     sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
+    evaluation_presets: Callable[[], Sequence[EvaluationPreset]] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
@@ -680,6 +685,7 @@ def command(
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
     @click.option("--show-config", is_flag=True, help="Print the composed SkyRL launch config as YAML and exit.")
+    @click.option("--then-eval", multiple=True, metavar="NAME", help="Evaluate the exported policy after RL.")
     @click.option(
         "--through",
         type=click.Choice(("sft", "rl")),
@@ -793,6 +799,7 @@ def command(
         issue: int | None,
         plan: bool,
         show_config: bool,
+        then_eval: tuple[str, ...],
         through: str,
         checkpoints: presets.CheckpointPolicy | None,
         checkpoint_every: int | None,
@@ -818,6 +825,8 @@ def command(
         if through == "sft":
             if show_config:
                 raise click.UsageError("--show-config requires --through rl")
+            if then_eval:
+                raise click.UsageError("--then-eval requires --through rl")
             if sft_name is None:
                 raise click.UsageError("--through sft requires --sft")
             if click.get_current_context().params["wait"]:
@@ -952,6 +961,9 @@ def command(
             )
             return (initializer.step,)
         from_launcher = get_job_info() is None
+        after_run = _selected_evaluations((*preset.after_run, *then_eval), evaluation_presets)
+        if after_run and preset.export == "none":
+            raise click.BadParameter("After-run evaluations require a policy export")
         run = build_experiment(
             preset,
             table=table,
@@ -1004,7 +1016,14 @@ def command(
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
-        following = tuple(build(step) for step in run.runs for build in preset.then)
+        following = (
+            *(preset.then(step) for step in run.runs if preset.then is not None),
+            *(
+                evaluation.recipe.evaluated(SkyRLPolicyModel(step), version=step.version)
+                for step in run.runs
+                for evaluation in after_run
+            ),
+        )
         rl_handles = (*run.runs, *((run.gate,) if run.gate else ()))
         click.get_current_context().meta["rl_handle_count"] = len(rl_handles)
         return (*rl_handles, *following)
@@ -1050,6 +1069,56 @@ def command(
     return run_command
 
 
+def _selected_evaluations(
+    names: tuple[str, ...], presets: Callable[[], Sequence[EvaluationPreset]] | None
+) -> tuple[EvaluationPreset, ...]:
+    if not names:
+        return ()
+    catalog = {evaluation.name: evaluation for evaluation in presets()} if presets is not None else {}
+    for name in names:
+        if name not in catalog:
+            choices = ", ".join(catalog) or "none"
+            raise click.BadParameter(f"Unknown evaluation {name!r}. Available evaluations: {choices}")
+    return tuple(catalog[name] for name in dict.fromkeys(names))
+
+
+def _evaluate_command(
+    table: presets.ModelPresets,
+    evaluation_presets: Callable[[], Sequence[EvaluationPreset]] | None,
+    *,
+    entry_module: str | None,
+    argv: tuple[str, ...],
+) -> click.Command:
+    preset = table.presets[0]
+
+    def initializer_version() -> str | None:
+        init_name = click.get_current_context().params.get("init_name", "")
+        _, separator, version = init_name.rpartition("@")
+        if separator and not is_cloud_uri(init_name):
+            return version or None
+        return None
+
+    def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
+        module = entry_module or getattr(sys.modules["__main__"].__spec__, "name", None)
+        if module is None:
+            raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
+        execution = skyrl_execution(handles[0]) or recipe.layout_execution(preset.recipe.layout)
+        submit_or_run(module, handles, max_concurrent, os.environ, argv=argv, execution=execution)
+
+    @click.option("--init", "init_name", required=True, metavar="NAME@VERSION")
+    @click.option("--evals", "evaluation_name", required=True, metavar="NAME")
+    def build(init_name: str, evaluation_name: str) -> ArtifactStep:
+        configure_coreweave_s3()
+        (evaluation,) = _selected_evaluations((evaluation_name,), evaluation_presets)
+        model = recipe.published_model(init_name, preset=preset, initializers=table.initializers)
+        version = resolve_version(f"{model.step.name}/{evaluation.name}", None)
+        return evaluation.recipe.evaluated(model, version=version)
+
+    return click.command(help="Evaluate a published model export. --version defaults to the named export's version.")(
+        build_options_with_runner(build, runner, default_version=initializer_version)
+    )
+
+
 def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
     planned = _from_handles(handles)
     build_artifacts(*planned.runs, max_concurrent=max_concurrent)
@@ -1064,6 +1133,7 @@ def main(
     argv: Sequence[str] | None = None,
     init: SkyRLModelSource | None = None,
     sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
+    evaluation_presets: Callable[[], Sequence[EvaluationPreset]] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> int:
@@ -1075,12 +1145,16 @@ def main(
                 raise click.UsageError("Python init cannot be used with compare")
             selected = (rl_gate if args[0] == "compare" else rl_publication).command(table)
             args = args[1:]
+        elif args and args[0] == "evaluate":
+            selected = _evaluate_command(table, evaluation_presets, entry_module=entry_module, argv=tuple(args))
+            args = args[1:]
         else:
             selected = command(
                 table,
                 argv=tuple(args),
                 init=init,
                 sft_presets=sft_presets,
+                evaluation_presets=evaluation_presets,
                 entry_module=entry_module,
                 forward_env=forward_env,
             )

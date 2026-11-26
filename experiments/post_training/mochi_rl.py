@@ -3,7 +3,6 @@
 
 """Run reinforcement learning from the production Mochi SFT export."""
 
-import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,7 +13,7 @@ from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
-from experiments.evaluation.micro210 import micro210_command, micro210_preset
+from experiments.evaluation.micro210 import Micro210SkyRL
 from experiments.grug.moe_hero_ep.ops.export_metadata import MANIFEST_FILENAME as SFT_EXPORT_MANIFEST
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
@@ -30,6 +29,7 @@ from experiments.post_training.rl_presets import (
     Recipe,
     Training,
 )
+from experiments.post_training.skyrl_evaluation import EvaluationPreset
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
 _MODEL = ArtifactHfModel(
@@ -302,7 +302,19 @@ _EVAL_SHORT = replace(
     evaluations=(replace(_EVALUATION, name="eval_lite", file=Path(FULL_VALIDATION_FILENAME).stem, every=None),),
 )
 
-_TRAIN_LONG_MICRO210 = micro210_preset(_TRAIN_LONG_AGENTIC, serving=MICRO210_RECIPE, checkpoint_every=2)
+_TRAIN_LONG_MICRO210 = replace(
+    _TRAIN_LONG_AGENTIC,
+    name="train-long-agentic-micro210",
+    checkpoints="best_and_final",
+    export="best_and_final",
+    checkpoint_every=2,
+    temporary_output=False,
+    retention=replace(_TRAIN_LONG_AGENTIC.retention, checkpoints_in_run_output=True),
+    recipe=replace(
+        _TRAIN_LONG_AGENTIC.recipe, layout=replace(_TRAIN_LONG_AGENTIC.recipe.layout, coordinator_timeout_hours=146)
+    ),
+    after_run=("micro210",),
+)
 
 MOCHI = ModelPresets(
     model="mochi",
@@ -329,17 +341,23 @@ MOCHI = ModelPresets(
 )
 
 
-def main() -> int:
-    if sys.argv[1:2] == ["micro210"]:
-        micro210_command(MICRO210_RECIPE, entry_module="experiments.post_training.mochi_rl").main(args=sys.argv[2:])
+def evaluation_presets() -> tuple[EvaluationPreset, ...]:
+    return (EvaluationPreset("micro210", Micro210SkyRL(MICRO210_RECIPE, "mochi")),)
 
+
+def main() -> int:
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
         from experiments.post_training.mochi_sft import MOCHI_SFT_PRESETS  # noqa: PLC0415
 
         return MOCHI_SFT_PRESETS
 
-    return rl.main(MOCHI, sft_presets=sft_presets)
+    return rl.main(
+        MOCHI,
+        sft_presets=sft_presets,
+        evaluation_presets=evaluation_presets,
+        entry_module="experiments.post_training.mochi_rl",
+    )
 
 
 if __name__ == "__main__":

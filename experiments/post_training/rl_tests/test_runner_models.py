@@ -17,7 +17,7 @@ from fray.types import ANY_REGION
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materialized_config
-from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution, skyrl_execution
+from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution, SkyRLPolicyModel, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch
@@ -25,10 +25,12 @@ from skyrlrecipe.documents import set_path
 
 from experiments.post_training import rl, rl_compose, rl_gate
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.mochi_rl import evaluation_presets as mochi_evaluations
 from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
 from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, write_published_artifact
 from experiments.post_training.snowball_rl import SNOWBALL
+from experiments.post_training.snowball_rl import evaluation_presets as snowball_evaluations
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
 
 
@@ -43,7 +45,10 @@ def plan(table, name, *options, version=None, sft_presets=None):
     if preset.tasks_input == "required":
         args += ("--tasks", SELECTION_IDENTITY)
     args += options
-    return CliRunner().invoke(rl.command(table, argv=args, sft_presets=sft_presets), args)
+    evaluations = mochi_evaluations if table.model == "mochi" else snowball_evaluations
+    return CliRunner().invoke(
+        rl.command(table, argv=args, sft_presets=sft_presets, evaluation_presets=evaluations), args
+    )
 
 
 @pytest.mark.parametrize("cadence, period", [(None, None), (2, 4)])
@@ -188,7 +193,7 @@ def test_named_micro210_uses_the_rl_export_and_its_placement(selection, table, t
     handles = []
     monkeypatch.setattr("marin.experiment.cli._print_plan", handles.extend)
     rack = ("DH1-136-US-EAST-08A",) if table is MOCHI else ()
-    options = ("--priority", "interactive")
+    options = ("--priority", "interactive", "--then-eval", "micro210")
     if rack:
         options += ("--init", "mochi-v5", "--exclude-rack", rack[0])
     result = plan(table, "train-long-agentic-micro210", *options)
@@ -213,14 +218,33 @@ def test_micro210_graph_accepts_an_sft_export_that_has_yet_to_run(selection, tmp
     sft = ArtifactStep.adopt("tests/pending-sft", "2026.11.26", str(tmp_path / "pending-sft"))
     preset = SNOWBALL.by_name["train-long-agentic-micro210"]
     [run] = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, init=ArtifactHfModel(sft)).runs
-    _health, evaluation = (build(run) for build in preset.then)
+    recipe = next(evaluation.recipe for evaluation in snowball_evaluations() if evaluation.name == preset.after_run[0])
+    evaluation = recipe.evaluated(SkyRLPolicyModel(run), version=run.version)
     assert sft in run.deps and run in evaluation.deps
 
 
-def test_micro210_preset_requires_an_export_even_without_an_eligible_best(selection):
-    result = plan(SNOWBALL, "train-long-agentic-micro210", "--checkpoints", "best", "--export", "best")
+def test_after_run_evaluations_bind_each_replicates_selected_export(selection, monkeypatch):
+    handles = []
+    monkeypatch.setattr("marin.experiment.cli._print_plan", handles.extend)
+    result = plan(SNOWBALL, "learning-medium", "--replicates", "2", "--then-eval", "micro210", "--then-eval", "standard")
+    assert result.exit_code == 0, (result.output, result.exception)
+    left, right, _gate, *evaluations = handles
+    assert [step.deps.count(left) for step in evaluations] == [1, 1, 0, 0]
+    assert [step.deps.count(right) for step in evaluations] == [0, 0, 1, 1]
+    assert len({step.name for step in evaluations}) == 4
+
+
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        (("--export", "none"), "After-run evaluations require a policy export"),
+        (("--then-eval", "unknown"), "Unknown evaluation 'unknown'"),
+    ],
+)
+def test_after_run_evaluation_refuses_unusable_plans(selection, options, error):
+    result = plan(SNOWBALL, "train-long-agentic-micro210", *options)
     assert result.exit_code == 4, (result.output, result.exception)
-    assert "Micro210 requires --export latest or best_and_final" in result.output
+    assert error in result.output
 
 
 def test_cross_host_generation_plan_refuses_a_non_vllm_backend(selection):
@@ -323,7 +347,7 @@ def test_resume_inherits_the_source_runs_initializer(
         runs.append(step)
         return apply("tests/after-rl", after_rl, version="2026.11.19.1", run=step)
 
-    preset = replace(preset, then=(collect,))
+    preset = replace(preset, then=collect)
     table = replace(table, presets=(preset,))
     started = plan(table, preset.name, *start_args)
     assert started.exit_code == 0, (started.output, started.exception)

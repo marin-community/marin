@@ -3,22 +3,22 @@
 
 """Launch frozen Micro210 evaluation with only a model binding and run identity."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import math
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
-from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING
 
-import click
 import draccus
 import yaml
-from finestore.rl.run_records import read_attempt_metrics
-from marin.execution.build_context import resolve_version
+from evalrecords.records import EvalRef, ModelRef, RLAttemptRef
+from finestore.rl.run_records import read_attempt, read_attempt_metrics, read_evaluations
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply
-from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
     ArtifactDataSource,
     ArtifactHfModel,
@@ -26,7 +26,6 @@ from marin.rl.skyrl import (
     SkyRLModelSource,
     SkyRLPolicyModel,
     SkyRLRetentionPolicy,
-    SkyRLRun,
     SkyRLRunConfig,
     SkyRLSpec,
     SkyRLTopology,
@@ -35,7 +34,6 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import resolve_secret_spec
 from skyrlrecipe.documents import merge_mappings, set_path
@@ -53,8 +51,12 @@ from experiments.evaluation.micro210_policy import (
     runtime_policy_config,
 )
 from experiments.post_training.rl_compose import layout_execution
-from experiments.post_training.rl_presets import Generation, Preset, Recipe
+from experiments.post_training.rl_presets import Generation, Recipe
+from experiments.post_training.skyrl_evaluation import model_rl_attempt
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
+
+if TYPE_CHECKING:
+    from experiments.evaluation.pipeline import EvaluationResult
 
 # The prepared table re-hosts benchmark items that must not be public; tasks read it
 # with the standard HF_TOKEN.
@@ -81,44 +83,12 @@ STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 class Micro210Run:
     skyrl: SkyRLRunConfig
     canonical_launch_sha256: str
-    run_id: str
     output_uri: str
     smoke_rows: tuple[int, ...]
     expected_manifest_sha256: str | None
     policy_reference: Micro210PolicyReference
     sft_export_manifest: str | None = None
-
-
-@dataclass(frozen=True)
-class ExportManifestIdentity:
-    sha256: str
-
-
-@dataclass(frozen=True)
-class ProducerIdentity:
-    artifact: str
-
-
-@dataclass(frozen=True)
-class EvaluatedModel:
-    uri: str
-    identity: ExportManifestIdentity | ProducerIdentity
-    tokenizer_uri: str
-    tokenizer_revision: str | None
-
-
-@dataclass(frozen=True)
-class Micro210Score:
-    canonical_spec_sha256: str
-    model: EvaluatedModel
-    run_id: str
-    output_uri: str
-    policy_reference: Micro210PolicyReference
-    native_sha256: str
-    native_inputs_uri: str
-    smoke_rows: tuple[int, ...]
-    score: float
-    attempt_id: str
+    rl_attempt: RLAttemptRef | None = None
 
 
 @dataclass(frozen=True)
@@ -194,9 +164,7 @@ def validate_inputs(protocol: dict, model: ResolvedModelLocator, inputs: str) ->
                 raise ValueError(f"Canonical Micro210 tokenizer has incompatible stop token ID: {token_id}")
 
 
-def export_identity(
-    model: ResolvedModelLocator, expected: str | None, sft_manifest: str | None
-) -> ExportManifestIdentity | ProducerIdentity:
+def export_identity(model: ResolvedModelLocator, expected: str | None, sft_manifest: str | None) -> str:
     """Identify the completed export by its manifest or immutable producer."""
     root = StoragePath(model.uri)
     manifests = (MODEL_MANIFEST_FILENAME, sft_manifest) if sft_manifest else (MODEL_MANIFEST_FILENAME,)
@@ -206,10 +174,10 @@ def export_identity(
         except FileNotFoundError:
             continue
         if expected is None or digest == expected:
-            return ExportManifestIdentity(digest)
+            return MODEL_IDENTITY_PREFIX + digest
     if expected is not None:
         raise ValueError("Micro210 model export manifest differs from the model binding")
-    return ProducerIdentity(model.identity)
+    return model.identity
 
 
 def verified_native_inputs(inputs: str, protocol: dict, smoke_rows: tuple[int, ...]) -> str:
@@ -230,7 +198,10 @@ def verified_native_inputs(inputs: str, protocol: dict, smoke_rows: tuple[int, .
     return digest
 
 
-def run_micro210(config: Micro210Run) -> SkyRLRun:
+def run_micro210(config: Micro210Run) -> EvaluationResult:
+    from experiments.evaluation.pipeline import EvaluationResult  # noqa: PLC0415
+    from experiments.post_training.rl_evaluation_records import publish_skyrl_evaluation  # noqa: PLC0415
+
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
     reference = config.policy_reference
@@ -244,26 +215,56 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     expected = len(config.smoke_rows) or policy["task_changes"]["sealed_rows"]
     judge = draccus.decode(JudgeConfig, policy["evaluation"]["judge"])
     api_key = resolve_secret_spec(("env:TOGETHER_API_KEY", judge.credential)).value
-    run = run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
-    metrics = read_attempt_metrics(config.skyrl.output.export_root, config.skyrl.attempt_id).get(0, {})
+    run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
+    export_root, attempt_id = config.skyrl.output.export_root, config.skyrl.attempt_id
+    metrics = read_attempt_metrics(export_root, attempt_id).get(0, {})
     attempted, scored = metrics.get("eval/all/num_attempted", 0), metrics.get("eval/all/num_scored", 0)
     score = metrics.get("eval/all/avg_verifier_score")
     if attempted != expected or scored != expected or score is None or not math.isfinite(score):
         raise ValueError(f"Micro210 requires {expected} scored rows and one finite score, got {scored}/{attempted}")
-    record = Micro210Score(
-        canonical_spec_sha256=reference.sha256,
-        model=EvaluatedModel(model.uri, identity, model.tokenizer_uri or model.uri, model.tokenizer_revision),
-        run_id=config.run_id,
-        output_uri=config.output_uri,
-        policy_reference=reference,
-        native_sha256=native_sha256,
-        native_inputs_uri=native_inputs_uri,
-        smoke_rows=config.smoke_rows,
+    attempt = read_attempt(export_root, attempt_id)
+    rows = read_evaluations(export_root, attempt_id=attempt_id, evaluation="eval/", step=-1)
+    answers = [answer for row in rows for answer in row.answers]
+    if (
+        attempt is None
+        or len({answer.ordinal for answer in answers}) != expected
+        or sum(answer.verifier_score is not None and math.isfinite(answer.verifier_score) for answer in answers)
+        != expected
+        or len(answers) != expected
+    ):
+        raise ValueError(f"Micro210 is missing the receipt or {expected} native answer rows for {attempt_id}")
+    record = publish_skyrl_evaluation(
+        attempt=attempt,
+        evaluation=EvalRef(
+            name="micro210-smoke" if config.smoke_rows else "micro210",
+            mechanism="skyrl",
+            source_digest=f"sha256:{reference.sha256}",
+            postprocessing={
+                "policy_uri": reference.uri,
+                "native_table_sha256": native_sha256,
+                "native_inputs_uri": native_inputs_uri,
+                "smoke_rows": json.dumps(config.smoke_rows),
+                "model_identity": identity,
+                "tokenizer_uri": model.tokenizer_uri or model.uri,
+                "tokenizer_revision": model.tokenizer_revision or "",
+                "evaluation_attempt_id": attempt_id,
+            },
+        ),
+        model=ModelRef(
+            name=document["run"].get("model") or StoragePath(model.uri).name, location=model.uri, backend="vllm"
+        ),
+        rows=rows,
+        rl_attempt=config.rl_attempt,
         score=score,
-        attempt_id=config.skyrl.attempt_id,
+        answer_coverage=True,
     )
-    (StoragePath(config.output_uri) / "canonical-evaluation.json").write_text(json.dumps(asdict(record), indent=2))
-    return run
+    return EvaluationResult(
+        path=config.output_uri,
+        group_id=record.group_id,
+        records_prefix=str(StoragePath(record.results_path).parent.parent),
+        run_ids=(record.run_id,),
+        results_paths=(record.results_path,),
+    )
 
 
 def micro210_step(
@@ -273,8 +274,11 @@ def micro210_step(
     version: str,
     smoke: Micro210Smoke | None = None,
     serving: Recipe,
-) -> ArtifactStep[SkyRLRun]:
+    model_name: str | None = None,
+) -> ArtifactStep[EvaluationResult]:
     """Build the canonical evaluation graph for a model and run identity."""
+    from experiments.evaluation.pipeline import EvaluationResult  # noqa: PLC0415
+
     pinned = None
     if isinstance(model, Micro210Model):
         pinned = model
@@ -348,6 +352,7 @@ def micro210_step(
             topology=SkyRLTopology(roles.num_nodes, roles.gpus_per_node, layout.gpu_variant, roles),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=evaluation_policy["seed"],
+            model_name=model_name,
         ),
         execution,
         export_hf=False,
@@ -368,82 +373,43 @@ def micro210_step(
         return Micro210Run(
             replace(run, launch_config_yaml=rendered, output=output),
             hashlib.sha256(rendered.encode()).hexdigest(),
-            run_id,
             context.output_path,
             smoke_rows,
             pinned.identity.removeprefix(MODEL_IDENTITY_PREFIX) if pinned else None,
             reference,
             serving.sft_export_manifest,
+            model_rl_attempt(source, context),
         )
 
-    configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)
+    configured = ArtifactStep(
+        name=step.name,
+        version=step.version,
+        artifact_type=EvaluationResult,
+        run=run_micro210,
+        build_config=build,
+        deps=step.deps,
+        runtime_args=step.runtime_args,
+    )
     return replace(configured, expected_fingerprint=configured.fingerprint())
 
 
-def micro210_after_rl(run: ArtifactStep[SkyRLRun], *, serving: Recipe) -> ArtifactStep[SkyRLRun]:
-    """Bind evaluation to the exported policy and placement of its producer."""
-    execution = skyrl_execution(run)
-    assert execution is not None
-    config = run.build_config(StepContext.for_fingerprint(run.runtime_args, run.deps))
-    trainer = yaml.safe_load(config.launch_config_yaml)["skyrl"]["trainer"]
-    if not config.export_hf or trainer.get("hf_export_checkpoint") == "best":
-        raise click.BadParameter("Micro210 requires --export latest or best_and_final")
-    layout = replace(
-        serving.layout,
-        cluster=execution.cluster,
-        priority=execution.priority,
-        excluded_nvlink_domains=execution.excluded_nvlink_domains,
-    )
-    return micro210_step(
-        SkyRLPolicyModel(run), name=f"{run.name}/micro210", version=run.version, serving=replace(serving, layout=layout)
-    )
+@dataclass(frozen=True)
+class Micro210SkyRL:
+    serving: Recipe
+    model_name: str
 
-
-def micro210_preset(preset: Preset, *, serving: Recipe, checkpoint_every: int | None = None) -> Preset:
-    """Retain the final and best checkpoints and evaluate the exported policy."""
-    return replace(
-        preset,
-        name="train-long-agentic-micro210",
-        checkpoints="best_and_final",
-        export="best_and_final",
-        checkpoint_every=preset.checkpoint_every if checkpoint_every is None else checkpoint_every,
-        temporary_output=False,
-        retention=replace(preset.retention, checkpoints_in_run_output=True),
-        recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, coordinator_timeout_hours=146)),
-        then=(*preset.then, partial(micro210_after_rl, serving=serving)),
-    )
-
-
-def micro210_command(serving: Recipe, *, entry_module: str) -> click.Command:
-    """Build a standalone command owned by the supplied model recipe."""
-
-    @click.command(help=__doc__)
-    @click.option("--model-uri", required=True)
-    @click.option("--model-manifest-sha256", required=True)
-    @click.option("--tokenizer-uri", required=True)
-    @click.option("--tokenizer-revision", required=True)
-    @click.option("--name", required=True)
-    @click.option(
-        "--smoke-row", multiple=True, type=click.IntRange(min=0), help="Prepared row index for a diagnostic smoke."
-    )
-    @click.option("--smoke-engines", type=click.IntRange(min=1))
-    @partial(rl_build_options, entry_module=entry_module)
-    def main(
-        model_uri: str,
-        model_manifest_sha256: str,
-        tokenizer_uri: str,
-        tokenizer_revision: str,
-        name: str,
-        smoke_row: tuple[int, ...],
-        smoke_engines: int | None,
-    ) -> ArtifactStep:
-        configure_coreweave_s3()
-        model = Micro210Model(
-            model_uri, MODEL_IDENTITY_PREFIX + model_manifest_sha256, tokenizer_uri, tokenizer_revision
+    def evaluated(self, model: SkyRLModelSource, *, version: str) -> ArtifactStep[EvaluationResult]:
+        serving = self.serving
+        if isinstance(model, SkyRLPolicyModel) and (execution := skyrl_execution(model.step)) is not None:
+            serving = replace(
+                serving,
+                layout=replace(
+                    serving.layout,
+                    cluster=execution.cluster,
+                    priority=execution.priority,
+                    excluded_nvlink_domains=execution.excluded_nvlink_domains,
+                ),
+            )
+        return micro210_step(
+            model, name=f"{model.step.name}/micro210", version=version, serving=serving, model_name=self.model_name
         )
-        if smoke_engines is not None and not smoke_row:
-            raise click.UsageError("--smoke-engines requires at least one --smoke-row")
-        smoke = Micro210Smoke(smoke_row, 1 if smoke_engines is None else smoke_engines) if smoke_row else None
-        return micro210_step(model, name=name, version=resolve_version(name, None), smoke=smoke, serving=serving)
-
-    return main

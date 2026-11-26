@@ -13,10 +13,25 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
-from finestore.rl.run_records import METRICS_TABLE, AttemptRecord, register_run_tables, run_records_root, write_attempt
+from evalrecords.records import RLAttemptRef, record_path
+from evalrecords.records import read_record as read_eval_record
+from finestore.eval import ARCHIVE_SAMPLES_TABLE
+from finestore.reader import ReadView
+from finestore.rl.run_records import (
+    METRICS_TABLE,
+    AttemptRecord,
+    EvaluationAnswerRow,
+    EvaluationTaskRow,
+    register_run_tables,
+    run_records_root,
+    write_attempt,
+    write_evaluations,
+)
+from finestore.rl.strata import TaskStrata
 from finestore.store import DataStore
 from marin.execution.artifact import (
     RECORD_FILENAME,
+    Artifact,
     ArtifactRecord,
     FingerprintMismatchError,
     read_record,
@@ -40,12 +55,12 @@ from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
     Micro210Model,
-    micro210_evaluation,
     read_micro210_policy,
 )
 from experiments.grug.moe_hero_ep.ops.export_metadata import MANIFEST_FILENAME as SFT_EXPORT_MANIFEST
 from experiments.post_training.mochi_rl import MICRO210_RECIPE as MOCHI_SERVING
 from experiments.post_training.rl_gate import compose_configs
+from experiments.post_training.rl_tests.fixtures import write_published_artifact
 from experiments.post_training.snowball_rl import MICRO210_RECIPE as SNOWBALL_SERVING
 from tests.rl.micro210_fixture import policy_fixture_reference
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -68,10 +83,10 @@ def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch,
         "experiments.evaluation.micro210_policy.POLICY_REFERENCE", replace(policy_reference, uri=str(changed))
     )
     with pytest.raises(ValueError, match="hash mismatch"):
-        micro210_evaluation(
+        micro210_step(
             Micro210Model("s3://test/model", "sha256:" + "a" * 64, "test/tokenizer", "a" * 40),
-            run_id="test",
-            output_uri="s3://test/output",
+            name="tests/micro210",
+            version="2026.11.26",
         )
 
 
@@ -119,6 +134,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
+    records = tmp_path / "records"
+    monkeypatch.setattr("experiments.post_training.rl_evaluation_records.CW_RECORDS_PREFIX", str(records))
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     producer_dir = tmp_path / "producer"
     producer_dir.mkdir()
@@ -134,6 +151,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
             draft_checkpoint_root=None,
             terminal_manifest_uri=str(producer_dir / "terminal.json"),
             iris_job_id="/test/run",
+            run_id="producer-run",
+            attempt_id="producer-attempt",
         )
         (producer_dir / RECORD_FILENAME).write_text(
             ArtifactRecord(
@@ -207,7 +226,45 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         terminal.parent.mkdir(parents=True, exist_ok=True)
         terminal.touch()
         submitted.append(launch)
-        write_attempt(skyrl.output.export_root, AttemptRecord(run_id=skyrl.run_id, attempt_id=skyrl.attempt_id))
+        write_attempt(
+            skyrl.output.export_root,
+            AttemptRecord(run_id=skyrl.run_id, attempt_id=skyrl.attempt_id, config=launch),
+        )
+        write_evaluations(
+            skyrl.output.export_root,
+            [
+                EvaluationTaskRow(
+                    attempt_id=skyrl.attempt_id,
+                    step=-1,
+                    evaluation="eval/",
+                    panel_name=None,
+                    panel_version=None,
+                    task_id="repeated-task",
+                    data_source="fixture",
+                    strata=TaskStrata(agentic=False),
+                    score=0.5,
+                    outcome="scored",
+                    error_type=None,
+                    answers=[
+                        EvaluationAnswerRow(
+                            ordinal=index,
+                            native_uid=f"task-{index}",
+                            optimization_reward=0.5,
+                            verifier_score=0.5,
+                            raw_verifier_score=0.5,
+                            score_min=0.0,
+                            score_max=1.0,
+                            verification_status="verified",
+                            passed=False,
+                            outcome="scored",
+                            error_type=None,
+                            error_treatment=None,
+                        )
+                        for index in range(expected_rows)
+                    ],
+                )
+            ],
+        )
         with DataStore.open(run_records_root(skyrl.output.export_root)) as store:
             register_run_tables(store)[METRICS_TABLE].extend(
                 [
@@ -230,22 +287,34 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setattr(
         "experiments.evaluation.micro210_policy.POLICY_REFERENCE", replace(policy_reference, sha256="0" * 64)
     )
-    run_micro210(config)
+    evaluation = run_micro210(config)
     launch = submitted[0]
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["api_key_env"] == "JUDGE_API_KEY"
     assert launch["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]["pi"]["version"] == "0.87.0"
     assert all("test-together-key" not in str(value) for value in launch.values())
-    record = json.loads((output / "canonical-evaluation.json").read_text())
-    identity = (
-        {"artifact": artifact_identity(producer)} if unmanifested else {"sha256": hashlib.sha256(manifest).hexdigest()}
+    [run_id] = evaluation.run_ids
+    record = read_eval_record(record_path(evaluation.records_prefix, run_id))
+    identity = artifact_identity(producer) if unmanifested else "sha256:" + hashlib.sha256(manifest).hexdigest()
+    assert record.model.location == str(model_dir)
+    assert record.rl_attempt == (
+        RLAttemptRef(run_id="producer-run", attempt_id="producer-attempt")
+        if isinstance(model, SkyRLPolicyModel)
+        else None
     )
-    assert record["model"]["identity"] == identity
-    assert record["attempt_id"] == config.skyrl.attempt_id
-    assert record["score"] == 0.5
-    assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
-    assert record["native_sha256"] == native_digest
-    assert record["native_inputs_uri"] == native_inputs_uri
+    assert record.metrics["micro210"]["reward"] == 0.5
+    assert record.coverage["micro210"].n_scored == expected_rows
+    archive = ReadView(record.results_path)
+    assert archive.is_sealed()
+    samples = list(archive.iter_rows(ARCHIVE_SAMPLES_TABLE, columns=["doc_id", "trial_id"]))
+    assert len(samples) == expected_rows
+    assert {row["trial_id"] for row in samples} == {str(index) for index in range(expected_rows)}
+    assert record.evaluation.source_digest == "sha256:" + hashlib.sha256(raw).hexdigest()
+    assert record.evaluation.mechanism == "skyrl"
+    assert record.evaluation.postprocessing["model_identity"] == identity
+    assert record.evaluation.postprocessing["evaluation_attempt_id"] == config.skyrl.attempt_id
+    assert record.evaluation.postprocessing["native_table_sha256"] == native_digest
+    assert record.evaluation.postprocessing["native_inputs_uri"] == native_inputs_uri
     if producer_kind != "rl":
         return
     assert (
@@ -288,7 +357,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     with pytest.raises(ValueError, match="434 scored rows"):
         run_micro210(incomplete_config)
-    assert not (incomplete / "canonical-evaluation.json").exists()
+    assert len(list(records.glob("*/record.json"))) == 1
     scored += 1
     score = float("nan")
     rejected = step.build_config(
@@ -296,14 +365,15 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     )
     with pytest.raises(ValueError, match="one finite score"):
         run_micro210(rejected)
-    assert not (incomplete / "canonical-evaluation.json").exists()
+    assert len(list(records.glob("*/record.json"))) == 1
     score = 0.5
     retry = step.build_config(
         StepContext.for_run(str(incomplete), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
     )
-    run_micro210(retry)
+    retry_result = run_micro210(retry)
     assert Path(incomplete_config.skyrl.output.terminal_manifest_uri).exists()
-    assert json.loads((incomplete / "canonical-evaluation.json").read_text())["attempt_id"] == retry.skyrl.attempt_id
+    retry_record = read_eval_record(record_path(retry_result.records_prefix, retry_result.run_ids[0]))
+    assert retry_record.evaluation.postprocessing["evaluation_attempt_id"] == retry.skyrl.attempt_id
     submitted.clear()
     token_content[128009] = "ordinary-token"
     with pytest.raises(ValueError, match="incompatible stop token ID: 128009"):
@@ -332,45 +402,40 @@ def test_canonical_evaluation_uses_model_serving_in_native_launch(tmp_path, serv
 
 
 @pytest.mark.parametrize("model", ["snowball", "mochi"])
-def test_standalone_coordinator_reenters_the_model_command(monkeypatch, model):
+def test_standalone_coordinator_reenters_the_model_command(monkeypatch, tmp_path, model):
     module = f"experiments.post_training.{model}_rl"
     submissions = []
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    monkeypatch.setattr("experiments.post_training.rl_compose.artifact_prefix", lambda _cluster: str(tmp_path))
+    write_published_artifact(tmp_path, "tests/model", "2026.11.26", Artifact, source=str(tmp_path / "weights"))
 
-    def submit(entrypoint, handles, _concurrency, _environment, *, argv):
+    def submit(entrypoint, handles, _concurrency, _environment, *, argv, execution):
+        assert len(handles) == 1 and [dep.name for dep in handles[0].deps if dep.name == "tests/model"] == [
+            "tests/model"
+        ]
+        assert handles[0].version == "2026.11.26"
         submissions.append((entrypoint, argv, tuple(step.fingerprint() for step in handles)))
 
-    monkeypatch.setattr("marin.rl.cli.submit_or_run", submit)
+    monkeypatch.setattr("experiments.post_training.rl.submit_or_run", submit)
     monkeypatch.setattr(
         sys,
         "argv",
         [
             module,
-            "micro210",
+            "evaluate",
             "--run",
-            "--version",
-            "2026.11.26",
-            "--name",
-            "tests/micro210",
-            "--model-uri",
-            "s3://fixture/model",
-            "--model-manifest-sha256",
-            "a" * 64,
-            "--tokenizer-uri",
-            "test/tokenizer",
-            "--tokenizer-revision",
-            "b" * 40,
+            "--init",
+            "tests/model@2026.11.26",
+            "--evals",
+            "micro210",
         ],
     )
-    with pytest.raises(SystemExit) as invoked:
-        import_module(module).main()
-    assert invoked.value.code == 0
+    assert import_module(module).main() == 0
     [(entrypoint, argv, _)] = submissions
-    assert entrypoint == module and argv[0] == "micro210"
+    assert entrypoint == module and argv[0] == "evaluate"
 
     monkeypatch.setattr(sys, "argv", [entrypoint, *argv])
-    with pytest.raises(SystemExit) as reentered:
-        import_module(entrypoint).main()
-    assert reentered.value.code == 0
+    assert import_module(entrypoint).main() == 0
     assert submissions[0] == submissions[1]
 
 

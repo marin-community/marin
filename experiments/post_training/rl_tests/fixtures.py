@@ -388,6 +388,7 @@ def evaluation_task_rows(
 
 def recorded_runs(selection, tmp_path, monkeypatch, request):
     monkeypatch.setattr(snowball_model, "SNOWBALL", with_current_control_revisions(snowball_model.SNOWBALL))
+    monkeypatch.setattr("experiments.post_training.rl_evaluation_records.CW_RECORDS_PREFIX", str(tmp_path / "evaldash"))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))

@@ -488,15 +488,16 @@ changing row order, repetitions, prompts, or task membership. Package resources
 become native Pi tasks with their own CPU, memory, disk, network, and verifier
 limits. `binding.json` records the source and derived table digests and image pins.
 The launch re-hashes the native table and verifies its frozen source, converter code,
-image pins, and smoke selection before allocation. The evaluation record includes
-the verified `native_sha256`, `native_inputs_uri`, and `smoke_rows`. The production
+image pins, and smoke selection before allocation. The EvalDash record includes
+the verified `native_table_sha256` and `native_inputs_uri`. The production
 native artifact pins its fingerprint; bump `PREPARED_INPUTS_VERSION` and update
 `NATIVE_INPUTS_FINGERPRINT` when the converter or image lock changes.
 The launch accepts a completed RL or SFT export dependency. It binds the SHA-256 of
 `.marinskyrl-model-manifest.json` or `export-manifest.json` when available, and uses
 the producer's artifact identity for exports without a manifest. Use
-`python -m experiments.post_training.snowball_rl micro210` or
-`python -m experiments.post_training.mochi_rl micro210` for standalone evaluation.
+`evaluate --init NAME@VERSION --evals micro210` on the Snowball or Mochi RL command
+to plan a standalone evaluation. Add `--run` to submit or `--version` to name a
+distinct evaluation artifact.
 The standalone Snowball command uses `cw-us-east-02a`. Both layouts use the sealed
 sampling settings. A full evaluation writes one aggregate verifier score after
 all 434 rows are scored.
@@ -508,9 +509,7 @@ with access to the pinned secrets. The coordinator uses the forwarded Together
 key before trying the policy's GCP secret reference. Judge credentials are passed
 at runtime. BixBench's verifier uses the machine-local judge relay after Pi stops.
 
-For a diagnostic smoke, use the production command with row and engine scale
-options, for example `--smoke-row 0 --smoke-row 1 --smoke-row 12 --smoke-engines 1`.
-These select CRUXEval, BixBench, and BFCL from the sealed table. All other task,
-sampling, timeout, and serving settings remain those of the production protocol.
-The evaluation record identifies smoke rows; a smoke is not a full Micro210 score.
-Use a fresh calendar version for each runtime change.
+Pipeline callers can use `micro210_step` with a `Micro210Smoke` configuration.
+Rows 0, 1, and 12 of the sealed table exercise CRUXEval, BixBench, and BFCL.
+The diagnostic record identifies the selected rows and preserves the production
+protocol for those tasks. Use a fresh calendar version for each runtime change.

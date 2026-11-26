@@ -167,9 +167,19 @@ corpus and tokenizer in that region before any launch; this command performs
 no cross-region transfer. The existing `--init NAME@VERSION` path remains
 available for previously published models.
 
-Use `train-long-agentic-micro210` to score the terminal RL export on the sealed
-Micro210 task set. The evaluation uses the model's serving recipe and inherits
-the training run's cluster, priority, and rack exclusions.
+Use `train-long-agentic-micro210`, or add `--then-eval micro210` to an RL preset
+with policy export enabled, to score the export selected by that run on the
+sealed Micro210 task set. The native evaluation inherits the run's cluster,
+priority, and rack exclusions. To plan the same evaluation on a published export,
+pass its artifact name and version to the model's `evaluate` command:
+
+```bash
+uv run python -m experiments.post_training.snowball_rl \
+  evaluate --init "$MODEL@$VERSION" --evals micro210
+```
+
+Add `--run` to submit the plan. EvalDash links the score to the originating
+RL attempt when the export includes that identity.
 
 ### Task selection and native resume
 

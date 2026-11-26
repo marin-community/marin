@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import json
+import math
 import tomllib
+from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlencode
 
 import click
+from evalrecords.records import EvalRef, ModelRef, RLAttemptRef
 from finestore.rl.rl_progress import (
     GRADER_REPORT_FILENAME,
     GRADER_REPORTS_DIR,
@@ -19,7 +22,14 @@ from finestore.rl.rl_progress import (
     ComparisonRole,
     GateResult,
 )
-from finestore.rl.run_records import AttemptRecord, attempt_lineage
+from finestore.rl.run_records import (
+    METRIC_ATTEMPT_IDS,
+    AttemptRecord,
+    EvaluationTaskRow,
+    attempt_lineage,
+    read_attempt_metrics,
+    read_evaluations,
+)
 from marin.execution.artifact import read_record
 from marin.rl import skyrl_records
 from marin.rl.skyrl_records import attempt_tracking, read_stored_skyrl_attempts, recorded_launch
@@ -31,10 +41,12 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import attempt_grafana_url
+from experiments.post_training.rl_evaluation_records import publish_skyrl_evaluation
 from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
     evaluation_status,
+    native_prefix,
     read_run_inputs,
     training_invariants,
 )
@@ -209,6 +221,61 @@ def build_record(
     )
 
 
+def _publish_training_evaluations(preset: presets.Preset, attempt: AttemptRecord) -> tuple[str, ...]:
+    if attempt.evaluation_storage_version != 1:
+        return ()
+    launch = recorded_launch(attempt)
+    if launch.run_mode != "train":
+        return ()
+    result = attempt.native.result
+    names = dict.fromkeys((*(evaluation.name for evaluation in preset.evaluations[:1]), *launch.evaluation_data))
+    attempt_ref = RLAttemptRef(run_id=attempt.run_id, attempt_id=attempt.attempt_id)
+    exported_model = result.model
+    metrics = {
+        step: {key: values[key] for key, owner in values[METRIC_ATTEMPT_IDS].items() if owner == attempt.attempt_id}
+        for step, values in read_attempt_metrics(launch.export_root, attempt.attempt_id).items()
+    }
+    ids = []
+    for name in names:
+        prefix = native_prefix(launch, name)
+        sessions: dict[int, list[EvaluationTaskRow]] = defaultdict(list)
+        for row in read_evaluations(launch.export_root, attempt_id=attempt.attempt_id, evaluation=prefix):
+            sessions[row.step].append(row)
+        attempted_key = f"{prefix}all/num_attempted"
+        complete_steps = []
+        for step, rows in sessions.items():
+            attempted = metrics.get(step, {}).get(attempted_key)
+            if attempted == sum(len(row.answers) for row in rows) or (attempted is None and result.state == "succeeded"):
+                complete_steps.append(step)
+        if not complete_steps:
+            continue
+        for step in dict.fromkeys((min(complete_steps), max(complete_steps))):
+            session_metrics = metrics.get(step, {})
+            score = session_metrics.get(f"{prefix}all/avg_verifier_score")
+            record = publish_skyrl_evaluation(
+                attempt=attempt,
+                evaluation=EvalRef(name=name, mechanism="skyrl"),
+                model=ModelRef(
+                    name=launch.model_name or preset.name,
+                    location=(
+                        exported_model.policy_export_uri
+                        if exported_model is not None and exported_model.global_step == step
+                        else (
+                            launch.model_uri
+                            if step <= 0 and not attempt.resumed_step
+                            else f"skyrl:{attempt.run_id}/{attempt.attempt_id}@{step}"
+                        )
+                    ),
+                    backend=launch.engine.backend,
+                ),
+                rows=sessions[step],
+                rl_attempt=attempt_ref,
+                score=score if score is not None and math.isfinite(score) else None,
+            )
+            ids.append(record.run_id)
+    return tuple(ids)
+
+
 def publish_runs(
     outputs: Sequence[str],
     preset: presets.Preset,
@@ -271,6 +338,15 @@ def publish_runs(
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     evaldash_run_ids=evaldash_run_ids,
                 )
+                try:
+                    evaluation_ids = _publish_training_evaluations(table.by_name[record.series], receipt)
+                except Exception as error:
+                    result.errors.append(f"EvalDash publication for {receipt.run_id}/{selected_id}: {error}")
+                    evaluation_ids = ()
+                if evaluation_ids:
+                    record = record.model_copy(
+                        update={"evaldash_run_ids": list(dict.fromkeys((*evaluation_ids, *(evaldash_run_ids or ()))))}
+                    )
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if selected_id == current_id:
@@ -278,7 +354,7 @@ def publish_runs(
             except Exception as error:
                 result.unserved_records.append(destination)
                 result.errors.append(str(error))
-    if result.unserved_records:
+    if result.errors:
         result.retry = "Repeat the original command with --wait."
     return result
 
@@ -333,12 +409,12 @@ def command(table: presets.ModelPresets) -> click.Command:
                 attempt_id=attempt,
                 evaldash_run_ids=evaldash_run_id or None,
             )
-            if result.unserved_records:
+            if result.errors:
                 result.retry = "Repeat this publication command with --run-output and --attempt."
         else:
             result = publish_controls(table, preset_name, service_url=url)
         click.echo(json.dumps(result.to_dict()))
-        if result.unserved_records:
+        if result.errors:
             raise click.exceptions.Exit(1)
 
     return command

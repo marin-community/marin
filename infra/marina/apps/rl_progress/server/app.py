@@ -17,12 +17,34 @@ _RETAINED_FIELDS = ("issue", "gate", "gate_result", "model", "evaldash_run_ids",
 _RETAINED_VALUES = ", ".join(
     f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
     for key in _RETAINED_FIELDS
+    if key != "evaldash_run_ids"
 )
 _UPSERT = text(
     f"""INSERT INTO rl_runs (run_id, attempt_id, record)
     VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
     ON CONFLICT (run_id, attempt_id) DO UPDATE
-      SET record = EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+      SET record = EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES}, 'evaldash_run_ids', CASE
+        WHEN jsonb_typeof(EXCLUDED.record -> 'evaldash_run_ids') IS DISTINCT FROM 'array'
+          THEN rl_runs.record -> 'evaldash_run_ids'
+        WHEN jsonb_typeof(rl_runs.record -> 'evaldash_run_ids') = 'array' THEN (
+          SELECT COALESCE(jsonb_agg(value ORDER BY starts_with(value, 'skyrl-training-') DESC, first_seen), '[]'::jsonb)
+          FROM (
+            SELECT value, min(ordinality) AS first_seen
+            FROM jsonb_array_elements_text(
+              (rl_runs.record -> 'evaldash_run_ids') || (EXCLUDED.record -> 'evaldash_run_ids')
+            )
+              WITH ORDINALITY AS links(value, ordinality)
+            WHERE ordinality > jsonb_array_length(rl_runs.record -> 'evaldash_run_ids')
+              OR NOT starts_with(value, 'skyrl-training-')
+              OR NOT EXISTS (
+                SELECT FROM jsonb_array_elements_text(EXCLUDED.record -> 'evaldash_run_ids') AS incoming(id)
+                WHERE starts_with(incoming.id, 'skyrl-training-')
+              )
+            GROUP BY value
+          ) unique_links
+        )
+        ELSE EXCLUDED.record -> 'evaldash_run_ids'
+      END)
     RETURNING record"""
 )
 

@@ -127,7 +127,10 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
         launch_paths[preset.name] = str(launch_path)
         with monkeypatch.context() as capture:
             capture.setattr(gate, "compose_configs", collect_plan)
-            result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments)), arguments)
+            result = CliRunner().invoke(
+                snowball.command(table, argv=tuple(arguments), evaluation_presets=snowball_model.evaluation_presets),
+                arguments,
+            )
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
         if preset.name == "eval-short":
             status = printed_status(result.stdout.partition("\nStepSpec(")[0])
@@ -1253,7 +1256,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             + f"following={following}\n"
             "table=snowball_rl.SNOWBALL\n"
             "if following is not None:\n"
-            "    table=replace(table,presets=tuple(replace(preset,then=(following,)) for preset in table.presets))\n"
+            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
             + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )

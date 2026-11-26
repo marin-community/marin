@@ -80,8 +80,18 @@ preserved. Reproduction uses the recorded historical checkout and cohort.
 
 ## Other evaluation paths
 
-Levanter's in-loop training evaluation remains independent. Catalog agentic
-benchmarks lower Harbor task packages to curated corpora and run through RolloutEngine.
+The RL model commands accept `--then-eval NAME` to score the policy they export,
+and `evaluate --init NAME@VERSION --evals NAME` to score published weights.
+Named evaluations bind the model's serving recipe and publish EvalDash records.
+Catalog agentic benchmarks lower Harbor task packages to curated corpora and run through RolloutEngine.
+The Micro210 `evaluate` preset uses SkyRL to score the sealed tasks. Its catalog
+selections can also run through the endpoint launcher.
+
+EvalLite and checkpoint cohorts run on the live SkyRL policy during training.
+The first and last recorded sessions for each evaluation publish to EvalDash
+and appear on the attempt's RL Progress page. Checkpoint selection reads the
+trainer metrics. Levanter uses its training mesh for in-loop loss evaluation.
+
 Harbor policies passed with `--harbor-config` still run through Harbor's own runtime,
 using the shared inference lifecycle and record catalog. See
 [Harbor integration](../harbor-integration.md).
