@@ -14,6 +14,7 @@ import importlib
 import json
 import logging
 import sys
+import time
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -128,12 +129,19 @@ def main() -> None:
         for line in sys.stdin:
             queries = json.loads(line)
             documents, searches = {}, []
+            started = time.monotonic()
             with source_diagnostics():
                 vectors = retriever.encode(queries)
                 for query, vector in zip(queries, vectors, strict=True):
                     result = retriever.search(query, vector)
                     documents.update(result.pop("documents"))
                     searches.append(result)
+            logger.info(
+                "Served %d queries in %.2fs: %s",
+                len(queries),
+                time.monotonic() - started,
+                [result["hits"][0]["docid"] if result["hits"] else None for result in searches],
+            )
             sys.stdout.write(json.dumps({"searches": searches, "documents": documents}, ensure_ascii=False) + "\n")
             sys.stdout.flush()
     finally:
