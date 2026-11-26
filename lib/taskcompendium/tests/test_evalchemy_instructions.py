@@ -1,11 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish instruction constraints without exposing private grader inputs, and grade IFBench responses.
-
-The IFBench checkers need NLTK's English punkt_tab sentence tokenizer. The IFBench grader image mounts it under
-NLTK_DATA; these tests fetch the same pinned archive once per session and add it to NLTK's search path.
-"""
+"""Publish instruction constraints without exposing private grader inputs, and grade IFBench responses."""
 
 import hashlib
 import io
