@@ -17,7 +17,7 @@ import { lastPageIndex } from '@/utils/pagination'
 import { scoreTint } from '@/utils/score'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
-import { MAX_COMPARE, isSmokeEval } from '@/constants'
+import { MAX_COMPARE, PANEL_ENDPOINT, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
   INTERVAL_KIND,
@@ -81,7 +81,7 @@ const query = computed(() => {
   if (modelQuery.value.trim()) params.set('model', modelQuery.value.trim())
   if (aggregatePolicy.value) params.set('aggregate', aggregatePolicy.value)
   const suffix = params.toString()
-  return suffix ? `api/panel?${suffix}` : 'api/panel'
+  return suffix ? `${PANEL_ENDPOINT}?${suffix}` : PANEL_ENDPOINT
 })
 
 const { data, loading, error, refresh } = useApi<Panel>(() => query.value)

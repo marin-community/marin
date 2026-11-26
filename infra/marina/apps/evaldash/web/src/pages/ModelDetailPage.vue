@@ -5,7 +5,7 @@ import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, fleetBest, isPartialCoverage } from '@/utils/panel'
-import { isSmokeEval } from '@/constants'
+import { isSmokeEval, PANEL_ENDPOINT } from '@/constants'
 import type { Meta, MissingCell, ModelDetail, ModelRun, Panel, PanelCell } from '@/types/api'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -23,7 +23,7 @@ const selectedCohort = computed(() => {
 const modelPath = computed(() =>
   `api/models/${encodeURIComponent(props.model)}?cohort=${encodeURIComponent(selectedCohort.value)}`,
 )
-const fleetPath = computed(() => `api/panel?include_archived=1&cohort=${encodeURIComponent(selectedCohort.value)}`)
+const fleetPath = computed(() => `${PANEL_ENDPOINT}?include_archived=1&cohort=${encodeURIComponent(selectedCohort.value)}`)
 const { data, loading, error, refresh } = useApi<ModelDetail>(() => modelPath.value)
 const { data: panel, refresh: refreshPanel } = useApi<Panel>(() => fleetPath.value)
 

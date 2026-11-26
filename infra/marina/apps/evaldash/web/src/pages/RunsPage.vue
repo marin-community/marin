@@ -21,7 +21,7 @@ const FACETS = [
 
 type View = 'launches' | 'runs'
 
-const { queryValue, offset, query, search, submitSearch, pushQuery, changePage } = useCatalogQuery()
+const { queryValue, offset, query, search, submitSearch, updateCatalogQuery, changePage } = useCatalogQuery()
 
 const group = computed(() => queryValue('group'))
 const view = computed<View>(() => queryValue('view') === 'runs' || group.value ? 'runs' : 'launches')
@@ -30,7 +30,7 @@ const pluralUnit = computed(() => view.value === 'launches' ? 'launches' : 'runs
 
 function setView(value: View) {
   if (value === view.value) return
-  void pushQuery({ view: value, group: '', offset: '' })
+  void updateCatalogQuery({ view: value, group: '' })
 }
 
 const filtersOpen = ref(false)
@@ -52,19 +52,18 @@ const facets = computed(() => FACETS.map((facet) => {
 const activeFacets = computed(() => facets.value.filter(({ value }) => value))
 
 function setFacet(key: string, value: string) {
-  void pushQuery({ [key]: value, offset: '' })
+  void updateCatalogQuery({ [key]: value })
 }
 
 function clearFilters() {
-  void pushQuery({ ...Object.fromEntries(FACETS.map(({ key }) => [key, ''])), offset: '' })
+  void updateCatalogQuery(Object.fromEntries(FACETS.map(({ key }) => [key, ''])))
 }
 
 function resetSearch() {
-  void pushQuery({
+  void updateCatalogQuery({
     ...Object.fromEntries(FACETS.map(({ key }) => [key, ''])),
     q: '',
     group: '',
-    offset: '',
     ...(group.value ? { view: 'runs' } : {}),
   })
 }
@@ -91,7 +90,7 @@ function setLimit(event: Event) {
     input.value = String(limit.value)
     return
   }
-  void pushQuery({ limit: String(value), offset: '' })
+  void updateCatalogQuery({ limit: String(value) })
 }
 
 const catalogPath = computed(() => {
@@ -211,7 +210,7 @@ const resultLabel = computed(() => {
       <div v-if="group || activeFacets.length" class="active-filters" role="group" aria-label="Active filters">
         <div v-if="group" class="active-filter">
           <span><strong>Launch</strong> <span class="font-mono">{{ group }}</span></span>
-          <button type="button" aria-label="Clear launch filter" @click="pushQuery({ group: '', view: 'runs', offset: '' })">×</button>
+          <button type="button" aria-label="Clear launch filter" @click="updateCatalogQuery({ group: '', view: 'runs' })">×</button>
         </div>
         <div v-for="facet in activeFacets" :key="facet.key" class="active-filter">
           <span><strong>{{ facet.label }}</strong> {{ facet.value }}</span>

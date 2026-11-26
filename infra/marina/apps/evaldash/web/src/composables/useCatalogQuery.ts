@@ -53,7 +53,11 @@ export function useCatalogQuery() {
     void pushSearchQuery({ offset: value > 0 ? String(value) : '' })
   }
 
-  return { queryValue, offset, query, search, submitSearch, changePage, pushQuery: pushSearchQuery }
+  function updateCatalogQuery(values: Record<string, string>) {
+    return pushSearchQuery({ ...values, offset: '' })
+  }
+
+  return { queryValue, offset, query, search, submitSearch, changePage, updateCatalogQuery }
 }
 
 export function useCatalogPage<Row>(path: () => string, offset: Readonly<Ref<number>>) {

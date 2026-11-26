@@ -2,6 +2,7 @@
 // share this so they never disagree on how many models are sendable.
 export const MAX_COMPARE = 4
 export const COMPARISON_MODELS_ENDPOINT = 'api/comparison-models'
+export const PANEL_ENDPOINT = 'api/panel'
 
 // Run properties a panel or comparison request can be filtered on. Mirrors metrics.RUN_FACETS; the
 // server rejects nothing it does not recognize, it simply ignores it, so drift is inert.

@@ -11,12 +11,12 @@ interface BenchmarkQuery {
   focus: string
 }
 
-function modelCoverage(row: ComparisonRow): number {
+function scoredModelCount(row: ComparisonRow): number {
   return Object.keys(row.cells).length
 }
 
 export function orderBenchmarks(rows: readonly ComparisonRow[]): ComparisonRow[] {
-  return [...rows].sort((a, b) => modelCoverage(b) - modelCoverage(a) || a.benchmark.localeCompare(b.benchmark))
+  return [...rows].sort((a, b) => scoredModelCount(b) - scoredModelCount(a) || a.benchmark.localeCompare(b.benchmark))
 }
 
 export function benchmarkPage(ordered: readonly ComparisonRow[], query: BenchmarkQuery) {

@@ -508,23 +508,26 @@ class ScoredRecords:
             if self._last_selection is not None and request == self._last_selection[0]:
                 return self._last_selection[1]
 
-            eligible = scores.records
-            metadata = self.metadata
-            if request.cohort is CohortMode.SINGLE_COHORT:
-                eligible = [record for record in eligible if in_cohort(record, request)]
-                metadata = {record.run_id: metadata[record.run_id] for record in eligible}
-
-            # A named cohort chooses its own protocols. Unversioned results still use the
-            # snapshot-wide protocols and are filtered by the engine's cohort admission rule.
-            measurements = scores.measurements
-            protocols = scores.protocols
-            if request.cohort_version is not None:
-                measurements = [m for m in measurements if m.version == request.cohort_version]
-                protocols = declared_protocols(measurements)
-            selection = select(measurements, replace(request, completeness=Completeness.ANY), metadata, protocols)
-            selected = _ScoreSelection(eligible, metadata, measurements, protocols, scores.families, selection)
+            selected = self._select_cohort(scores, request)
             self._last_selection = (replace(request, filters=dict(request.filters)), selected)
             return selected
+
+    def _select_cohort(self, scores: _CohortScores, request: SelectionRequest) -> _ScoreSelection:
+        eligible = scores.records
+        metadata = self.metadata
+        if request.cohort is CohortMode.SINGLE_COHORT:
+            eligible = [record for record in eligible if in_cohort(record, request)]
+            metadata = {record.run_id: metadata[record.run_id] for record in eligible}
+
+        # A named cohort chooses its own protocols. Unversioned results still use the
+        # snapshot-wide protocols and are filtered by the engine's cohort admission rule.
+        measurements = scores.measurements
+        protocols = scores.protocols
+        if request.cohort_version is not None:
+            measurements = [m for m in measurements if m.version == request.cohort_version]
+            protocols = declared_protocols(measurements)
+        selection = select(measurements, replace(request, completeness=Completeness.ANY), metadata, protocols)
+        return _ScoreSelection(eligible, metadata, measurements, protocols, scores.families, selection)
 
     def policy_rejections(
         self, request: SelectionRequest, models: tuple[str, ...] | None = None

@@ -73,6 +73,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import playground_reports, review, samples
 from .catalog import (
+    CatalogFacets,
     CatalogFilters,
     CatalogPage,
     LaunchMember,
@@ -374,36 +375,6 @@ def _deduplicate_records(records: list[EvalRunRecord]) -> list[EvalRunRecord]:
     return list(by_id.values())
 
 
-def record_to_row(record: EvalRunRecord) -> RunRow:
-    """Flatten one record to the canonical API run-row shape (ISO ``created_at``, task list, jobs map).
-
-    The single definition of that shape, so the run list is identical whichever store produced it.
-    """
-    return {
-        "run_id": record.run_id,
-        "group_id": record.group_id,
-        "created_at": record.created_at,
-        "version": record.version,
-        "user_name": record.user,
-        "model_name": record.model.name,
-        "model_location": record.model.location,
-        "eval_name": record.evaluation.name,
-        "mechanism": record.evaluation.mechanism,
-        "backend": record.model.backend,
-        "platform": record.hardware.platform,
-        "accelerator": record.hardware.accelerator,
-        "region": record.hardware.region_or_cluster,
-        "status": display_status(record),
-        "step_status": record.step_status,
-        "results_path": record.results_path,
-        "git_sha": record.provenance.git_sha,
-        "image_digest": record.provenance.eval_runtime,
-        "error": record.error,
-        "tasks": [task.name for task in record.evaluation.tasks],
-        "jobs": dict(record.jobs),
-    }
-
-
 def _group_sibling_row(record: EvalRunRecord) -> dict:
     """One sibling run in a group, for the run-detail group panel."""
     return {
@@ -503,8 +474,7 @@ class RecordStore:
         )
 
     def catalog_runs(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage[RunRow]:
-        records, total = self._snapshot().catalog.run_page(filters, offset, limit)
-        return CatalogPage([record_to_row(record) for record in records], total, limit)
+        return self._snapshot().catalog.run_page(filters, offset, limit)
 
     def catalog_launches(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage[LaunchRow]:
         launches = self._snapshot().catalog.matching_launches(filters)
@@ -512,14 +482,14 @@ class RecordStore:
         return CatalogPage(rows, len(launches), limit)
 
     def launches_with_members(self, filters: CatalogFilters, limit: int) -> list[LaunchWithMembers]:
-        """Include eval members and their headline scores for the array-based groups API."""
+        """Return matching launches newest first, with eval members oldest first and available headline scores."""
         launches = self._snapshot().catalog.matching_launches(filters)
         return [
             {**launch.row(), "evals": [_group_member(run.record) for run in reversed(launch.members)]}
             for launch in launches[:limit]
         ]
 
-    def catalog_facets(self) -> dict:
+    def catalog_facets(self) -> CatalogFacets:
         return {"run_facets": self._snapshot().catalog.facets()}
 
     def catalog_models(

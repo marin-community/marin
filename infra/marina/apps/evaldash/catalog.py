@@ -78,6 +78,10 @@ class ModelCatalogRow(TypedDict):
     latest_run: RunSummary
 
 
+class CatalogFacets(TypedDict):
+    run_facets: dict[str, list[str]]
+
+
 @dataclass(frozen=True)
 class CatalogPage[Row]:
     rows: list[Row]
@@ -120,6 +124,38 @@ class _Run:
     record: EvalRunRecord
     status: str
     search_text: str
+
+    def summary(self) -> RunSummary:
+        record = self.record
+        return {
+            "run_id": record.run_id,
+            "eval_name": record.evaluation.name,
+            "status": self.status,
+            "created_at": record.created_at,
+            "version": record.version,
+        }
+
+    def row(self) -> RunRow:
+        record = self.record
+        return {
+            **self.summary(),
+            "group_id": record.group_id,
+            "user_name": record.user,
+            "model_name": record.model.name,
+            "model_location": record.model.location,
+            "mechanism": record.evaluation.mechanism,
+            "backend": record.model.backend,
+            "platform": record.hardware.platform,
+            "accelerator": record.hardware.accelerator,
+            "region": record.hardware.region_or_cluster,
+            "step_status": record.step_status,
+            "results_path": record.results_path,
+            "git_sha": record.provenance.git_sha,
+            "image_digest": record.provenance.eval_runtime,
+            "error": record.error,
+            "tasks": [task.name for task in record.evaluation.tasks],
+            "jobs": dict(record.jobs),
+        }
 
     def matches(self, filters: CatalogFilters) -> bool:
         record = self.record
@@ -217,19 +253,12 @@ class _ModelActivity:
     archived: bool
 
     def row(self) -> ModelCatalogRow:
-        latest = self.runs[0]
         return {
             "model": self.model,
             "archived": self.archived,
             "run_count": len(self.runs),
             "benchmark_count": len({run.record.evaluation.name for run in self.runs}),
-            "latest_run": {
-                "run_id": latest.record.run_id,
-                "eval_name": latest.record.evaluation.name,
-                "status": latest.status,
-                "created_at": latest.record.created_at,
-                "version": latest.record.version,
-            },
+            "latest_run": self.runs[0].summary(),
         }
 
 
@@ -249,8 +278,8 @@ class RunCatalog:
         self._by_group = {group_id: Launch(members) for group_id, members in by_group.items()}
         self._launches = sorted(self._by_group.values(), key=_launch_order, reverse=True)
 
-    def run_page(self, filters: CatalogFilters, offset: int, limit: int) -> tuple[list[EvalRunRecord], int]:
-        """Return records on the requested page and the total matches before pagination."""
+    def run_page(self, filters: CatalogFilters, offset: int, limit: int) -> CatalogPage[RunRow]:
+        """Return rows on the requested page and the total matches before pagination."""
         if filters.group is None:
             candidates = self._runs
         else:
@@ -258,7 +287,7 @@ class RunCatalog:
             candidates = launch.members if launch is not None else []
         if filters != CatalogFilters():
             candidates = [run for run in candidates if run.matches(filters)]
-        return [run.record for run in candidates[offset : offset + limit]], len(candidates)
+        return CatalogPage([run.row() for run in candidates[offset : offset + limit]], len(candidates), limit)
 
     def matching_launches(self, filters: CatalogFilters) -> list[Launch]:
         if filters == CatalogFilters():

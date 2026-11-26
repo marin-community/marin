@@ -6,12 +6,14 @@ import CohortNotice from '@/components/shared/CohortNotice.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import { useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
-import { COMPARISON_MODELS_ENDPOINT, isSmokeEval, MAX_COMPARE } from '@/constants'
+import { COMPARISON_MODELS_ENDPOINT, isSmokeEval, MAX_COMPARE, PANEL_ENDPOINT } from '@/constants'
 import type { Meta, Panel } from '@/types/api'
 import { formatInterval, formatScore } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, cohortWarning, scoredItemsLabel } from '@/utils/panel'
 import { lastPageIndex } from '@/utils/pagination'
 import { compareCells } from '@/utils/ranking'
+
+const COLLAPSED_SUITE_LIMIT = 5
 
 const route = useRoute()
 const router = useRouter()
@@ -41,7 +43,7 @@ function toggleSuite(name: string) {
 
 const selected = ref<string[]>([])
 const params = computed(() => new URLSearchParams({ benchmarks: benchmark.value, cohort: cohort.value }))
-const { data, error, loading, refresh } = useApi<Panel>(() => 'api/panel?' + params.value)
+const { data, error, loading, refresh } = useApi<Panel>(() => `${PANEL_ENDPOINT}?${params.value}`)
 const choices = useApi<Pick<Meta, 'models'>>(() => `${COMPARISON_MODELS_ENDPOINT}?${params.value}`)
 const eligibleModels = computed(() => new Set(choices.data.value?.models ?? []))
 const ready = computed(() => options.value.includes(benchmark.value))
@@ -127,9 +129,9 @@ const selectedModels = computed(() => selected.value.filter(model => eligibleMod
           <span>{{ suite.settings.length }} {{ suite.settings.length === 1 ? 'setting' : 'settings' }}</span>
         </header>
         <div>
-          <RouterLink v-for="setting in (openSuites.includes(suite.name) ? suite.settings : suite.settings.slice(0, 5))" :key="setting"
+          <RouterLink v-for="setting in (openSuites.includes(suite.name) ? suite.settings : suite.settings.slice(0, COLLAPSED_SUITE_LIMIT))" :key="setting"
             :to="{ name: 'benchmarks', query: { benchmark: setting, cohort } }">{{ setting }}</RouterLink>
-          <button v-if="suite.settings.length > 5" :aria-expanded="openSuites.includes(suite.name)" @click="toggleSuite(suite.name)">
+          <button v-if="suite.settings.length > COLLAPSED_SUITE_LIMIT" :aria-expanded="openSuites.includes(suite.name)" @click="toggleSuite(suite.name)">
             {{ openSuites.includes(suite.name) ? 'Show fewer' : 'Show all ' + suite.settings.length }}
           </button>
         </div>

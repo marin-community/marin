@@ -107,7 +107,7 @@ def test_comparison_explores_shared_and_sparse_results_in_large_catalog(journey:
     expect(search).to_have_value("scale-benchmark-49")
     expect(all_recorded).to_have_attribute("aria-pressed", "true")
     shared.click()
-    expect(index.get_by_role("status")).to_have_text("0 settings")
+    expect(sparse).to_have_count(0)
     expect(benchmark).to_have_count(0)
     expect(page).not_to_have_url(re.compile(r"[?&]focus="))
     page.go_back(wait_until="domcontentloaded")

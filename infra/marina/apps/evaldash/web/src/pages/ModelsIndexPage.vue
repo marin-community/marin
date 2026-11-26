@@ -13,14 +13,14 @@ import { ALL_COHORTS, UNVERSIONED_COHORT } from '@/utils/panel'
 const ARCHIVE_FILTER = { key: 'include_archived', enabled: '1' }
 const numberFormat = new Intl.NumberFormat()
 
-const { queryValue, offset, query, search, submitSearch, pushQuery, changePage } = useCatalogQuery()
+const { queryValue, offset, query, search, submitSearch, updateCatalogQuery, changePage } = useCatalogQuery()
 
 const cohort = computed(() => queryValue('cohort'))
 const cohortLabel = computed(() => cohort.value === UNVERSIONED_COHORT ? 'Unversioned' : cohort.value)
 const showArchived = computed({
   get: () => queryValue(ARCHIVE_FILTER.key) === ARCHIVE_FILTER.enabled,
   set: (checked: boolean) => {
-    void pushQuery({ [ARCHIVE_FILTER.key]: checked ? ARCHIVE_FILTER.enabled : '', offset: '' })
+    void updateCatalogQuery({ [ARCHIVE_FILTER.key]: checked ? ARCHIVE_FILTER.enabled : '' })
   },
 })
 
@@ -68,7 +68,7 @@ const resultLabel = computed(() => {
           type="button"
           class="directory-button"
           aria-label="Clear cohort filter"
-          @click="pushQuery({ cohort: '', offset: '' })"
+          @click="updateCatalogQuery({ cohort: '' })"
         >{{ cohortLabel }} <span aria-hidden="true">×</span></button>
         <div class="directory-summary">
           <p role="status">{{ resultLabel }}</p>
