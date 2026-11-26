@@ -4481,9 +4481,12 @@ async def test_supplied_verifier_remains_caller_owned(fails):
 
 @pytest.mark.parametrize("error", [TimeoutError, ContextWindowExceeded, ConnectionError])
 @pytest.mark.parametrize("sampled", [False, True])
-async def test_workspace_agent_timeout_runs_verifier_and_transport_failure_stays_unavailable(error, sampled):
+async def test_workspace_agent_timeout_runs_verifier_and_transport_failure_stays_unavailable(tmp_path, error, sampled):
+    answer = tmp_path / "answer"
+    answer.write_text("12\n")
+
     async def agent(context, complete):
-        await context.machine.run(Command(("sh", "-c", "echo 12 > /workspace/answer")))
+        await context.machine.upload(answer, "/workspace/answer")
         if sampled:
             await complete(Prompt(({"role": "user", "content": "Working"},), {}))
         raise error("Agent stopped")

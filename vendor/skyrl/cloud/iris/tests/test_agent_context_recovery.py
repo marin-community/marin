@@ -286,7 +286,7 @@ async def test_micro210_native_error_policy_preserves_verdict_and_excludes_unnam
         "environment_requirements": SHELL_ENVIRONMENT,
         "answer_type": AnswerType.WORKSPACE_STATE,
         "grader": ScriptGrader(
-            argv=("sh", "-c", "echo 0.5"), cwd="/workspace", answer_path=None, placement=AgentMachine()
+            argv=("echo", "0.5"), cwd="/workspace", answer_path=None, placement=AgentMachine()
         ),
     })
     request = TaskRequestBatch(rows=(task_input(lowered_task(task, "pi", backend="shellsim")),))
