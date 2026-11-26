@@ -687,6 +687,47 @@ def test_the_next_commit_rewrites_the_manifest_the_previous_holder_published(tmp
     assert manifest.read_text() == "v2"
 
 
+def test_a_commit_queued_behind_many_short_holds_waits_past_the_timeout(tmp_path, monkeypatch):
+    """The timeout bounds one hold, not a save's whole queue of commits."""
+    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 0.3)
+    order = tensorstore_serialization._CommitOrder(str(tmp_path))
+    lock = tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME
+    lock.write_text("holder 0\n")
+    acquired = threading.Event()
+    errors: list[BaseException] = []
+
+    def wait_for_lock() -> None:
+        try:
+            order.acquire().release()
+            acquired.set()
+        except BaseException as error:
+            errors.append(error)
+
+    waiter = threading.Thread(target=wait_for_lock)
+    waiter.start()
+    # Hand the lock to a new holder every 0.15 s for 0.9 s in all: three timeouts with no free moment.
+    for holder in range(1, 7):
+        time.sleep(0.15)
+        handoff = tmp_path / f"handoff-{holder}"
+        handoff.write_text(f"holder {holder}\n")
+        os.replace(handoff, lock)
+    assert not errors and not acquired.is_set()
+    lock.unlink()
+    waiter.join(5)
+
+    assert not errors
+    assert acquired.is_set()
+
+
+def test_a_commit_times_out_behind_one_hold_longer_than_the_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(tensorstore_serialization, "_COMMIT_ORDER_TIMEOUT_S", 0.3)
+    order = tensorstore_serialization._CommitOrder(str(tmp_path))
+    (tmp_path / tensorstore_serialization._COMMIT_ORDER_LOCK_NAME).write_text("holder 0\n")
+
+    with pytest.raises(TimeoutError, match="one commit has held"):
+        order.acquire()
+
+
 def test_a_live_remote_writer_keeps_its_lock_file(tmp_path):
     """A lease refreshed by another host means the lock file is still a live commit."""
     lock = tmp_path / "manifest.ocdbt.__lock"
