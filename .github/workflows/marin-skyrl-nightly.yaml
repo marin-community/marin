@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   dispatch-controls-comment:
-    if: github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/rl-controls ')
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/rl-controls')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -218,6 +218,11 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
+      - name: Validate control selectors
+        if: inputs.presets != ''
+        run: |
+          uv run --frozen --all-packages --extra cpu --no-default-groups \
+            python -m experiments.post_training.rl_nightly_controls --check-presets="$CONTROL_PRESETS"
       - uses: google-github-actions/auth@v3
         with:
           project_id: hai-gcp-models

@@ -419,8 +419,9 @@ def test_control_presets_select_multiple_models_without_duplicates():
         (False, "admin", "mochi", "merged pull request"),
         (True, "read", "mochi", "write permission"),
         (True, "write", "mochi snowball/data-medium", "snowball/data-medium"),
-        (True, "write", "mochi unknown", "unknown"),
+        (True, "write", "mochi <unknown>", "&lt;unknown&gt;"),
         (True, "write", "", "at least one model"),
+        (True, "write", None, None),
         (True, "write", "mochi snowball/learning-medium", None),
         (True, "admin", "snowball/speed-medium mochi/learning-medium", None),
     ],
@@ -429,11 +430,12 @@ def test_control_comment_checks_repository_access_and_dispatches_main(
     monkeypatch, tmp_path, merged, permission, selection, error
 ):
     event = tmp_path / "comment.json"
+    body = "can we run /rl-controls mochi?" if selection is None else f"/rl-controls {selection}".strip()
     event.write_text(
         json.dumps(
             {
                 "issue": {"number": 14, "pull_request": {}},
-                "comment": {"body": f"/rl-controls {selection}", "user": {"login": "contributor"}},
+                "comment": {"body": body, "user": {"login": "contributor"}},
             }
         )
     )
@@ -441,6 +443,7 @@ def test_control_comment_checks_repository_access_and_dispatches_main(
     calls = []
     pull = "repos/example/marin/pulls/14"
     access = "repos/example/marin/collaborators/contributor/permission"
+    comments = "repos/example/marin/issues/14/comments"
 
     def github(command, **options):
         calls.append((command, options.get("input")))
@@ -451,17 +454,22 @@ def test_control_comment_checks_repository_access_and_dispatches_main(
         return b'{"html_url":"https://github.com/example/marin/actions/runs/145"}'
 
     monkeypatch.setattr(nightly.subprocess, "check_output", github)
-    if error:
-        with pytest.raises(ValueError, match=error):
-            nightly.dispatch_comment(event)
-        assert [command[-1] for command, _ in calls] == ([pull, access] if merged else [pull])
+    nightly.dispatch_comment(event)
+    if selection is None:
+        assert calls == []
+    elif error:
+        *checks, (reply, _) = calls
+        assert [command[-1] for command, _ in checks] == ([pull, access] if merged else [pull])
+        assert comments in reply
+        assert reply[-1].startswith("body=🤖 <code>") and error in reply[-1]
+        assert len(reply[-1].splitlines()) == 1
     else:
-        nightly.dispatch_comment(event)
         (pull_request, _), (permissions, _), (dispatch, payload), (reply, _) = calls
         assert pull_request[-1] == pull and permissions[-1] == access
+        assert "X-GitHub-Api-Version: 2026-03-10" in dispatch
         assert "repos/example/marin/actions/workflows/marin-skyrl-nightly.yaml/dispatches" in dispatch
         assert json.loads(payload) == {"ref": "main", "inputs": {"controls": "true", "presets": selection}}
-        assert "repos/example/marin/issues/14/comments" in reply
+        assert comments in reply
         assert reply[-1] == "body=🤖 [RL control run](https://github.com/example/marin/actions/runs/145)"
 
 

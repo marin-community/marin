@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from html import escape
 from pathlib import Path
 
 from finestore.rl.rl_progress import completed_controls
@@ -43,28 +44,32 @@ def dispatch_comment(event_path: Path) -> None:
     repository = f"repos/{os.environ['GITHUB_REPOSITORY']}"
     number = event["issue"]["number"]
     login = event["comment"]["user"]["login"]
-    api = ["gh", "api", "-H", "X-GitHub-Api-Version: 2026-03-10"]
-
-    pull = json.loads(subprocess.check_output([*api, f"{repository}/pulls/{number}"]))
-    if pull["merged"] is not True:
-        raise ValueError("RL controls require a merged pull request")
-    permission = json.loads(subprocess.check_output([*api, f"{repository}/collaborators/{login}/permission"]))
-    if permission["permission"] not in {"write", "admin"}:
-        raise ValueError("RL controls require repository write permission")
-    if len(command) != 2:
-        raise ValueError("Provide at least one model or model/preset after /rl-controls")
-    selection = command[1]
-    select_presets(selection)
-
-    dispatch = json.loads(
-        subprocess.check_output(
+    # The 2026-03-10 dispatch API returns the run ID and links in its response.
+    api = ["gh", "api", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10"]
+    try:
+        pull = json.loads(subprocess.check_output([*api, f"{repository}/pulls/{number}"]))
+        if pull["merged"] is not True:
+            raise ValueError("RL controls require a merged pull request")
+        permission = json.loads(subprocess.check_output([*api, f"{repository}/collaborators/{login}/permission"]))
+        if permission["permission"] not in {"write", "admin"}:
+            raise ValueError("RL controls require repository write permission")
+        if len(command) != 2:
+            raise ValueError("Provide at least one model or model/preset after /rl-controls")
+        selection = command[1]
+        select_presets(selection)
+    except json.JSONDecodeError:
+        raise
+    except ValueError as error:
+        reply = f"🤖 <code>{escape(str(error))}</code>"
+    else:
+        response = subprocess.check_output(
             [*api, "-X", "POST", f"{repository}/actions/workflows/marin-skyrl-nightly.yaml/dispatches", "--input", "-"],
             input=json.dumps({"ref": "main", "inputs": {"controls": "true", "presets": selection}}).encode(),
         )
-    )
-    subprocess.check_output(
-        [*api, f"{repository}/issues/{number}/comments", "-f", f"body=🤖 [RL control run]({dispatch['html_url']})"],
-    )
+        if not response:
+            raise RuntimeError("GitHub dispatch returned no run details")
+        reply = f"🤖 [RL control run]({json.loads(response)['html_url']})"
+    subprocess.check_output([*api, f"{repository}/issues/{number}/comments", "-f", f"body={reply}"])
 
 
 def main() -> int:
@@ -72,11 +77,15 @@ def main() -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--batch", help="Unique schedule or dispatch identifier.")
     source.add_argument("--comment-event", type=Path, help="GitHub issue_comment event payload.")
+    source.add_argument("--check-presets", help="Validate a selector list before launch setup.")
     parser.add_argument("--presets", default="", help="Space-separated models or model/preset selectors.")
     args = parser.parse_args()
     try:
         if args.comment_event is not None:
             dispatch_comment(args.comment_event)
+            return 0
+        if args.check_presets is not None:
+            select_presets(args.check_presets)
             return 0
         selected = select_presets(args.presets)
     except ValueError as error:
