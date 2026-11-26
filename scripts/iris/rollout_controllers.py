@@ -30,6 +30,7 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_c
 from iris.client.client import IrisClient
 from iris.client.workload import JobStatus
 from iris.cluster.config import IrisClusterConfig, load_config
+from iris.cluster.platforms.k8s.controller import resolve_controller_storage_credentials
 from iris.cluster.provenance import provenance_from_proto
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.state import JobState
@@ -106,6 +107,7 @@ class Need(StrEnum):
     COMMAND = "command"
     COMMAND_RUNS = "command-runs"
     SECRET = "secret"
+    STORAGE_SECRET = "storage-secret"
     KUBE_CONTEXT = "kube-context"
 
 
@@ -390,9 +392,15 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
                     source=platform.kubeconfig_path,
                 )
             )
-        if config.storage.remote_state_dir.startswith("s3://"):
-            for name in s3_env if s3_env is not None else _s3_credential_env():
-                needs.append(Requirement(Need.ENV, name, "S3 state auth projected into the iris-storage-secrets Secret"))
+        node_health = config.kubernetes_provider and config.kubernetes_provider.node_health
+        if config.storage.remote_state_dir.startswith("s3://") or (node_health and node_health.storage is not None):
+            assert config.controller.coreweave is not None
+            reference = config.controller.coreweave.storage_credentials_ref
+            if reference is not None:
+                needs.append(Requirement(Need.STORAGE_SECRET, reference, "controller and node-agent S3 key pair"))
+            else:
+                for name in s3_env if s3_env is not None else _s3_credential_env():
+                    needs.append(Requirement(Need.ENV, name, "S3 state auth projected into iris-storage-secrets"))
         # A Kubernetes controller pod holds no cloud credentials, so the deploy resolves
         # the signing key in the operator's shell and projects it into the Secret. It
         # resolves sources in their configured order; projected file references are
@@ -482,6 +490,9 @@ def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -
         return run_probe(requirement)
     if requirement.kind is Need.KUBE_CONTEXT:
         return check_kube_context(requirement, environ=environ)
+    if requirement.kind is Need.STORAGE_SECRET:
+        resolve_controller_storage_credentials(target)
+        return CheckResult(requirement, True, "resolved controller S3 key pair")
     resolved = resolve_secret_spec((target,))
     hint = "" if not target.startswith(GCP_SECRET_SCHEME) else " (needs GCP credentials)"
     return CheckResult(requirement, bool(resolved.value), f"resolved from {resolved.source}{hint}")

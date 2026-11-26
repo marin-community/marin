@@ -103,6 +103,7 @@ kubernetes_provider:
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   coreweave:
+    storage_credentials_ref: gcp-secret://projects/748532799086/secrets/iris-coreweave-storage-credentials/versions/1
     port: 10000
     service_name: iris-ci-controller-svc
     scale_group: cpu-erapids

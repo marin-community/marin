@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from pathlib import Path
 
+import fsspec
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
 from rigging.secrets import (
@@ -28,6 +29,7 @@ from rigging.secrets import (
     SECRETS_DIR_ENV,
     as_secret_spec,
     get_secret,
+    is_secret_reference,
     resolve_secret_spec,
     secret_file_contents,
 )
@@ -531,15 +533,35 @@ def build_egress_network_policy(namespace: str, network: TaskNetwork, service_ci
     }
 
 
-def _resolve_s3_credentials() -> dict[str, str]:
-    """Resolve operator storage keys for controller checkpoints and node probes."""
+def resolve_controller_storage_credentials(reference: str) -> tuple[str, str]:
+    """Read the controller S3 pair from one deploy-side secret reference."""
+    if not is_secret_reference(reference):
+        raise InfraError("controller.coreweave.storage_credentials_ref must be a secret reference")
+    payload = resolve_secret_spec(reference).value
+    try:
+        credentials = json.loads(payload)
+    except ValueError:
+        raise InfraError("CoreWeave controller storage secret must contain a JSON key pair") from None
     store = store_config(StoreType.COREWEAVE)
-    key_id = get_secret(store.key_id_env)
-    key_secret = get_secret(store.key_secret_env)
-    if not key_id or not key_secret:
-        raise InfraError(
-            f"{store.key_id_env} and {store.key_secret_env} secrets are required " "for S3-compatible object storage"
-        )
+    if isinstance(credentials, dict):
+        key_id = credentials.get(store.key_id_env)
+        key_secret = credentials.get(store.key_secret_env)
+        if isinstance(key_id, str) and isinstance(key_secret, str) and key_id.strip() and key_secret.strip():
+            return key_id.strip(), key_secret.strip()
+    raise InfraError(f"CoreWeave controller storage secret requires {store.key_id_env} and {store.key_secret_env}")
+
+
+def _storage_secret_files(reference: str | None) -> dict[str, str]:
+    store = store_config(StoreType.COREWEAVE)
+    if reference is not None:
+        key_id, key_secret = resolve_controller_storage_credentials(reference)
+    else:
+        key_id = get_secret(store.key_id_env)
+        key_secret = get_secret(store.key_secret_env)
+        if not key_id or not key_secret:
+            raise InfraError(
+                f"{store.key_id_env} and {store.key_secret_env} secrets are required for S3-compatible object storage"
+            )
     return secret_file_contents(
         {
             "AWS_ACCESS_KEY_ID": key_id,
@@ -548,6 +570,11 @@ def _resolve_s3_credentials() -> dict[str, str]:
             store.key_secret_env: key_secret,
         }
     )
+
+
+def _storage_health_configured(config: IrisClusterConfig) -> bool:
+    provider = config.kubernetes_provider
+    return bool(provider and provider.node_health and provider.node_health.storage is not None)
 
 
 def _build_s3_task_env(endpoint: str) -> dict[str, str]:
@@ -606,6 +633,8 @@ class K8sControllerProvider:
         self._s3_enabled = False
         self._controller_secret_specs: tuple[tuple[str, ...], ...] = ()
         self._prepared_controller_env: dict[str, str] | None = None
+        self._storage_credentials_ref: str | None = None
+        self._prepared_storage_files: dict[str, str] = {}
 
     @property
     def kubectl(self) -> K8sService:
@@ -636,6 +665,22 @@ class K8sControllerProvider:
             else None
         )
         resolve_principal_references(config.model_copy(update={"auth": auth}))
+        cw = config.controller.coreweave
+        assert cw is not None
+        reference = cw.storage_credentials_ref
+        self._prepared_storage_files = {}
+        if self.uses_s3_storage(config) or _storage_health_configured(config):
+            self._prepared_storage_files = _storage_secret_files(reference)
+            if reference is not None and self.uses_s3_storage(config):
+                endpoint = self._config.external_object_storage_endpoint or self._config.object_storage_endpoint
+                configure_fsspec_s3(endpoint)
+                # The deploy also reads and writes the rollout record through fsspec.
+                fsspec.config.conf.setdefault("s3", {}).update(
+                    key=self._prepared_storage_files["AWS_ACCESS_KEY_ID"],
+                    secret=self._prepared_storage_files["AWS_SECRET_ACCESS_KEY"],
+                    token=None,
+                )
+        self._storage_credentials_ref = reference
         self._controller_secret_specs = _controller_secret_specs(config)
         self._prepared_controller_env = env
 
@@ -657,7 +702,12 @@ class K8sControllerProvider:
                 f"{list(config.scale_groups.keys())}"
             )
 
-        if self._prepared_controller_env is None or self._controller_secret_specs != _controller_secret_specs(config):
+        if (
+            self._prepared_controller_env is None
+            or self._controller_secret_specs != _controller_secret_specs(config)
+            or self._storage_credentials_ref != cw.storage_credentials_ref
+            or bool(self._prepared_storage_files) != (self.uses_s3_storage(config) or _storage_health_configured(config))
+        ):
             self.preflight_controller(config)
         assert self._prepared_controller_env is not None
 
@@ -674,7 +724,10 @@ class K8sControllerProvider:
         default_env = _build_s3_task_env(self._config.object_storage_endpoint) if self._s3_enabled else {}
         storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
         if self._s3_enabled or storage_health is not None:
-            self.ensure_secret(STORAGE_SECRET_NAME, _resolve_s3_credentials())
+            storage_files = (
+                self._prepared_storage_files if cw.storage_credentials_ref is not None else _storage_secret_files(None)
+            )
+            self.ensure_secret(STORAGE_SECRET_NAME, storage_files)
         storage_environment = {
             **default_env,
             **config.defaults.task_env,
@@ -1269,6 +1322,8 @@ class K8sControllerProvider:
         # Controller auth references point to the controller-only Secret mount.
         assert_no_inlined_secrets(config)
         config_dict = config_to_dict(config)
+        # Keep deploy-only settings out of the runtime config, including on rollback.
+        config_dict["controller"].get("coreweave", {}).pop("storage_credentials_ref", None)
         if config.auth:
             for field, name in _CONTROLLER_SECRET_FIELDS:
                 if getattr(config.auth, field):

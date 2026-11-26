@@ -77,6 +77,7 @@ from iris.cluster.platforms.types import (
 )
 from iris.cluster.types import AcceleratorType
 from iris.cluster.worker.egress_dns import DomainAllowlist
+from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.timing import Duration
 
 
@@ -467,6 +468,32 @@ def test_start_controller_does_not_capture_application_credentials(monkeypatch):
     secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets")
     assert "WANDB_API_KEY" not in secret["data"]
     assert "wb-secret" not in json.dumps(k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config"))
+    provider.shutdown()
+
+
+def test_rollout_uses_one_storage_pair_for_operator_and_controller(tmp_path, monkeypatch):
+    source = tmp_path / "storage.json"
+    source.write_text(json.dumps({"CW_KEY_ID": "deploy-key", "CW_KEY_SECRET": "deploy-secret"}))
+    monkeypatch.setenv("CW_KEY_ID", "ambient-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "ambient-secret")
+    monkeypatch.setenv("FSSPEC_S3", '{"key":"ambient-key","secret":"ambient-secret","token":"ambient-token"}')
+    monkeypatch.setattr("fsspec.config.conf", {})
+    provider, k8s = _make_provider()
+    config = _make_cluster_config(remote_state_dir="s3://test-bucket/state")
+    config.controller.coreweave.storage_credentials_ref = f"file:{source}"
+    _seed_prerequisites(k8s, config)
+
+    provider.preflight_controller(config)
+    assert s3_credential_options() == {"key": "deploy-key", "secret": "deploy-secret"}
+    assert k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets") is None
+    source.unlink()
+    provider.start_controller(config)
+
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets")
+    assert base64.b64decode(secret["data"]["AWS_ACCESS_KEY_ID"]) == b"deploy-key"
+    assert base64.b64decode(secret["data"]["AWS_SECRET_ACCESS_KEY"]) == b"deploy-secret"
+    rendered = json.loads(k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"])
+    assert "storage_credentials_ref" not in rendered["controller"]["coreweave"]
     provider.shutdown()
 
 
