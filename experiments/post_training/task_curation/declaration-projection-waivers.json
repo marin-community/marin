@@ -6,6 +6,7 @@
   "rule": "post-seal-declaration-missing-served-projection",
   "source_ids": [
     "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
+    "AllenAI:rlvr_ifeval",
     "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k",
     "FWeindel:validated-tasks/endless",
     "FWeindel:validated-tasks/facet_v2",

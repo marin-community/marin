@@ -201,8 +201,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.JSONL,
                 ),
                 convert=convert_nemotron_if,
-                # L1 keeps the sealed version string so the receipt bindings hold;
-                # the admission landing bumps it to "2" with the re-cut receipts.
+                # Held at the sealed version: this source's receipts are re-cut by
+                # its own re-seal (the last of the five), whose admission landing
+                # bumps it to "2" with them. Bumping it earlier would fail the
+                # within-source dedup binding, which refuses any pin mismatch.
                 version="1",
                 intended_use=IntendedUse.TRAIN,
                 rubric=NEMOTRON_RUBRIC,
@@ -233,9 +235,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.PARQUET,
                 ),
                 convert=convert_rlvr_ifeval,
-                # L1 keeps the sealed version string so the receipt bindings hold;
-                # the admission landing bumps it to "3" with the re-cut receipts.
-                version="1",
+                # The admission landing (L2) ships this bump together with the
+                # refreshed receipt families bound at this version.
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,
