@@ -10,7 +10,7 @@ import torch
 from omegaconf import DictConfig
 
 from skyrl_train.batch_metrics import consumed_stop_metrics, rollout_metrics, reward_metrics, rollout_staleness_metrics
-from skyrl_train.batch_sampling import RowOwnership, filter_trajectory_batch
+from skyrl_train.batch_sampling import RowOwnership, select_trajectory_rows
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.dataset.preprocess import collate_response_token_channel, convert_prompts_responses_to_batch_tensors
 from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
@@ -302,8 +302,11 @@ def assemble_rank_slice(
         ) or not np.array_equal(facts.response_len, [len(row) for row in payload["response_ids"]]):
             raise ValueError("selected rollout row geometry does not match metadata")
         group = plan.group_ranges[index]
-        local_rows = list(range(max(rows.start - group.start, 0), min(rows.stop - group.start, len(group))))
-        selected.append(filter_trajectory_batch(payload, local_rows, row_ownership=RowOwnership.BORROWED))
+        if rows.start <= group.start and group.stop <= rows.stop:
+            selected.append(payload)
+        else:
+            local_rows = range(max(rows.start - group.start, 0), min(rows.stop - group.start, len(group)))
+            selected.append(select_trajectory_rows(payload, local_rows, row_ownership=RowOwnership.BORROWED))
     batch = normalize_trajectory_batches(selected, fields=plan.fields)
     validate_trajectory_batch(len(batch["response_ids"]), batch)
     batch["rewards"] = token_reward_rows(batch["rewards"], batch["response_ids"])

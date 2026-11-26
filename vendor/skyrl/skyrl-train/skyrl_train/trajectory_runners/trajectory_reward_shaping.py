@@ -275,21 +275,16 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         stop_reasons = [None] * batch_size
     groups = shaping_groups(output.get("is_last_step"), batch_size)
     response_lengths = [sum(bool(value) for value in loss_mask) for loss_mask in output["loss_masks"]]
-    trajectory_components = [aggregate_reward_shaping_components(components, group) for group in groups]
-    shaped_totals = [NormalizedReward.from_output(output["rewards"][group[-1]]).total for group in groups]
-    trajectory_lengths = [sum(response_lengths[index] for index in group) for group in groups]
-    trajectory_stops = [stop_reasons[group[-1]] for group in groups]
-    trajectory_outcomes = [float(outcomes[group[-1]]) for group in groups]
     charged_loop_advantages = [
         value for sample_advantages in loop_advantages for value in sample_advantages if value < 0
     ]
     refreshed_metrics = reward_shaping_metrics(
         groups=groups,
-        trajectory_components=trajectory_components,
-        shaped_totals=shaped_totals,
-        trajectory_lengths=trajectory_lengths,
-        trajectory_stops=trajectory_stops,
-        trajectory_outcomes=trajectory_outcomes,
+        row_components=components,
+        row_shaped_totals=[NormalizedReward.from_output(reward).total for reward in output["rewards"]],
+        row_lengths=response_lengths,
+        row_stops=stop_reasons,
+        row_outcomes=[float(outcome) for outcome in outcomes],
         row_loop_advantages=[sum(row) for row in loop_advantages],
         row_loop_token_counts=[sum(value < 0 for value in row) for row in loop_advantages],
         charged_loop_advantages=charged_loop_advantages,
@@ -308,11 +303,11 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
 def reward_shaping_metrics(
     *,
     groups: Sequence[Sequence[int]],
-    trajectory_components: Sequence[RewardShapingComponents],
-    shaped_totals: Sequence[float],
-    trajectory_lengths: Sequence[float],
-    trajectory_stops: Sequence[str | None],
-    trajectory_outcomes: Sequence[float],
+    row_components: Sequence[RewardShapingComponents],
+    row_shaped_totals: Sequence[float],
+    row_lengths: Sequence[int],
+    row_stops: Sequence[str | None],
+    row_outcomes: Sequence[float],
     row_loop_advantages: Sequence[float],
     row_loop_token_counts: Sequence[int],
     charged_loop_advantages: Sequence[float] | np.ndarray,
@@ -321,6 +316,11 @@ def reward_shaping_metrics(
     row_reasoning_span_violations: Sequence[int],
 ) -> dict[str, float]:
     """Report trajectory shaping metrics and the pooled mean of charged tokens."""
+    trajectory_components = [aggregate_reward_shaping_components(row_components, group) for group in groups]
+    shaped_totals = [row_shaped_totals[group[-1]] for group in groups]
+    trajectory_lengths = [sum(row_lengths[index] for index in group) for group in groups]
+    trajectory_stops = [row_stops[group[-1]] for group in groups]
+    trajectory_outcomes = [row_outcomes[group[-1]] for group in groups]
     penalties = [sum(values.values()) for values in trajectory_components]
     reasoning_span_penalties = [
         values.get("reasoning_span", 0.0) + sum(row_reasoning_span_penalties[index] for index in group)

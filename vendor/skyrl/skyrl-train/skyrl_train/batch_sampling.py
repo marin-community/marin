@@ -1,5 +1,6 @@
 """Row selection over trajectory batches."""
 
+from collections.abc import Sequence
 from copy import deepcopy
 from enum import StrEnum
 from typing import cast
@@ -40,6 +41,19 @@ def filter_trajectory_batch(
     *,
     row_ownership: RowOwnership = RowOwnership.ISOLATED,
 ) -> TrajectoryBatch:
+    """Select aligned rows and refresh their rollout metrics."""
+    result = select_trajectory_rows(output, kept_indices, row_ownership=row_ownership)
+    _refresh_filtered_rollout_metrics(result)
+    refresh_trajectory_reward_shaping_metrics(result)
+    return result
+
+
+def select_trajectory_rows(
+    output: TrajectoryBatch,
+    kept_indices: Sequence[int],
+    *,
+    row_ownership: RowOwnership,
+) -> TrajectoryBatch:
     """Select aligned rows; borrowed rows must only be consumed read-only."""
     if not isinstance(row_ownership, RowOwnership):
         raise ValueError(f"unsupported trajectory row ownership: {row_ownership!r}")
@@ -51,7 +65,4 @@ def filter_trajectory_batch(
             filtered[key] = [deepcopy(row) for row in rows] if row_ownership is RowOwnership.ISOLATED else rows
         else:
             filtered[key] = value
-    result = cast(TrajectoryBatch, filtered)
-    _refresh_filtered_rollout_metrics(result)
-    refresh_trajectory_reward_shaping_metrics(result)
-    return result
+    return cast(TrajectoryBatch, filtered)

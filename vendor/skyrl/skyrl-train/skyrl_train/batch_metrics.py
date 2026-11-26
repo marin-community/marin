@@ -20,11 +20,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     rollout_counter_metrics,
     verifier_score_summary,
 )
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
-    aggregate_reward_shaping_components,
-    reward_shaping_metrics,
-    shaping_groups,
-)
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import reward_shaping_metrics, shaping_groups
 from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
@@ -92,11 +88,11 @@ def _facts_shaping_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
     charged_counts = [sum(count for _, count in row) for row in charged]
     return reward_shaping_metrics(
         groups=groups,
-        trajectory_components=[aggregate_reward_shaping_components(components, rows) for rows in groups],
-        shaped_totals=[totals[rows[-1]] for rows in groups],
-        trajectory_outcomes=[outcomes[rows[-1]] for rows in groups],
-        trajectory_lengths=[sum(lengths[row] for row in rows) for rows in groups],
-        trajectory_stops=[stops[rows[-1]] for rows in groups],
+        row_components=components,
+        row_shaped_totals=totals,
+        row_outcomes=outcomes,
+        row_lengths=lengths,
+        row_stops=stops,
         row_loop_incidence=incidence,
         row_loop_advantages=loop_credit,
         row_loop_token_counts=charged_counts,
