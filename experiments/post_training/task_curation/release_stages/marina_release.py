@@ -145,9 +145,10 @@ def verify_package_receipt(package: ArtifactRef, inputs: MarinaReleaseInputs) ->
     if document.get("release_id") != inputs.release_id or document.get("source_revision") != inputs.source_revision:
         raise ValueError("the package receipt binds a different release or revision")
     packaged = document.get("packaged") or {}
-    if packaged.get("source_revision") != inputs.source_revision:
+    if packaged.get("source_revision") != document.get("code_revision"):
         raise ValueError(
-            f"packaged provenance pins revision {packaged.get('source_revision')!r}, expected {inputs.source_revision!r}"
+            f"packaged provenance pins revision {packaged.get('source_revision')!r},"
+            f" expected the packaging checkout {document.get('code_revision')!r}"
         )
     root = (document.get("package") or {}).get("uri")
     if not isinstance(root, str) or not root:
@@ -302,6 +303,7 @@ def run_marina_release(
             "app_id": result["id"],
             "mode": result["mode"],
             "source_sha": inputs.source_revision,
+            "code_revision": package["code_revision"],
             "service_url": inputs.service_url,
             "package": {"root": package["package"]["uri"]},
             "receipts": receipts,

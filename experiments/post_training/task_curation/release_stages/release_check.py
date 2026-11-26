@@ -38,7 +38,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
 from experiments.post_training.task_curation.release_stages import live_applet as live_applet_module
-from experiments.post_training.task_curation.release_stages.guard import attested_revision
+from experiments.post_training.task_curation.release_stages.guard import attested_revision, repo_head
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 from experiments.post_training.task_curation.release_stages.package_preview import receipt_kind as package_receipt_kind
 from infra.marina.apps.rl_data_catalog.release_receipts import PreflightBaseline
@@ -183,9 +183,10 @@ def verify_package_receipt(inputs: ReleaseCheckInputs) -> dict:
     if document.get("release_id") != inputs.release_id or document.get("source_revision") != inputs.source_revision:
         raise ValueError("the package receipt binds a different release or revision")
     packaged = document.get("packaged") or {}
-    if packaged.get("source_revision") != inputs.source_revision:
+    if packaged.get("source_revision") != document.get("code_revision"):
         raise ValueError(
-            f"packaged provenance pins revision {packaged.get('source_revision')!r}, expected {inputs.source_revision!r}"
+            f"packaged provenance pins revision {packaged.get('source_revision')!r},"
+            f" expected the packaging checkout {document.get('code_revision')!r}"
         )
     for name, ref in (("oracle_inventory", inputs.oracle_inventory), ("source_counts", inputs.source_counts)):
         if ref is not None and document.get(name) != {"uri": ref.uri, "sha256": ref.sha256}:
@@ -268,7 +269,7 @@ def subprocess_checker(repo_root: Path, argv: list[str], receipt_path: str) -> N
         )
 
 
-def verify_checker_receipt(receipt_path: str, inputs: ReleaseCheckInputs) -> dict:
+def verify_checker_receipt(receipt_path: str, inputs: ReleaseCheckInputs, code_revision: str) -> dict:
     """The produced checker receipt must exist, parse, and pass this phase."""
     path = StoragePath(receipt_path)
     if not path.exists():
@@ -278,9 +279,10 @@ def verify_checker_receipt(receipt_path: str, inputs: ReleaseCheckInputs) -> dic
         raise ValueError(f"checker receipt phase is {document.get('phase')!r}, expected {inputs.phase!r}")
     if document.get("passed") is not True:
         raise ValueError(f"the maintained {inputs.phase} check failed; see {receipt_path}")
-    if document.get("source_revision") != inputs.source_revision:
+    # The maintained checker records the checkout it ran from (the landed cut).
+    if document.get("source_revision") != code_revision:
         raise ValueError(
-            f"checker receipt pins revision {document.get('source_revision')!r}, expected {inputs.source_revision!r}"
+            f"checker receipt pins revision {document.get('source_revision')!r}, expected {code_revision!r}"
         )
     return document
 
@@ -346,11 +348,13 @@ def run_release_check(
         for name, raw in staged.items():
             _stage_local(paths[name], raw)
         (checker if checker is not None else subprocess_checker)(repo_root, argv, receipt_path)
-        checker_document = verify_checker_receipt(receipt_path, inputs)
+        code_revision = repo_head(repo_root)
+        checker_document = verify_checker_receipt(receipt_path, inputs, code_revision)
         checker_ref = seal_bytes(
             f"{inputs.output_root}/{CHECKER_RECEIPT_PATTERN.format(phase=inputs.phase)}", paths["receipt"].read_bytes()
         )
         proof["checker_receipt"] = {"uri": checker_ref.uri, "sha256": checker_ref.sha256}
+        proof["code_revision"] = code_revision
         proof["checker_artifacts"] = str(paths["receipt"].with_suffix(""))
         proof["passed"] = checker_document.get("passed") is True
         # The marina-release contract reads the maintained receipt vocabulary: the

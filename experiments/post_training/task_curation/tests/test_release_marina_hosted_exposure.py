@@ -118,6 +118,7 @@ def _package_receipt(tmp_path: Path, name: str, package_root: Path, modules: lis
         "kind": f"atlas-{RELEASE_ID}-preview-package",
         "release_id": RELEASE_ID,
         "source_revision": revision,
+        "code_revision": revision,
         "package": {"uri": str(package_root)},
         "packaged": {"source_revision": revision, "preview_only": True, "modules": modules},
         "oracle_inventory": None,

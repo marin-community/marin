@@ -167,7 +167,9 @@ def run_package_preview(
     try:
         inputs.validate()
         package_root = planned_package_root(inputs.output_root, repo_root)
-        verify_repo_state(repo_root, inputs.source_revision)
+        # The packaging checkout's HEAD: it contains the plan's cut revision plus any
+        # fix-forward landings, and is the revision the packaged provenance records.
+        code_revision = verify_repo_state(repo_root, inputs.source_revision)
         derived = derive_package_inputs(
             read_ref(inputs.census),
             inputs.expected_source_count,
@@ -188,6 +190,7 @@ def run_package_preview(
             "kind": receipt_kind(inputs.release_id),
             "release_id": inputs.release_id,
             "source_revision": inputs.source_revision,
+            "code_revision": code_revision,
             "package": {"uri": str(package_root)},
             "census": _ref_pointer(inputs.census),
             "prior_source_counts": _ref_pointer(inputs.prior_source_counts),
@@ -214,10 +217,10 @@ def run_package_preview(
             source_counts=staged_input(derived.source_counts, SOURCE_COUNTS_NAME, staging_dir),
         )
         provenance = _packaged_provenance(package_root)
-        if provenance is not None and provenance.get("source_revision") != inputs.source_revision:
+        if provenance is not None and provenance.get("source_revision") != code_revision:
             raise ValueError(
                 "packaged provenance pins revision"
-                f" {provenance.get('source_revision')!r}, expected {inputs.source_revision!r}"
+                f" {provenance.get('source_revision')!r}, expected the packaging checkout {code_revision!r}"
             )
         proof["packaged"] = provenance
         proof["completed_at"] = datetime.now(tz=UTC).isoformat(timespec="seconds")

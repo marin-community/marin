@@ -632,6 +632,7 @@ def _package_receipt(
         "kind": package_preview.receipt_kind(RELEASE_ID),
         "release_id": RELEASE_ID,
         "source_revision": revision,
+        "code_revision": revision,
         "package": {"uri": str(package_dir)},
         "census_sources": census_sources,
         "counted_sources": 2,
@@ -668,6 +669,8 @@ LIVE_VERSION = 39
 @pytest.fixture(autouse=True)
 def _live_preview(monkeypatch):
     monkeypatch.setattr(live_applet, "live_applet", lambda _url, _app: live_applet.LiveApplet(LIVE_VERSION, "public"))
+    # The release-check fixtures run the checker from a checkout at REVISION.
+    monkeypatch.setattr(release_check, "repo_head", lambda _root: REVISION)
 
 
 def _release_check_inputs(
@@ -999,3 +1002,24 @@ def test_strict_audit_reads_the_serving_projection_of_sealed_rows():
     assert served["grading_environment"] == available["grading_environment"]
     withheld = {**available, "data_restriction": "private_always"}
     assert strict_audit.served_backend_row(survey_row, withheld) == strict_audit.backend_metadata(served)
+
+
+def test_package_preview_records_the_fix_forward_checkout_beside_the_cut(tmp_path, monkeypatch):
+    """R40: the package builds from a checkout past the plan's cut; provenance pins that checkout."""
+    repo = tmp_path / "repo"
+    cut = _init_repo(repo)
+    (repo / "x").write_text("fix forward\n")
+    subprocess.run(["git", "commit", "--quiet", "-am", "fix"], cwd=repo, check=True, capture_output=True)
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True)
+    head = head.stdout.strip()
+
+    def fake_prepare(checkout, output, oracle_inventory=None, source_counts=None):
+        dist = Path(output) / "dist"
+        dist.mkdir(parents=True)
+        (dist / "bundled-model-provenance.json").write_text(json.dumps({"source_revision": head}))
+
+    monkeypatch.setattr(package_preview, "prepare_preview", fake_prepare)
+    proof = package_preview.run_package_preview(
+        _package_inputs(tmp_path, cut), dry_run=False, repo_root=repo, feeds=_feeds(tmp_path)
+    )
+    assert (proof["source_revision"], proof["code_revision"]) == (cut, head)
