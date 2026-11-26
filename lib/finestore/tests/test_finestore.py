@@ -908,6 +908,24 @@ def test_read_view_remains_valid_after_compaction(archive_root):
     assert {row["doc_id"] for row in _rows(pinned, "samples")} == {"0", "1", "2", "3"}
 
 
+def test_read_view_at_a_past_commit_ignores_later_commits_and_compaction(archive_root):
+    with DataStore.open(archive_root, writer_id="w1") as store:
+        store.table("tasks", primary_key=("task_id",), on_conflict=OnConflict.SUPERSEDE)
+        with store.transaction(author="alice", message="add a and b") as transaction:
+            transaction.table("tasks").extend([{"task_id": "a", "rev": 1}, {"task_id": "b", "rev": 1}])
+        first = transaction.token
+        with store.transaction(author="alice", message="fix a, add c") as transaction:
+            transaction.table("tasks").extend([{"task_id": "a", "rev": 2}, {"task_id": "c", "rev": 1}])
+    compact_table(archive_root, "tasks")
+
+    assert first is not None
+    past = ReadView.at(archive_root, first.commit_id)
+    assert past.token is not None and past.token.commit_id == first.commit_id
+    assert past.commit_info is not None and past.commit_info.message == "add a and b"
+    assert {row["task_id"]: row["rev"] for row in _rows(past, "tasks")} == {"a": 1, "b": 1}
+    assert {row["task_id"]: row["rev"] for row in _rows(ReadView(archive_root), "tasks")} == {"a": 2, "b": 1, "c": 1}
+
+
 def test_recompaction_merges_all_generations(archive_root):
     # Recompaction must merge an already compacted shard with a later level-zero shard.
     root = archive_root

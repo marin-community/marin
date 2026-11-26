@@ -30,7 +30,6 @@ from rigging.filesystem.storage_path import StoragePath
 
 from finestore.commit import ArchiveSnapshot, read_snapshot, read_snapshot_at
 from finestore.layout import (
-    RESERVED_COLUMNS,
     BlobColumns,
     BlobTables,
     CommitInfo,
@@ -744,13 +743,9 @@ class _ReadOperations:
         return result.slice(0, 1).to_pylist()[0]
 
     def rows_by_key(self, table: str, keys: Iterable[tuple]) -> dict[tuple, dict]:
-        """The newest row for each of ``keys`` that ``table`` holds, by primary-key tuple.
-
-        Rows leave out FineStore's system columns. Each key needs a non-null value for every
-        primary-key column.
-        """
-        wanted = self._lookup_keys(table, keys)
-        if not wanted:
+        """The newest row for each of ``keys`` that ``table`` holds, by primary-key tuple."""
+        wanted = {tuple(key) for key in keys}
+        if not wanted or self.table_metadata_path(table) is None:
             return {}
         rows = self._lookup_rows(table, list(wanted), _TABLE_SCAN_PROFILE)
         if rows is None:
@@ -760,13 +755,13 @@ class _ReadOperations:
         for row in rows.to_pylist():
             key = tuple(row[name] for name in primary_key)
             if key in wanted:
-                found[key] = {name: value for name, value in row.items() if name not in RESERVED_COLUMNS}
+                found[key] = row
         return found
 
     def keys_committed_after(self, table: str, keys: Iterable[tuple], sequence: int) -> list[tuple]:
         """Return, sorted, the ``keys`` whose newest row was committed after ``sequence``."""
-        wanted = self._lookup_keys(table, keys)
-        if not wanted:
+        wanted = {tuple(key) for key in keys}
+        if not wanted or self.table_metadata_path(table) is None:
             return []
         primary_key = self.primary_key(table)
         # Read only the key and version columns; the check needs no row values.
@@ -776,18 +771,6 @@ class _ReadOperations:
         commits = rows[SystemColumns.COMMIT].to_pylist()
         changed = {key_values(rows, index, primary_key) for index, commit in enumerate(commits) if commit > sequence}
         return sorted(changed & wanted)
-
-    def _lookup_keys(self, table: str, keys: Iterable[tuple]) -> set[tuple]:
-        """Return ``keys`` as tuples, or nothing when ``table`` is absent; reject partial or null keys."""
-        wanted = {tuple(key) for key in keys}
-        if any(value is None for key in wanted for value in key):
-            raise ValueError(f"keys for table {table!r} must not contain null values")
-        if not wanted or self.table_metadata_path(table) is None:
-            return set()
-        width = len(self.primary_key(table))
-        if any(len(key) != width for key in wanted):
-            raise ValueError(f"keys for table {table!r} must have {width} columns")
-        return wanted
 
     def _lookup_rows(
         self,
