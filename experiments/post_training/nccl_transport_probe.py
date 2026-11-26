@@ -54,6 +54,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 from typing import IO
 
 from connectrpc.code import Code
@@ -516,7 +517,7 @@ def run_launcher(args: argparse.Namespace) -> None:
     (RESULT_DIR / f"results-task{task_index}.json").write_text(json.dumps(report, indent=2))
 
 
-def rendezvous_endpoint_name(job_info: JobInfo, *, mode: str) -> str:
+def rendezvous_endpoint_name(job_info: JobInfo, *, mode: Literal["launcher", "gate"]) -> str:
     """Give each worker gang and retry its own rendezvous."""
     if mode == "launcher":
         return job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}").to_wire()
