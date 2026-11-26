@@ -13,7 +13,7 @@ from skyrl_train.timing_observability import STEP_WALL_PHASES, StepWallTime
 from skyrl_train.trainer import RayPPOTrainer
 
 
-class AdmissionProbe:
+class DispatchProbe:
     def __init__(self):
         self.config = SimpleNamespace(batch_size=1, max_staleness_steps=1)
         self.loop = asyncio.get_running_loop()
@@ -40,10 +40,17 @@ class BatchAssemblyReached(Exception):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("batch_builder", [BatchBuilder.DRIVER, BatchBuilder.WORKER])
-async def test_evaluation_step_pauses_admission_after_the_training_batch(batch_builder, monkeypatch):
+@pytest.mark.parametrize(
+    ("step", "has_eval_data", "pauses"),
+    [(2, True, True), (1, True, False), (2, False, False)],
+    ids=["evaluating", "regular", "no-eval-data"],
+)
+async def test_evaluation_step_pauses_dispatch_after_the_training_batch(
+    batch_builder, step, has_eval_data, pauses, monkeypatch
+):
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
     trainer.batch_builder = batch_builder
-    trainer.context = AdmissionProbe()
+    trainer.context = DispatchProbe()
     trainer.policy_model = SimpleNamespace(actor_infos=[SimpleNamespace(rank=SimpleNamespace(dp_size=1))])
     trainer.cfg = OmegaConf.create({"trainer": {"policy": {"megatron_config": {}}}})
     trainer._step_time_history = []
@@ -55,9 +62,9 @@ async def test_evaluation_step_pauses_admission_after_the_training_batch(batch_b
     trainer._distillation_runtime = None
     trainer.all_timings = {}
     trainer.all_metrics = {}
-    trainer.global_step = 2
+    trainer.global_step = step
     trainer.total_training_steps = trainer.num_steps_per_epoch = 4
-    trainer.eval_dataset = object()
+    trainer.eval_dataset = object() if has_eval_data else None
     trainer._control = TrainerControl()
     trainer.callback_handler = CallbackHandler([EvaluationCallback(eval_steps=2)])
 
@@ -68,4 +75,4 @@ async def test_evaluation_step_pauses_admission_after_the_training_batch(batch_b
     monkeypatch.setattr("skyrl_train.trainer.plan_worker_batch", assemble_batch)
     with pytest.raises(BatchAssemblyReached):
         await trainer._train_step(0, StepWallTime(dict.fromkeys(STEP_WALL_PHASES, 0.0)))
-    assert trainer.context.paused
+    assert trainer.context.paused is pauses

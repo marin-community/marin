@@ -271,7 +271,7 @@ class TrainerCallback(ABC):
         **kwargs,
     ) -> Optional[TrainerControl]:
         """
-        Called at the beginning of each training step.
+        Called after the training batch is ready and before its data is assembled.
 
         Args:
             state: Current trainer state

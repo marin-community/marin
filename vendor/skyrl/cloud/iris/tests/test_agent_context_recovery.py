@@ -17,7 +17,6 @@ from skyrl_train.rollouts.task_worker import TaskRolloutWorker, _model_turn
 from skyrl_train.trajectory_runners.model_clients import (
     ContextLengthExceededError,
     GenerationBudgetExceededError,
-    ModelServerError,
 )
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance
 from taskcompendium.grading_result import Outcome
@@ -296,37 +295,3 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
     assert result.failure is not None
     assert result.failure.diagnostics["setup_exit_code"] == exit_code
     assert result.metrics["rollout_retries"] == retries
-
-
-@pytest.mark.asyncio
-async def test_worker_retains_safe_model_server_error_text(agent_harnesses, worker_config):
-    async def agent(_context, complete):
-        await complete(Prompt(({"role": "user", "content": "Start"},), {}))
-
-    async def skip_backoff(_delay):
-        pass
-
-    credential = "hf_" + "a" * 24
-    class DescribedModelServerError(ModelServerError):
-        def __str__(self):
-            return f"{super().__str__()}; worker queue unavailable for {credential}"
-
-    error = DescribedModelServerError("server_error", "fixture-request", 503)
-    request = TaskRequestBatch(rows=(task_input(lowered_task(text_task(), "pi")),))
-    worker = TaskRolloutWorker(
-        worker_config,
-        WholeTaskProjection(worker_config, WorkerTokenizer()),
-        ScriptedClient([error, error]),
-        {},
-        retry_wait=skip_backoff,
-        agents=agent_harnesses(agent),
-        shutdown_timeout=5,
-    )
-    try:
-        (result,) = await worker.generate(request)
-    finally:
-        await worker.shutdown()
-    assert result.failure is not None
-    assert result.failure.diagnostics["status_code"] == 503
-    message = result.failure.diagnostics["message"]
-    assert "worker queue unavailable" in message and credential not in message

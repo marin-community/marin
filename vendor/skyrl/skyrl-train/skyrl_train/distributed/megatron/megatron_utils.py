@@ -522,9 +522,8 @@ def unpack_packed_token_values(
     cp_size = mpu.get_context_parallel_world_size()
     # All-gather scalar values across context-parallel ranks.
     if cp_size > 1:
-        gather_input = output.detach().contiguous()
-        output_list = [torch.empty_like(gather_input) for _ in range(cp_size)]
-        torch.distributed.all_gather(output_list, gather_input, group=mpu.get_context_parallel_group())
+        output_list = [torch.empty_like(output) for _ in range(cp_size)]
+        torch.distributed.all_gather(output_list, output.detach(), group=mpu.get_context_parallel_group())
         output_list[mpu.get_context_parallel_rank()] = output
     else:
         output_list = [output]

@@ -774,11 +774,16 @@ class RayPPOTrainer:
         )
         return True
 
+    def _step_evaluation_due(self) -> bool:
+        return self._control.should_evaluate and self.eval_dataset is not None
+
     async def _run_step_begin_callbacks(self, epoch: int) -> None:
         self._control.reset()
         self._control = await self.callback_handler.call_event_async(
             "on_step_begin", self._create_trainer_state(epoch), self._control, trainer=self
         )
+        if self._step_evaluation_due():
+            self.context.pause()
 
     async def _run_step_end_callbacks(self, state: TrainerState, *, step_wall: StepWallTime | None = None) -> None:
         """Run callback-requested work that belongs to the current training step."""
@@ -790,7 +795,7 @@ class RayPPOTrainer:
             await self._save_intermediate_checkpoint(state)
             self._control.should_save = False
 
-        if self._control.should_evaluate and self.eval_dataset is not None:
+        if self._step_evaluation_due():
             if step_wall is not None:
                 step_wall.start("evaluation")
             await self._evaluate_and_log(state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=False)

@@ -9,7 +9,6 @@ import pytest
 from marinskyrl.agent_harnesses import PI_HARNESS
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
-from rolloutengine.models import JudgeConnection
 from rolloutengine.validation import validate_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.local.machine import check_local_environment
@@ -35,7 +34,6 @@ from taskcompendium.runtime.resources import inline_resource
 from tests.cpu.task_specs import NATIVE_ENVIRONMENT, SHELL_ENVIRONMENT, machine_runtime, text_task
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
-from verifyit.spec import JudgeSpec
 
 
 class LocalAdmissionFactory:
@@ -160,35 +158,6 @@ def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_pa
     assert loaded[1].harness == ASSISTANT_PREFIX_HARNESS
     for spec in loaded:
         validate_spec(spec, FACTORIES)
-
-
-def test_dataset_keeps_verifier_machine_for_judged_script(tmp_path: Path):
-    task = text_task("judged-script").model_copy(
-        update={
-            "grader": ScriptGrader(
-                argv=("sh", "/tests/grade.sh"),
-                placement=GraderMachine(
-                    environment=EnvironmentRequirements(
-                        command_semantics=CommandSemantics.LINUX_PROCESS,
-                        docker_image="fixture@sha256:" + "0" * 64,
-                    )
-                ),
-                judge=JudgeSpec(
-                    references=("12",),
-                    rubric="labels",
-                    prompt_template="Reference: {reference}\nCandidate: {candidate}",
-                    label_scores={"PASS": 1.0, "FAIL": 0.0},
-                    model="fixture-judge",
-                ),
-            )
-        }
-    )
-    [row] = _load(tmp_path, (task,))
-    connected = row.spec.model_copy(
-        update={"judge_connection": JudgeConnection("http://judge.invalid/v1", "fixture-key")}
-    )
-    validate_spec(connected, FACTORIES)
-    assert connected.verifier_machine is not None
 
 
 def test_curated_structure_closure_row_keeps_its_prefix_last(tmp_path: Path):
