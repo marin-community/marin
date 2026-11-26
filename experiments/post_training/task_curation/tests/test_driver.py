@@ -166,7 +166,7 @@ def test_remote_planning_uses_cw_instead_of_ambient_gcs(tmp_path, catalog, monke
         options += ["--artifact-root", root]
     result = CliRunner().invoke(main, options)
     assert result.exit_code == 0, result.output
-    plan = json.loads(result.output)
+    plan = json.loads(result.stdout)
     assert plan["chunk_storage_prefix"] == f"{root or 's3://marin-us-east-02a/marin'}/.zephyr/rl-data-campaign"
     assert os.environ["MARIN_PREFIX"] == previous
     assert not (tmp_path / "report.json").exists()
@@ -194,7 +194,7 @@ def test_quick_cli_plans_then_converts_once_in_request_order(tmp_path, monkeypat
     runner = CliRunner()
     result = runner.invoke(main, args)
     assert result.exit_code == 0, result.output
-    assert [source["name"] for source in json.loads(result.output)["sources"]] == ["math500", "aime24"]
+    assert [source["name"] for source in json.loads(result.stdout)["sources"]] == ["math500", "aime24"]
     assert not output.exists()
     assert not cache.exists()
 
