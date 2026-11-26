@@ -99,10 +99,12 @@ def convert_research(row: RawRow, _context: ConversionContext) -> NormalizedTask
         or not isinstance(messages, list)
         or len(messages) < 2
         or not isinstance(meta, dict)
-        or set(meta) != {"id", "question", "answer", "language", "type"}
+        or not {"id", "question", "language", "type"} <= set(meta)
+        or set(meta) - {"id", "question", "answer", "language", "type"}
     ):
         return source_defect(
-            "incomplete_s1_native_contract", "Expected the messages/meta pair with the five meta fields"
+            "incomplete_s1_native_contract",
+            "Expected the messages/meta pair with the five meta fields (answer optional)",
         )
     if any(
         not isinstance(message, dict)
@@ -119,7 +121,7 @@ def convert_research(row: RawRow, _context: ConversionContext) -> NormalizedTask
         return source_defect(
             "invalid_s1_native_opening", "The trajectory must open with a system message then a user message"
         )
-    task_type, answer = meta["type"], meta["answer"]
+    task_type, answer = meta["type"], meta.get("answer")
     if task_type not in {CLOSED_ENDED, OPEN_ENDED}:
         return source_defect("invalid_s1_task_type", "The type label must be one of the two declared families")
     if meta["language"] not in LANGUAGES or not isinstance(meta["id"], str) or not meta["id"].strip():

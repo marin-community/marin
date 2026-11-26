@@ -96,6 +96,22 @@ def test_open_ended_answers_stay_in_the_rubric_family():
     assert judge is not None and not judge.references and judge.rubric == "checklist"
 
 
+def test_answer_key_may_be_absent_and_open_ended_rows_convert():
+    native = {
+        **NATIVE,
+        "meta": {
+            "id": NATIVE["meta"]["id"],
+            "question": NATIVE["meta"]["question"],
+            "language": "en",
+            "type": "Open-ended Exploration",
+        },
+    }
+    task = converted(native).task
+    judge = judge_spec(task.grader)
+    assert judge is not None and not judge.references and judge.rubric == "checklist"
+    assert task.labels["family"] == "open-ended-exploration"
+
+
 def test_contract_defects_fail_closed():
     broken = {**NATIVE, "meta": {**NATIVE["meta"], "type": "Closed-ended Multi-hop Resolution", "answer": None}}
     assert rejected(broken).reason.startswith("missing_closed_ended_reference")
