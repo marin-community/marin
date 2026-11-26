@@ -165,13 +165,17 @@ def apply_projection_waivers(
         # independent of declaration drift, so it runs before the selection/drift check.
         # A stale-pin gap is the same sealed-state class for a re-pinned source: the served
         # projection still records the prior pin and catches up at the next refresh, which
-        # the same expiry forces.
+        # the same expiry forces. The curriculum and derived-contract projections of the
+        # same named sources are the same sealed-refresh pending state: they catch up in
+        # the same projection pass, so the waiver covers them identically (ruling note
+        # 2026-11-25: the projection pass runs for every projection family at once).
         blocking, waived, notes = [], [], []
+        sealed_pending_projections = {"served-catalog", "curriculum", "derived-contract"}
         if not waivers.source_ids:
             raise ValueError("Ruling 68 waiver must name the exact declared source IDs")
         for gap in gaps:
             if (
-                gap.projection == "served-catalog"
+                gap.projection in sealed_pending_projections
                 and gap.state in {"missing", "stale-pin"}
                 and gap.source_id in waivers.source_ids
             ):
