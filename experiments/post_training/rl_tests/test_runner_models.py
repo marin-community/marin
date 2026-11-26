@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 import pytest
 import yaml
+from fsspec.implementations.memory import MemoryFileSystem
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.rl.skyrl import skyrl_execution
@@ -278,6 +279,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     else:
         monkeypatch.delenv("MARIN_PREFIX", raising=False)
     fake_s3(monkeypatch)
+    monkeypatch.setattr("rigging.filesystem.buckets._s3_filesystem", lambda *_args: MemoryFileSystem())
     monkeypatch.setattr(rl, "_follow_detached", lambda *_args: str(tmp_path / "follower.log"))
     graph = []
 
