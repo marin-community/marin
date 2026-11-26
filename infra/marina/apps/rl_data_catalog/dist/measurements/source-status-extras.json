@@ -20,6 +20,7 @@
     "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if": "ingest B \u00b7 Codex 01a1e039",
     "Nvidia:Nemotron-RL-InverseIFEval-v1": "ingest B \u00b7 Codex 01a1e039",
     "Nvidia:Nemotron-RL-QA-Abstention-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+    "Yatin:Edge-Agent-Reasoning-WebSearch-260K": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:tasktrove-code-contests-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
     "TaskTrove:tasktrove-taco-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
@@ -1605,6 +1606,24 @@
       "upstream_dataset": "Nemotron-RL-QA-Abstention-v1",
       "upstream_url": null,
       "notes": "TRAIN abstention only: the original 3,150-task native train split with the original abstention prompt, private native A/B/C rewards 1/0/0.5 and the native MEDIUM genrm judge (temperature 0, top_p 1, 64-token cap) preserved at Gym e597c962; the boxed-answer and grade parsing bodies are unchanged. No exact-only replacement, agent budget or native oracle is invented. Source user prompts and all retained TaskSpec/runtime bytes are preserved. Standard lexical retention removed zero of 3,150 input rows; no within-source duplicates. Canonical static retention covers all 3,150 current-pin tasks under the no-oracle policy, with executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 99/100, found 2 issues and one unavailable; Result some_issues; both findings remain verbatim in the SAMPLE receipt. The content survey measured ten neighbors: seven distinct and three partial pairs with the admitted Nemotron-Ultra SFT abstention components (ultra_sft_step3200_abstention x mopd/rlvr1/rlvr2), each an exact-content cohort of this source (2,299/2,299 exact at similarity 1.0; this source 2,302/3,150 matched, 2,299 exact). The delegated d2 disposition acknowledges the derived lineage and retains both populations with the substantial reuse caveat; training mixes must not treat the routes as independent abstention data or double-count the shared content; labels, digests and inputs are unchanged. Quality never vetoes admission. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/3150; global schema rejections 3150/3150, paths {'integrity_contract': 3150, 'grader.script.timeout': 3150, 'grader.script.judge.context_char_limit': 3150, 'grader.script.judge.max_turns': 3150, 'grader.script.judge.temperature': 3150, 'grader.script.judge.parse_attempts': 3150, 'grader.script.judge.chat_template_kwargs': 3150}. This records loader and launch binding, not a live judge response or executable-grader qualification. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/qa-abstention/2026.11.26.1/retained-final-pin-sample-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/qa-abstention/2026.11.26.1/admission-evidence-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/qa-abstention/2026.11.26.1/consumer-binding-v1/result.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
+      "display_name": "Yatin \u00b7 Edge-Agent-Reasoning-WebSearch-260K",
+      "status": "Pending",
+      "origin": "Yatin",
+      "upstream_dataset": "Edge-Agent-Reasoning-WebSearch-260K",
+      "upstream_url": null,
+      "notes": "TRAIN preparation-planning tasks converted from the pinned Edge WebSearch card: the raw user_prompt and role/industry/OS values are unchanged, and each task records the source-card-derived preparation-planning system contract as an explicit NormalizationChange. The added contract and new MEDIUM checklist judge are declared, not represented as a native grader or old-byte lineage; the generator checkpoint identity is undeclared by the source. Generated agent_reasoning stays private provenance, never judge gold or oracle, and no live search tool, environment, agent budget or native oracle is invented. Standard lexical retention removed zero of 260,293 input rows; no within-source duplicates. Canonical static retention covers all 260,293 current-pin tasks under the no-oracle policy, with executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 100/100 with zero issues, zero unavailable and zero uncertain; Result good. The content survey measured ten neighbors, all DISTINCT. Quality never vetoes admission. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/260293; global schema rejections 260293/260293, paths {'integrity_contract': 260293, 'grader.verifyit': 260293}. This records loader and launch binding, not a live judge response or executable-grader qualification. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/final-pin-sample-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/admission-evidence-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/consumer-binding-v1/result.json.",
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,

@@ -15,6 +15,7 @@ from experiments.post_training.task_curation.datasets import (
     campaign_releases,
     crosscode_python_repair,
     dolci_precise_if_admitted,
+    edge_websearch_admitted,
     facet_terminal,
     hierarchy_intake,
     inverse_ifeval_admitted,
@@ -214,6 +215,7 @@ R41_PENDING_SOURCE_IDS = (
         "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
         "Nvidia:Nemotron-RL-InverseIFEval-v1",
         "Nvidia:Nemotron-RL-QA-Abstention-v1",
+        "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
         # The native TaskTrove structured-output cohort qualified after the R40 freeze.
         "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
@@ -239,6 +241,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *dolci_precise_if_admitted.sources(),
     *inverse_ifeval_admitted.sources(),
     *qa_abstention_admitted.sources(),
+    *edge_websearch_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -324,6 +327,7 @@ def configured_sources() -> list[RlDataSource]:
         *dolci_precise_if_admitted.sources(),
         *inverse_ifeval_admitted.sources(),
         *qa_abstention_admitted.sources(),
+        *edge_websearch_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
