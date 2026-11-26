@@ -470,7 +470,7 @@ def test_start_controller_does_not_capture_application_credentials(monkeypatch):
     provider.shutdown()
 
 
-def test_rollout_uses_one_storage_pair_for_operator_and_controller(tmp_path, monkeypatch):
+def test_start_projects_the_managed_storage_pair_resolved_during_preflight(tmp_path, monkeypatch):
     source = tmp_path / "storage.json"
     source.write_text(json.dumps({"CW_KEY_ID": "deploy-key", "CW_KEY_SECRET": "deploy-secret"}))
     monkeypatch.setenv("CW_KEY_ID", "ambient-key")

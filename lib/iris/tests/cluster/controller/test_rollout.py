@@ -13,8 +13,7 @@ from iris.cluster.controller.main import prepare_controller_state
 from iris.cluster.controller.rollout import (
     RolloutPhase,
     RolloutRecord,
-    read_rollout_record,
-    write_rollout_record,
+    RolloutRecordStore,
 )
 from iris.cluster.controller.writes import meta_value_set
 from rigging.filesystem.storage_path import prefix_join
@@ -71,8 +70,7 @@ def test_prepare_controller_state_applies_requested_rollback_once(tmp_path: Path
     checkpoint = _checkpoint(tmp_path / "checkpoint-source", remote_state_dir, marker=1)
     db_dir = tmp_path / "db"
     _seed_database(db_dir, 2)
-    write_rollout_record(
-        remote_state_dir,
+    RolloutRecordStore(remote_state_dir).write(
         RolloutRecord(
             phase=RolloutPhase.ROLLBACK_REQUESTED,
             image="controller:old",
@@ -84,7 +82,7 @@ def test_prepare_controller_state_applies_requested_rollback_once(tmp_path: Path
     prepare_controller_state(db_dir, remote_state_dir, fresh=False, checkpoint_path=None)
 
     assert _database_marker(db_dir) == 1
-    record = read_rollout_record(remote_state_dir)
+    record = RolloutRecordStore(remote_state_dir).read()
     assert record is not None
     assert record.phase is RolloutPhase.ROLLED_BACK
     assert record.previous_image is None
@@ -100,12 +98,12 @@ def test_prepare_controller_state_rollback_without_checkpoint_reuses_local_datab
         image="controller:old",
         rollback_checkpoint=None,
     )
-    write_rollout_record(remote_state_dir, requested)
+    RolloutRecordStore(remote_state_dir).write(requested)
 
     prepare_controller_state(db_dir, remote_state_dir, fresh=False, checkpoint_path=None)
 
     assert _database_marker(db_dir) == 7
-    assert read_rollout_record(remote_state_dir) == requested
+    assert RolloutRecordStore(remote_state_dir).read() == requested
 
 
 def test_prepare_controller_state_reuses_local_database_at_latest_checkpoint(tmp_path: Path) -> None:

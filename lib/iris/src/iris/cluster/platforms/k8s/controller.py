@@ -573,10 +573,15 @@ def _storage_secret_files(key_id: str, key_secret: str) -> dict[str, str]:
     )
 
 
+def uses_s3_storage(config: IrisClusterConfig) -> bool:
+    """Whether controller state is stored in S3."""
+    return config.storage.remote_state_dir.startswith("s3://")
+
+
 def needs_controller_storage_credentials(config: IrisClusterConfig) -> bool:
     """Whether the controller or node-health probes use CoreWeave object storage."""
     provider = config.kubernetes_provider
-    return config.storage.remote_state_dir.startswith("s3://") or bool(
+    return uses_s3_storage(config) or bool(
         provider and provider.node_health and provider.node_health.storage is not None
     )
 
@@ -687,6 +692,17 @@ class K8sControllerProvider:
         self._prepared_controller_env = env
         return credentials
 
+    def _prepare_controller_if_needed(
+        self, config: IrisClusterConfig, reference: str | None, needs_storage: bool
+    ) -> None:
+        if (
+            self._prepared_controller_env is None
+            or self._controller_secret_specs != _controller_secret_specs(config)
+            or self._storage_credentials_ref != reference
+            or (reference is not None and (self._prepared_storage_credentials is not None) != needs_storage)
+        ):
+            self.preflight_controller(config)
+
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
 
@@ -706,16 +722,7 @@ class K8sControllerProvider:
             )
 
         needs_storage = needs_controller_storage_credentials(config)
-        if (
-            self._prepared_controller_env is None
-            or self._controller_secret_specs != _controller_secret_specs(config)
-            or self._storage_credentials_ref != cw.storage_credentials_ref
-            or (
-                cw.storage_credentials_ref is not None
-                and (self._prepared_storage_credentials is not None) != needs_storage
-            )
-        ):
-            self.preflight_controller(config)
+        self._prepare_controller_if_needed(config, cw.storage_credentials_ref, needs_storage)
         assert self._prepared_controller_env is not None
 
         # storage.local_state_dir set => mount it from node-local hostPath rather
@@ -727,7 +734,7 @@ class K8sControllerProvider:
 
         # Resolve values only in the deploy process; rendered config carries paths.
         assert_no_inlined_secrets(config)
-        self._s3_enabled = self.uses_s3_storage(config)
+        self._s3_enabled = uses_s3_storage(config)
         default_env = _build_s3_task_env(self._config.object_storage_endpoint) if self._s3_enabled else {}
         storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
         if needs_storage:
@@ -797,7 +804,7 @@ class K8sControllerProvider:
         secret_names = [
             secret
             for secret, projected in (
-                (STORAGE_SECRET_NAME, self.uses_s3_storage(config)),
+                (STORAGE_SECRET_NAME, uses_s3_storage(config)),
                 (CONTROLLER_SECRET_NAME, _projects_controller_env_secret(config)),
             )
             if projected
@@ -910,7 +917,7 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
         self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
-        if self.uses_s3_storage(config):
+        if uses_s3_storage(config):
             self._kubectl.delete(K8sResource.SECRETS, STORAGE_SECRET_NAME)
         if _projects_controller_env_secret(config):
             self._kubectl.delete(K8sResource.SECRETS, CONTROLLER_SECRET_NAME)
@@ -1119,10 +1126,6 @@ class K8sControllerProvider:
         )
 
     # -- Storage Detection ----------------------------------------------------
-
-    def uses_s3_storage(self, config: IrisClusterConfig) -> bool:
-        """Check if any storage URI uses S3."""
-        return config.storage.remote_state_dir.startswith("s3://")
 
     # -- Storage credential delivery ----------------------------------------
 

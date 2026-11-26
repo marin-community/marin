@@ -40,7 +40,8 @@ class ControllerProvider(Protocol):
         restart.
 
         Returns an explicitly configured storage key ID and secret for rollout
-        record access, or None when the provider uses ambient credentials.
+        record access when needed. Returns None if there is no configured pair
+        to resolve for this rollout.
         """
         ...
 

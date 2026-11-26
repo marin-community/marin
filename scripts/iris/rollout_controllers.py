@@ -41,7 +41,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.provenance import Provenance
-from rigging.secrets import ENV_SCHEME, GCP_SECRET_SCHEME, as_secret_spec, get_secret, resolve_secret_spec
+from rigging.secrets import ENV_SCHEME, GCP_SECRET_SCHEME, as_secret_spec, resolve_secret_spec, secret_path
 
 logger = logging.getLogger(__name__)
 
@@ -489,7 +489,8 @@ def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -
         value = environ.get(target, "")
         return CheckResult(requirement, bool(value), "set" if value else "unset")
     if requirement.kind is Need.NAMED_SECRET:
-        value = get_secret(target)
+        path = secret_path(target)
+        value = resolve_secret_spec(f"file:{path}").value if path.is_file() else environ.get(target)
         return CheckResult(requirement, bool(value), "set" if value else "unset")
     if requirement.kind is Need.COMMAND:
         path = shutil.which(target)

@@ -55,11 +55,9 @@ from iris.cluster.controller.autoscaler.scaling_group import (
 from iris.cluster.controller.dashboard import ProxyControllerDashboard
 from iris.cluster.controller.main import controller_serve_options, run_controller_serve
 from iris.cluster.controller.rollout import (
-    ROLLOUT_RECORD_FILENAME,
     RolloutPhase,
     RolloutRecord,
-    read_rollout_record,
-    write_rollout_record,
+    RolloutRecordStore,
 )
 from iris.cluster.dashboard_common import VUE_DIST_DIR
 from iris.cluster.local_cluster import LocalCluster
@@ -1327,17 +1325,13 @@ def controller_restart(
         raise click.ClickException(f"Controller restart preflight failed: {e}") from e
 
     remote_state_dir = config.storage.remote_state_dir
-    storage_options = (
-        {"key": storage_credentials[0], "secret": storage_credentials[1], "token": None}
-        if storage_credentials is not None and remote_state_dir.startswith("s3://")
-        else {}
-    )
-    prior_record = read_rollout_record(remote_state_dir, **storage_options) if remote_state_dir else None
+    record_store = RolloutRecordStore(remote_state_dir, storage_credentials) if remote_state_dir else None
+    prior_record = record_store.read() if record_store is not None else None
 
     if rollback:
         if prebuilt_tag is not None:
             raise click.ClickException("--prebuilt-tag cannot be combined with --rollback")
-        _rollback_last_deploy(ctx, bundle, config, remote_state_dir, prior_record, **storage_options)
+        _rollback_last_deploy(ctx, bundle, config, record_store, prior_record)
         return
 
     # Forward deploy. Fall back to a fresh start when no controller exists.
@@ -1359,7 +1353,7 @@ def controller_restart(
             raise SystemExit(1) from e
         click.echo(f"Controller started at {address}")
         _record_rollout(
-            remote_state_dir,
+            record_store,
             RolloutRecord(
                 phase=RolloutPhase.COMMITTED,
                 image=new_image,
@@ -1367,7 +1361,6 @@ def controller_restart(
                 rollback_checkpoint=None,
                 updated_at_ms=int(time.time() * 1000),
             ),
-            **storage_options,
         )
         return
 
@@ -1389,7 +1382,7 @@ def controller_restart(
     # Record the in-flight deploy before restarting: a crash mid-restart leaves a
     # rollback pointer, and a later --rollback reads back these coordinates.
     _record_rollout(
-        remote_state_dir,
+        record_store,
         RolloutRecord(
             phase=RolloutPhase.PENDING,
             image=new_image,
@@ -1397,19 +1390,18 @@ def controller_restart(
             rollback_checkpoint=pre_deploy_checkpoint,
             updated_at_ms=int(time.time() * 1000),
         ),
-        **storage_options,
     )
 
     try:
         address = bundle.controller.restart_controller(config)
     except Exception as e:
         click.echo(f"Deploy failed its post-restart health check: {e}", err=True)
-        _auto_rollback(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint, **storage_options)
+        _auto_rollback(bundle, config, record_store, previous_image, pre_deploy_checkpoint)
         raise SystemExit(1) from e
 
     click.echo(f"Controller restarted at {address}")
     _record_rollout(
-        remote_state_dir,
+        record_store,
         RolloutRecord(
             phase=RolloutPhase.COMMITTED,
             image=new_image,
@@ -1417,12 +1409,11 @@ def controller_restart(
             rollback_checkpoint=pre_deploy_checkpoint,
             updated_at_ms=int(time.time() * 1000),
         ),
-        **storage_options,
     )
 
 
 def _rollback_last_deploy(
-    ctx, bundle, config, remote_state_dir: str | None, prior_record: RolloutRecord | None, **storage_options: str | None
+    ctx, bundle, config, record_store: RolloutRecordStore | None, prior_record: RolloutRecord | None
 ) -> None:
     """Revert the last deploy from the rollout record: previous image + pre-deploy checkpoint.
 
@@ -1431,10 +1422,10 @@ def _rollback_last_deploy(
     on boot. There is no pre-deploy checkpoint of its own — this is a revert to older
     state, not a forward deploy.
     """
-    if not remote_state_dir:
+    if record_store is None:
         raise click.ClickException("--rollback needs config.storage.remote_state_dir to read the rollout record.")
     if prior_record is None or not prior_record.previous_image:
-        raise click.ClickException(f"No deploy to roll back to in {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}.")
+        raise click.ClickException(f"No deploy to roll back to in {record_store.url}.")
     try:
         require_controller_url(ctx)
     except (RuntimeError, click.ClickException):
@@ -1442,10 +1433,9 @@ def _rollback_last_deploy(
     _rollback_controller(
         bundle,
         config,
-        remote_state_dir,
+        record_store,
         prior_record.previous_image,
         prior_record.rollback_checkpoint,
-        **storage_options,
     )
 
 
@@ -1492,10 +1482,9 @@ def _take_pre_deploy_checkpoint(ctx, controller_url: str, checkpoint_timeout: in
 def _rollback_controller(
     bundle,
     config,
-    remote_state_dir: str | None,
+    record_store: RolloutRecordStore | None,
     rollback_image: str,
     rollback_checkpoint: str | None,
-    **storage_options: str | None,
 ) -> None:
     """Restart the controller on ``rollback_image``, restoring ``rollback_checkpoint``.
 
@@ -1505,7 +1494,7 @@ def _rollback_controller(
     config.controller.image = rollback_image
     detail = rollback_checkpoint or "(none — reuse local DB)"
     click.echo(f"Rolling back: image {rollback_image}, checkpoint {detail}")
-    _request_rollback(remote_state_dir, rollback_image, rollback_checkpoint, **storage_options)
+    _request_rollback(record_store, rollback_image, rollback_checkpoint)
     try:
         address = bundle.controller.restart_controller(config)
     except Exception as e:
@@ -1517,10 +1506,9 @@ def _rollback_controller(
 def _auto_rollback(
     bundle,
     config,
-    remote_state_dir: str | None,
+    record_store: RolloutRecordStore | None,
     previous_image: str | None,
     pre_deploy_checkpoint: str | None,
-    **storage_options: str | None,
 ) -> None:
     """Revert a failed forward deploy to the previous image and its pre-deploy checkpoint."""
     if not previous_image:
@@ -1530,11 +1518,11 @@ def _auto_rollback(
         )
         return
     click.echo(f"Auto-rolling back to previous image {previous_image}...")
-    _rollback_controller(bundle, config, remote_state_dir, previous_image, pre_deploy_checkpoint, **storage_options)
+    _rollback_controller(bundle, config, record_store, previous_image, pre_deploy_checkpoint)
 
 
 def _request_rollback(
-    remote_state_dir: str | None, rollback_image: str, rollback_checkpoint: str | None, **storage_options: str | None
+    record_store: RolloutRecordStore | None, rollback_image: str, rollback_checkpoint: str | None
 ) -> None:
     """Write a ROLLBACK_REQUESTED record so the restarted controller restores on boot.
 
@@ -1549,14 +1537,14 @@ def _request_rollback(
         rollback_checkpoint=rollback_checkpoint,
         updated_at_ms=int(time.time() * 1000),
     )
-    if not remote_state_dir:
+    if record_store is None:
         if rollback_checkpoint:
             raise click.ClickException(
                 "Rollback checkpoint restore needs config.storage.remote_state_dir to record the request."
             )
         return
     try:
-        write_rollout_record(remote_state_dir, record, **storage_options)
+        record_store.write(record)
     except OSError as e:
         if rollback_checkpoint:
             raise click.ClickException(
@@ -1565,23 +1553,23 @@ def _request_rollback(
             ) from e
         click.echo(f"Warning: could not record rollback request: {e}", err=True)
         return
-    click.echo(f"Rollout record: rollback_requested -> {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}")
+    click.echo(f"Rollout record: rollback_requested -> {record_store.url}")
 
 
-def _record_rollout(remote_state_dir: str | None, record: RolloutRecord, **storage_options: str | None) -> None:
+def _record_rollout(record_store: RolloutRecordStore | None, record: RolloutRecord) -> None:
     """Best-effort write of a PENDING/COMMITTED rollout marker; never fails the command.
 
     A failed write only costs the later --rollback convenience, so it warns and
     continues rather than aborting the restart.
     """
-    if not remote_state_dir:
+    if record_store is None:
         return
     try:
-        write_rollout_record(remote_state_dir, record, **storage_options)
+        record_store.write(record)
     except OSError as e:
         click.echo(f"Warning: could not write rollout record: {e}", err=True)
         return
-    click.echo(f"Rollout record: {record.phase} -> {remote_state_dir}/{ROLLOUT_RECORD_FILENAME}")
+    click.echo(f"Rollout record: {record.phase} -> {record_store.url}")
 
 
 @controller.command("worker-restart")

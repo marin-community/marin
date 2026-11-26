@@ -138,11 +138,15 @@ def test_deploy_candidates_drop_ci_owned_configs():
     assert set(deploy_candidates(configs)) == {"marin"}
 
 
-def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key():
+def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key(tmp_path, monkeypatch):
     config = coreweave_config(signing_key="gcp-secret://p/secrets/k/versions/1")
     needs = requirements(config, s3_env=["CW_KEY_ID", "CW_KEY_SECRET"])
 
-    assert {n.target for n in needs if n.kind is Need.NAMED_SECRET} == {"CW_KEY_ID", "CW_KEY_SECRET"}
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    (tmp_path / "CW_KEY_ID").write_text("file-key")
+    storage = [n for n in needs if n.kind is Need.NAMED_SECRET]
+    results = check_requirements(storage, environ={"CW_KEY_SECRET": "deploy-secret"})
+    assert {result.requirement.target: result.ok for result in results} == {"CW_KEY_ID": True, "CW_KEY_SECRET": True}
     context_needs = [n for n in needs if n.kind is Need.KUBE_CONTEXT]
     assert [(n.target, n.source) for n in context_needs] == [("marin-gpu_US-EAST-02A", "~/.kube/coreweave-iris")]
     # The operator resolves the source; the rendered config points at its mounted file.
