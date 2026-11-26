@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pynvml
 import pytest
+from ray._private.label_utils import parse_node_labels_string
 from skyrlrecipe.locality import LocalityPlan
 
 from cloud.iris import task_runtime
@@ -73,7 +74,7 @@ def test_healthy_single_node_writes_a_verified_report(audit):
     topology = RoleTopology(("policy",), LocalityPlan((1,), (0,)))
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 1
-    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}:1"
+    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}.1"
 
 
 def test_healthy_multi_node_groups_may_share_a_fabric(audit):
@@ -81,11 +82,11 @@ def test_healthy_multi_node_groups_may_share_a_fabric(audit):
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 3
     assert len({row["host"] for row in report["nodes"]}) == 3
-    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}:1"}
+    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}.1"}
 
 
 @pytest.mark.parametrize(
-    "label,value", [(FABRIC_LABEL, f"{CLUSTER_UUID}:2"), (HOST_LABEL, "host-0")], ids=["split-group", "duplicate-host"]
+    "label,value", [(FABRIC_LABEL, f"{CLUSTER_UUID}.2"), (HOST_LABEL, "host-0")], ids=["split-group", "duplicate-host"]
 )
 def test_invalid_physical_placement_is_rejected(audit, tmp_path, label, value):
     topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
@@ -104,6 +105,12 @@ def test_invalid_physical_placement_is_rejected(audit, tmp_path, label, value):
 def test_unhealthy_node_fabric_is_rejected(overrides):
     with pytest.raises(ValueError):
         node_physical_labels(rank=0, gpus_per_node=4, host="host-0", fabric_info=fabric_info(**overrides))
+
+
+def test_ray_accepts_physical_fabric_label():
+    labels = node_physical_labels(rank=0, gpus_per_node=4, host="host-0", fabric_info=fabric_info())
+    serialized = ",".join(f"{key}={value}" for key, value in labels.items())
+    assert parse_node_labels_string(serialized) == labels
 
 
 def test_fabric_probe_reads_versioned_nvml_output(monkeypatch):
