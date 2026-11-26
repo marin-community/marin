@@ -297,7 +297,7 @@ inspect a prediction alongside the reference answer and the grader's evidence.
 
 For a head-to-head review, open **Compare**, choose two to four models and
 select a benchmark. **Shared only** lists settings scored by every model.
-**All recorded** shows the rest, with a model count beside each setting. For
+**All recorded** includes settings with partial coverage and shows the model count beside each. For
 a review starting from one specific setting, find it in **Benchmarks**, then
 check the models and choose **Compare**.
 

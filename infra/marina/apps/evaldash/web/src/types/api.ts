@@ -665,8 +665,6 @@ export interface ModelCatalogRow {
   latest_run: Pick<RunRow, 'run_id' | 'eval_name' | 'status' | 'created_at' | 'version'>
 }
 
-export type ModelCatalogPage = CatalogPage<ModelCatalogRow>
-
 // Playground reports: model feedback saved by the marin-serve dashboard's Report issue button.
 // One row of /api/playground-reports, newest first.
 export interface ReportSummary {

@@ -111,6 +111,13 @@ class EvalSuite(TypedDict):
     evals: list[str]
 
 
+class PolicyRejection(TypedDict):
+    run_id: str
+    model: str
+    benchmark: str
+    reasons: list[str]
+
+
 def eval_suites(evals: set[str], families: Mapping[str, str]) -> list[EvalSuite]:
     """Group the eval names present into ordered presentation suites for the column tree.
 
@@ -531,7 +538,7 @@ class ScoredRecords:
 
     def policy_rejections(
         self, request: SelectionRequest, models: tuple[str, ...] | None = None
-    ) -> list[dict[str, object]]:
+    ) -> list[PolicyRejection]:
         if request.cohort_version not in POLICIES:
             return []
         return [

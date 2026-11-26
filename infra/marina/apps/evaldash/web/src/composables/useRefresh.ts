@@ -1,4 +1,4 @@
-/** Refetch the mounted view after a rescan, once a minute while visible, and when the tab regains visibility. */
+/** Refetch after a rescan request is accepted, once a minute while visible, and when the tab regains visibility. */
 import { onMounted, onUnmounted, readonly, ref, type DeepReadonly, type Ref } from 'vue'
 import { apiPost } from '@/composables/useApi'
 
@@ -21,7 +21,7 @@ export interface ServerRefresh {
   refreshNow: () => Promise<void>
 }
 
-/** Queue one server-side ingest pass, then refetch the mounted view. Shared across all callers. */
+/** Request a server-side ingest pass and refetch once the server accepts it. */
 async function refreshNow(): Promise<void> {
   if (refreshing.value) return
   refreshing.value = true

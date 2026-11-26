@@ -12,6 +12,7 @@ import SearchSelect from '@/components/shared/SearchSelect.vue'
 import { useRouteQuery } from '@/composables/useRouteQuery'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import { formatInterval, formatScore } from '@/utils/formatting'
+import { formatPageRange } from '@/utils/pagination'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cohortWarning } from '@/utils/panel'
 
 const MODEL_OPTION_LIMIT = 12
@@ -249,7 +250,7 @@ const ranking = computed(() => selected.value
             <div class="results-range">
               <p role="status">
                 <template v-if="index.rows.length">
-                  {{ index.offset + 1 }}–{{ index.offset + index.rows.length }} of {{ index.total }} {{ index.total === 1 ? 'setting' : 'settings' }}
+                  {{ formatPageRange(index.offset, index.rows.length, index.total) }} {{ index.total === 1 ? 'setting' : 'settings' }}
                 </template>
                 <template v-else>0 settings</template>
               </p>

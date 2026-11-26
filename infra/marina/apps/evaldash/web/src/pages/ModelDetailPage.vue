@@ -64,7 +64,6 @@ const tasks = computed<string[]>(() => {
   return [...ordered, ...extra]
 })
 
-// Use the selected cohort's panel for the fleet reference.
 const best = computed(() => fleetBest(panel.value?.rows ?? [], tasks.value))
 
 // Every run in the selected cohort (smoke included), for the Runs list.
