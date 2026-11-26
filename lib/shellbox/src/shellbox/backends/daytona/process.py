@@ -171,6 +171,7 @@ class DaytonaProcessSession(StreamProcessSession):
         self._release(self)
         await self._output.finish()
         try:
+            deletion_error = None
             async with asyncio.timeout(INTERRUPT_TIMEOUT):
                 try:
                     await self._process.delete_session(self.name, request_timeout=INTERRUPT_TIMEOUT)
@@ -178,7 +179,9 @@ class DaytonaProcessSession(StreamProcessSession):
                     pass
                 except DaytonaError as error:
                     status = f" (HTTP {error.status_code})" if error.status_code is not None else ""
-                    raise RuntimeError(f"Daytona delete_session failed for session {self.name}{status}") from None
+                    deletion_error = f"Daytona delete_session failed for session {self.name}{status}"
+            if deletion_error is not None:
+                raise RuntimeError(deletion_error)
         except BaseException:
             await self._failed_cleanup()
             raise

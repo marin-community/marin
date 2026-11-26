@@ -381,6 +381,7 @@ def test_daytona_process_cleanup_diagnostics_exclude_provider_details(session_ma
             api.delete_failure = DaytonaError(f"provider response: {credential}", status_code=503)
             with pytest.raises(RuntimeError, match=r"delete_session.*503") as error:
                 await session.close()
+            assert error.value.__context__ is None
             assert credential not in "".join(traceback.format_exception(error.value))
         finally:
             await machine.close()
