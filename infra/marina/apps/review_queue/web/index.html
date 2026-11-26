@@ -16,29 +16,33 @@
       </header>
 
       <section class="intro" aria-labelledby="page-title">
-        <h1 id="page-title">Review queue<span class="title-period">.</span></h1>
-        <p class="lede">See who has an open review request before asking for another.</p>
+        <div class="intro-copy">
+          <h1 id="page-title">Review queue<span class="title-period">.</span></h1>
+          <p class="lede">See who has an open review request before asking for another.</p>
+        </div>
         <div class="controls">
-          <button id="refresh" type="button">Refresh queue <span aria-hidden="true">↻</span></button>
+          <button id="refresh" type="button">Refresh</button>
           <span id="updated" class="updated" aria-live="polite">Loading open pull requests…</span>
         </div>
       </section>
 
       <section class="queue" aria-labelledby="queue-title">
         <div class="section-heading">
-          <div><div class="section-kicker">01 / INDIVIDUAL REQUESTS</div><h2 id="queue-title">Who has reviews waiting</h2></div>
-          <label class="search-label">Find reviewer <input id="search" type="search" placeholder="Search by GitHub handle" autocomplete="off"></label>
+          <div><h2 id="queue-title">Requested reviewers</h2><p class="section-note">Favorites stay at the top of this browser's queue.</p></div>
+          <label class="search-label">Find or star a GitHub handle <input id="search" type="search" placeholder="Search reviewers" autocomplete="off"></label>
         </div>
-        <p class="section-note">Sorted by the number of open PRs requesting each person. Multiple requests on one PR appear in each person's queue.</p>
+        <div id="favorite-suggestion" class="favorite-suggestion" hidden></div>
+        <div class="column-headings" aria-hidden="true"><span>REVIEWER</span><span>PENDING</span><span>OLDEST PR</span><span>AVG PR AGE</span><span></span></div>
         <div id="reviewers" class="reviewers" aria-live="polite"><p class="empty">Loading reviewer requests…</p></div>
+        <p class="data-note">Age is measured from PR creation, not from when a review was requested. A PR requested from several people appears in each queue.</p>
       </section>
 
-      <section class="secondary" aria-label="Other review requests">
-        <div class="secondary-panel"><div class="section-kicker">02 / TEAM REQUESTS</div><h2>Requested teams <span id="team-count" class="heading-count">—</span></h2><p class="section-note">Team requests are shown separately because GitHub does not assign them to one person.</p><div id="teams" class="compact-list"><p class="empty">Loading…</p></div></div>
-        <div class="secondary-panel"><div class="section-kicker">03 / NO REVIEWER</div><h2>Open without a request <span id="unassigned-count" class="heading-count">—</span></h2><p class="section-note">Drafts are included. These PRs currently have no individual or team review request.</p><div id="unassigned" class="compact-list"><p class="empty">Loading…</p></div></div>
+      <section class="other-queues" aria-label="Other open pull requests">
+        <details id="team-section" hidden><summary>Team requests <span id="team-count">—</span></summary><div id="teams" class="other-list"></div></details>
+        <details id="unassigned-section"><summary>Open PRs without a review request <span id="unassigned-count">—</span></summary><p class="data-note">Includes drafts. These PRs have no individual or team request.</p><div id="unassigned" class="other-list"></div></details>
       </section>
 
-      <footer><span>Source: GitHub open pull requests · refreshed when this page loads or you press Refresh.</span><span>Counts describe pending requests, not required approvals or actual availability.</span></footer>
+      <footer>Source: GitHub open pull requests · refreshed on page load or when you press Refresh. Pending requests do not imply required approvals or reviewer availability.</footer>
     </main>
   </body>
 </html>
