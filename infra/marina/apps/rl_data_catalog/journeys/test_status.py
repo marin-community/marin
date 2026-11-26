@@ -233,7 +233,8 @@ def test_status_table_keeps_human_columns_and_rows(journey: Journey, seeded_extr
     table = page.evaluate("() => Math.round(document.getElementById('status-table').getBoundingClientRect().width)")
     first_row = page.evaluate("() => Math.round(document.querySelector('#rows tr').getBoundingClientRect().height)")
     assert widths[0] >= 200, f"Source column too narrow: {widths}"
-    assert widths[6] >= 80, f"Last-change column too narrow: {widths}"
+    assert widths[4] >= 60, f"Owner column too narrow: {widths}"
+    assert widths[7] >= 80, f"Last-change column too narrow: {widths}"
     assert table <= 1500, f"status table is {table}px wide at a 1440px viewport"
     assert first_row <= 320, f"first status row is {first_row}px tall"
 
@@ -255,8 +256,9 @@ def test_status_page_lists_every_status_with_clickable_reasons(journey: Journey,
     }"""
     )
     assert layout["widths"][0] >= 260, f"Source column starved: {layout}"
-    assert layout["widths"][4] <= 560, f"Reasons column unclamped: {layout}"
-    assert layout["widths"][6] >= 60, f"Last-change column starved: {layout}"
+    assert layout["widths"][4] >= 60, f"Owner column starved: {layout}"
+    assert layout["widths"][5] <= 560, f"Reasons column unclamped: {layout}"
+    assert layout["widths"][7] >= 60, f"Last-change column starved: {layout}"
     assert layout["height"] <= 200, f"First row too tall: {layout}"
 
     counts = page.locator("#status-counts")

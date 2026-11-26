@@ -1,4 +1,150 @@
 {
+  "owners": {
+    "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL": "ingest B \u00b7 Codex 01a1e039",
+    "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL": "ingest B \u00b7 Codex 01a1e039",
+    "marcusm117:ProofNet-Verified": "atlas-source-coverage \u00b7 RLVR declarations registry",
+    "project-numina:NuminaMath-LEAN": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119": "swe-repair \u00b7 ses_e15d1c017ffe",
+    "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
+    "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
+    "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
+    "TaskTrove:laion__stackexchange-unix-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
+    "TaskTrove:laion__wizardlm-orca-v4": "ingest B \u00b7 Codex 01a1e039",
+    "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k": "facet-endless-admission \u00b7 ses_df1063379ffel",
+    "FWeindel:validated-tasks/endless": "facet-endless-admission \u00b7 ses_df1063379ffel",
+    "FWeindel:validated-tasks/pymethods2test_v1": "ingest A \u00b7 ses_de826fccdffe",
+    "Nvidia:Nemotron-RL-agent-workplace_assistant": "ingest B \u00b7 Codex 01a1e039",
+    "Nemotron:Nemotron-RL-knowledge-mcqa": "ingest B \u00b7 Codex 01a1e039",
+    "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1": "ingest B \u00b7 Codex 01a1e039",
+    "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if": "ingest B \u00b7 Codex 01a1e039",
+    "Nvidia:Nemotron-RL-InverseIFEval-v1": "ingest B \u00b7 Codex 01a1e039",
+    "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": "ingest B \u00b7 Codex 01a1e039",
+    "TaskTrove:tasktrove-code-contests-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:tasktrove-taco-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:tasktrove-nl2bash-rebuilt-v1": "facet-endless-admission \u00b7 ses_df1063379ffel",
+    "TaskTrove:tasktrove-pymethods2test-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
+    "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
+    "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
+    "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Anthropic:hh_rlhf/harmless-base": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Anthropic:hh_rlhf/helpful-base": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Anthropic:hh_rlhf/helpful-online": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Anthropic:hh_rlhf/helpful-rejection-sampled": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/hs3_en": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/hs3_multi": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/hs3_multiturn": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/safety_en": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "TaskTrove:laion__nemotron-gym-structured-outputs-v4": "ingest B \u00b7 Codex 01a1e039",
+    "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
+    "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
+    "Nemotron:Nemotron-RL-knowledge-web_search-mcqa": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "GPUMODE:kernelbot-data": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "CyBench:andyzorigin-cybench": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "HAL:princeton-pli-hal-harness": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "MiroVerse:miromind-ai-MiroVerse-v0.1": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "MAI-Gym:tasks": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "OpenGCUA:trajectories": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "TRL:kto_mix/argilla/distilabel-intel-orca-dpo-pairs": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "TRL:kto_mix/argilla/ultrafeedback-binarized-preferences-cleaned": "by design \u2014 ban registry / rulings; nothing to burn down",
+    "Evalchemy:hellaswag": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:boolq": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:piqa": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:openbookqa": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:winogrande": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:triviaqa": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:math500": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:aime24": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:aime25": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:amc23": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:olympiadbenchdeterministic": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:olympiadbench": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Evalchemy:financebench": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "HuggingFaceH4:aime24": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "ASDiv:asdiv": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "pafitis:hardmath": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "HuggingFaceH4:math500": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "AllenAI:rlvr_math": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "Open-R1:verifiable_code": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "TaskTrove:DCAgent__code-contests-noblock": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:DCAgent__swe_rebench_v2_patched_oracle-v2": "swe-repair \u00b7 ses_e15d1c017ffe",
+    "FWeindel:validated-tasks/facet_v2": "R41 self-executing \u00b7 ses_deccb722",
+    "FWeindel:validated-tasks/facet_v3": "R41 self-executing \u00b7 ses_deccb722",
+    "FWeindel:validated-tasks/mimo_v1": "R41 self-executing \u00b7 ses_deccb722",
+    "TaskTrove:swesmith-verifier-repaired-v5": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "Harbor Hub:skill2env/skill2env": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "TaskTrove:DCAgent__exp_rle_adversarial-v6": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:DCAgent__exp_rpt_nemotron-cpp": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:DCAgent__inferredbugs-sandboxes-verifier": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:DCAgent__mix_h4_binary_easy": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:DCAgent__selfinstruct-naive-sandboxes-2-verified-v3": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:GAIR__OpenSWE__openswe_oss": "SWE zero-task \u00b7 ses_de7ba44ecffe",
+    "TaskTrove:GAIR__OpenSWE__openswe_other": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "TaskTrove:laion__codeelo-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_bugsinpy-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_codenet-python-v4": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:laion__exp_rpt_ghactions-v3": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_methods2test-large-v4": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:laion__exp_rpt_nemotron-junit-v6": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_scaffold-v3": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_stack-cpp-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_stack-dockerfile-gpt5mini-v7": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_stack-go-v5": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_stack-jest-v5": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_stack-junit-v6": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_stack-php-large-v9": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_stack-pytest-large-v3": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__exp_rpt_stack-rspec-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__magicoder-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__mix_h10_reward_proportional-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__mix_h11_single_skill_only-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__mix_h8_original_tests-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-agentic-function-calling-pivot-v3": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-agentic-indirect-prompt-injection-v3": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-agentic-swe-pivot-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-cfbench-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-identity-following-v4": "identity-following-repair \u00b7 repair sealed, registers at the R41 load",
+    "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-instruction-following-citation-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-instruction-following-freeform-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-instruction-following-multiturnchat-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-inverse-ifeval-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-knowledge-web-search-mcqa-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-litmus-bench-v2": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-math-advanced-calculations-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-multichallenge-vanilla-v3": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-qa-abstention-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__nemotron-gym-sysbench-v4": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__openswe-tasks-patched-v7-oracle-success": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:laion__r2egym-patched-full-oracle-v3": "SWE zero-task \u00b7 ses_de7ba44ecffe",
+    "TaskTrove:laion__swegym-tasks-patched-validated-v5": "SWE zero-task \u00b7 ses_de7ba44ecffe",
+    "TaskTrove:laion__toolscale-v4": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:laion__tulu3-sft-personas-math-sandboxes-verified-v3": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:R2E-Gym__R2E-Gym-V1": "SWE zero-task \u00b7 ses_de7ba44ecffe",
+    "TaskTrove:SankalpKJ__nemotron-code-oracle-filtered": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
+    "TaskTrove:SWE-Gym__SWE-Gym": "SWE zero-task \u00b7 ses_de7ba44ecffe",
+    "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__general": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:XiaomiMiMo__MiMo-V2.6-RL-oss__music": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "TaskTrove:DCAgent__exp_rpt_pymethods2test-large-v2@backfilled-20261122": "requirement-backfill \u00b7 awaits the next preview publication",
+    "TaskTrove:DCAgent__exp_rpt_unitsyn-python-large-v2@backfilled-20261122": "requirement-backfill \u00b7 awaits the next preview publication",
+    "PrimeIntellect:PrimeIntellect/Multi-SWE-RL-Verified": "R41 self-executing \u00b7 ses_deccb722",
+    "PrimeIntellect:PrimeIntellect/Scale-SWE-Verified": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe",
+    "PrimeIntellect:PrimeIntellect/SWE-Lego-Real-Data-Verified": "TaskSpec re-admission \u00b7 ses_df2a1f590ffe"
+  },
   "consumer_inputs": {
     "Evalchemy:simpleqa": {
       "consumer_requirements": [
@@ -1138,6 +1284,7 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1155,6 +1302,7 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1172,6 +1320,7 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "atlas-source-coverage \u00b7 RLVR declarations registry",
       "use": "eval",
       "method_tags": [
         "RL"
@@ -1189,6 +1338,7 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1206,6 +1356,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "swe-repair \u00b7 ses_e15d1c017ffe",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1223,6 +1374,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1240,6 +1392,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1257,6 +1410,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1274,6 +1428,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1291,6 +1446,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1308,6 +1464,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1325,6 +1482,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "facet-endless-admission \u00b7 ses_df1063379ffel",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1342,6 +1500,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "facet-endless-admission \u00b7 ses_df1063379ffel",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1359,6 +1518,7 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest A \u00b7 ses_de826fccdffe",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1376,6 +1536,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1393,6 +1554,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1410,6 +1572,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1427,6 +1590,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1444,6 +1608,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1461,6 +1626,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1478,6 +1644,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1495,6 +1662,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1512,6 +1680,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "facet-endless-admission \u00b7 ses_df1063379ffel",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1529,6 +1698,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest A \u00b7 ses_de826fccdffe",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1546,6 +1716,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest A \u00b7 ses_de826fccdffe",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1563,6 +1734,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest A \u00b7 ses_de826fccdffe",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1580,6 +1752,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest A \u00b7 ses_de826fccdffe",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1597,6 +1770,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1614,6 +1788,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1631,6 +1806,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1648,6 +1824,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1665,6 +1842,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1682,6 +1860,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1699,6 +1878,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1716,6 +1896,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1733,6 +1914,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1750,6 +1932,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1767,6 +1950,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1784,6 +1968,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1801,6 +1986,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1818,6 +2004,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1835,6 +2022,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1852,6 +2040,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1869,6 +2058,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1886,6 +2076,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1903,6 +2094,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1920,6 +2112,7 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1937,6 +2130,7 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
+      "owner": "ingest B \u00b7 Codex 01a1e039",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1960,6 +2154,7 @@
       "stage": null,
       "dataset_id": "nvidia/Nemotron-RL-knowledge-web_search-mcqa",
       "dataset_revision": "41028dbc9e06eb388ba99f9fb7a0078123b564c3",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -1986,6 +2181,7 @@
       "stage": null,
       "dataset_id": "GPUMODE/kernelbot-data",
       "dataset_revision": "4159cf6b2c6bab208be6dda885d6d87631cc16df",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -2012,6 +2208,7 @@
       "stage": null,
       "dataset_id": "andyzorigin/cybench",
       "dataset_revision": "ca483c6443f17a20ba7d6bac3d274859a1721e51",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -2038,6 +2235,7 @@
       "stage": null,
       "dataset_id": "princeton-pli/hal-harness",
       "dataset_revision": "16bb03ebc11577fb5ea6dc8bb6c968387085e6aa",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -2064,6 +2262,7 @@
       "stage": null,
       "dataset_id": "miromind-ai/MiroVerse-v0.1",
       "dataset_revision": "11fbf325f6eda37b34f519d1ba7268f40f469ac6",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -2090,6 +2289,7 @@
       "stage": null,
       "dataset_id": "Tongyi-MAI/MAI-Gym",
       "dataset_revision": "dc279a3735f0d59f9b9b9806f1fc8cd99c28e6f9",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -2116,6 +2316,7 @@
       "stage": null,
       "dataset_id": "https://tongyi-mai.github.io/OpenGCUA/trajectories.html",
       "dataset_revision": "no published trajectory pin",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -2152,6 +2353,7 @@
       "stage": null,
       "dataset_id": "trl-lib/kto-mix-14k",
       "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -2178,6 +2380,7 @@
       "stage": null,
       "dataset_id": "trl-lib/kto-mix-14k",
       "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [
@@ -2204,6 +2407,7 @@
       "stage": null,
       "dataset_id": "trl-lib/kto-mix-14k",
       "dataset_revision": "4470f033f33364e7d064c9f920c3df54d0cce767",
+      "owner": "by design \u2014 ban registry / rulings; nothing to burn down",
       "use": null,
       "method_tags": [],
       "reasons": [

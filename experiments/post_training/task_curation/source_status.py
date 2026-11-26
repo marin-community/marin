@@ -40,6 +40,7 @@ from experiments.post_training.task_curation.environment_artifacts import verify
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource
+from experiments.post_training.task_curation.source_owners import source_owner
 from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources
 from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
 from infra.marina.apps.rl_data_catalog.server.methods import variant_projection
@@ -59,6 +60,8 @@ class StatusRow:
     stage: str | None = None
     dataset_id: str | None = None
     dataset_revision: str | None = None
+    owner: str | None = None
+    """The owning lane rendered beside the unresolved reasons; None only off the registry."""
     use: SourceUse | None = None
     """The declared intended use; metadata-only rows carry none."""
     method_tags: tuple[SourceMethod, ...] = ()
@@ -139,6 +142,7 @@ def pending_rows() -> list[dict[str, Any]]:
             upstream_url=source.info.upstream_url,
             notes=source.info.notes,
             stage=pending_stage(source.info.id, receipts).value,
+            owner=(source_owner(source.info.id).owner if source_owner(source.info.id) else None),
             **intake_columns(source),
         ).payload()
         for source in PENDING_MEASUREMENT_SOURCES
@@ -180,6 +184,7 @@ def remediation_rows() -> list[dict[str, Any]]:
             upstream_url=source.info.upstream_url,
             notes=source.info.notes,
             stage=source.stage.value if source.stage else None,
+            owner=(source_owner(source.info.id).owner if source_owner(source.info.id) else None),
             **intake_columns(source),
             reasons=[claim.model_dump(mode="json") for claim in source.declaration.exclusion_claims],
         ).payload()
@@ -200,6 +205,7 @@ def metadata_rows() -> list[dict[str, Any]]:
             upstream_url=row.upstream_url,
             dataset_id=row.dataset_id,
             dataset_revision=row.dataset_revision,
+            owner=(source_owner(row.id).owner if source_owner(row.id) else None),
             notes=row.notes,
             reasons=[claim.model_dump(mode="json") for claim in row.claims],
         ).payload()
@@ -235,6 +241,8 @@ def require_typed_rows(rows: list[dict[str, Any]]) -> None:
             raise ValueError(f"Pending source carries no PendingStage: {source_id}")
         if row["display_name"] != source_display_name(source_id):
             raise ValueError(f"Row display name differs from the identity-derived display name: {source_id}")
+        if row["status"] in (SourceStatus.PENDING.value, SourceStatus.EXCLUDED.value) and not row.get("owner"):
+            raise ValueError(f"Unresolved {row['status']} source carries no owner: {source_id}")
         if row["stage"]:
             member(PendingStage, row["stage"], source_id, "stage")
         for claim in row["reasons"]:
@@ -283,7 +291,20 @@ def status_extras() -> dict[str, Any]:
     pending = pending_rows()
     metadata = metadata_rows()
     require_typed_rows([*pending, *remediation, *metadata])
+    served_unresolved = {
+        source.info.id: source_owner(source.info.id).owner if source_owner(source.info.id) else None
+        for source in all_sources().values()
+        if source.status in (SourceStatus.PENDING, SourceStatus.EXCLUDED)
+    }
+    owners = {
+        **{row["id"]: row["owner"] for row in [*pending, *remediation, *metadata]},
+        **served_unresolved,
+    }
+    missing = sorted(source_id for source_id, owner in owners.items() if not owner)
+    if missing:
+        raise ValueError(f"Unresolved sources carry no owner in the registry: {missing[:8]}")
     return {
+        "owners": owners,
         "consumer_inputs": consumer_inputs(all_sources().values()),
         "pending": pending,
         "stages": {

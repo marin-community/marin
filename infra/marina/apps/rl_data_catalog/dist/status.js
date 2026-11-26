@@ -172,6 +172,9 @@ function row(item) {
   if (item.stage) status.append(chipRow(item.stage, 'stage'));
   if (item.replacement_source_id) status.append(replacementLink(item));
   tr.append(status, columnCell(item.use, 'use'), columnCell(item.method_tags, 'method'));
+  const owner = node('td', item.owner || '—');
+  if (item.owner) owner.title = `Owning lane: ${item.owner}`;
+  tr.append(owner);
   const claims = item.reasons || [];
   const reasons = node('td');
   if (claims.length) {
@@ -332,6 +335,13 @@ async function load() {
     byId.set(item.id, item);
   }
   state.rows = [...byId.values()];
+  // The owners overlay (atlas-2026.11.27): every unresolved row renders its owning
+  // lane. Queued extras rows carry owner on the row; served catalog rows take it
+  // from the extras' owners map.
+  const owners = extras.owners || {};
+  for (const item of state.rows) {
+    if (!item.owner) item.owner = owners[item.id] || null;
+  }
   requireTypedRows(state.rows);
   const generated = Math.max(
     0,
