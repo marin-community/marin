@@ -28,7 +28,7 @@ from evalrecords.records import (
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT
 
 SCORED_OUTCOMES = frozenset({"graded", "submission_failure"})
-SUMMARY_REVISION = "2026.11.08.1"
+SUMMARY_REVISION = "2026.11.26.1"
 # rolloutengine's stop reason for a rollout that reached a token limit.
 LENGTH_STOP_REASON = "length"
 
