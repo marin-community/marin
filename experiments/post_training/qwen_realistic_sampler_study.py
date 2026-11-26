@@ -15,7 +15,7 @@ from experiments.post_training.qwen_sampler import ROLE_PLAN, with_rollout_token
 from experiments.post_training.rl_presets import BatchMix, ModelPresets, Preset
 from experiments.post_training.task_curation.qwen_realistic_sampler import TRAIN_FAMILIES
 
-REVISION = "2026.11.26.8"
+REVISION = "2026.11.26.9"
 SEEDS = (26633, 26639)
 GROSS_TOKENS = 2_097_152
 MAX_UPDATES = 120
