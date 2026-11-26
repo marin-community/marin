@@ -138,7 +138,7 @@ SAMPLE_SQL = (
 , selected_tasks AS (
     SELECT t.load_id,t.source_id,t.task_id,t.content_hash,t.description_status
     FROM curriculum_tasks t JOIN selected_sources s USING (load_id, source_id)
-    -- An uncorrelated IN list is hashed once; the correlated EXISTS under this OR ran one
+    -- An uncorrelated IN list is hashed once. The correlated EXISTS under this OR ran one
     -- index probe per task of the load (R40, 1.7 s of every sample-pool page).
     WHERE (:node_id='' OR (t.source_id, t.task_id) IN (
         SELECT area_match.source_id, area_match.task_id FROM curriculum_matches area_match
