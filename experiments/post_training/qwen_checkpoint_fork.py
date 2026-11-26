@@ -63,17 +63,20 @@ class ForkTraining(Training):
         expected_tasks: int,
         initial_model_uri: str | None,
     ) -> tuple[Callback, ...]:
-        return (
-            *super().callbacks(preset, evaluation, profiles, expected_tasks, initial_model_uri),
-            ForkSourceQuotaCallback(type="fork_source_quota", easy_quota=self.easy_quota),
-        )
+        callbacks = super().callbacks(preset, evaluation, profiles, expected_tasks, initial_model_uri)
+        if preset.revision == EXTENSION_REVISION:
+            # The fork restores the shared donor and publishes terminal evaluations only.
+            callbacks = tuple(callback for callback in callbacks if callback.type != "checkpoint")
+        return (*callbacks, ForkSourceQuotaCallback(type="fork_source_quota", easy_quota=self.easy_quota))
 
 
-def fork_preset(name: str, easy_quota: Literal[6, 10], seed: int) -> Preset:
+def fork_preset(name: str, easy_quota: Literal[6, 10], seed: int, *, revision: str = FORK_REVISION) -> Preset:
     """Continue the same source pass to a shared absolute two Mi-token cap."""
     source = warmup_preset()
     layout = source.recipe.layout
     assert isinstance(layout.workload, Training)
+    if revision == EXTENSION_REVISION:
+        layout = replace(layout, host_memory="128GiB")
     config = source.recipe.config.merge(
         RecipePatch(
             data=sections.Data(sampling=sections.Sampling(seed=SEED)),
@@ -83,7 +86,7 @@ def fork_preset(name: str, easy_quota: Literal[6, 10], seed: int) -> Preset:
     return replace(
         source,
         name=f"{name}-s{seed}",
-        revision=FORK_REVISION,
+        revision=revision,
         seed=seed,
         evaluations=(
             replace(EVAL, name="development", at_start=False),
@@ -104,7 +107,7 @@ QWEN_FORK = ModelPresets(
         warmup_preset(),
         *(fork_preset(name, quota, seed) for seed in FORK_SEEDS for name, quota in FORKS),
         *(
-            replace(fork_preset(name, quota, seed), revision=EXTENSION_REVISION)
+            fork_preset(name, quota, seed, revision=EXTENSION_REVISION)
             for seed in EXTENSION_SEEDS
             for name, quota in FORKS
         ),
