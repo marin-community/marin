@@ -307,13 +307,14 @@ def main(
 ) -> None:
     """Plan, prepare, and run offline DSpark training on Iris."""
 
-    if stage in ("prefill", "train") and "IRIS_TASK_ID" not in os.environ:
+    requires_iris = stage in ("prefill", "train")
+    if requires_iris and "IRIS_TASK_ID" not in os.environ:
         raise click.UsageError(f"Submit the {stage} stage through Iris")
     configure_coreweave_s3()
     prefix = marin_prefix()
     size = mochi.DraftSize(draft_size) if draft_size is not None else None
     recipe, mix = _resolve_recipe(config, preset, data, prefix, steps=steps, draft_size=size)
-    if stage in ("prefill", "train"):
+    if requires_iris:
         _validate_training_locations(recipe, prefix)
     teacher = _teacher_artifact(recipe.teacher)
     prepared, draft = artifacts(recipe, teacher=teacher, mix=mix)

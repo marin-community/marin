@@ -21,7 +21,7 @@ from experiments.post_training.drafting import mochi
 from vendor.skyrl.marinskyrl.model_manifest import HF_WEIGHT_INDEX_FILENAME, MODEL_MANIFEST_FILENAME, ModelManifest
 
 
-def test_mochi_fits_both_draft_sizes_from_one_activation_cache(tmp_path, monkeypatch):
+def test_mochi_publishes_both_draft_sizes_from_one_activation_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     teacher_path, prepared_path = tmp_path / "teacher", tmp_path / "prepared"
     teacher_path.mkdir()

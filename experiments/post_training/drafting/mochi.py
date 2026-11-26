@@ -141,7 +141,7 @@ def activation_cache_key(teacher_identity: str, prepared: ArtifactStep, recipe: 
 
 
 def _activation_cache_root(key: str, prefix: str) -> StoragePath:
-    root = StoragePath(marin_temp_bucket(_ACTIVATION_TTL_DAYS, prefix=f"dspark/mochi/{key}", source_prefix=prefix))
+    root = StoragePath(marin_temp_bucket(_ACTIVATION_TTL_DAYS, prefix="dspark/mochi", source_prefix=prefix)) / key
     if root.scheme not in ("s3", "gs"):
         raise ValueError(f"Mochi needs a temporary object-storage bucket, got {root}")
     return root
@@ -190,6 +190,19 @@ def checkpoint_step(
     )
 
 
+def _publish_draft(export: Path, destination: StoragePath) -> str:
+    manifest = snapshot_model_manifest(export, None, None, tokenizer_mode="policy")
+    destination.mkdirs()
+    marker = destination / MODEL_MANIFEST_FILENAME
+    # The artifact record write can fail after the draft has been uploaded.
+    if marker.exists():
+        marker.rm()
+    for entry in manifest.files:
+        (destination / entry.path).upload_from(str(export / entry.path))
+    marker.write_text(manifest.model_dump_json(indent=2) + "\n")
+    return manifest.identity
+
+
 def _train_cached(config: CachedTraining, *, cache_key: str) -> DSparkExport:
     root = _activation_cache_root(cache_key, config.output)
     cache = read_activation_cache(root, reusable_for=_ACTIVATION_REUSE_WINDOW)
@@ -207,17 +220,9 @@ def _train_cached(config: CachedTraining, *, cache_key: str) -> DSparkExport:
             hidden_states=cache,
             split=split,
         )
-        export = scratch / result.hf_subdirectory
-        manifest = snapshot_model_manifest(export, None, None, tokenizer_mode="policy")
         destination = StoragePath(config.output) / result.hf_subdirectory
-        destination.mkdirs()
-        marker = destination / MODEL_MANIFEST_FILENAME
-        if marker.exists():
-            marker.rm()
-        for entry in manifest.files:
-            (destination / entry.path).upload_from(str(export / entry.path))
-        marker.write_text(manifest.model_dump_json(indent=2) + "\n")
-        return result.model_copy(update={"source_identity": manifest.identity})
+        identity = _publish_draft(scratch / result.hf_subdirectory, destination)
+        return result.model_copy(update={"source_identity": identity})
 
 
 def _select_smoke_data(data: Dataset, split: PreparedSplits, destination: Path) -> tuple[Dataset, PreparedSplits]:

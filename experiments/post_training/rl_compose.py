@@ -132,7 +132,7 @@ _GATED_KEYS = frozenset(
         "generator.sampling_params.min_tokens",
     }
 )
-_FROZEN_DSPARK_PROPOSALS = 4
+_DSPARK_PROPOSALS = 4
 
 
 def selection_summary(selection: ArtifactStep) -> dict:
@@ -420,9 +420,7 @@ def _recipe_config_for_model(preset: presets.Preset, model: SkyRLModelSource | R
         model == preset.model
         or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
     ):
-        decoding = sections.SpeculativeDecoding(
-            method="dspark", model=draft, num_speculative_tokens=_FROZEN_DSPARK_PROPOSALS
-        )
+        decoding = sections.SpeculativeDecoding(method="dspark", model=draft, num_speculative_tokens=_DSPARK_PROPOSALS)
         return preset.recipe.config.merge(RecipePatch(generator=sections.Generator(speculative_decoding=decoding)))
     return preset.recipe.config
 
