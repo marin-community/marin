@@ -27,9 +27,10 @@ DEEP_REVISION = "2026.11.26.8"
 DEEP_SEEDS = (181, 191, 193)
 DEEP_ENDPOINT = "qwen-string-deep384@2026.11.26.1"
 DEEP_BUDGET = 3_703_021
-NO_SAVE_REVISIONS = (EXTENSION_REVISION, DEEP_REVISION)
 CAP_AUDIT_REVISION = "2026.11.26.9"
 CAP_AUDIT_TOKENS = 8192
+CAP_FOLLOWUP_REVISION = "2026.11.26.10"
+NO_SAVE_REVISIONS = (EXTENSION_REVISION, DEEP_REVISION, CAP_FOLLOWUP_REVISION)
 
 
 def warmup_preset():
@@ -74,6 +75,8 @@ class ForkTraining(Training):
         if preset.revision in NO_SAVE_REVISIONS:
             # The fork restores the shared donor and publishes terminal evaluations only.
             callbacks = tuple(callback for callback in callbacks if callback.type != "checkpoint")
+        if preset.revision == CAP_FOLLOWUP_REVISION:
+            return callbacks
         return (*callbacks, ForkSourceQuotaCallback(type="fork_source_quota", easy_quota=self.easy_quota))
 
 
@@ -137,6 +140,32 @@ def cap_audit_preset(name: str, easy_quota: Literal[6, 10], seed: int) -> Preset
     )
 
 
+def cap_followup_preset(name: str, easy_quota: Literal[6, 10], seed: int) -> Preset:
+    """Evaluate a cap-audit checkpoint after its training budget has already been reached."""
+    preset = cap_audit_preset(name, easy_quota, seed)
+    development, confirmation, confirmation_4k = preset.evaluations
+    profile = confirmation.profile
+    assert profile.sampling_params is not None
+    cap = 2 * CAP_AUDIT_TOKENS
+    confirmation_16k = replace(
+        confirmation,
+        name="confirmation_16k",
+        profile=profile.replace(sampling_params=profile.sampling_params.replace(max_generate_length=cap)),
+    )
+    config = preset.recipe.config
+    budget = config.context_budget
+    assert budget is not None
+    # The worker also limits requests by the base generator context, even for named evaluation profiles.
+    budget = budget.replace(request_window_tokens=budget.max_input_tokens + cap, max_new_tokens_per_turn=cap)
+    return replace(
+        preset,
+        name=f"cap16-{name}-s{seed}",
+        revision=CAP_FOLLOWUP_REVISION,
+        evaluations=(development, confirmation_4k, confirmation, confirmation_16k),
+        recipe=replace(preset.recipe, config=config.replace(context_budget=budget)),
+    )
+
+
 QWEN_FORK = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-checkpoint-fork",
@@ -150,6 +179,7 @@ QWEN_FORK = ModelPresets(
         ),
         *(fork_preset(name, quota, seed, revision=DEEP_REVISION) for seed in DEEP_SEEDS for name, quota in FORKS),
         *(cap_audit_preset(name, quota, seed) for seed in DEEP_SEEDS for name, quota in FORKS),
+        *(cap_followup_preset(name, quota, seed) for seed in DEEP_SEEDS for name, quota in FORKS),
     ),
     control_pins={},
 )
