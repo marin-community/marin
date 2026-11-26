@@ -141,6 +141,7 @@ class VmCreateRequest:
     service_account: str | None = None
     disk_size_gb: int = 200
     boot_disk_type: str = "pd-standard"
+    local_ssd: bool = False
     image_family: str = "cos-stable"
     image_project: str = "cos-cloud"
 

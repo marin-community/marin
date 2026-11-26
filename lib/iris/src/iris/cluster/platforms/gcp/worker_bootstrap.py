@@ -12,6 +12,7 @@ controller bootstrap can reuse them.
 
 import json
 import re
+import shlex
 from collections.abc import Mapping
 
 from iris.cluster.config import WorkerConfig
@@ -170,10 +171,48 @@ def render_template(template: str, **variables: str | int) -> str:
 
 
 # Bootstrap script template for worker VMs.
+LOCAL_SSD_SETUP = """
+echo "[iris-init] Phase: local_ssd"
+IRIS_LOCAL_SSD=/dev/disk/by-id/google-local-nvme-ssd-0
+for attempt in $(seq 1 60); do
+    if [ -b "$IRIS_LOCAL_SSD" ]; then break; fi
+    sleep 2
+done
+test -b "$IRIS_LOCAL_SSD"
+IRIS_LOCAL_FS=$(sudo blkid -s TYPE -o value "$IRIS_LOCAL_SSD" || test "$?" -eq 2)
+if [ -z "$IRIS_LOCAL_FS" ]; then
+    sudo mkfs.ext4 -F "$IRIS_LOCAL_SSD"
+else
+    test "$IRIS_LOCAL_FS" = ext4
+fi
+sudo mkdir -p /mnt/iris-local-ssd
+if ! mountpoint -q /mnt/iris-local-ssd; then
+    sudo mount -o discard,defaults "$IRIS_LOCAL_SSD" /mnt/iris-local-ssd
+fi
+IRIS_LOCAL_UUID=$(sudo blkid -s UUID -o value "$IRIS_LOCAL_SSD")
+test "$(findmnt -n -o UUID --target /mnt/iris-local-ssd)" = "$IRIS_LOCAL_UUID"
+# Place image unpacking and task environments on scratch before Docker starts.
+# Refuse to hide existing boot-disk data on a worker that already ran tasks.
+for target in /var/lib/docker /var/lib/containerd {{ local_cache_dir }}; do
+    sudo mkdir -p "$target"
+    if mountpoint -q "$target"; then
+        test "$(findmnt -n -o UUID --target "$target")" = "$IRIS_LOCAL_UUID"
+        continue
+    fi
+    test -z "$(sudo find "$target" -mindepth 1 -maxdepth 1 -print -quit)"
+    source_dir="/mnt/iris-local-ssd${target}"
+    sudo mkdir -p "$source_dir"
+    sudo mount --bind "$source_dir" "$target"
+done
+"""
+
+
 WORKER_BOOTSTRAP_SCRIPT = """#!/bin/bash
 set -e
 
 echo "[iris-init] Starting Iris worker bootstrap"
+
+{{ local_ssd_setup }}
 
 echo "[iris-init] Phase: tpu_ready_gate"
 
@@ -478,6 +517,8 @@ exit 1
 
 def build_worker_bootstrap_script(
     worker_config: WorkerConfig,
+    *,
+    local_ssd_cache: bool = False,
 ) -> str:
     """Build the bootstrap script for a worker VM.
 
@@ -507,6 +548,11 @@ def build_worker_bootstrap_script(
 
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
+        local_ssd_setup=(
+            render_template(LOCAL_SSD_SETUP, local_cache_dir=shlex.quote(worker_config.cache_dir))
+            if local_ssd_cache
+            else ""
+        ),
         cache_dir=worker_config.cache_dir,
         secrets_root=str(VM_WORKER_SECRETS_ROOT),
         docker_image=worker_config.docker_image,

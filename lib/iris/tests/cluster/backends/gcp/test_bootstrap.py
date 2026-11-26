@@ -54,6 +54,15 @@ def test_bootstrap_runs_node_agent_beside_worker() -> None:
     assert "--worker-config /etc/iris/worker_config.json" in script
 
 
+def test_local_ssd_bootstrap_mounts_scratch_before_docker_install() -> None:
+    script = build_worker_bootstrap_script(_worker_config(), local_ssd_cache=True)
+    assert script.index('sudo mount --bind "$source_dir" "$target"') < script.index("https://get.docker.com")
+    assert "/var/lib/docker /var/lib/containerd /var/cache/iris" in script
+    assert 'test -z "$(sudo find "$target" -mindepth 1 -maxdepth 1 -print -quit)"' in script
+    result = subprocess.run(["bash", "-n"], input=script, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_bootstrap_renders_versioned_runsc_url() -> None:
     """Every gVisor URL in the bootstrap must use the numeric release path:
     the GCS layout is releases/release/<YYYYMMDD.P>/, and a URL built from the

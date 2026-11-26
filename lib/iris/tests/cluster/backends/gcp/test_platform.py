@@ -411,7 +411,8 @@ def test_gcp_validate_vm_slice_config_rejects_num_vms_not_one():
 
 
 @pytest.mark.parametrize(
-    "disk_config,expected_disk_type", [({}, "pd-standard"), ({"boot_disk_type": "pd-ssd"}, "pd-ssd")]
+    "disk_config,expected_disk_type",
+    [({}, "pd-standard"), ({"boot_disk_type": "pd-ssd"}, "pd-ssd"), ({"local_ssd_cache": True}, "pd-standard")],
 )
 def test_gcp_create_vm_slice_mode_produces_single_worker_slice(disk_config, expected_disk_type):
     """VM slice mode creates a single-worker slice that is discoverable and terminable."""
@@ -437,6 +438,7 @@ def test_gcp_create_vm_slice_mode_produces_single_worker_slice(disk_config, expe
     request = create_vm.call_args.args[0]
     assert request.boot_disk_type == expected_disk_type
     assert request.disk_size_gb == 512
+    assert request.local_ssd == disk_config.get("local_ssd_cache", False)
     status = handle.describe()
     assert status.worker_count == 1
     assert len(status.workers) == 1

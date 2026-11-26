@@ -651,7 +651,7 @@ class GcpWorkerProvider:
             worker_config.docker_image = self.resolve_image(worker_config.docker_image, zone=gcp.zone)
             worker_config.slice_id = slice_id
             worker_config.worker_id = construct_worker_id(slice_id, 0)
-            startup_script = build_worker_bootstrap_script(worker_config)
+            startup_script = build_worker_bootstrap_script(worker_config, local_ssd_cache=gcp.local_ssd_cache)
 
         request = VmCreateRequest(
             name=vm_name,
@@ -662,6 +662,7 @@ class GcpWorkerProvider:
             service_account=gcp.service_account or None,
             disk_size_gb=boot_disk_size,
             boot_disk_type=gcp.boot_disk_type or VmCreateRequest.boot_disk_type,
+            local_ssd=gcp.local_ssd_cache,
             image_family="debian-12",
             image_project="debian-cloud",
             startup_script=startup_script,

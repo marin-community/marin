@@ -54,3 +54,10 @@ For a GCP CPU scale group with `slice_template.gcp.mode: vm`, set
 `slice_template.gcp.boot_disk_type: pd-ssd` for image unpacking or other
 I/O-heavy workloads. The default is `pd-standard`; `pd-balanced` is also
 supported. The group's `resources.disk` sets the boot disk size.
+
+For a fresh VM on a machine type that supports one 375-GiB local NVMe disk,
+`slice_template.gcp.local_ssd_cache: true` attaches scratch storage and mounts
+the worker cache, Docker image data, and containerd data there before Docker
+installation. Bootstrap refuses to hide existing data in those directories.
+Local SSD data is ephemeral; keep durable outputs in object storage. This
+option uses local-SSD quota separately from the persistent boot disk quota.

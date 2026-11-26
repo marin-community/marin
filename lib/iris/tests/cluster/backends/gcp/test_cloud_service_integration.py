@@ -309,7 +309,8 @@ def _dump_http_log(log: list[HttpLog]) -> str:
 # ========================================================================
 
 
-def test_vm_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
+@pytest.mark.parametrize("local_ssd", [False, True])
+def test_vm_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend, local_ssd: bool):
     # wait=True: this test exercises the controller-VM bootstrap path that needs
     # the instance IP immediately after create.
     vm = svc.vm_create(
@@ -320,6 +321,7 @@ def test_vm_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
             labels={"iris-managed": "true"},
             startup_script="#!/bin/bash\necho hello",
             service_account="sa@test.iam.gserviceaccount.com",
+            local_ssd=local_ssd,
         ),
         wait=True,
     )
@@ -327,6 +329,13 @@ def test_vm_full_lifecycle(svc: CloudGcpService, backend: GcpFakeBackend):
     assert vm.name == "ctrl-vm", f"Expected ctrl-vm, got {vm.name}\n{_dump_http_log(backend.http_log)}"
     assert vm.internal_ip == "10.164.0.42", f"Expected IP, got {vm.internal_ip!r}\n{_dump_http_log(backend.http_log)}"
     assert vm.status == "RUNNING"
+    insert = next(entry.request_body for entry in backend.http_log if entry.method == "POST" and entry.request_body)
+    disks = insert["disks"]
+    assert len(disks) == (2 if local_ssd else 1)
+    if local_ssd:
+        assert disks[1]["type"] == "SCRATCH"
+        assert disks[1]["interface"] == "NVME"
+        assert disks[1]["initializeParams"]["diskType"] == f"zones/{ZONE_EU}/diskTypes/local-ssd"
 
     # Set labels (read-modify-write)
     svc.vm_update_labels("ctrl-vm", ZONE_EU, {"controller": "true"})

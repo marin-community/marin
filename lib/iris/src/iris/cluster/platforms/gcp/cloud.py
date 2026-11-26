@@ -583,6 +583,15 @@ class CloudGcpService:
         }
         if request.labels:
             body["labels"] = request.labels
+        if request.local_ssd:
+            body["disks"].append(
+                {
+                    "type": "SCRATCH",
+                    "autoDelete": True,
+                    "interface": "NVME",
+                    "initializeParams": {"diskType": f"zones/{request.zone}/diskTypes/local-ssd"},
+                }
+            )
         if request.network_tags:
             body["tags"] = {"items": list(request.network_tags)}
         if all_metadata:
