@@ -1,12 +1,12 @@
 {
   "repo": "open-athena/marin-source-duplicate-acknowledgements",
-  "revision": "f2a44327156bec743c927f961a327c1626f27d1b",
+  "revision": "7415dd97d86b58018a673b8826da066cb592e7ed",
   "references": [
     {
       "repo": "open-athena/marin-source-duplicate-acknowledgements",
-      "revision": "f2a44327156bec743c927f961a327c1626f27d1b",
+      "revision": "7415dd97d86b58018a673b8826da066cb592e7ed",
       "path": "acknowledgements.json",
-      "sha256": "e7d34b9b0d3f470089c62e2dcc83fe917dc6cb5b4cfa41933a2df8072843d36e"
+      "sha256": "d7c316adc4e0705241d8cbee1d622a1b6e644fc5b4e6ebf74d374093e6cd0a1a"
     }
   ]
 }
