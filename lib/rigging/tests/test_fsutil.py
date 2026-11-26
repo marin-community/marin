@@ -238,6 +238,12 @@ class _GcsRewriteDestination:
         self.generations += 1
         self.etags[path] = f"GENERATION-{self.generations}="
 
+    def _etag_for(self, path):
+        self.etags.setdefault(path, None)
+        if self.etags[path] is None:
+            self._new_etag(path)
+        return self.etags[path]
+
     def cp_file(self, source_path, destination_path, **kwargs):
         self.filesystem.cp_file(source_path, destination_path, **kwargs)
         self._new_etag(destination_path)
@@ -245,10 +251,7 @@ class _GcsRewriteDestination:
     def info(self, path):
         info = self.filesystem.info(path)
         if info.get("type") != "directory":
-            self.etags.setdefault(path, None)
-            if self.etags[path] is None:
-                self._new_etag(path)
-            info["etag"] = self.etags[path]
+            info["etag"] = self._etag_for(path)
         return info
 
     def find(self, path, *, detail):
@@ -256,10 +259,7 @@ class _GcsRewriteDestination:
         if detail:
             for name, info in found.items():
                 if info.get("type") != "directory":
-                    self.etags.setdefault(name, None)
-                    if self.etags[name] is None:
-                        self._new_etag(name)
-                    info["etag"] = self.etags[name]
+                    info["etag"] = self._etag_for(name)
         return found
 
 
