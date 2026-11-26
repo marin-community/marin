@@ -21,6 +21,50 @@ def _note(message: str) -> ExclusionEvidence:
 
 
 MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
+    # The 2026-11-26 15:20 EST user rule (nothing stays Pending indefinitely): intake
+    # rows whose owner shows no live work driving them to admission by the atlas-
+    # 2026.11.27 release are Excluded with their typed reason, the clearing path and
+    # their owner. They keep their measured receipts and return to intake when the
+    # path clears.
+    "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
+            evidence=_note(
+                "Staged intake with no live driver (the 2026-11-26 15:20 EST user rule): the declared "
+                "judge grader (MEDIUM MiniMax-M3, binary full-rubric, no reference) has no runtime "
+                "qualification — CANDIDATES parks it for the coordinator-directed fresh three-source "
+                "rotation and ingest B's live groups (QA-Abstention, Formatting, Edge) do not include "
+                "it. Judge-only over code that is never run; graders fail closed. Clears when the "
+                "rotation claims it and the native-judge runtime qualification (oracle/no-op controls "
+                "through the declared judge) seals."
+            ),
+        ),
+    ),
+    "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_JUDGE_UNAVAILABLE,
+            evidence=_note(
+                "Staged intake with no live driver (the 2026-11-26 15:20 EST user rule): the declared "
+                "judge grader (MEDIUM MiniMax-M3, binary full-rubric, no reference) has no runtime "
+                "qualification — CANDIDATES parks it for the coordinator-directed fresh three-source "
+                "rotation and ingest B's live groups (QA-Abstention, Formatting, Edge) do not include "
+                "it. Judge-only Tezos answers; the _copyN duplicates fall to dedup. Clears when the "
+                "rotation claims it and the native-judge runtime qualification seals."
+            ),
+        ),
+    ),
+    "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": (
+        ExclusionClaim(
+            reason=ExclusionReason.RETAINED_POPULATION_EMPTY,
+            evidence=_note(
+                "The declared 491-row small cohort was never published (the 2026-11-26 15:20 EST user "
+                "rule): the pinned release carries the LARGE Unitsyn population (4,991 rows) instead of "
+                "the 491-row small cohort the declaration names, so the declared retained population is "
+                "empty at this pin. Ingest A owns the republish; no republish job is live. Clears when "
+                "the small cohort is republished at its declared pin and the chain re-measures."
+            ),
+        ),
+    ),
     "Anthropic:hh_rlhf/harmless-base": (
         ExclusionClaim(
             reason=ExclusionReason.GRADER_MISSING,

@@ -7,7 +7,7 @@ import pytest
 from finestore.rl.status_taxonomy import SourceStatus
 
 from experiments.post_training.task_curation import source_status
-from experiments.post_training.task_curation.source_owners import SOURCE_OWNERS, source_owner
+from experiments.post_training.task_curation.source_owners import SOURCE_OWNERS, SourceOwner, source_owner
 
 
 def test_registry_entries_are_well_formed():
@@ -57,3 +57,26 @@ def test_require_typed_rows_rejects_an_ownerless_pending_row():
     ownerless = {**row, "owner": None}
     with pytest.raises(ValueError, match="carries no owner"):
         source_status.require_typed_rows([ownerless])
+
+
+@pytest.mark.data_integration
+def test_pending_row_with_an_inactive_owner_fails_the_build(monkeypatch):
+    """The release-time driver check (user rule 2026-11-26 15:20 EST)."""
+    row = next(row for row in source_status.pending_rows() if row["status"] == "Pending")
+    monkeypatch.setattr(
+        source_status,
+        "source_owner",
+        lambda source_id: SourceOwner(
+            owner="idle lane · ses_inactive",
+            note="no live jobs or landings since the previous release",
+            active=False,
+        ),
+    )
+    with pytest.raises(ValueError, match="no activity since the previous release"):
+        source_status.require_typed_rows([row])
+    monkeypatch.setattr(
+        source_status,
+        "source_owner",
+        lambda source_id: SourceOwner(owner="active lane · ses_active", note="conversion running", active=True),
+    )
+    source_status.require_typed_rows([row])

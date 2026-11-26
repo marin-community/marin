@@ -1655,12 +1655,12 @@
     {
       "id": "TaskTrove:tasktrove-code-contests-built-image",
       "display_name": "TaskTrove \u00b7 tasktrove-code-contests-built-image",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "TaskTrove",
       "upstream_dataset": "tasktrove-code-contests-built-image",
       "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
       "notes": "Excluded: the pinned payload reads only numeric rewards and can hide verifier failures. Republish with converter version 4 and robust SAMPLE/FULL controls before admission. 8222 tasks retain the exact built output of their archived environment for both actor and grader. Registry manifests were read back and pulled image IDs matched the local builds. The private release includes setup fidelity, stdio parity, sampled liveness, retained exclusions and frozen build contexts. No oracle solution or model-quality assessment ran",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
@@ -1668,7 +1668,18 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-defect",
+          "evidence": {
+            "kind": "note",
+            "message": "Excluded: the pinned payload reads only numeric rewards and can hide verifier failures. Republish with converter version 4 and robust SAMPLE/FULL controls before admission.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "TaskTrove:tasktrove-taco-built-image",
@@ -1745,12 +1756,12 @@
     {
       "id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
       "display_name": "TaskTrove \u00b7 tasktrove-unitsyn-python-rebuilt-v1",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "TaskTrove",
       "upstream_dataset": "tasktrove-unitsyn-python-rebuilt-v1",
       "upstream_url": "https://huggingface.co/datasets/open-thoughts/TaskTrove/tree/02923004846e4e73862c20962f823a6d05100e7a",
       "notes": "Excluded: this release contains the large Unitsyn population rather than the 491-row small cohort. 4,991 tasks converted to run in their archived environment, lowered onto the digest-pinned base, measured at the pinned upstream revision DCAgent__exp_rpt_unitsyn-python-v4 @ 02923004846e4e73862c20962f823a6d05100e7a with zero substitutions. Qualified without oracles: per-row setup fidelity matches and 20 of 20 sampled verifiers return a negative verdict on an empty submission. The repository is private pending release.",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest A \u00b7 ses_de826fccdffe",
@@ -1758,7 +1769,18 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "retained-population-empty",
+          "evidence": {
+            "kind": "note",
+            "message": "The declared 491-row small cohort was never published (the 2026-11-26 15:20 EST user rule): the pinned release carries the LARGE Unitsyn population (4,991 rows) instead of the 491-row small cohort the declaration names, so the declared retained population is empty at this pin. Ingest A owns the republish; no republish job is live. Clears when the small cohort is republished at its declared pin and the chain re-measures.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
@@ -1871,12 +1893,12 @@
     {
       "id": "Anthropic:hh_rlhf/harmless-base",
       "display_name": "Anthropic \u00b7 hh_rlhf/harmless-base",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Anthropic",
       "upstream_dataset": "hh_rlhf",
       "upstream_url": null,
       "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples.",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -1884,17 +1906,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): every converted task carries NoGrader \u2014 the preference converter's typed reason is 'Preference labels rank source candidates; scoring a new reply needs a reward model' and the Atlas has no reward-model grader, so no task can produce a reward; main declares the preference sources 'kept for review only'. Sealed evidence at the pin: the sibling subsets' grading censuses (converter 1509fc8638f6) report 100% 'No executable grader is declared' (helpful-base 43,699/43,699, helpful-online 21,989, helpful-rejection-sampled 52,382) and this subset's 42,378-task census shares that converter and declaration. MIT license gate PASSES (registry ingest_c_intake_20261126_a_v1) \u2014 the rows are untrainable as RL, not banned. Clears only with an executable or judge grader and a zero-missing grading census.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Anthropic:hh_rlhf/helpful-base",
       "display_name": "Anthropic \u00b7 hh_rlhf/helpful-base",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Anthropic",
       "upstream_dataset": "hh_rlhf",
       "upstream_url": null,
       "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples.",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -1902,17 +1935,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the sealed grading census at this pin reports 43,699/43,699 tasks 'No executable grader is declared' (s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/results/d587beb02be5706914cc/receipt.json) \u2014 the preference converter emits NoGrader ('Preference labels rank source candidates; scoring a new reply needs a reward model'). MIT license gate PASSES (registry ingest_c_intake_20261126_a_v1) \u2014 untrainable as RL, not banned. Clears only with an executable or judge grader and a zero-missing grading census.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Anthropic:hh_rlhf/helpful-online",
       "display_name": "Anthropic \u00b7 hh_rlhf/helpful-online",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Anthropic",
       "upstream_dataset": "hh_rlhf",
       "upstream_url": null,
       "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples.",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -1920,17 +1964,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the sealed grading census at this pin reports 21,989/21,989 tasks 'No executable grader is declared' \u2014 the preference converter emits NoGrader ('Preference labels rank source candidates; scoring a new reply needs a reward model'). MIT license gate PASSES (registry ingest_c_intake_20261126_a_v1) \u2014 untrainable as RL, not banned. Clears only with an executable or judge grader and a zero-missing grading census.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Anthropic:hh_rlhf/helpful-rejection-sampled",
       "display_name": "Anthropic \u00b7 hh_rlhf/helpful-rejection-sampled",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "Anthropic",
       "upstream_dataset": "hh_rlhf",
       "upstream_url": null,
       "notes": "Interaction describes supported conversation structure. Conversational collections can include one-turn examples.",
-      "stage": "Measurements pending",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
@@ -1938,7 +1993,18 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-missing",
+          "evidence": {
+            "kind": "note",
+            "message": "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the sealed grading census at this pin reports 52,382/52,382 tasks 'No executable grader is declared' \u2014 the preference converter emits NoGrader ('Preference labels rank source candidates; scoring a new reply needs a reward model'). MIT license gate PASSES (registry ingest_c_intake_20261126_a_v1) \u2014 untrainable as RL, not banned. Clears only with an executable or judge grader and a zero-missing grading census.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "Nemotron:nemotron_ultra_mopd/hs3_en",
@@ -2123,12 +2189,12 @@
     {
       "id": "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2",
       "display_name": "TaskTrove \u00b7 laion__glaive-code-assistant-sandboxes-verified-v2",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "TaskTrove",
       "upstream_dataset": "laion__glaive-code-assistant-sandboxes-verified-v2",
       "upstream_url": null,
       "notes": "Judge-only over code that is never run, four-criterion rubric, no reference. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission.",
-      "stage": "Intake queued",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest B \u00b7 Codex 01a1e039",
@@ -2136,17 +2202,28 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-judge-unavailable",
+          "evidence": {
+            "kind": "note",
+            "message": "Staged intake with no live driver (the 2026-11-26 15:20 EST user rule): the declared judge grader (MEDIUM MiniMax-M3, binary full-rubric, no reference) has no runtime qualification \u2014 CANDIDATES parks it for the coordinator-directed fresh three-source rotation and ingest B's live groups (QA-Abstention, Formatting, Edge) do not include it. Judge-only over code that is never run; graders fail closed. Clears when the rotation claims it and the native-judge runtime qualification (oracle/no-op controls through the declared judge) seals.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     },
     {
       "id": "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2",
       "display_name": "TaskTrove \u00b7 laion__stackexchange-tezos-sandboxes-verified-v2",
-      "status": "Pending",
+      "status": "Excluded",
       "origin": "TaskTrove",
       "upstream_dataset": "laion__stackexchange-tezos-sandboxes-verified-v2",
       "upstream_url": null,
       "notes": "Judge-only Tezos answers, four-criterion rubric, no reference; the _copyN duplicates fall to the dedup step. Kept as rubric-only (tag no-reference). Inventory: conversion pins MEDIUM MiniMax M3 with binary full-rubric grading and no source gold answers. Source-level qualification and a private pinned release are required before admission.",
-      "stage": "Intake queued",
+      "stage": null,
       "dataset_id": null,
       "dataset_revision": null,
       "owner": "ingest B \u00b7 Codex 01a1e039",
@@ -2154,7 +2231,18 @@
       "method_tags": [
         "RL"
       ],
-      "reasons": []
+      "reasons": [
+        {
+          "reason": "grader-judge-unavailable",
+          "evidence": {
+            "kind": "note",
+            "message": "Staged intake with no live driver (the 2026-11-26 15:20 EST user rule): the declared judge grader (MEDIUM MiniMax-M3, binary full-rubric, no reference) has no runtime qualification \u2014 CANDIDATES parks it for the coordinator-directed fresh three-source rotation and ingest B's live groups (QA-Abstention, Formatting, Edge) do not include it. Judge-only Tezos answers; the _copyN duplicates fall to dedup. Clears when the rotation claims it and the native-judge runtime qualification seals.",
+            "uri": null,
+            "sha256": null,
+            "expected": null
+          }
+        }
+      ]
     }
   ],
   "stages": {

@@ -18,10 +18,17 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 
 @dataclass(frozen=True)
 class SourceOwner:
-    """One unresolved source's owning lane and its current work item."""
+    """One unresolved source's owning lane and its current work item.
+
+    ``active`` is the release-time driver check (user rule 2026-11-26 15:20 EST):
+    a Pending row whose owner shows no live jobs or landings driving it since the
+    previous release fails the status-extras build. Maintain the flag beside the
+    note that carries the activity evidence.
+    """
 
     owner: str
     note: str
+    active: bool = True
 
 
 SOURCE_OWNERS: dict[str, SourceOwner] = {

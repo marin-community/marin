@@ -37,6 +37,7 @@ from experiments.post_training.task_curation.datasets.oracle_releases import ora
 from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
 from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
 from experiments.post_training.task_curation.environment_artifacts import verify_declared_environment_artifacts
+from experiments.post_training.task_curation.exclusion_registry import manual_exclusion_claims
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource
@@ -130,23 +131,47 @@ def served_snapshot_sources(catalog: CurationCatalog, snapshot_id: str) -> Itera
 
 
 def pending_rows() -> list[dict[str, Any]]:
-    """Rows for every queued source that is not configured for the catalog yet."""
+    """Rows for every queued source that is not configured for the catalog yet.
+
+    A queued row whose manual exclusion claims are already recorded renders
+    **Excluded** with those claims and its owner (the 2026-11-26 15:20 EST user
+    rule: nothing stays Pending indefinitely — a row with no live driver to
+    admission leaves Pending, keeps its typed reason and its clearing path, and
+    returns to intake only when the claims clear). The rest queue Pending with
+    their computed stage.
+    """
     receipts = receipt_registry_keys()
-    return [
-        StatusRow(
+    rows = []
+    for source in PENDING_MEASUREMENT_SOURCES:
+        decided = manual_exclusion_claims(source.info.id)
+        owner = source_owner(source.info.id)
+        common = dict(
             id=source.info.id,
             display_name=source_display_name(source.info.id),
-            status=SourceStatus.PENDING.value,
             origin=source.info.origin.value,
             upstream_dataset=source.info.upstream_dataset,
             upstream_url=source.info.upstream_url,
             notes=source.info.notes,
-            stage=pending_stage(source.info.id, receipts).value,
-            owner=(source_owner(source.info.id).owner if source_owner(source.info.id) else None),
+            owner=owner.owner if owner else None,
             **intake_columns(source),
-        ).payload()
-        for source in PENDING_MEASUREMENT_SOURCES
-    ]
+        )
+        if decided:
+            rows.append(
+                StatusRow(
+                    status=SourceStatus.EXCLUDED.value,
+                    reasons=[claim.model_dump(mode="json") for claim in decided],
+                    **common,
+                ).payload()
+            )
+        else:
+            rows.append(
+                StatusRow(
+                    status=SourceStatus.PENDING.value,
+                    stage=pending_stage(source.info.id, receipts).value,
+                    **common,
+                ).payload()
+            )
+    return rows
 
 
 CONSUMER_PENDING_CORE_RECEIPTS = ("actor census", "lexical", "grading", "sample", "dedup")
@@ -243,6 +268,13 @@ def require_typed_rows(rows: list[dict[str, Any]]) -> None:
             raise ValueError(f"Row display name differs from the identity-derived display name: {source_id}")
         if row["status"] in (SourceStatus.PENDING.value, SourceStatus.EXCLUDED.value) and not row.get("owner"):
             raise ValueError(f"Unresolved {row['status']} source carries no owner: {source_id}")
+        if row["status"] == SourceStatus.PENDING.value:
+            entry = source_owner(source_id)
+            if entry is not None and not entry.active:
+                raise ValueError(
+                    f"Pending source's owner shows no activity since the previous release "
+                    f"(user rule 2026-11-26 15:20 EST): {source_id} ({entry.owner})"
+                )
         if row["stage"]:
             member(PendingStage, row["stage"], source_id, "stage")
         for claim in row["reasons"]:
@@ -303,6 +335,22 @@ def status_extras() -> dict[str, Any]:
     missing = sorted(source_id for source_id, owner in owners.items() if not owner)
     if missing:
         raise ValueError(f"Unresolved sources carry no owner in the registry: {missing[:8]}")
+    # The release-time driver check (user rule 2026-11-26 15:20 EST): a Pending row
+    # whose owner shows no activity since the previous release fails the build.
+    # require_typed_rows covers the built rows; this covers the served catalog's
+    # Pending rows, which arrive through the owners overlay alone.
+    inactive = sorted(
+        source.info.id
+        for source in all_sources().values()
+        if source.status is SourceStatus.PENDING
+        and (entry := source_owner(source.info.id)) is not None
+        and not entry.active
+    )
+    if inactive:
+        raise ValueError(
+            f"Pending sources' owners show no activity since the previous release "
+            f"(user rule 2026-11-26 15:20 EST): {inactive[:8]}"
+        )
     return {
         "owners": owners,
         "consumer_inputs": consumer_inputs(all_sources().values()),

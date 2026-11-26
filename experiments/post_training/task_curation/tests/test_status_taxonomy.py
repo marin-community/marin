@@ -188,8 +188,16 @@ def test_pending_rows_cover_the_intake_queue():
     rows = source_status.pending_rows()
     assert {row["id"] for row in rows} == {source.info.id for source in PENDING_MEASUREMENT_SOURCES}
     for row in rows:
-        assert row["status"] == SourceStatus.PENDING
-        assert row["stage"] in {stage.value for stage in source_status.PendingStage}
+        assert row["status"] in (SourceStatus.PENDING.value, SourceStatus.EXCLUDED.value)
+        # Row payloads carry the enum VALUES (the page renders strings), so the
+        # comparisons are equality against .value, never identity against the member.
+        if row["status"] == SourceStatus.PENDING.value:
+            assert row["stage"] in {stage.value for stage in source_status.PendingStage}
+        else:
+            # The 2026-11-26 15:20 EST user rule: a queued row with recorded manual
+            # exclusion claims renders Excluded with its claims and keeps its owner.
+            assert row["reasons"], row["id"]
+            assert row["owner"], row["id"]
 
 
 @pytest.mark.data_integration
@@ -722,7 +730,12 @@ def test_pending_rows_carry_typed_columns():
         assert row["use"] in uses, f"Pending row Use outside SourceUse: {row['id']}"
         assert "task_format" not in row, f"Pending row still carries the dropped Format column: {row['id']}"
         assert row["method_tags"] and set(row["method_tags"]) <= methods, row["id"]
-        assert row["stage"] in stages, f"Pending row stage outside PendingStage: {row['id']}"
+        # The 2026-11-26 15:20 EST user rule: a queued row with recorded manual
+        # exclusion claims renders Excluded and carries no PendingStage.
+        if row["status"] == SourceStatus.PENDING.value:
+            assert row["stage"] in stages, f"Pending row stage outside PendingStage: {row['id']}"
+        else:
+            assert row["stage"] is None and row["reasons"], row["id"]
 
 
 def test_status_enum_semantics(tmp_path, monkeypatch):
