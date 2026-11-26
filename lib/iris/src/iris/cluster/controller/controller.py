@@ -984,6 +984,7 @@ class Controller:
                 break
             try:
                 write_checkpoint(self._db, self._config.remote_state_dir)
+                logger.info("Periodic checkpoint written")
             except Exception:
                 logger.exception("Periodic checkpoint failed")
 

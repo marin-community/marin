@@ -1139,6 +1139,63 @@ groups:
     folder: Alerts
     interval: 1m
     rules:
+      - uid: iris-controller-checkpoint-failed
+        title: IrisControllerCheckpointFailed
+        condition: C
+        for: 0m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: Iris controller cannot write its periodic checkpoint"
+          description: >-
+            The latest periodic checkpoint attempt failed. Check controller logs and
+            S3 credentials for the storage.remote_state_dir bucket. A successful
+            periodic checkpoint clears this alert; controller liveness is covered separately.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#controller-checkpoint-storage
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1800, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH latest AS (
+                        SELECT "cluster", data,
+                               ROW_NUMBER() OVER (PARTITION BY "cluster" ORDER BY epoch_ms DESC, seq DESC) AS row_rank
+                        FROM "log"
+                        WHERE key = '/system/controller'
+                          AND "cluster" IN ('cw-us-east-02a', 'cw-us-east-08a', 'cw-rno2a')
+                          AND epoch_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT)
+                          AND (data LIKE '%Periodic checkpoint failed%'
+                               OR data LIKE '%Periodic checkpoint written%')
+                      )
+                      SELECT "cluster", CASE WHEN data LIKE '%Periodic checkpoint failed%' THEN 1 ELSE 0 END AS value
+                      FROM latest WHERE row_rank = 1
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
       - uid: iris-federation-peer-unreachable
         title: IrisFederationPeerUnreachable
         condition: C

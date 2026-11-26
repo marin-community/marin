@@ -95,6 +95,20 @@ Restarting alone reuses the local database. Preserve the existing database and
 obtain recovery authorization before restoring older state. For Kubernetes,
 check [controller storage and placement](docs/coreweave.md#controller-state).
 
+### Controller checkpoint storage
+
+`IrisControllerCheckpointFailed` pages when the latest periodic checkpoint
+attempt logged by a CoreWeave controller failed. The controller retries at its
+configured interval; the next successful upload clears the alert. Check the
+controller log for the exception under `Periodic checkpoint failed`, then verify
+the controller's storage credentials and write access to `storage.remote_state_dir`
+in its cluster config. The node storage health probe may use a different bucket,
+so a healthy node probe does not establish checkpoint write access.
+If a Secret refresh restores checkpoint uploads but bundle handoffs still fail,
+the bundle store may retain its startup S3 client. Follow the authorized
+[controller rollout](../../.agents/skills/use-iris/references/controller-rollout.md)
+to replace that client.
+
 ## Job Management
 
 ```bash
