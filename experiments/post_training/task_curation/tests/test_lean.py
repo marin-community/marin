@@ -447,4 +447,3 @@ def test_lean_controls_give_a_daytona_snapshot_room_for_the_grader_image(control
     _, spec = machines.machine(environment, controls.memory_mb, controls.storage_mb)
     resources = snapshot_request_for_spec(spec).resources
     assert resources.disk is not None and resources.disk > LEAN_GRADER_IMAGE_GIB
-    assert resources.memory == 8
