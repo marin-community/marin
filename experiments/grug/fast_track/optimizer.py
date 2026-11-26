@@ -675,6 +675,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """With ``muonc_anneal_decay``: the reference total ``lr_max N`` at which ``muonc_anneal_decay`` applies. The
     matrix ``lambda`` becomes ``muonc_anneal_decay * muonc_anneal_decay_lr_steps / (lr_max N)``, so the total matrix
     decay ``lambda lr_max N`` is the same at every rung. 0: off."""
+    muonc_anneal_adam_decay_lr_steps: float = 0.0
+    """With ``muonc_anneal_decay``: the reference total ``adam_lr N`` at which the Adam-side decays apply. The
+    ``adamc_adam`` group's ``lambda`` and the ``MUONC_ANNEAL_ADAMW_DECAY`` of the Adam groups' rank >= 2 leaves scale by
+    ``muonc_anneal_adam_decay_lr_steps / (adam_lr N)``, so their total decay ``lambda adam_lr N`` is the same at every
+    rung. The head's decay is unchanged. 0: off."""
     muonc_anneal_lr_floor: bool = False
     """With ``muonc_anneal_decay``: the late-annealed matrix LR is clamped from below at the schedule's floor,
     ``lr_m = max(lr_t s(t) / s(t0), min_lr_ratio lr_max)`` from ``t0``; the matrix decay ``lambda_t`` follows the
@@ -697,6 +702,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 self.muonh_decay_power,
             )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        adam_decay_scale = 1.0
+        if self.muonc_anneal_adam_decay_lr_steps:
+            adam_decay_scale = self.muonc_anneal_adam_decay_lr_steps / (self.adam_lr * num_train_steps)
         hyperparams = {"learning_rate": learning_rate_schedule, "adam_lr": adam_lr_schedule}
         if self.muonh_nonsi_anneal or self.muonc_anneal_decay or self.muonh_law_cap_ball:
             late_anneal_start = round(LATE_ANNEAL_FRAC * num_train_steps)
@@ -824,7 +832,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             """Adam at ``lr``; ``decay`` adds the annealed decoupled ``gate_router_weight_decay``."""
             adam = adam_moments(self.beta1, self.beta2)
             if self.muonc_anneal_decay:
-                return optax.chain(adam, _matrix_decoupled_decay(MUONC_ANNEAL_ADAMW_DECAY), optax.scale(-lr))
+                adamw_decay = MUONC_ANNEAL_ADAMW_DECAY
+                if self.muonc_anneal_adam_decay_lr_steps:
+                    adamw_decay *= adam_decay_scale
+                return optax.chain(adam, _matrix_decoupled_decay(adamw_decay), optax.scale(-lr))
             if decay and self.gate_router_weight_decay > 0.0:
                 adam = _scale_by_adam_decoupled_decay(adam, self.gate_router_weight_decay, num_train_steps)
             return optax.chain(adam, optax.scale(-lr))
@@ -869,6 +880,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if self.adamc_head_router_embed or self.muonc_anneal_adamc:
                 # Before scale(-adam_lr): p <- p - adam_lr u - (adam_lr^2 / self.adam_lr) lambda p.
                 adamc_adam_decay = ADAMC_ADAM_DECAY if self.adamc_adam_decay is None else self.adamc_adam_decay
+                if self.muonc_anneal_adam_decay_lr_steps:
+                    adamc_adam_decay *= adam_decay_scale
                 transforms[ADAMC_ADAM_GROUP] = optax.chain(
                     adam_moments(self.beta1, self.beta2),
                     _fixed_decoupled_decay(adamc_adam_decay * adam_lr / self.adam_lr),
@@ -975,6 +988,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("muonc_anneal_adamc must be non-negative and needs muonc_anneal_decay and router_lr_mult 1")
         if self.muonc_anneal_decay_lr_steps < 0 or (self.muonc_anneal_decay_lr_steps and not self.muonc_anneal_decay):
             raise ValueError("muonc_anneal_decay_lr_steps must be non-negative and needs muonc_anneal_decay")
+        if self.muonc_anneal_adam_decay_lr_steps < 0 or (
+            self.muonc_anneal_adam_decay_lr_steps and not self.muonc_anneal_decay
+        ):
+            raise ValueError("muonc_anneal_adam_decay_lr_steps must be non-negative and needs muonc_anneal_decay")
         if self.muonc_anneal_lr_floor and not self.muonc_anneal_decay:
             raise ValueError("muonc_anneal_lr_floor needs muonc_anneal_decay")
         if self.muonh_law_cap_ball and (
