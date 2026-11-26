@@ -270,6 +270,12 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     dialog.get_by_text("Composed launch configuration", exact=True).click()
     expect(dialog.locator("pre")).to_contain_text('"max_steps": 25')
     journey.shoot("branch-run-detail")
+    dialog.get_by_text("Composed launch configuration", exact=True).hover()
+    journey.page.mouse.wheel(0, 1200)
+    expect(dialog.get_by_role("heading", name=branch["label"], exact=True)).not_to_be_in_viewport()
+    journey.page.keyboard.press("Escape")
+    chart.get_by_role("link", name="control-0 · 50.0%").click()
+    expect(dialog.get_by_role("heading", name="control-0", exact=True)).to_be_in_viewport(ratio=1)
     journey.page.keyboard.press("Escape")
 
     toggle.uncheck()
