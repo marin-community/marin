@@ -1,8 +1,9 @@
-import { signals } from './contracts.js';
+import { GRAPH_SAMPLE_LIMIT, metricSignals, OVERVIEW_SAMPLE_LIMIT, SAMPLE_SLICE_MS, signals } from './contracts.js';
 import { startupPhases } from './phases.js';
 
 export const BUCKET_MS = 10_000;
 export const MAX_COUNTER_GAP_MS = 15_000;
+export const MIN_SUMMARY_BUCKET_MS = 2 * MAX_COUNTER_GAP_MS;
 const MAX_ENGINES = 64;
 
 function parseObject(value) {
@@ -61,10 +62,10 @@ function counterIntervals(rows) {
   return intervals;
 }
 
-function bins({ from, to }) {
+function bins({ from, to }, width = BUCKET_MS) {
   const result = [];
-  for (let start = from; start < to; start += BUCKET_MS) {
-    const end = Math.min(start + BUCKET_MS, to);
+  for (let start = from; start < to; start += width) {
+    const end = Math.min(start + width, to);
     result.push({ t: (start + end) / 2, start, end, value: null });
   }
   return result;
@@ -262,10 +263,8 @@ function batchTotals(samples, rows, window) {
   }).sort((a, b) => a.t - b.t);
 }
 
-function entriesForSignal(id, s, rows, window, phases) {
-  const matching = rows.filter((row) => includes(row, s));
-  const entries = [];
-  const add = (data, group = null, groupKey = null) => entries.push({
+function plotSeries(id, s, data, group = null, groupKey = null) {
+  return {
     id: groupKey ? id + '/' + groupKey : id,
     label: s.dimension && group ? group : s.label,
     group: s.dimension ? null : group,
@@ -274,8 +273,15 @@ function entriesForSignal(id, s, rows, window, phases) {
     data,
     kind: s.kind ?? (['cumulative', 'cumulativeMean', 'waitTime', 'concurrency'].includes(s.transform) ? 'line' :
       ['eventRate', 'deltaRate'].includes(s.transform) ? 'bar' : 'scatter'),
-  });
+  };
+}
+
+function entriesForSignal(id, s, rows, window, phases) {
+  const matching = rows.filter((row) => includes(row, s));
+  const entries = [];
+  const add = (data, group, groupKey) => entries.push(plotSeries(id, s, data, group, groupKey));
   if (['cumulative', 'cumulativeMean', 'engineSnapshots'].includes(s.transform)) {
+    if (!matching.length) return [];
     const transform = (items) => {
       if (s.transform === 'cumulativeMean') return cumulativeMean(items, window, s.countName);
       if (s.transform === 'cumulative') return cumulativeRate(items, window);
@@ -381,11 +387,95 @@ function attachPromptOccupancy(rows, points, window, { startMs, endMs, trainingR
   }
 }
 
-export function createMeasurements(rawRows, window, configRows = [], inferenceGpus = null, context = {}) {
-  const decode = (row) => ({
+function decode(row) {
+  return {
     ...row, attributes: parseObject(row.attributes_json),
     body: parseObject(row.body_json), resource: parseObject(row.resource_attributes_json),
-  });
+  };
+}
+
+function addPerGpuRates(series, inferenceGpus) {
+  if (!Number.isSafeInteger(inferenceGpus) || inferenceGpus <= 0) return;
+  for (const id of ['promptTokens', 'generation']) {
+    if (!(id in series)) continue;
+    const [total] = series[id];
+    const normalized = id + 'PerGpu';
+    series[normalized] = total ? [{
+      ...total, id: normalized, unit: 'tokens/s/GPU',
+      data: total.data.map((point) => ({
+        ...point, value: point.value === null ? null : point.value / inferenceGpus,
+      })),
+    }] : [];
+  }
+}
+
+export function createDetailSeries(rawRows, window, card, inferenceGpus) {
+  const rows = rawRows.map(decode).sort(byTime);
+  const series = Object.fromEntries(metricSignals(card)
+    .map(([id, signal]) => [id, entriesForSignal(id, signal, rows, window, [])]));
+  addPerGpuRates(series, inferenceGpus);
+  return series;
+}
+
+function createBucketSeries(rows, buckets, card, inferenceGpus, kind) {
+  const series = {};
+  for (const [id, signal] of metricSignals(card)) {
+    const values = new Map(rows.filter((row) => row.name === signal.name && row.reason === (signal.filter.reason ?? null))
+      .map((row) => [row.bucket_start, row]));
+    const data = buckets.map((bin) => {
+      const row = values.get(bin.start);
+      if (!row) return bin;
+      let value = row.value;
+      if (signal.transform === 'cumulative') value *= 1000 / (bin.end - bin.start);
+      if (signal.transform === 'cumulativeMean') value = row.requests > 0 ? value / row.requests : null;
+      if (signal.transform === 'engineSnapshots') value *= (signal.factor ?? 1) / (signal.average ? row.engines : 1);
+      return { ...bin, value, ...(row.engines && { engines: row.engines }) };
+    });
+    series[id] = [plotSeries(id, kind ? { ...signal, kind } : signal, data)];
+  }
+  addPerGpuRates(series, inferenceGpus);
+  return series;
+}
+
+export function createSummarySeries(rows, window, bucketMs, card, inferenceGpus) {
+  return createBucketSeries(rows, bins(window, bucketMs), card, inferenceGpus);
+}
+
+export function createSampledSeries(rows, samples, card, inferenceGpus) {
+  const buckets = samples.slice().sort((a, b) => a.from - b.from)
+    .map(({ from, to }) => ({ start: from, end: to, t: (from + to) / 2, value: null }));
+  return createBucketSeries(rows, buckets, card, inferenceGpus, 'scatter');
+}
+
+export function sampleEnds(window, phases) {
+  const duration = window.to - window.from;
+  const maxSlices = Math.min(OVERVIEW_SAMPLE_LIMIT, Math.ceil(duration / (2 * SAMPLE_SLICE_MS)));
+  const inWindow = phases.filter((phase) => phase.start < window.to && phase.end > window.from);
+  const evaluation = inWindow.findLast((phase) => phase.kind === 'evaluation');
+  const batchWait = inWindow.findLast((phase) => phase.kind === 'rollout_wait');
+  const recent = [window.to, evaluation?.start, Math.min(batchWait?.end ?? window.from, window.to)]
+    .filter((time) => time > window.from);
+  const uniform = Array.from({ length: maxSlices }, (_, index) =>
+    window.to - Math.floor((index + 0.5) * duration / maxSlices));
+  // Space the first set across the range, then fill gaps in later requests.
+  const firstCount = Math.min(maxSlices, GRAPH_SAMPLE_LIMIT - recent.length);
+  const firstIndices = new Set(Array.from({ length: firstCount }, (_, index) =>
+    Math.floor((index + 0.5) * maxSlices / firstCount)));
+  const candidates = [
+    ...recent, ...Array.from(firstIndices, (index) => uniform[index]),
+    ...uniform.filter((_, index) => !firstIndices.has(index)),
+  ];
+  const ends = [];
+  for (const time of candidates) {
+    if (time > window.from && ends.every((end) => Math.abs(end - time) >= SAMPLE_SLICE_MS)) {
+      ends.push(time);
+    }
+    if (ends.length === maxSlices) break;
+  }
+  return ends;
+}
+
+export function createMeasurements(rawRows, window, configRows = [], inferenceGpus = null, context = {}) {
   const rows = rawRows.map(decode).sort(byTime);
   const phases = rows.filter((row) => row.name === 'async_phase_window').flatMap((row) => {
     const { started_unix_ms: start, finished_unix_ms: end } = row.body;
@@ -407,18 +497,7 @@ export function createMeasurements(rawRows, window, configRows = [], inferenceGp
     }
   }
   attachPromptOccupancy(rows, series.promptWait[0].data, window, context);
-  if (Number.isSafeInteger(inferenceGpus) && inferenceGpus > 0) {
-    for (const id of ['promptTokens', 'generation']) {
-      const [total] = series[id];
-      const normalized = id + 'PerGpu';
-      series[normalized] = [{
-        ...total, id: normalized, unit: 'tokens/s/GPU',
-        data: total.data.map((point) => ({
-          ...point, value: point.value === null ? null : point.value / inferenceGpus,
-        })),
-      }];
-    }
-  }
+  addPerGpuRates(series, inferenceGpus);
   const config = configRows.map(decode).find((row) => includes(row, signals.batchTarget));
   const batchTarget = config ? field(config, signals.batchTarget.value) : null;
   const maxStaleness = config?.body.max_staleness_steps;
