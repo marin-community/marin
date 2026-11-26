@@ -66,12 +66,16 @@ def main() -> None:
             stdout=subprocess.DEVNULL,
         )
         record = staged.model_dump(mode="json")
+        # fsutil's recursive copy nests the source directory under the target
+        # (<text_uri>/<slug>/...), so the record's output dirs point at the
+        # nested locations the scan actually reads.
+        nested = f"{text_uri}/{slug}"
         record.update(
             path=f"{text_uri}/",
             dataset_id=repo,
             dataset_revision=head,
-            main_output_dir=f"{text_uri}/outputs/main",
-            specs_output_dir=f"{text_uri}/specs",
+            main_output_dir=f"{nested}/outputs/main",
+            specs_output_dir=f"{nested}/specs",
         )
         # The scan's raw_load requires the artifact record sidecar at the staged
         # path; write it through fsutil (the local s3fs has no credentials). The
