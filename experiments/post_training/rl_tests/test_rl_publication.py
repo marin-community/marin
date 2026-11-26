@@ -97,10 +97,8 @@ def test_publish_cli_rebuilds_stored_measurements(
             elapsed_excluding_eval_seconds=123,
         )
         if case == "unknown-grandparent":
-            ancestor.resumed_step = 1
-            ancestor.parent = CheckpointReference(
-                export_root=str(path / "unavailable"), attempt_id="grandparent", step=1
-            )
+            parent = CheckpointReference(export_root=str(path / "unavailable"), attempt_id="grandparent", step=1)
+            ancestor = ancestor.model_copy(update={"resumed_step": 1, "parent": parent})
         write_attempt(export, ancestor)
         write_attempt(
             export,
