@@ -121,6 +121,10 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _is_mutable_step(step: StepSpec) -> bool:
+    return step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, ""))
+
+
 def step_is_built(step: StepSpec) -> bool:
     """True when the runner will serve ``step`` from cache rather than rebuild it.
 
@@ -130,7 +134,7 @@ def step_is_built(step: StepSpec) -> bool:
     instead of rebuilt; the launcher re-checks authoritatively before serving the
     node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
     """
-    if step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")):
+    if _is_mutable_step(step):
         return False
     return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
 
@@ -309,9 +313,9 @@ class StepRunner:
             cascades to dependents) so a rerun rebuilds it and its now-unpruned inputs.
             """
             path = step.output_path
-            mutable = check_drift(step)
             status = StatusFile(path, worker_id="check").status
-            if status == STATUS_SUCCESS and not mutable:
+            if status == STATUS_SUCCESS and not _is_mutable_step(step):
+                check_drift(step)
                 logger.info(f"Skip {step.name_with_hash}: already succeeded (pruned subtree)")
                 completed.add(path)
             else:
@@ -368,12 +372,11 @@ class StepRunner:
             logger.info(f"[DRY RUN] Would run {step_name}")
             return None
 
-        # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
-        mutable = check_drift(step)
-
         # Quick read-only status check to avoid submitting unnecessary jobs
         status = StatusFile(output_path, worker_id="check").status
+        mutable = _is_mutable_step(step)
         if status == STATUS_SUCCESS and not mutable:
+            check_drift(step)
             logger.info(f"Skip {step_name}: already succeeded")
             return None
 
@@ -440,11 +443,10 @@ def run_step(step: StepSpec) -> None:
     output_path = step.output_path
     step_label = step.name_with_hash
 
-    # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
-    mutable = check_drift(step)
-
     # 1. Cache check
+    mutable = _is_mutable_step(step)
     if not mutable and check_cache(output_path):
+        check_drift(step)
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
@@ -472,6 +474,7 @@ def run_step(step: StepSpec) -> None:
                 status_file.write_status(STATUS_FAILED)
                 raise
     except StepAlreadyDone:
+        check_drift(step)
         logger.info(f"Step {step_label} completed by another worker")
 
 

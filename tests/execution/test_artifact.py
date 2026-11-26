@@ -79,6 +79,18 @@ def test_same_recipe_rerun_is_cache_hit(tmp_path, monkeypatch):
     run(_toy(V, "a"))
 
 
+def test_cold_step_ignores_incomplete_executor_info(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    output_path = tmp_path / "datasets" / "toy" / V
+    output_path.mkdir(parents=True)
+    (output_path / ".executor_info").write_text('{"name":')
+
+    result = run(_toy(V, "a"))
+
+    assert result[0].payload == "a"
+    assert read_record(output_path.as_posix()).result == {"payload": "a"}
+
+
 # --- advisory drift (no more ImmutableArtifactError) ---------------------------
 
 
