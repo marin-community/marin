@@ -3,10 +3,13 @@
 
 import copy
 import json
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Barrier, local
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import click
@@ -14,7 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import AttemptSummary
+from finestore.rl.rl_progress import AttemptSummary, Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -32,18 +35,23 @@ from fsspec.core import url_to_fs
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
-from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts, recorded_launch
+from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl as runner
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_index
+from experiments.post_training import rl_nightly_controls as nightly
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import rl_publication as publication
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.rl_index import APPLET_ID
+from experiments.post_training.rl_index import list_attempts as read_progress_index
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, lineage_gpu_hours, run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     append_metrics,
+    cohort_from_fixtures,
     copy_evaluations,
     edit_receipt,
     replace_evaluations,
@@ -53,8 +61,8 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
-from experiments.post_training.skyrl_test_support import selection_summary
-from infra.marina.tests.rl_progress_fixtures import grader_report
+from experiments.post_training.skyrl_test_support import read_skyrl_metrics, selection_summary
+from infra.marina.tests.rl_progress_fixtures import grader_report, progress_record
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
 
@@ -205,6 +213,7 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
     if case == "native-composed":
         write_json(report_root / "native-attempt" / "grader_report.json", report)
     attempt = read_stored_skyrl_attempts(str(source))[1]["native-attempt"]
+    attempt = attempt.model_copy(update={"index": None})
     row = publication.build_record(
         str(source),
         table.by_name["data-medium"],
@@ -248,13 +257,25 @@ def test_stored_evaluation_keeps_its_original_selection_and_comparability(preset
         evaluations=(replace(preset.evaluations[0], name="renamed_eval", every=preset.checkpoint_every),),
     )
     write_json(Path(recipe.selection_artifact(newer.held_out_tasks).path()) / "summary.json", selection_summary(40))
-    row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt)
-    assert row.status == "succeeded" and row.failed_facts == []
+    report = gate.GateReport(
+        preset=preset.name,
+        verdict=Verdict.INVALID,
+        effect=None,
+        reason="The evaluation protocol differs",
+        run=gate.RunMetadata(preset_name=preset.name, replicates=1, attempt_ids=(attempt.attempt_id,)),
+        control=gate.ControlMetadata(version="1234abcd", attempts=()),
+        invariants=(),
+        comparisons=(),
+        gaps=(),
+    )
+    row = publication.build_record(str(source), newer, table=preset_table(newer), attempt=attempt, report=report)
+    assert row.status == "succeeded" and row.failed_facts == [], (row.failed_facts, row.evidence)
     native = recorded_launch(attempt)
     (selection,) = native.validation_data
     expected_source = f"{selection.identity}/{selection.relative_path}"
     assert row.evaluation_data_identity == baseline.evaluation_data_identity == expected_source
     assert {item.evaluation_score.profile for item in row.evaluations if item.evaluation_score} == {"eval_lite"}
+    assert row.gate_result is not None and row.gate_result.reason == report.reason
     assert {
         item.evaluation_score.step for item in row.evaluations if item.evaluation_score and item.evaluation_score.final
     } == {preset.updates}
@@ -305,10 +326,157 @@ def test_stored_evaluation_keeps_its_original_selection_and_comparability(preset
     assert family_identity(changed_protocol) != family_identity(changed_tasks)
 
 
+def test_concurrent_issue_claims_keep_one_lineage_issue(tmp_path, monkeypatch):
+    export_root = str(tmp_path / "exports")
+    read_attempts = publication.read_attempts
+    barrier = Barrier(2, timeout=10)
+    thread = local()
+
+    def read_with_race(path, *, view=None):
+        attempts = read_attempts(path, view=view)
+        if view is not None and not getattr(thread, "read", False):
+            thread.read = True
+            barrier.wait()
+        return attempts
+
+    monkeypatch.setattr(publication, "read_attempts", read_with_race)
+
+    def claim(issue):
+        try:
+            return publication.assign_issue(export_root, "same-run", f"attempt-{issue}", issue)
+        except publication.IssueConflict:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        claims = list(executor.map(claim, (73, 74)))
+    [winner] = [claim for claim in claims if claim is not None]
+    assert {attempt.issue for attempt in read_attempts(export_root).values()} == {winner}
+
+
+def test_nightly_fills_current_main_cohorts_and_waits_for_each_child(monkeypatch):
+    monkeypatch.setattr(nightly, "configure_coreweave_s3", lambda: None)
+    monkeypatch.setattr(gate, "compose_preset", lambda preset: preset.name)
+    monkeypatch.setattr(gate, "config_version", lambda config: "current")
+    monkeypatch.setattr("sys.argv", ["rl_nightly_controls", "--batch", "123-1"])
+    base = AttemptSummary.model_validate_json(
+        json.dumps(
+            progress_record()
+            | {
+                "model": "snowball",
+                "series": "learning-medium",
+                "preset_version": "current",
+                "is_control": True,
+                "dirty": False,
+                "branch": "main",
+                "commit": "main-source",
+                "base_commit": "main-source",
+            }
+        )
+    )
+    first = base.model_copy(update={"native_run_id": "control-0", "attempt_id": "first"})
+    records = [
+        first,
+        first.model_copy(update={"attempt_id": "retry"}),
+        base.model_copy(update={"native_run_id": "control-1"}),
+        base.model_copy(update={"native_run_id": "branch-control", "branch": "pull-branch"}),
+        base.model_copy(update={"native_run_id": "old-control", "preset_version": "old"}),
+        base.model_copy(update={"native_run_id": "failed-control", "status": "failed"}),
+    ]
+    monkeypatch.setattr(nightly.rl_index, "list_attempts", lambda: records)
+    requests, waited = {}, []
+
+    def submit(command):
+        identity = command[2], command[command.index("--preset") + 1]
+        requests[identity] = command[command.index("--replicates") + 1]
+
+        def wait():
+            waited.append(identity)
+            return int(identity[1] == "speed-short")
+
+        return SimpleNamespace(wait=wait)
+
+    monkeypatch.setattr(nightly.subprocess, "Popen", submit)
+    assert nightly.main() == 1
+    assert list(requests) == waited and len(requests) == 7
+    assert requests["experiments.post_training.snowball_rl", "learning-medium"] == "3"
+    assert all(count == "5" for (_, name), count in requests.items() if name != "learning-medium")
+    assert all(name != "data-medium" for _, name in requests)
+
+
+def test_control_presets_select_multiple_models_without_duplicates():
+    selected = nightly.select_presets("snowball/learning-medium mochi mochi/learning-medium snowball/speed-medium")
+    assert sorted((model, preset.name) for model, preset in selected) == [
+        ("mochi", "learning-medium"),
+        ("mochi", "speed-medium"),
+        ("snowball", "learning-medium"),
+        ("snowball", "speed-medium"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "merged, permission, selection, error",
+    [
+        (False, "admin", "mochi", "merged pull request"),
+        (True, "read", "mochi", "write permission"),
+        (True, "write", "mochi snowball/data-medium", "snowball/data-medium"),
+        (True, "write", "mochi <unknown>", "&lt;unknown&gt;"),
+        (True, "write", "", "at least one model"),
+        (True, "write", None, None),
+        (True, "write", "mochi snowball/learning-medium", None),
+        (True, "admin", "snowball/speed-medium mochi/learning-medium", None),
+    ],
+)
+def test_control_comment_checks_repository_access_and_dispatches_main(
+    monkeypatch, tmp_path, merged, permission, selection, error
+):
+    event = tmp_path / "comment.json"
+    body = "can we run /rl-controls mochi?" if selection is None else f"/rl-controls {selection}".strip()
+    event.write_text(
+        json.dumps(
+            {
+                "issue": {"number": 14, "pull_request": {}},
+                "comment": {"body": body, "user": {"login": "contributor"}},
+            }
+        )
+    )
+    monkeypatch.setenv("GITHUB_REPOSITORY", "example/marin")
+    calls = []
+    pull = "repos/example/marin/pulls/14"
+    access = "repos/example/marin/collaborators/contributor/permission"
+    comments = "repos/example/marin/issues/14/comments"
+
+    def github(command, **options):
+        calls.append((command, options.get("input")))
+        if pull in command:
+            return json.dumps({"merged": merged}).encode()
+        if access in command:
+            return json.dumps({"permission": permission}).encode()
+        return b'{"html_url":"https://github.com/example/marin/actions/runs/145"}'
+
+    monkeypatch.setattr(nightly.subprocess, "check_output", github)
+    nightly.dispatch_comment(event)
+    if selection is None:
+        assert calls == []
+    elif error:
+        *checks, (reply, _) = calls
+        assert [command[-1] for command, _ in checks] == ([pull, access] if merged else [pull])
+        assert comments in reply
+        assert reply[-1].startswith("body=🤖 <code>") and error in reply[-1]
+        assert len(reply[-1].splitlines()) == 1
+    else:
+        (pull_request, _), (permissions, _), (dispatch, payload), (reply, _) = calls
+        assert pull_request[-1] == pull and permissions[-1] == access
+        assert "X-GitHub-Api-Version: 2026-03-10" in dispatch
+        assert "repos/example/marin/actions/workflows/marin-skyrl-nightly.yaml/dispatches" in dispatch
+        assert json.loads(payload) == {"ref": "main", "inputs": {"controls": "true", "presets": selection}}
+        assert comments in reply
+        assert reply[-1] == "body=🤖 [RL control run](https://github.com/example/marin/actions/runs/145)"
+
+
 @pytest.mark.integration
 @pytest.mark.timeout(180)
 def test_snowball_publication_updates_attempts_and_publishes_controls(
-    preset_table, rl_progress_client, recorded_runs, monkeypatch
+    preset_table, rl_progress_client, recorded_runs, monkeypatch, cache_native_compositions
 ):
     client, request = rl_progress_client
     preset = replace(
@@ -317,23 +485,12 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     )
     table = preset_table(preset)
     monkeypatch.setattr(publication, "configure_coreweave_s3", lambda: None)
-    pin = gate.control_pin(preset, table=table)
-
-    def write_control(name, artifact_name, **kwargs):
-        return recorded_runs(
-            name,
-            artifact_name,
-            attempt_id="pinned-" + artifact_name.rsplit("-r", 1)[1],
-            metrics={"policy/entropy": kwargs["score"]},
-            **kwargs,
-        )
-
-    controls = write_controls(write_control, preset.name)
-    for control in controls:
-        path = control / RUN_INPUTS_FILENAME
-        old_inputs = json.loads(path.read_text())
-        del old_inputs["evaluation_profiles"]
-        write_json(path, old_inputs)
+    entropies = iter(0.48 + index * 0.01 for index in range(gate.CONTROL_COUNT))
+    controls = write_controls(
+        lambda *args, **kwargs: recorded_runs(*args, metrics={"policy/entropy": next(entropies)}, **kwargs),
+        preset.name,
+        cohort_run_id="nightly-batch",
+    )
     sources = [
         recorded_runs(
             preset.name, f"tests/publication-{i}", metrics={"policy/entropy": float(i)}, attempt_id=f"native-{i}"
@@ -346,7 +503,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     )
 
     def stored():
-        return {row["attempt_id"]: row for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]}
+        return {row["attempt_id"]: row for row in client.get(f"/a/{APPLET_ID}/api/runs").json()["runs"]}
 
     def publish(gate_path):
         return publication.publish_runs(
@@ -357,13 +514,16 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
             service_url="http://localhost",
         )
 
+    cohort = cohort_from_fixtures(sources[1])
+
     def saved_gate(requirements=()):
         report = run(
             gate.gate_step(
                 preset,
                 handles,
-                table=table,
-                inputs=run_inputs(preset.name, requirements=requirements, preset=preset),
+                cohort=cohort,
+                group_name="tests/publication",
+                inputs=RunInputs(preset_name=preset.name, requirements=requirements),
             )
         )[0]
         return report, str(report.path)
@@ -430,7 +590,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
 
     repeated = publish(second_gate)
     assert repeated.unserved_records == [] and repeated.errors == []
-    payload = client.get(f"/a/{publication.APPLET_ID}/api/runs").json()
+    payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     assert payload["skipped_records"] == [] and len(payload["runs"]) == 2
     rows = {row["attempt_id"]: row for row in payload["runs"]}
     assert rows["native-0"]["evaluation_data_identity"].endswith("/full_validation.parquet")
@@ -591,7 +751,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert guard_result.unserved_records == [] and guard_result.errors == []
     guard_rows = [
         row
-        for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
+        for row in client.get(f"/a/{APPLET_ID}/api/runs").json()["runs"]
         if row["attempt_id"] in {"native-retry", "native-1"}
     ]
     assert len(guard_rows) == 2
@@ -639,6 +799,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     (sources[1] / "resolved-launch.yaml").unlink()
     missing_report, missing_gate = saved_gate()
     assert missing_report.verdict == "invalid" and missing_report.run.attempt_ids == ("native-retry",)
+    assert missing_report.run.replicates == 2
     missing = publish(missing_gate)
     assert str(sources[1]) in missing.unserved_records and any(
         "No stored native receipt" in error for error in missing.errors
@@ -675,31 +836,44 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert after["native-retry"] == before["native-retry"] and after["native-1"] == before["native-1"]
     assert after["native-0"]["evaluations"] == before["native-0"]["evaluations"]
     assert after["native-0"]["gate_result"] == before["native-0"]["gate_result"]
-    with edit_receipt(controls[0]) as receipt:
-        receipt["result"]["provenance"].update(branch="main", dirty=False, base_commit=pin.commit)
-    command = CliRunner().invoke(
-        publication.command(table), ["--preset", "data-medium", "--marina-url", "http://localhost"]
-    )
-    assert command.exit_code == 0, (command.output, command.exception)
-    assert json.loads(command.output)["unserved_records"] == []
-    served_controls = [
-        row
-        for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
-        if row["attempt_id"].startswith("pinned-")
-    ]
-    assert len(served_controls) == pin.replicates
-    assert all(row["is_control"] for row in served_controls)
-    assert all(row.get("base_commit") is None for row in served_controls)
+    for root in controls:
+        attempt = read_stored_skyrl_attempts(str(root))[0]
+        command = CliRunner().invoke(
+            publication.command(table),
+            [
+                "--preset",
+                preset.name,
+                "--marina-url",
+                "http://localhost",
+                "--run-output",
+                str(root),
+                "--attempt",
+                attempt,
+            ],
+        )
+        assert command.exit_code == 0, (command.output, command.exception)
+    served_controls = [row for row in stored().values() if row.get("is_control") is True]
+    assert len(served_controls) == gate.CONTROL_COUNT
     assert all(
-        row["series"] == row["label"] == "learning-medium" and row["gate_result"] is None for row in served_controls
+        row["branch"] == "main" and row["preset_version"] == report.control.version and row["gate_result"] is None
+        for row in served_controls
     )
-    before_ids = {
-        (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
-    }
-    stale_table = replace(table, control_pins={**table.control_pins, pin.preset: replace(pin, version="unavailable")})
-    missing_controls = publication.publish_controls(stale_table, preset.name, service_url="http://localhost")
-    assert not missing_controls.served_records and len(missing_controls.unserved_records) == pin.replicates
-    after_ids = {
-        (row["run_id"], row["attempt_id"]) for row in client.get(f"/a/{publication.APPLET_ID}/api/runs").json()["runs"]
-    }
-    assert after_ids == before_ids
+
+    assert len({row["native_run_id"] for row in served_controls}) == gate.CONTROL_COUNT
+    assert {row["run_id"] for row in served_controls} == {"nightly-batch"}
+    control_index = read_stored_skyrl_attempts(str(controls[0]))[1]["control-r0"].index
+    assert control_index is not None
+    request(
+        "http://localhost",
+        "POST",
+        f"/a/{APPLET_ID}/query",
+        json_body={
+            "sql": "INSERT INTO rl_runs (run_id, attempt_id, record) VALUES ('invalid-old', 'attempt', '{}')",
+            "parameters": {},
+        },
+    )
+    listing = client.get(f"/a/{APPLET_ID}/api/runs").json()
+    assert [row["run_id"] for row in listing["skipped_records"]] == ["invalid-old"]
+    monkeypatch.setattr(rl_index, "list_attempts", read_progress_index)
+    selected = gate.select_controls(control_index, service_url="http://localhost")
+    assert {member.attempt_id for member in selected.attempts} == {row["attempt_id"] for row in served_controls}

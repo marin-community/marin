@@ -138,9 +138,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
     pq.write_table(pa.table({"task_spec": [changed.model_dump_json()]}), primary)
     with pytest.raises(ValueError, match="task content differs from selection manifest"):
         experiment.get_eval_dataset([str(primary)])
-    mismatched = original.set_column(
-        original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
-    )
+    mismatched = original.set_column(original.schema.get_field_index("family"), "family", pa.array(["wrong-family"]))
     false_label = original.set_column(original.schema.get_field_index("agentic"), "agentic", pa.array([False]))
     membership_path = primary.parent / "validation.parquet"
     membership = pq.read_table(membership_path)

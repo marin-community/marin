@@ -34,7 +34,6 @@ import json
 import os
 from pathlib import Path
 import queue
-import re
 import shutil
 import signal
 import socket
@@ -48,6 +47,7 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 from filelock import FileLock
+from finestore.rl.run_records import RunIndexIdentity
 from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV, IRIS_OUTPUT_DIR_ENV
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
@@ -110,7 +110,6 @@ from cloud.iris.ray_storage import (
     validate_ray_spill_dir,
 )
 from cloud.iris.launch_config import RunMode, derive_launch_topology, hugging_face_models, load_launch_config
-from finestore.rl.run_records import RunIndexIdentity
 from cloud.iris.rl_config_translation import materialize_launch_config
 from cloud.iris.rl_config_translation import TaskLocalSkyRLValues, apply_task_local_values
 from cloud.iris.runtime_environment import RuntimeProfile
@@ -2349,7 +2348,8 @@ def main() -> None:
         apply_policy_chat_template(model_path, args.policy_chat_template)
     resolve_ray_ports()
     rank = _rank()
-    debug_mode = DebugMode(str(launch_config.skyrl.get("trainer", {}).get("debug_mode", DebugMode.LIGHT.value)))
+    trainer = launch_config.skyrl.get("trainer", {})
+    debug_mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
     if rank == 0:
         final_config_path = _write_final_config(
             launch_config,

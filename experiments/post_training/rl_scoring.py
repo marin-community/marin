@@ -6,15 +6,12 @@
 from __future__ import annotations
 
 import math
-import statistics
 from collections import Counter, defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.compute as pc
 from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow
-from finestore.rl.strata import MembershipState, SelectionManifest
 
 SLICE_COLUMNS = ("family", "aai_category", "source", "topic", "difficulty", "agentic")
 AAII_WEIGHTS = {"scientific_reasoning": 0.2, "coding": 0.2, "general": 0.3, "agents": 0.3}
@@ -33,58 +30,12 @@ ANSWER_SCHEMA = pa.schema(
 )
 
 
-@dataclass(frozen=True)
-class EvalLiteVersionScore:
-    score: float | None
-    scored: int
-    missing: tuple[str, ...]
-    digest_mismatches: tuple[str, ...]
-
-
 def _has_verified_score(answer: EvaluationAnswerRow) -> bool:
     return answer.verification_status == "verified" and answer.verifier_score is not None
 
 
 def _scored_answer(answer: EvaluationAnswerRow) -> bool:
     return _has_verified_score(answer) and not answer.error_type and not answer.error_treatment
-
-
-def score_eval_lite_version(
-    rows: Sequence[EvaluationTaskRow], selection: SelectionManifest, *, expected_answers: int | None = None
-) -> EvalLiteVersionScore:
-    """Score one attempt, evaluation and step against an EvalLite version's active tasks.
-
-    Every task needs a matching digest and verified answers. Each task contributes
-    the mean of its normalized answer scores, with equal weight across tasks.
-    """
-    if len({(row.attempt_id, row.evaluation, row.step) for row in rows}) > 1:
-        raise ValueError("select one evaluation, attempt and step before scoring an EvalLite version")
-    measured = {row.task_id: row for row in rows}
-    if len(measured) != len(rows):
-        raise ValueError("duplicate per-task evaluation rows")
-
-    scores, missing, mismatches = [], [], []
-    for task_id, expected in sorted(selection.tasks.items()):
-        if expected.state != MembershipState.ACTIVE:
-            continue
-        row = measured.get(task_id)
-        if row is None or (expected_answers is not None and len(row.answers) != expected_answers):
-            missing.append(task_id)
-        elif row.task_digest is None or row.task_digest != expected.task_digest:
-            mismatches.append(task_id)
-        else:
-            verified = [
-                answer.verifier_score
-                for answer in row.answers
-                if _scored_answer(answer) and answer.verifier_score is not None and 0 <= answer.verifier_score <= 1
-            ]
-            if verified and len(verified) == len(row.answers):
-                scores.append(statistics.mean(verified))
-            else:
-                missing.append(task_id)
-
-    score = statistics.mean(scores) if scores and not (missing or mismatches) else None
-    return EvalLiteVersionScore(score, len(scores), tuple(missing), tuple(mismatches))
 
 
 def answer_table(evaluation_name: str, tasks: Sequence[EvaluationTaskRow]) -> pa.Table:

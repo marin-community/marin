@@ -53,7 +53,7 @@ record. `GET /api/runs` returns stored summaries with `has_grader_report` and li
 in `skipped_records`. The detail view reads the redacted configuration from
 `GET /api/configuration` with the run and attempt IDs. See the
 [Snowball publication rules](../../../../docs/recipes/rl-experiments.md#dashboard-publication)
-for record semantics, retries and publishing pinned controls.
+for record semantics and publication retries.
 
 ## Validate and release
 
