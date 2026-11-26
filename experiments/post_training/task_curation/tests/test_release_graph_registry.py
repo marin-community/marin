@@ -21,6 +21,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import graph as release_graph_module
+from experiments.post_training.task_curation.release_stages import release_check
 from experiments.post_training.task_curation.release_stages.graph import (
     _STAGE_SPECS,
     GRAPH_RECEIPT_KIND,
@@ -751,3 +752,21 @@ def test_curriculum_compose_receipt_is_its_sealed_handoff():
     proof = {"release_id": "r40", "handoff": handoff, "task_count": 3, "source_count": 1}
     receipt = _stage_receipt("curriculum_compose", proof, _STAGE_SPECS["curriculum_compose"].receipt_key)
     assert receipt.receipt.model_dump(mode="json") == handoff
+
+
+def test_typed_inputs_keep_defaults_for_inputs_a_phase_omits(tmp_path):
+    """R40: the preflight config names no preflight receipt; typed_inputs raised KeyError."""
+    plan = fixture_plan()
+    built = release_graph(plan)
+    prefix = str(tmp_path / "prefix")
+    package_receipt = {"uri": "s3://bucket/package.json", "sha256": "c" * 64}
+    derived = {
+        "oracle_inventory": {"uri": "s3://bucket/package-inputs/oracle-inventory.json", "sha256": "2" * 64},
+        "source_counts": {"uri": "s3://bucket/package-inputs/source-counts.json", "sha256": "3" * 64},
+    }
+    _write_dep(built.stages["package_preview"], prefix, "package_preview", plan.release_id, package_receipt, **derived)
+    config = _materialized_inputs(built.stages["release_check_preflight"], prefix)
+    config.pop("graph_receipt_root")
+    inputs = typed_inputs(release_check.ReleaseCheckInputs, config)
+    assert inputs.preflight_receipt is None and inputs.published_revision is None
+    inputs.validate()

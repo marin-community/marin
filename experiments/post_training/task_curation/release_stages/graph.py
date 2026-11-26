@@ -472,6 +472,9 @@ def typed_inputs(inputs_type: type, config: dict) -> Any:
     hints = typing.get_type_hints(inputs_type)
     kwargs = {}
     for field in dataclasses.fields(inputs_type):
+        if field.name not in config and field.default is not dataclasses.MISSING:
+            # A phase-specific optional input the stage's config omits keeps its default.
+            continue
         kwargs[field.name] = _coerce_ref(config[field.name], hints[field.name])
     return inputs_type(**kwargs)
 
