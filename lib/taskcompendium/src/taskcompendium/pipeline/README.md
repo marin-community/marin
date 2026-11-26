@@ -221,7 +221,6 @@ from taskcompendium.pipeline.task_store import TaskStore, TaskView
 with TaskStore("s3://bucket/task-store") as store:
     token = store.add(tasks, author="curation", message="import source X")
     store.update(["task-1"], fix, author="alice", message="fix the grader of task-1")
-    versions = store.history("task-1")  # newest first, with commit ids and messages
 
 pinned = TaskView.at("s3://bucket/task-store", token.commit_id)
 same_tasks = list(pinned.tasks())
@@ -231,8 +230,8 @@ same_tasks = list(pinned.tasks())
 repeated import commits nothing. `update` reads the newest versions, applies the
 edit and commits; when another writer changes one of the tasks first, the edit
 runs again on the newer version. A consumer records the commit id it read and
-gets the same tasks from `TaskView.at(root, commit_id)` later. `TaskView` and
-`task_history` need no write access to the archive.
+gets the same tasks from `TaskView.at(root, commit_id)` later. `TaskView` needs no
+write access to the archive.
 
 ## Grading environments
 

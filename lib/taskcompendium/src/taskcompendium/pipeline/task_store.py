@@ -13,11 +13,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from dataclasses import dataclass
 from types import TracebackType
 
 import pyarrow as pa
-from finestore.history import CommitRecord, row_history
 from finestore.layout import CommitToken, OnConflict
 from finestore.reader import ReadView
 from finestore.store import DataStore, Transaction
@@ -28,14 +26,6 @@ TASKS_TABLE = "tasks"
 TASK_ID = "task_id"
 SPEC = "spec"
 TASKS_SCHEMA = pa.schema([pa.field(TASK_ID, pa.string(), nullable=False), pa.field(SPEC, pa.string(), nullable=False)])
-
-
-@dataclass(frozen=True)
-class TaskVersion:
-    """One committed version of a task and the commit that wrote it."""
-
-    commit: CommitRecord
-    task: TaskSpec
 
 
 class TaskView:
@@ -64,14 +54,6 @@ class TaskView:
         """Yield the newest version of every task, in task-id order."""
         for row in self._view.iter_rows(TASKS_TABLE, columns=[TASK_ID, SPEC]):
             yield _task(row)
-
-
-def task_history(root: str, task_id: str) -> list[TaskVersion]:
-    """Every committed version of one task, newest first; empty for an unknown id."""
-    return [
-        TaskVersion(commit=version.commit, task=_task(version.row))
-        for version in row_history(root, TASKS_TABLE, (task_id,))
-    ]
 
 
 class TaskStore:
@@ -142,10 +124,6 @@ class TaskStore:
     def view(self, commit_id: str | None = None) -> TaskView:
         """The tasks as commit ``commit_id`` left them, or as the newest commit holds them."""
         return TaskView.at(self.root, commit_id)
-
-    def history(self, task_id: str) -> list[TaskVersion]:
-        """Every committed version of one task, newest first."""
-        return task_history(self.root, task_id)
 
 
 def _row(task: TaskSpec) -> dict:

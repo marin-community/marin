@@ -49,18 +49,13 @@ def test_add_commits_new_and_changed_tasks_and_keeps_every_version(tmp_path):
             "c": "one",
         }
         assert [(task.id, _prompt(task)) for task in store.view().tasks()] == [("a", "two"), ("b", "one"), ("c", "one")]
-        history = store.history("a")
 
-    assert [(_prompt(version.task), version.commit.info and version.commit.info.message) for version in history] == [
-        ("two", "fix a, add c"),
-        ("one", "import"),
-    ]
     past = TaskView.at(root, first.commit_id)
     assert past.commit_id == first.commit_id
     assert {task_id: _prompt(task) for task_id, task in past.get(["a", "c"]).items()} == {"a": "one"}
 
 
-def test_concurrent_updates_of_one_task_each_land_as_a_version(tmp_path):
+def test_concurrent_updates_of_one_task_all_land(tmp_path):
     root = str(tmp_path / "tasks")
     with TaskStore(root) as store:
         store.add([_task("a", "one")], author="alice", message="import")
@@ -87,4 +82,3 @@ def test_concurrent_updates_of_one_task_each_land_as_a_version(tmp_path):
         thread.join()
 
     assert len(TaskView.at(root).get(["a"])["a"].labels) == writers * edits
-    assert len(TaskStore(root).history("a")) == writers * edits + 1
