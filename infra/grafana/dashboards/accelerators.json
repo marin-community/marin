@@ -1894,7 +1894,7 @@
       "id": 17,
       "type": "marin-infra-panel",
       "title": "SM utilization by GPU",
-      "description": "One time raster lane per reporting GPU, ordered by cluster, node, and device. Green is low activity, orange is high activity, and dark gaps are missing samples. SM activity is the fraction of time at least one warp was active on a streaming multiprocessor; hover for the exact GPU and value.",
+      "description": "One time raster lane per reporting GPU, ordered by cluster, node, and device. Green is low activity, orange is high activity, and dark gaps are missing samples. SM activity is the fraction of time at least one warp was active on a streaming multiprocessor; hover for the exact GPU and value, and click a cell to open its node in Node details on this range.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"

@@ -1,12 +1,13 @@
 import React, { MouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
-import { DataFrame } from '@grafana/data';
+import { DataFrame, TimeRange } from '@grafana/data';
+import { locationService } from '@grafana/runtime';
 import { useTheme2 } from '@grafana/ui';
 import { frameWithField, smUtilizationPoints, smUtilizationRasterData } from '../data';
 import { SmUtilizationDevice, SmUtilizationRasterData } from '../types';
 import { PanelMessage } from './PanelMessage';
 
-interface Props { frames: DataFrame[]; width: number; height: number }
+interface Props { frames: DataFrame[]; width: number; height: number; timeRange: TimeRange }
 
 interface Geometry {
   left: number;
@@ -61,6 +62,21 @@ function smColor(percent: number): string {
   const [lowerValue, lowerColor] = SM_COLOR_STOPS[upperIndex - 1];
   const [upperValue, upperColor] = SM_COLOR_STOPS[upperIndex];
   return blend(lowerColor, upperColor, (value - lowerValue) / (upperValue - lowerValue));
+}
+
+// Relative bounds such as now-3h stay relative, as Grafana's ${__url_time_range} keeps them.
+function rangeBound(raw: TimeRange['raw']['from'], resolved: TimeRange['from']): string {
+  return typeof raw === 'string' ? raw : String(resolved.valueOf());
+}
+
+export function nodeDetailsUrl(device: SmUtilizationDevice, timeRange: TimeRange): string {
+  const params = new URLSearchParams({
+    'var-cluster': device.cluster,
+    'var-node': device.node,
+    from: rangeBound(timeRange.raw.from, timeRange.from),
+    to: rangeBound(timeRange.raw.to, timeRange.to),
+  });
+  return `/d/marin-nodes?${params.toString()}`;
 }
 
 const SM_COLORS = Array.from({ length: 101 }, (_, percent) => smColor(percent));
@@ -194,7 +210,7 @@ function drawRaster(
   }
 }
 
-export function SmUtilizationRaster({ frames, width, height }: Props) {
+export function SmUtilizationRaster({ frames, width, height, timeRange }: Props) {
   const theme = useTheme2();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hovered, setHovered] = useState<HoveredCell | null>(null);
@@ -260,9 +276,10 @@ export function SmUtilizationRaster({ frames, width, height }: Props) {
         ref={canvasRef}
         role="img"
         aria-label={summary}
-        className={css`display:block;`}
+        className={css`display:block;cursor:${hovered ? 'pointer' : 'default'};`}
         onMouseMove={updateHovered}
         onMouseLeave={() => setHovered(null)}
+        onClick={() => hovered && locationService.push(nodeDetailsUrl(hovered.device, timeRange))}
       />
       <div
         aria-label="SM utilization color scale from 0 to 100 percent"
@@ -286,6 +303,7 @@ export function SmUtilizationRaster({ frames, width, height }: Props) {
           <strong>{hovered.percent.toFixed(1)}% SM active</strong>
           <div>{hovered.device.cluster} · {hovered.device.node} · GPU {hovered.device.gpu}</div>
           <div className={css`color:${theme.colors.text.secondary};`}>{formatUtc(hovered.sampledAt)} UTC</div>
+          <div className={css`color:${theme.colors.text.secondary};`}>Click to open the node in Node details</div>
         </div>
       )}
     </section>

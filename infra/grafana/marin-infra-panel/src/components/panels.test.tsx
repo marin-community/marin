@@ -1,5 +1,6 @@
 import React from 'react';
-import { toDataFrame } from '@grafana/data';
+import { dateTime, toDataFrame } from '@grafana/data';
+import { locationService } from '@grafana/runtime';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CommitStrip } from './CommitStrip';
 import { ClusterCapacity } from './ClusterCapacity';
@@ -7,6 +8,10 @@ import { NightlyMatrix } from './NightlyMatrix';
 import { SmUtilizationRaster } from './SmUtilizationRaster';
 import { StatusPage } from './StatusPage';
 import { WandbChart } from './WandbChart';
+
+jest.mock('@grafana/runtime', () => ({ locationService: { push: jest.fn() } }));
+
+const LAST_3H = { from: dateTime(0), to: dateTime(10_800_000), raw: { from: 'now-3h', to: 'now' } };
 
 // An empty query result — what the bridge returns while a source is briefly
 // unavailable (missing token, GitHub rate limit, cold cache). The views used to
@@ -24,7 +29,7 @@ test('every view renders a placeholder instead of throwing on empty data', () =>
   rerender(<ClusterCapacity frames={[]} width={1200} height={800} />);
   expect(screen.getByText('No Kubernetes node inventory reported.')).toBeInTheDocument();
 
-  rerender(<SmUtilizationRaster frames={[]} width={700} height={240} />);
+  rerender(<SmUtilizationRaster frames={[]} width={700} height={240} timeRange={LAST_3H} />);
   expect(screen.getByLabelText('No data')).toBeInTheDocument();
 });
 
@@ -141,7 +146,7 @@ test('SM raster hover matches the painted time bucket', () => {
     { time: 0, cluster: 'cw-a', node: 'node-1', gpu: '1', sm_utilization: 50 },
   ])];
 
-  render(<SmUtilizationRaster frames={frames} width={700} height={240} />);
+  render(<SmUtilizationRaster frames={frames} width={700} height={240} timeRange={LAST_3H} />);
   const canvas = screen.getByRole('img');
   jest.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
     x: 0, y: 0, left: 0, top: 0, right: 700, bottom: 240, width: 700, height: 240, toJSON: () => ({}),
@@ -153,6 +158,32 @@ test('SM raster hover matches the painted time bucket', () => {
 
   expect(screen.getByRole('tooltip')).toHaveTextContent('25.0%');
   expect(screen.getByRole('tooltip')).toHaveTextContent('node-1');
+  contextSpy.mockRestore();
+});
+
+test('clicking an SM raster cell opens its node in Node details on the same range', () => {
+  const context = {
+    setTransform: jest.fn(), clearRect: jest.fn(), fillRect: jest.fn(), beginPath: jest.fn(),
+    moveTo: jest.fn(), lineTo: jest.fn(), stroke: jest.fn(), fillText: jest.fn(),
+  } as unknown as CanvasRenderingContext2D;
+  const contextSpy = jest.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context);
+  const frames = [frame('A', [
+    { time: 0, cluster: 'cw-a', node: 'node-1', gpu: '0', sm_utilization: 25 },
+    { time: 0, cluster: 'cw-b', node: 'node-2', gpu: '0', sm_utilization: 75 },
+  ])];
+
+  render(<SmUtilizationRaster frames={frames} width={700} height={240} timeRange={LAST_3H} />);
+  const canvas = screen.getByRole('img');
+  jest.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+    x: 0, y: 0, left: 0, top: 0, right: 700, bottom: 240, width: 700, height: 240, toJSON: () => ({}),
+  });
+  // The second lane (cw-b / node-2) covers the plot's lower half.
+  fireEvent.mouseMove(canvas, { clientX: 300, clientY: 200 });
+  fireEvent.click(canvas);
+
+  expect(locationService.push).toHaveBeenCalledWith(
+    '/d/marin-nodes?var-cluster=cw-b&var-node=node-2&from=now-3h&to=now'
+  );
   contextSpy.mockRestore();
 });
 
