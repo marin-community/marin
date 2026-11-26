@@ -251,6 +251,8 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         assert served["issue"] == changed["issue"]
         assert (served["commit"], served["settings"], served["is_control"]) == (rich["commit"], rich["settings"], True)
         assert served["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
+    unclassified = main_publication | {"attempt_id": "unclassified", "is_control": None}
+    assert publish(unclassified | {"evaldash_run_ids": None})["is_control"] is None
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
     assert "status: literal_error" in skipped["test/bad-status"]

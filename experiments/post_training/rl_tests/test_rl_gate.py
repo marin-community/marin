@@ -247,6 +247,7 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
                 preset=preset,
             ),
             cohort=cohort_from_fixtures(roots[0]),
+            group_name="users/test/requirements",
         )
 
     report = run(gate_for_candidates())[0]
@@ -261,6 +262,11 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         (0, True),
         (1, False),
     ]
+
+    edit_metrics(roots[1], lambda row: row.update({key: 0.0}))
+    updated = run(gate_for_candidates())[0]
+    assert updated.path != report.path
+    assert all(row.holds for row in updated.invariants if row.name == "require/" + key)
 
     cohort = cohort_from_fixtures(roots[0])
     member = cohort.attempts[0]
@@ -693,6 +699,7 @@ def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
         "missing-guard",
         "omitted-candidate-default",
         "protocol-temperature",
+        "family-assignment",
         "evaluation-cadence",
         "malformed-seed",
     ],
@@ -783,6 +790,14 @@ def test_gate_compares_recorded_configuration_and_defaults(
             set_path(receipt, path, value)
     if case == "missing-guard":
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
+    if case == "family-assignment":
+        current = read_stored_skyrl_attempts(str(candidate))[0]
+        export_root = str(candidate / "exports")
+        rows = read_evaluations(export_root, attempt_id=current, evaluation="eval/")
+        first = next(row for row in rows if row.step == preset.updates)
+        reassigned = first.model_copy(update={"strata": first.strata.model_copy(update={"family": "alternate"})})
+        write_evaluations(export_root, [reassigned])
+        reasons = ("scoring groups differ",)
     if case == "evaluation-cadence":
         with edit_receipt(candidate) as receipt:
             evaluation = next(

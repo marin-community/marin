@@ -36,7 +36,7 @@ from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
-from marin.execution.artifact import is_mutable_version
+from marin.execution.artifact import is_mutable_version, read_artifact
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
@@ -44,7 +44,13 @@ from marin.execution.step_runner import check_cache
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
-from marin.rl.cli import CONTROL_COHORT_ENV, RUN_INDEX_ENV, submit_or_run, validate_coordinator_graph
+from marin.rl.cli import (
+    CACHED_ATTEMPTS_ENV,
+    CONTROL_COHORT_ENV,
+    RUN_INDEX_ENV,
+    submit_or_run,
+    validate_coordinator_graph,
+)
 from marin.rl.skyrl import (
     IRIS_HUB_CLUSTER_CONFIG,
     ArtifactHfModel,
@@ -62,6 +68,7 @@ from marin.rl.skyrl_records import (
     RecordedLaunch,
     attempt_tracking,
     read_stored_skyrl_attempt,
+    read_stored_skyrl_attempts,
 )
 from pydantic import BaseModel, TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
@@ -96,6 +103,7 @@ _IRIS_DASHBOARD_URL = "https://iris.oa.dev"
 _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
 logger = logging.getLogger(__name__)
 _SUBMITTED_INDEX = TypeAdapter(dict[str, RunIndexIdentity])
+_CACHED_ATTEMPTS = TypeAdapter(dict[str, str])
 
 
 class SFTModelPreset(Protocol):
@@ -617,6 +625,7 @@ class _PublicationWatch(BaseModel):
     job: str
     preset: str
     outputs: tuple[str, ...]
+    cached_attempts: dict[str, str]
     gate: rl_gate.GateAddress | None
     timeout_seconds: float
     service_url: str | None
@@ -624,7 +633,12 @@ class _PublicationWatch(BaseModel):
 
 
 def _publication_watch(
-    job: JobName, handles: list[ArtifactStep], preset: presets.Preset, service_url: str | None, issue: int | None
+    job: JobName,
+    handles: list[ArtifactStep],
+    preset: presets.Preset,
+    service_url: str | None,
+    issue: int | None,
+    cached_attempts: dict[str, str],
 ) -> _PublicationWatch:
     run = _from_handles(handles)
     prefix = recipe.run_prefix(preset)
@@ -632,6 +646,7 @@ def _publication_watch(
         job=str(job),
         preset=preset.name,
         outputs=tuple(step.path(prefix) for step in run.runs),
+        cached_attempts=cached_attempts,
         gate=rl_gate.gate_address(run.gate, prefix) if run.gate is not None else None,
         timeout_seconds=preset.recipe.layout.coordinator_timeout_hours * 3600,
         service_url=service_url,
@@ -680,6 +695,7 @@ def _watch_publication(
             table=table,
             service_url=watch.service_url,
             coordinator=watch.job,
+            cached_attempts=watch.cached_attempts,
             interrupted=state != JobState.SUCCEEDED,
             submitted_gate=watch.gate,
             issue=watch.issue,
@@ -715,8 +731,9 @@ def _wait_for_run(
     service_url: str | None,
     has_following: bool,
     issue: int | None,
+    cached_attempts: dict[str, str],
 ) -> None:
-    watch = _publication_watch(job, handles, preset, service_url, issue)
+    watch = _publication_watch(job, handles, preset, service_url, issue, cached_attempts)
     parent_state, publication, gate_path = _watch_publication(watch, table)
     coordinator_error = (
         f"coordinator {job} is {parent_state}; required verdict unavailable"
@@ -783,7 +800,7 @@ def _submit_from_launcher(
     max_concurrent: int,
     context: click.Context,
     preset: presets.Preset,
-) -> JobName:
+) -> tuple[JobName, dict[str, str]]:
     module = _entry_module(module)
     submitted_at = datetime.now(UTC).isoformat()
     index: RunIndexIdentity = context.meta["rl_index"]
@@ -794,9 +811,23 @@ def _submit_from_launcher(
         step.path(prefix): step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id
         for step in runs
     }
+    cached_attempts = {}
+    for path in native_ids:
+        if not check_cache(path):
+            continue
+        try:
+            cached = read_artifact(path, SkyRLRun)
+        except FileNotFoundError:
+            continue
+        if cached.attempt_id is not None:
+            cached_attempts[path] = cached.attempt_id
     indexed_runs = dict.fromkeys(native_ids.values(), index)
     metadata = _SUBMITTED_INDEX.dump_json(indexed_runs).decode()
-    environment = {**os.environ, RUN_INDEX_ENV: metadata}
+    environment = {
+        **os.environ,
+        RUN_INDEX_ENV: metadata,
+        CACHED_ATTEMPTS_ENV: _CACHED_ATTEMPTS.dump_json(cached_attempts).decode(),
+    }
     if cohort := context.meta.get("rl_control_cohort"):
         environment[CONTROL_COHORT_ENV] = cohort.model_dump_json()
     if revision := context.meta.get("sft_source_revision"):
@@ -826,11 +857,13 @@ def _submit_from_launcher(
     _print_status(result)
     if not context.params["wait"]:
         try:
-            watch = _publication_watch(job, rl_handles, preset, context.params["url"], context.params["issue"])
+            watch = _publication_watch(
+                job, rl_handles, preset, context.params["url"], context.params["issue"], cached_attempts
+            )
             _print_status({"publication_log": _follow_detached(module, watch)})
         except OSError as error:
             logger.warning("Iris accepted %s. The publication watcher could not start (%s)", job, type(error).__name__)
-    return job
+    return job, cached_attempts
 
 
 def _run_command(
@@ -851,13 +884,15 @@ def _run_command(
         preset = context.meta["rl_preset"]
         count = context.meta["rl_handle_count"]
         rl_handles = handles[:count]
-        if get_job_info() is not None:
+        if (coordinator := get_job_info()) is not None:
             validate_coordinator_graph(handles)
-            _run_graph(rl_handles, max_concurrent)
+            _run_graph(rl_handles, max_concurrent, recipe.run_prefix(preset), str(coordinator.job_id))
             if following := handles[count:]:
                 build_artifacts(*following, max_concurrent=max_concurrent)
             return
-        job = _submit_from_launcher(entry_module, argv, handles, rl_handles, max_concurrent, context, preset)
+        job, cached_attempts = _submit_from_launcher(
+            entry_module, argv, handles, rl_handles, max_concurrent, context, preset
+        )
         if options["wait"]:
             _wait_for_run(
                 job,
@@ -867,6 +902,7 @@ def _run_command(
                 service_url=options["url"],
                 has_following=len(handles) > count,
                 issue=options["issue"],
+                cached_attempts=cached_attempts,
             )
 
     return click.command(
@@ -1139,9 +1175,20 @@ def command(
     return run_command
 
 
-def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
+def _run_graph(handles: list[ArtifactStep], max_concurrent: int, prefix: str, coordinator: str) -> None:
     planned = _from_handles(handles)
     attempts = build_artifacts(*planned.runs, max_concurrent=max_concurrent)
+    cached = _CACHED_ATTEMPTS.validate_json(os.environ.get(CACHED_ATTEMPTS_ENV, "{}"))
+    for step, artifact in zip(planned.runs, attempts, strict=True):
+        path, attempt_id = step.path(prefix), artifact.attempt_id
+        if attempt_id is None or attempt_id == cached.get(path):
+            continue
+        _, stored = read_stored_skyrl_attempts(path)
+        record = stored.get(attempt_id)
+        if record is None or record.native.config["run"].get("coordinator_iris_job_id") != coordinator:
+            raise rl_gate.InvalidComparison(
+                f"native attempt changed between submission and execution: {path}/{attempt_id}"
+            )
     gate = rl_gate.completed_gate(planned.gate, [artifact.attempt_id for artifact in attempts])
     if gate is not None:
         build_artifacts(gate, max_concurrent=max_concurrent)

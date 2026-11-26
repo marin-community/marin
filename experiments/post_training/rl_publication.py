@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import cast
 
 import click
+from finestore.commit import CommitConflict
+from finestore.reader import ReadView
 from finestore.rl.rl_progress import (
     GRADER_REPORT_FILENAME,
     GRADER_REPORTS_DIR,
@@ -29,14 +31,15 @@ from finestore.rl.run_records import (
     read_attempt,
     read_attempt_metrics,
     read_attempts,
+    run_records_root,
+    update_attempt,
     write_attempt,
 )
+from finestore.store import DataStore
 from marin.execution.artifact import read_record
 from marin.rl.skyrl_records import (
-    EXPORTS_SUBDIRECTORY,
     RecordedLaunch,
     attempt_tracking,
-    read_stored_skyrl_attempt,
     read_stored_skyrl_attempts,
     recorded_launch,
 )
@@ -311,9 +314,9 @@ class IssueConflict(ValueError):
     """The native output already has a different assigned issue."""
 
 
-def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
+def lineage_issue(export_root: str, requested: int | None = None, *, view: ReadView | None = None) -> int | None:
     """Read the run's issue and verify a proposed value against stored assignments."""
-    issues = {attempt.issue for attempt in read_attempts(export_root).values() if attempt.issue is not None}
+    issues = {attempt.issue for attempt in read_attempts(export_root, view=view).values() if attempt.issue is not None}
     if requested is not None:
         issues.add(requested)
     if len(issues) > 1:
@@ -322,18 +325,20 @@ def lineage_issue(export_root: str, requested: int | None = None) -> int | None:
 
 
 def assign_issue(export_root: str, run_id: str, attempt_id: str, requested: int | None) -> int | None:
-    issue = lineage_issue(export_root, requested)
-    if issue is not None:
-        write_attempt(export_root, AttemptRecord(run_id=run_id, attempt_id=attempt_id, issue=issue))
-    return issue
+    with DataStore.open(run_records_root(export_root)) as store:
+        while True:
+            view = store.read_view()
+            issue = lineage_issue(export_root, requested, view=view)
+            if issue is None:
+                return None
+            try:
+                update_attempt(store, AttemptRecord(run_id=run_id, attempt_id=attempt_id, issue=issue), base=view)
+            except CommitConflict:
+                continue
+            return issue
 
 
-def _coordinator_attempts(path: str, coordinator: str) -> dict[str, AttemptRecord]:
-    export_root = str(StoragePath(path) / EXPORTS_SUBDIRECTORY)
-    attempts = read_attempts(export_root)
-    current = read_stored_skyrl_attempt(path)
-    if current is not None:
-        attempts[current.attempt_id] = current
+def _coordinator_attempts(attempts: Mapping[str, AttemptRecord], coordinator: str) -> dict[str, AttemptRecord]:
     return {
         key: attempt
         for key, attempt in attempts.items()
@@ -351,7 +356,8 @@ def publish_running(
 ) -> None:
     """Upsert the prepared attempt for this coordinator while native work runs."""
     try:
-        for attempt in _coordinator_attempts(path, coordinator).values():
+        _, stored = read_stored_skyrl_attempts(path)
+        for attempt in _coordinator_attempts(stored, coordinator).values():
             key = (attempt.index_run_id, attempt.attempt_id)
             if key in published or attempt.native.result.state.is_terminal or attempt.interruption is not None:
                 continue
@@ -372,17 +378,23 @@ def _prepare_publication_attempts(
     path: str,
     coordinator: str | None,
     interrupted: bool,
+    cached_attempt: str | None,
 ) -> _OutputAttempts:
     current, stored = read_stored_skyrl_attempts(path)
     if coordinator is None:
         return _OutputAttempts(current, stored)
-    attempts = _coordinator_attempts(path, coordinator)
+    attempts = _coordinator_attempts(stored, coordinator)
     if current not in attempts:
         if attempts:
             succeeded = [key for key, row in attempts.items() if row.native.result.state == "succeeded"]
             candidates = succeeded or list(attempts)
             current = candidates[0] if len(candidates) == 1 else None
-        elif not interrupted and current in stored and stored[current].native.result.state == "succeeded":
+        elif (
+            cached_attempt is not None
+            and cached_attempt in stored
+            and stored[cached_attempt].native.result.state == "succeeded"
+        ):
+            current = cached_attempt
             attempts[current] = stored[current]
         else:
             current = None
@@ -420,6 +432,7 @@ def publish_runs(
     attempt_id: str | None = None,
     issue: int | None = None,
     coordinator: str | None = None,
+    cached_attempts: Mapping[str, str] | None = None,
     interrupted: bool = False,
     submitted_gate: gate.GateAddress | None = None,
 ) -> PublicationOutcome:
@@ -430,7 +443,8 @@ def publish_runs(
     snapshots = {}
     for path in outputs:
         try:
-            snapshots[path] = _prepare_publication_attempts(path, coordinator, interrupted)
+            cached = cached_attempts.get(path) if cached_attempts is not None else None
+            snapshots[path] = _prepare_publication_attempts(path, coordinator, interrupted, cached)
         except Exception as error:
             result.unserved_records.append(path)
             result.errors.append(str(error))

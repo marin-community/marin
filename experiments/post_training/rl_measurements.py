@@ -555,6 +555,16 @@ def read_measurements(
         ids = frozenset(table["task_id"].to_pylist())
         intended_step = workload.metric_step(preset.updates)
         sessions = [(evaluation.name, table, intended_step)]
+        if evaluation.held_out:
+            task_digest, protocol = identities[evaluation.name]
+            identities[evaluation.name] = (
+                task_digest,
+                {
+                    **protocol,
+                    "family_scoring": score_membership(table, "family_mean"),
+                    "aai_scoring": score_membership(table, "aai_weighted_mean"),
+                },
+            )
         if evaluation.at_start:
             if initial.num_rows and frozenset(initial["task_id"].to_pylist()) != ids:
                 raise InvalidComparison(f"initial and final evaluation task IDs differ: {path}")
@@ -583,7 +593,7 @@ def read_measurements(
                                 (
                                     recorded_task_sets[evaluation.name].task_set_sha256,
                                     evaluation_protocol(launch, evaluation.name),
-                                    score_membership(session, statistic),
+                                    score_membership(session, statistic, scored_only=True),
                                 ),
                                 sort_keys=True,
                             ).encode()

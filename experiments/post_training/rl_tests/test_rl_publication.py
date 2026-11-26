@@ -3,10 +3,12 @@
 
 import copy
 import json
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Barrier, local
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
@@ -324,6 +326,33 @@ def test_stored_evaluation_keeps_its_original_selection_and_comparability(preset
     assert family_identity(changed_protocol) != family_identity(changed_tasks)
 
 
+def test_concurrent_issue_claims_keep_one_lineage_issue(tmp_path, monkeypatch):
+    export_root = str(tmp_path / "exports")
+    read_attempts = publication.read_attempts
+    barrier = Barrier(2, timeout=10)
+    thread = local()
+
+    def read_with_race(path, *, view=None):
+        attempts = read_attempts(path, view=view)
+        if view is not None and not getattr(thread, "read", False):
+            thread.read = True
+            barrier.wait()
+        return attempts
+
+    monkeypatch.setattr(publication, "read_attempts", read_with_race)
+
+    def claim(issue):
+        try:
+            return publication.assign_issue(export_root, "same-run", f"attempt-{issue}", issue)
+        except publication.IssueConflict:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        claims = list(executor.map(claim, (73, 74)))
+    [winner] = [claim for claim in claims if claim is not None]
+    assert {attempt.issue for attempt in read_attempts(export_root).values()} == {winner}
+
+
 def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatch):
     launch = {"config": "composed"}
     monkeypatch.setattr(nightly, "configure_coreweave_s3", lambda: None)
@@ -439,7 +468,7 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     preset_table, rl_progress_client, recorded_runs, monkeypatch, cache_native_compositions
 ):
     cache_native_compositions()
-    client, request, _ = rl_progress_client
+    client, request = rl_progress_client
     preset = replace(
         snowball_model.SNOWBALL.by_name["learning-medium"],
         guards=(*snowball_model.SNOWBALL.by_name["learning-medium"].guards, presets.Metric("policy/entropy", True)),
@@ -823,6 +852,17 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     assert {row["run_id"] for row in served_controls} == {"nightly-batch"}
     control_index = read_stored_skyrl_attempts(str(controls[0]))[1]["control-r0"].index
     assert control_index is not None
+    request(
+        "http://localhost",
+        "POST",
+        f"/a/{APPLET_ID}/query",
+        json_body={
+            "sql": "INSERT INTO rl_runs (run_id, attempt_id, record) VALUES ('invalid-old', 'attempt', '{}')",
+            "parameters": {},
+        },
+    )
+    listing = client.get(f"/a/{APPLET_ID}/api/runs").json()
+    assert [row["run_id"] for row in listing["skipped_records"]] == ["invalid-old"]
     monkeypatch.setattr(rl_index, "list_attempts", read_progress_index)
     selected = gate.select_controls(control_index, service_url="http://localhost")
     assert {member.attempt_id for member in selected.attempts} == {row["attempt_id"] for row in served_controls}

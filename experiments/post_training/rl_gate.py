@@ -20,7 +20,7 @@ from time import monotonic
 
 import click
 from finestore.rl.rl_progress import Change, Comparison, ComparisonRole, Effect, Invariant, Verdict, completed_controls
-from finestore.rl.run_records import AttemptRecord, RunIndexIdentity
+from finestore.rl.run_records import AttemptRecord, RunIndexIdentity, attempt_evidence_versions
 from marin.execution.artifact import Artifact, read_artifact
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config, run
@@ -749,11 +749,7 @@ def preset_launch_yaml(
 
 def compose_preset(preset: presets.Preset) -> dict:
     """Compose the nominal preset in the checkout's SkyRL CPU environment."""
-    with tempfile.TemporaryDirectory(prefix="rl-preset-") as directory:
-        path = Path(directory) / "launch.yaml"
-        path.write_text(preset_launch_yaml(preset, name="nominal"))
-        (config,) = compose_configs([str(path)])
-        return config
+    return compose_candidate(preset, RunInputs(preset_name=preset.name))
 
 
 def _compose_plans(
@@ -959,7 +955,7 @@ def _write_gate(
             update={"held_out_tasks": controls[0].held_out_tasks, "engines": tuple(run.engine for run in controls)}
         )
         if any(candidate.evaluation_identity != controls[0].evaluation_identity for candidate in (*runs, *controls)):
-            raise InvalidComparison("evaluation protocol or held-out TaskSpec content differs")
+            raise InvalidComparison("evaluation protocol, held-out TaskSpec content or scoring groups differ")
         model = runs[0].config["inputs"]["model"]
         resolved_model = ResolvedModelLocator(
             **{field.name: model[field.name] for field in fields(ResolvedModelLocator)}
@@ -1081,18 +1077,24 @@ class GateAddress(BaseModel):
         return tuple(map(_control_attempt, self.controls))
 
     def suffix(self, candidates: tuple[AttemptRecord | None, ...], controls: tuple[AttemptRecord | None, ...]) -> str:
-        evidence = [
-            (identity, receipt.model_dump(mode="json", exclude={"issue", "interruption"}) if receipt else None)
-            for identities, group in zip(
-                (
-                    tuple(identity for identity, _ in self.candidates),
-                    tuple(member.attempt_id for member in self.controls),
-                ),
-                (candidates, controls),
-                strict=True,
-            )
-            for identity, receipt in zip(identities, group, strict=True)
-        ]
+        evidence = []
+        for identities, group in (
+            (tuple(identity for identity, _ in self.candidates), candidates),
+            (tuple(member.attempt_id for member in self.controls), controls),
+        ):
+            for identity, receipt in zip(identities, group, strict=True):
+                if receipt is None:
+                    evidence.append((identity, None, ()))
+                else:
+                    export_root = receipt.native.config.get("artifacts", {}).get("export_root")
+                    versions = (
+                        attempt_evidence_versions(export_root, receipt.attempt_id)
+                        if isinstance(export_root, str)
+                        else ()
+                    )
+                    evidence.append(
+                        (identity, receipt.model_dump(mode="json", exclude={"issue", "interruption"}), versions)
+                    )
         return "-evidence-" + fingerprint_hash(canonical_json(evidence))
 
     def completed_path(self, candidates: tuple[AttemptRecord | None, ...] | None = None) -> str:

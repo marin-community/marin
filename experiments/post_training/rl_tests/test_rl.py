@@ -743,6 +743,9 @@ def test_submission_exit_codes_and_publication_retries(
             write_attempt(
                 str(root / "exports"), AttemptRecord(run_id=native.run_id, attempt_id=native.attempt_id, issue=73)
             )
+    if case == "changed-source":
+        step = built.runs[0]
+        write_skyrl_run_record(source, step.name, step.version, fingerprint=step.fingerprint(), attempt_id="native-0")
     if case == "data-short":
         receipt = json.loads((source / "terminal.json").read_text())
         descriptor = receipt["config"]["inputs"]["validation_data"][0]
@@ -817,7 +820,7 @@ def test_submission_exit_codes_and_publication_retries(
             return SimpleNamespace(state=JobState.FAILED)
         for path in sources:
             native = snowball.read_stored_skyrl_attempt(str(path))
-            if native is not None:
+            if native is not None and case != "changed-source":
                 launch = native.native.config
                 launch["run"]["coordinator_iris_job_id"] = str(job)
                 write_attempt(

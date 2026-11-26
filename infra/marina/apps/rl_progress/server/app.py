@@ -127,10 +127,10 @@ def create_api(services):
                         },
                     )
                 if older_publication:
-                    response = {key: normalized[key] for key in record}
+                    response = {key: normalized.get(key, incoming.get(key)) for key in record}
                     groups = (
-                        response.get("evaluations", ()),
-                        (response.get("gate_result") or {}).get("comparisons", ()),
+                        response.get("evaluations") or (),
+                        (response.get("gate_result") or {}).get("comparisons") or (),
                     )
                     for group in groups:
                         for comparison in group:

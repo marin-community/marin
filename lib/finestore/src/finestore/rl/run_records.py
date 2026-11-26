@@ -18,7 +18,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, StrictInt, model_validator
 from rigging.filesystem.storage_path import prefix_join
 
-from finestore.layout import OnConflict
+from finestore.layout import OnConflict, TableVersion
 from finestore.reader import ReadView
 from finestore.rl.strata import TaskStrata
 from finestore.schema import arrow_schema
@@ -232,16 +232,22 @@ def register_run_tables(store: DataStore) -> dict[str, DataTable]:
     }
 
 
-def update_attempt(store: DataStore, record: AttemptRecord) -> None:
-    """Commit a fresh writer-owned update; omitted fields stay stored, explicit null clears a field."""
+def update_attempt(store: DataStore, record: AttemptRecord, *, base: ReadView | None = None) -> None:
+    """Commit an attempt update, guarding its table against concurrent writes when a base is supplied."""
     values = record.model_dump(mode="json", exclude_unset=True)
     values.pop("attempt_id")
     rows = [
         AttemptRow(attempt_id=record.attempt_id, field=name, value_json=json.dumps(value)).model_dump()
         for name, value in values.items()
     ]
-    register_run_tables(store)[ATTEMPTS_TABLE].extend(rows)
-    store.flush()
+    table = register_run_tables(store)[ATTEMPTS_TABLE]
+    if base is None:
+        table.extend(rows)
+        store.flush()
+    else:
+        with store.transaction(base=base) as transaction:
+            transaction.require_unchanged(ATTEMPTS_TABLE)
+            transaction.table(ATTEMPTS_TABLE).extend(rows)
 
 
 def write_attempt(export_root: str, record: AttemptRecord) -> None:
@@ -269,10 +275,10 @@ def read_attempt(export_root: str, attempt_id: str) -> AttemptRecord | None:
     return _attempt(ReadView(run_records_root(export_root)), attempt_id)
 
 
-def read_attempts(export_root: str) -> dict[str, AttemptRecord]:
-    """Read the stored attempts from one export root's committed snapshot."""
-    view = ReadView(run_records_root(export_root))
-    return _records(view.iter_rows(ATTEMPTS_TABLE))
+def read_attempts(export_root: str, *, view: ReadView | None = None) -> dict[str, AttemptRecord]:
+    """Read attempts from an export root, using an existing pinned snapshot when supplied."""
+    snapshot = view if view is not None else ReadView(run_records_root(export_root))
+    return _records(snapshot.iter_rows(ATTEMPTS_TABLE))
 
 
 def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> tuple[LineageEntry, ...]:
@@ -303,6 +309,16 @@ def _lineage(export_root: str, attempt_id: str, views: dict[str, ReadView]) -> t
 def attempt_lineage(export_root: str, attempt_id: str) -> tuple[LineageEntry, ...]:
     """Return newest-first checkpoint ancestry with inclusive through_step bounds."""
     return _lineage(export_root, attempt_id, {})
+
+
+def attempt_evidence_versions(export_root: str, attempt_id: str) -> tuple[tuple[str, TableVersion, TableVersion], ...]:
+    """Identify the stored metric and evaluation tables read for an attempt and its ancestry."""
+    views: dict[str, ReadView] = {}
+    _lineage(export_root, attempt_id, views)
+    return tuple(
+        (root, view.table_version(METRICS_TABLE), view.table_version(EVALUATIONS_TABLE))
+        for root, view in sorted(views.items())
+    )
 
 
 def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[str, Any]]:
