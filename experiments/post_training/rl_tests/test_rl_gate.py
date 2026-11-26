@@ -925,7 +925,8 @@ def test_python_run_saves_typed_inputs_for_comparison(
             kind=preset.model.step.artifact_type,
         ),
     )
-    preset = replace(preset, model=local)
+    guards = snowball_model.SNOWBALL.by_name["learning-medium"].guards
+    preset = replace(preset, model=local, guards=guards)
     preset_table(preset)
     controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None
