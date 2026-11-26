@@ -8,7 +8,14 @@ from datetime import UTC, datetime
 import pytest
 from click.testing import CliRunner
 from finestore.rl.curation import OversightEvidence, OversightLevel
-from finestore.rl.licenses import LicenseClass, LicenseDecision, LicenseDecisionKind, LicenseReceipt, require_license
+from finestore.rl.licenses import (
+    LicenseClass,
+    LicenseDecision,
+    LicenseDecisionKind,
+    LicenseReceipt,
+    LicenseSourcePin,
+    require_license,
+)
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 
 from experiments.post_training.task_curation import driver
@@ -26,7 +33,7 @@ from experiments.post_training.task_curation.source import SourceOrigin
 from experiments.post_training.task_curation.tests.admission_fixtures import with_admission_census
 from experiments.post_training.task_curation.tests.license_fixtures import fixture_license, with_license
 from experiments.post_training.task_curation.tests.numbers_pipeline import NUMBERS_DATASET, number_source
-from infra.marina.apps.rl_data_catalog.server import licensing
+from infra.marina.apps.rl_data_catalog.server import license_registry, licensing
 from infra.marina.apps.rl_data_catalog.server.admission import require_catalog_declaration, require_declaration_admission
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -121,6 +128,58 @@ def test_scoped_exception_is_preserved_and_cannot_override_a_ban():
             "train",
             ban=None,
         )
+
+
+def test_hardmath_exception_admits_exactly_this_source_and_scope(monkeypatch):
+    """The pafitis:hardmath ban exception admits only the verified lineage pin at train use."""
+    source_id = "pafitis:hardmath"
+    dataset = "pafitis/HARDMath_processed_training"
+    revision = "937e9f10356e31e854f6efb9a2507f1e200c8b25"
+    monkeypatch.setattr(licensing, "LICENSE_BANS", license_registry.LICENSE_BANS)
+    licensing.license_bans.cache_clear()
+    try:
+        registry = json.loads(license_registry.LICENSE_BANS)
+        exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
+        assert len(exceptions) == 1 and exceptions[0]["source_id"] == source_id
+        exception = exceptions[0]["exception"]
+        assert exception["upstream_revision"] == revision
+        assert exception["use"] == "train"
+        assert exception["receipt_sha256"] == ("fe67508421dd34ee42d5dbb92926320697d211a173981fa98c331c043565b2ef")
+        receipt = fixture_license(source_id, dataset, revision)
+        assert licensing.source_license_ban(source_id, dataset, receipt, "train") is None
+        licensing.require_unbanned(source_id, dataset, receipt, "train")
+        ban = licensing.source_license_ban(source_id, dataset, receipt, "eval")
+        assert ban is not None
+        with pytest.raises(ValueError, match="License banned: pafitis:hardmath"):
+            licensing.require_unbanned(source_id, dataset, receipt, "eval")
+        assert (
+            licensing.source_license_ban(source_id, dataset, fixture_license(source_id, dataset, "b" * 40), "train")
+            is not None
+        )
+        assert licensing.source_license_ban(source_id, dataset, None, "train") is not None
+        other = "FWeindel:validated-tasks/tmax11-v1.1"
+        assert licensing.source_license_ban(other, "TMaxxx/tmax-13k-v1.1", None, "train") is not None
+        release = "open-athena/pafitis-hardmath-processed-training-repaired-20261126-v1"
+        release_receipt = fixture_license(source_id, release, "c" * 40)
+        lineage_pin = LicenseSourcePin(
+            dataset_id=dataset,
+            revision=revision,
+            url=f"https://huggingface.co/datasets/{dataset}",
+            declaration=release_receipt.evidence[0],
+        )
+        resolved = release_receipt.model_copy(update={"resolved_source": lineage_pin})
+        assert licensing.source_license_ban(source_id, release, resolved, "train") is None
+        wrong_pin = lineage_pin.model_copy(update={"revision": "b" * 40})
+        assert (
+            licensing.source_license_ban(
+                source_id, release, resolved.model_copy(update={"resolved_source": wrong_pin}), "train"
+            )
+            is not None
+        )
+        wrapped = release_receipt.model_copy(update={"wrapper_chain": [lineage_pin]})
+        assert licensing.source_license_ban(source_id, release, wrapped, "train") is None
+    finally:
+        licensing.license_bans.cache_clear()
 
 
 def test_source_rename_carries_its_license_receipt(tmp_path):

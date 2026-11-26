@@ -90,7 +90,7 @@ def build_group(config: ImageConfig) -> GroupedInputImage:
         source = info.id
         receipt = LicenseReceipt.model_validate(licenses[source]["receipt"])
         require_license(receipt, source, DATASET, REVISION, "train", ban=None)
-        require_unbanned(source, DATASET, receipt)
+        require_unbanned(source, DATASET, receipt, "train")
     qualification_raw = StoragePath(config.qualifications_uri).read_bytes()
     if hashlib.sha256(qualification_raw).hexdigest() != config.qualifications_sha256:
         raise ValueError("FineEnvs qualification table differs from its frozen binding")

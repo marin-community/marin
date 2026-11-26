@@ -139,7 +139,12 @@ def backend_admission_review(
 
 
 def _require_declaration_license(declaration: SourceDeclaration) -> None:
-    require_unbanned(declaration.id, declaration.dataset_id, declaration.license_receipt)
+    require_unbanned(
+        declaration.id,
+        declaration.dataset_id,
+        declaration.license_receipt,
+        declaration.intended_use.value if declaration.intended_use else None,
+    )
     if declaration.intended_use is None:
         raise ValueError(f"Admission requires an explicit intended_use: {declaration.id}")
     require_license(

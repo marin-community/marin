@@ -234,6 +234,26 @@ class LicenseReceipt(BaseModel):
         return LicenseClass.UNKNOWN
 
 
+class LicenseBanException(BaseModel):
+    """A recorded reversing ruling that narrows one ban to a single use at a verified revision.
+
+    The exception applies only on an exact match: the same source, and a receipt either
+    pinned at the exception's revision or resolving its license (resolved source or
+    wrapper chain) to that revision, at the exception's use. Every other revision, use,
+    or a missing receipt stays banned.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    upstream_revision: str = Field(min_length=1)
+    use: str = Field(min_length=1)
+    receipt_sha256: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+    evidence_urls: list[str] = Field(min_length=1)
+    decided_at: str = Field(min_length=1)
+    decision_by: str = Field(min_length=1)
+
+
 class LicenseBan(BaseModel):
     """A source-wide user decision; lifting it requires a new recorded permissive grant."""
 
@@ -249,6 +269,7 @@ class LicenseBan(BaseModel):
     decided_at: str = Field(min_length=1)
     decision_by: str = Field(min_length=1)
     issue_url: str
+    exception: LicenseBanException | None = None
 
     @field_validator("issue_url")
     @classmethod

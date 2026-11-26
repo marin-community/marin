@@ -427,7 +427,7 @@ def test_wrapper_publication_uses_resolved_grant_and_preserves_physical_input_pi
 def test_new_private_pin_rechecks_restrictive_terms(tmp_path, monkeypatch):
     receipt = source_receipt(b"---\nlicense: cc-by-nc-4.0\n---\n")
     monkeypatch.setattr(license_publication, "resolve_license", lambda target: receipt)
-    monkeypatch.setattr(license_publication, "source_license_ban", lambda source, dataset, actual: None)
+    monkeypatch.setattr(license_publication, "source_license_ban", lambda source, dataset, actual, use=None: None)
     with pytest.raises(ValueError, match="Published pin failed"):
         license_publication.check_publication(receipt.source_id, "open-athena/new-private-pin", "c" * 40, "train")
 
@@ -519,7 +519,7 @@ def lineage_receipt(revision: str, scope: list[str], *, with_source: bool = True
 
 def registered_lineage(monkeypatch, receipt: LicenseReceipt) -> None:
     monkeypatch.setattr(license_publication, "resolve_license", lambda target: receipt)
-    monkeypatch.setattr(license_publication, "source_license_ban", lambda source, dataset, actual: None)
+    monkeypatch.setattr(license_publication, "source_license_ban", lambda source, dataset, actual, use=None: None)
     monkeypatch.setattr(license_publication, "read_license_receipts", lambda path: {receipt.source_id: receipt})
 
 

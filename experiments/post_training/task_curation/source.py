@@ -338,7 +338,12 @@ class RlDataSource[ConfigT: CatalogConfig]:
     def require_license(self) -> None:
         """Require stage-0 permission at the current pin before constructing any work."""
         dataset = self.dataset
-        require_unbanned(self.info.id, dataset.name if dataset else None, self.info.license_receipt)
+        require_unbanned(
+            self.info.id,
+            dataset.name if dataset else None,
+            self.info.license_receipt,
+            self.config.intended_use.value if self.config else None,
+        )
         require_license(
             self.info.license_receipt,
             self.info.id,

@@ -205,7 +205,7 @@ def require_publication_license(
     receipt: LicenseReceipt | None, source_id: str, dataset_id: str | None, revision: str | None, use: str
 ) -> None:
     """Check current source and upstream registry bans before the pinned license grant."""
-    require_unbanned(source_id, dataset_id, receipt)
+    require_unbanned(source_id, dataset_id, receipt, use)
     require_license(receipt, source_id, dataset_id, revision, use, ban=None)
 
 
@@ -427,7 +427,7 @@ def check_publication(source_id: str, dataset_id: str, revision: str, use: str, 
         source_id, dataset_id, revision, f"https://huggingface.co/datasets/{dataset_id}/tree/{revision}"
     )
     receipt = resolve_license(target)
-    result = check_license(receipt, source_license_ban(source_id, dataset_id, receipt))
+    result = check_license(receipt, source_license_ban(source_id, dataset_id, receipt, use))
     evidence = {**result.model_dump(mode="json"), "receipt": receipt.model_dump(mode="json")}
     if result.verdict is LicenseCheckVerdict.PASS:
         return evidence

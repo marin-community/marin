@@ -23,10 +23,11 @@ def license_bans() -> dict[str, LicenseBan]:
 
 
 def source_license_ban(
-    source_id: str, dataset_id: str | None, receipt: LicenseReceipt | None = None
+    source_id: str, dataset_id: str | None, receipt: LicenseReceipt | None = None, use: str | None = None
 ) -> LicenseBan | None:
-    if ban := license_bans().get(source_id):
-        return ban
+    ban = license_bans().get(source_id)
+    if ban is not None:
+        return None if _exception_applies(ban, receipt, use) else ban
     datasets = {dataset_id}
     if receipt is not None and receipt.resolved_source is not None:
         datasets.add(receipt.resolved_source.dataset_id)
@@ -34,15 +35,30 @@ def source_license_ban(
     return next((ban for ban in license_bans().values() if ban.upstream_id in datasets), None)
 
 
-def require_unbanned(source_id: str, dataset_id: str | None, receipt: LicenseReceipt | None = None) -> None:
-    if ban := source_license_ban(source_id, dataset_id, receipt):
+def _exception_applies(ban: LicenseBan, receipt: LicenseReceipt | None, use: str | None) -> bool:
+    """Fail closed: an exact receipt pin or resolved-upstream pin at the exception's use, or the ban stands."""
+    exception = ban.exception
+    if exception is None or use != exception.use or receipt is None:
+        return False
+    upstream = (ban.upstream_id, exception.upstream_revision)
+    pins = [(receipt.dataset_id, receipt.revision)]
+    if receipt.resolved_source is not None:
+        pins.append((receipt.resolved_source.dataset_id, receipt.resolved_source.revision))
+    pins.extend((source.dataset_id, source.revision) for source in receipt.wrapper_chain)
+    return upstream in pins
+
+
+def require_unbanned(
+    source_id: str, dataset_id: str | None, receipt: LicenseReceipt | None = None, use: str | None = None
+) -> None:
+    if ban := source_license_ban(source_id, dataset_id, receipt, use):
         raise ValueError(f"License banned: {source_id}: {ban.reason} ({ban.issue_url})")
 
 
 def declaration_license_ban(declaration: dict[str, Any]) -> LicenseBan | None:
     raw = declaration.get("license_receipt")
     receipt = LicenseReceipt.model_validate(raw) if raw is not None else None
-    return source_license_ban(declaration["id"], declaration.get("dataset_id"), receipt)
+    return source_license_ban(declaration["id"], declaration.get("dataset_id"), receipt, declaration.get("intended_use"))
 
 
 def license_projection(declaration: dict[str, Any]) -> dict[str, Any]:

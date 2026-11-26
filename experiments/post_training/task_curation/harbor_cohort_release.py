@@ -85,7 +85,7 @@ def require_conversion_source(source: RlDataSource) -> None:
     dataset = source.dataset
     if dataset is None or not dataset.revision:
         raise ValueError(f"Source {source.info.id} requires an exact pinned cohort")
-    require_unbanned(source.info.id, dataset.name, source.info.license_receipt)
+    require_unbanned(source.info.id, dataset.name, source.info.license_receipt, source.intended_use.value)
     require_license(
         source.info.license_receipt,
         source.info.id,
