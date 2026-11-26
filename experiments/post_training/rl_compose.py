@@ -470,6 +470,9 @@ def _training_config(
         ),
     )
     config = apply_settings(config, settings, preset)
+    if config.trainer.rollout_token_budget is not None:
+        # Gross generation counters start at zero; keep terminal saves without restoring an older run.
+        config = config.merge(RecipePatch(trainer=sections.Trainer(resume_mode="none")))
     if settings:
         try:
             presets.validate_agentic_recipe(config)

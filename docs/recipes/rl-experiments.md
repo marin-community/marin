@@ -273,12 +273,12 @@ credentials for submission. Prepare once from the branch containing the sampler:
 ```bash
 export MARIN_PREFIX=s3://marin-us-east-02a/marin
 uv run python -m experiments.post_training.task_curation.snowball_sampler_selection --run
-uv run python -m experiments.post_training.snowball_sampler --preset smoke-adaptive \
-  --version 2026.11.25.1 --priority interactive --issue 12201 --plan
+uv run python -m experiments.post_training.snowball_sampler --preset smoke-fixed-sync-chunked \
+  --version 2026.11.25.4 --priority interactive --issue 12201 --plan
 ```
 
-All arms use 40 H100s at interactive priority, 128 groups of four per optimizer update, up to
-32 simultaneous rollout groups and at most 384 untrained groups with two updates of staleness.
+All arms use 40 H100s at interactive priority, 128 groups of four per optimizer update and up to
+32 simultaneous rollout groups. The asynchronous presets allow two updates of staleness.
 The fixed and adaptive arms use the same family-aware sampler and equal reference shares. The fixed arm puts all its
 draw probability on those reference shares. The adaptive arm uses 20% reference exploration,
 decay 0.95 and a Beta(1, 1) prior. The optional `pilot-thompson` uses the same verified
@@ -286,30 +286,37 @@ groups, decay, prior, and draw windows. Each feedback batch redraws the family w
 from their Beta posteriors with the existing Thompson policy’s 0.05 floor parameter.
 All arms evaluate EvalLite’s same 100 frozen active tasks with greedy decoding.
 
-Run the four-update smokes first. Inspect scored coverage at steps 0, 2 and 4, the committed
-checkpoint and export, and the family weights and observations after the first dispatch window.
-Continue to the twenty-update pilots once these checks pass:
+Use `smoke-fixed-sync-chunked` for the paid four-update calibration. Its learner projects 1,024
+tokens at a time onto the 128,256-token vocabulary. A BF16 vocabulary tensor for one chunk
+occupies 0.245 GiB. The preset retains the 8,192-token response cap, scores the 100-task panel
+at initialization and completion, and saves and exports the terminal policy. Synchronous dispatch
+closes the 128 training groups before each optimizer update. To run, replace `--plan` with
+`--run --wait`. Sum `rollout/gross_response_tokens` over all four updates and reconcile it
+with all training leases, including failed and untrainable results with generated tokens,
+before using the total to select a common pilot budget.
+
+The source-preserving `within-source` and `within-source-random` arms use the prepared catalog's
+family shares. They respectively rank prompts by predicted useful groups per token with 5%
+exploration, or draw uniformly within the same source windows. Their asynchronous four-update
+smokes use revision `2026.11.25.3` and evaluate at steps 0, 2 and 4. Inspect actual dispatched
+family shares, closed leases and optimizer receipts before interpreting fixed-update pilots.
 
 ```bash
-for arm in smoke-fixed smoke-adaptive; do
+for arm in pilot-within-source pilot-within-source-random; do
   uv run python -m experiments.post_training.snowball_sampler --preset "$arm" \
-    --version 2026.11.25.1 --priority interactive --issue 12201 --run --wait || break
-done
-```
-
-```bash
-for arm in pilot-fixed pilot-adaptive; do
-  uv run python -m experiments.post_training.snowball_sampler --preset "$arm" \
-    --version 2026.11.25.1 --priority interactive --issue 12201 --run --wait || break
+    --version 2026.11.25.3 --priority interactive --issue 12201 --run --wait || break
 done
 ```
 
 Compare paired task scores at steps 0, 10 and 20 with per-family coverage. The step-20 exports
 give a fixed-update comparison. Record GPU-hours, total generated tokens including rejected groups,
 and family shares for each arm. A second adaptive arm can set `--set data.sampling.epsilon=0.1`.
-For a confirmatory run, predeclare a common gross-token cap and retain intermediate checkpoints.
-Use each arm's closest checkpoint below the cap and report both token counts. Claim a matched
-budget only when the counts differ by at most 5% of the smaller count.
+For a token-matched comparison, set the common threshold to five times the reconciled gross
+training response tokens from the four-update fixed calibration. Run each arm synchronously
+with the same optimizer safety cap and evaluate at its stopping update. The final batch can
+overshoot the threshold. Report both totals and compare learning at matched cost only when
+they differ by at most 5% of the smaller total. Reserve the other 1,400 EvalLite tasks for
+independent confirmation.
 
 ## Dashboard publication
 
