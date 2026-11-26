@@ -977,11 +977,11 @@ def _resolve_epoch_steps(ctx: StepContext, spec: SFTSpec, chat_cache: ArtifactSt
     return math.ceil(spec.num_train_epochs * total_tokens / (spec.seq_len * spec.batch_size))
 
 
-def _prepared_component_format(component: DatasetComponentBase, spec: SFTSpec) -> DatasetComponentBase:
+def _prepared_component(component: DatasetComponentBase, spec: SFTSpec) -> DatasetComponentBase:
     if isinstance(component, ConcatDatasetComponent):
         return replace(
             component,
-            children={name: _prepared_component_format(child, spec) for name, child in component.children.items()},
+            children={name: _prepared_component(child, spec) for name, child in component.children.items()},
         )
     if not isinstance(component, DatasetComponent):
         raise ValueError("Prepared data format overrides require cached dataset components")
@@ -1033,8 +1033,7 @@ def sft_step(spec: SFTSpec, resources: ResourceConfig) -> ArtifactStep[LevanterC
                 data_config = replace(
                     data_config,
                     components={
-                        name: _prepared_component_format(component, spec)
-                        for name, component in data_config.components.items()
+                        name: _prepared_component(component, spec) for name, component in data_config.components.items()
                     },
                 )
             return train_config(ctx, data_config, spec.num_train_steps)

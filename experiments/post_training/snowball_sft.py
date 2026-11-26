@@ -170,6 +170,7 @@ _EXP7_ANCHORS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
 _EXP6_C4_ROOT = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3"
 _EXP6_C4_REFERENCE = prefix_join(_EXP6_C4_ROOT, "long-loop-exp3/initializer-proof-inputs/2026.11.15.47")
 _EXP6_C4_RESULT = prefix_join(_EXP6_C4_REFERENCE, "c4-reference.json")
+_EXP7_COMPILATION_CACHE = "s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache"
 _EXP7_CHECKPOINTER = CheckpointerConfig(save_interval=timedelta(hours=2), keep=None, keep_last_temporary_checkpoints=3)
 
 # Frozen controls and their source artifact/revision are pinned in
@@ -234,7 +235,7 @@ EXP7_SPEC = replace(
             "jax_softmax_custom_jvp": "True",
             "jax_threefry_partitionable": "True",
         },
-        jax_compilation_cache_dir="s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache",
+        jax_compilation_cache_dir=_EXP7_COMPILATION_CACHE,
         watch=WatchConfig(watch_targets=["params", "updates", "grads"], include_per_parameter_norms=False, interval=1),
         xla_dump_upload=XlaDumpUploadConfig(enabled=True),
         tracker=WandbConfig(entity="marin-community", project="marin-long-loop", tags=["exp7", "sft"]),
@@ -277,7 +278,7 @@ EXP7_SPEC = replace(
     wandb_project="marin-long-loop",
     env_vars={
         "JAX_PLATFORMS": "cuda,cpu",
-        "JAX_COMPILATION_CACHE_DIR": "s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache",
+        "JAX_COMPILATION_CACHE_DIR": _EXP7_COMPILATION_CACHE,
     },
     xla_flags=(
         "--xla_gpu_shard_autotuning=false",

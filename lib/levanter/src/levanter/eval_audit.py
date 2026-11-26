@@ -89,7 +89,7 @@ def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[
 def initial_eval_match(reference: dict, metrics: dict, audit: dict, absolute_tolerance: float) -> dict:
     """Return reference/measured losses, their difference and the verified input audit.
 
-    Raise when inputs change or the initial loss exceeds the specified tolerance.
+    Raise when inputs change or the absolute loss difference exceeds the tolerance.
     """
     if reference["input_audit"] != audit:
         raise ValueError("Initial evaluation inputs do not match the reference token stream and masks")

@@ -75,7 +75,7 @@ def snowball_loss_with_dispatch_drops(
     z_loss_weight: float,
     reduction: hax.ReductionFunction,
 ) -> tuple[jax.Array | hax.NamedArray, dict[str, Metric]]:
-    """Measure dispatch on the same unmasked-token forward used for training."""
+    """Return training loss and dispatch counts from the same unmasked-token forward."""
     # All positions consume dispatch capacity in the regular training forward,
     # including padding. A supervision mask here would change that forward.
     valid = hax.ones(example.tokens.axes, dtype=jnp.bool_)
