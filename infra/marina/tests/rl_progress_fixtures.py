@@ -80,3 +80,28 @@ def progress_record() -> dict:
     }
 
     return AttemptSummary.model_validate_json(json.dumps(record), strict=True).model_dump(mode="json")
+
+
+def grader_report() -> dict:
+    return {
+        "training": {},
+        "training_tasks": {},
+        "evaluation": {
+            "eval_lite/0": [
+                {
+                    "subset_id": "test/source",
+                    "data_sources": ["test/source"],
+                    "attempted": 2,
+                    "verified": 2,
+                    "passed": 1,
+                    "verification_coverage": 1.0,
+                    "success_rate": 0.5,
+                    "verification_statuses": {"verified": 2},
+                    "grading_failures": {},
+                    "rollout_failures": {},
+                    "grading_latency_seconds": {"count": 2, "mean": 2.0, "p95": 2.0, "max": 2.0},
+                }
+            ]
+        },
+        "evaluation_tasks": {},
+    }

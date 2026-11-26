@@ -385,7 +385,7 @@ def test_native_summary_reuses_historical_scores_in_panel_comparison_and_history
     comparison = build_comparison(records, panel_request(), ("historical-model", "solver"))
     assert comparison["shared"] == [name]
     same_model = native.model_copy(update={"model": historical.model})
-    detail = build_model_detail([historical, same_model], "historical-model")
+    detail = build_model_detail([historical, same_model], "historical-model", panel_request())
     assert detail is not None
     assert [point["run_id"] for point in detail["history"][name]] == ["historical", "run"]
 

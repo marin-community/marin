@@ -117,6 +117,7 @@ class EpisodeInputs(EvaluationModel):
     cpus: int | None = Field(default=None, gt=0)
     memory_mb: int | None = Field(default=None, gt=0)
     storage_mb: int | None = Field(default=None, gt=0)
+    startup_timeout: float | None = Field(default=None, gt=0, exclude_if=lambda value: value is None)
     gpus: int = Field(default=0, ge=0)
     network: NetworkPolicy
 
@@ -136,8 +137,8 @@ class TerminusAgent(EvaluationModel):
 class PiAgent(EvaluationModel):
     """Harbor's Pi coding agent, run from the task image, which must provide it.
 
-    Pi chooses its own sampling and output limits, so the protocol's sampling does not apply to its
-    requests; the protocol's ``max_tokens`` is the per-reply limit Pi is configured with. ``version``,
+    Pi can choose its own temperature and top-p, otherwise it uses the protocol's. The protocol's
+    ``max_tokens`` is the per-reply limit Pi is configured with. ``version``,
     when set, must equal the image's Pi version. ``thinking`` is Pi's ``--thinking`` level. Pi compacts
     its history when fewer than ``compaction_reserve_tokens`` of its context are free, by default the
     per-reply limit. ``setup_timeout`` bounds Pi's setup in the task machine.
@@ -153,8 +154,8 @@ class PiAgent(EvaluationModel):
 class MiniSweAgent(EvaluationModel):
     """mini-swe-agent 2.1.0 as Harbor runs it: one ``bash`` tool, each command in a fresh subshell.
 
-    Like Pi, it sends its own requests, so the protocol's sampling does not apply to them; the protocol's
-    ``max_tokens`` is the largest reply it asks for.
+    Like Pi, it can choose its own temperature and top-p, otherwise it uses the protocol's. The
+    protocol's ``max_tokens`` is the largest reply it asks for.
     """
 
     kind: Literal["mini-swe-agent"] = "mini-swe-agent"

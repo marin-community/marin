@@ -363,6 +363,12 @@ class Metric:
     higher_is_better: bool
     window: WindowStatistic = WindowStatistic.MEAN
 
+    source: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.window is WindowStatistic.GAIN_PER_GPU_HOUR) != bool(self.source):
+            raise ValueError("Gain-per-GPU-hour metrics require an explicit source key")
+
 
 @dataclass(frozen=True)
 class BatchMix:
@@ -407,15 +413,12 @@ class Preset:
     """Describe an RL preset's workload, checkpoint retention, and export."""
 
     name: str
-    revision: str
     recipe: Recipe
     updates: int
     measured: range
     tasks_input: Literal["forbidden", "required", "optional"] = "forbidden"
     accepts_settings: bool = True
     accepts_init: bool = False
-    publishes: bool = False
-    control_preset: str | None = None
     checkpoint_every: int | None = None
     checkpoints: CheckpointPolicy = "best"
     keep_every: int | None = None
@@ -423,7 +426,7 @@ class Preset:
     data_settings: frozenset[str] = frozenset()
     tasks: str
     model: ArtifactHfModel
-    default_speculative_decoding: sections.SpeculativeDecoding | None = None
+    speculative_decoding_model: sections.SpeculatorModel | None = None
     evaluations: tuple[Evaluation, ...]
     seed: int
     sample_namespace: str
@@ -446,8 +449,6 @@ class Preset:
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
             raise ValueError("measured window must lie within the planned steps")
-        if self.gated and not self.guards:
-            raise ValueError("gated presets require guards")
         if self.held_out is not None and not self.held_out_tasks:
             raise ValueError("held-out evaluations require a held-out task selection")
         cadence = self.checkpoint_every
@@ -484,7 +485,7 @@ class Preset:
 
     @property
     def gated(self) -> bool:
-        return self.control_preset is not None
+        return bool(self.guards)
 
     @property
     def output_ttl_days(self) -> int | None:
@@ -507,20 +508,11 @@ class Preset:
 
 
 @dataclass(frozen=True)
-class ControlPin:
-    preset: str
-    commit: str
-    revision: str
-    replicates: int
-
-
-@dataclass(frozen=True)
 class ModelPresets:
     model: str
     presets: tuple[Preset, ...]
     namespace: str
-    control_pins: Mapping[str, ControlPin]
-    needs_completed_default_export: bool = False
+    default_export_marker: str | None = None
     initializers: Mapping[str, ArtifactHfModel] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

@@ -59,17 +59,8 @@ trial per task. Pair each model config with the indicated Harbor config; omit
 These are unlabeled diagnostics. The eager arms require Marin's explicit
 slow-serving acknowledgement, which is pinned in their model configs.
 
-For example, launch A from the Marin checkout with:
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/model-grid-a-eager-dp1-65k-8k.yaml \
-  --harbor-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/tb2-ten-old-wins-output8k.yaml \
-  --federated_cluster cw-rno2a --priority interactive --no-wait \
-  --description 'Unlabeled K2 ten-task grid arm A'
-```
-
-Replace only the two config paths and arm letter for B–F as mapped above.
+To reproduce an arm, use its recorded Marin checkout and the model and
+Harbor config pair listed in the table.
 
 ## Selected policy-compatible candidate
 

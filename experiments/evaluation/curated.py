@@ -14,6 +14,7 @@ from evalrecords.records import (
     CuratedRef,
     CuratedSettings,
     EvalRef,
+    EvaluationOverrides,
     EvaluationSelection,
     PromptFormat,
     ResolvedEvaluationSelection,
@@ -134,6 +135,28 @@ def declared_task_evidence(selection: ResolvedEvaluationSelection) -> TaskEviden
     return TaskEvidence.EMBEDDED
 
 
+def selection_run(selection: EvaluationSelection, protocol: ResolvedEvaluationSelection) -> EvaluationOverrides:
+    defaults = tuple(source.config.run_defaults for source in selected_sources(protocol) if source.config is not None)
+    if not defaults or all(value is None for value in defaults):
+        return selection.run
+    first = defaults[0]
+    if first is None or any(value != first for value in defaults):
+        raise ValueError(f"{selection.benchmark} corpora declare different run defaults")
+    overrides = {key: getattr(selection.run, key) for key in selection.run.model_fields_set}
+    baseline, machine = first.task_machine, selection.run.task_machine
+    if (
+        baseline is not None
+        and machine is not None
+        and ("backend" not in machine.model_fields_set or machine.backend is baseline.backend)
+    ):
+        overrides["task_machine"] = TaskMachineSettings.model_validate(
+            {**baseline.model_dump(), **{key: getattr(machine, key) for key in machine.model_fields_set}}
+        )
+    return EvaluationOverrides.model_validate(
+        {**{key: getattr(first, key) for key in first.model_fields_set}, **overrides}
+    )
+
+
 def runs_agent(selection: ResolvedEvaluationSelection) -> bool:
     return any(
         source.config is not None and source.config.protocol.operation == OperationKind.AGENT_EPISODE
@@ -230,6 +253,11 @@ def settings_for(
         if task_machine_backend is not TaskMachineBackend.DAYTONA:
             update["image_build"] = TaskImageBuild.SNAPSHOT
         task_machine = TaskMachineSettings.model_validate({**task_machine.model_dump(), **update})
+    for source in selected_sources(protocol):
+        assert source.config is not None
+        required = source.config.required_task_machine_backend
+        if required is not None and (task_machine is None or task_machine.backend is not required):
+            raise ValueError(f"{selection.benchmark} requires task_machine.backend={required.value} for grading")
     concurrency_bounds = [bound for bound in (model.evaluation_num_concurrent, run.concurrency) if bound is not None]
     return CuratedSettings(
         concurrency=min(concurrency_bounds, default=DEFAULT_EVALUATION_CONCURRENCY),

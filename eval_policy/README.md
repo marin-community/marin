@@ -1,6 +1,6 @@
 # Verified evaluation cohorts
 
-The [September 16](https://github.com/marin-community/marin/issues/9193) and [September 24](https://github.com/marin-community/marin/issues/9409) policies use the labels `eval-policy-2026-09-16-verified` and `eval-policy-2026-09-24-verified`. Evalchemy benchmarks still require their original external evaluator commits and a checkout predating vendoring. Harbor benchmarks now use the current vendored runtime and are admitted without the former `21e0ea6a` Harbor pin. Their runtime provenance comes from the Marin artifact checkout; a shared cohort label no longer establishes identical Harbor runtime behavior across checkouts.
+The [September 16](https://github.com/marin-community/marin/issues/9193) and [September 24](https://github.com/marin-community/marin/issues/9409) policies use the labels `eval-policy-2026-09-16-verified` and `eval-policy-2026-09-24-verified`. Evalchemy benchmarks require their original external evaluator commits. Harbor records identify the runtime through the recorded Marin checkout.
 
 Use a separate checkout at [Marin revision `205558e1a7fc`](https://github.com/marin-community/marin/commit/205558e1a7fc3dd705b1132691798b09dc1f254c) to reproduce the original evaluator versions; it supports both cohorts and their original pins. Historical records remain readable.
 

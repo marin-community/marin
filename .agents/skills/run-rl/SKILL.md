@@ -1,6 +1,6 @@
 ---
 name: run-rl
-description: Choose, run and read a Snowball RL preset through experiments/post_training/snowball_rl.py, compare it with pinned controls and record the experiment. Use for inference, trainer, numerics, task-selection or RL-algorithm measurements, stored-answer inspection and gate reports. New RL launch files and other experiments belong to launch-rl.
+description: Choose, run and read a Snowball RL preset through experiments/post_training/snowball_rl.py, compare it with indexed controls and record the experiment. Use for inference, trainer, numerics, task-selection or RL-algorithm measurements, stored-answer inspection and gate reports. New RL launch files and other experiments belong to launch-rl.
 ---
 
 # Run the RL runner
@@ -23,16 +23,15 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    [selection handoff](../../../docs/references/task-curation.md#train-on-a-snowball-selection).
    They need an immutable recipe, the same development panel, the full EvalLite in
    `exclusions`, and no AI-judged tasks.
-3. A default plan uses the declared control pin. Gated execution and planning with `--require`
-   need a pin at the preset's current revision. Controls are collected after merge. `--control`
-   and train-long need no pin. Print the plan:
+3. A gated launch selects the five newest completed main controls at its base preset version.
+   The nightly control runs supply that cohort. Print the plan:
 
    ```bash
    uv run python -m experiments.post_training.snowball_rl --preset speed-short --version dev --plan
    ```
 
    Check inputs, allocation, guards, budget estimate and output paths.
-   `--version dev` satisfies the launcher; step versions use each preset's `revision`.
+   `--version dev` satisfies the launcher. The preset version fingerprints the composed configuration.
    Use the same plan and inputs to read status for a saved run.
 4. Before submission, tell the person the preset, estimated budget and replicate count. Submit
    either train-long preset or multiple 40-H100 replicates only when the person asked. Set `WANDB_API_KEY`.
@@ -43,9 +42,10 @@ Map requests for a short loop, quick loop or long loop to the corresponding pres
    Replace `--plan` with `--run` to submit and add `--wait` for the final report.
    Use a background process and record its process and job IDs so a yielded tool call
    does not cause a second submission.
-   Record the finishing status's `rl_progress_url` with the verdict; the launcher publishes using
-   the caller's Marina login. Follow the recipe's [publication procedure](../../../docs/recipes/rl-experiments.md#dashboard-publication)
-   for retries and pinned controls.
+   Record the finishing status's `rl_progress_url` with its result. The launcher publishes the
+   running and terminal attempt with the caller's Marina login. Follow the recipe's
+   [publication procedure](../../../docs/recipes/rl-experiments.md#dashboard-publication)
+   for publication retries.
    Use `--marina-url ORIGIN` when publication targets a local Marina stack.
    Repeat the original `--run --wait` invocation with the same source and inputs to resume
    either train-long preset from its latest retained checkpoint.
@@ -62,17 +62,18 @@ uv run python -m experiments.post_training.snowball_rl --preset speed-medium \
 
 ## Record the experiment
 
-Open an issue through `file-issue` before the first run only with the experimenter's explicit approval.
+Open an issue through `file-issue` after checking the plan and the experimenter
+approves the issue text.
 In **Description**, explain what changes and what the preset measures. In **Hypothesis or Goal**,
 state the expected result and the measure that would confirm it. Put the relevant PR or source in
 **Links**. For an existing issue, pass its number with `--issue`. Use the same issue for later
-presets that measure the same change.
+presets that measure the same change. Use `publish --preset PRESET --run-output PATH --attempt ID --issue NUMBER`
+to associate a stored attempt with its issue.
 
 ## Inspect saved answers
 
-Read existing answers before launching another run. Controls are named by preset, `commit`
-and revision in `snowball_rl.SNOWBALL.control_pins`; use their configured output paths. Candidate status
-prints its output. Read the configured export root from the native resolved launch to locate answers.
+Read existing answers before launching another run. Use the exact control attempt paths in the gate
+report. Candidate status prints its output path. Read the configured export root from the native resolved launch to locate answers.
 [EvalLite evaluations](../../../docs/recipes/rl-experiments.md#tasks-and-evaluation) are greedy; data-short
 evaluates sampled candidate training tasks. Each native JSONL row carries
 its TaskSpec ID, prompt, output, tokens and verification.
@@ -86,17 +87,17 @@ Confirm the native receipt records success and the Iris job finished before repo
 For a linked issue, post one comment per result after the person's posting approval. Use these fields
 in order:
 
+- **Result** — verdict or status, key metrics, guards and report path.
 - **Preset** — name, version, source and changed inputs.
 - **Run / attempt** — IDs, Iris and Grafana links.
 - **W&B** — exact run link.
 - **Marina** — attempt link.
-- **Verdict and key metrics** — verdict, objectives, guards and report path.
 - **Cost** — elapsed time and measured GPU-hours, or label the estimate.
 
 ## Never
 
 - Stop or restart an Iris cluster, or cancel/resubmit unrelated jobs without authorization.
-- Collect controls or edit pins, a preset revision or `GATE_REVISION` unless asked in the current thread.
+- Launch manual controls or edit `GATE_REVISION` unless asked in the current thread.
 - Edit a preset, guard or tolerance to make a candidate pass.
 - Set `generator.enforce_eager=true` without a request; CUDA graphs affect speed measurement.
 - Claim a speed gain from speed-short alone, or a learning gain from a speed preset.

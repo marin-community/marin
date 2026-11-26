@@ -19,7 +19,6 @@ from evalrecords.records import RECORD_FILE, TaskEvidence, TaskMachineBackend, r
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
-from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.runner import EvaluationBatch, print_record, wait_and_report
@@ -28,8 +27,9 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import COREWEAVE_SECRET_NAMES, get_secret
 
+from experiments.evaluation.benchmarks.micro210 import print_pooled_score
 from experiments.evaluation.curated import load_evaluations
-from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
+from experiments.evaluation.evals import EvaluationDefinition, resolve_evaluations
 from experiments.evaluation.launch import (
     DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
@@ -50,30 +50,6 @@ def _resolve_evaluations(evals_arg: str) -> tuple[EvaluationDefinition, ...]:
         raise click.BadParameter(str(error)) from error
 
 
-def _load_selected_model(
-    model_key: str | None,
-    config_path: Path | None,
-    *,
-    key_hint: str,
-    config_hint: str,
-    label: str,
-) -> ModelConfig:
-    if config_path is not None:
-        try:
-            return load_model_config(config_path)
-        except Exception as exc:
-            raise click.BadParameter(str(exc), param_hint=config_hint) from exc
-    if model_key is None:
-        raise click.BadParameter(f"missing {label} selector", param_hint=f"{key_hint}/{config_hint}")
-    catalog = models()
-    if model_key not in catalog:
-        raise click.BadParameter(
-            f"unknown {label} {model_key!r}; known: {sorted(catalog)}",
-            param_hint=key_hint,
-        )
-    return catalog[model_key]
-
-
 def resolve_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig:
     """Resolve exactly one model registry key or catalog-schema file."""
     if (model_key is None) == (config_path is None):
@@ -81,31 +57,18 @@ def resolve_model_config(model_key: str | None, config_path: Path | None) -> Mod
             "specify exactly one of --model or --model-config",
             param_hint="--model/--model-config",
         )
-    return _load_selected_model(
-        model_key,
-        config_path,
-        key_hint="--model",
-        config_hint="--model-config",
-        label="model",
-    )
-
-
-def resolve_judge_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig | None:
-    """Resolve an optional hosted judge from the same model catalog schema."""
-    if model_key is None and config_path is None:
-        return None
-    if model_key is not None and config_path is not None:
+    if config_path is not None:
+        try:
+            return load_model_config(config_path)
+        except Exception as exc:
+            raise click.BadParameter(str(exc), param_hint="--model-config") from exc
+    catalog = models()
+    if model_key not in catalog:
         raise click.BadParameter(
-            "specify at most one of --judge-model or --judge-model-config",
-            param_hint="--judge-model/--judge-model-config",
+            f"unknown model {model_key!r}; known: {sorted(catalog)}",
+            param_hint="--model",
         )
-    return _load_selected_model(
-        model_key,
-        config_path,
-        key_hint="--judge-model",
-        config_hint="--judge-model-config",
-        label="judge model",
-    )
+    return catalog[model_key]
 
 
 def _require_coreweave_credentials(batch: EvaluationBatch) -> None:
@@ -133,21 +96,12 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
         f"priority={priority_band_name(batch.priority_band)}  instances={batch.instances}  "
         f"max_concurrent={batch.max_concurrent}"
     )
-    if batch.judge is not None:
-        click.echo(
-            f"judge: {batch.judge.model.name}  location={batch.judge.model.location}  "
-            f"accel={batch.judge.accelerator.label}  "
-            f"region_or_cluster={batch.judge.accelerator.target_cluster or batch.judge.accelerator.region}"
-        )
     for evaluation in batch.evaluations:
         eval_ref = evaluation.identity.eval_ref
         tasks = [task.name for task in eval_ref.tasks]
-        harbor = eval_ref.harbor
         curated = eval_ref.curated
         agent_context = ""
-        if harbor is not None:
-            agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
-        elif curated is not None and curated.agent is not None:
+        if curated is not None and curated.agent is not None:
             assert curated.settings.task_machine is not None
             agent_context = (
                 f"agent={curated.agent.harness}@{curated.agent.revision}  "
@@ -180,14 +134,6 @@ def cli() -> None:
     default=None,
     help="Model catalog YAML or JSON. Mutually exclusive with --model.",
 )
-@click.option("--judge-model", default=None, help="Optional hosted judge model registry key.")
-@click.option(
-    "--judge-model-config",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=None,
-    help="Optional hosted judge model catalog YAML or JSON.",
-)
-@click.option("--judge-accelerator", default=None, help="Hosted judge slice override, e.g. 'H100x8'.")
 @click.option(
     "--evals",
     "evals_arg",
@@ -199,17 +145,6 @@ def cli() -> None:
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
     help="Benchmark selection document. Repeat to combine entries; --evals selects entries from the combined documents.",
-)
-@click.option(
-    "--harbor-config",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    multiple=True,
-    help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
-)
-@click.option(
-    "--retry-unscored-harbor-trials",
-    is_flag=True,
-    help="Retry known unscored Harbor trials in --resume-results-path; preserve scored and unknown-error outcomes.",
 )
 @click.option(
     "--platform",
@@ -262,14 +197,6 @@ def cli() -> None:
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
 @click.option(
-    "--resume-results-path",
-    default=None,
-    help=(
-        "Existing object-store results path for a single Harbor evaluation. "
-        "Use only after every earlier driver for that path has ended."
-    ),
-)
-@click.option(
     "--run-id", default=None, help="Stable launch ID; repeat the command with this ID to reuse completed evals."
 )
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
@@ -298,14 +225,9 @@ def cli() -> None:
 def launch(
     model: str | None,
     model_config: Path | None,
-    judge_model: str | None,
-    judge_model_config: Path | None,
-    judge_accelerator: str | None,
     policy_finalization_config: Path | None,
     evals_arg: str | None,
     evaluation_config: tuple[Path, ...],
-    harbor_config: tuple[Path, ...],
-    retry_unscored_harbor_trials: bool,
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
@@ -316,7 +238,6 @@ def launch(
     task_evidence: str | None,
     version: str | None,
     description: str | None,
-    resume_results_path: str | None,
     run_id: str | None,
     no_wait: bool,
     dry_run: bool,
@@ -326,7 +247,6 @@ def launch(
 ) -> None:
     """Submit evaluations against a shared candidate endpoint for MODEL."""
     selected_model = resolve_model_config(model, model_config)
-    selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
     configured = [entry for path in evaluation_config for entry in load_evaluations(path)]
     if evaluation_config and evals_arg:
@@ -337,14 +257,7 @@ def launch(
                 f"Unknown configured evaluations: {', '.join(sorted(unknown))}", param_hint="--evals"
             )
         configured = [entry for entry in configured if entry.name in names]
-    harbor_definitions = [
-        HarborDefinition(
-            name=canonical_served_name(path.stem),
-            config_path=path,
-        )
-        for path in harbor_config
-    ]
-    evals = tuple(configured) + tuple(harbor_definitions)
+    evals = tuple(configured)
     if not evaluation_config and evals_arg is not None:
         evals += _resolve_evaluations(evals_arg)
     if not evals:
@@ -364,22 +277,15 @@ def launch(
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
-        judge_model=selected_judge,
-        judge_accelerator=judge_accelerator,
-        retry_unscored_harbor_trials=retry_unscored_harbor_trials,
         version=version,
         description=description,
-        resume_results_path=resume_results_path,
         run_id=run_id,
         policy_finalization=load_policy_finalization(policy_finalization_config) if policy_finalization_config else None,
     )
     try:
         batch = prepare_evaluation_batch(spec)
     except ValueError as exc:
-        if resume_results_path is not None:
-            param_hint = "--resume-results-path"
-        else:
-            param_hint = "--evaluation-config/--harbor-config" if evaluation_config or harbor_config else "--evals"
+        param_hint = "--evaluation-config" if evaluation_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
     _require_coreweave_credentials(batch)
     if dry_run:
@@ -397,7 +303,7 @@ def launch(
             click.echo(f"  {evaluation.run_id}  ({group.model_name} / {evaluation.eval_name})")
         if no_wait:
             return
-        if not wait_and_report([group]):
+        if not wait_and_report([group], report_group=print_pooled_score):
             raise click.ClickException("one or more evaluations failed or wrote no record")
 
 
@@ -410,8 +316,10 @@ def scores(runs: tuple[str, ...]) -> None:
     ``gs://marin-eval-metadata/evals/<run_id>``.
     """
     configure_coreweave_s3()
-    for run in runs:
-        print_record(read_record(run if run.endswith(RECORD_FILE) else prefix_join(run, RECORD_FILE)))
+    records = [
+        print_record(read_record(run if run.endswith(RECORD_FILE) else prefix_join(run, RECORD_FILE))) for run in runs
+    ]
+    print_pooled_score(records)
 
 
 def main() -> None:

@@ -4,8 +4,10 @@
 """The new judge changes task-owned transport while preserving task semantics."""
 
 import ast
+import hashlib
 import json
 import tomllib
+from dataclasses import replace
 
 import httpx
 import pyarrow as pa
@@ -16,19 +18,26 @@ from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import rollout_spec
 from taskcompendium.models import (
     AnswerType,
+    CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
+    GraderMachine,
     NoGrader,
     PlainText,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
+from experiments.evaluation.benchmarks import micro210
+from experiments.evaluation.catalog import evaluation_benchmarks
+from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.judge_config import MICRO210_JUDGE
 from experiments.evaluation.micro210_inputs import native_inputs, task_with_judge
+from experiments.evaluation.publication_cases import published_cases
 from tests.rl.micro210_fixture import policy_fixture_reference
 
 
@@ -140,7 +149,8 @@ def complete():
     assert request.extensions["timeout"]["read"] == 600.0
 
 
-def test_native_table_preserves_repeated_membership_and_package_provisioning(tmp_path, task):
+@pytest.fixture
+def frozen_trial(task):
     package = {
         "instruction.md": b"What is 2+2?",
         "task.toml": (
@@ -156,13 +166,14 @@ MODEL_NAME = "zai-org/GLM-5.3-Flash"
 cpus = 2
 memory_mb = 8192
 storage_mb = 10240
+build_timeout_sec = 1800
 allow_internet = true
 """
         ),
         "environment/Dockerfile": b"FROM fixture:sealed\nWORKDIR /workspace\n",
         "tests/test.sh": b"echo 0.5 > /logs/verifier/reward.txt\n",
     }
-    frozen_task = task.model_copy(
+    return task.model_copy(
         update={
             "id": "bixbench-pi/fixture",
             "answer_type": AnswerType.WORKSPACE_STATE,
@@ -170,6 +181,10 @@ allow_internet = true
             "resources": ResourceGroups(verifier=tuple(inline_resource(path, data) for path, data in package.items())),
         }
     )
+
+
+def test_native_table_preserves_repeated_membership_and_package_provisioning(tmp_path, frozen_trial):
+    frozen_task = frozen_trial
     frozen_rollout = rollout_spec(frozen_task, harness="harbor_trial")
     original = pa.table(
         {
@@ -200,7 +215,94 @@ allow_internet = true
         assert native.limits.total_turn_timeout == 1800
         assert native.limits.verifier_timeout == native.task.grader.timeout == 600
         assert {r.path: resource_bytes(r) for r in native.task.resources.verifier} == {
-            "test.sh": package["tests/test.sh"]
+            "test.sh": b"echo 0.5 > /logs/verifier/reward.txt\n"
         }
         assert native.task.grader.judge.model == MICRO210_JUDGE.model
         assert "${OPENAI_API_KEY}" not in native.task.model_dump_json()
+
+
+def test_shared_launcher_publishes_the_three_native_smoke_rows(tmp_path, monkeypatch, task, frozen_trial):
+    chat = task.model_copy(
+        update={
+            "grader": ScriptGrader(
+                argv=("true",),
+                placement=GraderMachine(
+                    environment=EnvironmentRequirements(
+                        docker_image="fixture@sha256:" + "b" * 64,
+                        command_semantics=CommandSemantics.LINUX_PROCESS,
+                    )
+                ),
+            )
+        }
+    )
+    chat_rollout = rollout_spec(chat)
+    bix = rollout_spec(frozen_trial, harness="harbor_trial")
+    bfcl = bix.model_copy(update={"task": frozen_trial.model_copy(update={"id": "bfclparity-pi/fixture"})})
+    rows = [{"agent": "single-turn", "benchmark": "cruxeval", "task_rollout_spec": chat_rollout.model_dump_json()}] * 13
+    rows[1] = {"agent": "pi", "benchmark": "bixbench", "task_rollout_spec": bix.model_dump_json()}
+    rows[12] = {"agent": "pi", "benchmark": "bfclparity", "task_rollout_spec": bfcl.model_dump_json()}
+    table = pa.Table.from_pylist(rows)
+    source = tmp_path / "frozen.parquet"
+    pq.write_table(table, source)
+    images = {"fixture:sealed": "sha256:" + "a" * 64}
+    image_lock = tmp_path / "images.json"
+    image_lock.write_text(json.dumps(images))
+    reference = policy_fixture_reference()
+    policy = json.loads(StoragePath(reference.uri).read_text())
+    policy["prepared_rollouts_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    policy_file = tmp_path / "policy.json"
+    raw_policy = json.dumps(policy).encode()
+    policy_file.write_bytes(raw_policy)
+    monkeypatch.setattr(micro210, "IMAGE_LOCK", image_lock)
+    monkeypatch.setattr(
+        micro210,
+        "POLICY_REFERENCE",
+        replace(
+            reference, uri=str(policy_file), sha256=hashlib.sha256(raw_policy).hexdigest(), byte_size=len(raw_policy)
+        ),
+    )
+    destination = tmp_path / "native.parquet"
+    native_inputs(str(source), str(destination), policy, images, rows=(0, 1, 12))
+    expected = {
+        index: TaskRolloutSpec.model_validate_json(raw)
+        for index, raw in zip((0, 1, 12), pq.read_table(destination)["task_rollout_spec"].to_pylist(), strict=True)
+    }
+    cases = []
+    for selection in resolve_evaluations("micro210-smoke"):
+        [declared] = evaluation_benchmarks()[selection.benchmark].resolve(selection.protocol)
+        assert declared.config is not None
+        cases.extend(
+            published_cases(
+                declared,
+                lambda path: path.write_bytes(source.read_bytes()),
+                tmp_path / selection.name,
+                monkeypatch,
+                declared.config.protocol.expected_population,
+            )
+        )
+    assert [case.item.source_ordinal for case in cases] == [0, 1, 12]
+    for case in cases:
+        index = case.item.source_ordinal
+        native = expected[index]
+        # The corpus adds a row identity and evaluation annotations to the native payload.
+        restored = case.task.model_copy(
+            update={
+                "id": native.task.id,
+                "source": native.task.source,
+                "tags": tuple(tag for tag in case.task.tags if tag != "eval"),
+                "labels": {
+                    key: value
+                    for key, value in case.task.labels.items()
+                    if key not in {micro210.EPISODE_LABEL, micro210.SOURCE_FAMILY}
+                },
+            }
+        )
+        assert (
+            hashlib.sha256(restored.model_dump_json().encode()).digest()
+            == hashlib.sha256(native.task.model_dump_json().encode()).digest()
+        )
+        if native.task_machine is not None:
+            assert case.item.episode is not None
+            assert case.item.episode.startup_timeout == native.task_machine.startup_timeout
+            assert case.item.episode.agent_timeout == native.limits.total_turn_timeout
+            assert case.item.episode.verifier_timeout == native.limits.verifier_timeout

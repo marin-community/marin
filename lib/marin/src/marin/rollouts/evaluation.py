@@ -8,7 +8,7 @@ import dataclasses
 import json
 import logging
 import threading
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import MappingProxyType
@@ -109,7 +109,7 @@ REUSED_FROM_RUN = "reused_response_from_run"
 # Run descriptor key listing, for each run whose responses this root reused, its root, run identity and driver revision.
 RESPONSE_SOURCES = "response_sources"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.23.1"
+EVALUATION_EXECUTION_REVISION = "2026.11.25.1"
 
 
 # Time for a judge-graded attempt's grading beyond the judge's own transport budget.
@@ -222,6 +222,18 @@ def run_identity(run: Mapping[str, Any]) -> str:
     """
     described = {key: value for key, value in run.items() if key != RESPONSE_SOURCES}
     return canonical_sha256({**described, "config": scoring_settings(run["config"])})
+
+
+def execution_revision(protocols: Iterable[EvaluationProtocol]) -> str:
+    """Separate cached requests whose declared agent sampling changes the execution."""
+    if any(
+        protocol.operation is OperationKind.AGENT_EPISODE
+        and protocol.sampling is not None
+        and (protocol.sampling.temperature is not None or protocol.sampling.top_p is not None)
+        for protocol in protocols
+    ):
+        return f"{EVALUATION_EXECUTION_REVISION}+agent-sampling"
+    return EVALUATION_EXECUTION_REVISION
 
 
 def generation_options(protocol: EvaluationProtocol, config: EvaluationRunConfig, trial: int) -> dict[str, Any]:
@@ -488,13 +500,24 @@ async def generation_turn(
     )
 
 
+async def agent_sampling_defaults(request: ModelRequest, *, model: Model, options: Mapping[str, Any]) -> ModelTurn:
+    """Fill omitted sampling values for an agent that builds its own requests."""
+    defaults = {
+        key: options[key] for key in ("temperature", "top_p") if key in options and request.options.get(key) is None
+    }
+    return await model(dataclasses.replace(request, options={**request.options, **defaults}))
+
+
 async def episode_turn(request: ModelRequest, *, model: Model, options: Mapping[str, Any]) -> ModelTurn:
-    """Apply the protocol's sampling to a harness request, keeping the harness's tools and extra body keys.
+    """Apply protocol options to a harness request, preserving its sampling, tools and extra body keys.
 
     The protocol's ``max_tokens`` caps the output limit the harness asks for, such as a summary's reserved budget.
     """
     extra_body = {**request.options.get("extra_body", {}), **options["extra_body"]}
     merged = {**request.options, **options, "extra_body": extra_body}
+    for key in ("temperature", "top_p"):
+        if (requested := request.options.get(key)) is not None:
+            merged[key] = requested
     if (requested := request.options.get("max_tokens")) is not None:
         merged["max_tokens"] = min(requested, options["max_tokens"])
     return await model(dataclasses.replace(request, options=merged))
@@ -508,6 +531,7 @@ def episode_machine(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> Machi
             "cpus": runtime.cpus if inputs.cpus is None else inputs.cpus,
             "memory_mb": runtime.memory_mb if inputs.memory_mb is None else inputs.memory_mb,
             "storage_mb": runtime.storage_mb if inputs.storage_mb is None else inputs.storage_mb,
+            "startup_timeout": runtime.startup_timeout if inputs.startup_timeout is None else inputs.startup_timeout,
             "gpus": inputs.gpus,
         }
     )
@@ -760,14 +784,12 @@ async def _score_rollout(
         engine = RolloutEngine(machine_factories, {harness: harnesses[harness](operation.harness, budget)})
         task_machine = episode_machine(config.task_machine, case.item.episode)
         limits = episode_limits(config.limits, operation, case.item.episode)
-        # Pi and mini-swe-agent send their own sampling and output limit, and Pi its thinking switch, as they do
-        # under Harbor. Other agents also send the model's agent request body, as Harbor's agents do.
-        agent_options = {**options, "extra_body": {**options["extra_body"], **config.agent_extra_body}}
-        policy_model = (
-            model
-            if isinstance(operation.harness, PiAgent | MiniSweAgent)
-            else partial(episode_turn, model=model, options=agent_options)
-        )
+        # Pi and mini-swe-agent construct requests and use the protocol's temperature and top-p as defaults.
+        if isinstance(operation.harness, PiAgent | MiniSweAgent):
+            policy_model = partial(agent_sampling_defaults, model=model, options=options)
+        else:
+            agent_options = {**options, "extra_body": {**options["extra_body"], **config.agent_extra_body}}
+            policy_model = partial(episode_turn, model=model, options=agent_options)
     else:
         assert isinstance(operation, ChatGeneration | TextGeneration)
         engine = RolloutEngine(machine_factories, {EXACT_CHAT_HARNESS: ExactChatHarness(options)})
@@ -964,7 +986,7 @@ async def run_evaluation(
     )
     run: dict[str, Any] = {
         "schema_version": 1,
-        "driver_revision": EVALUATION_EXECUTION_REVISION,
+        "driver_revision": execution_revision(protocol for _, protocol, _ in corpora),
         "config": config.model_dump(mode="json"),
         "datasets": [
             {

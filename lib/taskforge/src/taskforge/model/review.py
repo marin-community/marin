@@ -153,6 +153,8 @@ class AdversaryStatus(StrEnum):
     REPORTED = "reported"
     EXHAUSTED = "exhausted"
     FAILED = "failed"
+    UNSTARTED = "unstarted"
+    """The task environment's setup failed, so no search ran; the solver trials carry the failure to review."""
 
 
 class SearchLimit(StrEnum):

@@ -42,7 +42,6 @@ from cloud.iris.export_hf_checkpoint import export_terminal_policy
 from cloud.iris.submission import submission_client
 from cloud.iris.ray_storage import (
     RaySpillBackend,
-    resolve_ray_spill_target,
 )
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -65,10 +64,9 @@ from marinskyrl.environment_contract import (
 from cloud.iris.runtime_environment import (
     CHECKPOINT_EXPORT_ENTRYPOINT,
     IRIS_TASK_IMAGE,
-    MARINSKYRL_ACTIVATION_FILE,
     MARINSKYRL_TASK_ROOT,
     RuntimeProfile,
-    task_setup_script,
+    task_setup_command,
 )
 
 AUTOMATIC_RESOURCE_REQUEST = "auto"
@@ -551,11 +549,6 @@ def resolve_node_resource_requests(
     return resolved
 
 
-RL_PYTHON = "python"
-SKYRL_HOME = MARINSKYRL_TASK_ROOT
-APP_DIR = "/app"
-
-
 @dataclass(frozen=True)
 class BundledLaunchConfig:
     """Task path and environment payload for one resolved launch config."""
@@ -653,52 +646,20 @@ def _job_scope_fr_dump_path(prefix: str, job_name: str) -> str:
     return os.path.join(grandparent, job_name, os.path.basename(prefix))
 
 
-def _build_task_shell(
-    args: SimpleNamespace,
-    controller_cmd: list[str],
-    pythonpath: str,
-) -> list[str]:
-    """Wrap the node controller with per-pod storage setup."""
-    ctrl = shlex.join(controller_cmd)
-    # Run outside task_runtime so every pod establishes Ray's filesystem contract
-    # before importing or starting any MarinSkyRL controller code. The controller
-    # repeats this check immediately before `ray start` as defense in depth.
-    spill_preflight = resolve_ray_spill_target(
-        args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir
-    ).shell_preflight()
-    gate_report_prefix = f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate"
-    # The frozen export runtime uses PyTorch NCCL and has no vLLM.
-    pynccl_check = "" if _is_checkpoint_export(args) else " --pynccl-init"
-    transport_gate = (
-        f"{RL_PYTHON} {APP_DIR}/experiments/post_training/nccl_transport_probe.py"
-        f" --mode gate --gate-coverage all-gpus{pynccl_check}"
-        f" --gate-report-prefix {shlex.quote(gate_report_prefix)}; "
-    )
-    bash = (
-        f"set -e; {spill_preflight}cd {SKYRL_HOME}; "
-        f"export SKYRL_HOME={shlex.quote(SKYRL_HOME)}; "
-        f"source {shlex.quote(MARINSKYRL_ACTIVATION_FILE)}; "
-        f"export PYTHONPATH={shlex.quote(pythonpath)}:${{PYTHONPATH:-}}; "
-        f"export VLLM_USE_V1=1; "
-        f"{transport_gate}"
-        f"exec {ctrl}"
-    )
-    return ["bash", "-c", bash]
-
-
 def build_config_task_command(args: SimpleNamespace) -> list[str]:
     """Build the replica-controller command for the resolved launch config."""
     launch_config = args.launch_config_bundle
     if not isinstance(launch_config, BundledLaunchConfig):
         raise RuntimeError("resolved launch config payload is missing")
-    controller_cmd = [
-        RL_PYTHON,
-        "cloud/iris/task_runtime.py",
-        "--config",
+    single_domain = args.role_topology is not None and args.role_topology.locality.group_sizes == (args.num_nodes,)
+    return [
+        "bash",
+        f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
         launch_config.task_path,
+        f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate",
+        *(["--pynccl-init"] if args.runtime_profile is RuntimeProfile.MEGATRON else []),
+        *(["--gate-single-nvlink-domain"] if single_domain else []),
     ]
-    pythonpath = f"{APP_DIR}:{SKYRL_HOME}:{SKYRL_HOME}/skyrl-train"
-    return _build_task_shell(args, controller_cmd, pythonpath)
 
 
 def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ...] = ()) -> LaunchOutcome:
@@ -891,7 +852,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
             environment=EnvironmentSpec(
                 env_vars=env_vars,
                 extras=["gpu"],
-                setup_scripts=[task_setup_script(args.runtime_profile)],
+                setup_scripts=[task_setup_command(args.runtime_profile)],
             ),
             constraints=constraints or None,
             coscheduling=coscheduling,

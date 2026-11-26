@@ -401,6 +401,8 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
             assert continuation.parent is not None and continuation.parent.attempt_id == generated_attempt_id
             assert continuation.parent.step == continuation.resumed_step == 2
         current_attempt = "attempt-4" if resume else generated_attempt_id
+        elapsed = attempts[current_attempt].elapsed_excluding_eval_seconds
+        assert elapsed is not None and elapsed > 0
         task_rows = read_evaluations(
             str(root / "exports"), attempt_id=current_attempt, step=steps, evaluation="eval/full_task_set/"
         )

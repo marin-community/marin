@@ -17,7 +17,7 @@ their producers (``LevanterCheckpoint`` in ``marin.training.training``, ``Tokeni
 - ``read_record``/``write_record`` (the full record) and ``read_artifact``/``write_artifact``
   (the manual typed-payload API), two entry points over one serialization scheme.
 - :func:`check_drift` — the advisory recipe-drift guard the runner applies before serving a
-  cached output.
+  successful, immutable cached output.
 """
 
 import functools
@@ -52,8 +52,8 @@ RECORD_FILENAME = ".artifact.json"
 # The old Ray executor wrote a per-step ``.executor_info`` sidecar (the ``ExecutorStepInfo``
 # schema) instead of an ``.artifact.json``. Caches built that way — e.g. the pinned llama3
 # Nemotron-CC caches — carry their materialized ``config`` (tokenizer, format, tags) only there,
-# so we read it as a last resort to recover the record. Never written.
-_LEGACY_EXECUTOR_INFO_FILENAME = ".executor_info"
+# so we read it as a last resort to recover the record. This module never writes it.
+EXECUTOR_INFO_FILENAME = ".executor_info"
 
 # The lazy ``StepRunner`` also writes a ``.executor_info`` — but at *schedule* time, before the
 # step runs — tagged with this ``executor_version``. Unlike a genuine legacy Ray sidecar, its
@@ -189,6 +189,11 @@ def is_mutable_version(version: str) -> bool:
     return version == "dev" or version.endswith("-dev")
 
 
+def is_mutable_step(step: StepSpec) -> bool:
+    """Whether a fingerprinted step must rebuild on every run."""
+    return step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, ""))
+
+
 def validate_path_segment(label: str, value: str) -> None:
     """A ``name``/``version`` is a single path segment: non-empty, no URL scheme, no ``..``, no
     leading/trailing slash. A malformed one is a caller bug, not a silent malformed path."""
@@ -299,7 +304,7 @@ def read_record(output_path: str) -> ArtifactRecord | None:
     text = _read_text(output_path, RECORD_FILENAME)
     if text is not None and text.strip() != "null":
         return _parse_record(text)
-    executor_info = _read_text(output_path, _LEGACY_EXECUTOR_INFO_FILENAME)
+    executor_info = _read_text(output_path, EXECUTOR_INFO_FILENAME)
     if executor_info is not None:
         return _record_from_executor_info(executor_info)
     return None
@@ -378,24 +383,20 @@ def write_step_record(identity: StepRecordIdentity, *, output_path: str, result:
     )
 
 
-def check_drift(step: StepSpec) -> bool:
-    """Advisory recipe-drift guard, run before serving a cached SUCCESS.
+def check_drift(step: StepSpec) -> None:
+    """Advisory recipe-drift guard before serving a successful, immutable cache entry.
 
-    Returns ``False`` for a non-lazy step (no fingerprint). Returns ``True`` for a mutable
-    (``dev``) version so the caller rebuilds. Otherwise, if a record exists whose fingerprint
-    differs from the step's: raises :class:`FingerprintMismatchError` if the step carries an
-    ``expected_fingerprint`` pin, else logs a field-level warning and returns ``False`` (the
-    cached output is served).
+    If a record exists whose fingerprint differs from the step's, raises
+    :class:`FingerprintMismatchError` for an ``expected_fingerprint`` pin, or logs a
+    field-level warning before the caller serves the cached output.
     """
     fingerprint = step.hash_attrs.get(FINGERPRINT_KEY)
     if fingerprint is None:
-        return False
+        return
     version = step.hash_attrs.get(VERSION_KEY, "")
-    if is_mutable_version(version):
-        return True
     record = read_record(step.output_path)
     if record is None or record.fingerprint == fingerprint:
-        return False
+        return
 
     change = describe_drift(record.fingerprint_payload, step.fingerprint_payload)
     if step.hash_attrs.get(EXPECTED_FINGERPRINT_KEY) is not None:
@@ -413,4 +414,3 @@ def check_drift(step: StepSpec) -> bool:
         fingerprint,
         change,
     )
-    return False

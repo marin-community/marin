@@ -92,8 +92,7 @@ The first and last recorded sessions for each evaluation publish to EvalDash
 and appear on the attempt's RL Progress page. Checkpoint selection reads the
 trainer metrics. Levanter uses its training mesh for in-loop loss evaluation.
 
-Harbor policies passed with `--harbor-config` still run through Harbor's own runtime,
-using the shared inference lifecycle and record catalog. See
+The record catalog also includes archived Harbor policy runs with their runtime provenance. See
 [Harbor integration](../harbor-integration.md).
 
 Start with [running evaluations](../tutorials/run-lm-evals.md) for commands and
