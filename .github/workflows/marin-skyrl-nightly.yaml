@@ -35,7 +35,9 @@ concurrency:
 
 jobs:
   dispatch-controls-comment:
-    if: github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/rl-controls')
+    if: >-
+      github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      (github.event.comment.body == '/rl-controls' || startsWith(github.event.comment.body, '/rl-controls '))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

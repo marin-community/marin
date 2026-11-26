@@ -359,8 +359,8 @@ under the preset's output root.
    To refresh selected controls, dispatch the workflow on `main` with `controls=true` and a space-separated
    `presets` list. With repository write access, comment `/rl-controls snowball/learning-medium mochi`
    on a merged pull request to dispatch the same workflow and receive its run link. Use `model` for
-   all gated presets of a model, or `model/preset` for one. The workflow replies with the reason if
-   it refuses a comment.
+   all gated presets of a model, or `model/preset` for one. Every selector must name a gated target.
+   The workflow replies with the reason if it refuses a comment.
 
 ## Tasks and evaluation
 
