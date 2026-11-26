@@ -1,0 +1,19 @@
+experiment: X0259
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: X0250 + matrix decay lambda((1-f)lr_m/lr_max+f), f=0.05
+    flags:
+    - --opt-set
+    - muonc_anneal_decay=0.2
+    - --opt-set
+    - muonc_anneal_adamc=12.5
+    - --opt-set
+    - adamc_adam_decay=0.3
+    - --opt-set
+    - muonc_anneal_decay_floor_frac=0.05
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
