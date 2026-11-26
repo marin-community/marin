@@ -48,21 +48,26 @@ from experiments.belay.branch import (
     Rollover,
     abort_rollover,
     carry,
+    clear_rollover_blocked,
     conflicted_paths,
     current_branch,
     cut_fresh_week,
     enter_week,
     finish_port,
     git,
+    latest_week,
     load_rollover,
+    mark_rollover_blocked,
     named_checkout,
     remote_branch_exists,
     repo_root,
     require_clean_pushed_head,
     require_week_branch,
+    rollover_blocked,
     rollover_path,
     run_git,
     temporary_worktree,
+    with_dependencies,
 )
 from experiments.belay.code_change import (
     changed_paths,
@@ -348,9 +353,14 @@ def start(events_file: Path, today: datetime.date) -> None:
     week = CONFIG.week_branch(today)
     print(f"recipe: {CONFIG.recipe_name} ({CONFIG.recipe_branch}); this week's branch: {week}")
     if not enter_week(repo, week):
-        print(f"event: weekly rollover ({week} is not cut yet)")
-        say_next(f"{BELAY} weekly-rollover   (section 4), then run start again")
-        return
+        blocked = rollover_blocked(repo, week)
+        previous = latest_week(repo, week)
+        if blocked is None or previous is None:
+            print(f"event: weekly rollover ({week} is not cut yet)")
+            say_next(f"{BELAY} weekly-rollover   (section 4), then run start again")
+            return
+        enter_week(repo, previous)
+        print(f"{week} is not cut yet ({blocked}); this pass works on {previous}, and a later pass retries the cut")
     require_registry_checkout()
     state = page_state()
     todo = []
@@ -2139,8 +2149,10 @@ def gate_carried(repo: Path, entries: dict[str, dict]) -> None:
     run_precommit(repo, paths)
 
 
-def weekly_rollover(today: datetime.date, *, dry_run: bool) -> None:
-    """Cut this week's branch fresh from the recipe and carry only the code of ideas still in play."""
+def weekly_rollover(today: datetime.date, *, extra: list[str], drop: list[str], dry_run: bool) -> None:
+    """Cut this week's branch fresh from the recipe and carry only the code of ideas still in play, with the code
+    they need from ideas left behind. ``extra`` carries more ideas (code a carried idea needs that the scan missed);
+    ``drop`` leaves ideas behind (code that cannot be carried), so one idea never blocks the week."""
     repo = repo_root()
     target = CONFIG.week_branch(today)
     if remote_branch_exists(repo, target):
@@ -2149,11 +2161,25 @@ def weekly_rollover(today: datetime.date, *, dry_run: bool) -> None:
         raise SystemExit(f"refusing: a cut waits for a port.\nnext: {BELAY} weekly-rollover --continue (or --abort)")
     require_registry_checkout()
     entries = {e["id"]: e for e in all_entries()}
-    carried = carried_ideas(list(entries.values()), page_state())
-    owners = {c: x for x in carried for c in entries[x]["code_commits"]}
+    unknown = [x for x in [*extra, *drop] if x not in entries]
+    if unknown:
+        raise SystemExit(f"refusing: no registry entry {', '.join(unknown)}")
+    carried = [x for x in dict.fromkeys([*carried_ideas(list(entries.values()), page_state()), *extra]) if x not in drop]
     git(repo, "fetch", "--quiet", "origin")
+    chosen = {c: x for x in carried for c in entries[x].get("code_commits") or []}
+    others = {
+        c: e["id"]
+        for e in entries.values()
+        if e["id"] not in carried and e["id"] not in drop
+        for c in e.get("code_commits") or []
+    }
+    commits, owners, needed_by = with_dependencies(repo, chosen, others, f"origin/{CONFIG.base_branch}")
     print(f"carrying {len(carried)} idea(s): {', '.join(carried) or 'none'}")
-    rollover = Rollover(target, list(owners), owners)
+    for idea, needer in needed_by.items():
+        print(f"carrying {idea} as code {needer} needs (its flag stays off)")
+    for idea in drop:
+        print(f"leaving {idea} behind (--drop): its code stays on last week's branch")
+    rollover = Rollover(target, commits, owners, dropped=drop)
     conflict = cut_fresh_week(repo, rollover, dry_run=dry_run)
     if conflict is not None:
         ask_for_port(repo, rollover, conflict)
@@ -2172,16 +2198,17 @@ def ask_for_port(repo: Path, rollover: Rollover, commit: str) -> None:
     except SystemExit as outside:
         abort_rollover(repo)
         print(f"not portable here, nothing pushed: {outside}")
-        say_rollover_escalation(rollover.target, owner, f"Its commit {commit[:10]} conflicts outside fast_track.")
+        say_rollover_escalation(repo, rollover.target, owner, f"Its commit {commit[:10]} conflicts outside fast_track.")
         return
     print(
         f"Port it (RUNBOOK section 4): in each conflicted file keep {CONFIG.base_branch}'s code and re-apply only "
         f"{owner}'s change, which `git show {commit[:10]}` shows; leave no conflict marker; `git add` each file. "
-        f"If the code {owner} changes is gone from the recipe, so the change has nowhere to go, do not rewrite it."
+        f"If the code {owner} changes is gone from the recipe, so the change has nowhere to go, do not rewrite it: "
+        f"abort and cut the week without it (--drop {owner})."
     )
     say_next(
-        f"{BELAY} weekly-rollover --continue   (or, if it cannot be ported as it is: "
-        f"{BELAY} weekly-rollover --abort, then the escalate it prints)"
+        f"{BELAY} weekly-rollover --continue   (or, if it cannot be ported as it is: {BELAY} weekly-rollover --abort, "
+        f"then {BELAY} weekly-rollover --drop {owner}, plus any --with/--drop from an earlier try)"
     )
 
 
@@ -2203,14 +2230,20 @@ def continue_rollover(*, dry_run: bool) -> None:
 
 def stop_rollover() -> None:
     """Give up on a port: the checkout goes back to the recipe, nothing is pushed, and a maintainer decides."""
-    rollover = abort_rollover(repo_root())
+    repo = repo_root()
+    rollover = abort_rollover(repo)
     commit = rollover.commits[rollover.carried]
     owner = rollover.owners[commit]
     print(f"stopped the {rollover.target} cut at {owner} ({commit[:10]}); nothing pushed")
-    say_rollover_escalation(rollover.target, owner, f"Its commit {commit[:10]} could not be ported onto the recipe.")
+    print(f"next, cut the week without it: {BELAY} weekly-rollover --drop {owner} (plus any earlier --with/--drop)")
+    mark_rollover_blocked(repo, rollover.target, f"{owner} could not be ported")
+    say_next(f"{BELAY} weekly-rollover --drop {owner}")
 
 
-def say_rollover_escalation(target: str, owner: str, why: str) -> None:
+def say_rollover_escalation(repo: Path, target: str, owner: str, why: str) -> None:
+    """The cut cannot finish here: remember it so start works on last week's branch, and escalate once."""
+    mark_rollover_blocked(repo, target, why)
+    print(f"until a cut lands, sessions work on {latest_week(repo, target) or 'last week'}: run start again after this")
     say_next(
         f'{BELAY} escalate --title "{target}: {owner} does not apply to the recipe" --registry-id {owner} '
         f'--body "{why} A maintainer ports it or drops it, then reruns weekly-rollover."'
@@ -2228,17 +2261,35 @@ def finish_rollover(repo: Path, rollover: Rollover, *, dry_run: bool) -> None:
         except SystemExit as failure:  # one carried change fails its gates on the new base: escalate, push nothing
             git(repo, "reset", "--quiet", "--hard", f"origin/{CONFIG.base_branch}")
             print(f"the carried code fails its gates on {CONFIG.base_branch}; aborted, nothing pushed:\n{failure}")
+            print(
+                "Read the gate output for the idea at fault (RUNBOOK section 4). If it needs another idea's code, "
+                "rerun with --with <that X####>; if its own code is what fails, rerun with --drop <its X####>. "
+                "Keep the --with/--drop of earlier tries."
+            )
+            mark_rollover_blocked(repo, rollover.target, "carried code failed its gates")
             say_next(
+                f"{BELAY} weekly-rollover --with X#### or --drop X####   (if neither helps: "
                 f'{BELAY} escalate --title "{rollover.target}: carried code fails its gates on the recipe" '
-                '--body "<the gate output above>. A maintainer ports or drops the idea, then reruns weekly-rollover."'
+                '--body "<the gate output>", then start again)'
             )
             return
     run_git(repo, ["push", "--quiet", "-u", "origin", rollover.target], dry_run=dry_run)
+    if not dry_run:
+        clear_rollover_blocked(repo)
     print(f"on {rollover.target}: origin/{CONFIG.base_branch} plus {len(rollover.commits)} carried commit(s)")
     if rollover.ports:
         changed = [replace_code_commit(rollover.owners[old], old, new) for old, new in rollover.ports.items()]
         ids = sorted({rollover.owners[old] for old in rollover.ports})
         commit_and_push(changed, f"Belay registry: {', '.join(ids)} code ported to {CONFIG.recipe_tag}", dry_run=False)
+    if rollover.dropped:
+        ids = ", ".join(rollover.dropped)
+        say_next(
+            f'{BELAY} escalate --title "{rollover.target}: cut without {ids}" '
+            f'--body "{ids} could not be carried onto the recipe, so the week was cut without its code; its runs '
+            f'and results are unchanged. A maintainer ports it, then re-queues the idea.", then {BELAY} start '
+            "--events <the same events file>"
+        )
+        return
     say_next(f"{BELAY} start --events <the same events file>")
 
 
@@ -2449,6 +2500,8 @@ def main(argv: list[str]) -> None:
     step = p.add_mutually_exclusive_group()
     step.add_argument("--continue", dest="resume", action="store_true", help="commit the port and finish the cut")
     step.add_argument("--abort", action="store_true", help="give up on the port; nothing is pushed")
+    p.add_argument("--with", dest="extra", action="append", default=[], help="also carry this idea's code (X####)")
+    p.add_argument("--drop", action="append", default=[], help="leave this idea's code behind (X####)")
     p = command("recipe-change")
     p.add_argument("--from", dest="source", required=True, help="the branch whose tip becomes the new recipe")
     command("tracks").add_argument("--json", action="store_true", help="the table as JSON (web/tracks.json)")
@@ -2531,7 +2584,7 @@ def main(argv: list[str]) -> None:
     elif args.command == "weekly-rollover" and args.abort:
         stop_rollover()
     elif args.command == "weekly-rollover":
-        weekly_rollover(today, dry_run=args.dry_run)
+        weekly_rollover(today, extra=args.extra, drop=args.drop, dry_run=args.dry_run)
     elif args.command == "recipe-change":
         recipe_change(args.source, today, dry_run=args.dry_run)
     elif args.command == "tracks":

@@ -22,7 +22,7 @@ import yaml
 from rigging.auth import IapCredentialsUnavailable
 
 from experiments.belay import __main__ as belay_main
-from experiments.belay import page, submit
+from experiments.belay import branch, page, submit
 from experiments.belay.__main__ import (
     carried_ideas,
     idea_step,
@@ -49,8 +49,11 @@ from experiments.belay.branch import (
     finish_port,
     git,
     load_rollover,
+    mark_rollover_blocked,
     require_clean_pushed_head,
     require_week_branch,
+    rollover_blocked,
+    with_dependencies,
 )
 from experiments.belay.code_change import (
     Probe,
@@ -289,12 +292,69 @@ def test_only_ideas_in_play_are_carried() -> None:
 
 
 def test_launch_refused_off_this_weeks_branch(repo: Path) -> None:
+    git(repo, "checkout", "--quiet", CONFIG.base_branch)
     with pytest.raises(SystemExit, match="not this week's branch"):
         require_week_branch(repo, MONDAY)
 
 
+def test_until_the_week_is_cut_runs_launch_from_last_weeks_branch(repo: Path) -> None:
+    last_week = CONFIG.week_branch(MONDAY - datetime.timedelta(days=7))
+    assert require_week_branch(repo, MONDAY) == last_week  # the fixture leaves the clone on last week's branch
+
+    week = CONFIG.week_branch(MONDAY)
+    git(repo, "push", "--quiet", "origin", f"origin/{CONFIG.base_branch}:refs/heads/{week}")
+    with pytest.raises(SystemExit, match="not this week's branch"):  # once cut, only this week's branch launches
+        require_week_branch(repo, MONDAY)
+
+
+def test_a_failed_cut_is_skipped_for_a_while_then_retried(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    week = CONFIG.week_branch(MONDAY)
+    assert rollover_blocked(repo, week) is None
+    mark_rollover_blocked(repo, week, "X0002 could not be ported")
+    assert rollover_blocked(repo, week) == "X0002 could not be ported"
+    assert rollover_blocked(repo, CONFIG.week_branch(MONDAY + datetime.timedelta(days=7))) is None
+    monkeypatch.setattr(branch, "ROLLOVER_RETRY", datetime.timedelta(0))
+    assert rollover_blocked(repo, week) is None
+
+
+def python_commit(repo: Path, name: str, text: str) -> str:
+    commit_file(repo, name, text)
+    return git(repo, "rev-parse", "HEAD")
+
+
+def test_a_carried_commit_brings_the_left_behind_code_it_calls(repo: Path) -> None:
+    helper = python_commit(repo, "pointer.py", "def _reduce_mixture_loss(x):\n    return x\n")
+    git(repo, "checkout", "--quiet", "HEAD~3")  # the base: neither commit nor the fixture's flags
+    unrelated = python_commit(repo, "other.py", "def _other():\n    return 1\n")
+    git(repo, "checkout", "--quiet", helper)
+    user = python_commit(repo, "ngram.py", "from pointer import _reduce_mixture_loss\n\nY = _reduce_mixture_loss(2)\n")
+
+    commits, owners, needed_by = with_dependencies(
+        repo, {user: "X0242"}, {helper: "X0238", unrelated: "X0099"}, f"origin/{CONFIG.base_branch}"
+    )
+
+    assert commits == [helper, user]  # the helper first, in commit order
+    assert owners == {user: "X0242", helper: "X0238"}
+    assert needed_by == {"X0238": "X0242"}
+
+
+def test_a_name_the_recipe_already_defines_brings_nothing(repo: Path) -> None:
+    git(repo, "checkout", "--quiet", CONFIG.base_branch)
+    commit_file(repo, "shared.py", "def _shared():\n    return 0\n")
+    git(repo, "push", "--quiet", "origin", CONFIG.base_branch)
+    redefined = python_commit(repo, "again.py", "def _shared():\n    return 1\n")
+    user = python_commit(repo, "use.py", "from shared import _shared\n\nZ = _shared()\n")
+
+    commits, _, needed_by = with_dependencies(
+        repo, {user: "X0005"}, {redefined: "X0004"}, f"origin/{CONFIG.base_branch}"
+    )
+
+    assert commits == [user] and needed_by == {}
+
+
 def test_launch_refused_when_week_branch_lacks_the_base(repo: Path) -> None:
     git(repo, "checkout", "--quiet", "-b", CONFIG.week_branch(MONDAY))
+    git(repo, "push", "--quiet", "origin", CONFIG.week_branch(MONDAY))
     git(repo, "checkout", "--quiet", CONFIG.base_branch)
     commit_file(repo, "recipe_fix.txt", "fix\n")
     git(repo, "push", "--quiet", "origin", CONFIG.base_branch)

@@ -316,12 +316,18 @@ fourth goes to a maintainer.
 Each week's branch starts fresh from `marin_belay_v1_recipe`, the last accepted recipe, and carries only the code
 of ideas still in play: ideas in progress (approved, planned or running, or with a stage still pending) and wins
 not yet adopted. Their code commits come from the registry (`code_commits`). Losses, noise, declined and closed
-ideas stay behind on the old branch; settings-only ideas carry nothing.
+ideas stay behind on the old branch; settings-only ideas carry nothing. A carried idea whose code calls code from an
+idea left behind brings that code too, with its flag off: the cut scans each carried commit for names only a
+left-behind idea defines (`carrying X#### as code X#### needs`).
+
+The cut must never stop Belay. Until this week's branch exists, `start` runs the events on last week's branch, and
+a later session retries the cut. One idea that cannot be carried is left behind (`--drop`), not a reason to leave
+the whole week uncut.
 
 1. **Run:** `B weekly-rollover`
    - **Expect:**
-     - `carrying <n> idea(s): X####, ...`, then `cutting <branch> from origin/marin_belay_v1_recipe` and one
-       `carrying <commit> X####: <flag> (default off)` line per carried commit;
+     - `carrying <n> idea(s): X####, ...`, any `carrying X#### as code X#### needs` lines, then `cutting <branch>
+       from origin/marin_belay_v1_recipe` and one `carrying <commit> X####: <flag> (default off)` line per commit;
      - the push, then `on <branch>: origin/marin_belay_v1_recipe plus <n> carried commit(s)`;
      - `next: B start ...`.
    - **If a carried commit conflicts** (`... conflicts in: <files>`), port it; the recipe moved under it, which is
@@ -335,10 +341,15 @@ ideas stay behind on the old branch; settings-only ideas carry nothing.
         records each port as its idea's code commit on the registry
         (`... code ported to belay-ckpt-<date>`).
      4. **If the change has nowhere to go** (the code it changes is gone from the recipe, so a port would mean
-        rewriting the idea), or `--continue` still refuses after a fix: `B weekly-rollover --abort`, then run the
-        escalate command it prints, then stop.
-   - **If the conflict is outside those paths, or the carried code fails its gates on the recipe:** it pushes
-     nothing; run the escalate command it prints, then stop.
+        rewriting the idea): `B weekly-rollover --abort`, then cut without it: `B weekly-rollover --drop X####`.
+   - **If the carried code fails its gates**, read the output for the idea at fault and judge the cause:
+     - it needs code from another idea that the scan missed (a missing name, import or attribute that another
+       idea's commit adds): rerun with `--with <that X####>`;
+     - its own code fails on the new recipe: rerun with `--drop <its X####>`.
+     Keep every `--with`/`--drop` of earlier tries on each rerun. A cut with `--drop` ends by printing the escalate
+     command for the ideas left behind; run it, then `B start`.
+   - **If no cut finishes** after a few tries (or a conflict is outside those paths): run the escalate command it
+     prints, then `B start` again. It works the events on last week's branch, and a later session retries the cut.
 2. Go back to section 0.
 
 To retest an idea that stayed behind, a maintainer re-queues it with the note "retest on current recipe". If it
