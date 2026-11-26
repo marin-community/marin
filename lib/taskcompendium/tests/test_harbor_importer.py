@@ -592,6 +592,56 @@ def test_shared_verifier_rejects_what_the_agent_machine_cannot_run(tmp_path, ver
         lower(directory)
 
 
+NETWORK_PHASES = """\
+schema_version = "1.4"
+
+[verifier]
+network_mode = "public"
+timeout_sec = 900.0
+
+[agent]
+network_mode = "no-network"
+timeout_sec = 900.0
+
+[environment]
+network_mode = "public"
+docker_image = "alexgshaw/fix-git:20251031"
+"""
+
+
+def test_schema_1_4_runs_the_agent_offline_and_a_separate_verifier_online(tmp_path):
+    files = {
+        **SHARED_DEFAULT,
+        "task.toml": NETWORK_PHASES + '\n[verifier.environment]\ndocker_image = "alexgshaw/fix-git:20251031"\n',
+    }
+
+    lowered = lower(write_package(tmp_path, "package", files))
+
+    assert "network" not in lowered.task.environment_requirements.capabilities
+    assert lowered.episode.network == NetworkPolicy.DENY
+    placement = lowered.task.grader.placement
+    assert isinstance(placement, GraderMachine)
+    assert "network" in placement.environment.capabilities
+
+
+@pytest.mark.parametrize(
+    "task_toml,reason",
+    [
+        (NETWORK_PHASES, "tests in the agent's container that need a different network than the agent"),
+        (
+            NETWORK_PHASES.replace('[agent]\nnetwork_mode = "no-network"', '[agent]\nnetwork_mode = "allowlist"'),
+            "allowlisted network access",
+        ),
+    ],
+    ids=["shared-verifier-online", "allowlist"],
+)
+def test_schema_1_4_rejects_network_policies_the_machines_cannot_hold(tmp_path, task_toml, reason):
+    directory = write_package(tmp_path, "package", {**SHARED_DEFAULT, "task.toml": task_toml})
+
+    with pytest.raises(UnsupportedHarborFeature, match=re.escape(reason)):
+        lower(directory)
+
+
 def test_answer_file_is_captured_and_graded_on_the_host(tmp_path):
     grader = VerifyitGrader(mode="exact", parameters={"expected": ["204"]})
     rule = AnswerFile(path="/app/answer.txt", grader=grader)

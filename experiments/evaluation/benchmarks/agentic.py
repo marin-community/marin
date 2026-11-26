@@ -32,6 +32,12 @@ from experiments.evaluation.benchmarks.harbor import (
     pi_install,
 )
 from experiments.evaluation.benchmarks.harbor_judges import bixbench_answer, financeagent_answer, simpleqa_answer
+from experiments.evaluation.benchmarks.swebench_pro import (
+    SWEBENCH_PRO_DATASETS,
+    SWEBENCH_PRO_JOB,
+    SWEBENCH_PRO_MAX_INPUT_TOKENS,
+    SWEBENCH_PRO_MAX_OUTPUT_TOKENS,
+)
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
 from experiments.post_training.task_curation.harbor_packages import package_rows
 from experiments.post_training.task_curation.pipeline import HarborHubSource
@@ -519,6 +525,7 @@ HARBOR_DATASETS = {
         SWEBENCH_VERIFIED_MINI_SWE,
         SWEBENCH_MULTILINGUAL,
         SWEBENCH_MULTILINGUAL_100,
+        *SWEBENCH_PRO_DATASETS,
     )
 }
 
@@ -564,6 +571,16 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
                 job=JobSettings(agent_install=TMUX_INSTALL),
             )
             for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
+        ),
+        *(
+            harbor_source(
+                dataset,
+                MiniSweAgent(),
+                max_input_tokens=SWEBENCH_PRO_MAX_INPUT_TOKENS,
+                max_output_tokens=SWEBENCH_PRO_MAX_OUTPUT_TOKENS,
+                job=SWEBENCH_PRO_JOB,
+            )
+            for dataset in SWEBENCH_PRO_DATASETS
         ),
         harbor_source(DS_1000_MINI_200, terminus, max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS, job=CAMPAIGN_JOB),
         harbor_source(

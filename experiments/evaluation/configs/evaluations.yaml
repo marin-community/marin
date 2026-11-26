@@ -238,6 +238,34 @@ evaluations:
       concurrency: 32
       task_machine:
         image_build: declarative
+  swebench-pro:
+    benchmark: swebench-pro
+    protocol: mini-swe-agent
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro-200:
+    benchmark: swebench-pro-200
+    protocol: mini-swe-agent
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro-smoke:
+    benchmark: swebench-pro-smoke
+    protocol: mini-swe-agent
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  swebench-pro-lite:
+    benchmark: swebench-pro-smoke
+    protocol: mini-swe-agent
+    run:
+      limit: 2
+      task_machine:
+        image_build: declarative
   swebench-science:
     benchmark: swebench-science
     protocol: pi-xhigh

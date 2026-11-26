@@ -375,6 +375,7 @@ def lock_images(dataset: HarborDataset) -> dict[str, str]:
         for archive in sorted(root.glob(f"staged/{PACKAGE_ARCHIVES}")):
             package = root / "package"
             extract_package(archive.read_bytes(), package)
+            edit_package(package, dataset.edits)
             references.update(image_references(package))
             shutil.rmtree(package)
     logger.info("Resolving %d images for %s", len(references), dataset.recipe)
