@@ -383,6 +383,9 @@ def main() -> None:
         "revision": source.release_revision,
         "tasks_parquet_sha256": source.task_specs_sha256,
     }
+    # The published release is self-describing: rewrite the staged manifest before the
+    # upload so it carries the declared pin and the verified input-release identity.
+    (Path(args.output_root) / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     if not args.run:
         print(
             json.dumps({"plan": manifest, "release_repo": release_repo(source.info.id, args.artifact_version)}, indent=2)
