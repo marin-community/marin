@@ -33,12 +33,6 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
-from experiments.grug.moe_hero_ep.train import (
-    DEFAULT_SLOP_FACTOR,
-    HERO_EP_RUNTIME_ENV,
-    INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT,
-    XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
-)
 from experiments.sft.launcher import DatasetSpec, HFModel, PreparedData, SFTPreset, SFTSpec, main
 
 HF_MODEL = "open-athena/snowball-67b-a2b-base-262k-qk175-skew8"
@@ -281,16 +275,15 @@ EXP7_SPEC = replace(
     num_train_steps=1893,
     hf_save_dtype="bfloat16",
     wandb_project="marin-long-loop",
-    env_vars=HERO_EP_RUNTIME_ENV,
+    env_vars={
+        "JAX_PLATFORMS": "cuda,cpu",
+        "JAX_COMPILATION_CACHE_DIR": "s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache",
+    },
     xla_flags=(
         "--xla_gpu_shard_autotuning=false",
         "--xla_dump_to=/tmp/long-loop-xla",
         "--xla_dump_hlo_as_text",
         "--xla_gpu_first_collective_call_terminate_timeout_seconds=600",
-        f"--xla_gpu_experimental_parallel_collective_overlap_limit={INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT}",
-        "--xla_gpu_enable_latency_hiding_scheduler=true",
-        f"--xla_gpu_memory_limit_slop_factor={DEFAULT_SLOP_FACTOR}",
-        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
     ),
 )
 EXP7_262K_32NODE = SFTPreset(

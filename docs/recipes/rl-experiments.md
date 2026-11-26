@@ -136,8 +136,8 @@ constant learning rate after 30 warmup updates, then linear cooldown over the
 final 15% of updates to a 0.1× floor, FP32 parameters with BF16
 compute, token-weighted accumulation, special-token initialization and update
 scaling, and the initial C4 reference check. The preset also binds Exp6's GPU
-launch environment, including its collective scheduler and JAX command-buffer
-settings. Training allows two retries per task and 64 cumulative task failures;
+launch environment from SFT157's consumed configuration, including both
+600-second collective termination settings and the shared compilation cache. Training allows two retries per task and 64 cumulative task failures;
 these separate Fray gates prevent a single failed startup from ending the gang.
 It keeps the same staged Snowball
 base and tokenizer bindings. Its all-position view reads existing cached
