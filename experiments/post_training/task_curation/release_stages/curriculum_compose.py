@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pyarrow.parquet as pq
 from finestore.rl.curation import QualifiedSourceDeclaration, normalize_snapshot_declaration
@@ -293,10 +294,14 @@ def confidence_export(
     root: str,
     release: AlignmentRelease,
     coverage: CurriculumCoverage,
-    release_ref: ManifestReference,
-    coverage_ref: ManifestReference,
+    release_reference: dict,
+    coverage_reference: dict,
 ) -> tuple[ManifestReference, int]:
-    """Export and validate the catalog confidence document; returns (ref, validated rows)."""
+    """Export and validate the catalog confidence document; returns (ref, validated rows).
+
+    The references carry the sealed ``{uri, sha256}`` plus the ``release_id`` /
+    ``coverage_id`` the confidence reader binds the document to.
+    """
     width = len(coverage.confidence_levels)
     vectors: dict[str, list] = defaultdict(list)
     for path in coverage.confidence_paths:
@@ -327,8 +332,8 @@ def confidence_export(
             aggregates[scope][("placement", node.subject_id, node.node_id)]
     document = {
         "schema_version": CONFIDENCE_SCHEMA_VERSION,
-        "release": {"uri": release_ref.uri, "sha256": release_ref.sha256},
-        "coverage": {"uri": coverage_ref.uri, "sha256": coverage_ref.sha256},
+        "release": release_reference,
+        "coverage": coverage_reference,
         "levels": [level.model_dump(mode="json") for level in coverage.confidence_levels],
         "sources": rows,
         "aggregates": {
@@ -392,7 +397,9 @@ def run_compose(
                 alert_feeds,
             )
             return proof
-        root = f"{inputs.output_root}/composed"
+        # Assignment outputs carry random part names, so each attempt seals under its own
+        # directory: a retry after a partial attempt never collides with its seals.
+        root = f"{inputs.output_root}/composed/attempt-{uuid4().hex[:12]}"
         if context is None:
             with (
                 local_client() as client,
@@ -506,7 +513,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
     coverage_ref = seal(root, "coverage.json", coverage.model_dump(mode="json"))
     release_reference = {**release_ref.model_dump(mode="json"), "release_id": release.release_id}
     coverage_reference = {**coverage_ref.model_dump(mode="json"), "coverage_id": coverage.coverage_id}
-    confidence, validated = confidence_export(root, release, coverage, release_ref, coverage_ref)
+    confidence, validated = confidence_export(root, release, coverage, release_reference, coverage_reference)
     receipt = {
         "kind": f"atlas-{inputs.release_id}-{COMPOSE_RECEIPT_SUFFIX}",
         "release_id": inputs.release_id,

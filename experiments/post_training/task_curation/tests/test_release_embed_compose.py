@@ -540,3 +540,34 @@ def test_archived_assignment_counts_cover_planned_removals(tmp_path):
     compose.check_archived_assignment_counts(files, archived)
     with pytest.raises(ValueError, match="retained assignment counts disagree"):
         compose.check_archived_assignment_counts(files[:1], archived)
+
+
+def test_confidence_export_binds_the_release_and_coverage_ids(tmp_path):
+    """The curriculum load's confidence reader binds the document by release and coverage id."""
+    document, _ = _composition(tmp_path)
+    fresh = compose.AlignmentRelease.model_validate_json(Path(document["fresh_release"]["uri"]).read_text())
+    coverage = compose.CurriculumCoverage.model_validate_json(Path(document["fresh_coverage"]["uri"]).read_text())
+    (source,) = fresh.sources
+    vectors = tmp_path / "confidence.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"source_id": source.source_id, "metric": metric, "subject_id": "", "node_id": "", "instances": [2] * 5}
+                for metric in ("denominator", "assigned")
+            ]
+        ),
+        vectors,
+    )
+    coverage = coverage.model_copy(update={"confidence_paths": [str(vectors)]})
+    release_reference = {"uri": "memory://compose/release.json", "sha256": "a" * 64, "release_id": fresh.release_id}
+    coverage_reference = {
+        "uri": "memory://compose/coverage.json",
+        "sha256": "b" * 64,
+        "coverage_id": coverage.coverage_id,
+    }
+    ref, validated = compose.confidence_export(
+        str(tmp_path / "composed"), fresh, coverage, release_reference, coverage_reference
+    )
+    exported = json.loads(Path(ref.uri).read_text())
+    assert (exported["release"], exported["coverage"]) == (release_reference, coverage_reference)
+    assert validated > 0
