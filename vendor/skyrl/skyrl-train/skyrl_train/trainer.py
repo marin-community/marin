@@ -3023,6 +3023,14 @@ class RayPPOTrainer:
             reset_step or not self.cfg.trainer.restore_dataloader_state or self.resume_mode != ResumeMode.LATEST
         ):
             raise ValueError("The allocation fork must restore the source's absolute step and rollout state")
+        if fork:
+            source_trainer = saved_config["trainer"]
+            if (
+                source_trainer["policy"]["optimizer_config"] != self.cfg.trainer.policy.optimizer_config
+                or source_trainer.get("max_steps") != self.cfg.trainer.get("max_steps")
+                or source_trainer["epochs"] != self.cfg.trainer.epochs
+            ):
+                raise ValueError("The allocation fork must preserve the source optimizer configuration and update horizon")
         if budget is not None:
             total = 0 if reset_step else trainer_state.get(_ROLLOUT_GROSS_TOTAL_CHECKPOINT_KEY)
             saved_budget = saved_config["trainer"].get("rollout_token_budget")

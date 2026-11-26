@@ -220,12 +220,19 @@ async def test_allocation_forks_restore_one_source_and_force_distinct_next_windo
         fork.cfg.trainer.ckpt_path = str(tmp_path / f"fork-{easy_quota}")
         fork.cfg.trainer.callbacks = [{"type": "fork_source_quota", "easy_quota": easy_quota}]
         fork.cfg.trainer.train_batch_size = 16
+        fork.cfg.trainer.seed = 163 if easy_quota == 6 else 167
+        fork.cfg.data.sampling.seed = 2
         fork.cfg.data.sampling.kind = PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE
         fork.cfg.data.sampling.epsilon = 1
         validate_rollout_launch(fork.cfg)
         fork.callback_handler = DefaultCallbackHandler(fork.cfg)
         fork_order = order()
         fork.context.loader = SimpleNamespace(order=fork_order)
+        learning_rate = fork.cfg.trainer.policy.optimizer_config.lr
+        fork.cfg.trainer.policy.optimizer_config.lr *= 2
+        with pytest.raises(ValueError, match="preserve.*optimizer"):
+            fork.load_checkpoints()
+        fork.cfg.trainer.policy.optimizer_config.lr = learning_rate
         fork.global_step, fork.loaded_checkpoint_path = fork.load_checkpoints()
         assert (fork.global_step, fork.rollout_gross_response_tokens_total) == (1, 104)
         fork_order.load_state_dict(fork._restored_rollout_state.loader.order)

@@ -20,6 +20,7 @@ WARMUP_NAME = "warmup"
 FORK_REVISION = "2026.11.26.6"
 ENDPOINT = "qwen-string-fork384@2026.11.26.1"
 FORKS: tuple[tuple[str, Literal[6, 10]], ...] = (("easy10", 10), ("easy06", 6))
+FORK_SEEDS = (SEED, 163, 167)
 
 
 def warmup_preset():
@@ -66,16 +67,22 @@ class ForkTraining(Training):
         )
 
 
-def fork_preset(name: str, easy_quota: Literal[6, 10]) -> Preset:
+def fork_preset(name: str, easy_quota: Literal[6, 10], seed: int) -> Preset:
     """Continue the same source pass to a shared absolute two Mi-token cap."""
     source = warmup_preset()
     layout = source.recipe.layout
     assert isinstance(layout.workload, Training)
-    config = source.recipe.config.merge(RecipePatch(trainer=sections.Trainer(rollout_token_budget=2 * BLOCK_TOKENS)))
+    config = source.recipe.config.merge(
+        RecipePatch(
+            data=sections.Data(sampling=sections.Sampling(seed=SEED)),
+            trainer=sections.Trainer(rollout_token_budget=2 * BLOCK_TOKENS),
+        )
+    )
     return replace(
         source,
-        name=name,
+        name=f"{name}-s{seed}",
         revision=FORK_REVISION,
+        seed=seed,
         evaluations=(
             replace(EVAL, name="development", at_start=False),
             replace(EVAL, name="confirmation", at_start=False, selection=ENDPOINT),
@@ -91,7 +98,7 @@ def fork_preset(name: str, easy_quota: Literal[6, 10]) -> Preset:
 QWEN_FORK = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-checkpoint-fork",
-    presets=(warmup_preset(), *(fork_preset(name, quota) for name, quota in FORKS)),
+    presets=(warmup_preset(), *(fork_preset(name, quota, seed) for seed in FORK_SEEDS for name, quota in FORKS)),
     control_pins={},
 )
 
