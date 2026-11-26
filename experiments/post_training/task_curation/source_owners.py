@@ -526,7 +526,7 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         note="excluded",
     ),
     "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="identity-following-repair · repair sealed, registers at the R41 load",
         note="Measurements pending",
     ),
     "TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5": SourceOwner(

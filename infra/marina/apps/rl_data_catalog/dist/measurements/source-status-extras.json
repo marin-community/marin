@@ -5,7 +5,7 @@
     "marcusm117:ProofNet-Verified": "atlas-source-coverage \u00b7 RLVR declarations registry",
     "project-numina:NuminaMath-LEAN": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
     "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119": "swe-repair \u00b7 ses_e15d1c017ffe",
-    "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123": "identity-following-repair \u00b7 repair sealed, registers at the R41 load",
     "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:laion__stackexchange-overflow-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:laion__stackexchange-superuser-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
@@ -74,6 +74,7 @@
     "HuggingFaceH4:aime24": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
     "ASDiv:asdiv": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
     "pafitis:hardmath": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
+    "pafitis:hardmath@rhs": "ingest A \u00b7 ses_de826fccdffe (+ atlas-grader-reseal for the grader)",
     "HuggingFaceH4:math500": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
     "AllenAI:rlvr_math": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
     "Open-R1:verifiable_code": "no lane \u2014 license-ban by ruling #11497; lifts only by user ruling",
@@ -1374,7 +1375,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "identity-following-repair \u00b7 repair sealed, registers at the R41 load",
       "use": "train",
       "method_tags": [
         "RL"
