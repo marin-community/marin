@@ -35,7 +35,7 @@ from huggingface_hub import HfApi
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import task_spec_sha256
 from taskcompendium.models import TaskSpec
-from taskcompendium.runtime.resources import inline_resource
+from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.post_training.task_curation import native_source_conversion
 from experiments.post_training.task_curation.harbor_cohort_conversion import (
@@ -71,32 +71,63 @@ LOGGER = logging.getLogger(__name__)
 
 ORACLE_ADAPTER = b"""#!/bin/bash
 # Oracle adapter: write the archived gold completion to the declared answer path.
-# The laion v4 patch ships the gold as solution/solution.txt beside this script and
-# grades /app/solution.txt against the tests fixture; the adapter restores the
-# executable oracle the static verification requires without inventing content.
+# The laion v4 patch ships the gold as a file beside this script and grades
+# /app/solution.txt against the tests fixture; the adapter restores the executable
+# oracle the static verification requires without inventing content.
 set -euo pipefail
 mkdir -p /app
-cp "$(dirname "$0")/solution.txt" /app/solution.txt
+cp "$(dirname "$0")/GOLD_NAME" /app/solution.txt
 """
+
+
+class OracleAdapterUnsupported(ValueError):
+    """A package whose oracle shape the adapter does not serve; the row excludes typed."""
+
+
+def adapter_gold(task: TaskSpec) -> str | None:
+    """The single gold file the oracle adapter copies, or None when the shape is unsupported."""
+    golds = [
+        resource.path
+        for resource in task.resources.oracle
+        if resource.path.startswith("solution/") and resource.path != "solution/solve.sh"
+    ]
+    if len(golds) != 1:
+        return None
+    verifier = {resource.path: resource for resource in task.resources.verifier}
+    script = verifier.get("tests/test.sh")
+    if script is None:
+        return None
+    text = resource_bytes(script).decode()
+    # The two laion v4 crosscode families compare /app/solution.txt against the tests
+    # fixture; only that grading contract matches the copy adapter (methods2test's
+    # maven Surefire scoring needs its own family-specific oracle repair).
+    if "AGENT_OUT=/app/solution.txt" not in text:
+        return None
+    return golds[0]
 
 
 def add_oracle_adapter(task: TaskSpec) -> TaskSpec:
     """Restore the executable oracle adapter the laion v4 patch dropped.
 
-    The v4-patched packages carry the gold completion as ``solution/solution.txt`` and
+    The v4-patched packages carry the gold completion as a file under ``solution/`` and
     grade the agent's ``/app/solution.txt`` against the tests fixture, but ship no
     ``solution/solve.sh`` for the oracle control to execute. The adapter copies the
     packaged gold verbatim; the oracle replay therefore exercises the same grader the
-    agent faces with the reference submission.
+    agent faces with the reference submission. A package that already carries
+    ``solve.sh`` passes through unchanged; an unsupported oracle shape is a typed
+    per-row rejection.
     """
     paths = {resource.path for resource in task.resources.oracle}
     if "solution/solve.sh" in paths:
         return task
-    if "solution/solution.txt" not in paths:
-        raise CohortConversionRejected(
-            f"{task.id}: the package carries neither an executable oracle nor a solution.txt gold to adapt"
+    gold = adapter_gold(task)
+    if gold is None:
+        raise OracleAdapterUnsupported(
+            f"{task.id}: the package carries no executable oracle and no copy-adaptable gold "
+            f"(oracle files: {sorted(paths)})"
         )
-    adapter = inline_resource("solution/solve.sh", ORACLE_ADAPTER).model_copy(update={"mode": "0755"})
+    adapter_text = ORACLE_ADAPTER.replace(b"GOLD_NAME", gold.rpartition("/")[2].encode())
+    adapter = inline_resource("solution/solve.sh", adapter_text).model_copy(update={"mode": "0755"})
     updated = (*task.resources.oracle, adapter)
     return task.model_copy(update={"resources": task.resources.model_copy(update={"oracle": updated})})
 
@@ -122,9 +153,20 @@ def convert_population_rows(rows: list[dict], resolve: Callable[[str], str]) -> 
     resolutions_at_last_save = len(native_source_conversion._DIGEST_CACHE)
     for row in rows:
         task = TaskSpec.model_validate_json(row["task_spec"])
-        adapted = add_oracle_adapter(task)
         try:
-            outcome = convert_native_source_row(adapted, input_task_sha256=task_spec_sha256(task), resolve=resolve)
+            adapted = add_oracle_adapter(task)
+        except OracleAdapterUnsupported as error:
+            exclusions.append(
+                {
+                    "task_id": task.id,
+                    "reason": "oracle_adapter_unsupported",
+                    "detail": str(error),
+                    "input_task_sha256": task_spec_sha256(task),
+                }
+            )
+            continue
+        try:
+            outcome = convert_native_source_row(adapted, input_task_sha256=task_spec_sha256(adapted), resolve=resolve)
         except BasePinMissing as error:
             exclusions.append(
                 {
@@ -269,18 +311,54 @@ def publish_pinned_population(
         raise CohortConversionRejected(f"{source_id}: no license receipt to re-pin for the conversion release")
     require_unbanned(source_id, previous.dataset_id, previous)
 
+    # The publication package (pinned grant + notices) comes from the existing receipt;
+    # the card ships with the data upload so the readback is complete.
+    publication = prepare_license_publication(previous, output_root, use=intended_use)
+    body = (
+        "Private research artifact. The base-pinned conversion of a mechanically excluded compendium "
+        "population: every row's docker build FROM bases are digest-pinned through the maintained "
+        "resolver, the laion v4 oracle adapter is restored, and the executable grader is built from the "
+        "package's own verifier. Conversion receipts carry the per-task input/output SHAs. No quality "
+        "result or oracle execution is claimed; census, controls, lexical decontamination and SAMPLE QA "
+        f"run on this release before any admission.\n\n"
+        f"Input population: {population_uri} (sha256 {population_sha256}), the archived filtration input "
+        f"of the declared release {declared_release.get('repo')} at {declared_release.get('revision')}.\n\n"
+        f"Converted: {manifest['converted_rows']}; input: {manifest['input_rows']}; "
+        f"typed exclusions: {manifest['excluded_rows']}.\n"
+    )
+    (output_root / "README.md").write_text(
+        licensed_dataset_card(body, publication, pretty_name="Base-pinned conversion release")
+    )
+    filenames = [
+        "tasks.parquet",
+        "manifest.json",
+        "conversion-receipts.jsonl",
+        "conversion-exclusions.jsonl",
+        "README.md",
+    ]
     api = HfApi()
     repo = release_repo(source_id, artifact_version)
     api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
-    api.upload_folder(
+    if not api.repo_info(repo, repo_type="dataset").private:
+        raise ValueError("Conversion destination must be private")
+    commit = api.upload_folder(
         repo_id=repo,
         repo_type="dataset",
         folder_path=str(output_root),
+        allow_patterns=filenames,
         commit_message="Publish the base-pinned conversion release",
     )
-    staged_revision = api.repo_info(repo, repo_type="dataset").sha
-    card_path = Path(api.hf_hub_download(repo, "README.md", repo_type="dataset", revision=staged_revision))
-    bound = repin_license_receipt(previous, repo, staged_revision, card_path.read_bytes())
+    for filename in filenames:
+        if not (output_root / filename).exists():
+            continue
+        downloaded = api.hf_hub_download(repo, filename, repo_type="dataset", revision=commit.oid)
+        if (
+            hashlib.sha256((output_root / filename).read_bytes()).hexdigest()
+            != hashlib.sha256(Path(downloaded).read_bytes()).hexdigest()
+        ):
+            raise ValueError(f"Private upload readback differs: {filename}")
+    card_path = Path(api.hf_hub_download(repo, "README.md", repo_type="dataset", revision=commit.oid))
+    bound = repin_license_receipt(previous, repo, commit.oid, card_path.read_bytes())
     try:
         index_commit: str | None = append_license_receipt(
             LICENSE_RECEIPT_INDEX,
@@ -295,10 +373,9 @@ def publish_pinned_population(
         import shutil  # noqa: PLC0415
 
         shutil.rmtree(rebind_root)
-    publication = prepare_license_publication(bound, rebind_root, use=intended_use)
-    body = card_path.read_text(encoding="utf-8").split("---", 2)[-1].strip()
+    rebound_publication = prepare_license_publication(bound, rebind_root, use=intended_use)
     (rebind_root / "README.md").write_text(
-        licensed_dataset_card(body, publication, pretty_name="Base-pinned conversion release")
+        licensed_dataset_card(body, rebound_publication, pretty_name="Base-pinned conversion release")
     )
     card_commit = api.upload_folder(
         repo_id=repo,
@@ -365,6 +442,23 @@ def main() -> None:
         saved = save_digest_cache(args.digest_cache)
         LOGGER.info("digest cache persisted %d resolutions to %s", saved, args.digest_cache)
     declared_release = json.loads(args.declared_release)
+    if args.run and counts["converted_rows"] == 0:
+        # Nothing converted: record the typed exclusions and stop without publishing.
+        manifest = write_native_conversion_artifacts(
+            converted, receipts, counts, output_root=args.output_root, source_id=args.source_id
+        )
+        manifest["converter"] = "experiments.post_training.task_curation.excluded_population_conversion"
+        manifest["converter_revision"] = converter_revision(args.converter_revision)
+        manifest["mode"] = "blocked"
+        manifest["declared_release"] = declared_release
+        manifest["input_population"] = {"uri": args.population_uri, "sha256": args.population_sha256}
+        (Path(args.output_root) / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        if args.report is not None:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(payload)
+        print(payload)
+        return
     if not args.run:
         manifest = write_native_conversion_artifacts(
             converted, receipts, counts, output_root=args.output_root, source_id=args.source_id

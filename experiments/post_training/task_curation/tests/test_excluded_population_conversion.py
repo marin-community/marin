@@ -30,11 +30,11 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from experiments.post_training.task_curation.calibration_inventory import task_blockers
 from experiments.post_training.task_curation.excluded_population_conversion import (
     ORACLE_ADAPTER,
+    OracleAdapterUnsupported,
     add_oracle_adapter,
     convert_population_rows,
     load_population,
 )
-from experiments.post_training.task_curation.harbor_cohort_conversion import CohortConversionRejected
 from experiments.post_training.task_curation.native_source_conversion import BasePinMissing, pin_package_dockerfile
 
 PINS = {
@@ -63,14 +63,21 @@ TEST_SCRIPT = b"""#!/bin/bash
 # --- laion v4 patch: 4-tier forgiving verifier ---
 mkdir -p /logs/verifier
 echo "0" > /logs/verifier/reward.txt
-[ -f /app/solution.txt ] || exit 1
-[ -f /tests/solution.txt ] || exit 1
-cmp -s /app/solution.txt /tests/solution.txt && echo "1" > /logs/verifier/reward.txt
+AGENT_OUT=/app/solution.txt
+GOLD_OUT=/tests/solution.txt
+[ -f "$AGENT_OUT" ] || exit 1
+[ -f "$GOLD_OUT" ] || exit 1
+cmp -s "$AGENT_OUT" "$GOLD_OUT" && echo "1" > /logs/verifier/reward.txt
 exit 0
 """
 
 
-def _v4_package(dockerfile: str, *, oracle_paths: tuple[str, ...] = ("solution/solution.txt",)) -> TaskSpec:
+def _v4_package(
+    dockerfile: str,
+    *,
+    oracle_paths: tuple[str, ...] = ("solution/solution.txt",),
+    test_script: bytes = TEST_SCRIPT,
+) -> TaskSpec:
     """The archived laion-v4-patched package shape: gold file oracle, no executable solve.sh."""
     oracle = tuple(inline_resource(path, b"gold\n") for path in oracle_paths)
     return TaskSpec(
@@ -90,7 +97,7 @@ def _v4_package(dockerfile: str, *, oracle_paths: tuple[str, ...] = ("solution/s
                 inline_resource("environment/write_solution.sh", b"#!/bin/bash\nmkdir -p /app\n"),
                 inline_resource("instruction.md", b"Complete the file.\n"),
                 inline_resource("task.toml", b"[verifier]\ntimeout_sec = 720.0\n"),
-                inline_resource("tests/test.sh", TEST_SCRIPT),
+                inline_resource("tests/test.sh", test_script),
                 inline_resource("tests/solution.txt", b"gold\n"),
                 inline_resource(".laion_v4_patched", b"laion v4 patch applied\n"),
             ),
@@ -106,13 +113,20 @@ def test_add_oracle_adapter_restores_the_executable_oracle():
     paths = {resource.path for resource in adapted.resources.oracle}
     assert paths == {"solution/solution.txt", "solution/solve.sh"}
     solve = next(resource for resource in adapted.resources.oracle if resource.path == "solution/solve.sh")
-    assert resource_bytes(solve) == ORACLE_ADAPTER
+    assert resource_bytes(solve) == ORACLE_ADAPTER.replace(b"GOLD_NAME", b"solution.txt")
     assert solve.mode == "0755"
     # every other resource is untouched
     assert {resource.path for resource in adapted.resources.verifier} == {
         resource.path for resource in task.resources.verifier
     }
     assert task_spec_sha256(adapted) != task_spec_sha256(task)
+
+
+def test_add_oracle_adapter_adapts_the_declared_gold_name():
+    task = _v4_package(V4_DOCKERFILE, oracle_paths=("solution/solution.py",))
+    adapted = add_oracle_adapter(task)
+    solve = next(resource for resource in adapted.resources.oracle if resource.path == "solution/solve.sh")
+    assert resource_bytes(solve) == ORACLE_ADAPTER.replace(b"GOLD_NAME", b"solution.py")
 
 
 def test_add_oracle_adapter_is_idempotent():
@@ -122,7 +136,15 @@ def test_add_oracle_adapter_is_idempotent():
 
 def test_add_oracle_adapter_refuses_a_package_with_nothing_to_adapt():
     task = _v4_package(V4_DOCKERFILE, oracle_paths=())
-    with pytest.raises(CohortConversionRejected):
+    with pytest.raises(OracleAdapterUnsupported):
+        add_oracle_adapter(task)
+
+
+def test_add_oracle_adapter_refuses_an_unmatched_grading_contract():
+    """A gold whose verifier does not compare /app/solution.txt gets a typed rejection."""
+    maven_script = b"#!/bin/bash\nmvn test -q\n"
+    task = _v4_package(V4_DOCKERFILE, oracle_paths=("solution/Solution.java",), test_script=maven_script)
+    with pytest.raises(OracleAdapterUnsupported):
         add_oracle_adapter(task)
 
 
@@ -166,6 +188,25 @@ def test_missing_base_survives_pinning_as_the_typed_rejection():
 
     with pytest.raises(BasePinMissing):
         pin_package_dockerfile(_v4_package(dockerfile), resolve=missing)
+
+
+def test_convert_population_rows_excludes_an_unsupported_oracle_shape_typed():
+    maven_script = b"#!/bin/bash\nmvn test -q\n"
+    rows = [
+        {"task_spec": _v4_package(V4_DOCKERFILE).model_dump_json()},
+        {
+            "task_spec": (
+                _v4_package(
+                    V4_DOCKERFILE, oracle_paths=("solution/Solution.java",), test_script=maven_script
+                ).model_dump_json()
+            )
+        },
+    ]
+    _converted, receipts, counts = convert_population_rows(rows, _resolve)
+    assert counts["converted_rows"] == 1
+    assert counts["excluded_rows"] == 1
+    assert counts["exclusions"][0]["reason"] == "oracle_adapter_unsupported"
+    assert len(receipts) == 1
 
 
 def test_load_population_refuses_a_changed_archive(tmp_path: Path):
