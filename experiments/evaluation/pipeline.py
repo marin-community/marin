@@ -58,7 +58,7 @@ _INSTANCES_RUNTIME_ARG = "instances"
 def _overrides_fingerprint(run: EvaluationOverrides) -> dict[str, object]:
     """Preserve the established artifact fingerprint when the worker retry budget is unset."""
     fields = dict(vars(run))
-    if run.max_attempts is None:
+    if "max_attempts" not in run.model_fields_set:
         fields.pop("max_attempts")
     kind = type(run)
     return {"__repr__": f"{kind.__module__}.{kind.__qualname__}", "vars": fields}

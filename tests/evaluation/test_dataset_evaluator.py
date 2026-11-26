@@ -11,6 +11,7 @@ import pytest
 from evalrecords.records import (
     CuratedAgentRef,
     CuratedSettings,
+    EvaluationOverrides,
     TaskImageBuild,
     TaskMachineBackend,
     TaskMachineSettings,
@@ -132,6 +133,7 @@ def test_frontierscience_worker_receives_named_judge_and_retry_budget(
 
 def test_micro210_workers_use_the_sealed_judge_route_and_run_settings(tmp_path, created, submitted, monkeypatch):
     monkeypatch.setattr(micro210, "POLICY_REFERENCE", policy_fixture_reference())
+    selections = resolve_evaluations("micro210")
     model = replace(
         MODEL,
         serve=ServeConfig(max_model_len=SERVED_CONTEXT),
@@ -139,7 +141,7 @@ def test_micro210_workers_use_the_sealed_judge_route_and_run_settings(tmp_path, 
     )
     spec = LaunchSpec(
         model=model,
-        evals=resolve_evaluations("micro210"),
+        evals=selections,
         platform=Platform.GPU,
         accelerator="H100x1",
         limit=None,
@@ -166,6 +168,15 @@ def test_micro210_workers_use_the_sealed_judge_route_and_run_settings(tmp_path, 
 
     with pytest.raises(ValueError, match=r"requires task_machine\.backend=daytona"):
         prepare_evaluation_batch(replace(spec, task_machine_backend=TaskMachineBackend.LOCAL))
+
+    run = EvaluationOverrides(max_attempts=None, task_machine=TaskMachineSettings(cpus=2))
+    selected = selections[0].model_copy(update={"run": run})
+    (overridden,) = prepare_evaluation_batch(replace(spec, evals=(selected,))).evaluations
+    overridden.executor(SESSION, str(tmp_path), env, backend_state=lambda: InferenceBackendState.READY)
+    _, (_, _, config, attempts), _ = submitted["entrypoint"].resolve()
+    assert attempts == DEFAULT_MAX_ATTEMPTS
+    assert config.task_machine.cpus == 2
+    assert config.image_build is TaskImageBuild.DECLARATIVE
 
 
 def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_timestamp(created):

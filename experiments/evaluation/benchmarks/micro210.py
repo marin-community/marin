@@ -37,6 +37,7 @@ from taskcompendium.evaluation.spec import (
     SummaryKind,
     TrialPolicy,
 )
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, RawRow
@@ -248,25 +249,34 @@ def benchmarks() -> tuple[EvaluationBenchmark, ...]:
 
 def print_pooled_score(records: Sequence[EvalRunRecord]) -> None:
     """Report the row-weighted reward for paired full Micro210 records in one launch."""
-    launches: dict[tuple[str, str, str], dict[str, tuple[str, EvalRunRecord]]] = {}
+    launches: dict[tuple[str, str, str], dict[str, tuple[str, EvalRunRecord] | None]] = {}
     for record in records:
         curated = record.evaluation.curated
-        selection = None if curated is None else curated.selection
-        candidate = record.model.config_digest
-        if (
-            selection is not None
-            and selection.protocol == FULL_PROTOCOL
-            and selection.benchmark in POPULATIONS
-            and candidate
-        ):
-            launch = (record.group_id, record.created_at, candidate)
-            launches.setdefault(launch, {})[record.run_id] = (selection.benchmark, record)
-    for (group, _, _), runs in sorted(launches.items()):
-        pair = dict(runs.values())
-        if pair.keys() != POPULATIONS.keys():
+        if curated is None or curated.selection is None:
             continue
+        selection = curated.selection
+        candidate = record.model.config_digest
+        if selection.protocol == FULL_PROTOCOL and selection.benchmark in POPULATIONS and candidate:
+            # A resumed launch may write only the previously unfinished component.
+            settings = curated.settings
+            policy = canonical_sha256(
+                {
+                    "version": record.version,
+                    "seed": settings.seed,
+                    "judge": None if settings.judge is None else settings.judge.model_dump(mode="json"),
+                }
+            )
+            launch = (record.group_id, candidate, policy)
+            runs = launches.setdefault(launch, {})
+            entry = (selection.benchmark, record)
+            if runs.setdefault(record.run_id, entry) != entry:
+                runs[record.run_id] = None
+    for (group, _, _), runs in sorted(launches.items()):
+        pair = dict(entry for entry in runs.values() if entry is not None)
         if len(runs) != len(pair):
-            print(f"{group}  micro210  multiple records for one cohort")
+            print(f"{group}  micro210  conflicting records for a cohort")
+            continue
+        if pair.keys() != POPULATIONS.keys():
             continue
         scored = 0
         total = 0.0

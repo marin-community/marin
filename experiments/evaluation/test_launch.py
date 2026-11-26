@@ -747,11 +747,16 @@ def _agent_model():
 
 
 @pytest.mark.parametrize(
-    ("pi_scored", "same_candidate", "reward"),
-    [(51, True, "reward 0.4348"), (50, True, "(requires 90%)"), (94, False, None)],
-    ids=["above-floor", "below-floor", "different-model"],
+    ("pi_scored", "record_variant", "summary_text"),
+    [
+        (51, None, "reward 0.4348"),
+        (50, None, "(requires 90%)"),
+        (94, "different-model", None),
+        (94, "conflict", "conflicting records for a cohort"),
+    ],
+    ids=["above-floor", "below-floor", "different-model", "conflicting-copies"],
 )
-def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, pi_scored, same_candidate, reward):
+def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, pi_scored, record_variant, summary_text):
     monkeypatch.setattr(micro210, "POLICY_REFERENCE", policy_fixture_reference())
     model = replace(_agent_model(), agent=AgentConfig(agent_kwargs={"thinking_format": "chat-template"}))
     spec = replace(_pipeline_spec(tmp_path), model=model, evals=resolve_evaluations("micro210"))
@@ -762,12 +767,15 @@ def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, p
     ):
         name = evaluation.identity.eval_ref.name
         record_batch = batch
-        if name == "micro210-pi" and not same_candidate:
+        if name == "micro210-pi" and record_variant == "different-model":
             record_batch = replace(batch, model=replace(model, location="fixture/other"), source_model_config=None)
+        identity = evaluation.identity
+        if name == "micro210-pi":
+            identity = replace(identity, created_at="2026-11-26T19:00:00+00:00")
         paths.append(
             _record(
                 record_batch,
-                evaluation.identity,
+                identity,
                 RunStatus.SUCCEEDED,
                 None,
                 {name: {"reward": mean}},
@@ -776,15 +784,22 @@ def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, p
                 coverage={name: TaskCoverage(n_benchmark=population, n_attempted=population, n_scored=scored)},
             )
         )
+    if record_variant == "conflict":
+        record = json.loads(Path(paths[0]).read_text())
+        record["metrics"]["micro210-chat"]["reward"] = 0.25
+        alternate = tmp_path / "conflicting-record.json"
+        alternate.write_text(json.dumps(record))
+        paths.append(str(alternate))
     result = CliRunner().invoke(cli, ["scores", *paths])
     assert result.exit_code == 0, result.output
     summaries = [line for line in result.output.splitlines() if line.startswith(f"{batch.group_id}  micro210 ")]
-    if reward is None:
+    if summary_text is None:
         assert summaries == []
     else:
         [summary] = summaries
-        assert f"scored {340 + pi_scored}/434" in summary
-        assert reward in summary
+        assert summary_text in summary
+        if record_variant is None:
+            assert f"scored {340 + pi_scored}/434" in summary
 
 
 @pytest.fixture

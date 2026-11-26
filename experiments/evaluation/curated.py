@@ -142,11 +142,18 @@ def selection_run(selection: EvaluationSelection, protocol: ResolvedEvaluationSe
     first = defaults[0]
     if first is None or any(value != first for value in defaults):
         raise ValueError(f"{selection.benchmark} corpora declare different run defaults")
+    overrides = {key: getattr(selection.run, key) for key in selection.run.model_fields_set}
+    baseline, machine = first.task_machine, selection.run.task_machine
+    if (
+        baseline is not None
+        and machine is not None
+        and ("backend" not in machine.model_fields_set or machine.backend is baseline.backend)
+    ):
+        overrides["task_machine"] = TaskMachineSettings.model_validate(
+            {**baseline.model_dump(), **{key: getattr(machine, key) for key in machine.model_fields_set}}
+        )
     return EvaluationOverrides.model_validate(
-        {
-            **{key: getattr(first, key) for key in first.model_fields_set},
-            **{key: getattr(selection.run, key) for key in selection.run.model_fields_set},
-        }
+        {**{key: getattr(first, key) for key in first.model_fields_set}, **overrides}
     )
 
 
