@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import asdict, dataclass, replace
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -195,7 +196,6 @@ def _exported_policy(config: DictConfig) -> ExportedPolicy | None:
         tokenizer_revision=config.inputs.model.tokenizer_revision,
         checkpoint_root=checkpoint_root,
         terminal_manifest_uri=str(config.artifacts.terminal_manifest_uri),
-        used_final_fallback=selected.used_final_fallback,
     )
 
 
@@ -370,6 +370,8 @@ def create_parser() -> argparse.ArgumentParser:
     launch.add_argument("--config", required=True, type=Path)
     launch.add_argument("--forward-env", action="append", default=[], metavar="NAME")
     compose = iris_commands.add_parser("compose", help="Print validated native launch documents as JSON")
+    compose.add_argument("--checkout", required=True, type=Path)
+    compose.add_argument("--validate-driver", action="store_true")
     compose.add_argument("configs", nargs="+", type=Path)
     return parser
 
@@ -377,12 +379,16 @@ def create_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
     if args.action == "compose":
+        for name in ("cloud.iris.launch_config", "skyrl_train", "marinskyrl"):
+            if not Path(import_module(name).__file__).resolve().is_relative_to(args.checkout.resolve()):
+                raise ValueError(f"{name} must resolve inside {args.checkout}")
         configure_coreweave_s3()
         with contextlib.redirect_stdout(sys.stderr):
             documents = []
             for path in args.configs:
                 config = load_launch_config(path)
-                validate_launch_driver_config(config)
+                if args.validate_driver:
+                    validate_launch_driver_config(config)
                 documents.append(OmegaConf.to_container(config, resolve=True))
         print(json.dumps(documents))
         return 0

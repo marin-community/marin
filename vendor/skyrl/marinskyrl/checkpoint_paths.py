@@ -4,7 +4,6 @@ import json
 from dataclasses import dataclass
 
 from rigging.filesystem.storage_path import StoragePath
-
 from marinskyrl.resource_locator import join_resource_path
 
 GLOBAL_STEP_PREFIX = "global_step_"
@@ -23,7 +22,6 @@ def policy_export_path(export_root: str, global_step: int) -> str:
 class ExportCheckpoint:
     step: int
     initializer_uri: str | None = None
-    used_final_fallback: bool = False
 
 
 def selected_export_checkpoint(checkpoint_root: str, selection: str, latest_step: int) -> ExportCheckpoint | None:
@@ -35,7 +33,7 @@ def selected_export_checkpoint(checkpoint_root: str, selection: str, latest_step
     try:
         evidence = (StoragePath(checkpoint_root) / BEST_CHECKPOINT_FILENAME).read_text()
     except FileNotFoundError:
-        return ExportCheckpoint(latest_step, used_final_fallback=True) if selection == "best_and_final" else None
+        return ExportCheckpoint(latest_step) if selection == "best_and_final" else None
     best = json.loads(evidence)
     step = int(best["step"])
     if best["model_format"] == "native":

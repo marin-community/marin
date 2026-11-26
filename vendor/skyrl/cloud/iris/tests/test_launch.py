@@ -340,7 +340,6 @@ def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_chec
     assert (marker.read_text().strip() if marker.exists() else None) == case.expected_marker
     if case.export_step is not None:
         assert result.model is not None and result.model.global_step == case.export_step
-        assert result.model.used_final_fallback == (case.best_format is None)
 
 
 def test_checkpoint_export_launch_preserves_training_checkpoints(completed_run_checkpoints, tmp_path):

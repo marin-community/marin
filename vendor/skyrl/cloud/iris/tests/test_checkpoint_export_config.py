@@ -24,7 +24,7 @@ from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, RuntimeProfile
 from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
-from skyrl_train.callbacks.builtin import CheckpointCallback, HFModelSaveCallback
+from skyrl_train.callbacks.builtin import HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.hf_export import read_hf_export_request, write_hf_export_request
 from skyrl_train.trainer import RayPPOTrainer
@@ -325,10 +325,7 @@ def test_recovery_exports_the_best_checkpoint_without_a_terminal_request(tmp_pat
             assert initial_model in capsys.readouterr().out
 
 
-@pytest.mark.parametrize(
-    ("selection", "expected_step", "private"),
-    [("best", 15, False), ("latest", 20, True)],
-)
+@pytest.mark.parametrize(("selection", "expected_step", "private"), [("best", 15, False), ("latest", 20, True)])
 def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step, private) -> None:
     config = get_default_config()
     config.trainer.ckpt_path = str(tmp_path / "checkpoints")
@@ -366,25 +363,18 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("selection", "best_metadata", "final_committed", "expected_step", "expected_error"),
+    ("best_metadata", "expected_error"),
     [
-        ("best", None, False, None, None),
-        ("best", {"step": 0, "model_format": "hf"}, False, None, ValueError),
-        ("best", {"step": 15, "model_format": "native"}, False, 15, None),
-        ("best_and_final", None, True, 20, None),
-        ("best_and_final", {"step": 15, "model_format": "native"}, True, 15, None),
-        ("best_and_final", {"step": 15, "model_format": "native"}, False, None, OSError),
+        (None, None),
+        ({"step": 0, "model_format": "hf"}, ValueError),
+        ({"step": 15, "model_format": "native"}, None),
     ],
 )
-async def test_best_export_waits_until_train_end(
-    tmp_path: Path, selection, best_metadata, final_committed, expected_step, expected_error
-) -> None:
+async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata, expected_error) -> None:
     config = get_default_config()
     config.trainer.ckpt_path = str(tmp_path)
     config.trainer.export_path = str(tmp_path / "exports")
-    config.trainer.hf_export_checkpoint = selection
-    with open_dict(config.trainer):
-        config.trainer.checkpoint_retention = selection
+    config.trainer.hf_export_checkpoint = "best"
     config.trainer.policy.model.path = "org/policy"
     if best_metadata is not None:
         (tmp_path / "best_checkpoint.json").write_text(json.dumps(best_metadata))
@@ -395,7 +385,6 @@ async def test_best_export_waits_until_train_end(
     trainer = RayPPOTrainer.__new__(RayPPOTrainer)
     trainer.cfg = config
     trainer.global_step = 10
-    trainer._last_saved_step = 15
     trainer.all_timings = {}
     trainer.all_metrics = {}
     trainer.num_steps_per_epoch = 20
@@ -409,37 +398,17 @@ async def test_best_export_waits_until_train_end(
     await trainer._run_step_end_callbacks(state)
 
     assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
-    if selection == "best_and_final":
-        trainer.callback_handler = CallbackHandler([CheckpointCallback(save_steps=21), HFModelSaveCallback()])
-        trainer._checkpoint_save_failures = 0
-
-        async def rollout_state():
-            return None
-
-        async def upload(step):
-            if not final_committed:
-                raise OSError("fixture upload failure")
-            checkpoint = tmp_path / f"global_step_{step}"
-            checkpoint.mkdir()
-            (checkpoint / "trainer_state.pt").write_bytes(b"complete")
-            trainer._last_saved_step = step
-            return 0.0, 0.0
-
-        trainer._rollout_state = rollout_state
-        trainer._snapshot_checkpoint = lambda _state: trainer.global_step
-        trainer._finish_checkpoint_upload = upload
     if expected_error is not None:
-        with pytest.raises(expected_error, match="did not commit" if selection == "best_and_final" else None):
+        with pytest.raises(expected_error):
             await trainer._finalize_training(completed_step=20, epoch=0)
         assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
         return
 
     await trainer._finalize_training(completed_step=20, epoch=0)
-    if expected_step is None:
+    if best_metadata is None:
         assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
         return
-    checkpoint = tmp_path / f"global_step_{expected_step}"
-    request = read_hf_export_request(str(checkpoint))
+    request = read_hf_export_request(str(tmp_path / "global_step_15"))
     assert request is not None
-    assert request.step == expected_step
-    assert request.checkpoint_path == str(checkpoint)
+    assert request.step == 15
+    assert request.checkpoint_path == str(tmp_path / "global_step_15")

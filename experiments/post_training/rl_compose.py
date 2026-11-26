@@ -295,7 +295,7 @@ def published_model(
             raise click.BadParameter("storage initializers use the export's embedded tokenizer", param_hint="--init")
         export = str(StoragePath(value))
         try:
-            digest = hugging_face_export_digest(export, embedded_tokenizer=True)
+            digest = hugging_face_export_digest(export)
         except (FileNotFoundError, ValueError) as error:
             raise click.BadParameter(str(error), param_hint="--init") from error
         name = f"models/storage-init/{digest}"
