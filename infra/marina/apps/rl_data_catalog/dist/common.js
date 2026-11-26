@@ -246,6 +246,8 @@ function blockerReasons(fit) {
   for (const key of Object.keys(fit.blockers || {})) {
     const capability = key.split(':').slice(1).join(':');
     if (capability === 'required_backend') reasons.add('required-backend');
+    // displayBackendFit derives these from the survey's not_applicable environment kinds.
+    else if (capability.startsWith('unsupported_environment_kind:')) reasons.add('unsupported-environment-kind');
     else if (AtlasTaxonomy.backendReason[capability]) reasons.add(capability);
     else throw new Error(`Backend blocker "${key}" maps to no typed reason; the survey drifted from the taxonomy.`);
   }

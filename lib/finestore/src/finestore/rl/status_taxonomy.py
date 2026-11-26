@@ -461,6 +461,9 @@ class BackendBlockerReason(StrEnum):
     VALIDATION_ERROR = "validation-error"
     """The backend's checker refused the task's declared environment."""
 
+    UNSUPPORTED_ENVIRONMENT_KIND = "unsupported-environment-kind"
+    """The role's declared environment kind (for example a host image) is one the backend cannot run."""
+
 
 BACKEND_EXPLANATIONS: dict[ProductionBackend, ValueExplanation] = {
     ProductionBackend.DAYTONA: ValueExplanation(
@@ -490,6 +493,11 @@ BACKEND_BLOCKER_EXPLANATIONS: dict[BackendBlockerReason, ValueExplanation] = {
     BackendBlockerReason.VALIDATION_ERROR: ValueExplanation(
         label="Validation error",
         meaning="The backend's checker refused the task's declared environment outright.",
+    ),
+    BackendBlockerReason.UNSUPPORTED_ENVIRONMENT_KIND: ValueExplanation(
+        label="Unsupported environment kind",
+        meaning="The role declares an environment kind (such as a host image or a Docker build) that this "
+        "backend does not run, so the survey marks the role not applicable here.",
     ),
 }
 
