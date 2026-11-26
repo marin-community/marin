@@ -28,7 +28,7 @@ from fsspec.core import url_to_fs
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
-from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts
+from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts, recorded_launch
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl as runner
@@ -51,6 +51,21 @@ from experiments.post_training.rl_tests.fixtures import (
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
+
+
+def test_generation_attempt_publication_identifies_evaluation_data(preset_table, recorded_runs):
+    preset = snowball_model.SNOWBALL.by_name["eval-short"]
+    table = preset_table(preset)
+    source = recorded_runs(preset.name, "tests/generation-progress")
+    current, attempts = read_stored_skyrl_attempts(str(source))
+    attempt = attempts[current]
+    launch = recorded_launch(attempt)
+    row = publication.build_record(str(source), preset, table=table, attempt=attempt)
+
+    assert not launch.train_data
+    assert row.data_identity == "; ".join(source.identity for source in launch.validation_data)
+    assert row.status == "succeeded", (row.failed_facts, row.evidence)
+    assert row.evaluations
 
 
 @pytest.mark.parametrize(

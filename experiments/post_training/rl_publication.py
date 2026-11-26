@@ -159,6 +159,10 @@ def build_record(
         grader_report = json.loads(report_path.read_text())
     except FileNotFoundError:
         grader_report = None
+    data_sources = launch.train_data or [
+        *launch.validation_data,
+        *(source for sources in launch.evaluation_data.values() for source in sources),
+    ]
     return AttemptSummary(
         run_id=attempt.run_id,
         attempt_id=attempt_id,
@@ -202,7 +206,7 @@ def build_record(
         source_revision=(
             f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
         ),
-        data_identity="; ".join(source.identity for source in launch.train_data),
+        data_identity="; ".join(dict.fromkeys(source.identity for source in data_sources)),
         initializer_identity=launch.model_identity,
         artifact_uri=run_output,
         evidence=evidence,
