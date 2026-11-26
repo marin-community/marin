@@ -419,6 +419,14 @@ the deprecation reason. A source without a `pipeline` is `Inventory`: it stays
 visible in the Atlas with its evidence, but it is never admitted to selection and
 its measured Daytona and oracle evidence remains visible even without a pipeline.
 
+The Atlas-admitted sources whose sealed retained receipts resolve in the
+retained-pin table (`datasets/atlas_admissions.py`) land as runnable
+declarations: each record binds to its receipt's retained pin, lexical evidence
+and stage-0 license receipt, and runs through the retained reader. A record
+whose receipt does not resolve here stays recorded in the coverage fixture's
+`declaration_blockers` until its reader PR lands; a record is never declared
+pipeline-less.
+
 Every runnable agentic source declares its ingested `task_format`. New agentic
 sources must ingest TaskCompendium or Harbor task directories; selection rejects
 an agentic source that declares no format, and rejects MarinSkyRL's internal

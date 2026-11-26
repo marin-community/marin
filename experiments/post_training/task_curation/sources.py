@@ -5,6 +5,7 @@
 
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation.datasets import (
+    atlas_admissions,
     atlas_retained_pins,
     campaign_releases,
     nemo_tool_calls,
@@ -78,6 +79,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *unconverted.sources(),
     ]
     sources = atlas_retained_pins.bind_retained_pins(sources)
+    sources.extend(atlas_admissions.sources())
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")

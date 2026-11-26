@@ -36,7 +36,7 @@ from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     import_retained,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceReference
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 from infra.marina.apps.rl_data_catalog.server.admission import (
     PRIVATE_RELEASE_NAMESPACE,
     require_lexical_qualification,
@@ -219,15 +219,30 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
         )
     _check_pipeline_lineage(source, pin)
     require_lexical_qualification(pin.lexical, pin.release_repo, pin.release_revision, SourceUse(pin.intended_use.value))
-
-    config = pin.cohort(name=source.name)
-    release = pin.release
     inherited = source.current_release if source.declaration.status == "Available" else None
     info = replace(
         source.info,
-        current_release=release,
         upstream_url=source.info.upstream_url or dataset.url,
         inherited_admission=inherited,
+    )
+    return retained_source(info, pin, source.name)
+
+
+def retained_source(info: SourceInfo, pin: RetainedPin, name: str) -> RlDataSource:
+    """Build one retained declaration: the identity in ``info`` at the pin the receipt sealed.
+
+    The pin supplies the released dataset, the lexical and license evidence, the
+    retained census, and the remediation lineage note.
+    """
+    config = pin.cohort(name=name)
+    prefix = (
+        "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
+        f"original oversight and quality evidence apply through this subset lineage: {pin.evidence_url}. "
+    )
+    notes = prefix + info.notes
+    bound_info = replace(
+        info,
+        current_release=pin.release,
         dataset=config.dataset,
         count=pin.retained_count,
         lexical_contamination=pin.lexical,
@@ -235,12 +250,8 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
         daytona_snapshot_count=pin.retained_census.snapshot_count,
         daytona_count_basis=pin.retained_census.count_basis,
         daytona_execution_failures=pin.retained_census.execution_failures,
-        notes=(
-            "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
-            f"original oversight and quality evidence apply through this subset lineage: {pin.evidence_url}. "
-            + source.info.notes
-        ),
+        notes=notes,
     )
-    bound = RlDataSource(info=info, config=config, pipeline=import_retained)
+    bound = RlDataSource(info=bound_info, config=config, pipeline=import_retained)
     bound.require_license()
     return bound

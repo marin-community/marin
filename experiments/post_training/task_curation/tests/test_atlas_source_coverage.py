@@ -38,9 +38,9 @@ from experiments.post_training.task_curation.datasets.atlas_retained_pins import
 )
 from experiments.post_training.task_curation.sources import all_sources
 
-ATLAS_SOURCE_PINS_REVISION = "53147ef2354b789879e2b93f7919accdd6a04c84"
-ATLAS_SOURCE_PINS_SHA256 = "f0b0e08bc3e53260142323c3acd29e9da44e5e9ff8f26504d47472fafcec7f26"
-ATLAS_SOURCE_PINS_BYTES = 170943
+ATLAS_SOURCE_PINS_REVISION = "554e2da62c8d109fcd0a44d1316068ec853303f6"
+ATLAS_SOURCE_PINS_SHA256 = "b405606755b4f5dd69b4c12ad6ce9abf180e5f4416979cf182740141ea574e64"
+ATLAS_SOURCE_PINS_BYTES = 164802
 
 
 ATLAS_SOURCE_PINS_REFERENCE = PinnedHfFile(
