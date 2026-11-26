@@ -130,9 +130,7 @@ token = view.token
 A view pins one manifest. Commits and compactions that happen afterward do not change
 its results. Create a new view to observe a newer token.
 
-`ReadView.at(root, commit_id)` reads the archive as that commit left it, from the
-commit's immutable manifest. A reader that records `view.token.commit_id` reads the
-same rows from it later:
+`ReadView.at(root, commit_id)` reads the immutable manifest named by that commit ID:
 
 ```python
 past = ReadView.at("gs://bucket/purchases", token.commit_id)

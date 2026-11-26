@@ -51,7 +51,6 @@ _MAX_COMMIT_ATTEMPTS = 100_000
 _CREATE_RETRY_BUDGET = 60.0
 _MAX_CREATE_ATTEMPTS = 1000
 _ROOT_COMMIT_ID = "root"
-# The token version of a snapshot read by commit id. No HEAD read selected that snapshot.
 HISTORICAL_VERSION = "historical"
 
 _COMMITS = telemetry.counter("finestore_commits", unit="{commit}")
@@ -76,7 +75,7 @@ class Attribution:
 
 @dataclass(frozen=True)
 class ArchiveSnapshot:
-    """A manifest and the storage version of the HEAD object that selected it."""
+    """A manifest and its commit token, if the archive has a commit."""
 
     manifest: Manifest
     token: CommitToken | None
@@ -224,7 +223,7 @@ def read_snapshot(layout: FineStoreLayout) -> ArchiveSnapshot:
 
 
 def read_snapshot_at(layout: FineStoreLayout, commit_id: str) -> ArchiveSnapshot:
-    """Return the snapshot that commit ``commit_id`` published, from its immutable manifest.
+    """Return the snapshot stored in the manifest named by ``commit_id``.
 
     FineStore itself never deletes data files, so a published commit stays readable unless a
     bucket lifecycle rule removes its objects. An unknown ``commit_id``, or a deleted manifest,

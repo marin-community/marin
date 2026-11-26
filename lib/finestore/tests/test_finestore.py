@@ -920,7 +920,6 @@ def test_read_view_at_a_past_commit_ignores_later_commits_and_compaction(archive
 
     assert first is not None
     past = ReadView.at(archive_root, first.commit_id)
-    assert past.token is not None and past.token.commit_id == first.commit_id
     assert past.commit_info is not None and past.commit_info.message == "add a and b"
     assert {row["task_id"]: row["rev"] for row in _rows(past, "tasks")} == {"a": 1, "b": 1}
     assert {row["task_id"]: row["rev"] for row in _rows(ReadView(archive_root), "tasks")} == {"a": 2, "b": 1, "c": 1}

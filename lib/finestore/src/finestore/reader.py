@@ -976,7 +976,7 @@ class ReadView(_ReadOperations):
 
     @classmethod
     def at(cls, root: str, commit_id: str, *, cache_bytes: int = _READ_CACHE_BYTES) -> ReadView:
-        """Pin the snapshot that commit ``commit_id`` published, however many commits followed it."""
+        """Pin the snapshot stored in the manifest named by ``commit_id``."""
         return cls(root, read_snapshot_at(FineStoreLayout(root), commit_id), cache_bytes=cache_bytes)
 
     @property
