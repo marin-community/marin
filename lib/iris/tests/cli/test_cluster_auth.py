@@ -109,6 +109,33 @@ def test_controller_deploy_with_invalid_auth_leaves_infrastructure_untouched(
     assert "unused-inline-key" not in result.output
 
 
+def test_controller_restart_uses_preflight_pair_for_rollout_record(tmp_path, monkeypatch):
+    state = "s3://test-bucket/iris/state"
+    config = IrisClusterConfig.model_validate({"controller": {"coreweave": {}}, "storage": {"remote_state_dir": state}})
+    record_file = tmp_path / "rollout-record.json"
+    provider = SimpleNamespace(
+        preflight_controller=lambda config: ("deploy-key", "deploy-secret"),
+        restart_controller=lambda config: "https://controller.example",
+    )
+    monkeypatch.setattr(cluster_cli, "provider_bundle", lambda config: SimpleNamespace(controller=provider))
+    monkeypatch.setattr(cluster_cli, "require_controller_url", lambda ctx: "https://controller.example")
+    monkeypatch.setattr(cluster_cli, "_build_forward_image", lambda *args, **kwargs: "iris:test")
+
+    def open_record(url, mode, *, key, secret, token):
+        assert url == f"{state}/rollout-record.json"
+        assert (key, secret, token) == ("deploy-key", "deploy-secret", None)
+        return record_file.open(mode)
+
+    monkeypatch.setattr("iris.cluster.controller.rollout.open_url", open_record)
+    result = CliRunner().invoke(
+        cluster_cli.cluster, ["controller", "restart", "--skip-checkpoint"], obj={"config": config}
+    )
+    assert result.exit_code == 0, result.output
+    record = json.loads(record_file.read_text())
+    assert record["phase"] == "committed"
+    assert record["image"] == "iris:test"
+
+
 @pytest.mark.requires_cluster
 @pytest.mark.parametrize("local_flag", [True, False], ids=["converted", "already-local"])
 @pytest.mark.parametrize(
