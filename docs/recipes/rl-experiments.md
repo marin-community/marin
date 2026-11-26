@@ -423,7 +423,7 @@ the engine's serving window. BFCL and SWE-bench use verifier deadlines of 300 an
 OpenThoughts-TBLite uses each task's verifier deadline, capped at 3,600 seconds.
 Infrastructure failures can retry once. A result with unconfirmed sandbox cleanup is unscored.
 
-Agentic cohort results are stored under the named evaluation directories in `exports/`.
+Agentic cohort scores and traces are stored under their named evaluation profiles in FineStore.
 Repeat the command to resume from the latest retained checkpoint. The separate
 [offline evaluation launcher](../explanations/evaluation.md) evaluates an exported model.
 
@@ -443,7 +443,7 @@ best checkpoint step, or `none eligible`.
 | `run_inputs.json` | The runner's declared task, initializer, settings and requirements. |
 | `exports/run-records/` | FineStore attempt records, numeric metrics and per-task evaluations. |
 | FineStore `evaluations` table | One task per attempt, evaluation and step, with task content digest, ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations` reads it. |
-| `exports/dumped_evals/<attempt_id>/...` | Full evaluation answers and token IDs when `trainer.dump_eval_results` is enabled. Each evaluation step writes one JSONL per data source. Named evaluations have their own export subtrees. |
+| FineStore `evaluation_traces` table | Full prompts, responses, token IDs and intermediate turns when `trainer.dump_eval_results` is enabled. `finestore.rl.run_records.read_evaluation_traces` reads them by attempt, profile and step. Use step `-1` for an eval-only run. |
 | Native checkpoint root | The receipt records recovery checkpoint locations and lineage. Snowball uses 14-day scratch storage. When enabled, Mochi writes checkpoints under its run path. |
 | `exports/best_checkpoint.json` | The selected step and its evaluation evidence, written when a checkpoint is eligible. |
 | HF policy | The completed receipt identifies the HF model for `--init`, either the initializer or a converted checkpoint under `exports/`. |

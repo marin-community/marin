@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Attempt receipts, numeric metrics and task evaluations shared by RL writers and readers.
+"""Attempt receipts, metrics, evaluation scores and traces shared by RL writers and readers.
 
 Metrics are keyed by attempt, step and name. A resumed history contains only its
 recorded checkpoint ancestors, bounded by each continuation's starting step.
@@ -32,6 +32,7 @@ RUN_RECORDS_SUBDIRECTORY = "run-records"
 METRICS_TABLE = "metrics"
 ATTEMPTS_TABLE = "attempts"
 EVALUATIONS_TABLE = "evaluations"
+EVALUATION_TRACES_TABLE = "evaluation_traces"
 METRIC_ATTEMPT_IDS = "metric_attempt_ids"
 METRIC_METADATA_KEYS = frozenset(("step", "attempt_id", METRIC_ATTEMPT_IDS))
 
@@ -207,10 +208,38 @@ class EvaluationTaskRow(BaseModel):
         return value
 
 
+class EvaluationTraceRow(BaseModel):
+    """One evaluation answer or intermediate turn, including its model and grader inputs."""
+
+    attempt_id: str
+    step: int
+    evaluation: str
+    trace_index: int
+    ordinal: int
+    native_uid: str
+    task_id: str | None
+    data_source: str | None
+    is_last_step: bool
+    identity_disposition: str
+    prompt_token_ids: list[int]
+    response_token_ids: list[int]
+    input_prompt: str
+    output_response: str
+    score: float
+    token_rewards: list[float] | None
+    stop_reason: str | None
+    exception_type: str | None
+    error_treatment: str | None
+    env_class: str
+    subset_id: str | None
+    details_json: str
+
+
 _TABLES: dict[str, tuple[type[BaseModel], tuple[str, ...]]] = {
     METRICS_TABLE: (MetricRow, ("attempt_id", "step", "name")),
     ATTEMPTS_TABLE: (AttemptRow, ("attempt_id", "field")),
     EVALUATIONS_TABLE: (EvaluationTaskRow, ("attempt_id", "step", "evaluation", "task_id")),
+    EVALUATION_TRACES_TABLE: (EvaluationTraceRow, ("attempt_id", "step", "evaluation", "trace_index")),
 }
 
 
@@ -335,24 +364,44 @@ def read_attempt_metrics(export_root: str, attempt_id: str) -> dict[int, dict[st
     return dict(sorted(metrics.items()))
 
 
-def write_evaluations(export_root: str, rows: Sequence[EvaluationTaskRow]) -> None:
-    """Commit one evaluation's task answers in the run's canonical records store."""
+def write_evaluations(
+    export_root: str, rows: Sequence[EvaluationTaskRow], *, traces: Sequence[EvaluationTraceRow] = ()
+) -> None:
+    """Commit one evaluation's scores and optional full traces together."""
+    if not rows and not traces:
+        return
     with DataStore.open(run_records_root(export_root)) as store:
-        register_run_tables(store)[EVALUATIONS_TABLE].extend(row.model_dump(mode="json") for row in rows)
-        store.flush()
+        register_run_tables(store)
+        with store.unbounded_transaction() as transaction:
+            transaction.table(EVALUATIONS_TABLE).extend(row.model_dump() for row in rows)
+            transaction.table(EVALUATION_TRACES_TABLE).extend(row.model_dump() for row in traces)
+
+
+def _evaluation_filters(attempt_id: str, evaluation: str | None, step: int | None) -> list[tuple[str, str, object]]:
+    where: list[tuple[str, str, object]] = [("attempt_id", "==", attempt_id)]
+    if evaluation is not None:
+        where.append(("evaluation", "==", evaluation))
+    if step is not None:
+        where.append(("step", "==", step))
+    return where
 
 
 def read_evaluations(
     export_root: str, *, attempt_id: str, evaluation: str | None = None, step: int | None = None
 ) -> list[EvaluationTaskRow]:
-    """Read one attempt and evaluation without combining retries or other profiles."""
+    """Read one attempt's scores, optionally limited to a profile or step."""
     view = ReadView(run_records_root(export_root))
-    where = [("attempt_id", "==", attempt_id)]
-    if evaluation is not None:
-        where.append(("evaluation", "==", evaluation))
-    if step is not None:
-        where.append(("step", "==", step))
+    where = _evaluation_filters(attempt_id, evaluation, step)
     return [EvaluationTaskRow.model_validate(row) for row in view.iter_rows(EVALUATIONS_TABLE, where=where)]
+
+
+def read_evaluation_traces(
+    export_root: str, *, attempt_id: str, evaluation: str | None = None, step: int | None = None
+) -> list[EvaluationTraceRow]:
+    """Read full evaluation rows, ordered by step, profile and trace index."""
+    view = ReadView(run_records_root(export_root))
+    where = _evaluation_filters(attempt_id, evaluation, step)
+    return [EvaluationTraceRow.model_validate(row) for row in view.iter_rows(EVALUATION_TRACES_TABLE, where=where)]
 
 
 def attempt_evidence_digest(export_root: str, attempt_id: str) -> str:

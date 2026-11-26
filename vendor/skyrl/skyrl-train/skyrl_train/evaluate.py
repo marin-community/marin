@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager, nullcontext
 import torch
 from skyrl_train.utils.progress import tqdm
@@ -9,17 +10,15 @@ from dataclasses import dataclass, replace
 from math import fsum
 import numpy as np
 
-from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow, write_evaluations
+from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow, EvaluationTraceRow, write_evaluations
 from finestore.rl.strata import TaskEvaluationIdentity
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
+from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 
-from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.metric_names import EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX
-from skyrl_train.io import io
-from marinskyrl.resource_locator import join_resource_path
 
 from skyrl_train.trajectory_runners.trajectory_processing import (
     concatenate_trajectory_batches,
@@ -35,11 +34,7 @@ from skyrl_train.trajectory_runners.base import (
     TrajectoryRequestBatch,
     TrajectoryRunner,
 )
-from skyrl_train.utils.trainer_utils import (
-    calculate_per_dataset_metrics,
-    dump_per_dataset_eval_results,
-    evaluation_response_metrics,
-)
+from skyrl_train.utils.trainer_utils import calculate_per_dataset_metrics, evaluation_response_metrics
 from skyrl_train.trajectory_runners.trajectory_processing import validate_trajectory_batch
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.utils.logging_utils import log_example
@@ -51,6 +46,21 @@ from skyrl_train.trajectory_runners.trajectory_retention import (
 from omegaconf import DictConfig
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
+
+EVAL_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        GRADING_DURATION_SECONDS,
+        GRADING_FAILURE,
+        "exception_type",
+        "cause_error_type",
+        "operation",
+        "timed_out",
+        "machine_operation",
+        "provider_status_code",
+        "provider_sdk_call",
+        "provider_rate_limits",
+    }
+)
 
 
 @dataclass
@@ -72,12 +82,6 @@ class _EvaluationAccumulator(Protocol):
     metadata: List[TrajectoryMetadata]
 
     def record(self, request: TrajectoryRequestBatch, batch: TrajectoryBatch, uids: List[str]) -> None: ...
-
-
-def evaluation_dump_dir(export_path: str, global_step: int | None, *, attempt_id: str) -> str:
-    """Return the directory containing one evaluation session's persisted results."""
-    session = "eval_only" if global_step is None else f"global_step_{global_step}_evals"
-    return join_resource_path(export_path, "dumped_evals", attempt_id, session)
 
 
 @dataclass
@@ -322,34 +326,114 @@ def _evaluation_task_rows(
     return rows
 
 
-def _persist_evaluation(
-    cfg: DictConfig,
-    global_step: int | None,
-    val_set_name: str | None,
+def _evaluation_trace_rows(
     rollouts: _EvaluationRollouts,
-    records_export_root: str | None,
-) -> None:
-    rows = _evaluation_task_rows(
-        rollouts,
-        attempt_id=str(cfg.runtime.attempt_id),
-        model=cfg.runtime.get("model"),
-        model_source_identity=cfg.runtime.get("model_source_identity"),
-        starting_checkpoint_identity=cfg.runtime.get("starting_checkpoint_identity"),
-        step=global_step if global_step is not None else -1,
-        evaluation="eval/" if val_set_name is None else f"eval/{val_set_name}/",
-    )
-    if rows:
-        write_evaluations(records_export_root or str(cfg.trainer.export_path), rows)
+    tokenizer: AutoTokenizer,
+    *,
+    attempt_id: str,
+    step: int,
+    evaluation: str,
+) -> list[EvaluationTraceRow]:
+    batch = rollouts.batch
+    count = len(rollouts.uids)
+    missing = (None,) * count
+    task_ids = batch.get("task_ids")
+    identity_disposition = "task_spec" if task_ids else "preference_input"
+    last_steps = batch.get("is_last_step") or (True,) * count
+    messages = batch.get("evidence_messages") or missing
+    verifications = batch.get("verification_results") or missing
+    stop_reasons = batch.get("stop_reasons") or missing
+    exceptions = batch.get("exception_types") or missing
+    treatments = batch.get("error_treatments") or missing
+    server_errors = batch.get("server_errors") or missing
+    env_metrics = batch.get("env_metrics") or ({},) * count
+    rows = []
+    for index, (metadata, uid, ordinal) in enumerate(
+        zip(rollouts.metadata, rollouts.uids, rollouts.ordinals, strict=True)
+    ):
+        prompt_ids = batch["prompt_token_ids"][index]
+        response_ids = batch["response_ids"][index]
+        reward = batch["rewards"][index]
+        verification = verifications[index]
+        # Keep the operational diagnostics that were retained for grader debugging.
+        verification_details = None
+        if verification is not None:
+            verification_details = {
+                "status": verification.status.value,
+                "reason": verification.reason,
+                "score": verification.score,
+                "passed": verification.passed,
+                "score_min": verification.score_min,
+                "score_max": verification.score_max,
+                "diagnostics": {
+                    key: value for key, value in verification.diagnostics.items() if key in EVAL_DIAGNOSTIC_FIELDS
+                },
+            }
+        rows.append(
+            EvaluationTraceRow(
+                attempt_id=attempt_id,
+                step=step,
+                evaluation=evaluation,
+                trace_index=index,
+                ordinal=ordinal,
+                native_uid=uid,
+                task_id=task_ids[index] if task_ids is not None else None,
+                data_source=metadata.data_source,
+                is_last_step=last_steps[index],
+                identity_disposition=identity_disposition,
+                prompt_token_ids=prompt_ids,
+                response_token_ids=response_ids,
+                input_prompt=tokenizer.decode(prompt_ids),
+                output_response=tokenizer.decode(response_ids),
+                score=fsum(reward) if isinstance(reward, list) else reward,
+                token_rewards=reward if isinstance(reward, list) else None,
+                stop_reason=stop_reasons[index],
+                exception_type=exceptions[index],
+                error_treatment=treatments[index],
+                env_class=metadata.metric_class,
+                subset_id=metadata.subset_id,
+                details_json=json.dumps(
+                    {
+                        "messages": messages[index],
+                        "server_error": server_errors[index],
+                        "env_metrics": env_metrics[index],
+                        "verification": verification_details,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+    return rows
 
 
-def _dump_eval_results(
+def _persist_evaluation(
     cfg: DictConfig,
     global_step: int | None,
     tokenizer: AutoTokenizer,
     rollouts: _EvaluationRollouts,
     *,
     val_set_name: str | None,
+    records_export_root: str | None,
+    final_rollouts: _EvaluationRollouts | None = None,
 ) -> None:
+    attempt_id = str(cfg.runtime.attempt_id)
+    step = global_step if global_step is not None else -1
+    evaluation = "eval/" if val_set_name is None else f"eval/{val_set_name}/"
+    rows = _evaluation_task_rows(
+        final_rollouts if final_rollouts is not None else rollouts,
+        attempt_id=attempt_id,
+        step=step,
+        evaluation=evaluation,
+        model=cfg.runtime.get("model"),
+        model_source_identity=cfg.runtime.get("model_source_identity"),
+        starting_checkpoint_identity=cfg.runtime.get("starting_checkpoint_identity"),
+    )
+    traces = (
+        _evaluation_trace_rows(rollouts, tokenizer, attempt_id=attempt_id, step=step, evaluation=evaluation)
+        if cfg.trainer.dump_eval_results
+        else []
+    )
+    write_evaluations(records_export_root or str(cfg.trainer.export_path), rows, traces=traces)
     if cfg.trainer.get("dump_grader_report", False):
         stats = GraderStats()
         stats.add(rollouts.batch, rollouts.metadata)
@@ -361,23 +445,6 @@ def _dump_eval_results(
             str(cfg.trainer.grader_report_dir),
             key,
             {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]},
-        )
-    if not cfg.trainer.dump_eval_results:
-        return
-    with Timer("dump_eval_results"):
-        data_save_dir = evaluation_dump_dir(
-            str(cfg.trainer.export_path), global_step, attempt_id=str(cfg.runtime.attempt_id)
-        )
-        io.makedirs(data_save_dir, exist_ok=True)
-        dump_per_dataset_eval_results(
-            data_save_dir,
-            tokenizer,
-            rollouts.batch,
-            rollouts.metadata,
-            rollouts.uids,
-            attempt_id=str(cfg.runtime.attempt_id),
-            step=global_step if global_step is not None else -1,
-            ordinals=rollouts.ordinals,
         )
 
 
@@ -438,8 +505,9 @@ async def evaluate(
             rollouts.data_sources,
             cfg.generator.eval_n_samples_per_prompt,
         )
-        _persist_evaluation(cfg, global_step, val_set_name, rollouts, records_export_root)
-        _dump_eval_results(cfg, global_step, tokenizer, rollouts, val_set_name=val_set_name)
+        _persist_evaluation(
+            cfg, global_step, tokenizer, rollouts, val_set_name=val_set_name, records_export_root=records_export_root
+        )
 
         return eval_metrics
     finally:
@@ -513,7 +581,14 @@ async def evaluate_step_wise(
     eval_metrics = _calculate_eval_metrics(
         final_rollouts.batch, final_rollouts.uids, final_rollouts.data_sources, cfg.generator.eval_n_samples_per_prompt
     )
-    _persist_evaluation(cfg, global_step, val_set_name, final_rollouts, records_export_root)
-    _dump_eval_results(cfg, global_step, tokenizer, rollouts, val_set_name=val_set_name)
+    _persist_evaluation(
+        cfg,
+        global_step,
+        tokenizer,
+        rollouts,
+        val_set_name=val_set_name,
+        records_export_root=records_export_root,
+        final_rollouts=final_rollouts,
+    )
 
     return eval_metrics
