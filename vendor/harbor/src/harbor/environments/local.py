@@ -33,6 +33,7 @@ from harbor.environments.resource_policies import validate_local_resources
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import EnvironmentPaths
+from shellbox.backends.local.disk import LocalDiskPool, verified_local_disk_pool
 from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
 from shellbox.machine import Command, CommandSemantics
 from shellbox.process_session import (
@@ -66,6 +67,7 @@ class LocalEnvironment(BaseEnvironment):
         registry_authfile: str | None = None,
         signature_policy: str | None = None,
         cgroup_parent: str | None = None,
+        disk_root: str | None = None,
         ttl: float = 3600,
         model_endpoint: str | None = None,
         model_name: str | None = None,
@@ -75,6 +77,8 @@ class LocalEnvironment(BaseEnvironment):
         **kwargs,
     ):
         self.cgroup_parent = Path(cgroup_parent) if cgroup_parent is not None else None
+        self.disk_root = Path(disk_root) if disk_root is not None else None
+        self.disk_pool: LocalDiskPool | None = None
         unknown = kwargs.keys() - BASE_ENVIRONMENT_ARGUMENTS
         if unknown:
             raise ValueError(
@@ -103,6 +107,7 @@ class LocalEnvironment(BaseEnvironment):
             authfile=Path(registry_authfile) if registry_authfile is not None else None,
             policy=Path(signature_policy) if signature_policy is not None else None,
             cgroup_parent=self.cgroup_parent,
+            disk_pool=self.disk_pool,
             ttl=ttl,
         )
 
@@ -136,10 +141,14 @@ class LocalEnvironment(BaseEnvironment):
         }
         if any(str(mount["target"]) not in log_targets for mount in self._mounts):
             raise ValueError("Prepared sandbox does not support custom mounts")
+        task = self.task_env_config
+        if self.disk_root is not None and self.disk_pool is None:
+            task = task.model_copy(update={"storage_mb": None})
         validate_local_resources(
-            self.task_env_config,
+            task,
             cpu_enforcement_policy=self._cpu_resource_mode,
             memory_enforcement_policy=self._memory_resource_mode,
+            disk_pool=self.disk_pool,
         )
 
     def _command_user(self, user: str | int | None) -> str:
@@ -159,6 +168,15 @@ class LocalEnvironment(BaseEnvironment):
         if force_build:
             raise ValueError(
                 "Prepared sandbox uses prebuilt images; force_build is unsupported"
+            )
+        if self.disk_root is not None:
+            self.disk_pool = await verified_local_disk_pool(self.disk_root)
+            self.factory.disk_pool = self.disk_pool
+            validate_local_resources(
+                self.task_env_config,
+                cpu_enforcement_policy=self._cpu_resource_mode,
+                memory_enforcement_policy=self._memory_resource_mode,
+                disk_pool=self.disk_pool,
             )
         plan = self._prepared_task
         task_spec = replace(

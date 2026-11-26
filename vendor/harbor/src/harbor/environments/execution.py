@@ -3,8 +3,8 @@
 
 """Adapt Shellbox command results to Harbor's environment interface."""
 
-from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, ExecResult
-from shellbox.machine import Command, ExitReason, Machine
+from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, ExecResult, SandboxDiskFullError
+from shellbox.machine import Command, ExitReason, Machine, ResourceLimit, ResourceLimitExceeded
 
 
 async def execute_shellbox_command(
@@ -23,16 +23,21 @@ async def execute_shellbox_command(
         'if [ -x /bin/bash ]; then exec /bin/bash -c "$1"; '
         'else exec /bin/sh -c "$1"; fi'
     )
-    result = await machine.run(
-        Command(
-            ("/bin/sh", "-c", shell_command, "harbor-command", command),
-            cwd=cwd,
-            env=env,
-            timeout=timeout_sec,
-            user=user,
-            output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
+    try:
+        result = await machine.run(
+            Command(
+                ("/bin/sh", "-c", shell_command, "harbor-command", command),
+                cwd=cwd,
+                env=env,
+                timeout=timeout_sec,
+                user=user,
+                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
+            )
         )
-    )
+    except ResourceLimitExceeded as error:
+        if error.resource is ResourceLimit.DISK:
+            raise SandboxDiskFullError(str(error)) from error
+        raise
     if result.reason is ExitReason.TIMED_OUT:
         raise TimeoutError("Sandbox command timed out")
     return ExecResult(

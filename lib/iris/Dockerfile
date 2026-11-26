@@ -274,6 +274,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     unzip \
     ca-certificates \
+    e2fsprogs \
     openssh-client \
     git \
     build-essential \
