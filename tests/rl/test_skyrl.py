@@ -65,7 +65,6 @@ from marin.rl.skyrl import (
 from marin.rl.skyrl import _run_launcher as run_launcher_for_test
 from marin.rl.skyrl_records import (
     attempt_tracking,
-    read_skyrl_metrics,
     read_stored_skyrl_attempt,
     read_stored_skyrl_attempts,
     recorded_launch,
@@ -74,6 +73,8 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import cluster_config
 from rigging.filesystem.step_status import STATUS_SUCCESS
 from skyrlrecipe.locality import RoleTopologyMode
+
+from experiments.post_training.skyrl_test_support import read_skyrl_metrics
 
 _PROCESS_FIXTURE = str(Path(__file__).with_name("skyrl_process_fixture.py"))
 

@@ -11,12 +11,6 @@ on:
         description: Run the RL controls, including branch proof runs
         type: boolean
         default: false
-      model:
-        description: Optional model for the controls (snowball or mochi)
-        type: string
-      preset:
-        description: Optional gated preset to run
-        type: string
       grug_cutlass:
         description: Include the weekly Grug CUTLASS case alongside nightly Triton
         type: boolean
@@ -30,12 +24,12 @@ on:
         default: ""
 
 concurrency:
-  group: ${{ (inputs.controls || inputs.model || inputs.preset) && github.ref_name != 'main' && format('marin-rl-controls-{0}-{1}', github.ref, inputs.model || 'all') || 'marin-nightly' }}
+  group: marin-nightly
   cancel-in-progress: false
 
 jobs:
   gpu-gate:
-    if: ${{ !(inputs.controls || inputs.model || inputs.preset) }}
+    if: ${{ !(inputs.controls) }}
     name: ${{ matrix.lane }}
     strategy:
       fail-fast: false
@@ -175,7 +169,7 @@ jobs:
           if-no-files-found: ignore
 
   rl-controls:
-    if: github.event_name == 'schedule' || inputs.controls || inputs.model || inputs.preset
+    if: github.event_name == 'schedule' || inputs.controls
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
@@ -186,8 +180,6 @@ jobs:
       CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
       CONTROL_BATCH: ${{ github.run_id }}-${{ github.run_attempt }}
-      REQUESTED_MODEL: ${{ inputs.model }}
-      REQUESTED_PRESET: ${{ inputs.preset }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -207,15 +199,8 @@ jobs:
       - name: Submit and publish RL controls
         run: |
           set -eo pipefail
-          options=()
-          if [[ -n "$REQUESTED_MODEL" ]]; then
-            options+=(--model "$REQUESTED_MODEL")
-          fi
-          if [[ -n "$REQUESTED_PRESET" ]]; then
-            options+=(--preset "$REQUESTED_PRESET")
-          fi
           uv run --frozen --all-packages --extra cpu --no-default-groups \
-            python -m experiments.post_training.rl_nightly_controls --batch "$CONTROL_BATCH" "${options[@]}" \
+            python -m experiments.post_training.rl_nightly_controls --batch "$CONTROL_BATCH" \
             2>&1 | tee rl-controls.log
       - uses: actions/upload-artifact@v7
         if: always()
@@ -225,7 +210,7 @@ jobs:
           if-no-files-found: ignore
 
   report-failure:
-    needs: [gpu-gate]
+    needs: [gpu-gate, rl-controls]
     if: >-
       always() && github.event_name == 'schedule' &&
       (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
@@ -243,7 +228,7 @@ jobs:
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           triage-notes: >-
             The nightly runs OPD, Grug Megatron and the asynchronous
-            CatCount learning gate through WIF-authenticated Iris jobs. CatCount reports
+            CatCount learning gate and refreshes versioned RL controls through WIF-authenticated Iris jobs. CatCount reports
             INFRASTRUCTURE_FAILURE and retries once when no native training row reached
             the log. Failures after training starts and metric violations are GATE_FAILURE.
             Inspect the native log to distinguish placement, connection, lock,

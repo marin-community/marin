@@ -13,8 +13,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow
 
-FAMILY_SLICE = "family"
-SLICE_COLUMNS = (FAMILY_SLICE, "aai_category", "source", "topic", "difficulty", "agentic")
+SLICE_COLUMNS = ("family", "aai_category", "source", "topic", "difficulty", "agentic")
 AAII_WEIGHTS = {"scientific_reasoning": 0.2, "coding": 0.2, "general": 0.3, "agents": 0.3}
 
 ANSWER_SCHEMA = pa.schema(
@@ -22,7 +21,6 @@ ANSWER_SCHEMA = pa.schema(
         ("evaluation", pa.string()),
         ("step", pa.int32()),
         ("task_id", pa.string()),
-        ("task_digest", pa.string()),
         ("answer", pa.int32()),
         *((column, pa.bool_() if column == SLICE_COLUMNS[-1] else pa.string()) for column in SLICE_COLUMNS),
         ("score", pa.float64()),
@@ -53,7 +51,6 @@ def answer_table(evaluation_name: str, tasks: Sequence[EvaluationTaskRow]) -> pa
                 "evaluation": evaluation_name,
                 "step": task.step,
                 "task_id": task.task_id,
-                "task_digest": task.task_digest,
                 "answer": ordinals[task.step, task.task_id],
                 **task.strata.model_dump(),
                 "score": answer.verifier_score if verified else 0.0,
@@ -155,7 +152,7 @@ def score_answers(scores: pa.Table) -> dict[str, float]:
         families = [
             value
             for key, value in result.items()
-            if key.startswith(f"{evaluation}/{FAMILY_SLICE}/") and key.count("/") == 3
+            if key.startswith(f"{evaluation}/{SLICE_COLUMNS[0]}/") and key.count("/") == 3
         ]
         if families:
             result[f"{evaluation}/family_mean"] = math.fsum(families) / len(families)

@@ -221,7 +221,6 @@ def completed_controls(
     preset: str | None = None,
     version: str | None = None,
     limit: int | None = None,
-    branch: str = "main",
 ) -> list[AttemptSummary]:
     """Select the most recent completed control attempt from each matching native run."""
     ordered = sorted(
@@ -229,21 +228,13 @@ def completed_controls(
             record
             for record in records
             if record.is_control
-            and record.branch == branch
+            and record.branch == "main"
             and record.dirty is False
+            and record.base_commit is not None
+            and record.commit is not None
             and (
-                branch != "main"
-                or (
-                    record.base_commit is not None
-                    and record.commit is not None
-                    and (
-                        record.commit == record.base_commit
-                        or (
-                            re.fullmatch(r"[0-9a-f]{7,40}", record.commit)
-                            and record.base_commit.startswith(record.commit)
-                        )
-                    )
-                )
+                record.commit == record.base_commit
+                or (re.fullmatch(r"[0-9a-f]{7,40}", record.commit) and record.base_commit.startswith(record.commit))
             )
             and record.status == "succeeded"
             and record.artifact_uri

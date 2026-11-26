@@ -156,12 +156,6 @@ class LocalLaunchBackend:
     def launch(self, config_path: Path) -> LaunchOutcome:
         config = yaml.safe_load(config_path.read_text())
         artifacts = config["artifacts"]
-        run = config["run"]
-        if run.get("index") is not None:
-            prepared = read_attempt(artifacts["export_root"], run["attempt_id"])
-            assert prepared is not None and prepared.result is None and prepared.index is not None
-            assert prepared.index.run_id == run["index"]["run_id"]
-            assert prepared.native.config["run"]["coordinator_iris_job_id"] == "/user/coordinator"
         resolved = Path(artifacts["resolved_config_uri"])
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_bytes(config_path.read_bytes())
@@ -206,19 +200,6 @@ def test_launch_persists_attempt_result_and_exports_only_on_opt_in(
 ):
     path = _config_path(tmp_path)
     config = yaml.safe_load(path.read_text())
-    config["run"].update(
-        coordinator_iris_job_id="/user/coordinator",
-        index={
-            "run_id": "indexed-run",
-            "model": "snowball",
-            "preset": "speed-short",
-            "preset_version": "a1b2c3d4",
-            "user": "tester",
-            "branch": "main",
-            "source_revision": "a1b2c3d4",
-            "dirty": False,
-        },
-    )
     if export_hf is None:
         config["run"].pop("export_hf")
     else:

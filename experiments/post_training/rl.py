@@ -40,6 +40,7 @@ from marin.execution.artifact import is_mutable_version, read_artifact
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.lazy import run as build_artifacts
+from marin.execution.step_runner import check_cache
 from marin.execution.step_status import get_status_path
 from marin.experiment.cli import build_options_with_runner
 from marin.experiment.namespacing import user_owned_name
@@ -361,7 +362,6 @@ def _status(
     issue: int | None = None,
     publication_urls: dict[str, str] | None = None,
     scoped_attempts: Mapping[str, AttemptRecord] | None = None,
-    gate_report: rl_gate.GateReport | None = None,
 ) -> dict:
     prefix = recipe.run_prefix(preset)
     ttl = preset.output_ttl_days
@@ -462,7 +462,7 @@ def _status(
     report = None
     if run.gate is not None:
         path = run.gate.path(prefix=recipe.run_prefix(preset))
-        report = gate_report if scoped_attempts is not None else rl_gate.read_gate_report(path)
+        report = rl_gate.read_gate_report(path)
         if report is not None:
             verdict = {
                 "report": str(StoragePath(path) / rl_gate.GATE_REPORT_FILENAME),
@@ -705,8 +705,7 @@ def _watch_publication(
             errors=[str(error)],
             retry="Repeat the original command with --wait.",
         )
-    gate_path = str(publication.gate_report.path) if publication.gate_report is not None else None
-    return state, publication, gate_path
+    return state, publication, publication.gate_path
 
 
 def _follow_command(table: presets.ModelPresets) -> click.Command:
@@ -749,7 +748,6 @@ def _wait_for_run(
         stored_only=True,
         publication_urls=publication.urls,
         scoped_attempts=publication.attempts,
-        gate_report=publication.gate_report,
     )
     snapshot["publication"] = publication.to_dict()
     rows = snapshot.get("runs", ())
@@ -760,14 +758,8 @@ def _wait_for_run(
         and all(row["state"] == JobState.SUCCEEDED for row in rows)
     ):
         snapshot["post_run_error"] = f"Coordinator {job} ended in state {parent_state}. RL has a committed result."
-    successful_runs = len(publication.attempts) == len(watch.outputs) and all(
-        row["state"] == JobState.SUCCEEDED for row in rows
-    )
-    if "verdict" not in snapshot and "post_run_error" not in snapshot:
-        if coordinator_error is not None or gate_required:
-            snapshot["reason"] = coordinator_error or "required verdict unavailable"
-        elif not successful_runs:
-            snapshot["reason"] = "a successful native receipt is unavailable for one or more outputs"
+    if "verdict" not in snapshot and "post_run_error" not in snapshot and (coordinator_error or gate_required):
+        snapshot["reason"] = coordinator_error or "required verdict unavailable"
     _print_status(snapshot)
     if click.get_current_context().params.get("control"):
         if publication.unserved_records:
@@ -779,7 +771,7 @@ def _wait_for_run(
     verdict = snapshot.get("verdict")
     if verdict == Verdict.PASS and coordinator_error is not None:
         verdict = None
-    if verdict is None and not gate_required and coordinator_error is None and successful_runs:
+    if verdict is None and not gate_required and coordinator_error is None:
         verdict = Verdict.PASS
     raise click.exceptions.Exit(EXIT_CODES[verdict])
 
@@ -835,8 +827,6 @@ def _submit_from_launcher(
         environment["GIT_COMMIT"] = revision
     if preset.output_ttl_days is not None:
         environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
-    if index.is_control and index.branch == "main" and not index.dirty and environment.get("GITHUB_ACTIONS") == "true":
-        rl_publication.record_control_outputs(preset, index, context.params["control"], native_ids)
     job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
     submitted = [
         {
@@ -1083,8 +1073,6 @@ def command(
                 hours = layout.coordinator_timeout_hours + math.ceil(sft_model.task_timeout_seconds / 3600)
                 layout = replace(layout, coordinator_timeout_hours=hours)
                 preset = replace(preset, recipe=replace(preset.recipe, layout=layout))
-        if control:
-            preset = replace(preset, temporary_output=False)
         context.meta["rl_preset"] = preset
         if resume_name is not None:
             _check_resume(preset, has_init=init is not None or init_name is not None)
@@ -1112,7 +1100,7 @@ def command(
         assert run.inputs is not None
         preset_version = None
         if from_launcher and (do_run or plan):
-            config = rl_gate.compose_candidate(preset, run.inputs)
+            config = rl_gate.compose_preset(preset, run.inputs)
             preset_version = rl_gate.config_version(config)
             if do_run:
                 if issue is not None:

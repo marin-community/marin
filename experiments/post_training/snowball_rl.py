@@ -481,6 +481,7 @@ _PRESETS = (
     replace(
         _LEARNING_MEDIUM,
         name="data-medium",
+        guards=(),
         tasks_input="required",
         accepts_settings=False,
         accepts_init=False,

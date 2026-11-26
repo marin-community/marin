@@ -36,7 +36,6 @@ from marin.execution.lazy import OUT, ArtifactStep, apply, materialized_config, 
 from marin.rl import skyrl as skyrl_api
 from marin.rl.cli import RUN_INDEX_ENV
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
-from marin.rl.skyrl_records import read_skyrl_metrics
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
@@ -70,7 +69,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import run_native_test, selection_summary
+from experiments.post_training.skyrl_test_support import read_skyrl_metrics, run_native_test, selection_summary
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
@@ -703,8 +702,6 @@ def test_submission_exit_codes_and_publication_retries(
         "data-short",
     }
     # The data-short case rewrites its validation data before launch.
-    if publication_case and case != "data-short":
-        cache_native_compositions()
     preset_name = "data-short" if case == "data-short" else "learning-medium" if publication_case else "speed-medium"
     preset = snowball_model.SNOWBALL.by_name[preset_name]
     if case == "child":
@@ -726,11 +723,9 @@ def test_submission_exit_codes_and_publication_retries(
     replicas = 2 if case in {"partial-retry", "mixed-native-failed", "control-missing-receipt"} else 1
     control = case == "control-missing-receipt"
     if control:
-        monkeypatch.setenv("GITHUB_ACTIONS", "true")
         clean_main = Provenance("tree-one", "commit-one", False, "main", "test")
         monkeypatch.setattr(Provenance, "capture", lambda *_: clean_main)
         monkeypatch.setattr(snowball, "_base_preset", lambda *_: ("commit-one", "current-version"))
-        monkeypatch.setattr(snowball.rl_publication, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
     built = snowball.build_experiment(
         preset,
         table=snowball_model.SNOWBALL,
@@ -874,18 +869,6 @@ def test_submission_exit_codes_and_publication_retries(
 
     client, job = fake_iris(monkeypatch, "dashboard-coordinator")
     client.job.return_value.state_only.side_effect = lambda: finish().state
-    if control:
-
-        def submit_control(**_):
-            (manifest,) = (tmp_path / "rl-control-submissions").glob("snowball/learning-medium/*/*.json")
-            entry = json.loads(manifest.read_text())
-            assert list(entry["outputs"]) == list(map(str, sources))
-            assert entry["commit"] == "commit-one"
-            return SimpleNamespace(job_id=job)
-
-        client.submit.side_effect = submit_control
-    if case == "candidate-compose":
-        client.submit.side_effect = AssertionError("invalid stored inputs reached the coordinator RPC")
     published = []
     unavailable = {"value": case in {"partial-retry"}}
 

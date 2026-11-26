@@ -35,7 +35,7 @@ from fsspec.core import url_to_fs
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
-from marin.rl.skyrl_records import read_skyrl_metrics, read_stored_skyrl_attempts, recorded_launch
+from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training import rl as runner
@@ -61,7 +61,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
-from experiments.post_training.skyrl_test_support import selection_summary
+from experiments.post_training.skyrl_test_support import read_skyrl_metrics, selection_summary
 from infra.marina.tests.rl_progress_fixtures import grader_report, progress_record
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
@@ -353,22 +353,17 @@ def test_concurrent_issue_claims_keep_one_lineage_issue(tmp_path, monkeypatch):
     assert {attempt.issue for attempt in read_attempts(export_root).values()} == {winner}
 
 
-def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatch):
-    launch = {"config": "composed"}
+def test_nightly_fills_current_main_cohorts_and_waits_for_each_child(monkeypatch):
     monkeypatch.setattr(nightly, "configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr(gate, "compose_preset", lambda preset: launch)
+    monkeypatch.setattr(gate, "compose_preset", lambda preset: preset.name)
     monkeypatch.setattr(gate, "config_version", lambda config: "current")
-    branch = SimpleNamespace(branch="main", dirty=False)
-    monkeypatch.setattr(nightly.Provenance, "capture", lambda *_: branch)
-    monkeypatch.setattr(
-        "sys.argv",
-        ["rl_nightly_controls", "--model", "snowball", "--preset", "learning-medium", "--batch", "123-1"],
-    )
+    monkeypatch.setattr("sys.argv", ["rl_nightly_controls", "--batch", "123-1"])
     base = AttemptSummary.model_validate_json(
         json.dumps(
             progress_record()
             | {
                 "model": "snowball",
+                "series": "learning-medium",
                 "preset_version": "current",
                 "is_control": True,
                 "dirty": False,
@@ -378,88 +373,34 @@ def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatc
             }
         )
     )
-    controls = [base.model_copy(update={"native_run_id": f"control-{i}", "attempt_id": f"first-{i}"}) for i in range(5)]
-    retry = controls[0].model_copy(update={"attempt_id": "retry", "completed_at": "2026-11-02T02:00:00Z"})
+    first = base.model_copy(update={"native_run_id": "control-0", "attempt_id": "first"})
     records = [
-        *controls[:2],
-        retry,
-        base.model_copy(update={"run_id": "branch-control", "branch": "pull-branch"}),
-        base.model_copy(update={"run_id": "old-control", "preset_version": "old"}),
-        base.model_copy(update={"run_id": "failed-control", "status": "failed"}),
-        base.model_copy(update={"run_id": "short-provenance", "commit": "a", "base_commit": "a" * 40}),
+        first,
+        first.model_copy(update={"attempt_id": "retry"}),
+        base.model_copy(update={"native_run_id": "control-1"}),
+        base.model_copy(update={"native_run_id": "branch-control", "branch": "pull-branch"}),
+        base.model_copy(update={"native_run_id": "old-control", "preset_version": "old"}),
+        base.model_copy(update={"native_run_id": "failed-control", "status": "failed"}),
     ]
-    monkeypatch.setattr(nightly.rl_index, "list_attempts", lambda _service_url=None: list(records))
-    monkeypatch.setattr(publication, "CANONICAL_ARTIFACT_ROOT", str(tmp_path))
-    table = snowball_model.SNOWBALL
-    preset = table.by_name["learning-medium"]
-    output = str(tmp_path / "queued-control")
-    pending = str(tmp_path / "pending-control")
-    index = RunIndexIdentity(
-        run_id="previous-batch",
-        model=table.model,
-        preset=preset.name,
-        preset_version="current",
-        is_control=True,
-        user="tester",
-        branch="main",
-        source_revision="main-source",
-        dirty=False,
-    )
-    submission = {output: controls[2].native_run_id, pending: controls[3].native_run_id}
-    publication.record_control_outputs(preset, index, "previous-batch", submission)
-    finished = {output: controls[2]}
+    monkeypatch.setattr(nightly.rl_index, "list_attempts", lambda: records)
+    requests, waited = {}, []
 
-    def stored_attempts(path):
-        row = finished.get(path)
-        if row is None:
-            return None, {}
-        terminal = SimpleNamespace(
-            run_id=row.native_run_id,
-            attempt_id=row.attempt_id,
-            index=index,
-            native=SimpleNamespace(result=SimpleNamespace(state=SimpleNamespace(is_terminal=True))),
-        )
-        foreign = SimpleNamespace(**vars(terminal))
-        foreign.attempt_id = "different-source"
-        foreign.index = index.model_copy(update={"source_revision": "different-commit"})
-        return None, {foreign.attempt_id: foreign, row.attempt_id: terminal}
+    def submit(command):
+        identity = command[2], command[command.index("--preset") + 1]
+        requests[identity] = command[command.index("--replicates") + 1]
 
-    monkeypatch.setattr(publication, "read_stored_skyrl_attempts", stored_attempts)
-    recovered = []
+        def wait():
+            waited.append(identity)
+            return int(identity[1] == "speed-short")
 
-    def recover(paths, preset, *, table, attempt_id):
-        (path,) = paths
-        row = finished[path]
-        assert attempt_id == row.attempt_id
-        assert table.model == "snowball" and preset.name == "learning-medium"
-        recovered.append(path)
-        records.append(row)
-        return publication.PublicationOutcome(served_records=[(row.run_id, attempt_id)])
+        return SimpleNamespace(wait=wait)
 
-    monkeypatch.setattr(publication, "publish_runs", recover)
-    submissions = []
-
-    def submit(command, *, check):
-        submissions.append(command)
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(nightly.subprocess, "run", submit)
-
-    assert nightly.main() == 0
-    publication.record_control_outputs(preset, index, "previous-batch", submission)
-    records.append(controls[4])
-    finished[pending] = controls[3]
-    assert nightly.main() == 0
-    branch.branch = "pull-branch"
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
-    assert nightly.main() == 0
-
-    assert recovered == [output, pending]
-    assert [command[command.index("--replicates") + 1] for command in submissions] == ["2", "1", "5"]
-    for command in submissions:
-        assert command[1:5] == ["-m", "experiments.post_training.snowball_rl", "--preset", "learning-medium"]
-        assert command[command.index("--control") + 1] == "123-1"
-        assert command[-2:] == ["--run", "--wait"]
+    monkeypatch.setattr(nightly.subprocess, "Popen", submit)
+    assert nightly.main() == 1
+    assert list(requests) == waited and len(requests) == 7
+    assert requests["experiments.post_training.snowball_rl", "learning-medium"] == "3"
+    assert all(count == "5" for (_, name), count in requests.items() if name != "learning-medium")
+    assert all(name != "data-medium" for _, name in requests)
 
 
 @pytest.mark.integration
@@ -467,7 +408,6 @@ def test_nightly_fills_only_the_current_main_control_cohort(tmp_path, monkeypatc
 def test_snowball_publication_updates_attempts_and_publishes_controls(
     preset_table, rl_progress_client, recorded_runs, monkeypatch, cache_native_compositions
 ):
-    cache_native_compositions()
     client, request = rl_progress_client
     preset = replace(
         snowball_model.SNOWBALL.by_name["learning-medium"],

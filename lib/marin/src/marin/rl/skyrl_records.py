@@ -11,7 +11,6 @@ from finestore.rl.run_records import (
     LaunchReceipt,
     RunIndexIdentity,
     read_attempt,
-    read_attempt_metrics,
     read_attempts,
 )
 from pydantic import AliasPath, BaseModel, ConfigDict, Field, ValidationError
@@ -203,12 +202,6 @@ def read_stored_skyrl_attempts(run_output: str) -> tuple[str | None, dict[str, A
     if current is not None:
         attempts[current.attempt_id] = current
     return config["run"]["attempt_id"], attempts
-
-
-def read_skyrl_metrics(run_output: str, attempt_id: str | None = None) -> dict[int, dict]:
-    """Read one native attempt's metrics and bounded checkpoint ancestors."""
-    config = read_skyrl_launch_config(run_output)
-    return read_attempt_metrics(config["artifacts"]["export_root"], attempt_id or config["run"]["attempt_id"])
 
 
 def attempt_tracking(record: AttemptRecord, config: RecordedLaunch) -> AttemptTracking:

@@ -55,6 +55,7 @@ from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl_records import read_stored_skyrl_attempt
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
@@ -68,7 +69,7 @@ from experiments.post_training import rl as runner
 from experiments.post_training import rl_command as command
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
-from experiments.post_training import rl_index
+from experiments.post_training import rl_index, rl_publication
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, run_inputs
@@ -92,29 +93,20 @@ def native_compositions():
     compose_configs = gate.compose_configs
     cached = {}
 
-    def substitute(value: str, replacements: Sequence[tuple[str, str]]) -> str:
-        for old, new in replacements:
-            value = value.replace(old, new)
-        return value
-
-    def compose(paths, *, validate_driver=False, substitutions=None):
+    def compose(paths, *, validate_driver=False):
         documents = [Path(path).read_text() for path in paths]
-        if substitutions is None:
-            substitutions = [()] * len(documents)
-        patches = [
-            ((yaml.safe_load(document)["run"]["attempt_id"], "<fixture-attempt>"), *replacements)
-            for document, replacements in zip(documents, substitutions, strict=True)
-        ]
-        key = (
-            validate_driver,
-            tuple(substitute(document, patch) for document, patch in zip(documents, patches, strict=True)),
+        attempts = [yaml.safe_load(document)["run"]["attempt_id"] for document in documents]
+        token = "<fixture-attempt>"
+        key = validate_driver, tuple(
+            document.replace(attempt, token) for document, attempt in zip(documents, attempts, strict=True)
         )
         if key not in cached:
             configs = compose_configs(paths, validate_driver=validate_driver)
-            cached[key] = [substitute(json.dumps(config), patch) for config, patch in zip(configs, patches, strict=True)]
+            cached[key] = [
+                json.dumps(config).replace(attempt, token) for config, attempt in zip(configs, attempts, strict=True)
+            ]
         return [
-            json.loads(substitute(config, [(token, original) for original, token in patch]))
-            for config, patch in zip(cached[key], patches, strict=True)
+            json.loads(config.replace(token, attempt)) for config, attempt in zip(cached[key], attempts, strict=True)
         ]
 
     return compose
@@ -123,10 +115,7 @@ def native_compositions():
 def cache_native_compositions(monkeypatch, native_compositions):
     """Enable the native fixture cache for a test's gate calls."""
 
-    def enable():
-        monkeypatch.setattr(gate, "compose_configs", native_compositions)
-
-    return enable
+    monkeypatch.setattr(gate, "compose_configs", native_compositions)
 
 
 def fake_s3(monkeypatch, *paths: str) -> None:
@@ -567,33 +556,6 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             dirty=False,
         )
         write_attempt(str(root / "exports"), AttemptRecord(run_id=run_id, attempt_id=attempt, index=identity))
-        if control:
-            indexed_controls[run_id, attempt] = AttemptSummary(
-                run_id=identity.run_id,
-                native_run_id=run_id,
-                attempt_id=attempt,
-                label=preset_name,
-                series=preset_name,
-                model=table.model,
-                preset_version=version,
-                branch="main",
-                base_commit="commit-one",
-                commit="commit-one",
-                dirty=False,
-                is_control=True,
-                status="succeeded",
-                run_date=result["started_at"],
-                started_at=result["started_at"],
-                completed_at=result["finished_at"],
-                elapsed_seconds=3600,
-                timing_scope="fixture",
-                optimizer_steps=max_steps,
-                source_revision="commit-one",
-                data_identity=None,
-                initializer_identity="fixture",
-                artifact_uri=str(root),
-                evidence=[],
-            )
         write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
             root,
@@ -699,6 +661,12 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             values.update(metrics or {})
             values["attempt_id"] = attempt
         write_metrics(root, {step: values for step, values in stored_metrics.items() if step not in missing_steps})
+        if control:
+            stored = read_stored_skyrl_attempt(str(root))
+            assert stored is not None
+            indexed_controls[run_id, attempt] = rl_publication.build_record(
+                str(root), preset, table=table, attempt=stored
+            )
         return root
 
     return write

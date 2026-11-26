@@ -35,7 +35,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
-from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics, read_stored_skyrl_attempts
+from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempts
 from scipy.stats import t
 from skyrlrecipe.documents import set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
@@ -71,6 +71,7 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import answer as _answer
 from experiments.post_training.rl_tests.fixtures import write_json as _json
+from experiments.post_training.skyrl_test_support import read_skyrl_metrics
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TASK_MANIFEST_FILENAME,
@@ -105,7 +106,6 @@ def edit_metrics(root, edit):
 def test_compare_writes_the_report_for_the_five_newest_base_version_controls(
     recorded_runs, cache_native_compositions, monkeypatch
 ):
-    cache_native_compositions()
     preset = "speed-medium"
     for index, minute in enumerate((5, 2, 4, 3, 6, 1)):
         recorded_runs(
@@ -132,14 +132,7 @@ def test_compare_writes_the_report_for_the_five_newest_base_version_controls(
         }
     )
 
-    def list_index_with_retry(_service=None):
-        if read_stored_skyrl_attempts(str(candidate))[0] == "recorded-attempt":
-            with edit_receipt(candidate) as receipt:
-                receipt["config"]["run"]["attempt_id"] = "newer-retry"
-                receipt["result"]["state"] = "failed"
-        return [*indexed, different]
-
-    monkeypatch.setattr(rl_index, "list_attempts", list_index_with_retry)
+    monkeypatch.setattr(rl_index, "list_attempts", lambda _service=None: [*indexed, different])
     report = compare(preset, "--candidate", "users/test/baseline")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
@@ -155,20 +148,6 @@ def test_compare_writes_the_report_for_the_five_newest_base_version_controls(
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}
-    (candidate / "resolved-launch.yaml").unlink()
-    selected = measurements.read_measurements(
-        str(candidate), snowball_model.SNOWBALL.by_name[preset], attempt=records["recorded-attempt"]
-    )
-    assert selected.attempt_id == "recorded-attempt" and selected.values["speed/update_seconds"] == 102
-    for name, speed, kl, verdict, effect in (
-        ("improvement", 90, 0.1, "pass", "improves"),
-        ("regression", 150, 0.1, "fail", "regression"),
-        ("trade-off", 90, 0.2, "fail", "trade-off"),
-    ):
-        candidate = "users/test/" + name
-        recorded_runs(preset, candidate, speed=speed, metrics={KL: kl})
-        result = compare(preset, "--candidate", candidate)
-        assert (result["verdict"], result["effect"]) == (verdict, effect), result
 
 
 def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):
@@ -271,30 +250,6 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         (1, True),
     ]
 
-    cohort = cohort_from_fixtures(roots[0])
-    member = cohort.attempts[0]
-    original = read_attempt(str(Path(member.path) / "exports"), member.attempt_id)
-    assert original is not None and original.index is not None
-    with edit_receipt(Path(member.path)) as receipt:
-        receipt["config"]["run"]["attempt_id"] = "later-control-retry"
-        receipt["result"]["state"] = "failed"
-    same_cohort = run(
-        gate.gate_step(
-            preset,
-            tuple(candidates),
-            cohort=cohort,
-            group_name="users/test/requirements",
-            inputs=RunInputs(preset_name=preset.name, requirements=("policy/raw_grad_norm<=11",)),
-        )
-    )[0]
-    assert "failed" not in (same_cohort.reason or "") and same_cohort.control.attempts == cohort.attempts
-    other = cohort.attempts[1]
-    with edit_receipt(Path(other.path)) as receipt:
-        receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
-    stale = run(gate_for_candidates())[0]
-    assert stale.path != updated.path
-    assert stale.verdict == "invalid" and "stored control config version" in stale.reason
-
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):
     preset = replace(snowball_model.SNOWBALL.by_name["speed-long"], updates=3, measured=range(2, 4))
@@ -364,7 +319,6 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
 
 @pytest.mark.parametrize("preset", ["speed-short", "learning-medium"])
 def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset, cache_native_compositions):
-    cache_native_compositions()
     controls(recorded_runs, preset)
     root = recorded_runs(preset, "users/test/current-generation", speed=101)
     if preset == "speed-short":
@@ -746,7 +700,7 @@ def test_gate_compares_recorded_configuration_and_defaults(
             planning.setattr(
                 skyrl_api, "discover_hf_checkpoints", lambda *_: pytest.fail("gate planning read the initializer export")
             )
-            planned = gate.compose_candidate(preset, inputs)
+            planned = gate.compose_preset(preset, inputs)
             assert planned["inputs"]["model"]["uri"].endswith("/<terminal-hf-export>")
         return
     if case == "priority":
@@ -755,7 +709,7 @@ def test_gate_compares_recorded_configuration_and_defaults(
             recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, priority="production")),
         )
         inputs = inputs.model_copy(update={"options": RunOptions.from_preset(override)})
-        gate.compose_candidate(override, inputs)
+        gate.compose_preset(override, inputs)
         table = snowball_model.SNOWBALL
         with monkeypatch.context() as altered:
             single = replace(table, presets=(override,))

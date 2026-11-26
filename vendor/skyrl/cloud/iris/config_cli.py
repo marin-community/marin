@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compose launch documents or read schema defaults in the SkyRL CPU environment."""
+"""Compose launch documents in the SkyRL CPU environment."""
 
 import argparse
 import json
@@ -25,16 +25,16 @@ def main() -> None:
         required=True,
         help="checkout that supplies native modules",
     )
-    parser.add_argument("--progress-file", type=Path, required=True)
+    parser.add_argument("--progress-file", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     compose = commands.add_parser("compose", help="compose native launch documents")
     compose.add_argument("paths", nargs="*")
     compose.add_argument("--validate-driver", action="store_true")
-    schema = commands.add_parser("schema-defaults", help="read native defaults for a set of configuration groups")
-    schema.add_argument("groups_json", metavar="groups-json")
     args = parser.parse_args()
 
     def stage(message: str) -> None:
+        if args.progress_file is None:
+            return
         temporary = args.progress_file.with_suffix(".tmp")
         temporary.write_text(message)
         temporary.replace(args.progress_file)
@@ -48,30 +48,20 @@ def main() -> None:
 
     verify_checkout(args.checkout, sys.modules[__name__], launch_config, rl_config_translation, skyrl_train, marinskyrl)
 
-    if args.command == "compose":
-        from rigging.filesystem.s3_compat import configure_coreweave_s3
+    from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-        configure_coreweave_s3()
-        configs = []
-        for index, path in enumerate(args.paths, 1):
-            stage(f"Compose document {index}/{len(args.paths)}")
-            configs.append(launch_config.load_launch_config(path))
-        stage("Convert native configurations")
-        documents = [OmegaConf.to_container(config, resolve=True) for config in configs]
-        if args.validate_driver:
-            for index, config in enumerate(configs, 1):
-                stage(f"Validate driver for document {index}/{len(configs)}")
-                launch_config.validate_launch_driver_config(config)
-        print(json.dumps(documents))
-    else:
-        stage("Read native schema defaults")
-        groups = json.loads(args.groups_json)
-        config = rl_config_translation.compose_config_groups(groups, config_name="ppo_base_config")
-        defaults = OmegaConf.to_container(
-            OmegaConf.structured(launch_config.SkyRLLaunchConfig), resolve=False, enum_to_str=True
-        )
-        defaults["skyrl"] = OmegaConf.to_container(config, resolve=True, enum_to_str=True)
-        print(json.dumps(defaults))
+    configure_coreweave_s3()
+    configs = []
+    for index, path in enumerate(args.paths, 1):
+        stage(f"Compose document {index}/{len(args.paths)}")
+        configs.append(launch_config.load_launch_config(path))
+    stage("Convert native configurations")
+    documents = [OmegaConf.to_container(config, resolve=True) for config in configs]
+    if args.validate_driver:
+        for index, config in enumerate(configs, 1):
+            stage(f"Validate driver for document {index}/{len(configs)}")
+            launch_config.validate_launch_driver_config(config)
+    print(json.dumps(documents))
 
 
 if __name__ == "__main__":

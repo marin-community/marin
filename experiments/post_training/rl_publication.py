@@ -9,8 +9,6 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
-from hashlib import sha256
 from typing import cast
 
 import click
@@ -27,7 +25,6 @@ from finestore.rl.rl_progress import (
 )
 from finestore.rl.run_records import (
     AttemptRecord,
-    RunIndexIdentity,
     read_attempt,
     read_attempt_metrics,
     read_attempts,
@@ -44,7 +41,6 @@ from marin.rl.skyrl_records import (
     recorded_launch,
 )
 from pydantic import BaseModel, Field, ValidationError
-from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.redaction import redact_value
@@ -63,7 +59,6 @@ from experiments.post_training.rl_measurements import (
     recorded_lineage,
     training_invariants,
 )
-from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +69,7 @@ class PublicationOutcome(BaseModel):
     errors: list[str] = Field(default_factory=list)
     urls: dict[str, str] = Field(default_factory=dict)
     attempts: dict[str, AttemptRecord] = Field(default_factory=dict, exclude=True)
-    gate_report: gate.GateReport | None = Field(default=None, exclude=True)
+    gate_path: str | None = Field(default=None, exclude=True)
     retry: str | None = None
 
     def to_dict(self) -> dict:
@@ -194,7 +189,7 @@ def _gate_result(report: gate.GateReport | None) -> GateResult | None:
         reason=report.reason,
         invariants=list(report.invariants),
         comparisons=[*decisions, *history_scores],
-        attempt_ids=[attempt for attempt in report.run.attempt_ids if attempt is not None],
+        attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
     )
 
@@ -413,15 +408,6 @@ def _prepare_publication_attempts(
     return _OutputAttempts(current, attempts)
 
 
-def _read_publication_gate(
-    gate_path: str | None, current_attempts: tuple[str | None, ...], replicates: int
-) -> gate.GateReport | None:
-    report = gate.read_gate_report(gate_path)
-    if report is not None and (report.run.replicates != replicates or report.run.attempt_ids != current_attempts):
-        raise ValueError("Gate report attempts differ from the current output group; repeat with --wait")
-    return report
-
-
 def publish_runs(
     outputs: Sequence[str],
     preset: presets.Preset,
@@ -463,9 +449,9 @@ def publish_runs(
             )
         ):
             gate_path = submitted_gate.completed_path(candidates)
-        current_ids = tuple(row.attempt_id if row is not None else None for row in candidates)
-        report = _read_publication_gate(gate_path, current_ids, len(outputs))
-        result.gate_report = report
+        report = gate.read_gate_report(gate_path)
+        if report is not None:
+            result.gate_path = gate_path
     except Exception as error:
         report = None
         report_error = str(error)
@@ -536,73 +522,6 @@ def publish_runs(
     if result.unserved_records:
         result.retry = "Repeat the original command with --wait."
     return result
-
-
-def _control_submissions(preset: presets.Preset, model: str) -> StoragePath:
-    return StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-control-submissions" / model / preset.name
-
-
-class _ControlSubmission(BaseModel, frozen=True):
-    version: str
-    commit: str
-    outputs: dict[str, str]
-
-
-def record_control_outputs(preset: presets.Preset, index: RunIndexIdentity, batch: str, outputs: dict[str, str]) -> None:
-    """Persist output addresses before Iris submission so queued jobs can outlive the runner."""
-    expires = datetime.now(UTC) + timedelta(hours=preset.recipe.layout.coordinator_timeout_hours, days=2)
-    day = _control_submissions(preset, index.model) / expires.date().isoformat()
-    day.mkdirs()
-    manifest = conditional_object(str(day / f"{sha256(batch.encode()).hexdigest()}.json"))
-    entry = _ControlSubmission(version=index.preset_version, commit=index.source_revision, outputs=outputs)
-    try:
-        manifest.write(entry.model_dump_json().encode(), expected_version=None)
-    except ConditionalWriteError:
-        existing = manifest.read()
-        if existing is None:
-            raise
-        previous = _ControlSubmission.model_validate_json(existing.data)
-        if (
-            previous.version != entry.version
-            or previous.commit != entry.commit
-            or previous.outputs.items() - outputs.items()
-        ):
-            raise ValueError(f"Control batch {batch} already records different outputs") from None
-
-
-def recover_control_outputs(preset: presets.Preset, table: presets.ModelPresets) -> None:
-    """Publish terminal attempts from recent workflows and retain pending output addresses."""
-    root = _control_submissions(preset, table.model)
-    today = datetime.now(UTC).date().isoformat()
-    for path in (root / "*" / "*.json").glob():
-        if path.parent.name < today:
-            continue
-        manifest = conditional_object(str(path))
-        snapshot = manifest.read()
-        if snapshot is None:
-            continue
-        submission = _ControlSubmission.model_validate_json(snapshot.data)
-        pending = {}
-        for output, native_id in submission.outputs.items():
-            _, attempts = read_stored_skyrl_attempts(output)
-            owned = [
-                attempt
-                for attempt in attempts.values()
-                if attempt.run_id == native_id
-                and attempt.index is not None
-                and attempt.index.source_revision == submission.commit
-                and attempt.index.preset_version == submission.version
-            ]
-            terminal = [attempt for attempt in owned if attempt.native.result.state.is_terminal]
-            if not terminal or len(terminal) != len(owned):
-                pending[output] = native_id
-            for attempt in terminal:
-                result = publish_runs([output], preset, table=table, attempt_id=attempt.attempt_id)
-                if result.unserved_records:
-                    raise RuntimeError(f"Could not recover control {output}: {', '.join(result.errors)}")
-        if pending != submission.outputs:
-            updated = submission.model_copy(update={"outputs": pending})
-            manifest.write(updated.model_dump_json().encode(), expected_version=snapshot.version)
 
 
 def command(table: presets.ModelPresets) -> click.Command:

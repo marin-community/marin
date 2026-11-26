@@ -19,7 +19,7 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 | `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
 | `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. 20m12s and 13.47 H100-hours in the four-proposal comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
-| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Shares the `learning-medium` gate and controls. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
+| `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Reports scores for the candidate selection. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
 | `speed-long` | Sustained asynchronous update time and policy agreement | 40 H100s, 20 updates, 45–75 min and 30–50 H100-hours | Training metrics on updates 3–20. Gated on speed and mismatch. | Measure grading, admission or throughput changes over a longer window. | CPU plan only |
 
 ### Long loop
@@ -353,8 +353,7 @@ under the preset's output root.
 
 3. The SkyRL nightly workflow on main runs each gated preset with its default inputs. A version
    with fewer than five completed controls gets enough runs to reach five. Otherwise the workflow
-   starts one run per preset. Dispatch the workflow with `controls=true` and optional `model` and
-   `preset` filters to run a subset. Snowball's gated presets use Reno H100s. The Mochi speed and learning presets
+   starts one run per preset. Dispatch the workflow with `controls=true` to run the control refresh. Snowball's gated presets use Reno H100s. The Mochi speed and learning presets
    each use one GB200 rack.
 
 ## Tasks and evaluation
@@ -374,38 +373,7 @@ by task ID and count as scored only after successful verification without an exc
 Equal-family mean averages answers per task, tasks per family, then families. Slices use family, AAII
 category and agentic status. Task selection versions are immutable; follow the EvalLite reference to change one.
 
-To score earlier EvalLite versions, choose the run output, native attempt, evaluation name and
-checkpoint step. Set `version_roots` to the paths of the published selections you want to compare.
-The stored launch supplies the export root, evaluation prefix and expected answers per task.
-
-```python
-from finestore.rl.run_records import read_evaluations
-from finestore.rl.strata import read_selection_manifest
-from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
-from experiments.post_training.rl_measurements import evaluation_protocol, native_prefix
-from experiments.post_training.rl_scoring import score_eval_lite_version
-
-_, attempts = read_stored_skyrl_attempts(run_output)
-launch = recorded_launch(attempts[attempt_id])
-answers = evaluation_protocol(launch, evaluation_name)["n_samples_per_prompt"]
-rows = read_evaluations(
-    launch.export_root,
-    attempt_id=attempt_id,
-    evaluation=native_prefix(launch, evaluation_name),
-    step=step,
-)
-for root in version_roots:
-    selection = read_selection_manifest(root)
-    if selection is None:
-        raise ValueError(f"Missing selection manifest: {root}")
-    print(selection.definition.version, score_eval_lite_version(rows, selection, expected_answers=answers))
-```
-
-Use a preset's evaluation name, such as `eval_lite_100` for train-long. The primary evaluation is
-stored under `eval/`, and additional evaluations use `eval/<name>/`. The result reports scored tasks,
-missing verified answers and digest mismatches. A version has a score only when all of its active
-tasks have matching content and complete verified answers. Evaluate the full EvalLite pool to
-include tasks that were active in earlier versions.
+The primary evaluation is stored under `eval/`. Additional evaluations use `eval/<name>/`.
 
 ## Telemetry and provenance
 
@@ -464,7 +432,7 @@ best checkpoint step, or `none eligible`.
 |---|---|
 | `resolved-launch.yaml`, `terminal.json` | Native configuration and result; `read_stored_skyrl_attempt(output)` in `marin.rl.skyrl_records` reads the retained attempt without Iris. |
 | `run_inputs.json` | The runner's declared task, initializer, settings and requirements. |
-| `exports/run-records/` | FineStore attempt records, numeric metrics and per-task evaluations. `read_skyrl_metrics(output, attempt_id=...)` reads a selected attempt. |
+| `exports/run-records/` | FineStore attempt records, numeric metrics and per-task evaluations. |
 | FineStore `evaluations` table | One task per attempt, evaluation and step, with task content digest, ordered answers, native rewards, verifier bounds, normalized verifier scores, outcomes and canonical strata. `finestore.rl.run_records.read_evaluations` reads it. |
 | `exports/dumped_evals/<attempt_id>/...` | JSONL answers carrying attempt, step and final-turn identity; additional evaluations also have their own export subtree. |
 | Native checkpoint root | The receipt records recovery checkpoint locations and lineage. Snowball uses 14-day scratch storage. When enabled, Mochi writes checkpoints under its run path. |
@@ -524,10 +492,6 @@ The coordinator re-enters the calling module with the exact arguments. Run model
 Its `forward_env=("NAME", ...)` argument requires and forwards extra environment variables to
 the coordinator and native jobs, including terminal export. Configuration and logs contain
 names only. A layout's coordinator deadline can be changed with `dataclasses.replace`.
-
-A control can omit a configuration key when its current value equals the native SkyRL schema
-default. An omitted key whose current value differs from that default makes the control stale.
-Candidate receipts must match their recorded inputs exactly.
 
 ## Evaluate and publish a checkpoint
 
