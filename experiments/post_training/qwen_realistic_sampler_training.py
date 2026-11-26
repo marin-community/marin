@@ -6,7 +6,7 @@
 from dataclasses import replace
 from fractions import Fraction
 
-from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe import ContextBudget, RecipePatch, sections
 
 from experiments.post_training import rl
 from experiments.post_training.qwen_realistic_sampler import readiness
@@ -14,13 +14,22 @@ from experiments.post_training.qwen_sampler import LAYOUT, ROLE_PLAN, WITHIN_SOU
 from experiments.post_training.rl_presets import BatchMix, ModelPresets, Preset, Training
 from experiments.post_training.task_curation.qwen_realistic_sampler import NAME, TRAIN_FAMILIES, VERSION
 
-REVISION = "2026.11.26.3"
+REVISION = "2026.11.26.4"
+MAX_RESPONSE_TOKENS = 12_288
+REQUEST_WINDOW = 6_656 + MAX_RESPONSE_TOKENS
 UPDATES = 4
 SEED = 26631
 
 
 def realistic_smoke(arm: str, epsilon: float) -> Preset:
-    probe = readiness("dev", 1, "direct")
+    probe = readiness("dev", 1, "native")
+    (evaluation,) = probe.evaluations
+    params = evaluation.profile.sampling_params
+    assert params is not None
+    evaluation = replace(
+        evaluation,
+        profile=evaluation.profile.replace(sampling_params=params.replace(max_generate_length=MAX_RESPONSE_TOKENS)),
+    )
     plan = replace(ROLE_PLAN, micro_train_batch_size_per_gpu=1)
     layout = replace(
         LAYOUT,
@@ -29,7 +38,7 @@ def realistic_smoke(arm: str, epsilon: float) -> Preset:
         job_timeout_seconds=3600,
     )
     preset = sampler_preset(
-        f"realistic-direct-smoke-{arm}",
+        f"realistic-native-smoke-{arm}",
         UPDATES,
         WITHIN_SOURCE,
         epsilon,
@@ -40,7 +49,12 @@ def realistic_smoke(arm: str, epsilon: float) -> Preset:
     )
     config = preset.recipe.config.replace(
         environment=probe.recipe.config.environment,
-        context_budget=probe.recipe.config.context_budget,
+        context_budget=ContextBudget(
+            request_window_tokens=REQUEST_WINDOW,
+            serving_window_tokens=REQUEST_WINDOW,
+            max_new_tokens_per_turn=MAX_RESPONSE_TOKENS,
+            max_turns=1,
+        ),
         extra_env=probe.recipe.config.extra_env,
     ).merge(
         RecipePatch(
@@ -49,8 +63,8 @@ def realistic_smoke(arm: str, epsilon: float) -> Preset:
                 policy=sections.Policy(megatron_config=sections.PolicyMegatronConfig(output_projection_chunk_size=1024)),
             ),
             generator=sections.Generator(
-                chat_template_kwargs={"enable_thinking": False},
-                sampling_params=sections.SamplingParams(temperature=0.7, top_p=0.8, top_k=20, logprobs=None),
+                chat_template_kwargs={"enable_thinking": True},
+                sampling_params=sections.SamplingParams(temperature=0.6, top_p=0.95, top_k=20, logprobs=None),
             ),
         )
     )
@@ -59,10 +73,10 @@ def realistic_smoke(arm: str, epsilon: float) -> Preset:
         preset,
         tasks=f"{NAME}@{VERSION}",
         held_out_tasks=probe.held_out_tasks,
-        evaluations=probe.evaluations,
+        evaluations=(evaluation,),
         recipe=replace(preset.recipe, config=config),
         checkpoints="latest",
-        export="latest",
+        export="none",
         batch_mix=mix,
     )
 
