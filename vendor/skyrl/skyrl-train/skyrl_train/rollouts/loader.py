@@ -134,14 +134,14 @@ class PromptLoaderState:
 
 
 class PromptLoader:
-    """Yield one prompt at a time, re-offering prompts whose rollouts must be regenerated first.
+    """Yield one eligible prompt at a time for rollout.
 
     A batch trains at most one group per uid, so the loader never offers a uid that is live: already generating,
     or committed and not yet trained or discarded. A draw whose uid is live is dropped rather than generated as a
     copy the batch would reject.
 
-    A prompt whose group missed the staleness window is regenerated at most ``max_stale_retries`` times in a row;
-    after that it waits until the prompt order offers it again.
+    Source passes count each dispatch as a visit, including stale groups. Other orders give stale groups
+    up to ``max_stale_retries`` consecutive retries before returning the prompt to regular selection.
 
     A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
     every sample, is quarantined: the loader does not offer it for the next ``QUARANTINE_STEPS`` training steps, then
@@ -207,8 +207,8 @@ class PromptLoader:
     def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
         """Offer a prompt in the requested family whose uid is neither live nor quarantined.
 
-        Prompts awaiting regeneration come first. A family lease draws from only that family's pool. Without
-        a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
+        Source passes select among the least-visited eligible prompts in the chosen source. Other orders
+        offer queued retries first, then draw from the leased family or the full dataset.
         """
 
         def eligible(uid: str) -> bool:
@@ -260,7 +260,7 @@ class PromptLoader:
         return None
 
     def retry(self, prompt: dict) -> None:
-        """Queue a prompt whose group missed the staleness window, unless it used up its regenerations."""
+        """Queue a stale prompt for a bounded retry when its order allows immediate regeneration."""
         if self._pass_order is not None:
             # The stale dispatch already visited this prompt. It becomes eligible again through the pass.
             return
@@ -356,8 +356,7 @@ class PromptLoader:
         for family, order in self._family_orders.items():
             if family in saved_families:
                 order.load_state_dict(saved_families[family])
-        # A context checkpoint includes interrupted, already offered dispatches. The pass order
-        # will revisit them after the rest of their source instead of immediately duplicating them.
+        # The pass already counted interrupted dispatches. Restored visit counts govern their eligibility.
         self._retries = collections.deque(() if self._pass_order is not None else state.retries)
         if state.eligibility is not None:
             self._step = state.eligibility.step

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from collections.abc import Mapping
 
 from skyrl_gym.task_factories import EpisodeFactory
+from skyrlrecipe.declared import PromptAcquisition
 
 from ray.util.placement_group import placement_group, PlacementGroup
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
@@ -569,6 +570,9 @@ class BasePPOExp:
         held_out = [*additional_eval_datasets.values()]
         if eval_dataset is not None:
             held_out.append(eval_dataset)
+        elif cfg.data.sampling.kind in PromptAcquisition and cfg.data.val_data:
+            # Check the primary panel even when the trainer has no scheduled evaluation.
+            held_out.append(self._build_eval_dataset(cfg.data.val_data))
         return RayPPOTrainer(
             context=TrainingContext.from_config(cfg, train_dataset, trajectory_runner, held_out=held_out),
             cfg=cfg,

@@ -10,11 +10,13 @@ import pyarrow.parquet as pq
 import pytest
 from marinskyrl.task_sources import PreparedTaskCacheSource
 from omegaconf import OmegaConf
+from skyrlrecipe.declared import PromptAcquisition
 from skyrl_train import task_inputs
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
+from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.rollouts.context import TrainingContext, prompt_order_from_config
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.task_inputs import task_messages
@@ -90,6 +92,46 @@ def test_prompt_thompson_dispatches_prepared_training_rows_and_rejects_evaluatio
     config.data.sampling.reversion_mass = 1.0
     with pytest.raises(ValueError, match=r"data.sampling.reversion_mass.*Set it to 0"):
         prompt_order_from_config(config, training, held_out=[validation])
+
+
+@pytest.mark.parametrize("kind", list(PromptAcquisition))
+def test_prompt_thompson_checks_unscheduled_primary_panel(tmp_path, monkeypatch, kind):
+    config = get_default_config()
+    config.data.sampling.kind = kind.value
+    config.trainer.eval_interval = 0
+    config.trainer.train_batch_size = 1
+    config.generator.n_samples_per_prompt = 2
+    training, held_out = (tmp_path / name for name in ("training.parquet", "held-out.parquet"))
+    for path, prompts in (
+        (training, ["Compute one plus two.", "List three colors."]),
+        (held_out, ["Compute one plus two."]),
+    ):
+        tasks = [text_task(f"{path.stem}-{index}", prompt=prompt) for index, prompt in enumerate(prompts)]
+        pq.write_table(pa.table({TASK_SPEC_COLUMN: [task.model_dump_json() for task in tasks]}), path)
+    config.data.train_data = [str(training)]
+    config.data.val_data = [str(held_out)]
+    experiment = BasePPOExp.__new__(BasePPOExp)
+    experiment.cfg = config
+    experiment.evaluation_profiles = {}
+    experiment.tokenizer = _StubTokenizer()
+
+    monkeypatch.setattr(
+        "skyrl_train.rollouts.context.start_rollout_buffer",
+        lambda _: pytest.fail("A leaked validation prompt reached rollout actor startup"),
+    )
+    eval_dataset = experiment.get_eval_dataset()
+    assert eval_dataset is None
+    with pytest.raises(ValueError, match="held-out public prompt"):
+        experiment.get_trainer(
+            cfg=config,
+            tracker=None,
+            tokenizer=experiment.tokenizer,
+            train_dataset=experiment.get_train_dataset(),
+            eval_dataset=eval_dataset,
+            inference_engine_client=None,
+            trajectory_runner=None,
+            colocate_pg=None,
+        )
 
 
 def test_prompt_thompson_uses_public_tool_calls_without_transport_ids(tmp_path):
