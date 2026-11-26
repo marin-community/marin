@@ -19,7 +19,7 @@ from marina.client import MarinaRequestError
 from shellbox.requirements import Requirement
 
 from experiments.post_training.task_curation.tests.admission_fixtures import with_declaration_admission_census
-from infra.marina.apps.rl_data_catalog import release_check
+from infra.marina.apps.rl_data_catalog import release_browser, release_check
 from infra.marina.apps.rl_data_catalog.release_browser import verify_rendered_partition
 from infra.marina.apps.rl_data_catalog.release_check import main
 from infra.marina.apps.rl_data_catalog.release_evidence import catalog_state, projected_sources, task_totals
@@ -322,6 +322,22 @@ def test_sweep_reads_the_pending_manifest_without_a_browser(tmp_path, monkeypatc
         "measurements/pending-filtered-releases.json",
     ]
     assert release_check.pending_release_sources(reader) == {"Marin:pending-a", "Marin:pending-b"}
+
+
+def test_representative_evidence_smoke_takes_precomputed_cases(monkeypatch):
+    """R40 #62: the smoke unit's default path fetched the pending manifest on a page that
+    never navigated, so the parallel pool's four smoke units died on CORS. The unit hands
+    the sweep its one precomputed case instead, and no manifest is read."""
+    captured: dict[str, Any] = {}
+
+    def _sweep(page: Any, root: str, sources: list[dict[str, Any]], *, layouts: Any, cases: Any = None) -> list:
+        captured["cases"] = cases
+        return [{"source_id": sources[0]["id"]}]
+
+    monkeypatch.setattr(release_browser, "evidence_sweep", _sweep)
+    sources = [{"id": "Marin:a", "assessment": {"pipeline_key": "k"}}]
+    release_browser.evidence_smoke(None, "https://x/", sources, cases=[{"id": "Marin:a"}])
+    assert captured["cases"] == sources
 
 
 def test_full_sweep_splits_into_bounded_parallel_units(tmp_path, monkeypatch):

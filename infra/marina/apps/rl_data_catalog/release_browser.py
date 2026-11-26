@@ -485,7 +485,9 @@ def curriculum_domain_sweep(
             raise ValueError(f"Curriculum domains {sorted(set(domains) - set(live))} are not live on the page")
         for domain in live if domains is None else [domain for domain in live if domain in domains]:
             page.locator("#domain").select_option(domain)
-            expect(page.locator(".domain-card")).to_have_count(1)
+            # The area response is computed through the reader on first request; the
+            # parallel pool can hold it past Playwright's 5 s default (R40 #62).
+            expect(page.locator(".domain-card")).to_have_count(1, timeout=60000)
             expect(page.locator(".domain-card")).to_have_attribute("data-subject", domain)
             results.append({"theme": theme, "width": width, "domain": domain, **check_map(page)})
             expected_nodes = {
@@ -546,7 +548,9 @@ def curriculum_sweep(
         domain = representative_domain(data)
         if domain:
             page.locator("#domain").select_option(domain)
-            expect(page.locator(".domain-card")).to_have_count(1)
+            # The area response is computed through the reader on first request; the
+            # parallel pool can hold it past Playwright's 5 s default (R40 #62).
+            expect(page.locator(".domain-card")).to_have_count(1, timeout=60000)
             expect(page.locator("#task-list")).not_to_have_attribute("aria-busy", "true", timeout=60000)
             expect(page.locator("#task-message")).to_contain_text(
                 re.compile("sampled examples|No task examples|No stored sample examples")
@@ -565,8 +569,20 @@ def curriculum_sweep(
 
 
 def evidence_smoke(
-    page: Page, root: str, sources: list[dict[str, Any]], *, layouts: Sequence[tuple[str, int]] = LAYOUTS
+    page: Page,
+    root: str,
+    sources: list[dict[str, Any]],
+    *,
+    layouts: Sequence[tuple[str, int]] = LAYOUTS,
+    cases: Sequence[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Keep one Evidence and Backends presentation in the blocking geometry pass."""
+    """Keep one Evidence and Backends presentation in the blocking geometry pass.
+
+    ``cases`` is the parallel sweep's precomputed case list: the unit's page has not
+    navigated yet, so the default path's pending-manifest fetch would be cross-origin
+    (R40 #62). The smoke walk covers one source and needs no manifest.
+    """
     source = next((row for row in sources if (row.get("assessment") or {}).get("pipeline_key")), sources[0])
+    if cases is not None:
+        return evidence_sweep(page, root, [source], layouts=layouts, cases=[source])
     return evidence_sweep(page, root, [source], layouts=layouts)

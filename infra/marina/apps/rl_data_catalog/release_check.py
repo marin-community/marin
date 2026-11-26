@@ -683,7 +683,7 @@ def sweep_units(
                 SweepUnit(
                     SweepFamily.EVIDENCE,
                     f"evidence {name}",
-                    partial(evidence_smoke, root=root, sources=sources, layouts=layouts),
+                    partial(evidence_smoke, root=root, sources=sources, layouts=layouts, cases=cases),
                 )
             )
         readability = readability_sweep if SweepFamily.READABILITY in full else readability_smoke
