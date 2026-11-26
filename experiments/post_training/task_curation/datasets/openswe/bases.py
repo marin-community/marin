@@ -46,21 +46,26 @@ def base_dockerfile(python_version: str) -> str:
     return DOCKERFILE_TEMPLATE.format(miniconda_pin=MINICONDA3_PIN, python_version=python_version)
 
 
-def load_condensed_bases(bindings_input: object) -> dict[str, str]:
-    """The digest-pinned condensed base references from the staged bindings input.
+def load_bindings(bindings_input: object, filename: str = BINDINGS_FILENAME) -> dict[str, str]:
+    """Digest-pinned base references from a staged bindings manifest.
 
     The bindings must record the exact upstream pin the converter serves; a
     missing or unpinned version is the converter's typed rejection, never a
     mutable reference.
     """
     if bindings_input is None:
-        raise ValueError("The condensed base bindings are not staged for this conversion")
-    path = StoragePath(str(bindings_input)) / BINDINGS_FILENAME
+        raise ValueError("The base bindings are not staged for this conversion")
+    path = StoragePath(str(bindings_input)) / filename
     manifest = json.loads(path.read_text())
     if manifest["upstream_revision"] != UPSTREAM_REVISION:
-        raise ValueError("The condensed base bindings do not cover the pinned OpenSWE revision")
+        raise ValueError("The base bindings do not cover the pinned OpenSWE revision")
     images = manifest["images"]
     for version, reference in images.items():
         if "@sha256:" not in reference:
-            raise ValueError(f"The condensed base binding for Python {version} is not a digest-pinned reference")
+            raise ValueError(f"The base binding for Python {version} is not a digest-pinned reference")
     return dict(images)
+
+
+def load_condensed_bases(bindings_input: object) -> dict[str, str]:
+    """The digest-pinned condensed base references from the staged bindings input."""
+    return load_bindings(bindings_input)
