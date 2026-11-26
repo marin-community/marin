@@ -6,7 +6,7 @@
 from collections.abc import Callable
 
 import jax
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
 from levanter.grug._moe.scatter import _moe_mlp_local_scatter
@@ -22,6 +22,7 @@ def _moe_mlp_local(
     x: Float[Array, "T H"],
     selected_experts: Int[Array, "T K"],
     combine_weights: Float[Array, "T K"],
+    token_valid: Bool[Array, "T"],
     moe_w13: Float[Array, "E H I2"],
     moe_w2: Float[Array, "E I H"],
     *,
@@ -29,8 +30,11 @@ def _moe_mlp_local(
     num_experts: int,
     implementation: MoeImplementation,
     expert_chunks: int = 1,
+    combine_in_fp32: bool = False,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     if implementation == "sonic_cute":
+        if combine_in_fp32:
+            raise ValueError("combine_in_fp32 is unsupported by sonic_cute")
         if activation_fn is not jax.nn.silu:
             raise ValueError("sonic_cute requires SiLU because its QuACK kernel fuses SwiGLU")
         # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
@@ -47,6 +51,7 @@ def _moe_mlp_local(
                 x,
                 selected_experts,
                 combine_weights,
+                token_valid,
                 moe_w13,
                 moe_w2,
                 num_experts=num_experts,
@@ -57,6 +62,7 @@ def _moe_mlp_local(
             x,
             selected_experts,
             combine_weights,
+            token_valid,
             moe_w13,
             moe_w2,
             num_experts=num_experts,
@@ -68,8 +74,10 @@ def _moe_mlp_local(
         x,
         selected_experts,
         combine_weights,
+        token_valid,
         moe_w13,
         moe_w2,
         activation_fn=activation_fn,
         num_experts=num_experts,
+        combine_in_fp32=combine_in_fp32,
     )

@@ -1,0 +1,75 @@
+{#- ===================================================================== -#}
+{#- Delphi v0 chat template  (Llama-3 tokenizer; static; MVP)              -#}
+{#- ----------------------------------------------------------------------- -#}
+{#- MVP scope: CONSUME thinking + tool-use content from heterogeneous SFT   -#}
+{#- data and NORMALIZE it to ONE canonical token protocol the model learns. -#}
+{#-                                                                         -#}
+{#- Special tokens used (MUST be registered as single tokens in the         -#}
+{#- tokenizer, else they fragment into bytes — see chat_templating notes):  -#}
+{#-   native Llama-3 (already in vocab):                                    -#}
+{#-     <|begin_of_text|>  <|start_header_id|>  <|end_header_id|>  <|eot_id|>-#}
+{#-   repurposed reserved slots (canonical strings; ids assigned at patch): -#}
+{#-     <|start_think|>  <|end_think|>          (reasoning region)          -#}
+{#-     <|tool_call|>    <|tool_call_end|>      (assistant -> tool)          -#}
+{#-     <|tool_result|>  <|tool_result_end|>    (tool   -> assistant)        -#}
+{#-                                                                         -#}
+{#- Thinking normalization: prefer message.reasoning_content; else parse an -#}
+{#- inline <think>...</think> out of content. Either way emit canonical     -#}
+{#- <|start_think|>...<|end_think|>. enable_thinking=false suppresses it.    -#}
+{#- ===================================================================== -#}
+{{- bos_token }}
+{%- if messages[0].role == 'system' %}
+    {%- set system_message = messages[0].content %}
+    {%- set loop_messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = '' %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+{{- '<|start_header_id|>system<|end_header_id|>\n\n' }}
+{%- if system_message %}
+    {{- system_message }}
+{%- endif %}
+{%- if tools %}
+    {%- if system_message %}{{- '\n\n' }}{%- endif %}
+    {{- '# Tools\n\nYou may call one or more of the following functions. Emit each call as a JSON object {"name": ..., "arguments": ...} between <|tool_call|> and <|tool_call_end|>:\n' }}
+    {%- for tool in tools %}
+        {{- '\n' }}{{- tool | tojson }}
+    {%- endfor %}
+{%- endif %}
+{{- '<|eot_id|>' }}
+{%- for message in loop_messages %}
+    {%- set content = message.content if message.content is string else '' %}
+    {%- if message.role == 'user' %}
+        {{- '<|start_header_id|>user<|end_header_id|>\n\n' + content + '<|eot_id|>' }}
+    {%- elif message.role == 'assistant' %}
+        {%- set reasoning = '' %}
+        {%- if message.reasoning_content is string %}
+            {%- set reasoning = message.reasoning_content %}
+        {%- elif '</think>' in content %}
+            {%- set reasoning = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+            {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+        {%- endif %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+        {%- if reasoning %}
+            {{- '<|start_think|>\n' + reasoning.strip('\n') + '\n<|end_think|>\n\n' }}
+        {%- endif %}
+        {{- content }}
+        {%- if message.tool_calls %}
+            {%- for tc in message.tool_calls %}
+                {%- set fn = tc.function if tc.function is defined else tc %}
+                {{- '\n<|tool_call|>\n{"name": "' + fn.name + '", "arguments": ' }}
+                {%- if fn.arguments is string %}{{- fn.arguments }}{%- else %}{{- fn.arguments | tojson }}{%- endif %}
+                {{- '}\n<|tool_call_end|>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|eot_id|>' }}
+    {%- elif message.role == 'tool' %}
+        {{- '<|start_header_id|>tool<|end_header_id|>\n\n<|tool_result|>\n' + content + '\n<|tool_result_end|><|eot_id|>' }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- '<|start_think|>\n\n<|end_think|>\n\n' }}
+    {%- endif %}
+{%- endif %}

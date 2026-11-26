@@ -1,0 +1,16 @@
+# Models whose 32,768-token window cannot hold an evaluation's default protocol run the protocol
+# named here instead.
+model_evaluation_protocols:
+  inclusionAI-Ling-lite-1.5:
+    bixbench-pi: pi-32k
+  open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38:
+    bixbench-pi: pi-32k
+
+# This model's Terminal-Bench serving arm was validated at the exact agent
+# context/output limits. Selection is benchmark-specific; neither launcher nor
+# refill manager changes the serving settings in these canonical YAML files.
+model_config_overrides:
+  IFM-K2-Horizon-MoVA-36B-A4B:
+    tb2-recovery: ablations/k2/model-recommended-tb2.yaml
+  open-athena-Grug-67B-A2B-BFCL-Recovery:
+    triviaqa: model-configs/triviaqa/open-athena-Grug-67B-A2B-BFCL-Recovery.yaml

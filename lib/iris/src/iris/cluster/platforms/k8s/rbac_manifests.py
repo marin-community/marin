@@ -3,6 +3,29 @@
 
 """Define Kubernetes namespace and RBAC manifests for Iris controllers."""
 
+TASK_SECRET_ROLE_NAME = "iris-task-secret-delivery"
+
+
+def task_secret_role_manifest(namespace: str) -> dict:
+    """Limit submitted credential management to the controller's namespace."""
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "Role",
+        "metadata": {"name": TASK_SECRET_ROLE_NAME, "namespace": namespace},
+        "rules": [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["create", "patch", "delete"]}],
+    }
+
+
+def task_secret_binding_manifest(namespace: str, service_account: str) -> dict:
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "RoleBinding",
+        "metadata": {"name": TASK_SECRET_ROLE_NAME, "namespace": namespace},
+        "subjects": [{"kind": "ServiceAccount", "name": service_account, "namespace": namespace}],
+        "roleRef": {"kind": "Role", "name": TASK_SECRET_ROLE_NAME, "apiGroup": "rbac.authorization.k8s.io"},
+    }
+
+
 # Permissions the iris-controller ServiceAccount needs at runtime.
 CLUSTER_ROLE_RULES = [
     {
@@ -11,19 +34,27 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {
-        # Bound via ClusterRoleBinding, so this grants pod access in ALL namespaces —
-        # required for blocker eviction in kubernetes_provider.preempt_namespaces.
         "apiGroups": [""],
         "resources": ["pods", "pods/exec", "pods/log"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
-    {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+    {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch", "patch"]},
+    # The node agent reads its own kubelet's metrics/resource endpoint directly;
+    # the kubelet authorizes that read against the nodes/metrics subresource.
+    {"apiGroups": [""], "resources": ["nodes/metrics"], "verbs": ["get"]},
+    {"apiGroups": ["node.k8s.io"], "resources": ["runtimeclasses"], "verbs": ["get"]},
     {
         "apiGroups": [""],
         "resources": ["configmaps"],
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
-    {"apiGroups": ["metrics.k8s.io"], "resources": ["pods"], "verbs": ["get", "list"]},
+    {
+        # Per-attempt Cilium egress policies. The controller writes them by
+        # server-side apply; Kubernetes deletes each with its owning pod.
+        "apiGroups": ["cilium.io"],
+        "resources": ["ciliumnetworkpolicies"],
+        "verbs": ["create", "patch"],
+    },
     {
         "apiGroups": ["policy"],
         "resources": ["poddisruptionbudgets"],
@@ -38,7 +69,7 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "delete"],
     },
     {
-        # Iris creates iris-{production,interactive,batch} PriorityClass objects at
+        # Iris creates iris-{system,production,interactive,batch} PriorityClass objects at
         # startup so pods can be stamped without manual setup.
         "apiGroups": ["scheduling.k8s.io"],
         "resources": ["priorityclasses"],

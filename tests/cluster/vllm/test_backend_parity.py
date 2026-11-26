@@ -4,8 +4,7 @@
 import math
 
 import pytest
-
-from tests.cluster.vllm.backend_parity import (
+from marin.testing.inference.backend_parity import (
     NextTokenObservation,
     NextTokenParity,
     TokenScore,

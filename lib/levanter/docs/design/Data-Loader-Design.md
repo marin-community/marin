@@ -149,7 +149,12 @@ you can't do streaming.
 TensorStore can sustain high throughput but has pretty terrible latency (when hitting GCS).
 The latency can be on the order of a second. We mitigate this by prefetching the data in the DataLoader.
 
-With prefetching we can sustain about a million tokens per second per host, wihch is sufficient.
+The loader separates storage request size from queue depth. A background producer repeatedly retrieves
+`fetch_batch_size` batches and pushes them into a queue capped by `max_buffered_batches`. Small fetches bound the
+time before the first batch becomes available, while a larger queue preserves enough lookahead to cover storage
+latency during training.
+
+With prefetching we can sustain about a million tokens per second per host, which is sufficient.
 In particular, when training a GPT-2 small model on a v3-32, loading is able to keep up with training.
 However, 3/4 of evaluation time is spent blocked on loading data, so we could potentially speed up evaluation.
 (However it's still twice as fast as with the old cache and data loader.)

@@ -9,7 +9,6 @@ serve:
   max_model_len: 32768
   tool_call_parser: hermes
   vllm_extra_args:
-  - --enforce-eager
   - --disable-cascade-attn
   - --seed
   - '42'

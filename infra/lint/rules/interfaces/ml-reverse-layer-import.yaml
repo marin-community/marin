@@ -1,0 +1,21 @@
+schema_version: 1
+code: ml-reverse-layer-import
+lane: interfaces
+title: Reverse-direction import across layers
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** The dependency direction in this repo is
+  `{iris, haliax} → {levanter, zephyr} → marin`. A reverse import (e.g. `from
+  marin...` inside `lib/iris/`) makes the leaf library un-reusable and creates
+  a cycle the moment the trunk reaches back.
+
+  **When allowed:** Tests inside `lib/<leaf>/tests/` may import from `marin` to
+  exercise integration paths if marked `@pytest.mark.integration` and the
+  production code under `src/` stays clean. Top-level tooling under `infra/`,
+  `scripts/`, and `experiments/` may import any layer.
+
+  **Bad example:**
+  ```python
+  # in lib/iris/src/iris/cluster/something.py
+  from marin.processing import tokenize  # iris cannot depend on marin
+  ```

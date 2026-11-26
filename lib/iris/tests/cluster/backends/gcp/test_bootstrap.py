@@ -3,7 +3,10 @@
 
 """Tests for worker bootstrap script generation."""
 
+import os
 import re
+import subprocess
+from pathlib import Path
 
 import pytest
 from iris.cluster.config import GcpPlatformConfig, WorkerConfig
@@ -16,6 +19,8 @@ from iris.cluster.platforms.gcp.worker_bootstrap import (
     upstream_registry,
 )
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.runtime.docker import EGRESS_BRIDGE, EGRESS_DNS_SERVERS, EGRESS_RESOLV_CONF, EGRESS_RUN_DIR
+from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS
 from iris.cluster.service_mode import ServiceMode
 
 
@@ -246,3 +251,51 @@ def test_gcp_provider_resolve_image_requires_zone_for_mirrored_upstream() -> Non
         provider.resolve_image("ghcr.io/org/img:v1")
     with pytest.raises(ValueError, match="zone is required"):
         provider.resolve_image("ubuntu:24.04")
+
+
+_STUB_DOCKER = """#!/bin/bash
+[ "$1 $2" = "network inspect" ] && exit 1
+exit 0
+"""
+# Records every iptables call; `-C` (check) reports no rule, and a call that
+# matches $FAIL_ON fails, standing in for a host that rejects that rule.
+_STUB_IPTABLES = """#!/bin/bash
+echo "$*" >> "$IPTABLES_LOG"
+case "$*" in *" -C "*|"-C "*) exit 1;; esac
+[ -n "$FAIL_ON" ] && [[ "$*" == *"$FAIL_ON"* ]] && exit 1
+exit 0
+"""
+
+
+def _run_egress_filter_install(tmp_path: Path, fail_on: str) -> tuple[Path, list[str]]:
+    """Run the bootstrap's egress-filter section with stubbed sudo/docker/iptables."""
+    script = build_worker_bootstrap_script(_worker_config())
+    start = script.index("# Egress filter for")
+    end = script.index("\nfi\n", script.index("if install_iris_egress_filter")) + len("\nfi\n")
+    run_dir = tmp_path / "run"
+    section = script[start:end].replace(EGRESS_RUN_DIR, str(run_dir))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in {"sudo": '#!/bin/bash\nexec "$@"\n', "docker": _STUB_DOCKER, "iptables": _STUB_IPTABLES}.items():
+        (bin_dir / name).write_text(body)
+        (bin_dir / name).chmod(0o755)
+    log = tmp_path / "iptables.log"
+    log.touch()
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "IPTABLES_LOG": str(log), "FAIL_ON": fail_on}
+    subprocess.run(["bash", "-c", section], env=env, check=True, capture_output=True)
+    resolv_conf = Path(EGRESS_RESOLV_CONF.replace(EGRESS_RUN_DIR, str(run_dir)))
+    return resolv_conf, log.read_text().splitlines()
+
+
+@pytest.mark.parametrize("fail_on", ["", "DOCKER-USER", "INPUT"])
+def test_bootstrap_writes_egress_marker_only_after_every_rule_is_installed(tmp_path, fail_on) -> None:
+    """The worker runs INTERNET tasks only while the resolv.conf marker exists; a failed rule must leave none."""
+    resolv_conf, iptables_calls = _run_egress_filter_install(tmp_path, fail_on)
+
+    if fail_on:
+        assert not resolv_conf.exists()
+        return
+    assert resolv_conf.read_text() == "".join(f"nameserver {server}\n" for server in EGRESS_DNS_SERVERS)
+    assert {f"-A IRIS-EGRESS -d {cidr} -j DROP" for cidr in EGRESS_BLOCKED_CIDRS} <= set(iptables_calls)
+    assert f"-I DOCKER-USER -i {EGRESS_BRIDGE} -j IRIS-EGRESS" in iptables_calls
+    assert f"-I INPUT -i {EGRESS_BRIDGE} -j DROP" in iptables_calls

@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["@rsbuild/core/types"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "vue": ["./node_modules/vue"],
+      "@marina/*": ["../../../web/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "env.d.ts",
+    "rsbuild.config.ts",
+    "../../../web/**/*.ts",
+    "../../../web/**/*.vue"
+  ]
+}

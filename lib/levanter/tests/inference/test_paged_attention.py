@@ -19,10 +19,11 @@ from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.utils import INVALID
 import levanter.layers.attention as attention_module
-from levanter.layers import AttentionConfig, AttentionBackend, Attention
+from levanter.kernels.pallas import paged_attention as paged_kernel
+from levanter.layers.attention import AttentionConfig, AttentionBackend, Attention
 from levanter.layers.attention import AttentionMask, ragged_paged_attention, simple_attention_with_dropout
 from levanter.layers.kv_cache import KvPageCache
-from test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
 
 SLOT = hax.Axis("slot", 4)  # page size
 NUM_SLOTS = SLOT.size
@@ -147,6 +148,7 @@ def _rpa_tol() -> float:
     return 2e-2 if any(device.platform == "tpu" for device in devices) else 1e-4
 
 
+@pytest.mark.tpu
 def test_ragged_paged_attention_single_seq():
     with use_test_mesh():
         rng = jr.PRNGKey(0)
@@ -160,14 +162,12 @@ def test_ragged_paged_attention_single_seq():
     tol = _rpa_tol()
     for i in range(len(ragged.array)):
         assert_trees_all_close(ragged.array[i], ref.array[i], atol=tol, rtol=tol, custom_message=f" at index {i}")
-    # assert_trees_all_close(ragged.array[:-1], ref.array[:-1], atol=_rpa_tol(), rtol=_rpa_tol())
-    # assert_trees_all_close(ragged.array[-1], ref.array[-1], atol=_rpa_tol(), rtol=_rpa_tol())
-    # assert_trees_all_close(ragged.array, ref.array, atol=_rpa_tol(), rtol=_rpa_tol())
 
 
 jit_rpa = jax.jit(ragged_paged_attention)
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize("seq_lens", [[8], [8, 32, 16], [10, 37, 64], [9, 10, 34, 17]])
 def test_ragged_paged_attention_multi_seq(seq_lens):
     rng = jr.PRNGKey(hash(tuple(seq_lens)))
@@ -181,6 +181,7 @@ def test_ragged_paged_attention_multi_seq(seq_lens):
     assert_trees_all_close(ragged.array, ref.array, atol=tol, rtol=tol)
 
 
+@pytest.mark.tpu
 def test_ragged_paged_attention_incremental_single_seq():
     rng = jr.PRNGKey(2)
     seq_lens = [47]
@@ -195,6 +196,7 @@ def test_ragged_paged_attention_incremental_single_seq():
     assert_trees_all_close(ragged.array, ref.array, atol=tol, rtol=tol)
 
 
+@pytest.mark.tpu
 def test_ragged_paged_attention_incremental_multi_seq():
     rng = jr.PRNGKey(3)
     seq_lens = [10, 37, 64]
@@ -221,12 +223,13 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
         num_seqs_arr,
         *,
         sm_scale,
+        sliding_window,
         soft_cap,
     ):
-        del kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, soft_cap
+        del kv_pages_arr, kv_lens_arr, page_indices_arr, cu_q_lens_arr, num_seqs_arr, sliding_window, soft_cap
         return q_arr * jnp.asarray(sm_scale, dtype=q_arr.dtype)
 
-    monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", _fake_tpu_rpa)
+    monkeypatch.setattr(paged_kernel, "tpu_ragged_paged_attention", _fake_tpu_rpa)
 
     q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(jr.PRNGKey(123), [8, 4])
 
@@ -260,6 +263,7 @@ def _jit_paged_decode(attn, x, pos_ids, cache: KvPageCache, binfo: PageBatchInfo
     return attn.paged_decode(x, cache, binfo, pos_ids=pos_ids, key=jrandom.PRNGKey(2))
 
 
+@pytest.mark.tpu
 def test_attention_paged_decode_matches_full_ar():
     Pos = Axis("position", 4)
     Embed = Axis("embed", 8)
@@ -295,6 +299,7 @@ def test_attention_paged_decode_matches_full_ar():
     assert_trees_all_close(full_out.array, decoded_arr, atol=tol, rtol=tol)
 
 
+@pytest.mark.tpu
 def test_attention_paged_decode_matches_full_prefill():
     Pos = Axis("position", 16)
     Embed = Axis("embed", 16)
@@ -340,6 +345,7 @@ def test_attention_paged_decode_matches_full_prefill():
     assert_trees_all_close(full_out.array, decode_out.array, atol=tol, rtol=tol)
 
 
+@pytest.mark.tpu
 @pytest.mark.parametrize(
     ("prefix_size", "chunk_size", "seq_ids"),
     [
@@ -431,6 +437,7 @@ def test_attention_paged_decode_prefill_in_chunks(prefix_size, chunk_size, seq_i
         assert_trees_all_close(full_out.array, decoded_arr.array, atol=tol, rtol=tol)
 
 
+@pytest.mark.tpu
 def test_attention_paged_decode_ragged_fill_in_chunks():
     B = Axis("batch", 2)
     Pos = Axis("position", 8)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the iris.hooks.multigpu_main in-task GPU process supervisor (a user-invoked
+"""Tests for the iris.jax.multigpu_main in-task GPU process supervisor (a user-invoked
 runtime helper, not something the scheduler injects). None of this imports jax."""
 
 from __future__ import annotations
@@ -13,11 +13,18 @@ import sys
 import textwrap
 
 import pytest
+from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import ResourceSpec, gpu_device
-from iris.hooks import multigpu_main as multigpu
-from iris.hooks.multigpu import MultiGpuHook, build_multigpu_hook
-from iris.hooks.multigpu_main import main, run
-from rigging.timing import Duration
+from iris.jax import multigpu_main as multigpu
+from iris.jax.multigpu import MultiGpuHook, build_multigpu_hook
+from iris.jax.multigpu_main import main, run
+
+
+@pytest.fixture(autouse=True)
+def _reset_job_context():
+    set_job_info(None)
+    yield
+    set_job_info(None)
 
 
 def _py(code: str) -> list[str]:
@@ -47,7 +54,8 @@ def test_run_terminates_peers_when_one_fails() -> None:
 def test_run_sigkills_a_peer_that_ignores_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
     # Rank 0 fails; the peer traps SIGTERM and would sleep 30s. With escalation,
     # the supervisor SIGKILLs it after the grace period and still returns 3.
-    monkeypatch.setattr(multigpu, "_TERMINATE_GRACE", Duration.from_seconds(0.5))
+    monkeypatch.setenv("IRIS_TASK_ID", "/test/supervisor/0")
+    monkeypatch.setenv("IRIS_TERMINATION_GRACE_MS", "1000")
     code = (
         "import os,sys,signal,time\n"
         "if os.environ['IRIS_MULTIGPU_PROCESS_INDEX']=='0': sys.exit(3)\n"
@@ -80,35 +88,63 @@ def test_spawn_failure_kills_already_started_children(monkeypatch: pytest.Monkey
     assert started[0].returncode is not None and started[0].returncode < 0
 
 
-def test_external_sigterm_returns_128_plus_signum() -> None:
+@pytest.mark.parametrize("termination_phase", ["spawning", "running"])
+def test_external_sigterm_returns_128_plus_signum(termination_phase) -> None:
     # The supervisor itself is SIGTERMed (preemption/task termination). It
     # forwards the signal to the children, which die reporting negative signal
     # codes (-15). The supervisor must surface 128+SIGTERM (143) — the killed
     # task — not map a child's -15 to an arbitrary failure code (241).
     supervisor_src = textwrap.dedent(
         """
-        import sys
-        from iris.hooks.multigpu_main import run
+        import os, signal, sys
+        from iris.jax import multigpu_main
         child = [sys.executable, "-c", "print('READY', flush=True); import time; time.sleep(30)"]
-        sys.exit(run(nproc=2, devices_per_proc=1, child_argv=child))
         """
     )
+    if termination_phase == "spawning":
+        supervisor_src += textwrap.dedent(
+            """
+            spawn = multigpu_main.subprocess.Popen
+            def spawn_and_terminate(*args, **kwargs):
+                process = spawn(*args, **kwargs)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return process
+            multigpu_main.subprocess.Popen = spawn_and_terminate
+            """
+        )
+    supervisor_src += "sys.exit(multigpu_main.run(nproc=2, devices_per_proc=1, child_argv=child))\n"
     proc = subprocess.Popen(
         [sys.executable, "-c", supervisor_src], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
     assert proc.stdout is not None
-    # Signal only once both children are live, so the forwarded SIGTERM is what
-    # ends them (rather than racing their startup).
-    ready = 0
-    for line in proc.stdout:
-        if "READY" in line:
-            ready += 1
-            if ready == 2:
-                break
-    assert ready == 2, "children did not start"
-    proc.send_signal(signal.SIGTERM)
+    if termination_phase == "running":
+        # Child output can arrive before the supervisor finishes spawning both ranks.
+        ready = 0
+        for line in proc.stdout:
+            if "READY" in line:
+                ready += 1
+                if ready == 2:
+                    break
+        assert ready == 2, "children did not start"
+        proc.send_signal(signal.SIGTERM)
     proc.communicate(timeout=30)
     assert proc.returncode == 128 + signal.SIGTERM
+
+
+def test_child_streams_stay_separate_and_rank_tagged(capfd: pytest.CaptureFixture[str]) -> None:
+    # Each stream keeps its identity so iris still classifies an unprefixed
+    # stderr line as an error rather than as INFO on stdout.
+    code = "import sys; print('hello out'); print('hello err', file=sys.stderr)"
+    assert run(nproc=2, devices_per_proc=1, child_argv=_py(code)) == 0
+    captured = capfd.readouterr()
+    assert sorted(line for line in captured.out.splitlines() if "hello" in line) == [
+        "[rank0] hello out",
+        "[rank1] hello out",
+    ]
+    assert sorted(line for line in captured.err.splitlines() if "hello" in line) == [
+        "[rank0] hello err",
+        "[rank1] hello err",
+    ]
 
 
 def test_run_rejects_empty_command() -> None:

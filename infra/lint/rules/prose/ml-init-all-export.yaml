@@ -1,0 +1,22 @@
+schema_version: 1
+code: ml-init-all-export
+lane: prose
+title: '`__all__` listing every public symbol in `__init__.py`'
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** `__all__` is redundant when the module already exports the
+  names via `from .x import Foo`, and it drifts (one symbol added, `__all__`
+  not updated).
+
+  **When allowed:** Modules that genuinely re-export a subset and want
+  `from foo import *` to be a narrow set — rare.
+
+  **Bad example:**
+  ```python
+  # __init__.py
+  from .foo import Foo
+  from .bar import Bar
+  __all__ = ["Foo", "Bar"]   # duplicates the imports above; drop it.
+  ```
+
+  ## Documentation

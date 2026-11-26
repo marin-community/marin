@@ -12,6 +12,9 @@ import dataclasses
 import importlib
 import json
 import logging
+import os
+import signal
+import tempfile
 import uuid
 from io import StringIO
 from pathlib import Path
@@ -20,29 +23,26 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
 from jax._src import config as jax_config
-from jax.sharding import use_abstract_mesh
-from levanter.checkpoint import CheckpointerConfig
+from jax.sharding import AxisType, Mesh, NamedSharding, use_abstract_mesh
+from jax.sharding import PartitionSpec as P
+from levanter.checkpoint import CheckpointerConfig, load_checkpoint, save_checkpoint
 from levanter.data.dataset import ListAsyncDataset
-from levanter.data.text.datasets import DatasetComponent, DirectDatasetComponent, LmDataConfig
+from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
-from levanter.grug.sharding import _compact_grug_mesh_shape
+from levanter.grug.sharding import compact_grug_mesh, compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
+from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
-from marin.execution.artifact import ArtifactRecord, write_record
-from marin.execution.lazy import materialized_config
-from marin.processing.tokenize.tokenize import TokenizedCache
 
-from experiments.ferries import canary_ferry
-from experiments.llama import llama3_tokenizer
-
-_TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
+from experiments.grug.preemption import GracefulPreemption
 
 
 def _discover_grug_variants_with_file(filename: str) -> list[str]:
@@ -62,18 +62,31 @@ def _discover_grug_variants_with_file(filename: str) -> list[str]:
     return variants
 
 
+def test_grug_preemption_records_sigterm_until_completed_step():
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    preemption = GracefulPreemption()
+    preemption.install()
+    try:
+        assert not preemption.should_stop(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert preemption.should_stop(2)
+    finally:
+        preemption.restore()
+    assert signal.getsignal(signal.SIGTERM) == previous_handler
+
+
 def _variant_module_name(variant: str, module: str) -> str:
     return f"experiments.grug.{variant}.{module}"
 
 
 def test_compact_grug_mesh_shape_allows_expert_axis_to_span_processes():
-    assert _compact_grug_mesh_shape(
+    assert compact_grug_mesh_shape(
         process_count=32,
         local_device_count=4,
         expert_axis_size=16,
         replica_axis_size=4,
         model_axis_size=1,
-    ) == (4, 2, 16, 1)
+    ) == (4, 2, 16, 1, 1)
 
 
 def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
@@ -83,13 +96,138 @@ def test_compact_grug_mesh_shape_keeps_expert_axis_at_size_one():
     size 1 instead of dropping it so size-1 cases (e.g. the GPU canary) don't fall through
     a separate "axis absent" code path. See #6252 for the bug this contract prevents.
     """
-    assert _compact_grug_mesh_shape(
+    assert compact_grug_mesh_shape(
         process_count=1,
         local_device_count=4,
         expert_axis_size=1,
         replica_axis_size=1,
         model_axis_size=1,
-    ) == (1, 4, 1, 1)
+    ) == (1, 4, 1, 1, 1)
+
+
+@pytest.mark.multidevice
+def test_compact_grug_mesh_axis_sizes():
+    """Distinct context and expert widths detect swapped axis positions."""
+    with use_test_devices(8):
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = jax.devices()
+        device_count = len(devices)
+        if device_count % 8:
+            pytest.skip("compact Grug topology requires a device count divisible by eight")
+        mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=2, expert_axis_size=4)
+        assert tuple(mesh.shape.items()) == (
+            ("replica_dcn", 1),
+            ("data", device_count // 8),
+            ("expert", 4),
+            ("context", 2),
+            ("model", 1),
+        ), mesh.shape
+
+
+_CONTEXT_BEFORE_EXPERT_AXES = ("replica_dcn", "data", "context", "expert", "model")
+
+
+@pytest.mark.multidevice
+@pytest.mark.parametrize(("replica", "expert"), [(1, 8), (2, 4), (1, 2), (2, 1)])
+def test_compact_grug_mesh_keeps_cp1_device_assignment(replica, expert):
+    """At context=1 the expert-before-context mesh places every device where the old order did."""
+    with use_test_devices(8):
+        if jax.process_count() != 1 or len(jax.devices()) != 8:
+            pytest.skip("the layout comparison needs exactly eight devices in one process")
+        mesh = compact_grug_mesh(replica_axis_size=replica, expert_axis_size=expert, context_axis_size=1)
+        old_devices = np.asarray(jax.devices(), dtype=object).reshape(replica, 8 // (replica * expert), 1, expert, 1)
+
+        def coordinates(devices, axis_names):
+            return {
+                device.id: {name: int(index) for name, index in zip(axis_names, position, strict=True)}
+                for position, device in np.ndenumerate(devices)
+            }
+
+        assert coordinates(mesh.devices, mesh.axis_names) == coordinates(old_devices, _CONTEXT_BEFORE_EXPERT_AXES)
+
+
+@pytest.mark.multidevice
+def test_legacy_checkpoint_restore_with_unit_context_axis():
+    """Adding a size-one context axis preserves checkpoint values and placement."""
+    with use_test_devices(4) as selected_devices:
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = np.asarray(selected_devices, dtype=object)
+        device_count = len(devices)
+        legacy_mesh = Mesh(
+            devices.reshape(1, device_count // 2, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        mesh = Mesh(
+            devices.reshape(1, device_count // 2, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+
+        spec = P(("replica_dcn", "data", "expert"), None)
+        shape = (device_count, 4)
+        legacy_sharding = NamedSharding(legacy_mesh, spec)
+        sharding = NamedSharding(mesh, spec)
+        assert sharding.devices_indices_map(shape) == legacy_sharding.devices_indices_map(shape)
+
+        written = jax.device_put(jnp.arange(np.prod(shape), dtype=jnp.float32).reshape(shape), legacy_sharding)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with jax.set_mesh(legacy_mesh):
+                save_checkpoint({"params": written}, step=6000, checkpoint_path=tmpdir)
+            with jax.set_mesh(mesh):
+                restored = load_checkpoint(
+                    {"params": jax.ShapeDtypeStruct(shape, jnp.float32, sharding=sharding)},
+                    checkpoint_path=tmpdir,
+                    mesh=mesh,
+                )["params"]
+
+        assert restored.sharding == sharding, restored.sharding
+        np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
+
+
+@pytest.mark.multidevice
+def test_legacy_checkpoint_restore_with_context_sharding():
+    """A legacy expert checkpoint restores with its target context partitioning."""
+    with use_test_devices(4) as selected_devices:
+        if jax.process_count() != 1:
+            pytest.skip("checkpoint topology cases require a single process")
+        devices = np.asarray(selected_devices, dtype=object)
+        device_count = len(devices)
+        legacy_mesh = Mesh(
+            devices.reshape(1, device_count // 2, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        mesh = Mesh(
+            devices.reshape(1, device_count // 4, 2, 2, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+
+        # An expert stack [experts, fan_in, fan_out]: four shards on the target mesh, two on the
+        # mesh that wrote it.
+        shape = (4, 3, 2)
+        written = jax.device_put(
+            jnp.arange(np.prod(shape), dtype=jnp.float32).reshape(shape),
+            NamedSharding(legacy_mesh, P("expert", None, None)),
+        )
+        sharding = NamedSharding(mesh, P(("expert", "context"), None, None))
+        assert len({index for index in sharding.devices_indices_map(shape).values()}) == 4
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with jax.set_mesh(legacy_mesh):
+                save_checkpoint({"params": written}, step=6000, checkpoint_path=tmpdir)
+            with jax.set_mesh(mesh):
+                restored = load_checkpoint(
+                    {"params": jax.ShapeDtypeStruct(shape, jnp.float32, sharding=sharding)},
+                    checkpoint_path=tmpdir,
+                    mesh=mesh,
+                )["params"]
+
+        assert restored.sharding == sharding, restored.sharding
+        np.testing.assert_array_equal(np.asarray(restored), np.asarray(written))
 
 
 def _variant_has_noverify(variant_dir: Path) -> bool:
@@ -138,93 +276,6 @@ def _small_model_config(model_config_cls, *, vocab_size: int, seq_len: int):
     return model_config_cls(**kwargs)
 
 
-def test_grug_moe_layer_masks_preserve_thd_segment_metadata():
-    model_module = importlib.import_module("experiments.grug.moe.model")
-    mask = GrugAttentionMask.causal().with_segment_ids(
-        jnp.array([[0, 0, 1, 1, -1, -1]], dtype=jnp.int32),
-        max_segments=3,
-    )
-
-    short_mask, long_mask = model_module._layer_attention_masks(mask, sliding_window=12)
-
-    assert short_mask.thd_segment_metadata is mask.thd_segment_metadata
-    assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
-    assert short_mask.segment_ids is mask.segment_ids
-    assert long_mask.segment_ids is mask.segment_ids
-
-
-def test_grug_moe_xsa_forward_lowers_with_gpu_fa4_thd_gqa_sharding():
-    if jax.default_backend() != "gpu":
-        pytest.skip("gpu_fa4_thd requires the JAX GPU backend")
-
-    model_module = importlib.import_module("experiments.grug.moe.model")
-    mesh, _ = model_module.debug_mesh_and_token_pspec(num_devices=8)
-    cfg = model_module.GrugModelConfig(
-        vocab_size=128,
-        hidden_dim=512,
-        intermediate_dim=64,
-        shared_expert_intermediate_dim=64,
-        num_layers=1,
-        num_heads=4,
-        num_kv_heads=1,
-        max_seq_len=8,
-        sliding_window=8,
-        num_experts=4,
-        num_experts_per_token=2,
-        attention_implementation="gpu_fa4_thd",
-    )
-
-    def forward():
-        attn = model_module.CausalSelfAttention.init(cfg, key=jax.random.PRNGKey(0))
-        x = jax.sharding.reshard(
-            jnp.zeros((8, 16, cfg.hidden_dim), dtype=jnp.bfloat16),
-            jax.sharding.PartitionSpec(("replica_dcn", "data", "expert"), None, None),
-        )
-        segment_ids = jnp.zeros((8, 16), dtype=jnp.int32)
-        mask = GrugAttentionMask.causal().with_segment_ids(segment_ids, max_segments=1)
-        return attn(x, mask)
-
-    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
-        out_shape = eqx.filter_eval_shape(forward)
-
-    assert out_shape.shape == (8, 16, cfg.hidden_dim)
-
-
-def _seed_cache_records(step, prefix: str) -> None:
-    """Write the minimal record a built ``TokenizedCache`` dep would leave, so the run-time
-    ``mixture`` can read each dataset's tokenizer/format offline (mirrors a real run, where the
-    datasets materialize first as build dependencies)."""
-    for dep in step.deps:
-        if dep.artifact_type is TokenizedCache:
-            write_record(
-                ArtifactRecord(
-                    name=dep.name,
-                    version=dep.version,
-                    output_path=dep.path(prefix),
-                    result_type=_TOKENIZED_CACHE,
-                    config={"tokenizer": llama3_tokenizer, "format": {"text_key": "text"}},
-                )
-            )
-
-
-def test_coreweave_thd_canary_uses_fixed_shape_training_segments(monkeypatch, tmp_path):
-    monkeypatch.setenv("CANARY_ACCELERATOR", "gpu")
-    monkeypatch.setenv("CANARY_ATTENTION_IMPLEMENTATION", "gpu_fa4_thd")
-    monkeypatch.setenv("CANARY_TRACKER", "json_logger")
-    monkeypatch.setenv("RUN_ID", "test-thd")
-    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-
-    # build() reads the env at call time, so set it above before resolving the config.
-    step = canary_ferry.build()
-    _seed_cache_records(step, str(tmp_path))
-    data = materialized_config(step, str(tmp_path)).data
-
-    components = list(data.components.values())
-    assert components
-    assert all(isinstance(component, DatasetComponent) for component in components)
-    assert {component.pack for component in components} == {1}
-
-
 @pytest.mark.parametrize(
     "variant",
     _discover_grug_variants_with_model_and_train(),
@@ -257,7 +308,7 @@ def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
             loss_weight=jax.sharding.reshard(batch.loss_weight, token_pspec),
         )
         state = initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.PRNGKey(0), ema_beta=None)
-        return train_step(state, sharded_batch, compute_watch=False)
+        return train_step(state, sharded_batch)
 
     with _reset_abstract_mesh(), use_abstract_mesh(mesh):
         out_state_shape, out_metrics_shape, out_watch_shape = eqx.filter_eval_shape(one_step)
@@ -310,7 +361,7 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     always have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1
+    ``(replica_dcn, data, expert, context, model)`` contract the "expert" axis is kept at length 1
     instead of being dropped, so the data-loader pspec can name it unconditionally.
     """
     train_module = importlib.import_module("experiments.grug.moe.train")
@@ -335,12 +386,51 @@ def test_grug_moe_data_loaders_build_against_single_expert_mesh():
     assert loader is not None
 
 
+@pytest.mark.asyncio
+async def test_grug_moe_tagged_evaluator_shuffles_by_default():
+    train_module = importlib.import_module("experiments.grug.moe.train")
+    compact_grug_mesh = importlib.import_module("levanter.grug.sharding").compact_grug_mesh
+
+    examples = [
+        GrugLmExample(
+            tokens=jnp.array([i, 0, 0, 0], dtype=jnp.int32),
+            loss_weight=jnp.ones((4,), dtype=jnp.float32),
+            attn_mask=GrugAttentionMask.causal(),
+        )
+        for i in range(16)
+    ]
+    data_config = LmDataConfig(
+        tokenizer="passthrough",
+        vocab_size=256,
+        components={"eval": DirectDatasetComponent(datasets={"validation": ListAsyncDataset(examples)})},
+    )
+    eval_config = train_module.GrugEvalConfig(
+        eval_batch_size=max(1, len(jax.devices())),
+        compute_bpb=False,
+    )
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)
+
+    evaluator = train_module.build_tagged_evaluator(
+        data_config=data_config,
+        max_seq_len=4,
+        mesh=mesh,
+        eval_cfg=eval_config,
+    )
+    assert evaluator is not None
+
+    loaded = await evaluator.loader.data_store.get_batch(list(range(len(examples))))
+    loaded_ids = [int(example.tokens.array[0].item()) for example, _ in loaded]
+
+    assert loaded_ids != list(range(len(examples)))
+    assert sorted(loaded_ids) == list(range(len(examples)))
+
+
 def test_grug_moe_model_init_against_single_expert_mesh():
     """Regression: MoEMLP.init must build when the compact mesh's expert axis has size 1.
 
     See https://github.com/marin-community/marin/issues/6252 — canary configurations
     have expert_axis_size == 1. Under the standardized
-    ``(replica_dcn, data, expert, model)`` contract the "expert" axis is kept at length 1,
+    ``(replica_dcn, data, expert, context, model)`` contract the "expert" axis is kept at length 1,
     so MoEMLP.init reads ``mesh.shape["expert"] == 1`` rather than hitting an
     "axis absent" branch.
     """
@@ -396,7 +486,8 @@ def test_grug_variant_initial_state_only_stores_ema_when_enabled(variant: str):
     assert with_ema_state_shape.ema_params is not None
 
 
-def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
+@pytest.mark.parametrize("preempt", [False, True])
+def test_grug_base_run_metrics_and_preemption_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preempt: bool):
     train_module = importlib.import_module("experiments.grug.base.train")
     model_module = importlib.import_module("experiments.grug.base.model")
 
@@ -458,9 +549,25 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
                 compute_bpb=False,
             ),
         )
-        train_module.run_grug(run_cfg)
+        if preempt:
+            original_should_stop = GracefulPreemption.should_stop
+
+            def request_preemption(self: GracefulPreemption, completed_step: int) -> bool:
+                self._request_stop(signal.SIGTERM, None)
+                return original_should_stop(self, completed_step)
+
+            monkeypatch.setattr(GracefulPreemption, "should_stop", request_preemption)
+            with pytest.raises(SystemExit) as exited:
+                train_module.run_grug(run_cfg)
+            assert exited.value.code == 128 + signal.SIGTERM
+        else:
+            train_module.run_grug(run_cfg)
     finally:
         logger.removeHandler(handler)
+
+    if preempt:
+        assert list((variant_tmp / "checkpoints").rglob("metadata.json"))
+        return
 
     records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
     finish_records = [record for record in records if record.get("event") == "finish"]

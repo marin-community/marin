@@ -1,0 +1,273 @@
+models:
+- model: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
+  benchmarks:
+    financebench:
+      tracker_score: 0.62
+      source: s3://marin-us-east-02a/marin/evals/20261003-123111-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02-financebench-c109/results
+    olympiadbench:
+      tracker_score: 0.297
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02.json
+- model: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom
+  benchmarks:
+    financebench:
+      tracker_score: 0.6
+      source: s3://marin-us-east-02a/marin/evals/20261003-135836-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom-financebench-5af6/results
+    olympiadbench:
+      tracker_score: 0.177
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-dr-doom.json
+- model: Qwen/Qwen3.6-35B-A3B
+  benchmarks:
+    financebench:
+      tracker_score: 0.7
+      source: s3://marin-us-east-02a/marin/evals/20260927-132056-Qwen-Qwen3.6-35B-A3B-financebench-d419/results
+    olympiadbench:
+      tracker_score: 0.32
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/Qwen--Qwen3.6-35B-A3B.json
+- model: Qwen/Qwen3-Coder-30B-A3B-Instruct
+  benchmarks:
+    financebench:
+      tracker_score: 0.68
+      source: s3://marin-us-east-02a/marin/evals/20260927-132258-Qwen-Qwen3-Coder-30B-A3B-Instruct-financebench-8da0/results
+    olympiadbench:
+      tracker_score: 0.483
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/Qwen--Qwen3-Coder-30B-A3B-Instruct.json
+- model: Qwen/Qwen3-Next-80B-A3B-Instruct
+  benchmarks:
+    financebench:
+      tracker_score: 0.62
+      source: s3://marin-us-east-02a/marin/evals/20260927-132440-Qwen-Qwen3-Next-80B-A3B-Instruct-financebench-651f/results
+    olympiadbench:
+      tracker_score: 0.56
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/Qwen--Qwen3-Next-80B-A3B-Instruct.json
+- model: inclusionAI/Ling-lite-1.5
+  benchmarks:
+    financebench:
+      tracker_score: 0.48
+      source: s3://marin-us-east-02a/marin/evals/20260927-132622-inclusionAI-Ling-lite-1.5-financebench-7ab3/results
+    olympiadbench:
+      tracker_score: 0.433
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/inclusionAI--Ling-lite-1.5.json
+- model: google/gemma-4-26B-A4B-it
+  benchmarks:
+    financebench:
+      tracker_score: 0.66
+      source: s3://marin-us-east-02a/marin/evals/20260928-103844-google-gemma-4-26B-A4B-it-financebench-ce76/results
+    olympiadbench:
+      tracker_score: 0.597
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/google--gemma-4-26B-A4B-it.json
+- model: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16
+  benchmarks:
+    financebench:
+      tracker_score: 0.553
+      source: s3://marin-us-east-02a/marin/evals/20260927-142008-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-financebench-14a0/results
+    olympiadbench:
+      tracker_score: 0.237
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16.json
+- model: openai/gpt-oss-20b
+  benchmarks:
+    financebench:
+      tracker_score: 0.68
+      source: s3://marin-us-east-02a/marin/evals/20260927-182339-openai-gpt-oss-20b-financebench-083c/results
+    olympiadbench:
+      tracker_score: 0.483
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/openai--gpt-oss-20b.json
+- model: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+  benchmarks:
+    financebench:
+      tracker_score: 0.56
+      source: s3://marin-us-east-02a/marin/evals/20260927-210818-nvidia-NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-financebench-370c/results
+    olympiadbench:
+      tracker_score: 0.4
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.json
+- model: moonshotai/Kimi-Linear-48B-A3B-Instruct
+  benchmarks:
+    financebench:
+      tracker_score: 0.52
+      source: s3://marin-us-east-02a/marin/evals/20260928-212034-moonshotai-Kimi-Linear-48B-A3B-Instruct-financebench-9ee2/results
+    olympiadbench:
+      tracker_score: 0.327
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/moonshotai--Kimi-Linear-48B-A3B-Instruct.json
+- model: arcee-ai/Trinity-Mini
+  benchmarks:
+    financebench:
+      tracker_score: 0.64
+      source: s3://marin-us-east-02a/marin/evals/20260928-205813-arcee-ai-Trinity-Mini-financebench-edee/results
+    olympiadbench:
+      tracker_score: 0.193
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/arcee-ai--Trinity-Mini.json
+- model: open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92
+  benchmarks:
+    financebench:
+      tracker_score: 0.66
+      source: s3://marin-us-east-02a/marin/evals/20260927-131730-open-athena-Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92-financebench-2b10/results
+    olympiadbench:
+      tracker_score: 0.427
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/open-athena--Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92.json
+- model: open-athena/Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38
+  benchmarks:
+    financebench:
+      tracker_score: 0.66
+      source: s3://marin-us-east-02a/marin/evals/20260927-131658-open-athena-Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38-financebench-8102/results
+    olympiadbench:
+      tracker_score: 0.38
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/open-athena--Snowball-67B-A2B-5.7T-Mixed-RLVR-Step38.json
+- model: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21
+  benchmarks:
+    financebench:
+      tracker_score: 0.51
+      source: s3://marin-us-east-02a/marin/evals/20260927-131914-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.09.21-financebench-fc0c/results
+    olympiadbench:
+      tracker_score: 0.187
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21.json
+- model: laion/snowball-67b-a2b-relay-sft-allkimi-step1203
+  benchmarks:
+    financebench:
+      tracker_score: 0.58
+      source: s3://marin-us-east-02a/marin/evals/20261002-002707-laion-snowball-67b-a2b-relay-sft-allkimi-step1203-financebench-8073/results
+    olympiadbench:
+      tracker_score: 0.387
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/laion--snowball-67b-a2b-relay-sft-allkimi-step1203.json
+- model: laion/snowball-67b-a2b-relay-sft-acont-step999
+  benchmarks:
+    financebench:
+      tracker_score: 0.58
+      source: s3://marin-us-east-02a/marin/evals/20261001-092347-laion-snowball-67b-a2b-relay-sft-acont-step999-financebench-a61d/results
+    olympiadbench:
+      tracker_score: 0.437
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/laion--snowball-67b-a2b-relay-sft-acont-step999.json
+- model: IFM/K2-Horizon-MoVA-36B-A4B
+  benchmarks:
+    financebench:
+      tracker_score: 0.72
+      source: s3://marin-us-east-02a/marin/evals/20261004-154941-K2-Horizon-campaign-financebench-2eb6/results
+    olympiadbench:
+      tracker_score: 0.403
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/IFM--K2-Horizon-MoVA-36B-A4B.json
+- model: zai-org/GLM-4.7-Flash
+  benchmarks:
+    financebench:
+      tracker_score: 0.46
+      source: s3://marin-us-east-02a/marin/evals/20261005-155409-zai-org-GLM-4.7-Flash-financebench-c58f/results
+    olympiadbench:
+      tracker_score: 0.03
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/zai-org--GLM-4.7-Flash.json
+- model: Aleph-Alpha/Kolibri-1
+  benchmarks:
+    financebench:
+      tracker_score: 0.56
+      source: s3://marin-us-east-02a/marin/evals/20261003-210313-Aleph-Alpha-Kolibri-1-financebench-39b3/results
+    olympiadbench:
+      tracker_score: 0.223
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/Aleph-Alpha--Kolibri-1.json
+- model: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04
+  benchmarks:
+    financebench:
+      tracker_score: 0.62
+      source: s3://marin-us-east-02a/marin/evals/20261004-165735-open-athena-Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04-financebench-1467/results
+    olympiadbench:
+      tracker_score: 0.4
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-fixes-20261009-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-Antidoom-RLVR1-Reference-KL-Step20-2026.10.04.json
+- model: open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10
+  benchmarks:
+    financebench:
+      tracker_score: 0.54
+      source: s3://marin-us-east-02a/marin/evals/20261011-112757-open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10-financebench-ffdb/results
+    olympiadbench:
+      tracker_score: 0.323
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-new-candidates-20261012-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10.json
+- model: open-athena/Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09
+  benchmarks:
+    financebench:
+      tracker_score: 0.7
+      source: s3://marin-us-east-02a/marin/evals/20261011-102233-open-athena-Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09-financebench-6326/results
+    olympiadbench:
+      tracker_score: 0.417
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-new-candidates-20261012-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-Merge-NUPA-BFCL-Shared100-2026.10.09.json
+- model: open-athena/Grug-67B-A2B-BFCL-Recovery
+  benchmarks:
+    financebench:
+      tracker_score: 0.62
+      source: s3://marin-us-east-02a/marin/evals/20261011-141413-open-athena-Grug-67B-A2B-BFCL-Recovery-financebench-bdf0/results
+    olympiadbench:
+      tracker_score: 0.327
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-new-candidates-20261012-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-BFCL-Recovery.json
+- model: open-athena/Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12
+  benchmarks:
+    financebench:
+      tracker_score: 0.56
+      source: s3://marin-us-east-02a/marin/evals/20261012-112758-open-athena-Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12-financebench-3ceb/results
+    olympiadbench:
+      tracker_score: 0.303
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-new-candidates-20261012-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12.json
+- model: open-athena/Grug-67B-A2B-BFCL-Protocol-FTPO
+  benchmarks:
+    financebench:
+      tracker_score: 0.55
+      source: s3://marin-us-east-02a/marin/evals/20261012-123117-open-athena-Grug-67B-A2B-BFCL-Protocol-FTPO-financebench-b856/results
+    olympiadbench:
+      tracker_score: 0.337
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-new-candidates-20261012-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-BFCL-Protocol-FTPO.json
+- model: open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05
+  benchmarks:
+    financebench:
+      tracker_score: 0.54
+      source: s3://marin-us-east-02a/marin/evals/20261012-212427-open-athena-Grug-67B-A2B-Datakit-SFT-262K-2026.10.05-financebench-6730/results
+    olympiadbench:
+      tracker_score: 0.223
+      source: s3://marin-us-east-02a/marin/evals/ablations/shared-grader-datakit-20261005-20261013-958cdb80/results/olympiadbench/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.10.05.json
+- model: open-athena/Grug-67B-A2B-Continuation-Tool-Retention
+  benchmarks:
+    financebench:
+      tracker_score: 0.62
+      source: s3://marin-us-east-02a/marin/evals/20261013-151613-open-athena-Grug-67B-A2B-Continuation-Tool-Retention-financebench-6a8a/results
+    olympiadbench:
+      tracker_score: 0.333
+      source: s3://marin-us-east-02a/marin/evals/20261013-152009-open-athena-Grug-67B-A2B-Continuation-Tool-Retention-olympiadbench-f5bd/results
+- model: open-athena/Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13
+  benchmarks:
+    financebench:
+      tracker_score: 0.48
+      source: s3://marin-us-east-02a/marin/evals/20261014-005646-open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13-financebench-8c76/results
+    olympiadbench:
+      tracker_score: 0.3
+      source: s3://marin-us-east-02a/marin/evals/20261014-005646-open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-06-2026.10.13-olympiadbench-8c79/results
+- model: marianna13/Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465
+  benchmarks:
+    financebench:
+      tracker_score: 0.62
+      source: s3://marin-us-east-02a/marin/evals/20261014-110329-marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465-financebench-4761/results
+    olympiadbench:
+      tracker_score: 0.25
+      source: s3://marin-us-east-02a/marin/evals/20261014-110329-marianna13-Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465-olympiadbench-ac2f/results
+- model: open-athena/Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14
+  benchmarks:
+    financebench:
+      tracker_score: 0.56
+      source: s3://marin-us-east-02a/marin/evals/20261015-021212-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14-financebench-f9ff/results
+    olympiadbench:
+      tracker_score: 0.34
+      source: s3://marin-us-east-02a/marin/evals/20261015-021212-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-08-2026.10.14-olympiadbench-6e94/results
+- model: open-athena/Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14
+  benchmarks:
+    financebench:
+      tracker_score: 0.58
+      source: s3://marin-us-east-02a/marin/evals/20261015-095212-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14-financebench-f1f8/results
+    olympiadbench:
+      tracker_score: 0.313
+      source: s3://marin-us-east-02a/marin/evals/20261015-091512-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14-olympiadbench-4726/results
+- model: open-athena/Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14
+  benchmarks:
+    financebench:
+      tracker_score: 0.48
+      source: s3://marin-us-east-02a/marin/evals/20261015-113550-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14-financebench-8af9/results
+    olympiadbench:
+      tracker_score: 0.33
+      source: s3://marin-us-east-02a/marin/evals/20261015-060436-open-athena-Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-06-2026.10.14-olympiadbench-942c/results
+- model: open-athena/Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14
+  benchmarks:
+    financebench:
+      tracker_score: 0.5
+      source: s3://marin-us-east-02a/marin/evals/20261015-035838-open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14-financebench-0683/results
+    olympiadbench:
+      tracker_score: 0.277
+      source: s3://marin-us-east-02a/marin/evals/20261015-061057-open-athena-Grug-67B-A2B-Merge-Campaign4-Serial-Transfer-06-2026.10.14-olympiadbench-9905/results

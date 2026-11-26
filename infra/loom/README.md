@@ -1,58 +1,68 @@
 # Loom production deployment
 
 The `marin-loom` Pulumi stack manages `loom.oa.dev`: its GCE host with a
-persistent root disk, Artifact Registry repository, Secret Manager access,
-Cloudflare DNS, and scheduled root-disk snapshots. The runtime is built from
-the operator's local Loom worktree and runs as a Docker Compose application on
-the GCE host.
+retained Hyperdisk root disk, Artifact Registry repository, Secret Manager
+access, and Cloudflare DNS. The production host is an on-demand C4D VM with an
+AMD Turin CPU. It uses NVMe for its boot disk and gVNIC for networking, as
+required by the machine family. Hyperdisk performance is pinned to the included
+3,000 IOPS and 140 MB/s baseline. The operator's workstation builds the release
+image, and the GCE host runs it as a Docker Compose application.
 
 ## Prerequisites
 
-`Pulumi.yaml` selects the shared Marin state backend. Select the production
-stack before deploying:
-
-```sh
-pulumi stack select marin-loom --cwd /path/to/marin/infra/loom
-```
+`Pulumi.yaml` selects the shared Marin state backend. The deploy command selects
+the production stack explicitly.
 
 The `loom-oa-dev` GitHub App must be installed on the repositories Loom serves.
 Its private key, webhook secret, and client secret belong only in the
 `LOOM_DOTENV` Secret Manager secret. The App callback and webhook URL use
-`https://loom.oa.dev`.
+`https://loom.oa.dev`. Its organization permissions must grant **Members:
+Read-only** so Loom can verify private `Open-Athena` membership during sign-in
+and hourly revalidation.
 
 Authenticate Pulumi's providers and the local Docker client:
 
 ```sh
-export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
-  --project=hai-gcp-models --secret=cloudflare-oa-dns-token)"
 gcloud auth configure-docker us-central1-docker.pkg.dev
 ```
 
-The local Docker builder must support `linux/amd64`.
+The deploy command loads the Cloudflare provider token from Secret Manager. The
+local Docker builder must support `linux/amd64`.
+
+Activation restarts the host's startup script over SSH. Create the Compute
+Engine key pair once so the key is present and propagated before deploying;
+activation fails immediately when `~/.ssh/google_compute_engine` is missing
+rather than stalling while `gcloud` generates and propagates a new key.
+
+```sh
+gcloud compute ssh loom --zone=us-central1-a --project=hai-gcp-models
+```
 
 ## Deploy
 
 By default, Pulumi resolves the HEAD of Loom's default branch to its full commit
-SHA and uses that immutable Git context as the image input. When the resolved
-commit changes, preview reports an image update. `pulumi up` builds and pushes
-the changed image, places the provider-produced digest in VM metadata, and waits
-for `https://loom.oa.dev/api/ready` after activation.
+SHA and uses that immutable Git context as the image input. The build pulls
+current base images, so every update rebuilds the image, even for an unchanged
+commit. When preview skips that build, it shows the VM image as unknown.
+`pulumi up` builds and pushes the image, places the provider-produced digest in
+VM metadata, and waits for `https://loom.oa.dev/api/ready` after activation.
+The image entrypoint sets the Claude and Codex CLI and ACP adapter versions
+and selects the Codex executable for ACP sessions.
 
 ```sh
-pulumi preview --cwd /path/to/marin/infra/loom --stack marin-loom --diff
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom
-curl -fsS https://loom.oa.dev/api/ready
+cd /path/to/marin
+uv run --all-packages --extra deploy marin-deploy loom rollout
 ```
 
 Set `buildContext` to a Loom worktree to deploy local changes instead. The local
 build includes tracked and untracked files allowed by that worktree's
-`.dockerignore`; review its diff before deployment. Pulumi saves `-c` values in
-the stack configuration, so remove the override to return to the remote HEAD.
+`.dockerignore`; review its diff before deployment. The deploy command applies the
+override through a temporary stack config, so later deployments return to the remote
+HEAD automatically.
 
 ```sh
-pulumi up --cwd /path/to/marin/infra/loom --stack marin-loom \
-  -c buildContext=/path/to/loom
-pulumi config rm --cwd /path/to/marin/infra/loom --stack marin-loom buildContext
+uv run --all-packages --extra deploy marin-deploy loom rollout \
+  --config buildContext=/path/to/loom
 ```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE
@@ -60,6 +70,13 @@ startup unit stores Docker state on the persistent root disk, reads one numbered
 `LOOM_DOTENV` version, pulls the digest-pinned image, runs
 `docker compose up -d`, applies the configured Loom deployment policy, and
 checks readiness. It does not clone a repository or build images on the VM.
+
+The host applies the deployment manifest with a request from inside the Loom
+container to its loopback listener. Loom accepts that local request only for
+`deployment.reconcile`, even when shared-deployment mode disables general
+loopback trust. Caddy marks every forwarded request with `X-Loom-Forwarded`,
+and session containers reach Loom through Docker networking rather than that
+loopback listener. The request uses no deployment token or secret version.
 
 ## Update secrets
 
@@ -77,22 +94,189 @@ pulumi config set --cwd /path/to/marin/infra/loom --stack marin-loom \
 Delete the local payload after upload. The startup script never reads `latest`,
 so uploading another secret version does not change the running service.
 
+The deployment's `browser.allowed_origins` permits credentialed agent-panel
+connections from `https://marina.oa.dev` and `https://applets.marina.oa.dev`,
+Marina's authenticated private applet origin. Public applets on
+`https://public.applets.marina.oa.dev` are excluded. Allowed origins must still
+authenticate with Loom, and profile permissions still apply.
+
 ## Automation identities
+
+Repository-owned task procedures live in `procedures/`:
+
+- [Lint reporting](procedures/lint-review.md), used by the `agentic-lint` profile.
+- [Canary triage](procedures/triage-canary.md), named by the canary failure action.
+- [Docs/code parity](procedures/scrub-docs-code-parity.md),
+  [experiment summaries](procedures/scrub-experiment-issue-tldrs.md), and
+  [self-improvement](procedures/scrub-reflection-self-improvement.md), for
+  explicitly assigned work. These scrubs are manual procedures; recurring
+  execution requires a Loom watch that names the procedure path. They retain
+  the harness result footer but register no schedule.
+
+The `pr-review` and `pr-holistic-review` profiles both use `review-pr`, selecting
+its correctness and holistic reporting contracts respectively. Profile
+permissions and automation behavior remain specific to each pass.
 
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
-activation. The `grafana-alerts` federation mapping authorizes the Google
+activation. The deployment setting
+`auth.github_organizations: Open-Athena:188075292` binds admission to the
+organization's immutable GitHub id. An active member receives the `user` role
+at GitHub sign-in and a one-hour authorization lease. Loom revalidates the
+membership before the lease expires with a short-lived GitHub App installation
+token; it does not retain the user's OAuth token.
+
+Only an active result renews access. Removal from the organization, a GitHub
+outage, a timeout, or a permission failure invalidates the user's browser and
+session credentials and closes sessions they own. Signed `@loom` requests use
+the same policy and can revalidate a stale lease. Loom retains the identity row
+for history and later re-admission, but that row is not an approval. An
+administrator can explicitly convert an organization-derived user to manual
+authorization in **People & security**. Enabling organization authorization
+permanently latches this database into shared-deployment mode. Clearing the
+setting, removing users, or completing workloads never restores implicit
+loopback or machine-token administration.
+
+`github.trigger_allowed_user_ids` grants signed GitHub issue and PR triggers
+to the listed numeric GitHub identities. It does not bind those identities to
+Loom users or grant browser sign-in, so existing account roles are unchanged.
+Remove an ID from the setting to revoke this trigger grant.
+
+The `grafana-alerts` federation mapping authorizes the Google
 identity of the existing `marin-grafana` Cloud Run service account to select
-only the `ops` profile. Pulumi resolves that account's email and immutable
+only the `ops` profile. The profile names `marin-community/marin` in
+`githubRepositories` because Grafana launches the operator session in that
+repository and automation profiles receive only their configured repository
+credentials. Without that entry, Loom rejects the launch with HTTP 428 before
+creating a session. Pulumi resolves the service account's email and immutable
 numeric subject; it does not create or copy a Loom token.
 
+The `fork-ferry` mapping accepts OIDC tokens only from the `marin` repository's
+`ops-fork-ferry.yaml` workflow on `main`. It authorizes the dedicated
+`fork-ferry` automation profile. Loom brokers short-lived `loom-oa-dev` GitHub
+App tokens for the profile's Marin fork repositories, with contents, issues,
+and pull-request write access. The App key remains in `LOOM_DOTENV`; the profile
+does not store a GitHub token or grant Actions access. The GitHub Pulumi stack
+reads the mapping's profile from this stack's `githubFederationProfiles` output
+and publishes it as the workflow's `LOOM_FORK_FERRY_PROFILE` repository variable.
+The `agentic-lint` mapping authorizes the dedicated PR lint profile, and the
+`agent-prose-cleanup` mapping authorizes the low-effort `prose-cleanup` profile
+with a 16-session concurrency cap and a 40-turn budget, so description rewrites never
+consume the shared automation pool. The remaining GitHub agent workflows have
+individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
+`main`; the shared profile does not make other workflows eligible. Deploy the
+Loom stack before the GitHub Pulumi stack so the latter can publish
+`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`,
+`LOOM_PR_HOLISTIC_REVIEW_PROFILE`, and `LOOM_PROSE_CLEANUP_PROFILE`. Apply the
+Loom stack before the GitHub Pulumi stack whenever these federations or profile
+variables change.
+
+Organization prompt policy lives beside the runtime profiles in
+`profiles/<name>/AGENTS.md`. A profile's `instructionsFile` is resolved below
+`infra/loom`, read by Pulumi, and reconciled into Loom's visible profile
+`instructions` field. Loom therefore does not need access to this checkout at
+runtime, and the effective text remains inspectable in Settings. The production
+`slack.profile` and `github.profile` settings select their dedicated profiles;
+ordinary sessions use the deployment-managed `default` profile, while workload
+and future GitHub Actions callers select the automation profile authorized by
+their federation mapping.
+
+The PR review workflow launches on open, ready-for-review, and reopen events.
+Reopen a PR to retry its latest head if a push invalidates an in-progress review.
+The `pr-holistic-review` mapping authorizes the whole-change review profile,
+which also launches on pushes. Each PR has a stable channel, and each
+new head has a distinct run key.
+
+The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
+endpoints as the full `/marina/api` capability and the read-only
+`/marina-read/api` capability. Loom passes them directly to compatible ACP
+agents and mints an IAP ID token for the shared Marin desktop OAuth client from
+the VM workload identity when the agent process starts. No Marina token is
+stored in Pulumi state or a profile environment. Activation requires a Loom
+binary that accepts remote MCP deployment entries and ACP HTTP server
+descriptors; older binaries reject this manifest.
+
+The interactive `marina` profile selects only the `marina-read` capability
+group. Its instructions treat page and API content as untrusted data and forbid
+seeking another route to mutate Marina data. All other production profiles
+enumerate Loom's built-in groups rather than using `mcpAccess: all`, so
+registering another remote endpoint cannot silently widen them. The profile
+archives sessions after 50 idle minutes; an active process that outlives its
+IAP token must recover before its next Marina call because ACP does not refresh
+HTTP MCP headers in place.
+
+A profile's `env` block declares the environment every session of that profile
+receives. Each entry sets either an inline `value` for non-secret configuration
+or a same-project `secretRef` that the host resolves from Secret Manager at launch.
+Create the secret and upload its value before referencing it. The stack imports
+each referenced secret without managing its versions, so preview fails while one
+is missing, and removing the last reference leaves the secret in place. The VM
+account's project-level `roles/secretmanager.secretAccessor` grant in
+`infra/pulumi/src/iac/gcp/loom.py` covers every reference. Profile
+environment is applied after `envClear`, so strict automation profiles receive
+it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
+a session land under `/loom/<job>` instead of inheriting the session container's
+`app` OS account.
+
+The `belay` profile runs approved Marin Belay ideas through
+`experiments/belay/RUNBOOK.md` on the `marin_belay_v1_recipe` branch, one
+session at a time. It reads three Belay secrets: `BELAY_WANDB_API_KEY`, a
+`marin-community` W&B service-account key that the training launcher passes to
+each job, and `BELAY_CW_KEY_ID` and `BELAY_CW_KEY_SECRET`, a CoreWeave access
+key set as `CW_KEY_ID` and `CW_KEY_SECRET`. Iris attaches the submitter's keys
+to every CoreWeave job, so this key's access policy bounds what Belay runs can
+read and write. Replies on the intake issue use Loom's GitHub App token.
+
+Idle archiving has a 15-minute minimum (five for completed watches) and waits
+for active turns to finish. Suspended sessions still count toward concurrency
+limits. Profile edits apply to new sessions.
+
+Every profile that can run the `claude` agent sets `CLAUDE_CODE_OAUTH_TOKEN`
+from the `LOOM_CLAUDE_CODE_OAUTH_TOKEN` secret. That covers the interactive
+profiles, which accept a per-launch agent override, and the Claude automation
+profiles. Strict Codex profiles omit it. The value is a one-year token from
+`claude setup-token`, and the secret's `expires` annotation records its expiry.
+Claude Code prefers this variable to the login stored on the shared session home
+volume, so sessions do not depend on that login. An `ANTHROPIC_API_KEY` would
+take precedence over the token. Keep it out of `LOOM_DOTENV`, whose variables
+reach every session of a profile without `envClear`.
+
+Loom resolves `versions/latest` whenever it starts an agent, so rotation needs
+no deploy. New and resumed sessions use the new version; running agents keep the
+token they started with.
+
+```sh
+claude setup-token  # save the printed token to token.txt
+tr -d '[:space:]' < token.txt | gcloud secrets versions add \
+  LOOM_CLAUDE_CODE_OAUTH_TOKEN --project=hai-gcp-models --data-file=-
+gcloud secrets update LOOM_CLAUDE_CODE_OAUTH_TOKEN --project=hai-gcp-models \
+  --update-annotations=expires=YYYY-MM-DD
+rm token.txt
+```
+
+An interactive session always brokers the `loom-oa-dev` GitHub App for its own
+repository, and a stored personal token still takes precedence over it. The
+`default`, `github`, and `slack` profiles therefore allowlist owners rather than
+repositories: an `owner/*` entry lets a session expand into any repository under
+that owner without waiting for a human decision. Each expansion is still
+validated against the App's installations and recorded as a revocable grant, so
+the App's installation list is what actually bounds this. Removing an owner here
+does not withdraw access a session already holds.
+
+The `fork-ferry` automation profile keeps an explicit repository list: an
+automation session is stamped with its profile's entries verbatim and needs
+concrete repositories to mint the cross-repository token its workflow depends
+on.
+
 The Pulumi declaration is authoritative at activation time. An unchanged
-profile keeps its database revision; a changed declaration overwrites the
-current row and advances the revision. UI or API edits persist only until the
-next activation. Deployment pruning is enabled, so a profile or federation
-removed from `Pulumi.marin-loom.yaml` is removed from new selection on the next
-activation. Weaver's stock `default`, `github_comment`, and `watch` profiles are
-not deployment-managed and are not pruned.
+profile or remote MCP keeps its database revision; a changed declaration
+overwrites the current row and advances the revision. UI or API edits persist
+only until the next activation. Deployment pruning is enabled, so a
+deployment-managed setting, remote MCP, profile, or federation removed from
+`Pulumi.marin-loom.yaml` is removed from its deployment layer on the next
+activation. Stock profiles omitted from the declaration remain unmanaged and
+are not pruned; production intentionally manages `default` so interactive
+instruction and runtime policy are reviewed in this repository.
 
 At runtime, the Grafana bridge gets a Google-signed ID token from the Cloud Run
 metadata server, exchanges it at `/api/auth/federate`, and uses the resulting
@@ -102,33 +286,34 @@ Loom credential belongs in the Grafana stack or Secret Manager.
 Apply the Loom stack before deploying a Grafana revision that enables a new
 federated caller. This ensures the identity mapping and profile exist before the
 contact point begins sending alerts. The Grafana stack consumes the URL and
-profile from this stack's `workloadClients` output. The `marin-grafana` service
+profile from this stack's `workloadClients` output. `grafana-alerts` uses the
+single `ops` profile; the bridge assigns trusted alert behaviors to distinct Loom
+channels, so generic and Hero alerts keep separate durable coordinators while
+sharing the profile's four-session concurrency pool. Every nonterminal session
+explicitly launched with `ops` consumes that pool; an agent-launched child with no
+explicit `--profile` uses Loom's `default` profile. Four leaves headroom for an
+`ops`-profile handoff or delegated investigation while both coordinators are live,
+but it does not reserve capacity for either channel. The `marin-grafana` service
 account already exists in the production Grafana stack. In a new environment,
 deploy Grafana once with `marin-grafana:loom_alerts` set to `false`, deploy Loom
 to bind the new service account, then enable Loom alerts and redeploy Grafana.
 
 ## VM permissions
 
-The Loom VM service account runs interactive agent sessions. Keep its ambient GCP
-permissions in `Pulumi.marin-loom.yaml` instead of adding one-off project bindings:
+The Loom VM service account runs interactive agent sessions. Its project, secret, and KMS
+grants are declared in `infra/pulumi/src/iac/gcp/loom.py` and applied by the `marin`
+infrastructure stack. `Pulumi.marin-loom.yaml` contains runtime configuration only; do not add
+IAM bindings to this application stack or deployment scripts. Loom reaches Echo through its IAP-gated HTTP API on Marina (`infra/marina`), which is
+why the Loom VM account is an IAP accessor there. Its Cloud SQL login and the `context`
+database the codehealth workbench writes to are declared by the `marin-marina` stack.
 
-- `vmProjectRoles` grants named predefined or project-custom IAM roles on the
-  configured GCP project.
-- `vmPulumiKmsKeys` grants encrypt/decrypt access only on the listed crypto keys. This
-  lets the VM read and update Pulumi stacks that use those keys as secrets providers.
+A stack cannot bootstrap access to its own secrets-provider key. An identity that already has
+key access must apply the central KMS grant before Loom needs it.
 
-These lists are additive and reviewed as code. They do not register Cloud SQL database
-users or grant PostgreSQL table privileges; the owning service stack must do both.
-Echo owns the `loom-vm` Cloud SQL principal, login roles, and table grants in
-`infra/echo`.
-
-A stack cannot bootstrap access to its own secrets-provider key. An identity that
-already has key access must apply any new `vmPulumiKmsKeys` grant.
-
-Previewing Echo requires read access to its resources, Pulumi state objects, and
-secrets-provider key. Deploying Echo also requires mutation access for Cloud Run,
-Cloud Scheduler, Cloud SQL, Artifact Registry, service accounts, project IAM, Secret
-Manager IAM, and IAP IAM, plus payload access to
+Previewing Marina requires read access to its resources, Pulumi state objects, and
+secrets-provider key. Deploying Marina also requires mutation access for Cloud Run,
+Cloud Scheduler, Cloud SQL, Artifact Registry, service accounts, and IAP settings, plus
+payload access to
 `cloudsql-pulumi-admin-password`. Prefer the existing project custom IAP IAM role and
 secret-level access over project-wide `roles/iap.admin` or
 `roles/secretmanager.admin`.
@@ -140,7 +325,136 @@ Recreating the control-plane service preserves those containers, and the new
 control plane discovers and adopts them. Do not run `docker compose down` while
 sessions are live because it removes their shared network.
 
-To roll back, check out the prior Loom tree, restore its numbered
-`dotenvSecretVersion` when necessary, and run the normal preview and update.
-The separately managed persistent root disk is protected, is not auto-deleted
-with the VM, and has scheduled snapshots.
+The [startup script](startup-script.sh) disables MPTCP in the host network namespace and persists
+the setting in `/etc/sysctl.d/99-loom-mptcp.conf`. Compose disables MPTCP in
+Caddy's network namespace and sets `GODEBUG=multipathtcp=0`.
+Apply changes to Caddy's environment or sysctls by recreating only its service:
+
+```sh
+docker compose -f /opt/loom/docker-compose.yml up -d --no-deps --force-recreate caddy
+```
+
+To roll back an application release, check out the prior Loom tree, restore its
+numbered `dotenvSecretVersion` when necessary, and run the normal preview and
+update. The separately managed root disk is protected, retained if removed from
+Pulumi, and not auto-deleted with the VM. A replacement root disk must use an
+explicit `bootDiskSnapshot`; keep that source snapshot until a newer rollback
+point has been verified.
+
+## Scheduled watches
+
+Declare scheduled agent or script watches under `marin-loom:watches` in
+[Pulumi.marin-loom.yaml](Pulumi.marin-loom.yaml). The disabled
+`weekday-job-check` entry shows agent configuration. Use `promptFile` for prompts
+stored under `infra/loom`; Pulumi includes their contents in the manifest.
+
+The `goals` watch runs the `pm` profile ([instructions](profiles/pm/AGENTS.md)),
+which keeps the Marin high-level board and the goals document below its
+`Status` heading in line with the goals the document lists. It needs:
+
+- the `LOOM_PM_BOARD_TOKEN` secret in `hai-gcp-models`, holding a fine-grained
+  token with `marin-community` Projects read and write access, because Loom's
+  session tokens cannot write organization projects;
+- the document shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as
+  an editor;
+- the `marin` IAM stack applied first, for the `loom-vm` token-creator grant on
+  itself that mints a documents-scoped token.
+
+The `belay` watch runs the `belay` profile every 10 minutes
+([prompt](watches/belay.md)): a cheap check of the Belay app's queue, and a
+runbook session that drains the queue only when events wait. Turning dispatch off in the
+Belay app's admin page pauses it without a Loom deploy.
+
+The [PR review reminder watch](watches/pr-review-reminders.md) runs at 10:00
+Pacific each weekday. Loom posts a digest to `#marin-eng`. Each entry links the PR, gives its title,
+and shows how long since its last update and how long each reviewer has been
+waiting. Ages show elapsed calendar time. A request is due
+when it predates the same time on the previous weekday and the reviewer has
+had no activity since then. A new request, discussion or inline comment,
+review, or commit by that reviewer restarts the clock. Weekends are excluded
+and holidays count as weekdays. Drafts, PRs last updated over seven days ago,
+and PRs by bots or people without repository write access are skipped.
+
+Preview the messages locally with an authenticated `gh` CLI:
+
+```sh
+uv run --no-project python scripts/ops/pr_review_reminders.py --as-of "$(date -u +%FT%TZ)"
+```
+
+The `old-iris-jobs` watch runs the `ops-report` profile
+([instructions](profiles/ops-report/AGENTS.md)) at 09:00 Pacific on weekdays
+([prompt](watches/old-iris-jobs.md)). The profile runs Claude: the sandbox of a Codex
+profile makes the uv cache read-only and permits network access only to Loom. The watch runs
+[`scripts/ops/old_iris_jobs.py`](../../scripts/ops/old_iris_jobs.py) against the
+`marin` hub. The script keeps a Google Sheet with one tab per job owner and one
+row per Iris root job older than the prompt's `--min-age-days`. An owner sets
+the Decision cell of a row. `Kill` makes the next run cancel the job. `Revisit in
+30 days` or `Revisit in 365 days` leaves the job alone until the Revisit on date, then
+the run clears the decision and the owner decides again. A job with no decision stays in the sheet, and a job that stops
+running leaves it. The watch posts to `#marin-alerts` only when the script
+fails, which includes a cancel that Iris rejects. It needs:
+
+- the sheet shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as an
+  editor. Every person with edit access to the sheet can make the watch cancel
+  a job, so share it only with job owners and operators;
+- the `marin` IAM stack applied, for the `loom-vm` token-creator grant on
+  itself that mints a spreadsheets-scoped token.
+
+Loom has no CoreWeave kubeconfig, so the sheet has the jobs the hub federates
+to CoreWeave but not the jobs submitted directly to a CoreWeave controller.
+
+Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
+before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
+for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
+the IaC fields. Custom script files must already exist on the Loom server.
+
+## Doc sessions
+
+The `doc` profile ([instructions](profiles/doc/AGENTS.md)) runs a session whose
+record of the work is the branch artifact `doc`, with progress updates in the
+artifact `progress`. The agent writes both with the `loom` MCP artifact tools.
+The profile sets `docArtifact: doc`. Loom's
+[session doc](https://github.com/marin-community/loom/blob/main/docs/artifacts.md#the-session-doc)
+describes the Doc tab, comments, and the message that a person's edit sends.
+
+## claude.ai connector
+
+The `connector.enabled` setting serves Loom's claude.ai connector, a Streamable
+HTTP MCP endpoint at `https://loom.oa.dev/mcp`. Through it, claude.ai launches,
+follows, messages, and archives Loom sessions for the signed-in person. A launch
+that names no profile uses the `claude` profile
+([instructions](profiles/claude/AGENTS.md)), which inherits the `default`
+runtime policy. Loom is the connector's OAuth 2.1 authorization server.
+Open-Athena members sign in with GitHub, as in the web UI, and keep connector
+access only while the one-hour organization lease described in
+[Automation identities](#automation-identities) keeps renewing.
+
+Claude.ai calls `/mcp`, `/oauth/*`, and `/.well-known/oauth-*` from its own
+servers, so these paths must stay publicly reachable. Do not put them behind IAP
+or an IP allowlist. Caddy blocks only `/metrics`. With the setting off, Loom
+returns 404 for all of these paths.
+
+The stack declares the connector's OAuth clients under `oauthClients` in
+`Pulumi.marin-loom.yaml`, and activation registers them in Loom. Both are public
+clients that prove themselves with PKCE, so there is no secret to hand out.
+`claude-ai` accepts claude.ai's callback on both `claude.ai` and `claude.com`,
+because Anthropic says it may move. `claude-code` accepts Claude Code's loopback
+callback on any port. Never rename a client: claude.ai cannot change a
+connector's OAuth settings after it is added. Because the stack prunes, removing
+a client from it revokes every token the client was issued.
+
+An organization admin adds a custom connector in claude.ai with the URL
+`https://loom.oa.dev/mcp`, selects **Use your own OAuth client** under
+**Advanced settings**, enters the client ID `claude-ai`, and leaves the secret
+blank. A Claude Code user adds the server with:
+
+```sh
+claude mcp add --transport http --scope user --client-id claude-code loom https://loom.oa.dev/mcp
+```
+
+Activation requires a Loom build with connector support. An older build,
+including a rollback to one, rejects the unknown `connector.enabled` setting and
+activation fails. A build without declared OAuth clients ignores
+`oauthClients`, so the clients exist only once Loom has that support. Pulumi
+builds the HEAD of Loom's default branch, so that support must be on the default
+branch before this configuration deploys.

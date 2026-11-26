@@ -12,6 +12,7 @@ MARIN_EVAL_HARDWARE = HardwarePolicy(
     tpu_slices=("v5litepod-4", "v5litepod-8", "v6e-4", "v6e-8", "v5p-8"),
     tpu_family_regions=MappingProxyType(
         {
+            "v4": "us-central2",
             "v5e": "us-west4",
             "v6e": "europe-west4",
             "v5p": "us-central1",

@@ -1,0 +1,112 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Execute a bounded campaign merge and save its audit outside the model directory."""
+
+import argparse
+import json
+import logging
+import time
+from dataclasses import asdict
+from pathlib import Path
+
+import torch
+from marin.merging.arithmetic import merge_tensor
+from marin.merging.checkpoint import CheckpointReader, CheckpointSource
+from marin.merging.constrained import (
+    TensorSupport,
+    export_constrained,
+    finalize_constrained_export,
+    validate_audit_location,
+)
+from marin.merging.isospectral import isospectral_merge
+from rigging.filesystem.buckets import filesystem_for
+
+from experiments.weight_merging.merge import merge_parameters
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--recipe", type=Path, required=True)
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+    recipe = json.loads(args.recipe.read_text())
+    torch.set_num_threads(recipe["threads"])
+    base = CheckpointReader(CheckpointSource(**recipe["base"]))
+    donors = [CheckpointReader(CheckpointSource(**item)) for item in recipe["donors"]]
+    support = tuple(TensorSupport(x["name"], None if x["rows"] is None else tuple(x["rows"])) for x in recipe["support"])
+    params = recipe["parameters"].copy()
+    iso = params["method"] == "iso"
+    row_scaled = params["method"] == "row_scaled"
+    if iso:
+        parameters = None
+        if not torch.cuda.is_available():
+            raise ValueError("Campaign ISO conversion requires its reserved CUDA device")
+    elif row_scaled:
+        if len(donors) != 1:
+            raise ValueError("Row-scaled transfer requires exactly one donor")
+        parameters = None
+    else:
+        parameters = merge_parameters(params)
+    diagnostics = []
+    measured_names = set()
+    start = time.monotonic()
+    audit_fs, audit_path = filesystem_for(recipe["audit"])
+    if audit_fs.exists(audit_path):
+        raise FileExistsError(recipe["audit"])
+    validate_audit_location(recipe["audit"], recipe["output"])
+
+    def transform(name: str, row: int | None, value: torch.Tensor) -> torch.Tensor:
+        values = [reader.tensor(name) for reader in donors]
+        if row is not None:
+            values = [tensor[row] for tensor in values]
+        if "expert_assignment" in recipe or row_scaled:
+            if row is None:
+                raise ValueError("Assigned transfers require row support")
+            if row_scaled:
+                donor_index = 0
+                fraction = recipe["row_fractions"][name][str(row)]
+            else:
+                donor_index = recipe["expert_assignment"][name][str(row)]
+                fraction = recipe["transfer_fraction"]
+            donor = values[donor_index]
+            if fraction == 1:
+                return donor
+            return (value.float() + fraction * (donor.float() - value.float())).to(value.dtype)
+        if iso:
+            device = torch.device("cuda:0")
+            result, coefficients = isospectral_merge(value, values, params["keep"], device)
+            diagnostic = {"tensor": name, "row": row, "coefficients": coefficients}
+            if name not in measured_names:
+                original = torch.linalg.svdvals(value.to(device=device, dtype=torch.float64))
+                stored = torch.linalg.svdvals(result.to(device=device, dtype=torch.float64))
+                diagnostic["stored_spectrum_relative_l2"] = (
+                    torch.linalg.vector_norm(stored - original) / torch.linalg.vector_norm(original)
+                ).item()
+                measured_names.add(name)
+            diagnostics.append(diagnostic)
+            if len(diagnostics) % 32 == 0:
+                logging.info("ISO matrices completed: %d", len(diagnostics))
+            return result
+        assert parameters is not None
+        return merge_tensor(value, values, parameters, tensor_name=f"{name}:{row}")
+
+    audit = export_constrained(
+        base,
+        recipe["output"],
+        support,
+        recipe["support_cap"],
+        recipe["change_cap"],
+        transform,
+    )
+    audit["recipe"] = recipe
+    audit["parameters"] = params if iso or row_scaled else asdict(parameters)
+    audit["elapsed_seconds"] = time.monotonic() - start
+    if iso:
+        audit["iso_diagnostics"] = diagnostics
+    finalize_constrained_export(audit, recipe["audit"])
+    logging.info("Completed policy audit: %s; changed %.6f%%", recipe["audit"], audit["changed_percent"])
+
+
+if __name__ == "__main__":
+    main()

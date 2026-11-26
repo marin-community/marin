@@ -1,0 +1,19 @@
+schema_version: 1
+code: ml-trivial-docstring
+lane: prose
+title: Docstring narrates a self-evident one-liner
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Skip docstrings on trivial functions with clear names.
+  `def get_user_id(user): """Return the user's id."""` says nothing the
+  signature didn't.
+
+  **When allowed:** Public-API functions documented in user-facing reference
+  docs. Internal one-liners with clear names: no docstring.
+
+  **Bad example:**
+  ```python
+  def get_user_id(user: User) -> str:
+      """Return the user's id."""
+      return user.id
+  ```

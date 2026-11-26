@@ -19,7 +19,8 @@ model vocab. Two inputs are resolved here rather than left implicit:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass
 
 import draccus
 from fray.types import ResourceConfig
@@ -28,6 +29,7 @@ from levanter.main.export_hf_to_lm import ImportHfConfig
 from levanter.main.export_hf_to_lm import main as import_hf_to_levanter
 from levanter.models.lm_model import LmConfig
 
+from marin.execution.fingerprint import fingerprint_omitted_fields
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.remote import remote
 from marin.training.training import LevanterCheckpoint
@@ -77,8 +79,7 @@ def resolve_lm_config(model_type: str, hf_id: str, hf_revision: str) -> LmConfig
     architecture is an identity-bearing input, not something reconstructed only on the worker.
     """
     config_cls = LmConfig.get_choice_class(model_type)
-    converter = config_cls().hf_checkpoint_converter().replaced(reference_checkpoint=RepoRef(hf_id, hf_revision))
-    return converter.default_config
+    return config_cls().hf_checkpoint_converter().config_from_hf_checkpoint(RepoRef(hf_id, hf_revision))
 
 
 def run_hf_to_levanter(config: HfToLevanterConfig) -> None:
@@ -123,6 +124,30 @@ class HfToLevanterCheckpoint:
     model: LmConfig
 
 
+def _omit_fingerprint_fields(config: object, encoded: object) -> object:
+    """Remove opted-in fields from an encoded config before hashing."""
+    if isinstance(encoded, list) and isinstance(config, list | tuple):
+        return [_omit_fingerprint_fields(item, value) for item, value in zip(config, encoded, strict=True)]
+    if not isinstance(encoded, dict):
+        return encoded
+
+    omitted: set[str] = set()
+    values: Mapping[object, object]
+    if is_dataclass(config) and not isinstance(config, type):
+        omitted = fingerprint_omitted_fields(config)
+        values = {item.name: getattr(config, item.name) for item in fields(config)}
+    elif isinstance(config, Mapping):
+        values = config
+    else:
+        return encoded
+
+    return {
+        key: _omit_fingerprint_fields(values[key], value) if key in values else value
+        for key, value in encoded.items()
+        if key not in omitted
+    }
+
+
 def hf_to_levanter(
     hf_id: str,
     *,
@@ -144,6 +169,8 @@ def hf_to_levanter(
     tokenizer_revision = tokenizer_revision or hf_revision
     model_config = resolve_lm_config(model_type, hf_id, hf_revision)
     model_config_json = draccus.encode(model_config)
+    fingerprint_model_config_json = _omit_fingerprint_fields(model_config, model_config_json)
+    assert isinstance(fingerprint_model_config_json, dict)
     name = f"checkpoints/hf-to-levanter/{get_directory_friendly_name(hf_id)}-{model_type}"
 
     def build_config(ctx: StepContext) -> HfToLevanterConfig:
@@ -154,7 +181,7 @@ def hf_to_levanter(
             tokenizer=tokenizer,
             tokenizer_revision=tokenizer_revision,
             compute_dtype=compute_dtype,
-            model_config_json=model_config_json,
+            model_config_json=fingerprint_model_config_json if ctx.is_fingerprint else model_config_json,
             output_path=ctx.output_path,
             resources=ctx.runtime_arg(_CONVERT_RESOURCES),
         )

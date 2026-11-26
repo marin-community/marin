@@ -1,0 +1,34 @@
+schema_version: 1
+code: ml-orphaned-by-change
+lane: meta
+title: Change strands an old path it should have deleted
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** `ml-obsolete-after-refactor` only fires when the dead code is
+  itself in a changed hunk. The expensive case is the opposite: the PR adds the
+  replacement and updates the callers, and the superseded path sits live in an
+  UNCHANGED file — every hunk-scoped reviewer passes it. NO-BACKWARD-COMPAT is house
+  law; a stranded old path is exactly the trap it exists to prevent.
+
+  This rule advises *confirmation*, never assertion — phrase the finding as a question
+  ("appears to lose its last static caller; confirm it is not reached via
+  dispatch/registry/entrypoint before deleting"). Fire only when this diff supplies
+  the replacement AND you traced that the orphan's last in-repo caller was
+  removed/rerouted by this diff (cite the caller hunk), AND a whole-tree grep of the
+  symbol NAME (as a string and as an attribute) returns zero hits beyond the def and
+  the rerouted callers. Dynamic dispatch is pervasive here — Iris RPC handlers,
+  Levanter config registries, fsspec protocol dispatch — and is invisible to a static
+  call graph. Anchor on the orphan's `def` line (in the unchanged file); confidence
+  ≥0.9 — this is the highest-stakes claim in the catalog.
+
+  **When allowed:** The orphan is an RPC/handler method, is referenced by name as a
+  string anywhere, is decorated (`register`/`route`/entrypoint), is exported in
+  `__init__`/`__all__`, or is a documented migration shim with a removal trigger. Any
+  dynamic-dispatch indicator → suppress.
+
+  **Bad example:**
+  ```python
+  # this PR routes log delivery through new direct_push() and updates all callers, but
+  # WorkerProvider.forward_logs() (unchanged file) was reachable only from those callers
+  # and nothing references it by name → confirm no dispatch path, then delete it.
+  ```

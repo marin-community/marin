@@ -1,31 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the guarded fsspec factory: the url_to_fs/open_url/filesystem entry
-points, unique_temp_path, atomic_rename, and fetch_file_atomic, plus the S3
-request bounds those entry points inject."""
+"""Tests for guarded fsspec entry points and their S3 request bounds."""
 
 import asyncio
 import json
 import socket
 import threading
 import time
-from pathlib import Path
+from typing import ClassVar
 
 import fsspec
 import pytest
+import rigging.filesystem.cross_region as rfs
+import rigging.filesystem.s3_compat as s3_compat
 from aiobotocore.config import AioConfig
 from botocore.awsrequest import AWSRequest
 from botocore.exceptions import ReadTimeoutError
-from rigging.filesystem import s3_compat
-from rigging.filesystem.cross_region import CrossRegionGuardedFS
+from fsspec.implementations.memory import MemoryFileSystem
+from fsspec.registry import _registry as _fsspec_implementations
+from rigging.filesystem.cross_region import CrossRegionGuardedFS, TransferBudget, TransferBudgetExceeded
 from rigging.filesystem.factory import (
-    _with_s3_timeout_defaults,
-    atomic_rename,
-    fetch_file_atomic,
+    _s3_filesystem_options,
     filesystem,
     open_url,
-    unique_temp_path,
+    unbudgeted_url_to_fs,
     url_to_fs,
 )
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
@@ -67,88 +66,6 @@ fsspec.register_implementation("externallistings", _ExternallyMutableFileSystem,
 fsspec.register_implementation("externals3listings", _ExternallyMutableS3FileSystem, clobber=True)
 
 
-def test_unique_temp_path_produces_distinct_paths():
-    """Each call to unique_temp_path returns a different path."""
-    paths = {unique_temp_path("/some/output.txt") for _ in range(10)}
-    assert len(paths) == 10
-    for p in paths:
-        assert p.startswith("/some/output.txt.tmp.")
-
-
-def test_atomic_rename_uses_unique_temp_paths(tmp_path):
-    """Concurrent atomic_rename calls use distinct temp paths (UUID collision avoidance)."""
-    output = str(tmp_path / "out.txt")
-    observed_temps = []
-
-    for _ in range(5):
-        with atomic_rename(output) as temp_path:
-            observed_temps.append(temp_path)
-            Path(temp_path).write_text("data")
-
-    assert len(set(observed_temps)) == 5, "Each call should produce a unique temp path"
-    for tp in observed_temps:
-        assert ".tmp." in tp
-
-
-def test_atomic_rename_cleans_up_on_error(tmp_path):
-    """Temp file is removed when the context raises an exception."""
-    output = str(tmp_path / "out.txt")
-
-    with pytest.raises(RuntimeError, match="boom"):
-        with atomic_rename(output) as temp_path:
-            Path(temp_path).write_text("bad")
-            raise RuntimeError("boom")
-
-    assert not Path(temp_path).exists()
-    assert not Path(output).exists()
-
-
-# ---------------------------------------------------------------------------
-# fetch_file_atomic
-# ---------------------------------------------------------------------------
-
-
-def test_fetch_file_atomic_copies_source(tmp_path):
-    src = tmp_path / "remote" / "tokenizer.json"
-    src.parent.mkdir(parents=True)
-    src.write_bytes(b'{"version": 1}')
-    dest = tmp_path / "cache" / "tokenizer.json"
-    dest.parent.mkdir(parents=True)
-
-    assert fetch_file_atomic(str(src), str(dest)) is True
-    assert dest.read_bytes() == b'{"version": 1}'
-
-
-def test_fetch_file_atomic_missing_source_returns_false(tmp_path):
-    dest = tmp_path / "cache" / "tokenizer.json"
-    dest.parent.mkdir(parents=True)
-
-    assert fetch_file_atomic(str(tmp_path / "remote" / "absent.json"), str(dest)) is False
-    assert not dest.exists()
-
-
-def test_fetch_file_atomic_failure_preserves_dest_and_cleans_temp(tmp_path, monkeypatch):
-    # Regression for marin#7167: a fetch that dies mid-finalize must not leave a
-    # partial file at dest (poisoning a shared cache) and must not orphan its temp.
-    src = tmp_path / "remote" / "tokenizer.json"
-    src.parent.mkdir(parents=True)
-    src.write_bytes(b'{"version": 2}')
-    dest = tmp_path / "cache" / "tokenizer.json"
-    dest.parent.mkdir(parents=True)
-    dest.write_bytes(b'{"version": 1}')  # a previous complete file
-
-    def boom(*args, **kwargs):
-        raise OSError("simulated failure finalizing the fetch")
-
-    monkeypatch.setattr("os.replace", boom)
-
-    with pytest.raises(OSError, match="simulated failure"):
-        fetch_file_atomic(str(src), str(dest))
-
-    assert dest.read_bytes() == b'{"version": 1}'
-    assert [p.name for p in dest.parent.iterdir()] == ["tokenizer.json"]
-
-
 # ---------------------------------------------------------------------------
 # Guarded entry point tests
 # ---------------------------------------------------------------------------
@@ -160,6 +77,36 @@ def test_url_to_fs_does_not_wrap_local(tmp_path):
 
     fs, _path = url_to_fs(str(test_file))
     assert not isinstance(fs, CrossRegionGuardedFS)
+
+
+class _FakeGcsFileSystem(MemoryFileSystem):
+    """In-memory object store that rigging classifies as GCS."""
+
+    protocol = ("gs", "gcs")
+    store: ClassVar[dict] = {}
+    pseudo_dirs: ClassVar[list] = [""]
+
+
+@pytest.fixture()
+def exhausted_cross_region_budget(monkeypatch):
+    """A GCS bucket in another region than the VM, with no cross-region budget left."""
+    monkeypatch.setitem(_fsspec_implementations, "gs", _FakeGcsFileSystem)
+    monkeypatch.setattr(_FakeGcsFileSystem, "store", {})
+    monkeypatch.setattr(rfs, "cached_marin_region", lambda: "us-central1")
+    monkeypatch.setattr(rfs, "_cached_bucket_location", lambda bucket: "us-central2")
+    monkeypatch.setattr(rfs, "_global_transfer_budget", TransferBudget(limit_bytes=0))
+    fs, path = fsspec.core.url_to_fs("gs://remote-bucket/state/blob")
+    fs.pipe_file(path, b"bundle bytes")
+    return "gs://remote-bucket/state/blob"
+
+
+def test_unbudgeted_url_to_fs_reads_past_an_exhausted_budget(exhausted_cross_region_budget):
+    guarded, path = url_to_fs(exhausted_cross_region_budget)
+    with pytest.raises(TransferBudgetExceeded):
+        guarded.cat_file(path)
+
+    unbudgeted, path = unbudgeted_url_to_fs(exhausted_cross_region_budget)
+    assert unbudgeted.cat_file(path) == b"bundle bytes"
 
 
 def test_open_url_local_file(tmp_path):
@@ -232,7 +179,7 @@ def test_configure_fsspec_s3_preserves_process_listing_cache_config(monkeypatch)
 def test_s3_filesystems_are_built_with_the_deadline():
     """Without this wiring the deadline exists but nothing uses it, and every
     rigging-built S3 filesystem keeps the #6719 hang."""
-    config_kwargs = _with_s3_timeout_defaults({})["config_kwargs"]
+    config_kwargs = _s3_filesystem_options({})["config_kwargs"]
 
     assert config_kwargs["http_session_cls"] is TotalDeadlineAIOHTTPSession
     # AioConfig is the call s3fs makes; it rejects the kwarg before aiobotocore 2.12.2.

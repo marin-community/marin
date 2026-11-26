@@ -4,11 +4,9 @@
 """Add ``backend_id`` to jobs/tasks/task_attempts and the ``backends`` table.
 
 Multi-backend clusters pin every job, task, and attempt to one backend via a
-``backend_id``. Existing single-backend rows are stamped with the implicit
-``DEFAULT_BACKEND_ID``, and one ``backends`` row for it is inserted (status
-ACTIVE). The same literal is used by the runtime config synthesis
-(``iris.cluster.config.resolve_backends``), so upgraded rows match what the
-controller resolves at startup.
+``backend_id``. Existing rows are stamped with ``DEFAULT_BACKEND_ID``, and one
+``backends`` row for it is inserted (status ACTIVE). Controller composition uses
+the same literal, so upgraded rows match the registered backend.
 
 Idempotent: re-run from scratch if the controller crashes mid-migration.
 """

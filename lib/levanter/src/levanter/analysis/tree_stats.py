@@ -10,8 +10,27 @@ import haliax.nn
 from haliax import NamedArray, is_named_array
 from haliax.jax_utils import is_jax_array_like
 
+from levanter.layers.stacked import ArrayStacked, layer_in_axes
 from levanter.tracker.histogram import SummaryStats
 from levanter.utils import jax_utils
+
+_SplitScanContainer = (haliax.nn.Stacked, ArrayStacked)
+
+
+def _stacked_leaves(stacked: Any) -> list[tuple[str, Any]]:
+    """(key path, leaf) for each array leaf of a scan module's stacked body.
+
+    Keyed as the non-split path keys them so the whole-stack norm, taken over each original leaf,
+    stays comparable to non-split logging (and is correct for leaves shared across layers).
+    """
+    key_paths = jax_utils.leaf_key_paths(stacked, is_leaf=is_named_array)
+    return list(
+        zip(
+            jax.tree.leaves(key_paths, is_leaf=is_named_array),
+            jax.tree.leaves(stacked, is_leaf=is_named_array),
+            strict=True,
+        )
+    )
 
 
 def summary_statistics_for_tree(
@@ -43,7 +62,7 @@ def summary_statistics_for_tree(
 
     """
     if split_scan_layers:
-        is_leaf = lambda n: isinstance(n, haliax.nn.Stacked) or is_named_array(n)  # noqa: E731
+        is_leaf = lambda n: isinstance(n, _SplitScanContainer) or is_named_array(n)  # noqa: E731
     else:
         is_leaf = is_named_array
 
@@ -65,6 +84,29 @@ def summary_statistics_for_tree(
                 for k, v in vmapped_hists.items():
                     for i in range(g.Block.size):
                         hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
+
+                if include_norms:
+                    for sub_key, leaf in _stacked_leaves(g.stacked):
+                        norms[f"{key_path}.stacked.{sub_key}"] = optax.global_norm(leaf)
+
+            elif split_scan_layers and isinstance(g, ArrayStacked):
+                num_layers = g.num_layers
+                in_axes = layer_in_axes(g.stacked, num_layers, is_array_like=is_jax_array_like)
+                vmapped_norms, vmapped_hists = jax.vmap(_rec_log_magnitudes, in_axes=(None, None, None, in_axes))(
+                    {}, {}, "", g.stacked
+                )
+
+                for k, v in vmapped_norms.items():
+                    for i in range(num_layers):
+                        norms[f"{key_path}.{i}.{k}"] = v[i]
+
+                for k, v in vmapped_hists.items():
+                    for i in range(num_layers):
+                        hists[f"{key_path}.{i}.{k}"] = jax.tree.map(lambda x: x[i] if is_jax_array_like(x) else x, v)
+
+                if include_norms:
+                    for sub_key, leaf in _stacked_leaves(g.stacked):
+                        norms[f"{key_path}.stacked.{sub_key}"] = optax.global_norm(leaf)
 
             elif isinstance(g, NamedArray):
                 if include_norms:

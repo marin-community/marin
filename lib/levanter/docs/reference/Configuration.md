@@ -153,6 +153,100 @@ checkpointer:
 
 This policy will save permanent checkpoints every 1,000 steps until 10,000 steps, then every 5,000 steps until 40,000 steps, then every 10,000 steps.
 The default step-based checkpoint policy is to save a checkpoint every 10,000 steps.
+The final training hook reuses a permanent save already requested for that step after waiting
+for it to complete. A temporary save at the final step is still followed by a permanent save.
+
+#### Checkpoint Format
+
+A checkpoint directory contains three kinds of file:
+
+* `manifest.json`: the format declaration and the inventory of arrays, each with its shape,
+  dtype and chunk grid. Written when the save starts. A reader that meets a `format_version`
+  above its own fails. Older checkpoints have no manifest and fall back to listing.
+* `metadata.json`: step, timestamp, and whether the checkpoint is temporary. Written after
+  every process has committed, so a directory containing it is complete. Checkpoint
+  discovery keys off this file.
+* the array data itself, as a single OCDBT database of zarr3 arrays.
+
+#### Checkpoint Write Parallelism
+
+Every process writes the part of the state it holds, and arrays replicated across processes
+are split across their replicas. A save also bounds the host memory it stages: one whose
+share fits under `max_staged_host_bytes` returns while the commits drain, and a larger save
+rolls through it.
+
+When several processes save to a local or NFS path, each OCDBT manifest commit takes a lock
+file that every other writer waits on. Each process chooses its commit path from its own
+staged bytes. A save that does not fit in `max_staged_host_bytes` batches each staging wave
+into one atomic manifest commit. A save that fits, and every save that is not using lock
+files, commits each chunk as soon as it is staged, which overlaps staging with storage I/O.
+In either path, one process publishes the array metadata before the others open the arrays,
+and the others open it without reading it back. Before each manifest commit, the writer
+refreshes the directory and holds a commit-order lock until the commit finishes, so it
+rewrites the manifest the previous client published instead of a cached copy. A save also
+publishes a writer lease for its lifetime. Lock files left in the directory are removed only
+after that lease is gone or stale. Set `checkpointer.write.file_io_locking` to `os`,
+`lockfile`, or `none` to override that default.
+
+| Parameter                                  | Description                                                                            | Default |
+|--------------------------------------------|----------------------------------------------------------------------------------------|---------|
+| `checkpointer.write.max_write_replicas`    | Cap on how many replicas of an array write part of it. `1` disables replica splitting. | 1024    |
+| `checkpointer.write.min_replica_slice_bytes` | Do not split an array when doing so would give each replica less than this.          | 16 MiB  |
+| `checkpointer.write.max_chunk_bytes`       | Upper bound on one zarr3 chunk, which bounds a single object store write.              | 512 MiB |
+| `checkpointer.write.max_staged_host_bytes` | Cap on host memory one process stages at once during a save.                           | 16 GiB  |
+| `checkpointer.write.cache_pool_bytes`      | Soft limit for each TensorStore write cache.                                            | 1 GiB   |
+| `checkpointer.write.data_copy_concurrency` | Maximum CPU concurrency TensorStore uses to copy and encode checkpoint data.           | 16      |
+| `checkpointer.write.file_io_locking`       | File-driver lock while a key commits: `os`, `lockfile`, or `none`. Unset uses the default above. | lock file when several processes save to a local or NFS path |
+
+#### Checkpoint Telemetry
+
+Checkpoint debug mode publishes numeric data from each JAX process to Finelog. This configuration disables allocation tracing and forced garbage collection:
+
+```yaml
+checkpointer:
+  debug:
+    enabled: true
+    tracemalloc_frames: null
+    force_gc_before_serialize: false
+    top_allocations: 0
+    flush_logs: false
+```
+
+This configuration does not start `tracemalloc` or force Python garbage collection. It publishes these gauges:
+
+| Metric | Value |
+|--------|-------|
+| `checkpoint_phase_duration_seconds` | Time in one checkpoint phase. |
+| `checkpoint_total_duration_seconds` | Time from checkpoint start through metadata commit. Process zero publishes this metric. |
+| `checkpoint_staged_host_bytes` | Peak host bytes staged by one process. |
+| `checkpoint_process_peak_rss_bytes` | Peak resident memory for one process. |
+
+The phase metric uses the `phase` attribute. All metrics use `checkpoint_step`. Finelog also records the run, job, process, node, and cluster fields.
+
+Use a short run that saves at least one checkpoint for a cluster smoke test. Then query the regional Finelog deployment:
+
+```bash
+uv run finelog query <cluster> --format table <<'SQL'
+SELECT to_timestamp_millis(timestamp_ms) AS ts,
+       process_index,
+       name,
+       value,
+       json_get(attributes_json, 'checkpoint_step') AS checkpoint_step,
+       json_get(attributes_json, 'phase') AS phase
+FROM telemetry_v1
+WHERE run_id = '<run-id>'
+  AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '2 hours') * 1000 AS BIGINT)
+  AND name IN (
+    'checkpoint_phase_duration_seconds',
+    'checkpoint_total_duration_seconds',
+    'checkpoint_staged_host_bytes',
+    'checkpoint_process_peak_rss_bytes'
+  )
+ORDER BY timestamp_ms, process_index, name
+SQL
+```
+
+The checkpoint is complete when process zero reports `checkpoint_total_duration_seconds`. Each process reports its local asynchronous commit phase.
 
 ### JAX Compilation Cache Configuration
 
@@ -232,17 +326,17 @@ trainer:
 | tags           | Tags to add to the run.                        | `[]`                       |
 | id             | Unique run id                                  | wandb's autogenerated id   |
 | name           | The name of the run.                           | wandb's autogenerated name |
+| resume         | Resume policy for an existing run ID.          | `"allow"`                 |
+| fork_from      | Optional `<source-run-id>?_step=<step>` lineage point for a new child run. | `None` |
 | save_code      | Whether to save the code to wandb.             | `True`                     |
-| save_xla_dumps | Whether to save XLA compiler outputs to wandb. | `False`                    |
 
 
 Notes:
 
 * WandB's code saving logic isn't very good for our use case, so we have our own. We automatically sniff out the git repo
 of your main script.
-* `save_xla_dumps` is useful for debugging XLA compilation issues. It tends to dump a lot of stuff, so we don't save it by default.
-To use it, you must also set the right environment variables. Something like `XLA_FLAGS="--xla_dump_to=/tmp/output_folder/xla_dumps --xla_dump_hlo_pass_re=.*`.
-We will automatically parse out the env variable.
+* `fork_from` creates a new W&B child run with inherited history through the named step. It is mutually exclusive with
+  W&B resume: use it only for the initial cutover, then omit it and use the child run ID with `resume: allow` for recovery.
 
 ### Tensorboard
 

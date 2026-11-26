@@ -10,13 +10,15 @@ without a GPU by spawning ``levanter.recovery.fake_trainer.fake_trainer``.
 
 from __future__ import annotations
 
+import signal
+
 import pytest
 
 from levanter.recovery import supervisor as sup
 from levanter.recovery.fake_trainer import ENV_BEHAVIOR, fake_trainer
 from levanter.recovery.detection import DetectionConfig
 from levanter.recovery.supervisor import GPUHangSupervisor
-from levanter.recovery.types import FaultClass, RunOutcome
+from levanter.recovery.types import FaultClass, RunOutcome, classify_returncode
 
 
 def _make_supervisor(tmp_path, **overrides):
@@ -42,15 +44,16 @@ def test_clean_run_no_faults(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "behavior,expected_class",
+    "behavior,expected_class,deadman_timeout",
     [
-        ("sticky", FaultClass.STICKY),
-        ("crash", FaultClass.CRASH),
-        ("hang", FaultClass.STALL),
+        # Only hang exercises the deadman. Other faults get enough time to exit under CI scheduling delays.
+        pytest.param("sticky", FaultClass.STICKY, 30.0, id="sticky-sticky"),
+        pytest.param("crash", FaultClass.CRASH, 30.0, id="crash-crash"),
+        pytest.param("hang", FaultClass.STALL, 3.0, id="hang-stall"),
     ],
 )
-def test_recovers_from_one_off_fault(tmp_path, behavior, expected_class):
-    with _make_supervisor(tmp_path) as s:
+def test_recovers_from_one_off_fault(tmp_path, behavior, expected_class, deadman_timeout):
+    with _make_supervisor(tmp_path, deadman_timeout=deadman_timeout) as s:
         result = s.run(
             fake_trainer,
             {"steps": 6, "fault_step": 2},
@@ -62,6 +65,11 @@ def test_recovers_from_one_off_fault(tmp_path, behavior, expected_class):
     assert result.attempts == 2
     assert [f.fault_class for f in result.faults] == [expected_class]
     assert result.restored_from_snapshot
+
+
+def test_deadman_does_not_override_a_concurrent_child_crash():
+    assert classify_returncode(-signal.SIGABRT, deadman=True) is FaultClass.CRASH
+    assert classify_returncode(-signal.SIGTERM, deadman=True) is FaultClass.STALL
 
 
 def test_hard_failure_is_not_restarted(tmp_path):

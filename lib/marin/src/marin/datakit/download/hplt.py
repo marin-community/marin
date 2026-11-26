@@ -11,10 +11,10 @@ from functools import cache
 
 import requests
 from fray.types import ResourceConfig
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 from zephyr import counters
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream
@@ -24,7 +24,6 @@ from marin.execution.step_spec import StepSpec
 logger = logging.getLogger(__name__)
 
 HPLT_BASE_URL = "https://data.hplt-project.org/three/sorted/eng_Latn"
-HPLT_MAP_URL = f"{HPLT_BASE_URL}/eng_Latn.map"
 
 # Shard counts per WDS quality tier
 HPLT_SHARD_COUNTS = {5: 74, 6: 119, 7: 275, 8: 479, 9: 344, 10: 3}

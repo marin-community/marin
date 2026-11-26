@@ -1,0 +1,19 @@
+schema_version: 1
+code: ml-unused-param
+lane: cruft
+title: Unused function parameter
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Delete dead code. Unused params imply a contract that
+  doesn't exist, and they break tools (template validation, type checkers,
+  callers searching for usages).
+
+  **When allowed:** Required by an interface (e.g. a callback signature) —
+  but then use `_` to make the intent explicit, and only for that case.
+
+  **Bad example:**
+  ```python
+  def render_pvc(image: str, port: int, remote_log_dir: str) -> str:
+      # template never references image/port/remote_log_dir; drop them or split per-template.
+      return PVC_TEMPLATE.format(...)
+  ```

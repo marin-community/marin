@@ -6,14 +6,21 @@
 One :class:`Entry` model serves both the CLI and the TUI, and one navigable tree
 spans every backend: the root lists the declared buckets, and each level below is
 an ordinary object-store listing routed through
-:func:`rigging.filesystem.filesystem_for`.
+:func:`rigging.filesystem.buckets.filesystem_for`.
 """
 
 import dataclasses
-from datetime import datetime
+import glob
+from collections import deque
+from collections.abc import Iterable, Iterator
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
 
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import StoreType, data_buckets
+from rigging.filesystem.paged_listing import DIRECTORY_TYPE, is_child
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.compression import compression_for
 
@@ -26,6 +33,10 @@ _SCHEME_FOR_STORE = {StoreType.GCS: "gs", StoreType.R2: "s3", StoreType.COREWEAV
 # Preview reads are bounded: browsing should never pull a multi-gigabyte shard down a home
 # connection because someone pressed enter on it. `fsutil cp` fetches whole objects.
 MAX_PREVIEW_BYTES = 10 * 1024 * 1024
+
+# Bucket listings are network-bound.
+DEFAULT_LISTING_WORKERS = 128
+_MAX_SPLIT_DEPTH = 3
 
 
 @dataclasses.dataclass(frozen=True)
@@ -48,10 +59,51 @@ class Entry:
 
 
 @dataclasses.dataclass(frozen=True)
+class ListingPage:
+    """One metadata page and aggregate progress for its listing."""
+
+    path: str
+    entries: list[dict[str, Any]]
+    pages_completed: int
+    prefixes_completed: int
+    prefixes_discovered: int
+    workers_active: int
+    workers_total: int
+
+
+@dataclasses.dataclass(frozen=True)
 class Preview:
     data: bytes
     truncated: bool
     full_size: int | None
+
+
+@dataclasses.dataclass(frozen=True)
+class _ListingStats:
+    size: int
+    count: int
+    directories: list[str]
+
+
+@dataclasses.dataclass(frozen=True)
+class _CompletedDirectoryListing:
+    path: str
+    entries: list[dict[str, Any]]
+    workers_active: int
+
+
+class _ListingMode(StrEnum):
+    PROBE = "probe"
+    EXPAND = "expand"
+    FLAT = "flat"
+
+
+@dataclasses.dataclass(frozen=True)
+class _ListingTask:
+    path: str
+    mode: _ListingMode
+    depth: int = 0
+    continuation_token: str | None = None
 
 
 def bucket_url(bucket: str) -> str:
@@ -64,12 +116,14 @@ def bucket_url(bucket: str) -> str:
     return f"{_SCHEME_FOR_STORE[spec.store]}://{spec.name}"
 
 
-def list_entries(url: str) -> list[Entry]:
-    """List the immediate children of *url*, directories first then names ascending.
+def list_entries(url: str, *, recursive: bool = False) -> list[Entry]:
+    """List *url*'s immediate children or the entries matching a glob pattern.
 
     ``url`` may be :data:`ROOT`, in which case the declared buckets are the children.
-    The listed location itself is never included, so a listing is always strictly a
-    level down.
+    Glob matches are named relative to the non-pattern prefix, so matches remain
+    distinguishable when their basenames are the same. Recursive listings of literal
+    URLs name every descendant relative to ``url``; recursive root and glob listings
+    retain their ordinary non-recursive behavior.
     """
     if url == ROOT:
         return [
@@ -78,33 +132,63 @@ def list_entries(url: str) -> list[Entry]:
 
     parsed = StoragePath(url)
     fs, path = filesystem_for(url)
-    entries = [_entry(parsed, item) for item in fs.ls(path, detail=True) if _is_child(path, item["name"])]
+    if recursive and not glob.has_magic(path):
+        entries = []
+        for item in fs.find(path, detail=True, withdirs=True).values():
+            if not is_child(path, item["name"]):
+                continue
+            qualified_url = _qualified_url(parsed, item["name"])
+            name = _relative_name(item["name"], path)
+            entries.append(_entry(parsed, item, name=name, url=qualified_url))
+    elif glob.has_magic(path):
+        root = _glob_root(path)
+        entries = []
+        for item in fs.glob(path, detail=True).values():
+            qualified_url = _qualified_url(parsed, item["name"])
+            name = _relative_name(item["name"], root)
+            entries.append(_entry(parsed, item, name=name, url=qualified_url))
+    else:
+        entries = [_entry(parsed, item) for item in fs.ls(path, detail=True) if is_child(path, item["name"])]
     entries.sort(key=lambda e: (not e.is_dir, e.name.lower()))
     return entries
 
 
-def _is_child(listed: str, name: str) -> bool:
-    """Whether *name* is a child of the listed path rather than the path itself.
-
-    Object stores commonly report a zero-byte marker object for the prefix being
-    listed; it carries no information and would render as an empty-named row.
-    """
-    return name.strip("/") != listed.strip("/")
+def _glob_root(pattern: str) -> str:
+    first_magic = min(pattern.find(character) for character in "*?[" if character in pattern)
+    return pattern[:first_magic].rpartition("/")[0]
 
 
-def _entry(parsed: StoragePath, item: dict) -> Entry:
-    name = item["name"].rstrip("/").rsplit("/", 1)[-1]
-    is_dir = item["type"] == "directory"
+def _qualified_url(parsed: StoragePath, path: str) -> str:
+    if parsed.scheme is None or "://" in path:
+        return path
+    return f"{parsed.scheme}://{path}"
+
+
+def _relative_name(name: str, root: str) -> str:
+    rooted = root.startswith("/")
+    root = root.rstrip("/")
+    if name == root:
+        return ""
+    prefix = f"{root}/" if root else "/" if rooted else ""
+    if not name.startswith(prefix):
+        raise ValueError(f"{name} is not under {root}")
+    return name[len(prefix) :]
+
+
+def _entry(parsed: StoragePath, item: dict, *, name: str | None = None, url: str | None = None) -> Entry:
+    item_name = item["name"].rstrip("/")
+    name = name or item_name.rsplit("/", 1)[-1]
+    is_dir = item["type"] == DIRECTORY_TYPE
     return Entry(
-        url=str(parsed / name),
+        url=url or str(parsed / name),
         name=name,
         size=None if is_dir else item.get("size", 0),
-        mtime=_mtime(item),
+        mtime=entry_mtime(item),
         is_dir=is_dir,
     )
 
 
-def _mtime(item: dict) -> datetime | None:
+def entry_mtime(item: dict) -> datetime | None:
     """The entry's modification time under whichever key the backend uses.
 
     gcsfs reports ``updated``/``mtime``, s3fs ``LastModified``; directories carry none.
@@ -112,7 +196,7 @@ def _mtime(item: dict) -> datetime | None:
     for key in ("LastModified", "mtime", "updated"):
         value = item.get(key)
         if isinstance(value, datetime):
-            return value
+            return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
     return None
 
 
@@ -147,15 +231,155 @@ def _read_preview(fs, path: str, *, compression: str | None, full_size: int | No
 
 
 def total_size(url: str) -> tuple[int, int]:
-    """Return ``(bytes, object_count)`` under *url*, walking every prefix beneath it."""
+    """Return ``(bytes, object_count)`` under *url*."""
     fs, path = filesystem_for(url)
-    if fs.isfile(path):
-        return fs.size(path), 1
+    info = fs.info(path)
+    if info["type"] != DIRECTORY_TYPE:
+        return info.get("size", 0) or 0, 1
 
     total = 0
     count = 0
-    for _, _, files in fs.walk(path, detail=True):
-        for info in files.values():
-            total += info.get("size", 0) or 0
-            count += 1
+    for page in _metadata_listing_pages(fs, path, DEFAULT_LISTING_WORKERS):
+        stats = _listing_stats(page.path, page.entries)
+        total += stats.size
+        count += stats.count
     return total, count
+
+
+def metadata_listing_pages(url: str, *, workers: int = DEFAULT_LISTING_WORKERS) -> Iterator[ListingPage]:
+    """Yield independent metadata pages covering every object below *url*."""
+    fs, path = filesystem_for(url)
+    yield from _metadata_listing_pages(fs, path, workers)
+
+
+def _metadata_listing_pages(fs, path: str, workers: int) -> Iterator[ListingPage]:
+    paged_listing = getattr(fs, "listing", None)
+    if paged_listing is not None:
+        yield from _paged_listing_pages(paged_listing, path, workers)
+        return
+
+    root_entries = fs.ls(path, detail=True)
+    directories = _listing_stats(path, root_entries).directories
+    prefixes_discovered = len(directories) + 1
+    yield ListingPage(
+        path=path,
+        entries=root_entries,
+        pages_completed=1,
+        prefixes_completed=1,
+        prefixes_discovered=prefixes_discovered,
+        workers_active=1,
+        workers_total=workers,
+    )
+
+    pages_completed = 1
+    prefixes_completed = 1
+    for completed in _directory_listing_pages(fs, directories, workers):
+        pages_completed += 1
+        prefixes_completed += 1
+        prefixes_discovered += len(_listing_stats(completed.path, completed.entries).directories)
+        yield ListingPage(
+            path=completed.path,
+            entries=completed.entries,
+            pages_completed=pages_completed,
+            prefixes_completed=prefixes_completed,
+            prefixes_discovered=prefixes_discovered,
+            workers_active=completed.workers_active,
+            workers_total=workers,
+        )
+
+
+def _directory_listing_pages(fs, directories: Iterable[str], workers: int) -> Iterator[_CompletedDirectoryListing]:
+    queued = deque(directories)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending = {}
+        while queued or pending:
+            while queued and len(pending) < workers:
+                directory = queued.popleft()
+                pending[executor.submit(fs.ls, directory, detail=True)] = directory
+
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                directory = pending.pop(future)
+                entries = future.result()
+                queued.extend(_listing_stats(directory, entries).directories)
+                workers_active = len(pending) + 1
+                yield _CompletedDirectoryListing(directory, entries, workers_active)
+
+
+def _paged_listing_pages(paged_listing, path: str, workers: int) -> Iterator[ListingPage]:
+    queued = deque([_ListingTask(path, _ListingMode.PROBE)])
+    scheduled_prefixes = {path}
+    pages_completed = 0
+    prefixes_completed = 0
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending = {}
+        while queued or pending:
+            while queued and len(pending) < workers:
+                task = queued.popleft()
+                delimiter = "/" if task.mode == _ListingMode.EXPAND else ""
+                future = executor.submit(paged_listing.page, task.path, task.continuation_token, delimiter)
+                pending[future] = task
+
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                task = pending.pop(future)
+                entries, continuation_token = future.result()
+                pages_completed += 1
+                if task.mode == _ListingMode.PROBE:
+                    if continuation_token is None:
+                        prefixes_completed += 1
+                    elif task.depth < _MAX_SPLIT_DEPTH:
+                        entries = []
+                        queued.appendleft(_ListingTask(task.path, _ListingMode.EXPAND, depth=task.depth))
+                    else:
+                        queued.appendleft(
+                            _ListingTask(
+                                task.path,
+                                _ListingMode.FLAT,
+                                depth=task.depth,
+                                continuation_token=continuation_token,
+                            )
+                        )
+                else:
+                    if continuation_token is None:
+                        prefixes_completed += 1
+                    else:
+                        queued.appendleft(
+                            _ListingTask(
+                                task.path,
+                                task.mode,
+                                depth=task.depth,
+                                continuation_token=continuation_token,
+                            )
+                        )
+                    if task.mode == _ListingMode.EXPAND:
+                        for directory in _listing_stats(task.path, entries).directories:
+                            if directory not in scheduled_prefixes:
+                                scheduled_prefixes.add(directory)
+                                queued.append(_ListingTask(directory, _ListingMode.PROBE, depth=task.depth + 1))
+
+                yield ListingPage(
+                    path=task.path,
+                    entries=entries,
+                    pages_completed=pages_completed,
+                    prefixes_completed=prefixes_completed,
+                    prefixes_discovered=len(scheduled_prefixes),
+                    workers_active=len(pending) + 1,
+                    workers_total=workers,
+                )
+
+
+def _listing_stats(listed: str, entries: list[dict[str, Any]]) -> _ListingStats:
+    total = 0
+    count = 0
+    directories = []
+    for entry in entries:
+        name = entry["name"]
+        if not is_child(listed, name):
+            continue
+        if entry["type"] == DIRECTORY_TYPE:
+            directories.append(name)
+            continue
+        total += entry.get("size", 0) or 0
+        count += 1
+    return _ListingStats(size=total, count=count, directories=directories)

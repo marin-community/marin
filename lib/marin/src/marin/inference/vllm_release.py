@@ -3,10 +3,20 @@
 
 """Select and describe verified vLLM GPU release wheels."""
 
+import json
 import platform
 from dataclasses import dataclass
+from pathlib import Path
 
 from marin.external_dependencies import VllmGpuRelease, VllmGpuWheel
+from marin.inference.vllm_release_schema import release_from_manifest
+
+
+def load_vllm_gpu_release(path: Path | None) -> VllmGpuRelease | None:
+    """Load a published GPU release manifest, or return None when no path is given."""
+    if path is None:
+        return None
+    return release_from_manifest(json.loads(path.read_text()), path)
 
 
 @dataclass(frozen=True)
@@ -35,7 +45,12 @@ def current_vllm_gpu_wheel(release: VllmGpuRelease) -> VllmGpuWheel:
 
 
 def vllm_gpu_wheel_requirement(wheel: VllmGpuWheel) -> str:
-    """Return the hash-verified direct wheel requirement."""
+    """Return the direct wheel requirement, tagged with the promoted digest.
+
+    ``uv tool run`` records neither the fragment digest nor an ``archive_info`` hash for a remote
+    direct reference and does not check it, so the digest documents the promoted asset rather than
+    gating the install. Startup verification compares the installed URL, version, and ABI instead.
+    """
     return f"vllm @ {wheel.url}#sha256={wheel.sha256}"
 
 

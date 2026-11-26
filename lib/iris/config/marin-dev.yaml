@@ -47,6 +47,9 @@ storage:
 # tunnels). Anything forwarded through the LB carries X-Forwarded-For and never
 # matches a CIDR.
 auth:
+  principal_directory: gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
+  user_roles:
+    "principal:human-080": user
   iap:
     url: https://iris-dev.oa.dev
     # Same Marin desktop OAuth client as prod (rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT)
@@ -64,6 +67,8 @@ auth:
 # Federation peers this cluster may hand whole jobs to. Same CoreWeave clusters marin
 # federates to: they trust this cluster's public key under the id `marin-dev`, and admit
 # its submitters by their own auth.allowed_submitters.
+budget_peers: [cw-us-west-04a]
+
 peers:
   cw-rno2a:
     controller_address: https://iris-cw-rno2a.oa.dev
@@ -191,3 +196,6 @@ user_budgets:
   - user_ids: [power]
     budget_limit: 75000
     max_band: PRIORITY_BAND_PRODUCTION
+  - user_ids: [principal:human-080]
+    budget_limit: 0
+    max_band: PRIORITY_BAND_BATCH

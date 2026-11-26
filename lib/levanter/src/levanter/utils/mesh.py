@@ -23,21 +23,30 @@ DEFAULT_SHARED_MAPPING: Dict[str, str | Tuple[str, ...]] = {"mlp": "model", "hea
 class MeshConfig:
     """
     Defines mesh axes and logical-to-physical mappings.
-    axes: ICI sizes per axis (within a slice). -1 means absorb remaining ICI.
-    dcn_axes: DCN sizes per axis (across slices). -1 means absorb remaining DCN.
+    axes: ICI size overrides (within a slice). -1 means absorb remaining ICI.
+    dcn_axes: DCN size overrides (across slices). -1 means absorb remaining DCN.
     shared_mapping: common logical-axis defaults shared by both compute and parameter sharding.
     compute_mapping: logical -> physical axis (or axes) for compute (e.g., batch -> [replica_dcn, replica, data]).
     param_mapping: logical -> physical axis (or axes) for parameters and opt states
     """
 
-    axes: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_ICI_AXIS_SPEC))
-    dcn_axes: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_DCN_AXIS_SPEC))
+    axes: Mapping[str, int] | None = None
+    dcn_axes: Mapping[str, int] | None = None
 
     # Typically you should only set these fields in config, and only read the resolved_* properties.
     batch_axis_name: str | None = "batch"
     shared_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     compute_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": "data"})
+
+    def __post_init__(self):
+        # Preserve concrete defaults in serialized recipes; explicit maps retain only caller entries.
+        axes, dcn_axes = self.axes, self.dcn_axes
+        default_axes, default_dcn_axes = _axis_specs_with_defaults(axes or {}, dcn_axes or {})
+        if axes is None:
+            object.__setattr__(self, "axes", default_axes)
+        if dcn_axes is None:
+            object.__setattr__(self, "dcn_axes", default_dcn_axes)
 
     @cached_property
     def resolved_compute_mapping(self) -> ResourceMapping:
@@ -82,8 +91,9 @@ class MeshConfig:
 
         per_slice = num_devices // num_slices
 
-        axes = {**DEFAULT_ICI_AXIS_SPEC, **self.axes}
-        dcn_axes = {**DEFAULT_DCN_AXIS_SPEC, **self.dcn_axes}
+        assert self.axes is not None and self.dcn_axes is not None
+
+        axes, dcn_axes = _axis_specs_with_defaults(self.axes, self.dcn_axes)
 
         # If the user added another absorber (-1), drop the default absorber so exactly one remains.
         if sum(1 for v in axes.values() if v == -1) > 1 and "data" in axes and "data" not in self.axes:
@@ -129,6 +139,16 @@ class MeshConfig:
         return axes, dcn_axes
 
 
+def _axis_specs_with_defaults(
+    axes: Mapping[str, int], dcn_axes: Mapping[str, int]
+) -> tuple[Dict[str, int], Dict[str, int]]:
+    # An explicit network placement replaces that axis's default placement.
+    return (
+        {**{k: v for k, v in DEFAULT_ICI_AXIS_SPEC.items() if k not in dcn_axes}, **axes},
+        {**{k: v for k, v in DEFAULT_DCN_AXIS_SPEC.items() if k not in axes}, **dcn_axes},
+    )
+
+
 def create_mesh_from_axis_specs(
     *,
     ici_axes: Mapping[str, int],
@@ -153,6 +173,17 @@ def create_mesh_from_axis_specs(
     if not devices:
         raise ValueError("No devices available to build a mesh.")
 
+    if axis_types is not None and len(axis_types) != len(axis_names):
+        raise ValueError(f"axis_types must match axis_names length: {len(axis_types)} != {len(axis_names)}")
+    if devices[0].platform == "gpu":
+        # XLA's distributed GPU autotuner requires IOTA device assignment.
+        # Outer-network axes must precede node-local axes so flattening the
+        # hybrid grid preserves topology-aware GPU numbering.
+        types_by_name = dict(zip(axis_names, axis_types, strict=True)) if axis_types is not None else None
+        axis_names = list(dcn_axes) + list(ici_axes)
+        if types_by_name is not None:
+            axis_types = tuple(types_by_name[name] for name in axis_names)
+
     ici_mesh_shape = tuple(ici_axes.get(name, 1) for name in axis_names)
     dcn_mesh_shape = tuple(dcn_axes.get(name, 1) for name in axis_names)
 
@@ -172,9 +203,6 @@ def create_mesh_from_axis_specs(
             devices=devices,
             allow_split_physical_axes=allow_split_physical_axes,
         )
-
-    if axis_types is not None and len(axis_types) != len(axis_names):
-        raise ValueError(f"axis_types must match axis_names length: {len(axis_types)} != {len(axis_names)}")
 
     return Mesh(device_mesh, tuple(axis_names), axis_types=axis_types)
 

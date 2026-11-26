@@ -2,44 +2,253 @@
 
 This directory contains thin trigger YAML around behavior implemented in `scripts/ci/`. See the design at `.agents/projects/workflow_scripts/design.md` and contracts at `.agents/projects/workflow_scripts/spec.md`.
 
+## Pulumi service rollouts
+
+`ops-pulumi-rollout.yaml` runs
+`uv run --all-packages --extra deploy --frozen marin-deploy <service> rollout` for
+registered service projects after their source paths change on `main`.
+`scripts/ci/pulumi_rollouts.py` maps each service to its Pulumi directory, deploy
+identity, tests, and additional source roots.
+The registry currently covers Ducky, Echo, EvalDash, Grafana, and XProf. Add one `Rollout` entry when
+another service should deploy through this workflow.
+
+For an `IrisService`, every registered shared source root must also be present in that
+service's `code_paths`. The rollout selector starts the shared deploy command;
+`code_paths` changes the `command.local.Command` input that resubmits the Iris job.
+
+Pull requests run each affected service's registered pytest path. Manual dispatch selects one
+registered service and accepts a deploy-generation override for Ducky and XProf. Ducky and
+XProf still read their runtime credentials from GitHub Actions secrets; the rollout job exposes
+those values only to the matching matrix entry.
+
+Run one stack manually from `main` with:
+
+```bash
+gh workflow run ops-pulumi-rollout.yaml --ref main -f service=echo
+```
+
 ## Agent prose cleanup
 
-`ops-agent-prose-cleanup.yaml` cleans issue and PR descriptions carrying the
-`agent-generated` label. It runs when an item is opened, edited, reopened, or
-labeled. The workflow executes `scripts/ci/github_prose_cleanup.py` from the
-default branch; `pull_request_target` never checks out the PR head.
+`ops-agent-prose-cleanup.yaml` launches a Loom session for an issue or PR carrying
+the `agent-generated` label whose author has write access or is `marin-ops-agent[bot]`
+or `loom-oa-dev[bot]`; external issues and PRs are not cleaned up. The session
+leaves descriptions alone unless they contain egregious prose or agent
+attribution such as "written by Claude". Short descriptions, minor style issues,
+and harmless formatting do not warrant edits. Changes are local and preserve
+technical facts; the publishing helper does not apply further style rewrites.
+The session applies the archive, validation, and stale-body checks in
+`scripts/ci/github_prose_cleanup.py` before any update. Actions checks out
+only the trusted default-branch launch and access-check actions. The workflow runs on open, reopen, and label
+events, not edits. The launch uses the low-effort `prose-cleanup` Loom profile published as
+`LOOM_PROSE_CLEANUP_PROFILE`, and its idempotency key is the issue or PR number, so later label
+and reopen events return the existing run instead of starting another. A body that already carries
+the `marin-prose-cleanup` marker skips the launch entirely.
 
-Claude reads the common writing-style guide, the AI-writing checklist, and the
-applicable issue or pull request guide from `.agents/skills/writing-style/`, then
-rewrites the description as a permanent record for a technical reader. The
-workflow prompt narrows that policy to a soft edit: preserve source facts,
-measurements, caveats, links, and useful code examples; do not import facts from
-the diff or comments; do not target a word count; and leave compliant text and
-titles unchanged.
+## Agentic lint
 
-The model job has read-only repository permissions, receives only the filesystem
-`Read` tool, and returns a schema-validated body. A separate write job runs the
-Python finalizer, which applies deterministic presentation checks outside fenced
-and inline code, rejects empty or oversized rewrites, and prepares the GitHub
-update.
+`agentic-lint.yaml` runs a best-effort Loom lint review on a pull request that
+lacks the `agentic-lint` label. The label records that the PR has had a lint
+pass: the `manage-pr` skill applies it at PR creation after the author's local
+`./infra/pre-commit.py --review`, and the Loom session adds it after reporting
+its findings. The launcher runs when a non-draft PR from this repository opens,
+reopens, or becomes ready for review, and only when its author has write access
+or is `marin-ops-agent[bot]`. Pushes to a PR do not launch another review;
+removing the label requests a fresh review of the current head. The idempotency
+key is the PR number and head SHA, so repeated events on one commit reuse a run.
+The review is not a required check, so a failed Loom run does not block merging.
+Loom's `agentic-lint` profile and the workflow's OIDC federation are declared in
+`infra/loom/Pulumi.marin-loom.yaml`; the GitHub profile variable is published
+from `infra/pulumi/github`.
 
-Before an edit, the workflow stores the exact prior description in a collapsed
-`github-actions[bot]` comment. The edited description ends with an `Original
-description` link to that comment. Content hashes make archive creation
-idempotent across retries, and the workflow rechecks the current description
-before writing so a queued run cannot overwrite a newer edit. It skips cleanup
-when the archive or updated body would exceed GitHub's size limit.
+Other GitHub agent entry points use the `github-automation` Loom profile.
+
+Loom launchers that respond to a user-authored issue, comment, review, or pull
+request decide who may trigger them with the `check-write-access` action
+rather than the event payload's `author_association`. The payload hides
+private organization membership, so a regular member with private visibility
+appears as `CONTRIBUTOR` and would be skipped. The action asks GitHub for the
+author's effective repository permission with the workflow token and allows
+`write`, `maintain`, or `admin`; a lookup failure logs the API error and denies
+the launch. Bot accounts do not resolve through that endpoint, so the
+pull-request launchers pass `marin-ops-agent[bot]` through the action's
+`allowed-bots` input. Scheduled and label-driven launchers such as prose
+cleanup do not use the check.
+
+Canary failure workflows launch an independent triage session and continue to
+send the immediate Slack fallback notification. The Iris smoke test still
+uploads screenshots for inspection through the `Marin - Unit` run.
+
+## Holistic review and deslop
+
+`ops-loom-holistic-review.yaml` launches a whole-change review session for a
+non-draft pull request from this repository whose author has write access or
+is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. Each distinct head gets a run in the PR's Loom
+channel. The session reads the `review-pr` skill from the workflow revision
+so an older branch receives the current rubric. The reviewer maintains
+one compact overview ending in
+`<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
+overview by comment ID, preserving finding numbers and updating their status.
+A separate new top-level comment may announce only new or materially changed
+actionable findings; it links to the overview and uses
+`<!-- marin-holistic-followup:<sha> -->` so it cannot become the overview.
+On push, the session checks the delta and open findings against the current
+head before updating the overview. A rebase gets a full review. A session
+for a superseded head exits before posting. The review is advisory.
+
+The `deslop` job in `ops-loom-github.yaml` launches a `github-automation`
+session when a holistic packet is posted on a pull request carrying
+`agent-generated`, or when a maintainer review contains `deslop`. The session
+applies only the packet's mechanical items and the `simplify-code` skill, pushes one
+`Deslop` commit after the narrow checks pass, and replies with
+`<!-- marin-deslop:<sha> -->`. The launcher's per-PR idempotency key permits
+one automatic deslop session; follow-up findings are advisory.
+Pull requests without `agent-generated` receive
+committable suggestions and no push.
+
+## Nightshift area reviews
+
+`ops-nightshift-cleanup.yaml` runs on weekdays at 10:00 UTC and by manual
+dispatch. It launches one `github-automation` session. Follow this procedure
+for that assignment; CI-test and documentation-drift jobs have separate scopes.
+
+1. **Find demand, then choose one area.** Read applicable `AGENTS.md` files
+   and use `use-echo` for prior work. Inspect the last 20 PRs labeled
+   `nightshift`, including closed PRs and relevant feedback:
+
+   ```bash
+   gh pr list --repo marin-community/marin --state all --label nightshift --limit 20 \
+     --json number,title,state,createdAt,url,files
+   ```
+
+   Look for an unresolved failure, repeated operator work, a current request,
+   or a measured cost in an active workflow. Read the full discussion,
+   including corrections and rejected fixes. Use that evidence to choose a
+   bounded subsystem under `lib/marin/src/marin`, `lib/iris/src/iris`,
+   `lib/zephyr/src/zephyr`, or `lib/levanter/src/levanter`. Name the affected
+   workflow and why it deserves attention now. Prefer an area the inspected
+   PRs have not recently covered unless new evidence justifies returning. If no
+   demand is documented, measure an ordinary caller before proposing work.
+
+2. **Understand the system before proposing edits.** Apply the whole-system
+   questions from [holistic review](../../.agents/skills/review-pr/references/holistic.md):
+   fit with existing concepts, better abstractions, consequences across
+   boundaries, hidden tests, claims versus evidence, related PRs, test value,
+   and scope. This is an audit of existing behavior; the PR-specific head,
+   delta, posting, and telemetry procedures apply only to PR reviews.
+   Trace entry points, current callers, configuration defaults, state and
+   error transitions, neighboring abstractions, tests, and recent history.
+   Read `TESTING.md` and module testing guidance when assessing coverage.
+   Write a short walkthrough of one ordinary workflow, including its dominant
+   work and failure boundaries. Check open PRs by listing their changed files
+   and filtering by the area's paths; `gh pr list --search` does not search
+   changed paths. Read relevant closed predecessors before developing a fix.
+   Defer work already covered by an open PR or rejected without new evidence.
+
+3. **Generate alternatives from that workflow.** Consider preventing the
+   failure, containing it at an existing boundary, or removing unnecessary
+   work. Compare up to three supported improvements; do not fill a quota. Each
+   candidate needs exact source paths and lines, an affected user or operator,
+   a concrete consequence, a replacement using existing concepts, and a safe,
+   falsifiable regression or measurement. Establish why the affected case
+   matters now: a non-test caller exercising it, an active operational path,
+   a recent failure or request, repeated CI observations, or a measurement on
+   a representative workload. Accompany a synthetic reproducer with evidence
+   of priority. Public-API completeness or unused option combinations alone are
+   insufficient reasons to spend a nightshift run.
+
+   Trace the proposed replacement through the ordinary execution path. Account
+   for added bytes read, peak memory, network requests, repeated passes, and
+   latency. A format or edge-case fix that introduces full-file materialization
+   or extra work for common callers needs evidence that its benefit outweighs
+   that cost.
+
+4. **Choose by demonstrated benefit.** Record a candidate table with evidence
+   of current use, consequence or measured cost, proposed change, validation,
+   effort, risk, and selection or rejection reasons. Distinguish observed
+   impact from possible severity; mark frequency and savings unknown when
+   unmeasured. Prefer removal of recurring cost or failure in exercised paths
+   over isolated edge-case completeness. Explain why the winner is worth more
+   than the alternatives relative to its implementation and review burden.
+   Avoid style-only changes, trivial extraction, and speculative performance
+   claims. Defer changes needing live migrations, distributed ownership
+   redesign, multiple PRs, or validation unavailable to this run.
+
+   If no candidate has enough demonstrated value for one coherent PR, report
+   what was reviewed and why no change is warranted. Do not switch areas
+   repeatedly to force a PR.
+
+5. **Test the replacement, then implement one improvement.** Reproduce the
+   defect or measure the cost before editing. Use a small local prototype to
+   compare the proposed replacement with the baseline through the affected
+   caller. Ask one reviewer with fresh context to try to disprove the selected
+   candidate using its source and demand evidence. Have them check prior
+   decisions, added costs, failure paths, teardown, and any state or ownership
+   boundaries the replacement changes. A helper-level reproducer does not
+   establish that it works across retries, asynchronous completion, or ranks.
+   Drop disproved candidates and reconsider the remaining ones. Narrow claims
+   to the callers and modes actually validated.
+
+   Follow applicable implementation and testing skills. Compare the finished
+   change with the baseline using the promised regression or measurement.
+   Measure added I/O or materialization on representative input sizes and
+   relate local measurements to the whole workflow. Passing existing tests
+   alone does not establish the improvement. Update the nearest docs when guidance
+   changes and use `manage-pr` to publish a PR with `agent-generated` and `nightshift`
+   labels. Do not merge it or file issues for unselected candidates.
+
+Publish the report in the session's Loom channel with message kind `result`:
+
+```bash
+loom channels send --kind result "<review and outcome>"
+```
+
+Include the reviewed baseline SHA, reviewed area, walkthrough, candidate table,
+selection or no-change rationale, validation results and limits, and resulting
+PR URL and head SHA when present. Keep the full review in the session; keep the
+PR description focused on its resulting behavior.
+
+## SkyRL runtime checks
+
+`Marin - Unit` selects `skyrl-wheel` for SkyRL, its editable Marin
+dependencies, or CI tooling changes. It checks the nested lock and runs the
+packaging, launcher, and verifier tests in SkyRL's CPU environment. GPU smoke
+tests run separately; see `docs/dev-guide/skyrl.md`.
+
+`Marin - SkyRL Nightly` runs OPD, Grug/Megatron and asynchronous GPU CatCount
+at 09:00 UTC. The Grug CUTLASS case runs weekly or by manual selection.
+`Marin - SkyRL CPU Nightly` runs CatCount learning and checkpoint/resume gates
+at 06:00 UTC. Both use the checked-out nested runtime and its independent lock.
 
 ## External dependency updates
 
-`ops-external-dependencies.yaml` advances the isolated Evalchemy, Harbor, and
-MarinSkyRL projects at 09:00 UTC each day. It runs
-`uv run config/update-external.py` without a project selector, records each
-resolved version and commit in the job summary, and includes every upstream
-commit subject between the old and new revisions. It opens or refreshes one
-`automation/external-dependencies` pull request when generated state changes
-and enables squash auto-merge. The Nightshift GitHub App token lets normal pull
-request checks run on the automation branch.
+Harbor is maintained under `vendor/harbor`. The `harbor-unit` lane and local
+affected-test runner use `infra/ci/run_harbor_tests.py` to check its standalone
+lock before running offline runtime tests. Changes to its local Rigging and
+FineStore dependencies also select this lane.
+
+Curated TaskSpec evaluation runs in the Marin unit lane. Harbor uses local
+Rigging and FineStore.
+
+`ops-external-dependencies.yaml` is manual: it regenerates packaged external
+requirements and opens an update only when generated state changes. Vendored
+SkyRL and Harbor source updates land directly in Marin.
+
+`ops-native-package-dependencies.yaml` applies the same policy to Marin's
+published native wheels. A successful non-PR `Marin - Release Packages` run
+triggers the updater from the default branch, where the protected environment
+can release the app key. The updater reads the newest published DupeKit,
+Finelog, and Iris native versions from PyPI, advances their compatibility floors
+and `uv.lock`, and merges only after the same identity, file, SHA, and CI gates
+pass. Manual dispatch retries a failed or missed update without republishing the
+wheels.
+
+## Snowball family-tree releases
+
+`marin-release-snowball-tree.yaml` publishes the Snowball family-tree app from
+`main` with `scripts/ci/snowball_release.py`. Scheduled runs require the
+repository variable `SNOWBALL_TREE_RELEASE=enabled`. The
+[tree maintenance guide](../../docs/references/snowball-family-tree.md#nightly-publication)
+covers activation and manual runs.
 
 ## Canonical recipe: open or update a bot PR with `git + gh`
 

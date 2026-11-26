@@ -78,7 +78,7 @@ def _nightly_query_start(lane: NightlyLane, now: datetime) -> datetime:
     return today - timedelta(days=6 + cadence_days)
 
 
-def _to_nightly_run(run: dict) -> NightlyRun:
+def _to_nightly_run(run: dict, *, skipped: bool) -> NightlyRun:
     return NightlyRun(
         id=run["id"],
         status=run["status"],
@@ -88,6 +88,7 @@ def _to_nightly_run(run: dict) -> NightlyRun:
         run_started_at=run.get("run_started_at"),
         updated_at=run["updated_at"],
         url=run["html_url"],
+        skipped=skipped,
     )
 
 
@@ -105,6 +106,10 @@ class GithubSource:
         # REST ferry/nightly panels still work but rate-limit fast, and the GraphQL
         # build panel returns no data.
         self._client = httpx.Client(timeout=timeout, headers=headers, auth=auth)
+        # Whether each completed run attempt took its lane's skip step, keyed by (run id,
+        # attempt). A re-run keeps its run id, but a completed attempt never changes, so
+        # this costs one jobs request per attempt for the life of the process.
+        self._skipped_by_attempt: dict[tuple[int, int], bool] = {}
 
     def _get(self, url: str, params: dict | None = None) -> dict:
         try:
@@ -190,6 +195,27 @@ class GithubSource:
             )
         return rows
 
+    def _run_skipped(self, lane: NightlyLane, run: dict) -> bool:
+        """Whether a green run took the lane's skip step, so it never ran its workload.
+
+        GitHub lists every step of a job, with conclusion "skipped" when its `if`
+        was false, so only a successful skip step counts.
+        """
+        if lane.skip_step is None or run["status"] != "completed" or run.get("conclusion") != "success":
+            return False
+        attempt = (run["id"], run["run_attempt"])
+        if attempt not in self._skipped_by_attempt:
+            jobs = self._get(
+                f"{GITHUB_API_BASE}/repos/{lane.repository}/actions/runs/{attempt[0]}/attempts/{attempt[1]}/jobs",
+                params={"per_page": 100},
+            ).get("jobs", [])
+            self._skipped_by_attempt[attempt] = any(
+                step["name"] == lane.skip_step and step.get("conclusion") == "success"
+                for job in jobs
+                for step in job.get("steps", [])
+            )
+        return self._skipped_by_attempt[attempt]
+
     def _nightly_lane_snapshot(self, lane: NightlyLane, now: datetime) -> NightlyLaneSnapshot:
         """Fetch one lane's recent scheduled runs; a failure becomes an error snapshot, not a raise."""
         url = f"{GITHUB_API_BASE}/repos/{lane.repository}/actions/workflows/{quote(lane.workflow_file, safe='')}/runs"
@@ -201,9 +227,11 @@ class GithubSource:
         }
         try:
             payload = self._get(url, params=params)
+            runs = [
+                _to_nightly_run(run, skipped=self._run_skipped(lane, run)) for run in payload.get("workflow_runs", [])
+            ]
         except UpstreamError as err:
             return NightlyLaneSnapshot(lane_id=lane.id, runs=[], error=str(err))
-        runs = [_to_nightly_run(run) for run in payload.get("workflow_runs", [])]
         return NightlyLaneSnapshot(lane_id=lane.id, runs=runs, error=None)
 
     def nightlies(self, now: datetime | None = None) -> list[dict]:

@@ -7,12 +7,16 @@ Tests type conversions and handle serialization without requiring an Iris cluste
 Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
+import logging
 import pickle
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock
 
 import fray.iris_backend as iris_backend
 import pytest
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
@@ -26,12 +30,17 @@ from fray.types import (
     Entrypoint,
     GpuConfig,
     JobRequest,
+    JobStatus,
     ResourceConfig,
     TpuConfig,
 )
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
-from iris.cluster.types import ResourceSpec, gpu_device
+from iris.cluster.types import JobName, ResourceSpec, gpu_device
+from iris.resources.state import JobState as IrisJobState
+from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 class TestConvertConstraints:
@@ -126,23 +135,34 @@ class TestConvertConstraintsDeviceAlternatives:
         assert {v.value for v in c.values} == {"v4-8", "v5p-8"}
 
 
-class TestIrisActorHandlePickle:
-    def test_pickle_roundtrip_preserves_name(self):
-        handle = IrisActorHandle("my-actor")
-        data = pickle.dumps(handle)
-        restored = pickle.loads(data)
-        assert restored._endpoint_name == "my-actor"
-        assert restored._client is None
+def test_unpickled_actor_handle_reresolves_endpoint_in_receiver_context(monkeypatch):
+    """A pickled handle carries only its endpoint name; the receiver resolves it through its own Iris context."""
+    resolved_names = []
 
-    def test_pickle_drops_client(self):
-        """Client is transient state — pickle should not carry it."""
-        handle = IrisActorHandle("my-actor", resolver=MagicMock())
-        # Manually set client to simulate resolved state
-        handle._client = "fake-client"
-        data = pickle.dumps(handle)
-        restored = pickle.loads(data)
-        assert restored._client is None
-        assert restored._resolver is None
+    def actor_client(actor_resolver, endpoint_name):
+        resolved_names.append(actor_resolver.resolve(endpoint_name).name)
+        return SimpleNamespace(ping=lambda: "pong")
+
+    monkeypatch.setattr(iris_backend, "ActorClient", actor_client)
+
+    sender_lookups = []
+    sender_resolver = SimpleNamespace(resolve=lambda name: sender_lookups.append(name) or SimpleNamespace(name=name))
+    handle = IrisActorHandle("my-actor", resolver=sender_resolver)
+    assert handle.ping() == "pong"
+
+    restored = pickle.loads(pickle.dumps(handle))
+    receiver_lookups = []
+    receiver_cluster = SimpleNamespace(list_endpoint_instances=lambda name: receiver_lookups.append(name) or [])
+    receiver_ctx = IrisContext(
+        job_id=JobName.from_string("/user/receiver"),
+        client=cast(IrisClient, SimpleNamespace(_cluster_client=receiver_cluster)),
+    )
+    with iris_ctx_scope(receiver_ctx):
+        assert restored.ping() == "pong"
+
+    assert resolved_names == ["my-actor", "my-actor"]
+    assert sender_lookups == ["my-actor"]
+    assert receiver_lookups == [f"{receiver_ctx.namespace}/my-actor"]
 
 
 def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
@@ -185,6 +205,40 @@ def test_iris_job_handle_returns_a_globally_bounded_tail():
     job.logs.assert_called_once_with(max_lines=2, tail=True)
 
 
+def test_iris_job_handle_reports_killed_job_as_stopped():
+    job = MagicMock()
+    job.state_only.return_value = IrisJobState.KILLED
+
+    assert IrisJobHandle(job).status() is JobStatus.STOPPED
+
+
+def test_actor_startup_after_task_termination_stops_server_without_error(monkeypatch, caplog):
+    def reject_registration(_name, _address):
+        raise ConnectError(
+            Code.FAILED_PRECONDITION,
+            "Task /user/job/0 is already terminal; endpoint not registered",
+        )
+
+    stopped = []
+    server = SimpleNamespace(
+        register=lambda _name, _instance: None,
+        serve_background=lambda: 1234,
+        stop=lambda: stopped.append(True),
+    )
+    registry = SimpleNamespace(register=reject_registration)
+    ctx = SimpleNamespace(job_id=JobName.from_wire("/user/job"), registry=registry, get_port=lambda _name: 1234)
+    job_info = SimpleNamespace(task_index=0, advertise_host="worker")
+
+    monkeypatch.setattr(iris_backend, "ActorServer", lambda **_kwargs: server)
+    monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
+    monkeypatch.setattr(iris_backend, "get_job_info", lambda: job_info)
+
+    iris_backend._host_actor(object, (), {}, "actor", 17)
+
+    assert stopped
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
 class TestResourceConfigScale:
     def test_scale_with_uniform_factor_scales_all_dimensions(self):
         scaled = ResourceConfig(cpu=1, ram="4g", disk="2g").scale(2)
@@ -223,14 +277,6 @@ class TestResourceConfigScale:
 
 
 class TestImagePlumbing:
-    def test_resource_config_image_default_is_none(self):
-        rc = ResourceConfig()
-        assert rc.image is None
-
-    def test_resource_config_image_set(self):
-        rc = ResourceConfig(image="custom/swetrace:dev")
-        assert rc.image == "custom/swetrace:dev"
-
     def test_create_actor_group_passes_task_image_to_iris(self):
         """resources.image must reach the underlying iris.submit() call as task_image."""
         fake_iris = MagicMock()
@@ -251,6 +297,22 @@ class TestImagePlumbing:
         assert kwargs["task_image"] == "custom/swetrace:dev"
         assert kwargs["replicas"] == 2
 
+    def test_create_actor_group_passes_the_container_profile_to_iris(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-123")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        client.create_actor_group(
+            _DummyActor,
+            name="dummy",
+            count=1,
+            resources=ResourceConfig(cpu=2, ram="4g", container_profile="CONTAINER_PROFILE_PRIVILEGED"),
+        )
+        assert fake_iris.submit.call_args.kwargs["container_profile"] == job_pb2.CONTAINER_PROFILE_PRIVILEGED
+
     def test_create_actor_group_default_image_is_none(self):
         """When ResourceConfig.image is unset, task_image flows through as None."""
         fake_iris = MagicMock()
@@ -265,8 +327,8 @@ class TestImagePlumbing:
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] is None
 
-    def test_submit_job_passes_task_image_to_iris(self):
-        """resources.image on a top-level job request reaches iris.submit()."""
+    def test_submit_job_passes_request_options_to_iris(self):
+        """Top-level job options reach iris.submit()."""
         fake_iris = MagicMock()
         fake_iris.submit.return_value = MagicMock(job_id="job-456")
         client = FrayIrisClient.from_iris_client(fake_iris)
@@ -276,13 +338,19 @@ class TestImagePlumbing:
 
         request = JobRequest(
             name="test-job",
+            ports=("ray-gcs", "ray-client"),
             entrypoint=Entrypoint.from_callable(_noop),
             resources=ResourceConfig(cpu=1, ram="2g", image="custom/swetrace:dev"),
+            timeout=Duration.from_minutes(30),
+            termination_grace=Duration.from_seconds(60),
         )
         client.submit(request)
 
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
+        assert kwargs["timeout"] == Duration.from_minutes(30)
+        assert kwargs["termination_grace"] == Duration.from_seconds(60)
+        assert kwargs["ports"] == ["ray-gcs", "ray-client"]
 
 
 class TestActorGroupEnvironment:
@@ -470,7 +538,7 @@ def test_wrap_multiprocess_one_process_per_gpu() -> None:
     assert wrapped.command == [
         "python",
         "-m",
-        "iris.hooks.multigpu_main",
+        "iris.jax.multigpu_main",
         "--nproc",
         "8",
         "--devices-per-proc",
@@ -490,24 +558,13 @@ def test_wrap_multiprocess_groups_devices_when_fewer_processes() -> None:
     assert wrapped.command[:8] == [
         "python",
         "-m",
-        "iris.hooks.multigpu_main",
+        "iris.jax.multigpu_main",
         "--nproc",
         "4",
         "--devices-per-proc",
         "2",
         "--",
     ]
-
-
-def test_wrap_multiprocess_requires_gpu() -> None:
-    cpu_only = ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=None)
-    with pytest.raises(ValueError, match="requires a GPU device"):
-        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), cpu_only, processes_per_task=2)
-
-
-def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
-    with pytest.raises(ValueError, match="must divide the GPU count"):
-        wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)
 
 
 def test_wrap_nsys_is_a_noop_without_the_environment_variable(monkeypatch):

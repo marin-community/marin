@@ -68,16 +68,26 @@ length, row count, included columns, predicate, and source-row identity domain.
 ### A closed method family
 
 User schemas remain concise: column flags declare trigram, exact-value, and
-value-count policy, while `Schema.projections` declares independent named
-covering projections. The server compiles those declarations into a closed Rust
-`IndexSpec` enum:
+value-count policy, while `Schema.projections` and `Schema.grouped_extrema`
+declare independent named covering projections and grouped-extrema summaries.
+The server compiles those declarations into a closed Rust `IndexSpec` enum:
 
 ```text
 TrigramBloom { column }
 ExactPostings { column, values }
 ValueCounts { column }
+AdaptiveValueCounts { column }
+AdaptiveGroupExtrema { config }
 CoveringProjection { projection }
 ```
+
+The `Adaptive*` variants are best-effort. `with_adaptive_value_counts` adds a
+value-count method for every string column the schema did not already require,
+and `with_adaptive_group_extrema` adds the declared grouped-extrema configs. A
+segment that declines an adaptive section — because the column exceeds its
+cardinality or byte budget — is still complete, so an adaptive method never
+forces a rebuild. A declared `ValueCounts` section is required, and its absence
+makes the bundle stale.
 
 This is the useful part of PostgreSQL's access-method and operator-class split:
 storage methods are distinct from the SQL shapes they support. It deliberately
@@ -86,13 +96,14 @@ requires a typed enum variant, schema validation, a versioned section codec, a
 planner rule, fallback tests, and a copied-shard benchmark. There is no
 free-form method string or runtime plugin.
 
-The initial methods do not overlap:
+The methods do not overlap:
 
 | Method | Query family | Planner result |
 | --- | --- | --- |
-| `TrigramBloom` | `contains` and literal runs in `LIKE` | Conservative source-row span mask; residual filter retained |
+| `TrigramBloom` | `contains`, literal runs in `LIKE`, and literal `regexp_matches` patterns | Conservative source-row span mask; residual filter retained |
 | `ExactPostings` | Configured `=`, `IN`, and same-column `OR` | Exact source-row selection; residual filter retained |
-| `ValueCounts` | Unfiltered one-column `GROUP BY` with `COUNT(*)` or `COUNT(column)` | Exact aggregate subtree replacement |
+| `ValueCounts`, `AdaptiveValueCounts` | One-column `GROUP BY` with `COUNT(*)` or `COUNT(column)`, optionally under a half-open Int64 range | Exact aggregate subtree replacement per contained segment |
+| `AdaptiveGroupExtrema` | `MAX` of an Int64 column grouped by a top-level JSON value, under a string equality filter and a half-open Int64 range | Exact aggregate subtree replacement per contained segment |
 | `CoveringProjection` | Configured predicate whose referenced columns are covered | Per-segment replacement Parquet file |
 
 Parquet already supplies row-group min/max statistics, so Finelog does not add
@@ -125,12 +136,22 @@ Exact postings are used only when they retain at most 25% of a segment. Above
 that threshold, applying a fragmented row selection is more expensive than a
 contiguous Parquet scan. This is a planner cost guard, not a correctness rule.
 
-Value-count substitution requires complete coverage for every visible segment.
-Each segment omits a summary above 4,096 distinct non-null values, and the
+Value-count substitution is per segment. Stable segments wholly inside the
+query's half-open range read their count summaries, while boundary segments and
+fresh L0 segments keep an ordinary aggregate; a final aggregate merges both
+inputs exactly. That keeps derived-index work off the write-acknowledgement
+path. Each segment omits a summary above 4,096 distinct non-null values, and the
 optimizer aborts substitution if the combined result exceeds 16,384 values.
 The logical optimizer emits `FinelogIndexAggregate`; `EXPLAIN`, outer
 projections, `ORDER BY`, and `LIMIT` therefore see and compose with the rewrite.
 `COUNT(column)` excludes the null bucket while `COUNT(*)` includes it.
+
+Grouped extrema follow the same shape under `FinelogGroupExtrema`. A segment
+contributes its summary only when its recorded range sits wholly inside or
+wholly outside the requested window; boundary, L0, remote-only, missing, and
+malformed segments fall back to the ordinary aggregate. Each segment declines
+the section above 4,096 groups, and the optimizer aborts above 16,384 combined
+groups.
 
 ### Named projections, not column or JSON shattering
 
@@ -144,11 +165,15 @@ included-column list. The planner substitutes it only when the query's predicate
 values and every scan or filter column are covered. A second exact-value policy
 cannot silently widen an existing projection.
 
-The initial `training-status` projection contains rows whose `name` is `phase`,
-`step`, or `progress_time_seconds` and only these columns:
+The telemetry schema has grown from the one projection this design started with
+to fourteen, covering training status, per-run attribution, host metrics, and
+accelerator metrics. The original `training-status` projection contains rows
+whose `name` is `phase`, `step`, or `progress_time_seconds` and only these
+columns:
 
 ```text
-seq, timestamp_ms, service, name, value, resource_attributes_json, cluster
+seq, timestamp_ms, service, run_id, job_id, name, value,
+resource_attributes_json, attributes_json, cluster
 ```
 
 Arbitrary JSON shattering is out of scope. OpenTelemetry attribute bags are
@@ -156,7 +181,10 @@ sparse and evolve by producer. A JSON path should become a typed generated
 column only when a recurring query uses it, copied-shard profiling shows JSON
 extraction remains material after pruning, and the path has a stable type and
 meaning. Once promoted, indexes and projections treat it like any ordinary
-column.
+column. `AdaptiveGroupExtrema` stays inside that boundary: it summarizes one
+declared top-level JSON key per segment without materializing the key as a
+column, and declines the section when the key set exceeds its cardinality or
+byte budget.
 
 ## Build, cache, and lifecycle
 
@@ -195,7 +223,11 @@ corrupt-section counters.
 
 Planner debug events report covered or pruned segments, retained rows, and
 high-selectivity posting fallbacks. Exact aggregate substitution is visible in
-`EXPLAIN` as `FinelogIndexAggregate`. These signals distinguish incomplete
+`EXPLAIN` as `FinelogIndexAggregate` and `FinelogGroupExtrema`, each naming the
+table and the number of candidate segments the rewrite snapshotted. Both print
+`coverage=runtime` because the split between summary and fallback segments is
+decided during execution, so the count is not the substituted-segment count.
+Together with the planner debug events these signals distinguish incomplete
 backfill, an unsupported query shape, poor selectivity, corruption, and a
 planner regression.
 
@@ -204,6 +236,10 @@ cache size. `query_metadata_cache_mb` remains the independent DataFusion
 Parquet-footer cache.
 
 ## Benchmark and acceptance criteria
+
+These are the acceptance numbers for the original four-method family and the
+single `training-status` projection. The adaptive methods and the later
+projections landed afterward and were not measured here.
 
 The completed `.fidx` implementation was measured on four copied production
 telemetry segments containing 29.2 million rows and 171.9 MB of source Parquet.

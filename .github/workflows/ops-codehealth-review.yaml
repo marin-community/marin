@@ -1,0 +1,34 @@
+name: "Ops - Code-health Review Data"
+
+on:
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: codehealth-review-data
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up code-health environment
+        uses: ./.github/actions/codehealth-setup
+        with:
+          gcp-credentials-json: ${{ secrets.IRIS_CI_GCP_SA_KEY }}
+
+      - name: Aggregate review data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: uv run --frozen python -m infra.codehealth.review_quality aggregate --days 7

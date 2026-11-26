@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -15,6 +16,7 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
@@ -27,10 +29,15 @@ from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
-from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -40,6 +47,7 @@ from levanter.recovery.types import AblationSpec, RunOutcome
 from levanter.schedule import BatchSchedule
 from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
+from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
@@ -47,6 +55,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, Transformer
+from experiments.grug.preemption import GracefulPreemption
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -56,6 +65,8 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 HERO_FSDP_RUNTIME_ENV = {
+    "LD_PRELOAD": "libjemalloc.so.2",
+    "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
     "JAX_ENABLE_PGLE": "1",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
     # NVLink SHARP. Below the sweep's resolution alone; carried by the combined configuration.
@@ -106,8 +117,8 @@ class GrugTrainerConfig:
     offload_opt_state: bool = False
     save_checkpoints: bool = False
 
-    # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
-    # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
+    # Grug builds its own compact (replica_dcn, data, expert, context, model) mesh instead of using
+    # the Trainer's logical axis mapping; `data` absorbs whatever these leave free.
     # Defaults reproduce the historical layout: no expert parallelism and full replication
     # across slices (replica_axis_size=None -> jax.process_count()), i.e. parameters
     # replicated per slice and sharded only over the intra-slice `data` axis. For a model
@@ -149,7 +160,7 @@ class GrugRunConfig:
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+    # via the iris.jax.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
     run_mode: GrugRunMode = GrugRunMode.DEFAULT
 
@@ -161,21 +172,7 @@ def build_train_dataset(
     batch_schedule: BatchSchedule,
     key: PRNGKeyArray,
 ) -> MixtureDataset[GrugLmExample]:
-    pos = Axis("position", max_seq_len)
-    mix_key, shuffle_key = jax.random.split(key)
-    weights = data_config.train_weights
-    if isinstance(weights, list):
-        weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
-
-    initial_batch_size = batch_schedule.batch_size_at_step(0)
-    datasets = data_config.train_sets(pos, key=shuffle_key, initial_batch_size=initial_batch_size)
-    return MixtureDataset(
-        datasets=datasets,
-        weights=weights,
-        stop_strategy=data_config.stop_strategy,
-        key=mix_key,
-        block_size=data_config.mixture_block_size,
-    )
+    return data_config.train_mixture(Axis("position", max_seq_len), batch_schedule, key=key)
 
 
 BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -188,7 +185,7 @@ def build_train_loader(
     mesh: Mesh,
 ) -> DataLoader[GrugLmExample]:
     # DataLoader uses this batch axis mapping to shard batches across the distributed mesh.
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     return DataLoader(
         dataset,
@@ -218,7 +215,7 @@ def build_tagged_evaluator(
         max_examples_per_dataset = eval_cfg.max_eval_batches * eval_cfg.eval_batch_size
 
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
-    # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
+    # `compact_grug_mesh` always carries (replica_dcn, data, expert, context, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
     eval_axis_mapping = {"batch": BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
@@ -373,18 +370,30 @@ def initial_state(
 
 def _drop_metrics(
     dropped_assignments: jax.Array,
+    skipped_padding_assignments: jax.Array,
+    valid_assignments: jax.Array,
     *,
     batch_size: int,
     sequence_length: int,
     top_k: int,
     num_layers: int,
 ) -> dict[str, int | float]:
-    # Global assignment totals can exceed int32; float32 would also round large drop counts.
-    dropped_assignments_host = int(dropped_assignments)
-    total_assignments = batch_size * sequence_length * top_k * num_layers
+    # Per-layer int32 counts are summed on the host so large global totals cannot overflow.
+    def _sum_int64(per_layer: jax.Array) -> int:
+        return int(np.asarray(per_layer).astype(np.int64).sum())
+
+    dropped_assignments_host = _sum_int64(dropped_assignments)
+    skipped_padding_assignments_host = _sum_int64(skipped_padding_assignments)
+    valid_assignments_host = _sum_int64(valid_assignments)
+    total_positions = batch_size * sequence_length * top_k * num_layers
+    if valid_assignments_host + skipped_padding_assignments_host != total_positions:
+        raise ValueError("valid plus skipped assignments must equal the padded batch size")
     return {
-        "moe/dropped_assignments": dropped_assignments_host,
-        "moe/drop_fraction": dropped_assignments_host / total_assignments,
+        MOE_DROPPED_ASSIGNMENTS_METRIC: dropped_assignments_host,
+        "moe/drop_fraction": dropped_assignments_host / max(valid_assignments_host, 1),
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: skipped_padding_assignments_host,
+        "moe/skipped_padding_fraction": skipped_padding_assignments_host / total_positions,
+        MOE_VALID_ASSIGNMENTS_METRIC: valid_assignments_host,
     }
 
 
@@ -513,7 +522,19 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
     )
-    with set_mesh(mesh):
+    # Armed before the state is built or restored, so its startup deadline covers a stall in
+    # initialization, checkpoint restore, cache construction or compilation. The step and process
+    # deadlines only arm once a step reports progress.
+    progress_watchdog = trainer.progress_watchdog.create(
+        process_index=jax.process_index(),
+        diagnostic=capture_stall_diagnostics,
+    )
+
+    checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
+    dashboard = (
+        TrainingDashboard(config, checkpointer.request_checkpoint, run_id) if checkpointer is not None else nullcontext()
+    )
+    with set_mesh(mesh), dashboard:
         batch_schedule = trainer.batch_schedule
 
         train_dataset = build_train_dataset(
@@ -541,7 +562,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -584,10 +604,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
-        progress_watchdog = trainer.progress_watchdog.create(
-            process_index=jax.process_index(),
-            diagnostic=capture_stall_diagnostics,
-        )
         if progress_watchdog is not None:
             state_callbacks.add_hook(progress_watchdog, every=1)
         state_callbacks.add_hook(
@@ -625,6 +641,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_step_duration = 0.0
 
         # Main optimization loop.
+        preemption = GracefulPreemption()
+        preemption.install()
+        preempted = False
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
@@ -667,9 +686,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
                             step=step,
                         )
-                    if "moe/dropped_assignments" in metrics:
+                    if MOE_DROPPED_ASSIGNMENTS_METRIC in metrics:
                         drop_metrics = _drop_metrics(
-                            metrics["moe/dropped_assignments"],
+                            metrics[MOE_DROPPED_ASSIGNMENTS_METRIC],
+                            metrics[MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC],
+                            metrics[MOE_VALID_ASSIGNMENTS_METRIC],
                             batch_size=batch.tokens.shape[0],
                             sequence_length=batch.tokens.shape[1],
                             top_k=config.model.num_experts_per_token,
@@ -687,26 +708,30 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                     ):
                         checkpointer.on_step(tree=state, step=int(state.step))
+                preempted = preemption.should_stop(int(state.step))
+                if preempted:
+                    break
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
             )
             raise
         else:
-            # Mirror classic trainer behavior: force callbacks on the last completed step.
-            state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if not preempted:
+                state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
                 with callbacks.progress_event_scope(
                     state_callbacks.emit_event,
                     callbacks.ProgressEvent.CHECKPOINT_STARTED,
                     callbacks.ProgressEvent.CHECKPOINT_FINISHED,
                 ):
-                    checkpointer.on_step(tree=state, step=int(state.step), force=True)
-                    checkpointer.wait_until_finished()
+                    checkpointer.save_final_checkpoint(tree=state, step=int(state.step))
         finally:
+            preemption.restore()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
+    preemption.exit_if_preempted()
 
 
 def _run_grug_supervised_local(config: GrugRunConfig) -> None:

@@ -3,9 +3,10 @@
 
 """Uncheatable Eval subsets as lazy validation ``Dataset`` handles.
 
-The Uncheatable Eval dumps live in a GitHub repo with no pinned download, so the
-raw data is a :func:`raw_download` handle (re-fetched on demand — a small repo) that
-each subset tokenizer depends on.
+The Uncheatable Eval dumps live in a GitHub repo, so the raw data is a
+:func:`raw_download` handle (re-fetched on demand — a small repo) that each subset
+tokenizer depends on. The download is pinned to :data:`UNCHEATABLE_COMMIT`; the
+decontamination eval corpus reads the same commit.
 """
 
 from marin.datakit.download.uncheatable_eval import (
@@ -17,6 +18,12 @@ from marin.experiment.data import dataset_main, raw_download, tokenized
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.llama import llama3_tokenizer
+
+UNCHEATABLE_REPOSITORY_OWNER = "ziqing-huang"
+UNCHEATABLE_REPOSITORY_NAME = "uncheatable_eval"
+# The upstream commit that holds the evaluated dumps. A new region then downloads
+# the same dumps, and the decontamination corpus covers the text that is evaluated.
+UNCHEATABLE_COMMIT = "185c463882a8ae0f203e51ae5852d8cf4fe299cf"
 
 # The English + code subsets included in the eval, mapped to their file globs.
 UNCHEATABLE_SUBSETS = {
@@ -37,22 +44,31 @@ def uncheatable_raw() -> ArtifactStep[TokenizedCache]:
         fn=download_latest_uncheatable_eval,
         build_config=lambda ctx: UncheatableEvalDownloadConfig(
             output_path=ctx.output_path,
-            repo_owner="ziqing-huang",
-            repo_name="uncheatable_eval",
+            repo_owner=UNCHEATABLE_REPOSITORY_OWNER,
+            repo_name=UNCHEATABLE_REPOSITORY_NAME,
             data_path="data",
-            branch="master",
+            branch=UNCHEATABLE_COMMIT,
         ),
         version="2026.06.28",
     )
 
 
 def uncheatable_dataset(
-    subset: str, *, tokenizer: str = llama3_tokenizer, raw: ArtifactStep[TokenizedCache] | None = None
+    subset: str,
+    *,
+    tokenizer: str = llama3_tokenizer,
+    tag: str = "llama3",
+    raw: ArtifactStep[TokenizedCache] | None = None,
 ) -> ArtifactStep[TokenizedCache]:
-    """One Uncheatable Eval subset as a validation handle."""
+    """One Uncheatable Eval subset as a validation handle.
+
+    ``tag`` names the tokenizer in the cache path; a non-default ``tokenizer`` MUST pass a distinct
+    ``tag`` (the cache is addressed by name+version, not tokenizer) or it resolves to the existing
+    ``llama3`` cache and evals the model on the wrong vocab.
+    """
     raw = raw if raw is not None else uncheatable_raw()
     return tokenized(
-        f"uncheatable_eval/{subset}-llama3",
+        f"uncheatable_eval/{subset}-{tag}",
         tokenizer=tokenizer,
         version="2026.06.28",
         raw=raw,
@@ -61,10 +77,12 @@ def uncheatable_dataset(
     )
 
 
-def uncheatable_datasets(*, tokenizer: str = llama3_tokenizer) -> dict[str, ArtifactStep[TokenizedCache]]:
+def uncheatable_datasets(
+    *, tokenizer: str = llama3_tokenizer, tag: str = "llama3"
+) -> dict[str, ArtifactStep[TokenizedCache]]:
     """All Uncheatable Eval subsets, keyed by subset name; one shared raw download."""
     raw = uncheatable_raw()
-    return {subset: uncheatable_dataset(subset, tokenizer=tokenizer, raw=raw) for subset in UNCHEATABLE_SUBSETS}
+    return {subset: uncheatable_dataset(subset, tokenizer=tokenizer, tag=tag, raw=raw) for subset in UNCHEATABLE_SUBSETS}
 
 
 if __name__ == "__main__":

@@ -4,8 +4,9 @@
 """Command-line entry point for the eval launcher.
 
 ``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``.
-``launch`` submits runs and optionally waits for their object-store records. Fleet-wide archive
-sweeps are administrative and live in :mod:`experiments.evaluation.migrations.cli`.
+``launch`` submits runs and optionally waits for their object-store records; ``scores`` prints the
+records and derived scores of finished runs. Fleet-wide archive sweeps are administrative and live in
+:mod:`experiments.evaluation.migrations.cli`.
 """
 
 from __future__ import annotations
@@ -14,32 +15,63 @@ import logging
 from pathlib import Path
 
 import click
+from evalrecords.records import RECORD_FILE, TaskEvidence, TaskMachineBackend, read_record
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.runner import EvaluationBatch, wait_and_report
+from marin.evaluation.runner import EvaluationBatch, print_record, wait_and_report
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import prefix_join
+from rigging.secrets import COREWEAVE_SECRET_NAMES, get_secret
 
-from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
+from experiments.evaluation.curated import load_evaluations
+from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import (
+    DEFAULT_EVAL_CONCURRENCY,
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
     launch_group,
     prepare_evaluation_batch,
 )
 from experiments.evaluation.models import models
+from experiments.evaluation.policy_finalization import load_policy_finalization
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
+def _resolve_evaluations(evals_arg: str) -> tuple[EvaluationDefinition, ...]:
     try:
-        return resolve_eval_keys(evals_arg)
+        return resolve_evaluations(evals_arg)
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
+
+
+def _load_selected_model(
+    model_key: str | None,
+    config_path: Path | None,
+    *,
+    key_hint: str,
+    config_hint: str,
+    label: str,
+) -> ModelConfig:
+    if config_path is not None:
+        try:
+            return load_model_config(config_path)
+        except Exception as exc:
+            raise click.BadParameter(str(exc), param_hint=config_hint) from exc
+    if model_key is None:
+        raise click.BadParameter(f"missing {label} selector", param_hint=f"{key_hint}/{config_hint}")
+    catalog = models()
+    if model_key not in catalog:
+        raise click.BadParameter(
+            f"unknown {label} {model_key!r}; known: {sorted(catalog)}",
+            param_hint=key_hint,
+        )
+    return catalog[model_key]
 
 
 def resolve_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig:
@@ -49,34 +81,89 @@ def resolve_model_config(model_key: str | None, config_path: Path | None) -> Mod
             "specify exactly one of --model or --model-config",
             param_hint="--model/--model-config",
         )
-    if config_path is not None:
-        try:
-            return load_model_config(config_path)
-        except Exception as exc:
-            raise click.BadParameter(str(exc), param_hint="--model-config") from exc
+    return _load_selected_model(
+        model_key,
+        config_path,
+        key_hint="--model",
+        config_hint="--model-config",
+        label="model",
+    )
 
-    assert model_key is not None
-    catalog = models()
-    if model_key not in catalog:
-        raise click.BadParameter(f"unknown model {model_key!r}; known: {sorted(catalog)}", param_hint="--model")
-    return catalog[model_key]
+
+def resolve_judge_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig | None:
+    """Resolve an optional hosted judge from the same model catalog schema."""
+    if model_key is None and config_path is None:
+        return None
+    if model_key is not None and config_path is not None:
+        raise click.BadParameter(
+            "specify at most one of --judge-model or --judge-model-config",
+            param_hint="--judge-model/--judge-model-config",
+        )
+    return _load_selected_model(
+        model_key,
+        config_path,
+        key_hint="--judge-model",
+        config_hint="--judge-model-config",
+        label="judge model",
+    )
+
+
+def _require_coreweave_credentials(batch: EvaluationBatch) -> None:
+    """Fail before submission when a CoreWeave target would reject the job for missing storage keys."""
+    if batch.accelerator.target_cluster is None:
+        return
+    missing = [name for name in COREWEAVE_SECRET_NAMES if not get_secret(name)]
+    if missing:
+        raise click.UsageError(
+            f"Target cluster {batch.accelerator.target_cluster} runs on CoreWeave, which requires your own "
+            f"object-storage credentials. Missing: {', '.join(missing)}. Export CW_KEY_ID and CW_KEY_SECRET "
+            "(see lib/iris/docs/secrets.md), or launch on GCP TPU with --platform tpu."
+        )
 
 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
+    geometry = batch.accelerator.geometry
+    serving = geometry.label if geometry is not None else "worker-resolved"
+    serving = f"{serving} instances={batch.model.serve.instances}"
+    task_count = (geometry.task_count if geometry is not None else 1) * batch.model.serve.instances
     click.echo(
         f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
         f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
-        f"priority={priority_band_name(batch.priority_band)}"
+        f"priority={priority_band_name(batch.priority_band)}  instances={batch.instances}  "
+        f"max_concurrent={batch.max_concurrent}"
     )
-    for evaluation in batch.evaluations:
-        tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
+    if batch.judge is not None:
         click.echo(
-            f"  eval={evaluation.identity.eval_ref.name}  location={batch.model.location}  "
+            f"judge: {batch.judge.model.name}  location={batch.judge.model.location}  "
+            f"accel={batch.judge.accelerator.label}  "
+            f"region_or_cluster={batch.judge.accelerator.target_cluster or batch.judge.accelerator.region}"
+        )
+    for evaluation in batch.evaluations:
+        eval_ref = evaluation.identity.eval_ref
+        tasks = [task.name for task in eval_ref.tasks]
+        harbor = eval_ref.harbor
+        curated = eval_ref.curated
+        agent_context = ""
+        if harbor is not None:
+            agent_context = f"max_input_tokens={harbor.max_input_tokens}  max_output_tokens={harbor.max_output_tokens}  "
+        elif curated is not None and curated.agent is not None:
+            assert curated.settings.task_machine is not None
+            agent_context = (
+                f"agent={curated.agent.harness}@{curated.agent.revision}  "
+                f"task_machine={curated.settings.task_machine.backend.value}  "
+                f"max_input_tokens={curated.agent.max_input_tokens}  "
+                f"max_output_tokens={curated.agent.max_output_tokens}  "
+            )
+        click.echo(
+            f"  eval={eval_ref.name}  location={batch.model.location}  "
             f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
+            f"serve={serving} tasks={task_count} x {batch.accelerator.label}  "
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
-            f"records={batch.records_prefix}"
+            f"{agent_context}"
+            f"records={batch.records_prefix}  "
+            f"results={evaluation.identity.output_dir}"
         )
 
 
@@ -93,23 +180,36 @@ def cli() -> None:
     default=None,
     help="Model catalog YAML or JSON. Mutually exclusive with --model.",
 )
+@click.option("--judge-model", default=None, help="Optional hosted judge model registry key.")
+@click.option(
+    "--judge-model-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional hosted judge model catalog YAML or JSON.",
+)
+@click.option("--judge-accelerator", default=None, help="Hosted judge slice override, e.g. 'H100x8'.")
 @click.option(
     "--evals",
     "evals_arg",
     default=None,
-    help="Suite name (e.g. 'smoke') or comma-separated eval keys; defaults to smoke.",
+    help="Suite or comma-separated eval keys; selects document entries with --evaluation-config. Defaults to smoke.",
 )
 @click.option(
-    "--evalchemy-config",
+    "--evaluation-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
-    help="Portable Evalchemy YAML or JSON. Repeatable and additive with --evals and --harbor-config.",
+    help="Benchmark selection document. Repeat to combine entries; --evals selects entries from the combined documents.",
 )
 @click.option(
     "--harbor-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
     help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
+)
+@click.option(
+    "--retry-unscored-harbor-trials",
+    is_flag=True,
+    help="Retry known unscored Harbor trials in --resume-results-path; preserve scored and unknown-error outcomes.",
 )
 @click.option(
     "--platform",
@@ -120,12 +220,58 @@ def cli() -> None:
 @click.option("--accelerator", default=None, help="Slice override, e.g. 'v6e-8' or 'H100x8'.")
 @click.option("--limit", type=int, default=None, help="Override max eval instances per task.")
 @click.option(
+    "--instances",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Candidate serving instances, each using the selected accelerator; multiple instances share a broker.",
+)
+@click.option(
+    "--max-concurrent",
+    type=click.IntRange(min=1),
+    default=DEFAULT_EVAL_CONCURRENCY,
+    show_default=True,
+    help="Maximum concurrent evaluators sharing inference.",
+)
+@click.option(
+    "--seed", type=int, default=None, help="Run seed for curated evaluations. Default: 0, or unseeded on TPU vLLM."
+)
+@click.option(
+    "--task-machine-backend",
+    type=click.Choice([backend.value for backend in TaskMachineBackend]),
+    default=None,
+    help="Run curated agent benchmarks' task machines on this backend. Default: each selection's, else daytona.",
+)
+@click.option(
+    "--task-evidence",
+    type=click.Choice([mode.value for mode in TaskEvidence]),
+    default=None,
+    help=(
+        "What curated attempt evidence keeps of each task: a corpus reference, or a full copy with hidden tests. "
+        "Default: what the benchmark declares, embedded unless it declares reference."
+    ),
+)
+@click.option(
     "--version",
     "version",
     default=None,
-    help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
+    help=(
+        "Submitter-controlled cohort label, e.g. '2026.07.20' or 'rl-fix-sweep'. "
+        "This is provenance metadata, not an eval-policy conformance claim."
+    ),
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
+@click.option(
+    "--resume-results-path",
+    default=None,
+    help=(
+        "Existing object-store results path for a single Harbor evaluation. "
+        "Use only after every earlier driver for that path has ended."
+    ),
+)
+@click.option(
+    "--run-id", default=None, help="Stable launch ID; repeat the command with this ID to reuse completed evals."
+)
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
@@ -144,33 +290,53 @@ def cli() -> None:
     default=None,
     help="Iris priority band for the orchestrator and serve jobs; defaults to inherit.",
 )
+@click.option(
+    "--policy-finalization-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Frozen judge configuration; enabled by the policy campaign launcher.",
+)
 def launch(
     model: str | None,
     model_config: Path | None,
+    judge_model: str | None,
+    judge_model_config: Path | None,
+    judge_accelerator: str | None,
+    policy_finalization_config: Path | None,
     evals_arg: str | None,
-    evalchemy_config: tuple[Path, ...],
+    evaluation_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
+    retry_unscored_harbor_trials: bool,
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
+    max_concurrent: int,
+    instances: int,
+    seed: int | None,
+    task_machine_backend: str | None,
+    task_evidence: str | None,
     version: str | None,
     description: str | None,
+    resume_results_path: str | None,
+    run_id: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
     federated_cluster: str | None,
     priority: str | None,
 ) -> None:
-    """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
+    """Submit evaluations against a shared candidate endpoint for MODEL."""
     selected_model = resolve_model_config(model, model_config)
+    selected_judge = resolve_judge_model_config(judge_model, judge_model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
-    evalchemy_definitions = [
-        EvalchemyDefinition(
-            name=canonical_served_name(path.stem),
-            config_path=path,
-        )
-        for path in evalchemy_config
-    ]
+    configured = [entry for path in evaluation_config for entry in load_evaluations(path)]
+    if evaluation_config and evals_arg:
+        names = {name.strip() for name in evals_arg.split(",") if name.strip()}
+        unknown = names - {entry.name for entry in configured}
+        if unknown:
+            raise click.BadParameter(
+                f"Unknown configured evaluations: {', '.join(sorted(unknown))}", param_hint="--evals"
+            )
+        configured = [entry for entry in configured if entry.name in names]
     harbor_definitions = [
         HarborDefinition(
             name=canonical_served_name(path.stem),
@@ -178,45 +344,74 @@ def launch(
         )
         for path in harbor_config
     ]
-    evals = (
-        _resolve_eval_keys(evals_arg)
-        if evals_arg is not None
-        else (() if evalchemy_definitions or harbor_definitions else _resolve_eval_keys("smoke"))
-    )
+    evals = tuple(configured) + tuple(harbor_definitions)
+    if not evaluation_config and evals_arg is not None:
+        evals += _resolve_evaluations(evals_arg)
+    if not evals:
+        evals = _resolve_evaluations("smoke")
     spec = LaunchSpec(
         model=selected_model,
         evals=evals,
-        evalchemy_definitions=tuple(evalchemy_definitions),
-        harbor_definitions=tuple(harbor_definitions),
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
+        max_concurrent=max_concurrent,
+        instances=instances,
+        seed=seed,
+        task_machine_backend=TaskMachineBackend(task_machine_backend) if task_machine_backend is not None else None,
+        task_evidence=TaskEvidence(task_evidence) if task_evidence is not None else None,
         records_prefix=records_prefix,
         submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
+        judge_model=selected_judge,
+        judge_accelerator=judge_accelerator,
+        retry_unscored_harbor_trials=retry_unscored_harbor_trials,
         version=version,
         description=description,
+        resume_results_path=resume_results_path,
+        run_id=run_id,
+        policy_finalization=load_policy_finalization(policy_finalization_config) if policy_finalization_config else None,
     )
     try:
         batch = prepare_evaluation_batch(spec)
     except ValueError as exc:
-        param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
+        if resume_results_path is not None:
+            param_hint = "--resume-results-path"
+        else:
+            param_hint = "--evaluation-config/--harbor-config" if evaluation_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
+    _require_coreweave_credentials(batch)
     if dry_run:
         _print_plan(spec, batch)
         return
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         group = launch_group(batch, client)
         click.echo(
-            f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) "
+            f"submitted group {group.group_id} ({len(group.evaluations)} evals sharing inference) "
             f"through cluster {EVALUATION_CONTROLLER_CLUSTER!r}"
         )
+        click.echo(f"  job: {group.job.job_id}")
+        click.echo(f"  records: {group.records_prefix}")
         for evaluation in group.evaluations:
             click.echo(f"  {evaluation.run_id}  ({group.model_name} / {evaluation.eval_name})")
         if no_wait:
             return
-        wait_and_report([group])
+        if not wait_and_report([group]):
+            raise click.ClickException("one or more evaluations failed or wrote no record")
+
+
+@cli.command()
+@click.argument("runs", nargs=-1, required=True)
+def scores(runs: tuple[str, ...]) -> None:
+    """Print status, coverage and scores for finished runs.
+
+    Each RUN is a ``record.json`` URI or the run directory that contains it, such as
+    ``gs://marin-eval-metadata/evals/<run_id>``.
+    """
+    configure_coreweave_s3()
+    for run in runs:
+        print_record(read_record(run if run.endswith(RECORD_FILE) else prefix_join(run, RECORD_FILE)))
 
 
 def main() -> None:

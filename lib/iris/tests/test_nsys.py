@@ -16,7 +16,6 @@ from typing import NoReturn
 
 import pytest
 from iris.cluster.client.job_info import set_job_info
-from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.hooks.nsys import NsysHook
 from iris.hooks.nsys_main import (
     build_nsys_argv,
@@ -28,6 +27,7 @@ from iris.hooks.nsys_main import (
     should_profile,
 )
 from iris.hooks.nsys_main import main as nsys_main
+from iris.jax.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 
 CMD = ["python", "train.py", "--steps", "10"]
 OUT = "s3://bucket/tmp/ttl=30d/nsys"
@@ -35,9 +35,10 @@ _FAKE_NSYS_WRITE_REPORT_ENV = "FAKE_NSYS_WRITE_REPORT"
 
 
 @pytest.fixture(autouse=True)
-def clear_job_info_cache() -> Iterator[None]:
+def clear_job_info_cache(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Drop the memoized JobInfo (a ContextVar) around every test in this module."""
     set_job_info(None)
+    monkeypatch.setenv("IRIS_TERMINATION_GRACE_MS", "10000")
     yield
     set_job_info(None)
 
@@ -84,12 +85,12 @@ def test_selection_index_requires_a_task_context(monkeypatch: pytest.MonkeyPatch
 
 
 def test_default_output_uri_keys_on_the_job_and_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Resolved from the task's own MARIN_PREFIX (right cluster even under federation) and
+    """Resolved from the task's own storage backend (including under federation) and
     keyed on the job so a run's reports are findable and self-expiring."""
     monkeypatch.setenv("MARIN_PREFIX", "s3://marin-us-east-02a/marin")
     monkeypatch.setenv("IRIS_TASK_ID", "/rav/train-42/0")
     monkeypatch.setenv("IRIS_NUM_TASKS", "1")
-    assert default_output_uri() == "s3://marin-us-east-02a/tmp/ttl=30d/iris-profiles/rav/train-42"
+    assert default_output_uri() == "s3://marin-us-east-08a/tmp/ttl=30d/iris-profiles/rav/train-42"
 
 
 def test_build_nsys_argv_matches_what_the_container_allows() -> None:

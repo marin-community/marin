@@ -3,7 +3,7 @@
 ## Problem
 
 Actor RPC calls block an HTTP connection for the entire duration of the method.
-When `ZephyrCoordinator.run_pipeline` (`lib/zephyr/src/zephyr/execution.py`)
+When `ZephyrCoordinator.run_pipeline` (`lib/zephyr/src/zephyr/coordinator.py`)
 takes hours, the httpx read timeout fires and `call_with_retry`
 (`lib/iris/src/iris/rpc/errors.py`) retries the call — creating duplicate
 pipeline executions on the same coordinator (#3459).

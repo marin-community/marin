@@ -13,11 +13,10 @@ from marin.evaluation.trace_labeled_eval import (
     TraceRowAdapterConfig,
     _source_for_dataset,
 )
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import WhitespaceSplit
-
-from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE
 
 
 class FailingAfterLimitSource(ShardedDataSource[int]):

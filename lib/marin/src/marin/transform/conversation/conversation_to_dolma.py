@@ -9,8 +9,8 @@ Transform conversation format to Dolma format.
 import dataclasses
 
 import draccus
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 from zephyr.readers import load_jsonl
 
 

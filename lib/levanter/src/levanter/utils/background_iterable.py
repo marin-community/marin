@@ -5,7 +5,7 @@ import asyncio
 import queue
 import sys
 import threading
-from typing import AsyncIterator, Callable, Iterable, Iterator, Optional, TypeVar, Union
+from typing import AsyncIterator, Callable, Iterator, Optional, TypeVar
 
 import tblib
 
@@ -13,27 +13,6 @@ from levanter.utils.thread_utils import AsyncIteratorWrapper
 
 
 Ex = TypeVar("Ex", covariant=True)
-
-
-class BackgroundIterable(Iterable[Ex]):
-    """
-    A wrapper around an iterable that runs the iterable in a background thread and fills a queue with the results.
-
-    This allows the iterable to be consumed in a separate thread, and for the results to be consumed in the main thread.
-    This will only work particularly well if the main thread is doing some kind of IO or other blocking operation,
-    like running XLA kernels...
-    """
-
-    def __init__(
-        self,
-        producer_fn: Callable[[], Union[Iterator[Ex], AsyncIterator[Ex]]],
-        max_capacity: Optional[int] = None,
-    ):
-        self.max_capacity = max_capacity
-        self._producer_fn = producer_fn
-
-    def __iter__(self):
-        return BackgroundIterator(self._producer_fn, self.max_capacity)
 
 
 class BackgroundIterator(Iterator[Ex]):
@@ -70,8 +49,10 @@ class BackgroundIterator(Iterator[Ex]):
         if self.thread is not None:
             batch = self.q.get()
             if batch is _SENTINEL:
+                self._stop_event.set()
                 raise StopIteration
             if isinstance(batch, _ExceptionWrapper):
+                self._stop_event.set()
                 batch.reraise()
             return batch
         # No background thread; consume the iterator on demand.
@@ -99,7 +80,7 @@ class BackgroundIterator(Iterator[Ex]):
         try:
             iterator = self._producer_fn()
         except Exception:
-            self.q.put(_ExceptionWrapper(sys.exc_info()))
+            self._enqueue(_ExceptionWrapper(sys.exc_info()))
             return
 
         if isinstance(iterator, Iterator):
@@ -127,7 +108,7 @@ class BackgroundIterator(Iterator[Ex]):
                     return
             self._enqueue(_SENTINEL)
         except Exception:
-            self.q.put(_ExceptionWrapper(sys.exc_info()))
+            self._enqueue(_ExceptionWrapper(sys.exc_info()))
 
     async def _produce_batches_async(self, iterator):
         try:
@@ -136,7 +117,7 @@ class BackgroundIterator(Iterator[Ex]):
                     return
             self._enqueue(_SENTINEL)
         except Exception:
-            self.q.put(_ExceptionWrapper(sys.exc_info()))
+            self._enqueue(_ExceptionWrapper(sys.exc_info()))
 
 
 class _Sentinel:

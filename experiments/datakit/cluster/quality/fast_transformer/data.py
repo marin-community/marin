@@ -1,33 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tokenize and pack oracle-scored text for the fast-transformer.
+"""Encode, window and pack oracle-scored text for the fast-transformer.
 
-Tokenizes text with a HuggingFace tokenizer, builds a compact vocabulary from the
-training split (mirroring fasttext's ``minCount`` pruning so every embedding row is
-actually trained and the table stays small), and packs into dense padded arrays.
+Token ids come from the datakit tokenize encoding path
+(:func:`marin.processing.tokenize._core.text_preprocessor`), so the ids the
+trainer sees for a label text are byte-identical to the ids the tokenize stage
+writes for the same text (BOS/EOS included). The stage scores those stored ids
+directly; this module builds a compact vocabulary from the training split
+(mirroring fasttext's ``minCount`` pruning so every embedding row is actually
+trained and the table stays small), slices begin/middle/end token windows, and
+packs into dense padded arrays.
 """
 
-import functools
 import logging
 from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
-from transformers import AutoTokenizer
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.tokenizers import load_tokenizer
+from marin.processing.tokenize._core import text_preprocessor
 
 logger = logging.getLogger(__name__)
-
-
-@functools.lru_cache(maxsize=8)
-def load_tokenizer(tokenizer_name: str):
-    """Load a HuggingFace tokenizer, memoized per process.
-
-    ``AutoTokenizer.from_pretrained`` re-runs the slow→fast conversion of the
-    250K-vocab tokenizer on every call; scoring calls this once per batch, so
-    without the cache a many-batch shard reloads the tokenizer hundreds of times.
-    """
-    return AutoTokenizer.from_pretrained(tokenizer_name)
 
 
 # Reserved compact ids. Real tokens are remapped to dense ids starting at 2.
@@ -57,19 +52,41 @@ class PackedData:
     max_tokens: int
 
 
-def _encode(tokenizer, texts: list[str], max_tokens: int) -> list[list[int]]:
-    """Tokenize *texts* (no special tokens), truncating to ``max_tokens``."""
-    # Pre-truncate by characters to bound tokenizer work; ~8 chars/token is a
-    # safe over-estimate so we never starve the max_tokens budget.
-    char_cap = max_tokens * 8
-    capped = [t[:char_cap] for t in texts]
-    encoded = tokenizer(
-        capped,
-        add_special_tokens=False,
-        truncation=True,
-        max_length=max_tokens,
-    )["input_ids"]
-    return encoded
+def encode_texts(tokenizer_name: str, texts: list[str]) -> list[list[int]]:
+    """Encode in-memory texts exactly as the datakit tokenize stage does (untruncated).
+
+    ``tokenizer_name`` is a hub name or a local tokenizer dir.
+    """
+    proc = text_preprocessor(TextLmDatasetFormat(), load_tokenizer(tokenizer_name))
+    return [r["input_ids"] for r in proc([{"text": t} for t in texts])]
+
+
+def bme_windows(ids: np.ndarray, max_tokens: int) -> list[np.ndarray]:
+    """Begin/middle/end ``max_tokens`` windows of one document's token ids.
+
+    A doc of at most ``max_tokens`` ids is a single window. Longer docs give three
+    windows of exactly ``max_tokens`` (``max_tokens`` is even). Windows are copies
+    so a caller can drop the Arrow batch the ids were read from.
+    """
+    n = len(ids)
+    if n <= max_tokens:
+        return [ids[:n].copy()]
+    m = n // 2
+    half = max_tokens // 2
+    return [ids[:max_tokens].copy(), ids[m - half : m + half].copy(), ids[-max_tokens:].copy()]
+
+
+def remap_table(remap: dict[int, int]) -> np.ndarray:
+    """Dense lookup table for ``remap``; unknown ids map to ``UNK_ID``.
+
+    The last row is a guaranteed ``UNK_ID`` sentinel, so callers clamp with
+    ``table[np.minimum(raw, len(table) - 1)]`` and any raw id above the largest
+    known one lands there.
+    """
+    size = max(remap) + 2
+    table = np.full(size, UNK_ID, dtype=np.int32)
+    table[list(remap)] = list(remap.values())
+    return table
 
 
 def _build_vocab(train_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:
@@ -99,11 +116,6 @@ def _pack(raw_ids: list[list[int]], remap: dict[int, int], scores: np.ndarray, m
         mapped = [remap.get(t, UNK_ID) for t in row[:max_tokens]]
         ids[i, : len(mapped)] = mapped
     return PackedSplit(ids=ids, scores=scores)
-
-
-def encode_texts(tokenizer_name: str, texts: list[str], max_tokens: int) -> list[list[int]]:
-    """Tokenize raw in-memory texts (no parquet read), truncating to ``max_tokens``."""
-    return _encode(load_tokenizer(tokenizer_name), texts, max_tokens)
 
 
 def build_remap(raw_ids: list[list[int]], min_count: int, max_vocab: int | None = None) -> dict[int, int]:

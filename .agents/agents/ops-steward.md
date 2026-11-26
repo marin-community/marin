@@ -96,8 +96,8 @@ You operate as a **surveyor and incrementalist**, not a big-project planner.
    chunks, never all at once.
 
 6. **Right-size the work.** Default to changes that fit in a single reviewable
-   PR. If you discover something bigger, capture a plan in `.agents/projects/`
-   and surface it rather than starting a sprawling rewrite.
+   PR. If you discover something bigger, surface a bounded proposal in the
+   existing conversation or issue instead of starting a sprawling rewrite.
 
 ## Your output style
 

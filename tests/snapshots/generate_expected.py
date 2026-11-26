@@ -6,12 +6,9 @@ Usage:
 
 import json
 import os
-import re
 
-from bs4 import BeautifulSoup
 from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
-from marin.schemas.web.selectors import ARXIV_BLACKLISTED_SELECTORS, WIKI_BLACKLISTED_SELECTORS
-from marin.transform.ar5iv.transform_ar5iv import clean_html
+from marin.schemas.web.selectors import WIKI_BLACKLISTED_SELECTORS
 from marin.transform.stackexchange.transform_stackexchange import prepare_md_template
 from marin.transform.wikipedia.transform_wikipedia import clean_wiki_html
 from marin.web.convert import convert_page
@@ -21,7 +18,7 @@ MY_DIR = os.path.dirname(os.path.realpath(__file__))
 
 def transform_web(html: str) -> str:
     """Transform web HTML to markdown using resiliparse."""
-    output = convert_page(html, extract_method="resiliparse", config=ResiliparseConfig())
+    output = convert_page(html, config=ResiliparseConfig())
     return output["content"]
 
 
@@ -30,7 +27,6 @@ def transform_wiki(html: str) -> str:
     filtered_html = clean_wiki_html(html, remove_reference_section=True)
     output = convert_page(
         filtered_html,
-        extract_method="resiliparse",
         config=ResiliparseConfig(
             links=False,
             skip_elements=WIKI_BLACKLISTED_SELECTORS,
@@ -41,32 +37,6 @@ def transform_wiki(html: str) -> str:
         ),
     )
     return output["content"]
-
-
-def transform_ar5iv(html: str) -> str:
-    """Transform ar5iv HTML to markdown."""
-    bs4_html = BeautifulSoup(html, "html.parser")
-    html = str(bs4_html)
-    filtered_html = clean_html(html, remove_reference_section=True)
-
-    output = convert_page(
-        filtered_html,
-        extract_method="resiliparse",
-        config=ResiliparseConfig(
-            links=False,
-            prepend_title=True,
-            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
-            markdownify_config=HtmlToMarkdownConfig(
-                include_images=False,
-                include_links=False,
-            ),
-        ),
-    )
-
-    content = output["content"]
-    # Remove citation references
-    content = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", content)
-    return content
 
 
 def transform_stackexchange(json_str: str) -> str:
@@ -87,7 +57,7 @@ def transform_stackexchange(json_str: str) -> str:
             include_links=False,
         ),
     )
-    content = prepare_md_template(title, question, answers, tags, "resiliparse", config, prepend_vote_count=False)
+    content = prepare_md_template(title, question, answers, tags, config, prepend_vote_count=False)
     return content.strip()
 
 
@@ -95,7 +65,6 @@ def transform_dclm_hq(html: str) -> str:
     """Transform DCLM HQ HTML to markdown."""
     output = convert_page(
         html,
-        extract_method="resiliparse",
         config=ResiliparseConfig(
             links=False,
             skip_elements=[],
@@ -111,7 +80,6 @@ def transform_dclm_hq(html: str) -> str:
 DATASETS = {
     "web/resiliparse": (".html", transform_web),
     "wiki": (".html", transform_wiki),
-    "ar5iv": (".html", transform_ar5iv),
     "stackexchange": (".json", transform_stackexchange),
     "dclm_hq": (".html", transform_dclm_hq),
 }

@@ -12,7 +12,7 @@ import {
   type GetJobStatusResponse, type GetTaskStatusResponse, type ListTasksResponse, type ListJobsResponse,
   type EndpointInfo, type ListEndpointsResponse,
 } from '@/types/rpc'
-import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor } from '@/utils/formatting'
+import { timestampMs, formatTimestamp, formatDuration, formatRelativeTime, formatBytes, formatCpuMillicores, formatDeviceConfig, bandDisplayName, bandColor, egressPolicyName, formatEgressRule } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import { getLeafJobName } from '@/utils/jobTree'
 import { batchSummarySql } from '@/utils/taskStatus'
@@ -715,12 +715,18 @@ const maxRetriesPreemption = computed(() => jobRequest.value?.maxRetriesPreempti
 const failuresTitle = computed(() =>
   `${job.value?.failureCount ?? 0} failed task attempts (including retries). `
   + `Each task retries up to ${maxRetriesFailure.value}× on failure; `
-  + `the job fails once more than ${maxTaskFailures.value} tasks fail.`,
+  + `the job fails after more than ${maxTaskFailures.value} failed task attempts.`,
 )
 
 const preemptionsTitle = computed(() =>
   `${job.value?.preemptionCount ?? 0} task preemptions (including retries). `
   + `Each task retries up to ${maxRetriesPreemption.value}× on preemption.`,
+)
+
+const egressPolicy = computed(() => egressPolicyName(jobRequest.value?.egressPolicy))
+// A job's own rules take effect only under the allowlist.
+const egressRules = computed(() =>
+  egressPolicy.value === 'allowlist' ? (jobRequest.value?.egressAllow ?? []).map(formatEgressRule) : [],
 )
 
 const acceleratorDisplay = computed(() => {
@@ -1100,9 +1106,18 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
           <InfoRow label="Duration">
             <span class="font-mono">{{ jobDuration(job) }}</span>
           </InfoRow>
-          <InfoRow label="Failures">
+          <InfoRow label="Failure attempts">
             <span :title="failuresTitle">
-              {{ job.failureCount ?? 0 }}<span class="text-text-muted"> / (max {{ maxTaskFailures }})</span>
+              {{ job.failureCount ?? 0 }}<span class="text-text-muted">
+                / (job max <span data-testid="job-failure-budget">{{ maxTaskFailures }}</span>)
+              </span>
+            </span>
+          </InfoRow>
+          <InfoRow label="Failure retries">
+            <span :title="failuresTitle">
+              <span class="text-text-muted">
+                max <span data-testid="task-failure-retry-budget">{{ maxRetriesFailure }}</span>/task
+              </span>
             </span>
           </InfoRow>
           <InfoRow label="Preemptions">
@@ -1114,6 +1129,10 @@ async function handleProfile(taskId: string, profilerType: string, format: strin
             <span :class="bandColor(jobRequest.priorityBand)" class="font-semibold">
               {{ bandDisplayName(jobRequest.priorityBand) }}
             </span>
+          </InfoRow>
+          <InfoRow v-if="egressPolicy" label="Egress">
+            <span class="font-mono">{{ egressPolicy }}</span>
+            <span v-if="egressRules.length" class="font-mono text-text-muted"> + {{ egressRules.join(', ') }}</span>
           </InfoRow>
           <InfoRow v-if="multiBackend && job?.backendId" label="Backend">
             <span class="font-mono">{{ job!.backendId }}</span>

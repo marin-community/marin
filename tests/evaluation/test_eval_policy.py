@@ -1,0 +1,95 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Admission for the two published evaluation cohorts."""
+
+import hashlib
+import json
+from dataclasses import asdict
+
+from evalrecords.eval_policy import (
+    SEPTEMBER_16_VERSION,
+    SEPTEMBER_24_VERSION,
+    policy_violations,
+)
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.records import EvalchemyRef, EvalRef, EvalTaskRef, ModelConfigRef, ModelRef
+from marin.evaluation.model_config import ModelConfig
+
+
+def _model(generation_kwargs: dict[str, bool | None] | None = None) -> ModelRef:
+    config = ModelConfigRef.model_validate(asdict(ModelConfig(name="model", location="org/model")))
+    if generation_kwargs is not None:
+        config = config.model_copy(
+            update={"generation": config.generation.model_copy(update={"chat_template_kwargs": generation_kwargs})}
+        )
+    return ModelRef(name="model", location="org/model", backend="vllm", config=config)
+
+
+def _math500(thinking: bool | None, *, shots: int = 0, version: str = SEPTEMBER_24_VERSION) -> EvalRef:
+    return EvalRef(
+        name="math500",
+        mechanism="evalchemy",
+        source_digest=POLICY_SOURCE_DIGESTS[version]["math500"],
+        tasks=(EvalTaskRef(name="MATH500", num_fewshot=shots, generation=True),),
+        evalchemy=EvalchemyRef(
+            apply_chat_template=True,
+            max_gen_toks=None,
+            max_eval_instances=None,
+            num_concurrent=16,
+            batch_size="1",
+            seed=42,
+            chat_template_kwargs={"enable_thinking": thinking} if thinking is not None else {},
+        ),
+    )
+
+
+def test_september_24_requires_explicit_benchmark_thinking_mode():
+    model = _model({"enable_thinking": False})
+    assert policy_violations(SEPTEMBER_24_VERSION, model, _math500(True)) == ()
+    assert any(
+        "enable_thinking=True" in problem for problem in policy_violations(SEPTEMBER_24_VERSION, model, _math500(False))
+    )
+    assert any(
+        "enable_thinking=True" in problem for problem in policy_violations(SEPTEMBER_24_VERSION, model, _math500(None))
+    )
+
+
+def test_september_16_preserves_model_defaults_and_checks_shots():
+    assert policy_violations(SEPTEMBER_16_VERSION, _model(), _math500(None, version=SEPTEMBER_16_VERSION)) == ()
+    assert "num_fewshot must be 0" in policy_violations(
+        SEPTEMBER_16_VERSION, _model(), _math500(None, shots=1, version=SEPTEMBER_16_VERSION)
+    )
+    original_null = _math500(None, version=SEPTEMBER_16_VERSION)
+    assert original_null.evalchemy is not None
+    original_null = original_null.model_copy(
+        update={
+            "evalchemy": original_null.evalchemy.model_copy(update={"chat_template_kwargs": {"enable_thinking": None}})
+        }
+    )
+    assert policy_violations(SEPTEMBER_16_VERSION, _model({"enable_thinking": None}), original_null) == ()
+
+
+def test_legacy_policy_label_is_not_verified():
+    assert policy_violations("eval-policy-updated", _model(), _math500(None))
+
+
+def test_unset_nccl_symmetric_memory_is_omitted_from_recorded_config():
+    # Records written before this setting existed have no such key. An unset value must serialize the
+    # same way, or the config digests stored in those records stop verifying.
+    config = _model().config
+    assert config is not None
+    assert "vllm_use_nccl_symm_mem" not in config.model_dump(mode="json")["serve"]
+
+
+def test_policy_accepts_historical_model_config_digest_without_request_deadline():
+    record = _model().model_dump(mode="json")
+    record["config"].pop("evaluation_request_timeout")
+    payload = json.dumps(record["config"], sort_keys=True, separators=(",", ":"))
+    record["config_digest"] = hashlib.sha256(payload.encode()).hexdigest()
+    model = ModelRef.model_validate_json(json.dumps(record))
+    evaluation = _math500(None, version=SEPTEMBER_16_VERSION)
+
+    assert policy_violations(SEPTEMBER_16_VERSION, model, evaluation) == ()
+    record["config"]["serve"]["max_model_len"] = 4096
+    assert policy_violations(SEPTEMBER_16_VERSION, ModelRef.model_validate(record), evaluation)

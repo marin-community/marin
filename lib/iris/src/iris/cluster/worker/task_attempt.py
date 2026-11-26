@@ -16,20 +16,34 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
+from rigging.secrets import SECRETS_DIR, SECRETS_DIR_ENV, secret_file_environment, validate_secret_name
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
 from iris.cluster.bundle import BundleStore
-from iris.cluster.constraints import WellKnownAttribute
+from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.egress import rule_domains
 from iris.cluster.log_keys import INJECTED_ERROR_SOURCE, STDERR_SOURCE, classify_log_level, task_log_key
 from iris.cluster.platforms.types import probe_outbound_ip
-from iris.cluster.runtime.docker import DockerContainerHandle
-from iris.cluster.runtime.env import STANDARD_MOUNTS, build_common_iris_env
+from iris.cluster.runtime.docker import EGRESS_NETWORK, EGRESS_RESOLV_CONF, DockerContainerHandle
+from iris.cluster.runtime.env import (
+    IRIS_ATTEMPT_UID_ENV,
+    IRIS_TASK_TOKEN_ENV,
+    IRIS_WORKER_REGION_ENV,
+    TASK_OUTPUT_FINALIZING_STATUS,
+    UV_LINK_MODE_ENV,
+    build_common_iris_env,
+)
+from iris.cluster.runtime.output_capture import capture_task_outputs_for_attempt
+from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
 from iris.cluster.runtime.types import (
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerHandle,
@@ -37,14 +51,27 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
+    MountKind,
+    MountSpec,
     RuntimeLogReader,
 )
+from iris.cluster.secrets import (
+    task_secret_values,
+    worker_secret_root,
+    write_task_secrets,
+)
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
-from iris.cluster.types import AttemptUid, JobName, is_task_finished
+from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, is_task_finished
 from iris.cluster.types import TaskAttempt as TaskAttemptIdentity
+from iris.cluster.worker.egress_dns import EgressDnsFilters
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.tpu_health import detect_tpu_init_failure
 from iris.cluster.worker.worker_types import LogLine
+from iris.preemption import (
+    SHUTDOWN_MARGIN,
+    TERMINATION_GRACE_ENV,
+    resolve_termination_grace,
+)
 from iris.rpc import job_pb2, worker_pb2
 from iris.rpc.errors import format_exception_with_traceback
 from iris.rpc.job_pb2 import TaskState, WorkerMetadata
@@ -55,6 +82,7 @@ logger = logging.getLogger(__name__)
 
 # Trailing stderr lines scanned for TPU bad-node signatures on non-zero exit.
 _TPU_STDERR_TAIL_LINES = 200
+_OUTPUT_HOST_DIRNAME = ".iris-outputs"
 
 
 # Max time to wait for the container to actually exit after force-kill before
@@ -69,6 +97,12 @@ _KILLABLE_STATES = (
     job_pb2.TASK_STATE_BUILDING,
     job_pb2.TASK_STATE_PENDING,
 )
+
+
+class _StopState(StrEnum):
+    RUNNING = "running"
+    GRACEFUL = "graceful"
+    FORCE = "force"
 
 
 def _format_exit_error(exit_code: int | None, oom_killed: bool = False) -> str:
@@ -128,10 +162,41 @@ class TaskAttemptConfig:
         return self.task_attempt.require_attempt()
 
 
+@dataclass(frozen=True, slots=True)
+class _TaskOutcome:
+    state: TaskState
+    error: str | None = None
+    exit_code: int | None = None
+
+
+def docker_network_mode(network: TaskNetwork) -> str:
+    """The Docker network mode for a task's network.
+
+    CLUSTER and ALLOWLIST share the host's network; an ALLOWLIST task's DNS
+    goes through a worker-run filter instead (see ``egress_dns``). INTERNET
+    runs on the bridge network whose host filter worker bootstrap installs. A
+    bridge container without that filter reaches the VPC and the metadata
+    server through the VM's routes, so the worker refuses INTERNET unless
+    bootstrap has written ``EGRESS_RESOLV_CONF``, which it does only after the
+    filter is in place.
+    """
+    if network in (TaskNetwork.CLUSTER, TaskNetwork.ALLOWLIST):
+        return NETWORK_MODE_HOST
+    if network is TaskNetwork.NONE:
+        return NETWORK_MODE_NONE
+    if not Path(EGRESS_RESOLV_CONF).exists():
+        raise ValueError(
+            f"Egress policy internet needs the worker's host egress filter, and {EGRESS_RESOLV_CONF} is "
+            "missing: worker bootstrap has not installed the filter since this VM booted"
+        )
+    return EGRESS_NETWORK
+
+
 def build_iris_env(
     task: "TaskAttempt",
     worker_id: str | None,
     controller_address: str | None,
+    task_token: str | None,
 ) -> dict[str, str]:
     """Build Iris system environment variables for the task container.
 
@@ -143,13 +208,16 @@ def build_iris_env(
     env = build_common_iris_env(
         task_id=req.task_id,
         attempt_id=task.attempt_id,
+        attempt_uid=str(task.attempt_uid),
         num_tasks=task.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
+        task_token=task_token,
         environment=req.environment,
         constraints=req.constraints,
         ports=req.ports,
         resources=req.resources if req.HasField("resources") else None,
+        termination_grace=task.termination_grace,
     )
 
     if worker_id:
@@ -199,9 +267,11 @@ class TaskAttempt:
         port_allocator: PortAllocator,
         log_client: LogClient | None,
         poll_interval_seconds: float = 5.0,
+        task_outputs: TaskOutputPolicy | None = None,
         *,
         container_handle: ContainerHandle | None = None,
         initial_status: TaskState | None = None,
+        egress_dns: EgressDnsFilters | None = None,
     ):
         """Initialize a TaskAttempt.
 
@@ -229,6 +299,8 @@ class TaskAttempt:
             poll_interval_seconds: How often to poll container status
             container_handle: Pre-existing container handle for adopted tasks
             initial_status: Starting status (default PENDING, use RUNNING for adopted tasks)
+            egress_dns: The worker's DNS filters for ALLOWLIST tasks; None leaves
+                their DNS unfiltered.
         """
         self._bundle_store = bundle_store
         self._runtime = container_runtime
@@ -236,10 +308,13 @@ class TaskAttempt:
         self._worker_id = worker_id
         self._controller_address = controller_address
         self._task_env = task_env or {}
+        self._secret_dir: Path | None = None
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
+        self._egress_dns = egress_dns
         self._poll_interval_seconds = poll_interval_seconds
+        self._task_outputs = task_outputs.model_copy(deep=True) if task_outputs is not None else None
         self._log_client = log_client
         self._log_key = task_log_key(config.task_attempt)
         # Stats Table for the iris.task namespace. Tables are cached by the
@@ -260,8 +335,12 @@ class TaskAttempt:
         # it across worker restarts.
         self.attempt_uid: AttemptUid = config.attempt_uid
         self.request: job_pb2.RunTaskRequest = config.request
+        self.termination_grace = resolve_termination_grace(Duration.from_ms(self.request.termination_grace.milliseconds))
+        self.termination_timeout_ms = (self.termination_grace + SHUTDOWN_MARGIN).to_ms()
         self.ports: dict[str, int] = {}
         self.workdir: Path | None = None
+        self.output_dir: Path | None = None
+        self.output_archive: job_pb2.TaskOutputArchive | None = None
         self._cache_dir: Path = config.cache_dir
         # Task state
         self.status: TaskState = initial_status or job_pb2.TASK_STATE_PENDING
@@ -289,7 +368,8 @@ class TaskAttempt:
         self._container_handle: ContainerHandle | None = container_handle
         self.thread: threading.Thread | None = None
         self.cleanup_done: bool = False
-        self.should_stop: bool = False
+        self._stop_state = _StopState.RUNNING
+        self._output_stop = threading.Event()
 
     @classmethod
     def adopt(
@@ -299,6 +379,9 @@ class TaskAttempt:
         log_client: LogClient | None,
         port_allocator: PortAllocator,
         poll_interval_seconds: float = 5.0,
+        task_outputs: TaskOutputPolicy | None = None,
+        task_env: dict[str, str] | None = None,
+        egress_dns: EgressDnsFilters | None = None,
     ) -> "TaskAttempt":
         """Create a TaskAttempt that adopts an already-running container.
 
@@ -314,6 +397,7 @@ class TaskAttempt:
         request = job_pb2.RunTaskRequest(
             task_id=discovered.task_id,
             attempt_id=attempt_id,
+            termination_grace={"milliseconds": discovered.termination_grace.to_ms()},
         )
         config = TaskAttemptConfig(
             task_attempt=identity,
@@ -330,22 +414,31 @@ class TaskAttempt:
             worker_metadata=None,
             worker_id=discovered.worker_id,
             controller_address=None,
-            task_env=None,
+            task_env=task_env,
             default_task_image=None,
             resolve_image=None,
             port_allocator=port_allocator,
             log_client=log_client,
             poll_interval_seconds=poll_interval_seconds,
+            task_outputs=task_outputs,
             container_handle=container_handle,
             initial_status=job_pb2.TASK_STATE_RUNNING,
+            egress_dns=egress_dns,
         )
         instance.started_at = Timestamp.now()
         instance.status_message = "adopted"
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
+        instance.output_dir = instance.workdir / _OUTPUT_HOST_DIRNAME if instance.workdir is not None else None
+        if instance.attempt_uid:
+            validate_secret_name(str(instance.attempt_uid))
+            instance._secret_dir = worker_secret_root(instance._cache_dir) / str(instance.attempt_uid)
         # Restore host-port reservations and re-mark them taken so the worker
         # never re-allocates an in-use port to a new task after restart.
         instance.ports = dict(discovered.ports)
         port_allocator.reserve(list(discovered.ports.values()))
+        # The previous worker's DNS filter died with it; the container's resolv.conf still names its address.
+        if egress_dns is not None and instance.workdir is not None:
+            egress_dns.restore(instance.workdir.name)
         return instance
 
     def resume_monitoring(self) -> None:
@@ -366,7 +459,9 @@ class TaskAttempt:
 
         try:
             log_reader = handle.log_reader()
-            self._monitor_loop(handle, log_reader)
+            outcome = self._monitor_loop(handle, log_reader)
+            self._capture_outputs()
+            self.transition_to(outcome.state, error=outcome.error, exit_code=outcome.exit_code)
         except Exception as e:
             self._fail_from_exception(job_pb2.TASK_STATE_FAILED, "Monitoring failed", e)
         finally:
@@ -398,11 +493,19 @@ class TaskAttempt:
 
     def stop(self, force: bool = False) -> None:
         """Stop the container, if running."""
-        self.should_stop = True
+        if force:
+            self._stop_state = _StopState.FORCE
+        elif self._stop_state == _StopState.RUNNING:
+            self._stop_state = _StopState.GRACEFUL
+        self._output_stop.set()
         if self._container_handle:
             self._container_handle.stop(force=force)
 
-    def kill(self, term_timeout_ms: int = 5000) -> bool:
+    @property
+    def should_stop(self) -> bool:
+        return self._stop_state != _StopState.RUNNING
+
+    def kill(self, term_timeout_ms: int | None = None) -> bool:
         """Stop this attempt, escalating to a force-kill on timeout.
 
         Issues SIGTERM, waits up to ``term_timeout_ms`` for the container to
@@ -411,12 +514,16 @@ class TaskAttempt:
         """
         if self.status not in _KILLABLE_STATES:
             return False
+        if term_timeout_ms is None:
+            term_timeout_ms = self.termination_timeout_ms
         # Signal the execution thread immediately, even with no container yet:
         # this bails an in-progress BUILDING-phase bundle download.
-        self.should_stop = True
         if not self.has_container:
+            self._stop_state = _StopState.FORCE
+            self._output_stop.set()
             return True
         try:
+            assert self._container_handle is not None
             self.stop(force=False)
             running = (job_pb2.TASK_STATE_RUNNING, job_pb2.TASK_STATE_BUILDING)
             stopped = ExponentialBackoff(initial=0.05, maximum=0.5).wait_until(
@@ -578,11 +685,8 @@ class TaskAttempt:
         safe_task_id = self.task_id.to_safe_token()
         self.workdir = self._cache_dir / "workdirs" / f"{safe_task_id}_attempt_{self.attempt_id}"
         self.workdir.mkdir(parents=True, exist_ok=True)
-
-        # Mount tmpfs on workdir for quota enforcement (Docker only; no-op for process/k8s).
-        # Must happen before _download_bundle() so staged files land on the tmpfs.
-        disk_bytes = self.request.resources.disk_bytes if self.request.HasField("resources") else 0
-        self._runtime.prepare_workdir(self.workdir, disk_bytes)
+        self.output_dir = self.workdir / _OUTPUT_HOST_DIRNAME
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> None:
         """Execute the full task lifecycle. Intended to run in a background thread.
@@ -594,7 +698,8 @@ class TaskAttempt:
         3. Create container handle
         4. Build phase: run setup_commands (uv sync) - BUILDING state
         5. Run phase: start main command - RUNNING state
-        6. Monitor until completion
+        6. Monitor until the command exits
+        7. Capture task outputs, then publish the terminal state
 
         Not valid for adopted tasks — use resume_monitoring() instead.
         """
@@ -619,7 +724,9 @@ class TaskAttempt:
             self._build_container()
             self._check_cancelled()
             self._run_container()
-            self._monitor()
+            outcome = self._monitor()
+            self._capture_outputs()
+            self.transition_to(outcome.state, error=outcome.error, exit_code=outcome.exit_code)
         except TaskCancelled:
             self.transition_to(job_pb2.TASK_STATE_KILLED)
         except ContainerInfraError as e:
@@ -704,24 +811,45 @@ class TaskAttempt:
         Prepares the container configuration including environment variables,
         mounts, and workdir setup. The actual container is not started yet.
         """
+        isolation = task_isolation(self.request.container_profile, self.request.egress_policy)
         iris_env = build_iris_env(
             self,
             self._worker_id,
-            self._controller_address,
+            self._controller_address if isolation.include_controller_address else None,
+            self.request.task_token if isolation.include_task_token else None,
         )
         env = dict(iris_env)
+        mounts = list(isolation.mounts)
+        secret_values = task_secret_values(self.request.environment)
+        if isolation.include_cluster_env:
+            env.update(self._task_env)
+        env.update(self.request.environment.env_vars)
+        if secret_values:
+            validate_secret_name(str(self.attempt_uid))
+            root = worker_secret_root(self._cache_dir)
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._secret_dir = root / str(self.attempt_uid)
+            assert self.workdir is not None
+            owner = self.workdir.stat()
+            write_task_secrets(secret_values, self._secret_dir, uid=owner.st_uid, gid=owner.st_gid)
+            mounts.append(MountSpec("task-secrets", str(SECRETS_DIR), MountKind.SECRET, read_only=True))
+            env[SECRETS_DIR_ENV] = str(SECRETS_DIR)
+            for name, value in secret_file_environment(secret_values).items():
+                env.setdefault(name, value)
+        # CPU tasks on TPU hosts also need to share the cache's package files.
+        if self._worker_metadata.device.HasField("tpu"):
+            env[UV_LINK_MODE_ENV] = "symlink"
+        # The controller owns the process-incarnation identity and the task's
+        # credential and shutdown budget. User and cluster env cannot replace them.
+        for controller_owned in (IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV, TERMINATION_GRACE_ENV):
+            env.pop(controller_owned, None)
+            if value := iris_env.get(controller_owned):
+                env[controller_owned] = value
 
-        env.update(self._task_env)
-        env.update(dict(self.request.environment.env_vars))
-
-        # Surface the worker's region so in-task code (e.g. the Marin
-        # executor) and IrisClient.submit_job's parent->child region
-        # inheritance can read it via get_job_info().worker_region.
-        # Set last: this is a physical fact about the worker, not a
-        # user-configurable preference, so task/user env_vars cannot spoof it.
-        region_attr = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
-        if region_attr and region_attr.string_value:
-            env["IRIS_WORKER_REGION"] = region_attr.string_value
+        # The worker's physical location is authoritative over task-provided env.
+        region = self._worker_metadata.attributes.get(WellKnownAttribute.REGION)
+        if region and region.string_value:
+            env[IRIS_WORKER_REGION_ENV] = region.string_value
 
         # Get RuntimeEntrypoint proto directly
         rt_ep = self.request.entrypoint
@@ -741,8 +869,13 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
-            mounts=list(STANDARD_MOUNTS),
+            termination_grace=self.termination_grace,
+            mounts=mounts,
+            network_mode=docker_network_mode(isolation.network),
+            resolv_conf=self._prepare_resolv_conf(isolation.network),
             workdir_host_path=self.workdir,
+            output_host_path=self.output_dir,
+            secret_host_path=self._secret_dir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             attempt_uid=self.attempt_uid,
@@ -755,6 +888,51 @@ class TaskAttempt:
         chaos_raise("worker.create_container")
         self._container_handle = self._runtime.create_container(config)
         logger.info("Container handle created for task %s", self.task_id)
+
+    def _prepare_resolv_conf(self, network: TaskNetwork) -> Path | None:
+        """Return the resolv.conf to mount over the container's, if any.
+
+        Starts the DNS filter of an ALLOWLIST task. Without a filter manager,
+        as in local process runtimes, an ALLOWLIST task resolves every name.
+        """
+        if network is TaskNetwork.INTERNET:
+            # Docker's embedded resolver on the bridge forwards to the metadata
+            # server, which the host filter blocks, and relies on NAT rules
+            # gVisor does not apply. Bootstrap's file names public resolvers.
+            return Path(EGRESS_RESOLV_CONF)
+        if network is TaskNetwork.ALLOWLIST and self._egress_dns is not None:
+            assert self.workdir is not None
+            return self._egress_dns.start(self.workdir.name, rule_domains(self.request.egress_allow))
+        return None
+
+    def _capture_outputs(self) -> None:
+        if self._task_outputs is None:
+            return
+        if self.output_dir is None or not self.output_dir.exists():
+            self.output_archive = job_pb2.TaskOutputArchive(
+                state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE,
+                error="output_directory_unavailable",
+            )
+            return
+        if self.should_stop:
+            self.output_archive = job_pb2.TaskOutputArchive(
+                state=job_pb2.TaskOutputArchive.TASK_OUTPUT_ARCHIVE_STATE_UNAVAILABLE,
+                error="cancelled",
+            )
+            return
+        self.status_message = TASK_OUTPUT_FINALIZING_STATUS
+        try:
+            self.output_archive = capture_task_outputs_for_attempt(
+                self.output_dir,
+                self._task_outputs,
+                self.task_id,
+                self.attempt_uid,
+                local_root=self._cache_dir / "task-output-archives",
+                source_prefix=self._task_env.get("MARIN_PREFIX"),
+                stop=self._output_stop,
+            )
+        finally:
+            self.status_message = ""
 
     def _build_container(self) -> None:
         """Run setup commands (uv sync, pip install, etc) during BUILDING state.
@@ -791,13 +969,13 @@ class TaskAttempt:
             self.ports,
         )
 
-    def _monitor(self) -> None:
+    def _monitor(self) -> _TaskOutcome:
         """Monitor task execution: check status, collect stats, stream logs.
 
         Polls container status at regular intervals until the container stops.
         Streams logs incrementally into task.logs (single source of truth).
         Collects runtime statistics (CPU, memory, disk).
-        Updates task state to terminal status (SUCCEEDED/FAILED/KILLED) when container stops.
+        Returns the terminal outcome without mutating the attempt to a terminal state.
 
         Execution timeouts are enforced by the controller, not the worker.
         Profiling is handled centrally by the controller's profile loop thread.
@@ -807,22 +985,21 @@ class TaskAttempt:
         handle = self._container_handle
 
         log_reader = handle.log_reader()
-        self._monitor_loop(handle, log_reader)
+        return self._monitor_loop(handle, log_reader)
 
     def _monitor_loop(
         self,
         handle: ContainerHandle,
         log_reader: RuntimeLogReader,
-    ) -> None:
+    ) -> _TaskOutcome:
         last_disk_check = 0.0
         while True:
             if rule := chaos("worker.task_monitor"):
                 time.sleep(rule.delay_seconds)
-                self.transition_to(job_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
-                break
+                return _TaskOutcome(job_pb2.TASK_STATE_FAILED, error="chaos: monitor crashed")
 
             # Check if we should stop
-            if self.should_stop:
+            if self._stop_state == _StopState.FORCE:
                 handle.stop(force=True)
                 logger.info("Task %s requested stop; killing container %s", self.task_id, self.container_id)
                 # Wait for the runtime to confirm the container has actually
@@ -841,8 +1018,7 @@ class TaskAttempt:
                         _KILL_EXIT_WAIT_TIMEOUT,
                     )
                 self._stream_logs(log_reader)  # Capture final logs
-                self.transition_to(job_pb2.TASK_STATE_KILLED)
-                break
+                return _TaskOutcome(job_pb2.TASK_STATE_KILLED)
 
             # Check container status
             status = handle.status()
@@ -862,15 +1038,17 @@ class TaskAttempt:
                 )
                 # Final log fetch before container stops
                 self._stream_logs(log_reader)
+                if self.should_stop and status.exit_code in (0, 128 + signal.SIGTERM, 128 + signal.SIGKILL):
+                    return _TaskOutcome(job_pb2.TASK_STATE_KILLED, exit_code=status.exit_code)
 
                 # Container has stopped
                 if status.error:
                     failure_state = job_pb2.TASK_STATE_FAILED
                     if status.error_kind == ContainerErrorKind.INFRA_NOT_FOUND:
                         failure_state = job_pb2.TASK_STATE_WORKER_FAILED
-                    self.transition_to(failure_state, error=status.error, exit_code=status.exit_code or -1)
+                    return _TaskOutcome(failure_state, error=status.error, exit_code=status.exit_code or -1)
                 elif status.exit_code == 0:
-                    self.transition_to(job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
+                    return _TaskOutcome(job_pb2.TASK_STATE_SUCCEEDED, exit_code=0)
                 else:
                     stderr_tail: list[str] = [
                         entry.data for entry in log_reader.read_all() if entry.source == STDERR_SOURCE and entry.data
@@ -894,18 +1072,17 @@ class TaskAttempt:
                             data=f"iris: TPU bad-node signature detected ({tpu_pattern!r}); "
                             "reporting as worker failure",
                         )
-                        self.transition_to(
+                        return _TaskOutcome(
                             job_pb2.TASK_STATE_WORKER_FAILED,
                             error=f"TPU init failure ({tpu_pattern!r}): {error}",
                             exit_code=status.exit_code or -1,
                         )
                     else:
-                        self.transition_to(
+                        return _TaskOutcome(
                             job_pb2.TASK_STATE_FAILED,
                             error=error,
                             exit_code=status.exit_code or -1,
                         )
-                break
 
             # Stream logs incrementally
             self._stream_logs(log_reader)
@@ -1024,6 +1201,18 @@ class TaskAttempt:
                 self._container_handle.cleanup()
             except Exception as e:
                 logger.warning("Failed to cleanup container handle for task %s: %s", self.task_id, e)
+
+        if self._secret_dir is not None and self._secret_dir.exists():
+            try:
+                shutil.rmtree(self._secret_dir)
+            except OSError:
+                logger.exception("Failed to remove secret files for task %s", self.task_id)
+
+        if self._egress_dns is not None and self.workdir is not None:
+            try:
+                self._egress_dns.stop(self.workdir.name)
+            except Exception as e:
+                logger.warning("Failed to stop DNS filter for task %s: %s", self.task_id, e)
 
         # Release ports
         try:

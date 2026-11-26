@@ -3,7 +3,10 @@
 
 import pytest
 from iris.cluster.client.job_info import JobInfo, get_job_info, resolve_job_user, set_job_info
+from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.types import JobName
+from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 @pytest.fixture(autouse=True)
@@ -42,19 +45,27 @@ def test_resolve_job_user_falls_back_to_root_when_os_user_lookup_fails(monkeypat
     assert resolve_job_user() == "root"
 
 
-def test_worker_region_from_env(monkeypatch):
-    """IRIS_WORKER_REGION is read into JobInfo.worker_region (regression for #5541)."""
-    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
-    monkeypatch.setenv("IRIS_WORKER_REGION", "us-central1")
-    info = get_job_info()
-    assert info is not None
-    assert info.worker_region == "us-central1"
+def test_runtime_metadata_round_trip_preserves_resolved_termination_grace(monkeypatch):
+    environment = build_common_iris_env(
+        task_id="/alice/train/0",
+        attempt_id=2,
+        attempt_uid="attempt-2",
+        num_tasks=1,
+        bundle_id="bundle-id",
+        controller_address=None,
+        task_token=None,
+        environment=job_pb2.EnvironmentConfig(),
+        constraints=(),
+        ports=(),
+        resources=None,
+        termination_grace=Duration.from_ms(60123),
+    )
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
 
-
-def test_worker_region_absent_when_env_not_set(monkeypatch):
-    """worker_region is None when IRIS_WORKER_REGION is not set."""
-    monkeypatch.setenv("IRIS_TASK_ID", "/test-user/my-job/0:1")
-    monkeypatch.delenv("IRIS_WORKER_REGION", raising=False)
     info = get_job_info()
+
     assert info is not None
-    assert info.worker_region is None
+    assert info.termination_grace == Duration.from_ms(60123)
+    assert info.task_id == JobName.from_wire("/alice/train/0")
+    assert info.attempt_id == 2

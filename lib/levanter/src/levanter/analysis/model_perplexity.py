@@ -10,7 +10,8 @@ from typing import Any, Sequence
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from rigging.filesystem import StoragePath, open_url, prefix_join
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from levanter.analysis.perplexity_gap import (
     LOG2E,
@@ -198,11 +199,6 @@ def read_scored_documents(output_path: str) -> list[ScoredDocument]:
     with open_url(scored_documents_path, "rb") as f:
         table = pq.read_table(f)
     return [_scored_document_from_row(row) for row in table.to_pylist()]
-
-
-def read_token_count_summary(output_path: str) -> dict[str, Any]:
-    token_count_summary_path = prefix_join(output_path, TOKEN_COUNT_SUMMARY_FILENAME)
-    return json.loads(StoragePath(token_count_summary_path).read_text())
 
 
 def compare_scored_outputs(

@@ -1,0 +1,135 @@
+import datasets
+from loguru import logger
+import os
+from collections.abc import Callable, Mapping
+from typing import List
+from transformers import PreTrainedTokenizerBase
+
+
+PARALLEL_DATASET_MIN_ROWS = 10_000
+
+
+def dataset_num_proc(row_count: int, num_workers: int) -> int | None:
+    return num_workers if row_count >= PARALLEL_DATASET_MIN_ROWS else None
+
+
+def read_prompt_files(
+    sources: list[str], *, prepare_source: Callable[[str, datasets.Dataset], datasets.Dataset] | None = None
+) -> datasets.Dataset:
+    """Load local parquet/JSON files or explicitly selected Hugging Face splits."""
+    loaded = []
+    for source in sources:
+        ext = os.path.splitext(source)[-1].lower()
+        if ext == ".parquet":
+            data = datasets.load_dataset("parquet", data_files=source, keep_in_memory=False)["train"]
+        elif ext in [".json", ".jsonl"]:
+            data = datasets.load_dataset("json", data_files=source, keep_in_memory=False)["train"]
+        else:
+            name, separator, split = source.partition(":")
+            split = split if separator else "train"
+            available = datasets.load_dataset(path=name, keep_in_memory=False)
+            if split not in available:
+                raise ValueError(
+                    f"Split `{split}` not found in dataset `{name}`. Configured split was `{split}` and default is `train`"
+                )
+            data = available[split]
+        loaded.append(prepare_source(source, data) if prepare_source is not None else data)
+    return datasets.concatenate_datasets(loaded)
+
+
+class PromptDataset:
+    def __init__(
+        self,
+        datasets: str | List[str],
+        tokenizer: PreTrainedTokenizerBase,
+        max_prompt_length: int,
+        num_workers: int = 8,
+        prompt_key: str = "prompt",
+        env_class_key: str = "env_class",
+        chat_template_kwargs: dict | None = None,
+        prepare_source: Callable[[str, datasets.Dataset], datasets.Dataset] | None = None,
+    ):
+        self._prepare_source = prepare_source
+        self.tokenizer = tokenizer
+        self.max_prompt_length = max_prompt_length
+        self.prompt_key = prompt_key
+        self.env_class_key = env_class_key
+        self.num_workers = num_workers
+        self.chat_template_kwargs = dict(chat_template_kwargs or {})
+        self.prompts_dropped_too_long = 0
+
+        self.datasets = datasets
+        if isinstance(self.datasets, str):
+            self.datasets = [self.datasets]
+
+        self._read_files_and_tokenize()
+
+    def _read_files_and_tokenize(self):
+        self.dataframe = self._read_and_prepare_rows()
+
+        logger.info(f"Total dataset size: {len(self.dataframe)}")
+
+        # filter out too long prompts
+        tokenizer = self.tokenizer
+        prompt_key = self.prompt_key
+        max_prompt_length = self.max_prompt_length
+        token_count = type(self).prompt_token_count
+        template_kwargs = self.chat_template_kwargs
+        input_rows = len(self.dataframe)
+        self.dataframe = self.dataframe.filter(
+            lambda doc: token_count(tokenizer, doc, prompt_key, chat_template_kwargs=template_kwargs)
+            <= max_prompt_length,
+            num_proc=dataset_num_proc(len(self.dataframe), self.num_workers),
+            desc=f"Filtering prompts longer than {self.max_prompt_length} tokens",
+        )
+
+        self.prompts_dropped_too_long = input_rows - len(self.dataframe)
+        logger.info(f"Filtered dataset size: {len(self.dataframe)}")
+
+    def _read_and_prepare_rows(self) -> datasets.Dataset:
+        return self.prepare_dataset(read_prompt_files(self.datasets, prepare_source=self._prepare_source))
+
+    def prepare_dataset(self, dataset):
+        return dataset
+
+    @staticmethod
+    def prompt_token_count(
+        tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
+    ) -> int:
+        return _prompt_token_count(tokenizer, row[prompt_key], **(chat_template_kwargs or {}))
+
+    def __getitem__(self, item):
+        row_dict: dict = self.dataframe[item]
+        messages = row_dict.pop(self.prompt_key)
+        env_class = row_dict.pop(self.env_class_key, None)
+
+        extra = {key: value for key, value in row_dict.items() if key != self.prompt_key and key != self.env_class_key}
+
+        return messages, env_class, extra, self.uid(item)
+
+    def uid(self, index: int) -> str:
+        return str(index)
+
+    def label(self, index: int) -> str:
+        return self.uid(index)
+
+    def __len__(self):
+        return len(self.dataframe)
+
+
+def _prompt_token_count(tokenizer: PreTrainedTokenizerBase, prompt, **template_options) -> int:
+    """Count token IDs, including with Transformers 5.x ``BatchEncoding`` output."""
+    encoded = tokenizer.apply_chat_template(prompt, add_generation_prompt=True, **template_options)
+    if isinstance(encoded, Mapping):
+        encoded = encoded.get("input_ids")
+    if encoded is None:
+        raise TypeError("tokenizer chat template returned no input_ids")
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if isinstance(encoded, list) and len(encoded) == 1 and isinstance(encoded[0], list):
+        encoded = encoded[0]
+    if isinstance(encoded, str):
+        return len(encoded)
+    if not isinstance(encoded, list):
+        raise TypeError(f"tokenizer chat template returned unsupported token IDs: {type(encoded).__name__}")
+    return len(encoded)

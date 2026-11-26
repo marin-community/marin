@@ -25,6 +25,7 @@ class OpenAIStubState:
     requests: list[OpenAIStubRequest] = field(default_factory=list)
     # Lets tests keep selected prompt requests in flight until the event is set.
     prompt_pauses: Mapping[str, threading.Event] = field(default_factory=dict)
+    tokenize_pause: threading.Event | None = None
 
 
 @dataclass
@@ -47,6 +48,15 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self) -> None:
+        if self.path == "/metrics":
+            self._stub_server.state.requests.append(OpenAIStubRequest(path=self.path, payload={}))
+            payload = b"stub_metric_total 17\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path != "/v1/models":
             self._write_json(404, {"error": "not found"})
             return
@@ -55,6 +65,13 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         payload = self._read_json()
+        if self.path == "/tokenize":
+            self._handle_tokenize(payload)
+            return
+        if self.path == "/detokenize":
+            self._stub_server.state.requests.append(OpenAIStubRequest(path=self.path, payload=payload))
+            self._write_json(200, {"prompt": "decoded tokens"})
+            return
         if self.path == "/v1/completions":
             self._handle_completions(payload)
             return
@@ -62,6 +79,16 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
             self._handle_chat_completions(payload)
             return
         self._write_json(404, {"error": "not found"})
+
+    def _handle_tokenize(self, payload: dict[str, object]) -> None:
+        pause = self._stub_server.state.tokenize_pause
+        self._stub_server.state.requests.append(OpenAIStubRequest(path=self.path, payload=payload))
+        if payload.get("model") != self._stub_server.model:
+            self._write_json(404, {"error": "wrong model"})
+            return
+        if pause is not None:
+            pause.wait()
+        self._write_json(200, {"count": 3, "max_model_len": 32768, "tokens": [1, 2, 3]})
 
     @property
     def _stub_server(self) -> _DeterministicOpenAIServer:
@@ -161,8 +188,9 @@ def serve_deterministic_openai_stub(
     *,
     model: str = "gpt2",
     prompt_pauses: Mapping[str, threading.Event] | None = None,
+    tokenize_pause: threading.Event | None = None,
 ) -> Iterator[DeterministicOpenAIStub]:
-    state = OpenAIStubState(prompt_pauses={} if prompt_pauses is None else prompt_pauses)
+    state = OpenAIStubState(prompt_pauses={} if prompt_pauses is None else prompt_pauses, tokenize_pause=tokenize_pause)
     server = _DeterministicOpenAIServer(("127.0.0.1", 0), _DeterministicOpenAIHandler)
     server.model = model
     server.state = state

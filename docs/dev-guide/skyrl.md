@@ -1,0 +1,501 @@
+# Maintain the vendored SkyRL runtime
+
+SkyRL lives in `vendor/skyrl` with its own `pyproject.toml` and `uv.lock`.
+Source and dependency changes land directly in Marin. SkyRL is excluded from
+Marin's workspace and root dependency resolution.
+
+Marin invokes the nested `marinskyrl` executable in an isolated child process:
+
+```bash
+uv run --isolated --project vendor/skyrl --frozen --extra cpu --no-group dev marinskyrl --help
+```
+
+`--isolated` builds the environment once in the shared uv cache; without it, uv
+materializes a `vendor/skyrl/.venv` (about 2 GB with the `cpu` extra) in every
+checkout. The `cpu` extra runs on macOS. The `vllm` and `megatron` extras and
+GPU torch builds do not run on macOS; run GPU work through Iris.
+
+The launcher clears the parent's Python environment selection. SkyRL installs
+Marin libraries and Harbor as editable dependencies from this checkout, using
+the paths in `vendor/skyrl/pyproject.toml`. Marin calls SkyRL through the executable.
+See [launching RL experiments](../references/rl-launching.md)
+for the artifact entry point, launch document, and resource configuration.
+For model-owned preset selection, experiment status and saved results, see the
+[RL experiments recipe](../recipes/rl-experiments.md).
+
+The Marin CLI uses SkyRL's `cpu` extra. Set `environment.task_sessions.local: {}`
+to enable the local task backend, which probes Linux bubblewrap before task
+admission. Omitting this key or setting it to `null` disables the backend.
+The launcher forwards `iris.container_profile` to the coordinator and trainer;
+local execution requires a successful sandbox capability check.
+
+## Runtime and dependencies
+
+Iris bundles the Marin repository through its standard workspace submission.
+Workers run SkyRL from `/app/vendor/skyrl` and install the project in editable
+mode using the `megatron`, `vllm`, and `telemetry` extras from the nested lock.
+`cloud/iris/bootstrap_runtime.sh` installs these extras for training. Marin artifacts and SkyRL run
+records use `rigging.provenance` to record the checkout and launch context
+alongside the resolved configuration. Use a fresh RL artifact version after
+runtime changes unless checkpoint compatibility has been established.
+
+The runtime supports Megatron training. Marin's curriculum arms use Megatron
+for both Qwen and Snowball.
+
+Marin library edits are available to SkyRL without publishing wheels. When
+changing dependency declarations, refresh SkyRL's independent lock:
+
+```bash
+uv lock --project vendor/skyrl
+```
+
+Run the
+[train, resume, and evaluation smoke](#train-resume-and-evaluate-through-marin)
+to check runtime behavior after dependency changes.
+
+When checking an NCCL upgrade, read the loaded library version. Torch's
+`torch.cuda.nccl.version()` returns the version used to build Torch, so it can
+remain older after a dependency override. In the frozen CUDA runtime, run:
+
+```bash
+python - <<'PYTHON'
+import ctypes
+from pathlib import Path
+import torch
+
+paths = {
+    line.split()[-1]
+    for line in Path("/proc/self/maps").read_text().splitlines()
+    if "libnccl.so" in line and line.split()[-1].startswith("/")
+}
+assert len(paths) == 1, paths
+library = ctypes.CDLL(paths.pop())
+version = ctypes.c_int()
+status = library.ncclGetVersion(ctypes.byref(version))
+assert status == 0, status
+print("Loaded NCCL:", version.value, "Torch build NCCL:", torch.cuda.nccl.version())
+PYTHON
+```
+
+NCCL 2.32.6 reports `23206`. Set `NCCL_DEBUG=VERSION` before a collective test
+and capture its stdout and stderr to save the version banner with the numerical
+results.
+
+The launcher lock targets Linux x86_64, Linux aarch64, and macOS ARM64.
+The pinned Ray release has no Intel macOS wheel.
+
+## Task errors
+
+[rigging.task_errors](https://github.com/marin-community/marin/blob/main/lib/rigging/src/rigging/task_errors.py)
+owns `ErrorCategory`, `RetrySettings` and names shared by task producers and SDKs.
+Each framework owns its remaining categories: Shellbox owns machine and Daytona
+errors, Harbor owns its native errors, and SkyRL owns its rollout errors.
+SkyRL composes the shared, Shellbox and SkyRL maps, plus Harbor's map when Harbor
+is installed. Composition rejects names assigned by more than one owner.
+
+SkyRL maps categories to training treatment in `skyrl_train.task_error_handling`:
+infrastructure failures are excluded, agent failures receive zero reward, and
+passthrough failures retain available verifier output. Unknown names use the
+configured fallback and emit an error log.
+
+Add a new persisted exception name to its producer's category map. Put a name
+used by several producers in the shared map once. Per-name training overrides
+belong in `ErrorHandlingConfig`.
+
+SkyRL retains passthrough terminal results with usable verifier output. Native
+Harbor may retry when environment teardown is unconfirmed.
+
+## Run records
+
+Native receipts and numeric metrics use the [FineStore run-record contract](https://github.com/marin-community/marin/blob/main/lib/finestore/README.md#package-boundary).
+See [RL launching](../references/rl-launching.md) for checkpoint continuation and retry procedures.
+
+Generate-only launches through Marin allocate the inference engines' nodes and
+reserve no trainer or reference nodes.
+
+## Grug activation storage
+
+With full/uniform recomputation and pipeline parallelism, Grug can store saved
+activation inputs in pinned CPU memory:
+
+```bash
++trainer.policy.megatron_config.transformer_config_kwargs.grug_checkpoint_cpu_offload=true
+```
+
+This opt-in uses PyTorch's `save_on_cpu` on non-final model stages, including
+the embedding stage. Backward restores each input to its original device before
+recomputation. Scoring and the final pipeline stage keep their normal storage
+policy. It trades host memory and device-to-host/host-to-device copies for GPU
+headroom; update time can increase. It cannot be combined with Megatron's other
+activation-offload modes.
+
+## Hero EP MuonH
+
+Set `trainer.policy.optimizer_config.optimizer: MuonH` and
+`trainer.policy.optimizer_config.optimizer_kwargs.expert_normalization: all_experts`
+to preserve one Frobenius norm per layer's routed gate, up and down expert
+projection across GPUs. Only norm scalars are exchanged. Each shared expert's
+projections and logical Q/K/V and gate/up matrices keep separate updates.
+Supported routed names end in `mlp.experts.linear_fc[12].weight<N>` or
+`mlp.experts.experts.linear_fc[12].weight<N>`. Unrecognized trainable routed
+expert names raise an error in this mode.
+
+The default `expert_normalization: per_expert` keeps each expert matrix's norm
+separate. Both modes use corrected BF16 rounding and square-matrix orientation,
+so existing per-expert numerical updates also change.
+
+MuonH owns matrix weights, AdamH owns the readout, and Adam owns embeddings,
+routers, attention gates, scalar norm gains and ShortConv kernels. Set
+`optimizer_kwargs.adam_lr` separately. The Hero pretraining settings come from
+`experiments/grug/moe_hero_ep/heuristic.py`.
+
+To match Hero pretraining, set `max_grad_norm: 1.0` (the
+`HERO_MAX_GRAD_NORM` setting in `experiments/grug/moe_hero_ep/hero_recipe.py`).
+Use `weight_decay: 0`, TP=ETP=1, FP32 master parameters and
+`megatron_config.optimizer_config_kwargs.use_distributed_optimizer: false`.
+Megatron's AdamW CPU offload and precision-aware optimizer are unsupported.
+`optimizer_kwargs.offload_momentum: true` keeps Muon momentum in pinned CPU memory.
+
+Native checkpoints record `MuonH:hero_ep_all_experts` or `MuonH` for whole-bank
+or per-expert state. Training-state restore rejects a mismatched recipe;
+model-only restore can start a fresh optimizer with a different recipe.
+Extracted from [the Mochi experiment](https://github.com/marin-community/marin/pull/11199),
+using [Hero EP at 4af96607](https://github.com/marin-community/marin/tree/4af966070e5d0252e87d404196400c35bd04883b/experiments/grug/moe_hero_ep)
+as the numerical reference.
+
+## Batch assembly
+
+The driver builds batches by default. Recipes that support policy-worker slicing can set
+`trainer.batch_builder=worker`. Keep `driver` for these configurations:
+
+| Worker startup refusal | Configurations |
+| --- | --- |
+| Objectives and credit | Reference objectives, DPO/FTPO, distillation, unsupported estimators, trajectory selection, step-wise training, advantage normalization, loop advantage credit or marker-target penalties |
+| Placement and output | Colocation, MoE ETP (or its TP fallback) greater than one, rows requiring DP padding, dense batch dumps |
+
+Outcome estimators and SFT/uniform support scalar and per-turn token rewards. Unexpected loop, teacher or route metadata reports its group uid. Worker mismatch metrics omit p95/p99/p999, ESS, KL/chi-square and collapse-tail statistics, plus rollout/train probability-difference standard deviation. Two-phase payload sharing precedes rank reads and assembly (`timing/load_worker_batch`). Resume rebuilds per-row summaries with bounded parallel reads for either builder. Checkpoints work in either mode.
+
+## CI checks
+
+The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
+launch configuration, checkpoint export, and verifier tests in SkyRL's CPU
+environment. Changes to its editable dependencies also select this lane.
+The lane discovers `test_*.py` files directly in `infra/tests`, `cloud/iris/tests`,
+and `skyrl-gym/tests`; new files matching these globs need no workflow edit. The
+pytest configuration excludes the `docker` marker. Run these tests locally
+from `vendor/skyrl`:
+
+```bash
+uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 \
+  pytest -q infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py
+```
+
+Check the lock locally with:
+
+```bash
+uv lock --project vendor/skyrl --check
+```
+
+`Marin - SkyRL Nightly` runs on-policy distillation, Grug/Megatron training and
+serving checks, and asynchronous GPU CatCount at 09:00 UTC from the checked-out
+Marin revision. Its Grug CUTLASS kernel check runs weekly or by manual selection;
+see [the workflow](https://github.com/marin-community/marin/blob/main/.github/workflows/marin-skyrl-nightly.yaml)
+for the selected tests. `Marin - SkyRL CPU Nightly` runs CatCount
+learning and checkpoint/resume gates at 06:00 UTC using the nested lock.
+
+## Grug training communication
+
+Batch-invariant workers inherit vLLM's one-channel NCCL limit. Megatron policies
+with TP1 and expert TP1 can set a separate training limit:
+
+```text
+trainer.algorithm.batch_invariant=true
+trainer.policy.megatron_config.tensor_model_parallel_size=1
+trainer.policy.megatron_config.expert_tensor_parallel_size=1
+trainer.policy.megatron_config.nccl_max_channels=8
+generator.weight_sync_transport=broadcast
+```
+
+The default `nccl_max_channels=null` preserves existing behavior. Broadcast
+publication keeps vLLM's channel limit on both ends; `expert_block` requires
+`null` or `1`. Leave `NCCL_MAX_CTAS` unset when using this option.
+
+Eight channels is a tested starting point for Hero on 192 H100s at 65K, not a
+universal setting. More channels consume GPU memory: automatic selection ran
+out on its second update, while eight completed eight updates. See the
+[paired measurements](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-auto-01a13c0f/reports/HERO-NCCL-AUTOMATIC-SELECTION.md).
+One and eight channels produced identical scores and expert choices at each
+tested batch shape, but both retained existing batch-shape sensitivity. This
+option does not establish exact batch invariance; see the
+[numerical checks](https://marin-us-east-02a.cwobject.com/marin/users/romain/hero-nccl-invariance-01a13c0f/reports/HERO-NCCL-BATCH-INVARIANCE.md).
+
+## Keep each model group within one NVLink domain
+
+On NVL72, set `IrisSkyRLExecution.role_topology` to
+`RoleTopologyMode.NVLINK_DOMAIN` (from `skyrlrecipe.locality`), or use
+`iris.role_topology: nvlink.domain` in a launch document, to keep the trainer
+within one rack and each vLLM engine within one rack. Each group may use at
+most 16 four-GPU hosts (64 GPUs) in one rack. Each trainer or engine must fit
+within that limit. Groups may share a rack when capacity permits. This mode
+uses separate trainer and inference GPUs. Inference requires tensor and pipeline
+parallelism of one (TP=PP=1), with expert parallelism equal to data parallelism
+(EP=DP). A reference model may share trainer GPUs.
+For example, a 32-GPU trainer and a 64-GPU engine request 24 four-GPU
+hosts in groups of eight and sixteen. Marin rounds each group up to whole hosts.
+Iris admits the job together; Ray confines each role to its group. Deploy an Iris
+controller with [grouped coscheduling](https://github.com/marin-community/marin/pull/11449)
+before enabling this mode. Explicit groups lose the default preference
+for nearby racks on InfiniBand. Cross-rack transport between trainer and
+inference still needs validation on main. Omitting the option keeps existing placement.
+
+## Mochi inference on GB200
+
+Use a retained BF16 Mochi (535B-A23B) export with
+`grugmoe_artifact_schema_version: 3` in its `config.json`, retained data handles,
+and a recipe that already validates on main with a 64-GPU Megatron trainer
+at TP1/PP16/CP4/EP4. This configuration uses eight
+TP1/PP1/DP16/EP16 inference engines on another 128 GPUs. Required NVLink placement
+packs the trainer into one 16-host domain and four inference engines into each of
+two further domains: 48 four-GPU hosts in total.
+
+Keep the existing context limit, optimizer, n=8, staleness three, trainer batch,
+task setup, evaluation and recovery settings. The base recipe must use local
+vLLM engines, Triton MoE and NCCL expert-block weight sync. Commit the following
+fragment as `mochi-inference.yaml` beside your experiment:
+
+```yaml
+trainer:
+  rollout_buffer:
+    max_in_flight: 128
+generator:
+  num_inference_engines: 8
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 16
+  inference_engine_expert_parallel_size: 16
+  model_dtype: bfloat16
+  vllm_attention_backend: FLASHINFER
+  max_num_seqs: 128
+  max_num_batched_tokens: 2048
+  gpu_memory_utilization: 0.90
+  enable_prefix_caching: false
+  expert_block_sync:
+    verify: true
+    timeout_seconds: 1800
+  engine_init_kwargs:
+    enable_return_routed_experts: true
+    compilation_config:
+      mode: 3
+      cudagraph_mode: PIECEWISE
+      splitting_ops:
+        - vllm::unified_attention_with_output
+        - vllm::unified_kv_cache_update
+        - vllm::grug_moe_short_conv
+      inductor_compile_config:
+        enable_auto_functionalized_v2: false
+        combo_kernels: true
+        benchmark_combo_kernel: true
+```
+
+In your artifact main, apply it to the existing `SkyRLSpec` named `spec` and
+`IrisSkyRLExecution` named `execution` before calling `skyrl_step`. These public
+interfaces are described in [RL launching](../references/rl-launching.md).
+The role plan below reads its inference topology from the same patch that replaces
+the recipe's old declarations. The file stays in the submitted checkout so the
+coordinator reads the same recipe.
+
+```python
+from dataclasses import replace
+from pathlib import Path
+
+import yaml
+from skyrlrecipe import RecipePatch, SkyRLRecipe
+from skyrlrecipe.locality import RoleTopologyMode
+
+recipe = SkyRLRecipe.from_document(yaml.safe_load(spec.config_yaml))
+inference = RecipePatch.from_document(
+    yaml.safe_load(Path(__file__).with_name("mochi-inference.yaml").read_text())
+)
+role_plan = replace(
+    spec.topology.role_plan,
+    num_inference_engines=inference.generator.num_inference_engines,
+    inference_engine_tensor_parallel_size=inference.generator.inference_engine_tensor_parallel_size,
+    inference_engine_pipeline_parallel_size=inference.generator.inference_engine_pipeline_parallel_size,
+    inference_engine_data_parallel_size=inference.generator.inference_engine_data_parallel_size,
+    inference_engine_expert_parallel_size=inference.generator.inference_engine_expert_parallel_size,
+)
+spec = replace(
+    spec,
+    config_yaml=yaml.safe_dump(recipe.merge(inference).to_skyrl(), sort_keys=False),
+    topology=replace(spec.topology, num_nodes=role_plan.num_nodes, role_plan=role_plan),
+)
+execution = replace(execution, role_topology=RoleTopologyMode.NVLINK_DOMAIN)
+```
+
+The 128-group admission limit is separate from the trainer batch. The native
+buffer also bounds untrained groups by `(staleness + 1) * batch_size`: at
+staleness three, a six-group batch admits at most 24 groups. The 128-sequence
+limit applies to each vLLM DP worker, which uses one GPU in this layout. To keep a smoke
+run's admission cap at two groups, use
+`inference = inference.with_settings(("trainer.rollout_buffer.max_in_flight=2",))`
+before updating `spec`. Use a new artifact version for the changed
+inference layout and inspect the rendered launch document before submitting it.
+
+This example was composed for vLLM build `marin-vllm-gpu-20261113-0ac9dcb157ee`.
+CPU validation covers recipe composition,
+native launch loading, training configuration and three-domain placement, with
+and without existing inference topology declarations. It also checks the two-group
+admission override. These checks provide no GPU execution or performance evidence.
+GPU memory fit, updated-weight publication, long-context training and recovery
+need validation on your runtime. [Issue #11430](https://github.com/marin-community/marin/issues/11430)
+tracks serving work.
+
+## Expert-block weight sync placement
+
+Expert-block sync publishes each Grug expert from the Megatron rank that owns it to the
+vLLM expert-parallel rank that serves it. The local vLLM engine must use the TRITON MoE
+backend, NCCL weight sync, TP=1, and EP equal to DP. Megatron needs TP=ETP=1 and
+`nccl_max_channels` unset or set to 1.
+
+| Placement | Supported layout | Lifecycle |
+| --- | --- | --- |
+| Separate policy and inference GPUs | Local TP=1 vLLM, EP=DP; trainer and receiver parallel sizes may differ | Receivers stay awake; placement and transfer groups are checked at startup. |
+| Shared GPUs (`colocate_all=true`) | Standard training entrypoint on one four-GPU node; Megatron TP=PP=ETP=1, EP=4; one vLLM TP=PP=1, DP=EP=4 engine; no LoRA or eager mode | Level-2 sleep during training; receiver placement and Gloo transfer groups are rechecked and rebuilt after each weight wake. Verification is required before generation resumes. |
+
+Colocated transfer groups use Gloo's CUDA broadcast support because the pinned NCCL
+2.29 runtime rejects two ranks on one physical GPU. [NCCL's shared-GPU rank mode](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-multi-rank-gpu-enable)
+starts in 2.30 and is experimental. The config's
+`weight_sync_backend: nccl` remains required for the vLLM weight-sync interface; the
+expert-block transport selects Gloo only for its colocated groups.
+
+Other colocated shapes fail during launch validation, before GPU allocation. A colocated
+recipe must explicitly declare these settings in its SkyRL YAML:
+
+```yaml
+trainer:
+  strategy: megatron
+  placement:
+    colocate_all: true
+    policy_num_nodes: 1
+    policy_num_gpus_per_node: 4
+  policy:
+    megatron_config:
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      expert_tensor_parallel_size: 1
+      expert_model_parallel_size: 4
+generator:
+  backend: vllm
+  run_engines_locally: true
+  weight_sync_backend: nccl
+  weight_sync_transport: expert_block
+  expert_block_sync:
+    verify: true
+  num_inference_engines: 1
+  inference_engine_tensor_parallel_size: 1
+  inference_engine_pipeline_parallel_size: 1
+  inference_engine_data_parallel_size: 4
+  inference_engine_expert_parallel_size: 4
+  engine_init_kwargs:
+    kernel_config:
+      moe_backend: triton
+```
+
+The four-GPU gate is
+`skyrl-train/tests/gpu/test_grug_megatron.py::test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_two_updates`.
+It runs an initial publication and two train/sleep/wake/publication/generation cycles.
+After each update it exports the policy checkpoint, then compares the serving ranks'
+dense and expert tensors byte-for-byte with a fresh vLLM load of that export. Fixed-input
+prompt log-probabilities use a maximum absolute tolerance of `2e-3` for BF16 kernel-order
+variation; stale or swapped experts must still fail the exact tensor comparison. Run this
+gate on four H100s before relying on a new runtime revision for colocated training:
+
+```bash
+gh workflow run marin-skyrl-nightly.yaml --ref <branch> \
+  -f grug_tests='skyrl-train/tests/gpu/test_grug_megatron.py::test_grug_megatron_four_gpu_colocated_expert_block_matches_fresh_load_after_two_updates'
+```
+
+## Train, resume, and evaluate through Marin
+
+The artifact smoke uses Qwen2.5-0.5B-Instruct, procedural CatCount training
+data, and two colocated H100s on `cw-rno2a`. It performs two Megatron steps,
+saves a distributed checkpoint, exports HF weights, then submits a fresh
+training job against that checkpoint root with a four-step limit. Its final
+artifact evaluates the resumed HF policy on the 128-row GSM8K smoke preset
+in Marin's separate serving environment.
+
+Run from the repository root. Build and inspect the graph first:
+
+```bash
+uv run python -m experiments.post_training.skyrl_port_smoke \
+  --version <new-version> --stage evaluate
+```
+
+Submit it with:
+
+```bash
+uv run python -m experiments.post_training.skyrl_port_smoke \
+  --version <new-version> --stage evaluate --run
+```
+
+Choose a new immutable version for each runtime change or independent rerun.
+Require successful training and export jobs, evidence that the fresh job
+loads step two and advances to step four, a complete final export, and a
+successful evaluation artifact. This smoke checks pipeline handoffs. Use
+the nightly learning gates to assess learning behavior.
+
+## Author typed recipes
+
+Experiments can import `SkyRLRecipe` and generated section classes from `skyrlrecipe`, the
+unpublished `marin-skyrlrecipe` workspace library. SkyRL installs the same library from its editable
+path source. The library depends only on Pydantic; Hydra composes runtime defaults in SkyRL.
+
+The typed object is the sparse authored document. Unset fields read as the base YAML default, or
+the unset sentinel where no single base value exists. Only Hydra composition gives the values training uses:
+`algorithm_recipe=gspo` leaves `eps_clip_high` at `0.2` on the object and composes it to `0.0004`.
+
+```python
+from skyrlrecipe import ContextBudget, SkyRLRecipe
+from skyrlrecipe.sections import Trainer
+
+recipe = SkyRLRecipe(
+    context_budget=ContextBudget(request_window_tokens=2048, max_new_tokens_per_turn=512, max_turns=1),
+    trainer=Trainer(max_steps=2),
+)
+```
+
+Serialize `recipe.to_skyrl()` to YAML for `SkyRLSpec.config_yaml`. Supply the seed and checkpoint
+retention through the launch envelope. Closed sections reject unknown and launcher-owned fields;
+open mappings also check owned paths. `merge` and `with_settings` apply explicit overrides.
+An explicit empty mapping is retained, including `environment.task_sessions.local: {}`.
+
+After changing SkyRL YAML or group options, regenerate the author classes from the nested environment:
+
+```bash
+uv run --isolated --frozen --project vendor/skyrl --extra cpu --no-group dev python vendor/skyrl/scripts/generate_recipe_schema.py
+```
+
+Types and open mappings that YAML cannot express belong in `vendor/skyrl/scripts/recipe_schema_sidecar.py`.
+A renamed or retired author key needs a migration message in `skyrlrecipe.ownership.REMOVED`.
+
+## Reference-likelihood diagnostics
+
+Add `type: reference_likelihood` to `trainer.callbacks`, with `reference_paths`
+(a list of Parquet paths), `output_path`, and optional `batch_size` (default 8).
+It runs inside the existing evaluation session, after rollout weights have been
+synchronized. Keep an evaluation callback to schedule those sessions.
+
+Each Parquet row needs a unique `id`, `validation_domain`, `reference_token_ids`
+(the complete prompt and answer), and `reference_start` (the first answer token).
+Render the native chat template, including thinking-mode delimiters, before
+creating these rows. A nonempty prompt is required to score the first answer token.
+The tokenizer must match the serving model. The scorer requests prompt logprobs
+and one disposable output token; it does not grade that generated token.
+
+Metrics distinguish equal-example NLL from token-weighted NLL. Per-step JSONL
+records contain the full token IDs, answer start, and chosen answer-token logprobs.
+Use them to locate distribution changes. Lower NLL does not establish factual
+correctness, better generated answers, or preserved behavior. The callback does
+not select checkpoints, enforce preservation gates, or stop training.
+Missing or misaligned scores fail that step's scoring: the trainer logs a
+warning, omits the step's reference metrics and JSONL, and continues training.

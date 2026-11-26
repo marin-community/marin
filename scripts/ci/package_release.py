@@ -20,8 +20,9 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from datetime import date
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
@@ -30,6 +31,19 @@ PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/{distribution}/json"
 PYPI_VERSION_JSON_URL = "https://pypi.org/pypi/{distribution}/{version}/json"
 LOCK_RETRY_DELAYS = (0, 5, 15, 30, 60, 120)
 PYTHON_LIBS_FAMILY = "python-libs"
+IRIS_DISTRIBUTION = "marin-iris"
+# `iris.version` reads this first, so it has to be cleared to prove the date came
+# out of the artifact rather than out of the environment running the check.
+IRIS_REVISION_DATE_ENV = "IRIS_REVISION_DATE"
+# uv writes its own lockfile format revision, so a newer uv changes it on each re-lock.
+LOCK_FORMAT_KEYS = frozenset({"revision"})
+# uv releases spell environment markers differently. The targeted-change guard ignores them,
+# and a marker change holds the update for a person to review instead.
+LOCK_MARKER_KEYS = frozenset({"resolution-markers", "marker"})
+# Vendored projects keep their own uv.lock, and CI checks each one.
+VENDORED_LOCK_GLOB = "vendor/*/uv.lock"
+# uv.lock source keys for a package installed from a local directory.
+LOCAL_SOURCE_KEYS = frozenset({"editable", "directory"})
 _VERSION_RE = re.compile(r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[.-]dev\.?(?P<dev>\d+))?$")
 
 
@@ -85,6 +99,16 @@ class BuildOperation(StrEnum):
     SDIST = "sdist"
 
 
+class FloorUpdate(StrEnum):
+    """Outcome of raising one native compatibility floor."""
+
+    # The floor already admits the release.
+    CURRENT = "current"
+    RAISED = "raised"
+    # The floor advanced, and environment markers changed outside the released packages.
+    MARKERS_CHANGED = "markers_changed"
+
+
 @dataclass(frozen=True)
 class ReleaseVersion:
     mode: str
@@ -112,6 +136,11 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 Path("lib/levanter/pyproject.toml"),
                 Path("lib/haliax/src/haliax/__about__.py"),
                 Path("lib/finestore/pyproject.toml"),
+                Path("lib/shellbox/pyproject.toml"),
+                Path("lib/verifyit/pyproject.toml"),
+                Path("lib/taskcompendium/pyproject.toml"),
+                Path("lib/rolloutengine/pyproject.toml"),
+                Path("lib/evalrecords/pyproject.toml"),
             ),
             artifacts=MappingProxyType(
                 {
@@ -125,11 +154,32 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                         "marin-levanter",
                         "marin-haliax",
                         "marin-finestore",
+                        "marin-shellbox",
+                        "marin-verifyit",
+                        "marin-taskcompendium",
+                        "marin-rolloutengine",
+                        "marin-evalrecords",
                     )
                 }
             ),
             tag_prefix="marin-libs-v",
-            source_patterns=("scripts/python_libs_package.py",),
+            source_patterns=(
+                "scripts/python_libs_package.py",
+                "lib/iris/hatch_build.py",
+                "lib/finestore/src/**",
+                "lib/shellbox/src/**",
+                "lib/shellbox/pyproject.toml",
+                "lib/shellbox/README.md",
+                "lib/verifyit/src/**",
+                "lib/verifyit/pyproject.toml",
+                "lib/verifyit/README.md",
+                "lib/taskcompendium/src/**",
+                "lib/taskcompendium/pyproject.toml",
+                "lib/rolloutengine/src/**",
+                "lib/rolloutengine/pyproject.toml",
+                "lib/evalrecords/src/**",
+                "lib/evalrecords/pyproject.toml",
+            ),
             build_legs=(("ubuntu-latest", BuildOperation.PYTHON),),
             build=PythonBundle(script_path=Path("scripts/python_libs_package.py")),
         ),
@@ -144,7 +194,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             source_patterns=("lib/iris/rust/**", "rust/iris-*/**"),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(
@@ -176,7 +226,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             ),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(
@@ -207,7 +257,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
             ),
             build_legs=(
                 ("ubuntu-latest", BuildOperation.LINUX),
-                ("macos-14", BuildOperation.MACOS),
+                ("macos-15", BuildOperation.MACOS),
                 ("ubuntu-latest", BuildOperation.SDIST),
             ),
             build=NativeBuild(
@@ -339,24 +389,61 @@ def _declared_version(repo_root: Path, package: PackageFamily) -> str:
     return max(versions, key=_version_key)
 
 
-def latest_pypi_version(distribution: str) -> str | None:
-    """Return the latest supported PyPI release, or None before the first release."""
+def latest_complete_version(releases: Mapping[str, Sequence[str]], expectation: ArtifactExpectation) -> str | None:
+    """Return the greatest supported version whose PyPI files include every expected artifact."""
+    complete = []
+    for version, package_types in releases.items():
+        if (
+            package_types.count("bdist_wheel") >= expectation.wheels
+            and package_types.count("sdist") >= expectation.sdists
+        ):
+            complete.append(version)
+    return latest_supported_version(complete)
+
+
+def pypi_releases(distribution: str) -> Mapping[str, Sequence[str]]:
+    """Return the PyPI package type of each file per release, or an empty mapping before the first release."""
     url = PYPI_PROJECT_JSON_URL.format(distribution=distribution)
     try:
         with urllib.request.urlopen(url, timeout=30) as response:
             data = json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return None
+            return {}
         raise
-    releases = data.get("releases", {})
-    return latest_supported_version(releases)
+    return {version: tuple(file["packagetype"] for file in files) for version, files in data.get("releases", {}).items()}
+
+
+def latest_pypi_version(distribution: str) -> str | None:
+    """Return the latest supported PyPI release, or None before the first release."""
+    return latest_supported_version(pypi_releases(distribution))
 
 
 def latest_family_version(package: PackageFamily) -> str | None:
     """Return the greatest supported release across a coupled package family."""
     versions = [version for distribution in package.artifacts if (version := latest_pypi_version(distribution))]
     return max(versions, key=_version_key) if versions else None
+
+
+def latest_native_release_versions(
+    releases: Callable[[str], Mapping[str, Sequence[str]]] = pypi_releases,
+) -> Mapping[str, str]:
+    """Return the newest completely published wheel version consumed by each native family.
+
+    A release run that fails after its first upload leaves a partial PyPI release, for example
+    one macOS wheel, which other platforms cannot install.
+    """
+    versions = {}
+    for name, package in sorted(PACKAGES.items()):
+        build = package.build
+        if not isinstance(build, NativeBuild):
+            continue
+        expectation = package.artifacts[build.requirement_distribution]
+        version = latest_complete_version(releases(build.requirement_distribution), expectation)
+        if version is None:
+            raise ValueError(f"No published release found for {build.requirement_distribution}")
+        versions[name] = version
+    return MappingProxyType(versions)
 
 
 def resolve_version(
@@ -520,12 +607,20 @@ def published_artifacts(distribution: str, version: str) -> list[PublishedArtifa
     ]
 
 
-def _canonical_package_entries(lock_text: str) -> tuple[dict, dict[str, list[str]]]:
+def _without_keys(value: object, ignored_keys: frozenset[str]) -> object:
+    if isinstance(value, dict):
+        return {key: _without_keys(item, ignored_keys) for key, item in value.items() if key not in ignored_keys}
+    if isinstance(value, list):
+        return [_without_keys(item, ignored_keys) for item in value]
+    return value
+
+
+def _canonical_package_entries(lock_text: str, ignored_keys: frozenset[str]) -> tuple[object, dict[str, list[str]]]:
     lock = tomllib.loads(lock_text)
-    metadata = {key: value for key, value in lock.items() if key != "package"}
+    metadata = _without_keys({key: value for key, value in lock.items() if key != "package"}, ignored_keys)
     packages: dict[str, list[str]] = {}
     for package in lock.get("package", []):
-        packages.setdefault(package["name"], []).append(json.dumps(package, sort_keys=True))
+        packages.setdefault(package["name"], []).append(json.dumps(_without_keys(package, ignored_keys), sort_keys=True))
     for entries in packages.values():
         entries.sort()
     return metadata, packages
@@ -539,9 +634,13 @@ def validate_targeted_lock_change(
     *,
     allowed_packages: Iterable[str] = (),
 ) -> None:
-    """Reject lock changes outside the released distribution and requirement owner."""
-    before_metadata, before_packages = _canonical_package_entries(before)
-    after_metadata, after_packages = _canonical_package_entries(after)
+    """Reject lock changes outside the released distribution and requirement owner.
+
+    Environment markers are not compared; `lock_changed_outside` reports a marker change.
+    """
+    ignored_keys = LOCK_FORMAT_KEYS | LOCK_MARKER_KEYS
+    before_metadata, before_packages = _canonical_package_entries(before, ignored_keys)
+    after_metadata, after_packages = _canonical_package_entries(after, ignored_keys)
     if before_metadata != after_metadata:
         raise ValueError("Targeted native lock update changed lockfile metadata")
 
@@ -556,6 +655,9 @@ def validate_targeted_lock_change(
         raise ValueError(f"Targeted native lock update changed unrelated packages: {sorted(unrelated)}")
 
     target_entries = [json.loads(entry) for entry in after_packages.get(distribution, ())]
+    # A vendored lock can record the owner's floor without installing the distribution.
+    if not target_entries and distribution not in before_packages:
+        return
     expected = canonical_version(version)
     if len(target_entries) != 1 or target_entries[0].get("version") != expected:
         versions = sorted(entry.get("version") for entry in target_entries)
@@ -564,7 +666,21 @@ def validate_targeted_lock_change(
         raise ValueError(f"Expected {distribution}=={expected} to resolve from a registry")
 
 
-def _emit_github_output(path: Path | None, **values: str) -> None:
+def lock_changed_outside(before: str, after: str, allowed_packages: Iterable[str]) -> bool:
+    """Return whether anything but the format revision changed outside `allowed_packages`.
+
+    After `validate_targeted_lock_change` passes, a True result means only markers changed.
+    """
+    before_metadata, before_packages = _canonical_package_entries(before, LOCK_FORMAT_KEYS)
+    after_metadata, after_packages = _canonical_package_entries(after, LOCK_FORMAT_KEYS)
+    names = (set(before_packages) | set(after_packages)) - set(allowed_packages)
+    return before_metadata != after_metadata or any(
+        before_packages.get(name) != after_packages.get(name) for name in names
+    )
+
+
+def emit_github_output(path: Path | None, **values: str) -> None:
+    """Append single-line values to a GitHub Actions output file when configured."""
     if path is None:
         return
     with path.open("a", encoding="utf-8") as output:
@@ -572,73 +688,96 @@ def _emit_github_output(path: Path | None, **values: str) -> None:
             output.write(f"{key}={value}\n")
 
 
+def lock_paths_recording(repo_root: Path, owner: str) -> list[Path]:
+    """Return the root uv.lock and each vendored uv.lock that installs `owner` from a local path.
+
+    Such a lock records the requirements of `owner`, so a floor raised in its pyproject.toml makes the lock stale.
+    """
+    lock_paths = [repo_root / "uv.lock"]
+    for lock_path in sorted(repo_root.glob(VENDORED_LOCK_GLOB)):
+        packages = tomllib.loads(lock_path.read_text()).get("package", [])
+        if any(package["name"] == owner and package["source"].keys() & LOCAL_SOURCE_KEYS for package in packages):
+            lock_paths.append(lock_path)
+    return lock_paths
+
+
+def _write_texts(texts: Mapping[Path, str]) -> None:
+    for path, text in texts.items():
+        path.write_text(text)
+
+
+def _uv_lock_returncode(project_dir: Path, *options: str) -> int:
+    return subprocess.run(["uv", "lock", *options], cwd=project_dir).returncode
+
+
+def _relock(original_locks: Mapping[Path, str], upgrade: str) -> dict[Path, str]:
+    """Re-lock each project with `upgrade`, retrying while the release reaches the package index."""
+    failed: Path | None = None
+    for delay in LOCK_RETRY_DELAYS:
+        time.sleep(delay)
+        _write_texts(original_locks)
+        failed = next(
+            (
+                path
+                for path in original_locks
+                if _uv_lock_returncode(path.parent, "--upgrade-package", upgrade)
+                or _uv_lock_returncode(path.parent, "--check")
+            ),
+            None,
+        )
+        if failed is None:
+            return {path: path.read_text() for path in original_locks}
+    raise RuntimeError(
+        f"Re-locking {failed} with `--upgrade-package {upgrade}` failed after {len(LOCK_RETRY_DELAYS)} attempts"
+    )
+
+
 def bump_native_requirement(
     package_name: str,
     version: str,
     repo_root: Path,
-) -> None:
-    """Advance the compatibility floor and exact universal lock entry."""
+) -> FloorUpdate:
+    """Advance the compatibility floor and the exact entry in each lock that records it."""
     package = PACKAGES[package_name]
     build = package.build
     if not isinstance(build, NativeBuild):
         raise ValueError(f"{package_name} has no native dependency floor")
     version = canonical_version(version)
     requirement_path = repo_root / build.requirement_path
-    lock_path = repo_root / "uv.lock"
     original_requirement = requirement_path.read_text()
-    _, changed = update_native_requirement(
+    # The floor is raised in place, so it stays in whichever section declares it.
+    updated_requirement, changed = update_native_requirement(
         original_requirement,
         build.requirement_distribution,
         version,
     )
     if not changed:
-        return
+        return FloorUpdate.CURRENT
 
-    original_lock = lock_path.read_text()
-    command = [
-        "uv",
-        "add",
-        "--package",
-        build.requirement_owner,
-        f"{build.requirement_distribution}>={version}",
-        "--upgrade-package",
-        f"{build.requirement_distribution}=={version}",
-        "--no-sync",
-    ]
-    for attempt, delay in enumerate(LOCK_RETRY_DELAYS, start=1):
-        if delay:
-            time.sleep(delay)
+    original_locks = {path: path.read_text() for path in lock_paths_recording(repo_root, build.requirement_owner)}
+    requirement_path.write_text(updated_requirement)
+    try:
+        updated_locks = _relock(original_locks, f"{build.requirement_distribution}=={version}")
+        for path, updated_lock in updated_locks.items():
+            try:
+                validate_targeted_lock_change(
+                    original_locks[path],
+                    updated_lock,
+                    build.requirement_distribution,
+                    version,
+                    allowed_packages=(build.requirement_owner,),
+                )
+            except ValueError as error:
+                error.add_note(f"Lock file: {path}")
+                raise
+    except (RuntimeError, ValueError):
         requirement_path.write_text(original_requirement)
-        lock_path.write_text(original_lock)
-        result = subprocess.run(command, cwd=repo_root)
-        if result.returncode != 0:
-            if attempt < len(LOCK_RETRY_DELAYS):
-                continue
-            requirement_path.write_text(original_requirement)
-            lock_path.write_text(original_lock)
-            raise RuntimeError(f"`{' '.join(command)}` failed after {attempt} attempts")
-        updated_lock = lock_path.read_text()
-        try:
-            validate_targeted_lock_change(
-                original_lock,
-                updated_lock,
-                build.requirement_distribution,
-                version,
-                allowed_packages=(build.requirement_owner,),
-            )
-        except ValueError:
-            requirement_path.write_text(original_requirement)
-            lock_path.write_text(original_lock)
-            raise
-        check = subprocess.run(["uv", "lock", "--check"], cwd=repo_root)
-        if check.returncode != 0:
-            if attempt < len(LOCK_RETRY_DELAYS):
-                continue
-            requirement_path.write_text(original_requirement)
-            lock_path.write_text(original_lock)
-            raise RuntimeError(f"`uv lock --check` failed after {attempt} attempts")
-        return
-    raise AssertionError("Unreachable lock retry loop")
+        _write_texts(original_locks)
+        raise
+    allowed = (build.requirement_distribution, build.requirement_owner)
+    if any(lock_changed_outside(original_locks[path], updated_locks[path], allowed) for path in original_locks):
+        return FloorUpdate.MARKERS_CHANGED
+    return FloorUpdate.RAISED
 
 
 def _zig_platform_key() -> str:
@@ -719,7 +858,8 @@ def _build_python_bundle(build: PythonBundle, version: str, operation: str, repo
     subprocess.run(
         [
             sys.executable,
-            build.script_path.as_posix(),
+            "-m",
+            ".".join(build.script_path.with_suffix("").parts),
             "--mode",
             "stable",
             "--version",
@@ -754,8 +894,10 @@ def _build_native_package(build: NativeBuild, version: str, operation: str, repo
     if operation == BuildOperation.LINUX:
         zig_dir = str(Path(_ensure_zig(repo_root)).parent)
         environment = {**os.environ, "PATH": f"{zig_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    maturin_config = tomllib.loads((repo_root / build.native_path / "pyproject.toml").read_text())["tool"]["maturin"]
+    profile = maturin_config.get("profile", "release")
     for target, manylinux in targets:
-        arguments = ["build", "--release", "--out", str(dist_dir), "--target", target]
+        arguments = ["build", "--profile", profile, "--out", str(dist_dir), "--target", target]
         if manylinux:
             arguments.extend(("--manylinux", manylinux))
         if operation == BuildOperation.LINUX:
@@ -803,6 +945,68 @@ def validate_native_wheel(package_name: str, version: str, dist_dir: Path) -> No
             [str(python), "-c", f"import {build.import_name}"],
             check=True,
         )
+
+
+def iris_release_artifacts(version: str, dist_dir: Path) -> dict[str, Path]:
+    """The marin-iris wheel and sdist built for `version`, keyed by kind."""
+    prefix = f"{_normalized_distribution(IRIS_DISTRIBUTION)}-{python_compatible_version(version)}"
+    artifacts = {}
+    for kind, pattern in (("wheel", f"{prefix}-*.whl"), ("sdist", f"{prefix}.tar.gz")):
+        matches = sorted(dist_dir.glob(pattern))
+        if len(matches) != 1:
+            raise ValueError(f"Expected one {IRIS_DISTRIBUTION} {kind} in {dist_dir}, found {[p.name for p in matches]}")
+        artifacts[kind] = matches[0]
+    return artifacts
+
+
+def installed_revision_date(artifact: Path) -> str:
+    """Revision date reported by marin-iris installed alone from one artifact.
+
+    Asks the installed package rather than reading the archive, so the answer
+    comes from the code path a user's client runs. Installing the sdist rebuilds
+    the wheel outside any checkout, the way `pip install --no-binary` and an
+    install from a git URL do; that build has no repository to read and has to
+    carry the sdist's own stamp forward.
+    """
+    with tempfile.TemporaryDirectory(prefix="iris-revision-") as temporary:
+        environment = Path(temporary) / "venv"
+        subprocess.run(["uv", "venv", str(environment)], check=True)
+        python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        subprocess.run(
+            ["uv", "pip", "install", "--python", str(python), "--no-deps", str(artifact.resolve())],
+            check=True,
+        )
+        probe = subprocess.run(
+            [str(python), "-c", "from iris.version import client_revision_date; print(client_revision_date())"],
+            check=True,
+            capture_output=True,
+            text=True,
+            # Outside the repository, so a checkout cannot supply the date either.
+            cwd=temporary,
+            env={key: value for key, value in os.environ.items() if key != IRIS_REVISION_DATE_ENV},
+        )
+    return probe.stdout.strip()
+
+
+def validate_revision_stamp(version: str, dist_dir: Path) -> dict[str, str]:
+    """Fail unless both marin-iris distributions report their own revision date.
+
+    The controller gates client submissions on this date and falls back to
+    wall-clock time for a build that cannot report one, so an unstamped release
+    would loosen the gate for everyone who installs it without failing anything.
+    """
+    dates = {
+        kind: installed_revision_date(artifact) for kind, artifact in iris_release_artifacts(version, dist_dir).items()
+    }
+    for kind, value in dates.items():
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            raise ValueError(
+                f"{IRIS_DISTRIBUTION} {version} {kind} reports revision date {value!r}, "
+                f"expected ISO YYYY-MM-DD from lib/iris/hatch_build.py"
+            ) from None
+    return dates
 
 
 def release_plan(
@@ -899,14 +1103,23 @@ def _bump_releases_command(args: argparse.Namespace) -> None:
     selected = [name for name in sorted(versions) if isinstance(PACKAGES[name].build, NativeBuild)]
     requirement_paths = requirement_paths_for_packages(selected)
     before = {path: (args.repo_root / path).read_text() for path in requirement_paths}
-    for name in selected:
-        bump_native_requirement(name, versions[name]["version"], args.repo_root)
+    updates = [bump_native_requirement(name, versions[name]["version"], args.repo_root) for name in selected]
     changed_paths = [path for path in requirement_paths if (args.repo_root / path).read_text() != before[path]]
-    _emit_github_output(
+    emit_github_output(
         args.github_output,
         changed=str(bool(changed_paths)).lower(),
+        markers_changed=str(FloorUpdate.MARKERS_CHANGED in updates).lower(),
         requirement_paths=" ".join(path.as_posix() for path in changed_paths),
     )
+
+
+def _latest_native_releases_command(args: argparse.Namespace) -> None:
+    versions = json.dumps(
+        {name: {"version": version} for name, version in latest_native_release_versions().items()},
+        separators=(",", ":"),
+    )
+    print(versions)
+    emit_github_output(args.github_output, versions=versions)
 
 
 def _plan_command(args: argparse.Namespace) -> None:
@@ -933,7 +1146,7 @@ def _plan_command(args: argparse.Namespace) -> None:
         "publish": str(next(iter(plan.versions.values())).mode != ReleaseMode.MANUAL).lower(),
     }
     print(json.dumps(values, indent=2, sort_keys=True))
-    _emit_github_output(args.github_output, **values)
+    emit_github_output(args.github_output, **values)
 
 
 def _build_command(args: argparse.Namespace) -> None:
@@ -942,6 +1155,10 @@ def _build_command(args: argparse.Namespace) -> None:
 
 def _validate_wheel_command(args: argparse.Namespace) -> None:
     validate_native_wheel(args.package, args.version, args.dist_dir)
+
+
+def _validate_revision_stamp_command(args: argparse.Namespace) -> None:
+    print(json.dumps(validate_revision_stamp(args.version, args.dist_dir), indent=2, sort_keys=True))
 
 
 def main() -> None:
@@ -959,6 +1176,10 @@ def main() -> None:
     bump_releases.add_argument("--repo-root", type=Path, default=Path.cwd())
     bump_releases.add_argument("--github-output", type=Path)
     bump_releases.set_defaults(func=_bump_releases_command)
+
+    latest_native_releases = subparsers.add_parser("latest-native-releases")
+    latest_native_releases.add_argument("--github-output", type=Path)
+    latest_native_releases.set_defaults(func=_latest_native_releases_command)
 
     plan = subparsers.add_parser("plan")
     plan.add_argument("--event-name", required=True)
@@ -985,6 +1206,11 @@ def main() -> None:
     validate_wheel.add_argument("--version", required=True)
     validate_wheel.add_argument("--dist-dir", type=Path, default=Path("dist"))
     validate_wheel.set_defaults(func=_validate_wheel_command)
+
+    validate_revision_stamp_parser = subparsers.add_parser("validate-revision-stamp")
+    validate_revision_stamp_parser.add_argument("--version", required=True)
+    validate_revision_stamp_parser.add_argument("--dist-dir", type=Path, default=Path("dist"))
+    validate_revision_stamp_parser.set_defaults(func=_validate_revision_stamp_command)
 
     args = parser.parse_args()
     args.func(args)

@@ -32,10 +32,12 @@ learn.
 import inspect
 import json
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Final, Generic, TypeVar, cast
 
-from rigging.filesystem import marin_prefix, marin_region, prefix_join, url_to_fs
+from rigging.filesystem.cluster_config import marin_prefix, marin_region
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import Provenance
 
 from marin.execution.artifact import (
@@ -54,6 +56,7 @@ from marin.execution.artifact import (
 )
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import canonical_json, fingerprint_hash
+from marin.execution.remote import RemoteCallable
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec, _is_relative_path
 
@@ -201,12 +204,19 @@ class ArtifactStep(Generic[T]):
     """Opt-in hard pin: when set, :func:`lower` raises :class:`FingerprintMismatchError` if the
     config now fingerprints to something else, and the drift check raises rather than warns. Leave
     ``None`` to opt out."""
+    output_path_prefix: str | None = None
+    """Storage root for this produced artifact. Dependencies retain their own roots."""
 
     def __post_init__(self) -> None:
         validate_path_segment("name", self.name)
         validate_version(self.version)
         if self.adopt_source is not None and self.override_path is not None:
             raise ValueError(f"{self.name}@{self.version}: an artifact cannot be both adopted and pinned")
+        if self.output_path_prefix is not None:
+            if not self.output_path_prefix or _is_relative_path(self.output_path_prefix):
+                raise ValueError("output_path_prefix must be a storage URI or an absolute directory")
+            if self.override_path is not None or self.adopt_source is not None:
+                raise ValueError("output_path_prefix applies to produced artifacts")
 
     def fingerprint_payload(self) -> str:
         """The canonical config bytes this handle's fingerprint hashes. For a computed
@@ -223,7 +233,7 @@ class ArtifactStep(Generic[T]):
         return fingerprint_hash(self.fingerprint_payload())
 
     def path(self, prefix: str | None = None) -> str:
-        resolved_prefix = prefix or marin_prefix()
+        resolved_prefix = self.output_path_prefix or prefix or marin_prefix()
         # An adopted artifact resolves to its source; a pin to its location; else the
         # canonical name@version address.
         location = self.adopt_source if self.adopt_source is not None else self.override_path
@@ -273,6 +283,11 @@ class ArtifactStep(Generic[T]):
         )
 
 
+def artifact_identity(step: ArtifactStep) -> str:
+    """Return the immutable recipe identity carried across artifact boundaries."""
+    return f"{step.name}@{step.version}:{step.fingerprint()}"
+
+
 def _adopt_noop(_config: Any) -> None:
     raise AssertionError("adopted artifacts are registered, not computed")
 
@@ -293,23 +308,32 @@ def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
 
 
 def _output_path_spec(handle: "ArtifactStep") -> str:
-    """The relative output path StepSpec should use: the pin if set, else ``{name}/{version}``."""
+    """The pin if it is set, otherwise the artifact's name and version."""
     return handle.override_path or f"{handle.name}/{handle.version}"
 
 
-def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
+def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepSpec] | None = None) -> StepSpec:
     """Lower a handle graph into a ``StepSpec`` graph, recording ``provenance`` on every step.
 
     Each handle becomes a step addressed by its explicit ``{name}/{version}`` (or its pin); the
     fingerprint, version, artifact type, and dep identities travel in ``hash_attrs`` so the runner
     applies the drift check before serving a cached output, and the step fn writes a full
-    :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it never
-    inspects ``handle.run``.
+    :class:`ArtifactRecord` on success (unless pinned). Pure transform of *structure* — it only
+    inspects ``handle.run`` to preserve a :class:`RemoteCallable` wrapper in the lowered spec.
+
+    ``memo`` caches the spec of each handle by identity, so a handle several consumers share is
+    lowered once. Without it a diamond re-walks the shared subgraph — and re-runs its
+    ``build_config`` — once per path through it. Pass one ``memo`` across a whole ``run`` to share
+    it between terminals.
 
     Raises :class:`FingerprintMismatchError` if ``expected_fingerprint`` is set and differs;
     :class:`ValueError` if a fixed (non-``dev``) handle has a ``dev`` dep.
     """
-    dep_specs = [_lower(dep, provenance) for dep in handle.deps]
+    memo = {} if memo is None else memo
+    cached = memo.get(id(handle))
+    if cached is not None:
+        return cached
+    dep_specs = [_lower(dep, provenance, memo) for dep in handle.deps]
     payload = handle.fingerprint_payload()
     fingerprint = fingerprint_hash(payload)
     if handle.expected_fingerprint is not None and fingerprint != handle.expected_fingerprint:
@@ -352,7 +376,8 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
                 deps=_handle.deps,
             )
             config = _handle.build_config(ctx)
-            result = _handle.run(config)
+            run_fn = _handle.run.fn if isinstance(_handle.run, RemoteCallable) else _handle.run
+            result = run_fn(config)
             source = None
             config_json = json.loads(canonical_json(config))
             result_json = result.result_payload() if isinstance(result, Artifact) else None
@@ -383,15 +408,19 @@ def _lower(handle: "ArtifactStep", provenance: Provenance) -> StepSpec:
     if handle.expected_fingerprint is not None:
         hash_attrs[EXPECTED_FINGERPRINT_KEY] = handle.expected_fingerprint
 
-    return StepSpec(
+    step_fn = replace(handle.run, fn=fn) if isinstance(handle.run, RemoteCallable) else fn
+    spec = StepSpec(
         name=handle.name,
+        output_path_prefix=handle.output_path_prefix,
         override_output_path=_output_path_spec(handle),
         deps=dep_specs,
         hash_attrs=hash_attrs,
         fingerprint_payload=payload,
-        fn=fn,
+        fn=step_fn,
         writes_record=True,
     )
+    memo[id(handle)] = spec
+    return spec
 
 
 def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: bool = True) -> list[T]:
@@ -404,8 +433,9 @@ def run(*handles: "ArtifactStep[T]", max_concurrent: int = 8, force_run_failed: 
     ``force_run_failed`` reruns a previously-FAILED step instead of raising.
     """
     provenance = Provenance.capture()
+    memo: dict[int, StepSpec] = {}
     StepRunner().run(
-        [_lower(h, provenance) for h in handles],
+        [_lower(h, provenance, memo) for h in handles],
         force_run_failed=force_run_failed,
         max_concurrent=max_concurrent,
     )

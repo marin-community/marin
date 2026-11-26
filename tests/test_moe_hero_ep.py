@@ -1,20 +1,238 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+import json
+import logging
+import math
 import os
-import subprocess
-import sys
-import textwrap
+import tomllib
+from datetime import timedelta
+from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import unquote
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jmp
+import levanter.grug.attention._fa4_cute as fa4_cute
+import numpy as np
+import optax
 import pytest
-from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
+from fray.cluster import ResourceConfig
+from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.callbacks.state_adapter import StateCallbackRunner
+from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from levanter.checkpoint import CheckpointerConfig, discover_checkpoint_candidates, load_checkpoint, save_checkpoint
+from levanter.data.text.datasets import LmDataConfig
+from levanter.data.text.examples import GrugLmExample
+from levanter.distributed import DistributedConfig
+from levanter.grug.attention import AttentionMask
+from levanter.grug.grug_moe import (
+    MOE_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
+    MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
+    MOE_VALID_ASSIGNMENTS_METRIC,
+)
+from levanter.testing.devices import use_test_devices
+from levanter.tracker.json_logger import JsonLoggerConfig
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
+from marin.execution.lazy import StepContext
+from marin.testing.moe import ragged_ep
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, launch, train
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
+from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
+from experiments.grug.moe_hero_ep import launch_diagnostics as launch
+from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
+from experiments.grug.moe_hero_ep.grugmuon_hero import (
+    _newtonschulz_4d_distributed,
+    _newtonschulz_padded_stack_sharded,
+    _zeropower_via_newtonschulz_local,
+    _zeropower_via_newtonschulz_replicated,
+)
+from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization, GrugMoeMuonHConfig, ScheduleExtension
+
+GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
+
+
+@pytest.mark.parametrize("normalization", tuple(ExpertNormalization))
+def test_muon_expert_normalization_matches_stacked_and_pipeline_layouts(normalization):
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh):
+        values = np.random.default_rng(18).normal(size=(3, 8, 4)).astype(np.float32)
+        values *= np.asarray([0.2, 3.0, 5.0], dtype=np.float32)[:, None, None]
+        gradients = jnp.asarray(np.random.default_rng(19).normal(size=values.shape).astype(np.float32))
+        bank = jax.device_put(jnp.asarray(values), NamedSharding(mesh, P("expert", None, None)))
+        pipeline_params = {"blocks": ({"mlp": {"expert_mlp": {"w_up": bank}}},)}
+        stacked_params = {"stacked_blocks": {"stacked": {"mlp": {"expert_mlp": {"w_up": bank[None]}}}}}
+        pipeline_grads = jax.tree.map(lambda _: gradients, pipeline_params)
+        stacked_grads = jax.tree.map(lambda _: gradients[None], stacked_params)
+        optimizer = GrugMoeMuonHConfig(
+            learning_rate=0.1,
+            warmup=0,
+            lr_schedule="constant",
+            use_syrk=False,
+            expert_normalization=normalization,
+        ).build(3)
+
+        @jax.jit
+        def step(params, state, grads):
+            updates, state = optimizer.update(grads, state, params)
+            return optax.apply_updates(params, updates), state
+
+        pipeline_state = optimizer.init(pipeline_params)
+        stacked_state = optimizer.init(stacked_params)
+        for _ in range(2):
+            pipeline_params, pipeline_state = step(pipeline_params, pipeline_state, pipeline_grads)
+            stacked_params, stacked_state = step(stacked_params, stacked_state, stacked_grads)
+            actual = pipeline_params["blocks"][0]["mlp"]["expert_mlp"]["w_up"]
+            expected = stacked_params["stacked_blocks"]["stacked"]["mlp"]["expert_mlp"]["w_up"][0]
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+        initial_norms = np.linalg.norm(values, axis=(1, 2))
+        final_norms = np.linalg.norm(np.asarray(actual), axis=(1, 2))
+        if normalization == ExpertNormalization.PER_EXPERT:
+            np.testing.assert_allclose(final_norms, initial_norms, rtol=1e-5, atol=1e-5)
+        else:
+            np.testing.assert_allclose(np.linalg.norm(final_norms), np.linalg.norm(initial_norms), rtol=1e-5, atol=1e-5)
+            assert np.max(np.abs(final_norms - initial_norms)) > 1e-3
+
+
+@pytest.mark.multidevice
+def test_muon_expert_stack_preserves_sharding_and_updates():
+    with use_test_devices(2) as devices:
+        devices = np.asarray(devices)
+        mesh = Mesh(
+            devices.reshape(1, 1, -1, 1), ("replica_dcn", "data", "expert", "model"), axis_types=(AxisType.Explicit,) * 4
+        )
+        sharding = NamedSharding(mesh, P("expert", None, None))
+        values = np.random.default_rng(0).normal(size=(len(devices) * 2, 8, 4)).astype(np.float32)
+        reference = jax.jit(jax.vmap(_zeropower_via_newtonschulz_local))(jnp.asarray(values, dtype=jnp.bfloat16))
+        with jax.set_mesh(mesh):
+            matrices = jax.device_put(jnp.asarray(values, dtype=jnp.bfloat16), sharding)
+            actual = jax.jit(lambda x: _newtonschulz_padded_stack_sharded(x, target_sharding=sharding))(matrices)
+        assert actual.sharding == sharding
+        np.testing.assert_array_equal(np.asarray(actual), np.asarray(reference))
+
+
+def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
+    step = launch.build_diagnostic_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert (
+        config.model.hidden_dim,
+        config.model.num_layers,
+        config.model.num_experts,
+        config.model.intermediate_dim,
+        config.model.num_experts_per_token,
+        config.model.latent_dim,
+        config.model.capacity_factor,
+        config.model.pooled_transport_capacity_factor,
+        config.model.num_expert_waves,
+        config.model.moe_implementation,
+        config.model.qb_estimator,
+        config.model.qb_hist_bins,
+        config.processes_per_task,
+        config.trainer.trainer.watch.interval,
+        config.tensorstore_cache_bytes,
+        config.trainer.trainer.mp.param_dtype,
+        config.trainer.trainer.mp.compute_dtype,
+        config.trainer.master_param_mode,
+    ) == (
+        6144,
+        48,
+        384,
+        3072,
+        8,
+        3072,
+        1.5,
+        1.15,
+        3,
+        "ragged_all_to_all",
+        model.QbEstimator.HIST,
+        10_000,
+        4,
+        10,
+        1_000_000_000,
+        jnp.float32,
+        jnp.bfloat16,
+        train.MasterParamMode.DEVICE,
+    )
+
+
+def test_sequence_extension_preserves_optimizer_at_fixed_token_budget():
+    configs = []
+    for seq_len, batch_size, context, expert in [(4096, 1024, 1, 64), (262144, 16, 4, 16)]:
+        step = launch.build_diagnostic_run(
+            run_id=f"fixed-budget-{seq_len}",
+            dp_racks=1,
+            num_steps=100,
+            schedule_steps=4470000,
+            batch_size=batch_size,
+            max_seq_len=seq_len,
+            context_axis_size=context,
+            expert_axis_size=expert,
+            version="dev",
+        )
+        configs.append(step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)))
+
+    assert configs[0].optimizer == configs[1].optimizer
+
+
+def _validated_trainer_and_batch_axis_size(step, device_count: int):
+    """Validate the trainer for the requested device count and return its batch-axis size."""
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    trainer = config.trainer.trainer
+    with patch("jax.device_count", return_value=device_count):
+        trainer._validate_and_set_defaults()
+        return trainer, trainer.data_axis_size
+
+
+def test_context_batch_below_device_count_validates():
+    # Batch 16 over 64 devices: with levanter's default mesh, `data` absorbs all 64, so
+    # `per_device_parallelism` floors to 0 and the next line raises `ZeroDivisionError` -- on an
+    # allocated 16-node gang. Naming `context` leaves grug's own 16 batch shards.
+    step = launch.build_diagnostic_run(
+        run_id="cp4-ep16-validate",
+        dp_racks=1,
+        num_steps=1,
+        batch_size=16,
+        max_seq_len=262144,
+        context_axis_size=4,
+        expert_axis_size=16,
+        version="dev",
+    )
+
+    trainer, data_axis_size = _validated_trainer_and_batch_axis_size(step, device_count=64)
+
+    assert data_axis_size == 16
+    assert trainer.per_device_parallelism == 1
+
+
+def test_hero_batch_validation_matches_default_mesh():
+    # With a context axis of length 1, the added axis must not move a single number the hero computed
+    # through 65K.
+    step = launch.build_diagnostic_run(
+        run_id="hero-validate", dp_racks=1, num_steps=1, max_seq_len=65536, context_axis_size=1, version="dev"
+    )
+    trainer, data_axis_size = _validated_trainer_and_batch_axis_size(step, device_count=64)
+
+    default_mesh_trainer = dataclasses.replace(
+        step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).trainer.trainer,
+        mesh=MeshConfig(),
+    )
+    with patch("jax.device_count", return_value=64):
+        default_mesh_trainer._validate_and_set_defaults()
+
+    assert data_axis_size == default_mesh_trainer.data_axis_size == 64
+    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 1
+    assert trainer.per_device_eval_parallelism == default_mesh_trainer.per_device_eval_parallelism
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -22,14 +240,254 @@ def test_full_bank_top_k_is_rejected_before_launch():
     # more entries than there are experts. Without this the job dies in the router, which is after
     # the 16-node gang is allocated.
     with pytest.raises(ValueError, match="must be < num_experts"):
-        launch.build_hero_run(run_id="full-bank", num_steps=1, num_experts_per_token=128, version="dev")
+        launch.build_diagnostic_run(
+            run_id="full-bank",
+            dp_racks=1,
+            num_steps=1,
+            num_experts=128,
+            num_experts_per_token=128,
+            version="dev",
+        )
 
 
-def test_expert_bank_override_must_divide_the_expert_axis():
+def test_checkpoint_path_overrides_the_step_output_path():
+    """A run that only exercises the checkpoint write sends it to disposable storage."""
+    temp_path = "s3://marin-us-east-02a/tmp/ttl=1d/hero-ckpt-smoke"
+    step = launch.build_diagnostic_run(
+        run_id="ckpt-elsewhere",
+        dp_racks=1,
+        num_steps=1,
+        save_checkpoints=True,
+        checkpoint_path=temp_path,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.trainer.checkpointer.base_path == temp_path
+
+
+def test_checkpoint_path_defaults_under_the_step_output_path():
+    step = launch.build_diagnostic_run(run_id="ckpt-default", dp_racks=1, num_steps=1, version="dev")
+    ctx = StepContext.for_fingerprint(step.runtime_args, step.deps)
+    config = step.build_config(ctx)
+
+    assert config.trainer.trainer.checkpointer.base_path == f"{ctx.output_path}/checkpoints"
+
+
+def test_checkpoint_interval_must_be_positive():
+    with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
+        launch.build_diagnostic_run(
+            run_id="bad-checkpoint-interval",
+            dp_racks=1,
+            num_steps=1,
+            checkpoint_interval=timedelta(0),
+            version="dev",
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile_steps", "profile_start_step"),
+    [(-1, 0), (1, -1), (1, 3)],
+)
+def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_step):
+    with pytest.raises(ValueError, match="profile"):
+        launch.build_diagnostic_run(
+            run_id="bad-profile-window",
+            dp_racks=1,
+            num_steps=3,
+            profile_steps=profile_steps,
+            profile_start_step=profile_start_step,
+            version="dev",
+        )
+
+
+def test_data_parallel_racks_keep_the_global_batch_explicit():
+    # At 16K the one-rack batch spans two racks; at 65K it holds one sequence per device and cannot.
+    one_rack = launch.build_diagnostic_run(run_id="one-rack", dp_racks=1, num_steps=1, max_seq_len=16384, version="dev")
+    step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, max_seq_len=16384, version="dev")
+    one_rack_config = one_rack.build_config(StepContext.for_fingerprint(one_rack.runtime_args, one_rack.deps))
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.replica_axis_size == 2
+    assert config.trainer.trainer.train_batch_size == one_rack_config.trainer.trainer.train_batch_size
+    assert step.runtime_args["train_resources"].replicas == 2 * launch.HERO_EP_NODES
+
+
+def test_schedule_steps_do_not_extend_the_run():
+    step = launch.build_diagnostic_run(
+        run_id="schedule-head",
+        dp_racks=1,
+        num_steps=5,
+        schedule_steps=100,
+        version="dev",
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.trainer.num_train_steps == 100
+    assert config.stop_after_steps == 5
+
+
+def test_synthetic_training_data_builds_a_reusable_global_batch():
+    device_count = len(jax.devices())
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, device_count, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
+    )
+    batch = train._make_synthetic_batch(
+        batch_size=device_count,
+        max_seq_len=8,
+        vocab_size=11,
+        seed=3,
+        mesh=mesh,
+    )
+
+    expected_tokens = (np.arange(device_count * 8).reshape(device_count, 8) + 3) % 11
+    np.testing.assert_array_equal(batch.tokens, expected_tokens)
+    np.testing.assert_array_equal(batch.loss_weight[:, :-1], 1)
+    np.testing.assert_array_equal(batch.loss_weight[:, -1], 0)
+    assert batch.tokens.sharding == NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+
+@pytest.mark.parametrize("context_size", [1, 2])
+@pytest.mark.multidevice
+def test_balance_attention_rows_spreads_long_documents_across_shards(context_size):
+    # Two whole-row documents land on the last shard as loaded; balancing gives them separate shards,
+    # moves every row's tokens, loss weights, and segment ids together, and keeps loaded order within a shard.
+    # Context ranks share rows, so a context axis must not change the placement. With one row per shard,
+    # placement cannot change any shard's work, so the rows stay where they were loaded.
+    with use_test_devices(4 * context_size) as devices:
+        rows, seq_len, shards, context = 8, 16, 4, context_size
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, shards, context, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        segment_ids = np.repeat(np.arange(seq_len // 2)[None, :], rows, axis=0).repeat(2, axis=1)
+        segment_ids[-2:] = 0
+        # Row 0 is two 2-token documents followed by padding.
+        segment_ids[0, 4:] = -1
+        tokens = np.arange(rows)[:, None] * 100 + np.arange(seq_len)[None, :]
+        loss_weight = np.repeat(np.arange(rows, dtype=np.float32)[:, None], seq_len, axis=1)
+        sharding = NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+        def balance(select):
+            batch = jax.device_put(
+                GrugLmExample(
+                    tokens=jnp.asarray(tokens[select], dtype=jnp.int32),
+                    loss_weight=jnp.asarray(loss_weight[select]),
+                    attn_mask=AttentionMask.causal().with_segment_ids(jnp.asarray(segment_ids[select], dtype=jnp.int32)),
+                ),
+                sharding,
+            )
+            with jax.set_mesh(mesh):
+                return jax.jit(train.balance_attention_rows)(batch)
+
+        out = balance(slice(None))
+
+        assert out.tokens.sharding == sharding
+        source = np.asarray(out.tokens)[:, 0] // 100
+        assert sorted(source.tolist()) == list(range(rows))
+        np.testing.assert_array_equal(np.asarray(out.tokens), tokens[source])
+        np.testing.assert_array_equal(np.asarray(out.loss_weight), loss_weight[source])
+        for ids in out.attn_mask.segment_ids:
+            np.testing.assert_array_equal(np.asarray(ids), segment_ids[source])
+        long_rows_per_shard = np.isin(source, [rows - 2, rows - 1]).reshape(shards, rows // shards).sum(axis=1)
+        assert long_rows_per_shard.max() == 1, long_rows_per_shard
+        # Padding adds no cost, so row 0 is the cheapest row and the snake deal pairs it with the costliest.
+        # A full receiver keeps earlier senders' tokens first, so the deal starts at the costliest row's
+        # loaded shard instead of always giving that row shard 0.
+        by_shard = source.reshape(shards, rows // shards)
+        assert sorted(by_shard[(rows - 2) // (rows // shards)].tolist()) == [0, rows - 2], source
+        reversed_out = balance(slice(None, None, -1))
+        reversed_by_shard = (np.asarray(reversed_out.tokens)[:, 0] // 100).reshape(shards, rows // shards)
+        assert sorted(reversed_by_shard[0].tolist()) == [0, rows - 1], reversed_by_shard
+        # Expert capacity drops a shard's later tokens first, so a shard keeps its rows in loaded order.
+        assert (np.diff(source.reshape(shards, rows // shards), axis=1) > 0).all(), source
+
+        # The last rows hold both long documents, so a deal would move them.
+        one_per_shard = balance(slice(rows - shards, None))
+        np.testing.assert_array_equal(np.asarray(one_per_shard.tokens), tokens[rows - shards :])
+
+
+def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
-    with pytest.raises(ValueError, match="must divide the expert axis"):
-        launch.build_hero_run(run_id="bad-bank", num_steps=1, num_experts=200, version="dev")
+    with pytest.raises(ValueError, match=r"must be divisible by expert \(64\) \* context \(1\) = 64"):
+        launch.build_diagnostic_run(
+            run_id="bad-bank",
+            dp_racks=1,
+            num_steps=1,
+            num_experts=200,
+            max_seq_len=65536,
+            context_axis_size=1,
+            version="dev",
+        )
+
+
+def test_expert_bank_requires_context_divisibility():
+    # The bank is stored over (expert, context), so 48 experts pass the 16-way expert check but fail
+    # parameter init at EP16 x CP4; the launcher must catch the product before the rack is allocated.
+    with pytest.raises(ValueError, match=r"must be divisible by expert \(16\) \* context \(4\) = 64"):
+        launch.build_diagnostic_run(
+            run_id="bad-bank-cp",
+            dp_racks=1,
+            num_steps=1,
+            batch_size=16,
+            max_seq_len=262144,
+            context_axis_size=4,
+            expert_axis_size=16,
+            num_experts=48,
+            version="dev",
+        )
+
+
+def test_pooled_wave_expert_bank_must_support_three_waves():
+    with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
+        launch.build_diagnostic_run(
+            run_id="bad-waves",
+            dp_racks=1,
+            num_steps=1,
+            num_experts=256,
+            max_seq_len=65536,
+            context_axis_size=1,
+            moe_implementation="fixed_pooled_wave_all_to_all",
+            version="dev",
+        )
+
+
+def test_ragged_expert_bank_ignores_the_pooled_wave_count():
+    # Only the pooled-wave transport splits local experts into waves; 4 local experts are fine for ragged.
+    launch.build_diagnostic_run(
+        run_id="ragged-waves",
+        dp_racks=1,
+        num_steps=1,
+        num_experts=256,
+        max_seq_len=65536,
+        context_axis_size=1,
+        version="dev",
+    )
+
+
+def _runtime_env_config(
+    *,
+    processes_per_task=1,
+    watch_mode=train.WatchMode.INLINE,
+    watch_interval=1,
+    moe_implementation="fixed_pooled_wave_all_to_all",
+    remat_mode="recompute_all",
+):
+    """A stand-in for GrugRunConfig holding only the fields ``run_grug``'s env setup and dispatch read."""
+    return SimpleNamespace(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            watch_mode=watch_mode,
+        ),
+        model=SimpleNamespace(moe_implementation=moe_implementation, remat_mode=remat_mode),
+        resources=ResourceConfig.with_gpu("GB200", count=4),
+        processes_per_task=processes_per_task,
+        max_retries_failure=0,
+        max_task_failures=10,
+    )
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
@@ -37,11 +495,7 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
-    config = SimpleNamespace(
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
-        resources=object(),
-        processes_per_task=1,
-    )
+    config = _runtime_env_config()
 
     with patch.object(train, "dispatch_grug_training_run"):
         train.run_grug(config)
@@ -51,15 +505,250 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
-    for name, value in train.HERO_EP_RUNTIME_ENV.items():
-        assert os.environ[name] == value
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+    assert os.environ["XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"] == "192"
+    assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "cuda_async"
+    assert os.environ["LD_PRELOAD"] == "libjemalloc.so.2"
+    assert os.environ["MALLOC_CONF"] == "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2"
+
+
+def test_run_grug_defaults_pgle_off_for_per_gpu_processes(monkeypatch):
+    # Per-GPU processes cannot profile: the per-process CUPTI sessions collide with
+    # each other and with the cluster's DCGM, and auto-PGLE's recompile path has
+    # wedged per-node gangs (#7344). Per-GPU runs therefore default PGLE off, while
+    # an explicit env setting still wins.
+    for name in train.HERO_EP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(processes_per_task=4)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+
+    monkeypatch.setenv("JAX_ENABLE_PGLE", "true")
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+
+
+def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
+    monkeypatch.setenv("JAX_ENABLE_PGLE", "false")
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+    monkeypatch.setenv("LD_PRELOAD", "/opt/custom/liballocator.so")
+    monkeypatch.setenv("MALLOC_CONF", "narenas:8")
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config()
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["JAX_ENABLE_PGLE"] == "false"
+    assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
+    assert os.environ["LD_PRELOAD"] == "/opt/custom/liballocator.so"
+    assert os.environ["MALLOC_CONF"] == "narenas:8"
+
+
+@pytest.mark.parametrize(
+    ("watch_mode", "watch_interval", "expected_overlap_limit"),
+    [
+        (train.WatchMode.INLINE, 1, train.INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT),
+        (train.WatchMode.DIAGNOSTIC, 1, train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT),
+        (train.WatchMode.INLINE, 0, train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT),
+    ],
+)
+def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
+    monkeypatch, watch_mode, watch_interval, expected_overlap_limit
+):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(watch_mode=watch_mode, watch_interval=watch_interval)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
+
+
+def test_the_stock_pjrt_plugin_fails_a_ragged_run_rather_than_running_it_slowly(monkeypatch):
+    """jax reports the stock generation either way, so nothing else catches a stock runtime."""
+    monkeypatch.setattr("importlib.metadata.version", lambda name: jax.__version__)
+    with pytest.raises(RuntimeError, match=r"\+marin\."):
+        train.verify_ragged_pjrt()
+
+    monkeypatch.setattr("importlib.metadata.version", lambda name: f"{jax.__version__}+marin.abc123def456")
+    train.verify_ragged_pjrt()
+
+
+def test_the_patched_pjrt_wheel_pairs_with_the_pinned_jax():
+    """The patched wheel swaps in for the stock plugin, whose ABI follows the jax pin; a jax bump
+    without a fork rebuild would otherwise be caught only on a GB200, at the first collective."""
+    project = tomllib.loads(GPU_EXTRA_PYPROJECT.read_text())
+    gpu_extra = project["project"]["optional-dependencies"]["gpu"]
+    jax_pins = [requirement for requirement in gpu_extra if requirement.startswith("jax[cuda13]==")]
+    assert len(jax_pins) == 1
+    jax_version = jax_pins[0].removeprefix("jax[cuda13]==")
+
+    source = project["tool"]["uv"]["sources"]["jax-cuda13-pjrt"]
+    assert source["extra"] == "gpu"
+    assert source["marker"] == "platform_machine == 'aarch64'"
+    filename = unquote(source["url"].rsplit("/", 1)[-1])
+    assert filename.startswith(f"jax_cuda13_pjrt-{jax_version}+marin.")
+    assert filename.endswith("aarch64.whl")
+
+
+def _tiny_state(params, master_params):
+    return train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=(),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 2)),
+    )
+
+
+def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
+    """A run wanting a master cannot synthesize one from a master-less checkpoint; refuse loudly.
+
+    The same-layout cases pass the template through unchanged.
+    """
+    state = _tiny_state(jnp.zeros(4), None)
+    master_less = str(tmp_path / "step-1")
+    save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
+    assert not checkpoint_stores_master(master_less)
+    assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DEVICE) is state
+    with pytest.raises(ValueError, match="Synthesizing a master"):
+        train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
+
+    master_bearing = str(tmp_path / "step-2")
+    save_checkpoint(
+        {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
+    )
+    assert checkpoint_stores_master(master_bearing)
+    assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
+    migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DEVICE)
+    assert migrating.params is None and migrating.master_params is state.params
+
+
+def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_path):
+    """Old runs saved `{"train_state": state}`, and those are the checkpoints most likely to hold
+    a master; missing the prefix would let exactly them restore silently from the bf16 copy."""
+    checkpoint = str(tmp_path / "step-1")
+    save_checkpoint(
+        {LEGACY_STATE_KEY: {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}},
+        step=1,
+        checkpoint_path=checkpoint,
+    )
+
+    assert checkpoint_stores_master(checkpoint)
+
+
+def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):
+    """Restore reads the stored fp32 master directly into the run's fp32 params template.
+
+    Reading with the run's own exemplar instead succeeds and returns bf16 weights, so a test that
+    only checked the restore did not raise would pass against the bug this migration exists for.
+    """
+    cfg = _latent_config()
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    def build(mp, key, master_param_mode):
+        with set_mesh(mesh):
+            return train.initial_state(
+                cfg,
+                optimizer=optax.sgd(0.1),
+                mp=mp,
+                key=jax.random.key(key),
+                ema_beta=None,
+                master_param_mode=master_param_mode,
+            )
+
+    written = build(
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"), 17, train.MasterParamMode.FP32_PINNED_HOST
+    )
+    checkpoint_root = tmp_path / "checkpoints"
+    save_checkpoint(written, step=1, checkpoint_path=str(checkpoint_root / "step-1"))
+
+    template = build(jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16"), 23, train.MasterParamMode.DEVICE)
+    with set_mesh(mesh):
+        restored = train.take_master_as_params(
+            restore_grug_state_from_checkpoint(
+                template,
+                checkpoint_search_paths=[str(checkpoint_root)],
+                load_checkpoint_setting=True,
+                mesh=None,
+                allow_partial=False,
+                template_for_candidate=lambda candidate: train.template_for_candidate_layout(
+                    template, candidate, train.MasterParamMode.DEVICE
+                ),
+            )
+        )
+
+    assert restored.master_params is None
+    got = jax.tree.leaves(restored.params)
+    assert all(leaf.dtype == jnp.float32 for leaf in got)
+    for want, have in zip(jax.tree.leaves(written.master_params), got, strict=True):
+        np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
+
+
+def test_the_carry_offload_overrides_an_inherited_collective_overlap_limit(monkeypatch):
+    inherited = f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT}"
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    config = _runtime_env_config(
+        moe_implementation=train.RAGGED_MOE_IMPLEMENTATION,
+        remat_mode=model.OFFLOAD_CARRY_REMAT_MODE,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert inherited not in flags
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}=1" in flags
+    assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
+
+
+def test_a_ragged_run_without_the_offload_keeps_the_scheduler_off(monkeypatch):
+    # The scheduler's longer live ranges do not fit until the carry leaves HBM, so an arm that
+    # skips the offload has to keep the posture it was measured under.
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = _runtime_env_config(moe_implementation=train.RAGGED_MOE_IMPLEMENTATION)
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert "--xla_gpu_enable_latency_hiding_scheduler=false" in os.environ["XLA_FLAGS"].split()
+
+
+@pytest.mark.parametrize(
+    ("moe_implementation", "expected_remat_mode"),
+    [
+        (train.RAGGED_MOE_IMPLEMENTATION, model.OFFLOAD_CARRY_REMAT_MODE),
+        ("fixed_pooled_wave_all_to_all", "recompute_all"),
+    ],
+)
+def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, expected_remat_mode):
+    step = launch.build_diagnostic_run(
+        run_id="carry-offload",
+        dp_racks=1,
+        num_steps=1,
+        version="dev",
+        moe_implementation=moe_implementation,
+        processes_per_task=4,
+    )
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.remat_mode == expected_remat_mode
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, 64, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        axis_sizes=(1, 1, 64, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
     input_sharding = NamedSharding(mesh, P(None, "expert", None, None))
     x = jax.ShapeDtypeStruct((48, 256, 8, 4), jnp.float32, sharding=input_sharding)
@@ -81,25 +770,42 @@ def test_ep_newton_schulz_returns_to_expert_sharding():
     assert output.sharding == NamedSharding(mesh, P(None, "expert", "data", "model"))
 
 
-def test_ep_newton_schulz_matches_replicated_path():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+def test_ep_newton_schulz_preserves_context_bank_sharding():
+    # Under CP the expert bank is split over ("expert", "context"). An update that came back on
+    # "expert" alone would drag the parameter, its fp32 master and the momentum buffer back to a
+    # context-replicated layout -- the memory this sharding exists to avoid.
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 16, 4, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    param_spec = P(None, ("expert", "context"), None, None)
+    x = jax.ShapeDtypeStruct((48, 256, 8, 4), jnp.float32, sharding=NamedSharding(mesh, param_spec))
 
-        from experiments.grug.moe_hero_ep.grugmuon_hero import (
-            _newtonschulz_4d_distributed,
-            _zeropower_via_newtonschulz_replicated,
+    def apply_ns(y):
+        return grugmuon_hero._newtonschulz_4d_distributed(
+            (jax.tree_util.GetAttrKey("w_gate"),),
+            y,
+            steps=0,
+            eps=1e-8,
+            coefficient_type="quintic",
+            use_syrk=False,
+            target_sharding=NamedSharding(mesh, param_spec),
         )
 
+    with use_abstract_mesh(mesh):
+        output = jax.eval_shape(apply_ns, x)
+
+    assert output.sharding == NamedSharding(mesh, param_spec)
+
+
+@pytest.mark.multidevice
+def test_ep_newton_schulz_matches_replicated_path():
+    with use_test_devices(2) as devices:
         mesh = Mesh(
-            np.asarray(jax.devices()).reshape(1, 1, 2, 1),
-            ("replica_dcn", "data", "expert", "model"),
-            axis_types=(AxisType.Explicit,) * 4,
+            np.asarray(devices).reshape(1, 1, 2, 1, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
         )
         x = jax.random.normal(jax.random.key(0), (1, 2, 4, 2), dtype=jnp.float32)
         x_sharded = jax.device_put(x, NamedSharding(mesh, P(None, "expert", "data", "model")))
@@ -126,24 +832,44 @@ def test_ep_newton_schulz_matches_replicated_path():
             actual = apply_ns(x_sharded)
 
         np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-5, rtol=1e-5)
-    """
 
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
 
-    assert result.returncode == 0, result.stderr
+@pytest.mark.multidevice
+def test_ep_newton_schulz_context_bank_avoids_gather():
+    # Output placement alone cannot detect an intermediate gather of the full bank.
+    with use_test_devices(4) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, 1, 4, 1),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        spec = P(None, ("expert", "context"), "data", "model")
+        x = jax.device_put(
+            jax.random.normal(jax.random.key(0), (2, 4, 8, 4), dtype=jnp.float32), NamedSharding(mesh, spec)
+        )
+        apply_ns = jax.jit(
+            lambda y: _newtonschulz_4d_distributed(
+                (jax.tree_util.GetAttrKey("w_gate"),),
+                y,
+                steps=1,
+                eps=1e-7,
+                coefficient_type="quintic",
+                use_syrk=False,
+                target_sharding=NamedSharding(mesh, spec),
+            )
+        )
+        with jax.set_mesh(mesh):
+            hlo = apply_ns.lower(x).compile().as_text()
+            out = apply_ns(x)
+        assert out.sharding.spec == spec, out.sharding.spec
+        assert "all-gather" not in hlo, "the context-split expert bank was gathered whole"
 
 
 def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
     mesh = AbstractMesh(
-        axis_sizes=(1, 1, 64, 1),
-        axis_names=("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
+        axis_sizes=(1, 1, 64, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
     )
     parameter_sharding = NamedSharding(mesh, P(None, "expert", None))
     x = jax.ShapeDtypeStruct((48, 64, 4), jnp.float32, sharding=parameter_sharding)
@@ -161,3 +887,1002 @@ def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
         output = jax.eval_shape(apply_ns, x)
 
     assert output.sharding == parameter_sharding
+
+
+def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
+    # The dropless eval transform must retarget only the static MoE backend fields and keep every
+    # weight leaf shared by identity, so the eval scores the trained weights with no capacity drops.
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    cfg = model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(32),
+        qk_mult=1.3,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+        report_capacity_overflow=True,
+    )
+    with set_mesh(mesh):
+        m = model.Transformer.init(cfg, key=jax.random.key(0))
+    dropless = train._to_dropless_local(m)
+
+    original = m.stacked_blocks.stacked.mlp.expert_mlp
+    swapped = dropless.stacked_blocks.stacked.mlp.expert_mlp
+    assert original.implementation == "fixed_all_to_all"  # input model left untouched
+    assert swapped.implementation == "sonic_cute"
+    assert swapped.expert_chunks == 1
+    orig_leaves = jax.tree_util.tree_leaves(original)
+    swapped_leaves = jax.tree_util.tree_leaves(swapped)
+    assert len(orig_leaves) == len(swapped_leaves)
+    assert all(a is b for a, b in zip(orig_leaves, swapped_leaves, strict=True))
+
+
+def test_eval_every_adds_the_held_out_suites_as_dependencies():
+    # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
+    off = launch.build_diagnostic_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
+    on = launch.build_diagnostic_run(
+        run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, max_seq_len=65536, context_axis_size=1, version="dev"
+    )
+    off_config = off.build_config(StepContext.for_fingerprint(off.runtime_args, off.deps))
+    on_config = on.build_config(StepContext.for_fingerprint(on.runtime_args, on.deps))
+
+    assert len(off.deps) == 1
+    assert len(on.deps) > len(off.deps)
+    assert off_config.eval is None
+    assert on_config.eval is not None
+    assert on_config.eval.steps_per_eval == 50
+    assert on_config.eval.eval_batch_size == launch.HERO_RACK_GPUS
+    assert on_config.eval.dropless_eval is True
+
+
+def test_ep_ablation_defaults_match_the_documented_arm_and_scale_per_rack():
+    one = abl.build_small_run(run_id="d768", size="d768", flavor="ep", version="dev")
+    cfg = one.build_config(StepContext.for_fingerprint(one.runtime_args, one.deps))
+    m = cfg.model
+    # The EP rung is a downsized hero: pooled-wave transport, 384 experts / top-8, hidden/2-wide experts
+    # in a hidden/2 latent, receiver/sender capacity 1.15 with 3 waves, and the selected top-k QB arm.
+    assert m.moe_implementation == "fixed_pooled_wave_all_to_all"
+    assert (m.num_experts, m.num_experts_per_token) == (384, 8)
+    assert m.intermediate_dim == m.hidden_dim // 2
+    assert m.latent_dim == m.hidden_dim // 2
+    assert m.capacity_factor == 1.15
+    assert m.pooled_transport_capacity_factor == 1.15
+    assert m.num_expert_waves == 3
+    assert m.qb_estimator == model.QbEstimator.TOPK
+    assert m.num_layers % 2 == 0  # even depth applied in the launcher, not GrugModelConfig
+    # The histogram QB estimator is selectable on through the builder.
+    hist = abl.build_small_run(run_id="d768-hist", size="d768", flavor="ep", qb_use_histogram=True, version="dev")
+    assert hist.build_config(StepContext.for_fingerprint(hist.runtime_args, hist.deps)).model.qb_estimator == (
+        model.QbEstimator.HIST
+    )
+    # The global batch scales with the rack count, holding the per-rack token load constant.
+    four = abl.build_small_run(run_id="d2048", size="d2048", flavor="ep", dp_racks=4, version="dev")
+    four_cfg = four.build_config(StepContext.for_fingerprint(four.runtime_args, four.deps))
+    assert four_cfg.trainer.trainer.train_batch_size == cfg.trainer.trainer.train_batch_size * 4
+
+
+def test_odd_depth_config_is_not_silently_rounded():
+    # GrugModelConfig must preserve an odd depth so HF round-trips and odd configs stay faithful;
+    # even-rounding is the launcher's job.
+    cfg = model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        num_layers=3,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=1,
+        head_dim=8,
+        max_seq_len=8,
+    )
+    assert cfg.num_layers == 3
+
+
+@pytest.mark.multidevice
+def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide():
+    with use_test_devices(4) as devices:
+        mesh = Mesh(
+            np.asarray(devices).reshape(1, 1, 2, 1, 2),
+            ("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        cfg = model.GrugModelConfig(
+            vocab_size=128,
+            hidden_dim=32,
+            intermediate_dim=16,
+            shared_expert_intermediate_dim=16,
+            num_shared_experts=1,
+            num_experts=4,
+            num_experts_per_token=1,
+            num_layers=1,
+            num_heads=4,
+            num_kv_heads=2,
+            local_kv_heads=2,
+            global_kv_heads=1,
+            head_dim=8,
+            max_seq_len=8,
+            sliding_window=4,
+            global_every=2,
+            capacity_factor=1.0,
+            initializer_std=0.5 / math.sqrt(32),
+            qk_mult=1.3,
+            attention_implementation="reference",
+            moe_implementation="fixed_all_to_all",
+            report_capacity_overflow=True,
+        )
+        tokens = jax.ShapeDtypeStruct((2, 8), jnp.int32)
+        with set_mesh(mesh):
+            output = jax.eval_shape(
+                lambda token_ids: model.Transformer.init(cfg, key=jax.random.key(0))(token_ids)[0],
+                tokens,
+            )
+        assert output.shape == (2, 8, 32)
+
+
+def _explicit_mesh(*axis_sizes):
+    return Mesh(
+        np.asarray(jax.devices()).reshape(*axis_sizes),
+        ("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+
+
+def _latent_config(latent_dim=None):
+    return model.GrugModelConfig(
+        vocab_size=128,
+        hidden_dim=32,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_shared_experts=1,
+        num_experts=4,
+        num_experts_per_token=1,
+        latent_dim=latent_dim,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        local_kv_heads=2,
+        global_kv_heads=2,
+        head_dim=8,
+        max_seq_len=8,
+        sliding_window=4,
+        global_every=2,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(32),
+        qk_mult=1.3,
+        attention_implementation="reference",
+        moe_implementation="fixed_all_to_all",
+        report_capacity_overflow=True,
+    )
+
+
+def test_local_attention_ignores_keys_outside_the_window():
+    # The model passes every layer a full-causal mask and carries the local window only in the fa4 bounds.
+    cfg = dataclasses.replace(_latent_config(), max_seq_len=12)
+    window = cfg.sliding_window
+    hidden = jax.random.normal(jax.random.key(71), (1, 12, cfg.hidden_dim))
+    moved_first_token = hidden.at[:, 0].add(1.0)
+    mask = AttentionMask.causal()
+    local_bounds, valid = fa4_cute.fa4_cute_segment_bounds(mask, batch_size=1, seq_len=12, sliding_window=window)
+    global_bounds, _ = fa4_cute.fa4_cute_segment_bounds(mask, batch_size=1, seq_len=12, sliding_window=None)
+
+    with set_mesh(_explicit_mesh(1, 1, 1, 1, 1)):
+        attn = model.CausalSelfAttention.init(cfg, key=jax.random.key(72))
+
+        def change(bounds, is_global):
+            layer_mask = mask.with_fa4_bounds(bounds, valid)
+            before = attn(hidden, layer_mask, is_global=is_global)
+            after = attn(moved_first_token, layer_mask, is_global=is_global)
+            return np.abs(np.asarray(after - before)).max(axis=(0, 2))
+
+        local_change = change(local_bounds, False)
+        global_change = change(global_bounds, True)
+
+    # Position 0 attends only to itself, and XSA removes that value's direction, so it starts at 1.
+    assert np.all(local_change[1:window] > 1e-4)
+    np.testing.assert_array_equal(local_change[window:], 0.0)
+    assert np.all(global_change[1:] > 1e-4)
+
+
+@pytest.mark.parametrize("context_size", [1, 2])
+def test_logits_preserves_context_sharding(context_size):
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 2, context_size, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    config = _latent_config()
+    tokens = jax.ShapeDtypeStruct((2, 8), jnp.int32)
+    with use_abstract_mesh(mesh):
+        logits = jax.eval_shape(lambda ids: model.Transformer.init(config, key=jax.random.key(0)).logits(ids), tokens)
+    assert logits.shape == (2, 8, config.vocab_size)
+    # Replicating this axis would multiply the per-device logits allocation by context_size.
+    assert logits.sharding.spec[1] == ("context" if context_size > 1 else None)
+
+
+def test_block_threads_attention_padding_into_moe_metrics():
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    cfg = _latent_config()
+    hidden = jax.random.normal(jax.random.key(57), (1, 8, cfg.hidden_dim))
+    segment_ids = jnp.array([[0, 0, 1, 1, -1, -1, -1, -1]], dtype=jnp.int32)
+    mask = (
+        AttentionMask.causal()
+        .with_segment_ids(segment_ids)
+        .with_fa4_bounds(jnp.zeros_like(segment_ids), segment_ids >= 0)
+    )
+
+    with set_mesh(mesh):
+        block = model.Block.init(cfg, key=jax.random.key(58))
+        _, metrics = jax.jit(lambda x: block(x, mask))(hidden)
+
+    np.testing.assert_array_equal(jnp.sum(metrics["routing_counts_local"]), jnp.array(4.0))
+    np.testing.assert_array_equal(metrics["skipped_assignments"], jnp.array(4, dtype=jnp.int32))
+
+
+@pytest.mark.parametrize("qb_estimator", [model.QbEstimator.HIST, model.QbEstimator.TOPK])
+def test_moe_qb_estimator_ignores_padding(qb_estimator: model.QbEstimator):
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    cfg = dataclasses.replace(_latent_config(), qb_estimator=qb_estimator)
+    hidden = jax.random.normal(jax.random.key(59), (1, 8, cfg.hidden_dim))
+    token_valid = jnp.array([[True, False, True, True, False, False, True, False]])
+    valid_indices = jnp.array([0, 2, 3, 6], dtype=jnp.int32)
+
+    with set_mesh(mesh):
+        mlp = model.MoEMLP.init(cfg, key=jax.random.key(60))
+        _, padded_stats = mlp(hidden, token_valid)
+        _, compact_stats = mlp(
+            hidden[:, valid_indices],
+            jnp.ones((1, valid_indices.shape[0]), dtype=jnp.bool_),
+        )
+
+    beta_key = "qb_beta" if qb_estimator == model.QbEstimator.HIST else "qb_beta_local"
+    np.testing.assert_allclose(padded_stats[beta_key], compact_stats[beta_key], rtol=1e-5, atol=1e-5)
+
+
+def test_latent_moe_shrinks_the_dispatched_width_but_not_the_token():
+    # The point of LatentMoE is that the all-to-all payload narrows while the residual stream does
+    # not, so the expert weights must be latent-wide and the layer output hidden-wide.
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    cfg = _latent_config(latent_dim=16)
+    tokens = jax.ShapeDtypeStruct((1, 8), jnp.int32)
+    with set_mesh(mesh):
+        built = jax.eval_shape(lambda: model.MoEMLP.init(cfg, key=jax.random.key(0)))
+        out = jax.eval_shape(lambda t: model.Transformer.init(cfg, key=jax.random.key(0))(t)[0], tokens)
+
+    assert built.w_latent_down.shape == (cfg.hidden_dim, 16)
+    # Normalizing the latent keeps the expert input at unit scale despite the down-projection.
+    assert built.latent_norm.weight.shape == (16,)
+    assert built.w_latent_up.shape == (16, cfg.hidden_dim)
+    # Expert banks are latent-wide: this is what narrows the dispatch.
+    assert built.expert_mlp.w_gate.shape[1] == 16
+    assert built.expert_mlp.w_up.shape[1] == 16
+    assert built.expert_mlp.w_down.shape[2] == 16
+    # The residual stream is untouched.
+    assert out.shape[-1] == cfg.hidden_dim
+
+
+def test_latent_moe_is_absent_by_default():
+    # A config without a latent width must keep the standard MoE layer.
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    cfg = _latent_config(latent_dim=None)
+    with set_mesh(mesh):
+        built = jax.eval_shape(lambda: model.MoEMLP.init(cfg, key=jax.random.key(0)))
+    assert built.w_latent_down is None and built.w_latent_up is None
+    assert built.latent_norm is None
+    assert built.expert_mlp.w_gate.shape[1] == cfg.hidden_dim
+
+
+def test_latent_moe_hf_config_roundtrip_preserves_the_architecture():
+    cfg = _latent_config(latent_dim=16)
+
+    hf_config = cfg.to_hf_config(cfg.vocab_size)
+    roundtripped = model.GrugModelConfig.from_hf_config(hf_config)
+
+    assert hf_config.to_dict()["latent_dim"] == 16
+    assert hf_config.to_dict()[model.GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY] == 3
+    assert roundtripped.latent_dim == 16
+
+
+def test_latent_moe_state_dict_contains_the_projection_state():
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    cfg = _latent_config(latent_dim=16)
+    with set_mesh(mesh):
+        built = model.Transformer.init(cfg, key=jax.random.key(0))
+        state_dict = built.to_state_dict()
+    block = next(iter(built.stacked_blocks.unstacked()))
+    assert block.mlp.w_latent_down is not None
+    assert block.mlp.latent_norm is not None
+    assert block.mlp.w_latent_up is not None
+
+    expected = {
+        "model.layers.0.mlp.latent_down_proj.weight": jnp.swapaxes(block.mlp.w_latent_down, -1, -2),
+        "model.layers.0.mlp.latent_norm.weight": block.mlp.latent_norm.weight,
+        "model.layers.0.mlp.latent_up_proj.weight": jnp.swapaxes(block.mlp.w_latent_up, -1, -2),
+    }
+    for name, value in expected.items():
+        np.testing.assert_array_equal(state_dict[name], value)
+
+
+def test_latent_dim_above_hidden_is_rejected():
+    # A latent wider than the hidden dim adds communication instead of removing it.
+    with pytest.raises(ValueError, match="latent_dim must be in"):
+        _latent_config(latent_dim=99999)
+
+
+def test_latent_moe_flops_replace_routed_width_and_add_projections():
+    latent_dim = 16
+    full_width_config = _latent_config(latent_dim=None)
+    latent_config = _latent_config(latent_dim=latent_dim)
+    full_width_flops, _ = train._compute_flops(model_config=full_width_config)
+    latent_flops, _ = train._compute_flops(model_config=latent_config)
+
+    routed_delta = (
+        2
+        * 3
+        * latent_config.intermediate_dim
+        * latent_config.num_experts_per_token
+        * (latent_dim - latent_config.hidden_dim)
+    )
+    projection_flops = 2 * 2 * latent_config.hidden_dim * latent_dim
+    expected_delta = 3 * latent_config.max_seq_len * latent_config.num_layers * (routed_delta + projection_flops)
+
+    assert latent_flops - full_width_flops == expected_delta
+
+
+class _TinyWatchModel(eqx.Module):
+    weight: jax.Array
+
+    def next_token_loss(
+        self,
+        tokens,
+        loss_weight,
+        *,
+        mask,
+        reduction,
+        logsumexp_weight,
+        return_router_metrics,
+    ):
+        del mask, reduction, logsumexp_weight, return_router_metrics
+        error = self.weight * tokens.astype(self.weight.dtype) - loss_weight
+        return jnp.mean(error**2), {}
+
+
+def test_diagnostic_watch_stats_match_direct_gradient_and_parameter_norms():
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    batch = SimpleNamespace(
+        tokens=jnp.array([1, 3], dtype=jnp.int32),
+        loss_weight=jnp.array([0.5, 1.0]),
+        attn_mask=AttentionMask.causal(),
+    )
+    mp = jmp.get_policy("params=float32,compute=float32,output=float32")
+    watch = WatchConfig(interval=1)
+
+    actual = train._compute_diagnostic_watch_stats(params, batch, mp, None, watch)
+    grads = jax.grad(
+        lambda model: model.next_token_loss(
+            batch.tokens,
+            batch.loss_weight,
+            mask=batch.attn_mask,
+            reduction="mean",
+            logsumexp_weight=None,
+            return_router_metrics=True,
+        )[0]
+    )(params)
+    expected = compute_watch_stats(
+        watch_targets=watch.watch_targets,
+        include_norms=watch.include_norms,
+        include_per_parameter_norms=watch.include_per_parameter_norms,
+        include_histogram=watch.include_histograms,
+        split_scan_layers=watch.split_scan_layers,
+        params=params,
+        grads=grads,
+        model_tree_type=type(params),
+    )
+
+    assert actual.keys() == expected.keys()
+    for key in actual:
+        np.testing.assert_allclose(actual[key], expected[key])
+
+
+def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=None,
+        opt_state=optimizer.init(params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del batch, mp, z_loss
+        loss = current_params.weight**2
+        grads = _TinyWatchModel(weight=2 * current_params.weight)
+        metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
+        return (loss, metrics), grads
+
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=float32,compute=float32,output=float32"),
+        z_loss_weight=0,
+        ema_beta=None,
+        watch_config=WatchConfig(interval=10),
+    )
+
+    state, _, step_zero_stats = train_step(state, jnp.array(0))
+    state, _, step_one_stats = train_step(state, jnp.array(0))
+
+    assert step_zero_stats is not None
+    assert step_one_stats is not None
+    np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
+    np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
+
+
+def _fake_fa4_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
+    del k, v, lower_bounds, valid, sm_scale, kernel_config, q_offset
+    return q
+
+
+# The hero mesh (11 racks x EP64) leaves `data` at length 1; the second shape partitions every batch axis.
+@pytest.mark.parametrize("axis_sizes", [(2, 1, 2, 1, 1), (1, 2, 2, 1, 1)])
+def test_fa4_attention_traces_through_hero_loss_and_gradient(monkeypatch, axis_sizes):
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_fa4_forward)
+    mesh = AbstractMesh(
+        axis_sizes=axis_sizes,
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    config = dataclasses.replace(_latent_config(), attention_implementation="gpu_fa4_cute")
+    batch_sharding = NamedSharding(mesh, P(model._BATCH_AXES, None))
+    tokens = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.int32, sharding=batch_sharding)
+    loss_weight = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.float32, sharding=batch_sharding)
+
+    def loss_and_grad(token_ids, weight):
+        transformer = model.Transformer.init(config, key=jax.random.key(0))
+        return eqx.filter_value_and_grad(lambda m: m.next_token_loss(token_ids, weight, mask=AttentionMask.causal()))(
+            transformer
+        )
+
+    with use_abstract_mesh(mesh):
+        loss, grads = eqx.filter_eval_shape(loss_and_grad, tokens, loss_weight)
+
+    assert loss.shape == ()
+    assert grads.output_proj.shape == (config.hidden_dim, config.vocab_size)
+
+
+def test_scalar_state_uses_the_active_mesh():
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 1, 1, 1),
+        axis_names=("replica_dcn", "data", "expert", "context", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+
+    with use_abstract_mesh(mesh):
+        state = eqx.filter_eval_shape(
+            lambda: train.initial_state(
+                _latent_config(),
+                optimizer=optax.adam(0.1),
+                mp=jmp.get_policy("f32"),
+                key=jax.random.key(0),
+                ema_beta=None,
+                offload_opt_state=True,
+            )
+        )
+
+    step_sharding = state.step.sharding
+    assert isinstance(step_sharding, NamedSharding)
+    assert step_sharding.mesh == mesh
+    assert step_sharding.spec == P()
+
+    count_sharding = state.opt_state[0].count.sharding
+    assert isinstance(count_sharding, NamedSharding)
+    assert count_sharding.mesh == mesh
+    assert count_sharding.spec == P()
+
+
+def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.bfloat16))
+    master_params = _TinyWatchModel(weight=jnp.array(1.0, dtype=jnp.float32))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=master_params,
+        opt_state=optimizer.init(master_params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del current_params, batch, mp, z_loss
+        loss = jnp.array(0.0)
+        grads = _TinyWatchModel(weight=jnp.array(0.01, dtype=jnp.bfloat16))
+        metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
+        return (loss, metrics), grads
+
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+        z_loss_weight=0,
+        ema_beta=None,
+        master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+    )
+
+    for _ in range(10):
+        state, _, _ = train_step(state, jnp.array(0))
+
+    assert state.master_params is not None
+    assert state.master_params.weight.dtype == jnp.float32
+    assert state.params.weight.dtype == jnp.bfloat16
+    expected_master = 1.0 - 10 * 0.1 * float(jnp.array(0.01, dtype=jnp.bfloat16))
+    np.testing.assert_allclose(state.master_params.weight, expected_master, rtol=1e-6)
+    np.testing.assert_allclose(state.params.weight, jnp.asarray(expected_master, dtype=jnp.bfloat16))
+
+
+def test_fp32_host_master_preserves_float32_initialization(monkeypatch):
+    config = _latent_config()
+    key = jax.random.key(17)
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+
+    with set_mesh(mesh):
+        expected = model.Transformer.init(config, key=key)
+        state = train.initial_state(
+            config,
+            optimizer=optax.sgd(0.1),
+            mp=jmp.get_policy("params=bfloat16,compute=bfloat16,output=bfloat16"),
+            key=key,
+            ema_beta=None,
+            master_param_mode=train.MasterParamMode.FP32_PINNED_HOST,
+        )
+
+    assert state.master_params is not None
+    expected_leaves = jax.tree.leaves(expected)
+    master_leaves = jax.tree.leaves(state.master_params)
+    param_leaves = jax.tree.leaves(state.params)
+    for expected_leaf, master_leaf, param_leaf in zip(expected_leaves, master_leaves, param_leaves, strict=True):
+        np.testing.assert_array_equal(master_leaf, expected_leaf)
+        np.testing.assert_array_equal(param_leaf, expected_leaf.astype(jnp.bfloat16))
+    assert any(
+        not np.array_equal(master_leaf, param_leaf.astype(jnp.float32))
+        for master_leaf, param_leaf in zip(master_leaves, param_leaves, strict=True)
+    )
+
+
+def test_drop_metrics_reports_sender_and_receiver_fractions():
+    metrics = train._drop_metrics(
+        jnp.array(5, dtype=jnp.int32),
+        jnp.array(2, dtype=jnp.int32),
+        jnp.array(3, dtype=jnp.int32),
+        jnp.array(4, dtype=jnp.int32),
+        jnp.array(12, dtype=jnp.int32),
+        batch_size=2,
+        sequence_length=4,
+        top_k=2,
+        num_layers=1,
+    )
+
+    assert metrics == {
+        MOE_DROPPED_ASSIGNMENTS_METRIC: 5,
+        "moe/drop_fraction": 5 / 12,
+        MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC: 2,
+        "moe/sender_drop_fraction": 2 / 12,
+        MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC: 3,
+        "moe/receiver_drop_fraction": 3 / 12,
+        "moe/receiver_drop_fraction_of_received": 3 / 10,
+        MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC: 4,
+        "moe/skipped_padding_fraction": 4 / 16,
+        MOE_VALID_ASSIGNMENTS_METRIC: 12,
+    }
+
+
+def test_drop_metrics_sums_per_layer_counts_in_int64_without_overflow():
+    # Per-layer int32 counts whose 48-layer sum exceeds int32 (jax_enable_x64 is off, so an in-device
+    # jnp.sum would wrap and break the total==sender+receiver check). The host sum must stay exact.
+    num_layers = 48
+    per_layer_sender = jnp.full((num_layers,), 40_000_000, dtype=jnp.int32)  # 48 * 40M = 1.92e9
+    per_layer_receiver = jnp.full((num_layers,), 60_000_000, dtype=jnp.int32)  # 48 * 60M = 2.88e9 > int32
+    per_layer_total = per_layer_sender + per_layer_receiver
+    per_layer_valid = jnp.full((num_layers,), 4096 * 4096 * 8, dtype=jnp.int32)
+    per_layer_skipped = jnp.zeros((num_layers,), dtype=jnp.int32)
+    sender_total = 48 * 40_000_000
+    receiver_total = 48 * 60_000_000
+
+    metrics = train._drop_metrics(
+        per_layer_total,
+        per_layer_sender,
+        per_layer_receiver,
+        per_layer_skipped,
+        per_layer_valid,
+        batch_size=4096,
+        sequence_length=4096,
+        top_k=8,
+        num_layers=num_layers,
+    )
+
+    assert metrics[MOE_DROPPED_ASSIGNMENTS_METRIC] == sender_total + receiver_total  # no int32 wrap
+    assert metrics[MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC] == sender_total
+    assert metrics[MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC] == receiver_total
+
+
+def test_baseline_eval_hook_runs_once_after_the_first_step():
+    # The baseline eval must fire on the first completed step and never again: it reshards the
+    # params onto the expert-collapsed mesh, and that copy competes with the train step's temporary
+    # buffer. A resumed run starts above step 1 and must skip it.
+    fired = []
+    runner = StateCallbackRunner[SimpleNamespace](
+        step_getter=lambda s: s.step,
+        model_getter=lambda s: s.params,
+        eval_model_getter=lambda s: s.params,
+        opt_state_getter=lambda s: s.opt_state,
+    )
+    runner.add_hook(train._first_step_only(lambda info: fired.append(info.step)), every=1)
+
+    def run_steps(next_steps):
+        for next_step in next_steps:
+            runner.run(
+                SimpleNamespace(step=jnp.int32(next_step), params=None, opt_state=None),
+                loss=0.0,
+                step_duration=0.0,
+            )
+
+    run_steps([1, 2, 3, 3000])
+    assert fired == [0]  # StepInfo.step is next_step - 1, so the point lands at 0 on the curve
+
+    fired.clear()
+    run_steps([5001, 5002])  # a resumed run
+    assert fired == []
+
+
+def test_the_drop_oracle_keeps_everything_when_capacity_cannot_clip():
+    # The 4-GPU guard judges the transport against this mask, so a wrong mask either hides a
+    # transport bug or fails a correct one. At the structural no-drop capacity nothing may drop.
+    rng = np.random.default_rng(0)
+    tokens_per_shard = 8
+    tokens = tokens_per_shard * ragged_ep.EP_SIZE
+    selected = rng.integers(0, ragged_ep.NUM_EXPERTS, size=(tokens, ragged_ep.TOPK))
+
+    keep = ragged_ep._keep_mask(selected, tokens_per_shard, ragged_ep.NO_DROP_CAPACITY)
+
+    assert keep.shape == selected.shape
+    assert keep.all()
+
+
+def test_the_drop_oracle_keeps_a_prefix_of_each_expert_group():
+    # Accepted rows are the prefix of each expert group in the shard's stable expert-sorted order,
+    # which is what lets the transport read them in place. The mask has to agree.
+    rng = np.random.default_rng(1)
+    tokens_per_shard = 16
+    tokens = tokens_per_shard * ragged_ep.EP_SIZE
+    topk, num_experts = ragged_ep.TOPK, ragged_ep.NUM_EXPERTS
+    # Skew hard toward the low experts so the gate actually bites.
+    selected = rng.choice(num_experts, size=(tokens, topk), p=[0.5, 0.3, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025])
+
+    keep = ragged_ep._keep_mask(selected, tokens_per_shard, 1.0)
+
+    dropped = int((1.0 - keep).sum())
+    assert 0 < dropped < selected.size, f"expected partial clipping, dropped {dropped}"
+    for shard in range(ragged_ep.EP_SIZE):
+        lo, hi = shard * tokens_per_shard, (shard + 1) * tokens_per_shard
+        flat_selected = selected[lo:hi].reshape(-1)
+        flat_keep = keep[lo:hi].reshape(-1)
+        for expert in range(num_experts):
+            group = np.flatnonzero(flat_selected == expert)
+            kept = flat_keep[group]
+            # A prefix: every kept entry precedes every dropped one within the group.
+            assert list(kept) == sorted(kept, reverse=True), f"shard {shard} expert {expert} not a prefix"
+
+
+def test_total_norm_clip_passes_small_gradients_through_bitwise():
+    grads = {"a": jnp.array([0.3, -0.4]), "b": jnp.array([[0.1, 0.2]])}
+
+    clipped, norm, fired = train.clip_by_total_norm(grads, 1.0)
+
+    np.testing.assert_allclose(norm, math.sqrt(0.09 + 0.16 + 0.01 + 0.04), rtol=1e-6)
+    assert not bool(fired)
+    for want, have in zip(jax.tree.leaves(grads), jax.tree.leaves(clipped), strict=True):
+        np.testing.assert_array_equal(np.asarray(have), np.asarray(want))
+
+
+def test_total_norm_clip_rescales_the_whole_gradient_to_the_limit():
+    grads = {"a": jnp.array([3.0, 4.0]), "b": jnp.array([[12.0]])}
+
+    clipped, norm, fired = train.clip_by_total_norm(grads, 1.0)
+
+    np.testing.assert_allclose(norm, 13.0)
+    assert bool(fired)
+    np.testing.assert_allclose(optax.global_norm(clipped), 1.0, rtol=1e-6)
+    np.testing.assert_allclose(clipped["a"], np.array([3.0, 4.0]) / 13.0, rtol=1e-6)
+    np.testing.assert_allclose(clipped["b"], np.array([[12.0]]) / 13.0, rtol=1e-6)
+
+
+def test_clipped_train_step_updates_with_the_clipped_gradient_and_logs_the_raw_norm(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        master_params=None,
+        opt_state=optimizer.init(params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del batch, mp, z_loss
+        loss = current_params.weight**2
+        grads = _TinyWatchModel(weight=2 * current_params.weight)
+        return (loss, {"qb_beta_per_layer": jnp.zeros((1, 1))}), grads
+
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=float32,compute=float32,output=float32"),
+        z_loss_weight=0,
+        ema_beta=None,
+        max_grad_norm=1.0,
+        watch_config=WatchConfig(interval=10),
+    )
+
+    state, metrics, watch_stats = train_step(state, jnp.array(0))
+
+    np.testing.assert_allclose(state.params.weight, 1.9, rtol=1e-6)
+    np.testing.assert_allclose(metrics[train.GRAD_NORM_METRIC], 4.0)
+    assert float(metrics[train.GRAD_CLIPPED_METRIC]) == 1.0
+    np.testing.assert_allclose(watch_stats["grad/norm/total"], 4.0)
+
+
+def test_a_clipping_run_restores_a_checkpoint_saved_without_clipping(tmp_path, monkeypatch):
+    cfg = _latent_config()
+    mesh = _explicit_mesh(1, 1, 1, 1, 1)
+    mp = jmp.get_policy("f32")
+    optimizer = optax.adam(1e-3)
+    monkeypatch.setattr(train, "_tree_to_memory_kind", lambda tree, memory_kind: tree)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
+
+    def large_gradients(current_params, batch, mp, z_loss):
+        del batch, mp, z_loss
+        grads = jax.tree.map(lambda p: jnp.full_like(p, 10.0), current_params)
+        return (jnp.array(0.0), {"qb_beta_per_layer": jnp.zeros((1, 1))}), grads
+
+    monkeypatch.setattr(train, "_loss_and_grads", large_gradients)
+
+    def build(key):
+        with set_mesh(mesh):
+            return train.initial_state(cfg, optimizer=optimizer, mp=mp, key=jax.random.key(key), ema_beta=None)
+
+    unclipped_step = train._make_train_step(optimizer, mp, z_loss_weight=0, ema_beta=None)
+    with set_mesh(mesh):
+        written, _, _ = unclipped_step(build(17), jnp.array(0))
+    checkpoint_root = tmp_path / "checkpoints"
+    save_checkpoint(written, step=1, checkpoint_path=str(checkpoint_root / "step-1"))
+
+    clipped_step = train._make_train_step(optimizer, mp, z_loss_weight=0, ema_beta=None, max_grad_norm=1.0)
+    with set_mesh(mesh):
+        restored = restore_grug_state_from_checkpoint(
+            build(23),
+            checkpoint_search_paths=[str(checkpoint_root)],
+            load_checkpoint_setting=True,
+            mesh=None,
+            allow_partial=False,
+        )
+        assert int(restored.step) == 1
+        for want, have in zip(jax.tree.leaves(written), jax.tree.leaves(restored), strict=True):
+            np.testing.assert_array_equal(np.asarray(want), np.asarray(have))
+        # The step donates its input state, so compare before stepping.
+        stepped, metrics, _ = clipped_step(restored, jnp.array(0))
+
+    assert jax.tree.structure(stepped.opt_state) == jax.tree.structure(written.opt_state)
+    assert float(metrics[train.GRAD_CLIPPED_METRIC]) == 1.0
+    assert int(stepped.step) == 2
+
+
+_EXTENSION_LOGGER = "test_schedule_extension_run"
+
+
+@dataclasses.dataclass(frozen=True)
+class _SgdOnTheHeroSchedule(GrugMoeMuonHConfig):
+    """Reads the real schedule, for the training loop: MuonH's Newton-Schulz rejects the one-device hero mesh."""
+
+    def build(self, num_train_steps):
+        return optax.inject_hyperparams(optax.sgd)(learning_rate=self.lr_scheduler(num_train_steps))
+
+
+@pytest.fixture
+def extension_run(tmp_path, monkeypatch):
+    """Run the real loop and checkpointing with a 4-step schedule and a 2-step extension from 5% to 1% of peak."""
+    stream = StringIO()
+    logger = logging.getLogger(_EXTENSION_LOGGER)
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler(stream)
+    logger.addHandler(handler)
+
+    def run(stop_step, device_memory_hook=lambda step: None):
+        monkeypatch.setattr(train, "log_device_memory", device_memory_hook)
+        stream.seek(0)
+        stream.truncate()
+        trainer = TrainerConfig(
+            id="extension",
+            num_train_steps=4,
+            train_batch_size=len(jax.devices()),
+            tracker=JsonLoggerConfig(logger_name=_EXTENSION_LOGGER),
+            require_accelerator=False,
+            use_explicit_mesh_axes=True,
+            distributed=DistributedConfig(initialize_jax_distributed=False),
+            log_dir=tmp_path / "logs",
+            checkpointer=CheckpointerConfig(base_path=str(tmp_path / "checkpoints"), keep=[{"every": 3}]),
+        )
+        train._run_grug_local(
+            train.GrugRunConfig(
+                model=model.GrugModelConfig(
+                    vocab_size=64,
+                    hidden_dim=32,
+                    intermediate_dim=16,
+                    shared_expert_intermediate_dim=16,
+                    num_layers=1,
+                    num_heads=2,
+                    num_kv_heads=2,
+                    max_seq_len=8,
+                    num_experts=4,
+                    num_experts_per_token=2,
+                ),
+                data=LmDataConfig(components={}, vocab_size=64, tokenizer="passthrough"),
+                resources=ResourceConfig.with_cpu(),
+                optimizer=_SgdOnTheHeroSchedule(
+                    learning_rate=1e-2,
+                    adam_lr=1e-3,
+                    min_lr_ratio=0.05,
+                    schedule_extension=ScheduleExtension(steps=2, final_lr_ratio=0.01),
+                ),
+                trainer=train.GrugTrainerConfig(
+                    trainer=trainer,
+                    training_data_mode=train.TrainingDataMode.SYNTHETIC,
+                    save_checkpoints=True,
+                ),
+                eval=None,
+                stop_after_steps=stop_step,
+            )
+        )
+        records = [json.loads(line) for line in stream.getvalue().splitlines() if line.startswith("{")]
+        return {
+            record["step"]: record["metrics"]["optim/learning_rate"]
+            for record in records
+            if record["event"] == "log" and "optim/learning_rate" in record["metrics"]
+        }
+
+    yield SimpleNamespace(run=run, checkpoint_root=tmp_path / "checkpoints" / "extension")
+    logger.removeHandler(handler)
+
+
+def _committed_checkpoints(root):
+    return {candidate.step: candidate for candidate in discover_checkpoint_candidates(str(root))}
+
+
+@pytest.mark.timeout(240)
+def test_run_resumes_past_schedule_at_extension_rate(extension_run):
+    first = extension_run.run(stop_step=5)
+    assert _committed_checkpoints(extension_run.checkpoint_root)[5].metadata["is_temporary"] is False
+    # The update at count 4 is the first past the schedule and still uses the floor.
+    assert first[4] == pytest.approx(1e-2 * 0.05, rel=1e-5)
+
+    resumed = extension_run.run(stop_step=6)
+    assert list(resumed) == [5]
+    assert resumed[5] == pytest.approx(1e-2 * 0.03, rel=1e-5)
+    assert _committed_checkpoints(extension_run.checkpoint_root)[6].metadata["is_temporary"] is False
+
+    with pytest.raises(ValueError, match="past the stop step"):
+        extension_run.run(stop_step=5)
+
+
+@pytest.mark.timeout(240)
+def test_final_hook_failure_keeps_checkpoint_and_retry_skips_hooks(extension_run):
+    visits = []
+
+    def fail_in_the_forced_pass(step):
+        visits.append(step.step)
+        if visits.count(4) == 2:
+            raise RuntimeError("final eval failed")
+
+    with pytest.raises(RuntimeError, match="final eval failed"):
+        extension_run.run(stop_step=5, device_memory_hook=fail_in_the_forced_pass)
+    written = _committed_checkpoints(extension_run.checkpoint_root)[5]
+
+    retry_visits = []
+    retried = extension_run.run(stop_step=5, device_memory_hook=retry_visits.append)
+
+    assert retry_visits == []
+    assert retried == {}
+    assert _committed_checkpoints(extension_run.checkpoint_root)[5].timestamp == written.timestamp
+
+
+@pytest.mark.timeout(240)
+def test_restoring_temporary_stop_checkpoint_promotes_it(extension_run):
+    extension_run.run(stop_step=5)
+    metadata_path = extension_run.checkpoint_root / "step-5" / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata_path.write_text(json.dumps({**metadata, "is_temporary": True}))
+
+    visits = []
+    extension_run.run(stop_step=5, device_memory_hook=visits.append)
+
+    assert visits
+    assert _committed_checkpoints(extension_run.checkpoint_root)[5].metadata["is_temporary"] is False
+
+
+def test_muonh_resume_into_extension_scales_every_lr_group(tmp_path):
+    schedule_steps = 4
+    base = GrugMoeMuonHConfig(learning_rate=1e-2, adam_lr=1e-3, min_lr_ratio=0.05, warmup=0.0, use_syrk=False)
+    extended = dataclasses.replace(base, schedule_extension=ScheduleExtension(steps=2, final_lr_ratio=0.01))
+    base_optimizer = base.build(schedule_steps)
+    extended_optimizer = extended.build(schedule_steps)
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+    rng = np.random.default_rng(20)
+
+    def matrix(*shape):
+        return jnp.asarray(rng.normal(size=shape).astype(np.float32))
+
+    with jax.set_mesh(mesh):
+        params = {
+            "stacked_blocks": {"stacked": {"mlp": {"expert_mlp": {"w_up": matrix(1, 3, 8, 4)}}}},
+            "lm_head": matrix(8, 4),
+            "token_embed": matrix(8, 4),
+        }
+        grads = jax.tree.map(lambda leaf: matrix(*leaf.shape), params)
+        assert set(jax.tree.leaves(base.create_mask(params))) == {"muonh", "adamh", "adam"}
+
+        base_update = jax.jit(base_optimizer.update)
+        extended_update = jax.jit(extended_optimizer.update)
+        state = base_optimizer.init(params)
+        for _ in range(schedule_steps):
+            updates, state = base_update(grads, state, params)
+            params = optax.apply_updates(params, updates)
+
+        save_checkpoint({"params": params, "opt_state": state}, step=schedule_steps, checkpoint_path=str(tmp_path))
+        restored = load_checkpoint(
+            {"params": params, "opt_state": extended_optimizer.init(params)}, str(tmp_path), allow_partial=False
+        )
+        params, state = restored["params"], restored["opt_state"]
+
+        for ratio in (0.05, 0.03, 0.01, 0.01):
+            floor_updates, _ = base_update(grads, state, params)
+            updates, state = extended_update(grads, state, params)
+            assert float(state.hyperparams["learning_rate"]) == pytest.approx(1e-2 * ratio, rel=1e-5)
+            assert float(state.hyperparams["adam_lr"]) == pytest.approx(1e-3 * ratio, rel=1e-5)
+            for moved, floor_moved in zip(jax.tree.leaves(updates), jax.tree.leaves(floor_updates), strict=True):
+                assert float(jnp.linalg.norm(moved) / jnp.linalg.norm(floor_moved)) == pytest.approx(
+                    ratio / 0.05, rel=0.02
+                )
+            params = optax.apply_updates(params, updates)

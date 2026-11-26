@@ -20,14 +20,15 @@ in the [Iris test cleanup artifact](https://loom.oa.dev/s/kiyyg1qv/artifacts/iri
 | MIGRATE | 200 | 89 were replaced by journeys; 111 were retained after the boundary review below. |
 | DELETE | 68 | Removed from Iris; three GCS lease cases moved to the owning Rigging package. |
 
-The 89 removed migration families map to these collected journeys:
+The 89 removed migration families map to these collected journeys or to a
+feature that has since been removed:
 
 | Source group | Families | Journey replacement |
 |---|---:|---|
 | Controller replay | 3 | checkpoint, lifecycle, and automatic invariants |
 | Direct controller lifecycle | 9 | lifecycle, scheduling, coscheduling, and worker lifecycle |
 | Transition chronology | 12 | lifecycle, cancellation, hierarchy, endpoint, and worker lifecycle |
-| Multi-backend routing | 3 | routing |
+| Multi-backend routing | 3 | removed with local multi-backend mode |
 | Preemption | 4 | lifecycle and worker lifecycle |
 | Scheduling fairness | 1 | mixed-capacity routing |
 | Worker health | 1 | worker lifecycle |

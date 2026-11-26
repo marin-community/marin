@@ -2,6 +2,14 @@
 
 Start with `/AGENTS.md`; this file adds experiment-specific guidance.
 
+## Pipeline Ownership
+
+Build artifact graphs and keep one-off binding code in `experiments/**`. Put
+concrete work intended for reuse in `lib/**`, then bind it here. Keep
+experiment-specific tests beside the experiment, outside root `tests/**` and
+`lib/**`; library behavior keeps its normal library tests. Follow
+`/.agents/skills/write-pipeline/SKILL.md` when writing or revising a pipeline.
+
 ## Dataset Catalogs
 
 All dataset definitions live under `experiments/datasets/`, one leaf module per
@@ -46,4 +54,4 @@ dataset (or dataset family), built with the lazy data builders in
 - Write behavior: writes go directly to the local prefix.
 - Both `mirror://` copies and direct cross-region GCS reads share a single process-global `TransferBudget` (default 10 GB) that raises `TransferBudgetExceeded` when exhausted.
 
-Implementation references: `lib/iris/src/iris/marin_fs.py` and `rigging.filesystem` (the `TransferBudget`).
+Implementation references: `rigging.filesystem.mirror` and `rigging.filesystem.cross_region` (the `TransferBudget`).

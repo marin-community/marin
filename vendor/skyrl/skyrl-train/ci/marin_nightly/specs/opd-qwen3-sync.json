@@ -1,0 +1,31 @@
+{
+  "provenance": {
+    "what": "One synchronous OPD optimizer step with a Qwen3-0.6B policy, a separately allocated Qwen3-1.7B vLLM teacher, exact shared token IDs, and sampled reverse KL.",
+    "produced_by": "ci/marin_nightly/run_opd_h100.sh on one Iris H100x4 task",
+    "why_these_thresholds": [
+      "The gate requires teacher-scored tokens and a nonzero teacher advantage over valid training tokens. The driver reports this credit after applying route weights and the teacher coefficient.",
+      "A positive raw gradient norm proves the combined objective reached the optimizer. The CPU numerical suite independently proves that changing teacher log-probabilities changes this gradient.",
+      "The wall-clock allowance covers cold downloads and vLLM graph capture while remaining a bounded startup and training check."
+    ]
+  },
+  "min_train_steps": 1,
+  "finite_metrics": [
+    "policy/final_loss",
+    "distillation/teacher_advantage_mean",
+    "distillation/teacher_advantage_abs_mean",
+    "distillation/teacher_advantage_clipped_fraction",
+    "distillation/valid_tokens",
+    "policy/raw_grad_norm",
+    "distillation/scored_tokens",
+    "distillation/teacher_count"
+  ],
+  "bounds": {
+    "policy/raw_grad_norm": { "minimum": 1e-12, "maximum": 1000000.0 },
+    "distillation/teacher_advantage_abs_mean": { "minimum": 1e-12, "maximum": 1.7976931348623157e308 },
+    "distillation/teacher_advantage_clipped_fraction": { "minimum": 0.0, "maximum": 1.0 },
+    "distillation/valid_tokens": { "minimum": 1.0, "maximum": 10000.0 },
+    "distillation/scored_tokens": { "minimum": 1.0, "maximum": 10000.0 },
+    "distillation/teacher_count": { "minimum": 1.0, "maximum": 1.0 }
+  },
+  "max_wall_clock_seconds": 1800
+}

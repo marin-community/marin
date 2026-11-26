@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 

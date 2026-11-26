@@ -67,6 +67,8 @@ class VerifiedIdentity:
     # the consuming service enforces that. None ⇒ a full identity (the default
     # for every non-scoped token and every non-JWT authenticator).
     audience: str | None = None
+    # Set only for an Iris task token: the wire name of the job that owns the token.
+    job_id: str | None = None
 
 
 # Identity granted to a credentialless caller admitted by ambient trust:
@@ -109,12 +111,6 @@ _verified_identity: ContextVar[VerifiedIdentity | None] = ContextVar("verified_i
 def get_verified_identity() -> VerifiedIdentity | None:
     """Return the verified identity for the current RPC, or None if auth is disabled."""
     return _verified_identity.get()
-
-
-def get_verified_user() -> str | None:
-    """Return just the user_id for the current RPC, or None."""
-    identity = _verified_identity.get()
-    return identity.user_id if identity is not None else None
 
 
 @contextlib.contextmanager

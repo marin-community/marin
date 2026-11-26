@@ -38,6 +38,20 @@ In practice, experiment scripts rarely construct `ArtifactStep(...)` directly. H
 as `tokenized`, `hf_download`, and `train_lm` return the appropriate `ArtifactStep[T]` handle
 from high-level arguments.
 
+## Where pipeline code belongs
+
+Construct graphs, bind steps, and choose artifact identities in `experiments/**`. Keep one-off
+workflow code and experiment-specific tests beside the experiment, outside root `tests/**`
+and `lib/**`. Put concrete behavior intended for reuse in `lib/**`, then call it from an
+experiment step. New library code should not construct
+`ArtifactStep` or `StepSpec` objects, compose a graph, or refer to specific artifact handles
+or output locations. Library tests continue to cover reusable behavior.
+
+`marin.experiment.data`, `train`, and `evaluation` currently provide library builders that
+construct handles. They remain supported APIs, but do not establish a location for new
+pipeline builders. The `Artifact` and `ArtifactStep` types themselves remain in the
+execution framework.
+
 ## Steps and StepContext
 
 An `ArtifactStep` is flat — there is no separate recipe object. Its fields split cleanly
@@ -106,7 +120,7 @@ artifact**, in argument order — so the driver gets the resolved values directl
 read. `resolve(handle)` is `run` for a single handle, returning its one artifact.
 
 ```python
-from marin.execution.lazy import run
+from marin.execution.lazy import resolve
 
 checkpoint = build()                      # returns ArtifactStep[LevanterCheckpoint]; nothing runs yet
 result = resolve(checkpoint)              # materializes deps, runs training, returns LevanterCheckpoint
@@ -147,6 +161,13 @@ return train_lm(name="checkpoints/dclm_7b_1x", version="2026.07.01", ...)
 
 During development, use a `dev` version string (e.g. `"dev"` or `"mylabel-dev"`) to opt out
 of the cache entirely and always rebuild.
+
+When adding an opt-in dataclass field, set `fingerprint_omit_value` to the literal
+value that preserves the pre-field behavior. For example,
+`field(default="native", metadata={"fingerprint_omit_value": "native"})` keeps
+the existing fingerprint for the native kernel. If the default later becomes
+`"fixed"`, leave the omission value pinned to `"native"` so the new behavior
+changes the fingerprint.
 
 ## Adopting pre-existing data
 

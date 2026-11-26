@@ -24,14 +24,7 @@ from levanter.kernels.pallas.splash_attention import (
     splash_attention_block_sizes,
     splash_partition_spec_shard_factor,
 )
-from levanter.inference.utils import is_valid
-
-try:
-    from jax.experimental.pallas.ops.tpu.ragged_paged_attention import (
-        ragged_paged_attention as tpu_ragged_paged_attention,
-    )
-except Exception:  # pragma: no cover - optional dep
-    tpu_ragged_paged_attention = None
+from levanter.kernels.pallas.paged_attention import tpu_paged_attention, tpu_paged_attention_available
 
 import haliax
 import haliax as hax
@@ -278,7 +271,7 @@ def dot_product_attention(
     if attention_out is not None:
         return attention_out
     else:
-        from levanter.models.flash_attention import (  # noqa: PLC0415  # circular import: attention -> flash_attention -> attention
+        from levanter.layers.flash_attention import (  # noqa: PLC0415  # circular import: attention -> flash_attention -> attention
             flash_attention,
         )
 
@@ -1616,17 +1609,7 @@ def ragged_paged_attention(
     supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
     """
 
-    def _tpu_rpa_available() -> bool:
-        if tpu_ragged_paged_attention is None:
-            return False
-        if jax.default_backend() != "tpu":
-            return False
-        kind = str(getattr(jax.devices()[0], "device_kind", "")).lower()
-        if "tpu v2" in kind or "tpu v3" in kind:
-            return False
-        return True
-
-    if _tpu_rpa_available():
+    if tpu_paged_attention_available():
         try:
             out = _do_tpu_ragged_paged_attention(
                 q,
@@ -1668,111 +1651,29 @@ def _do_tpu_ragged_paged_attention(
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
 ) -> NamedArray:
-    if tpu_ragged_paged_attention is None:
-        msg = "TPU ragged paged attention kernel is unavailable."
-        raise RuntimeError(msg)
-    kernel = tpu_ragged_paged_attention
+    q = q.rearrange(("position", "kv_head", "q_heads_per_group", "head_size"))
 
-    # Usual shardmap dance
-    # Ensure last dimension (head_size) is a multiple of 128 for Pallas kernels
-    orig_head_size = q.axis_size("head_size")
-    padded_head_size = ((orig_head_size + 127) // 128) * 128
+    # Use runtime scaling to retain the named adapter's query precision.
+    def local_attention(q_arr, pages, lengths, indices, offsets, count, scale):
+        return tpu_paged_attention(q_arr, pages, lengths, indices, offsets, count, sm_scale=scale, soft_cap=soft_cap)
 
-    if padded_head_size != orig_head_size:
-        pad_amount = padded_head_size - orig_head_size
-        # Pad query on the head_size axis with zeros
-        q_padded = hax.concatenate(
-            "head_size",
-            [q, hax.zeros_like(q["head_size", hax.ds(0, pad_amount)])],
-        )
-        # Pad kv_pages on the head_size axis with zeros to match
-        kv_pages_padded = hax.concatenate(
-            "head_size",
-            [kv_pages, hax.zeros_like(kv_pages["head_size", hax.ds(0, pad_amount)])],
-        )
-    else:
-        q_padded = q
-        kv_pages_padded = kv_pages
-
-    # The TPU kernel expects the second dimension of the query tensor to be the total number of query heads.
-    q_flat = q_padded.flatten_axes(("kv_head", "q_heads_per_group"), "kv_head")
-    if num_seqs.ndim == 0:
-        this_num_seqs = num_seqs.reshape((1,))
-    else:
-        this_num_seqs = num_seqs
-
-    # the INVALIDs make the TPU sad. mask them with 0:
-    this_num_seqs = jnp.where(this_num_seqs < 0, 0, this_num_seqs)
-    page_indices = hax.where(~is_valid(page_indices), 0, page_indices)
-    kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
-
-    sm_scale_array = jnp.asarray(sm_scale, dtype=q_flat.array.dtype)
-    q_scaled = q_flat.array * sm_scale_array
-
-    def _rpa_with_runtime_scale(
-        q_arg: jax.Array,
-        kv_pages_arg: jax.Array,
-        kv_lens_arg: jax.Array,
-        page_indices_arg: jax.Array,
-        cu_q_lens_arg: jax.Array,
-        num_seqs_arg: jax.Array,
-    ) -> jax.Array:
-        return kernel(
-            q_arg,
-            kv_pages_arg,
-            kv_lens_arg,
-            page_indices_arg,
-            cu_q_lens_arg,
-            num_seqs_arg,
-            sm_scale=1.0,
-            soft_cap=soft_cap,
-        )
-
-    o = shard_map(
-        _rpa_with_runtime_scale,
+    output = shard_map(
+        local_attention,
         mesh=hax.partitioning._get_mesh(),
-        in_specs=(
-            haliax.partitioning.pspec_for_axis(q_flat.axes),
-            haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),
-            haliax.partitioning.pspec_for_axis(kv_lens.axes),
-            haliax.partitioning.pspec_for_axis(page_indices.axes),
-            haliax.partitioning.pspec_for_axis(cu_q_lens.axes),
-            PartitionSpec(),  # num_seqs
-        ),
-        out_specs=pspec_for_axis(
-            (
-                "position",
-                "kv_head",
-                "head_size",
-            )
-        ),
+        in_specs=tuple(pspec_for_axis(x.axes) for x in (q, kv_pages, kv_lens, page_indices, cu_q_lens))
+        + (PartitionSpec(), PartitionSpec()),
+        out_specs=pspec_for_axis(q.axes),
         check_rep=False,
     )(
-        q_scaled,
-        kv_pages_padded.array,
+        q.array,
+        kv_pages.array,
         kv_lens.array,
         page_indices.array,
         cu_q_lens.array,
-        this_num_seqs,
+        num_seqs,
+        jnp.asarray(sm_scale, dtype=q.dtype),
     )
-
-    out = hax.named(
-        o,
-        ("position", "kv_head", "head_size"),
-    )
-    out = out.unflatten_axis(
-        "kv_head",
-        (
-            q.resolve_axis("kv_head"),
-            q.resolve_axis("q_heads_per_group"),
-        ),
-    )
-
-    # If we padded head_size for the kernel, slice back to the original size
-    if padded_head_size != orig_head_size:
-        out = out["head_size", hax.ds(0, orig_head_size)]
-
-    return out
+    return hax.named(output, q.axes)
 
 
 def default_ragged_paged_attention(
@@ -1914,229 +1815,6 @@ def default_ragged_paged_attention(
     output = output["position", 0 : q_orig.axis_size("position")]
 
     return output
-
-
-@dataclass(frozen=True)
-class MultiHeadLatentAttentionConfig:
-    """Configuration for MultiHeadLatentAttention adapted from DeepSeek-V3."""
-
-    Embed: Axis
-    num_heads: int
-    kv_lora_rank: int
-    q_lora_rank: int | None = None
-    qk_rope_head_dim: int = 64
-    qk_nope_head_dim: int = 128
-    v_head_dim: int = 128
-    use_bias: bool = False
-    upcast_attn: bool = False
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = None
-    rope: Optional[RotaryEmbeddingsConfig] = None
-    scaling_factor: Optional[float] = None
-    logits_soft_cap: Optional[float] = None
-
-    @property
-    def Heads(self) -> Axis:
-        return Axis("heads", self.num_heads)
-
-    @property
-    def QHeadSize(self) -> Axis:
-        return Axis("q_head_dim", self.qk_rope_head_dim + self.qk_nope_head_dim)
-
-    @property
-    def VHeadSize(self) -> Axis:
-        return Axis("v_head_dim", self.v_head_dim)
-
-    @property
-    def LatentSize(self) -> Axis:
-        return Axis("latent", self.kv_lora_rank)
-
-    @property
-    def QLoraSize(self) -> Axis:
-        return Axis("q_lora_rank", self.q_lora_rank)
-
-    @property
-    def KVCombinedSize(self) -> Axis:
-        return Axis("kv_combined", self.kv_lora_rank + self.qk_rope_head_dim)
-
-
-class MultiHeadLatentAttention(eqx.Module):
-    """Multi-head attention layer with latent projections inspired by DeepSeek-V3.
-    Reference: https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/modeling_deepseek.py
-    """
-
-    config: MultiHeadLatentAttentionConfig = eqx.field(static=True)
-    kv_a_proj: hnn.Linear
-    kv_a_norm: LayerNormBase
-    kv_b_proj: hnn.Linear
-    o_proj: hnn.Linear
-
-    q_proj: Optional[hnn.Linear] = None
-    q_a_proj: Optional[hnn.Linear] = None
-    q_a_norm: Optional[LayerNormBase] = None
-    q_b_proj: Optional[hnn.Linear] = None
-
-    rot_embs: Optional[RotaryEmbeddings] = eqx.field(default=None)
-
-    @staticmethod
-    def init(config: MultiHeadLatentAttentionConfig, *, key) -> "MultiHeadLatentAttention":
-        use_bias = config.use_bias
-        keys = jrandom.split(key, 5)
-        if config.q_lora_rank is None:
-            q_proj = hnn.Linear.init(
-                In=config.Embed,
-                Out=(config.Heads, config.QHeadSize),
-                key=keys[0],
-                use_bias=False,
-                out_first=True,
-            )
-            q_a_proj = None
-            q_a_norm = None
-            q_b_proj = None
-        else:
-            q_a_proj = hnn.Linear.init(
-                In=config.Embed,
-                Out=config.QLoraSize,
-                key=keys[0],
-                use_bias=use_bias,
-                out_first=True,
-            )
-            q_a_norm = hnn.RmsNorm.init(Axis("q_lora_rank", config.q_lora_rank), use_bias=False)
-            q_b_proj = hnn.Linear.init(
-                In=config.QLoraSize,
-                Out=(config.Heads, config.QHeadSize),
-                key=keys[1],
-                use_bias=False,
-                out_first=True,
-            )
-            q_proj = None
-
-        kv_a_proj = hnn.Linear.init(
-            In=config.Embed,
-            Out=config.KVCombinedSize,
-            key=keys[2],
-            use_bias=use_bias,
-            out_first=True,
-        )
-        kv_a_norm = hnn.RmsNorm.init(Axis("latent", config.kv_lora_rank), use_bias=False)
-        kv_b_proj = hnn.Linear.init(
-            In=config.LatentSize,
-            Out=(
-                config.Heads,
-                Axis("kv_out", config.qk_nope_head_dim + config.v_head_dim),
-            ),
-            key=keys[3],
-            use_bias=False,
-            out_first=True,
-        )
-        o_proj = hnn.Linear.init(
-            In=(config.Heads, config.VHeadSize),
-            Out=config.Embed,
-            key=keys[4],
-            use_bias=use_bias,
-            out_first=True,
-        )
-        rot_embs = config.rope.build(Axis("q_head_dim", config.qk_rope_head_dim)) if config.rope is not None else None
-
-        return MultiHeadLatentAttention(
-            config,
-            kv_a_proj,
-            kv_a_norm,
-            kv_b_proj,
-            o_proj,
-            q_proj,
-            q_a_proj,
-            q_a_norm,
-            q_b_proj,
-            rot_embs,
-        )
-
-    @named_call
-    def __call__(
-        self,
-        x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
-        *,
-        key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
-        k_q_a, k_q_b, k_kv_a, k_kv_b, k_o = maybe_rng_split(key, 5)
-
-        # Project to a shared latent space for K and V.
-        # For inference, this means you just need to cache the reduced size latent.
-        kv = self.kv_a_proj(x, key=k_kv_a)
-        compressed_kv = kv["kv_combined", : self.config.kv_lora_rank].rename({"kv_combined": "latent"})
-
-        # We can't do RoPE on K without materializing K, so we shave off a
-        # qk_rope_head_dim-sized chunk to materialize for RoPE.
-        k_pe = (
-            kv["kv_combined", self.config.kv_lora_rank :]
-            .rename({"kv_combined": "q_head_dim"})
-            .broadcast_axis(self.config.Heads)
-            .rearrange(("batch", "heads", "position", "q_head_dim"))
-        )
-        compressed_kv_norm = self.kv_a_norm(compressed_kv)
-        kv_out = self.kv_b_proj(compressed_kv_norm, key=k_kv_b)
-
-        # Split the matrix into K_nope and the full V.
-        k_nope = kv_out["kv_out", : self.config.qk_nope_head_dim].rename({"kv_out": "q_head_dim"})
-        v = kv_out["kv_out", self.config.qk_nope_head_dim :].rename({"kv_out": "v_head_dim"})
-
-        # Optional step of doing LoRA on Q (as done in DeepSeek).
-        if self.config.q_lora_rank is None:
-            assert self.q_proj is not None, "q_lora_rank not defined, but q_proj is missing."
-            q = self.q_proj(x, key=k_q_a)
-        else:
-            assert (
-                self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None
-            ), "q_lora_rank defined, but LoRA matrices are not."
-            q = self.q_a_proj(x, key=k_q_a)
-            q = self.q_a_norm(q)
-            q = self.q_b_proj(q, key=k_q_b)
-        q = q.rearrange((..., "heads", "position", "q_head_dim"))
-
-        # Prep for partial RoPE.
-        q_nope = q["q_head_dim", : self.config.qk_nope_head_dim]
-        q_pe = q["q_head_dim", self.config.qk_nope_head_dim :]
-
-        # Apply RoPE to the split-off portion and then merge back together.
-        if self.rot_embs is not None:
-            if pos_ids is None:
-                pos_ids = hax.arange(x.resolve_axis("position"), dtype=jnp.int32)
-            q_pe = self.rot_embs(q_pe, pos_ids)
-            k_pe = self.rot_embs(k_pe, pos_ids)
-
-        query_states = hax.concatenate("q_head_dim", (q_nope, q_pe))
-        key_states = hax.concatenate("q_head_dim", (k_nope, k_pe))
-
-        # Rename axes for attention inputs.
-        key_states = key_states.rename({"position": "key_position"})
-        v = v.rename({"position": "key_position"})
-        # Build the value tensor AFTER renaming position → key_position.
-        v_attn = v.rename({"v_head_dim": "q_head_dim"})
-
-        attn_output = dot_product_attention(
-            "position",
-            "key_position",
-            "q_head_dim",
-            query_states,
-            key_states,
-            v_attn,
-            mask,
-            attention_dtype=jnp.float32 if self.config.upcast_attn else x.dtype,
-            attn_backend=self.config.attn_backend,
-            flash_block_size=self.config.flash_attention_block_size,
-            scaling_factor=self.config.scaling_factor,
-            logits_soft_cap=self.config.logits_soft_cap,
-            dropout=0.0,
-            inference=True,
-            prng=key,
-        )
-
-        attn_output = attn_output.rename({"q_head_dim": "v_head_dim"}).astype(x.dtype)
-        assert self.o_proj is not None
-        attn_output = self.o_proj(attn_output, key=k_o)
-        return attn_output
 
 
 class AttentionWithSink(Attention):

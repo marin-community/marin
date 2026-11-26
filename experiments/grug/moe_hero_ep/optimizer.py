@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +13,11 @@ from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe_hero_ep.adamh import scale_by_adamh
 from experiments.grug.moe_hero_ep.grugmuon_hero import _grug_scale_with_muon_hero, _target_named_sharding
+
+
+class ExpertNormalization(StrEnum):
+    ALL_EXPERTS = "all_experts"
+    PER_EXPERT = "per_expert"
 
 
 def _match_named_update_sharding() -> optax.GradientTransformation:
@@ -42,31 +48,107 @@ def _match_named_sharding_to_params(updates, params):
     return jax.tree.map(match_sharding, updates, params, is_leaf=lambda x: x is None)
 
 
-def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
+def _pin_sharding(x, ref):
+    """Reshard ``x`` to ``ref``'s named sharding so a following norm reduces correctly.
+
+    ``new_param`` is a computed intermediate; leaving it with an SPMD-inferred sharding lets the sharded
+    ``norm(new_param)`` over-count and collapse the tensor (issue #8073). This reshard is a same-layout
+    no-op at runtime.
+    """
+    sharding = _target_named_sharding(ref)
+    return jax.sharding.reshard(x, sharding) if sharding is not None else x
+
+
+def _scale_invariant_hyperball_updates(
+    params, direction_updates, learning_rate: float, expert_normalization: ExpertNormalization
+):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
     parameter's Frobenius sphere (scale-invariant update)."""
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
-    def scale_invariant_update(param, update):
+    paths = leaf_key_paths(params)
+
+    def scale_invariant_update(param, update, path):
         if update is None:
             return None
         if not hasattr(param, "ndim"):
             return update
+        # Run the step and re-projection in float32 so BF16 parameter-space norms
+        # round identically to post-step norms, and use sum-of-squares plus a
+        # same-layout reshard so sharded reductions do not over-count (issue #8073).
+        param_f32 = param.astype(jnp.float32)
+        update_f32 = update.astype(jnp.float32)
         if param.ndim == 2:
-            param_norm = jnp.linalg.norm(param)
-            update_norm = jnp.linalg.norm(update)
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-            new_param_norm = jnp.linalg.norm(new_param)
-            return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param_f32)))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update_f32)))
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param = _pin_sharding(new_param, param)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param)))
+        else:
+            if path.endswith((".expert_mlp.w_gate", ".expert_mlp.w_up", ".expert_mlp.w_down")):
+                # Pipeline blocks have [experts, in, out]; the scanned EP model adds
+                # a leading layer axis. Normalize the same expert bank in both layouts.
+                bank_dims = 3 if expert_normalization == ExpertNormalization.ALL_EXPERTS else 2
+                axes = tuple(range(param.ndim - bank_dims, param.ndim))
+            else:
+                axes = tuple(range(1, param.ndim))
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param_f32), axis=axes, keepdims=True))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update_f32), axis=axes, keepdims=True))
+            new_param = param_f32 - learning_rate * update_f32 * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
+        # Ratio form: equal norms give a ratio of exactly 1.0, so a zero raw step
+        # yields an exactly zero update without a special case.
+        ratio = jnp.maximum(param_norm, 1e-10) / jnp.maximum(new_param_norm, 1e-10)
+        return (new_param * ratio - param_f32).astype(param.dtype)
 
-        axes = tuple(range(1, param.ndim))
-        param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
-        update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-        new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
-        return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
+    return jax.tree.map(scale_invariant_update, params, direction_updates, paths, is_leaf=lambda x: x is None)
 
-    return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
+
+def _is_gate_or_router_weight(path_lower: str) -> bool:
+    """True for exactly the ``attn_gate`` and MoE ``router`` weight leaves.
+
+    Matches the leaf attribute name at the end of the path, so it selects ``...attn.attn_gate`` and
+    ``...mlp.router`` but not the separate ``...mlp.router_bias`` leaf.
+    """
+    return path_lower.endswith(".attn_gate") or path_lower.endswith(".router")
+
+
+def _gate_router_decay_mask(params):
+    """Boolean pytree that is True on the ``attn_gate`` and ``router`` weight leaves -- the ones that
+    receive decoupled weight decay -- and False everywhere else."""
+    paths = leaf_key_paths(params)
+
+    def is_target(_, path):
+        path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+        return _is_gate_or_router_weight(path_str.lower())
+
+    return jax.tree.map(is_target, params, paths)
+
+
+def _scale_by_adam_gate_router_decay(
+    b1: float, b2: float, eps: float, weight_decay: float, total_steps: int
+) -> optax.GradientTransformation:
+    """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight,
+    annealed linearly to 0 over ``total_steps``. The coefficient reads the Adam ``count`` and the
+    state stays ``ScaleByAdamState``, so a checkpoint written without decay resumes at the right step
+    with its moments intact."""
+    adam = optax.scale_by_adam(b1, b2, eps)
+
+    def init_fn(params):
+        return adam.init(params)
+
+    def update_fn(updates, state, params=None):
+        if params is None:
+            raise ValueError("_scale_by_adam_gate_router_decay requires params for decoupled decay")
+        step = state.count
+        updates, next_state = adam.update(updates, state, params)
+        wd = weight_decay * jnp.clip(1.0 - step / total_steps, 0.0, None)
+        mask = _gate_router_decay_mask(params)
+        updates = jax.tree.map(lambda u, p, keep: u + wd * p if keep else u, updates, params, mask)
+        return updates, next_state
+
+    return optax.GradientTransformation(init_fn, update_fn)
 
 
 def scale_with_grug_muonh(
@@ -77,8 +159,10 @@ def scale_with_grug_muonh(
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
     use_syrk: bool = True,
+    expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked hero model: Newton-Schulz direction + Frobenius hyperball step."""
+    expert_normalization = ExpertNormalization(expert_normalization)
     muon_transform = _grug_scale_with_muon_hero(
         momentum=momentum,
         nesterov=nesterov,
@@ -95,10 +179,29 @@ def scale_with_grug_muonh(
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
         muon_updates, next_state = muon_transform.update(updates, state, params)
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate, expert_normalization)
         return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
+
+
+@dataclass(frozen=True)
+class ScheduleExtension:
+    """Learning rate for training past the end of the schedule.
+
+    From the schedule's floor, ``min_lr_ratio`` of peak, the rate moves linearly to ``final_lr_ratio`` of peak
+    over ``steps`` steps and then stays there. ``final_lr_ratio == min_lr_ratio`` holds the floor. The heuristic,
+    weight decay, and data stages keep the schedule's length, which an extension does not change.
+    """
+
+    steps: int
+    final_lr_ratio: float
+
+    def __post_init__(self):
+        if self.steps <= 0:
+            raise ValueError(f"steps must be positive, got {self.steps}")
+        if self.final_lr_ratio < 0:
+            raise ValueError(f"final_lr_ratio must not be negative, got {self.final_lr_ratio}")
 
 
 @OptimizerConfig.register_subclass("grug_moe_hero_ep_muonh_v1")
@@ -113,6 +216,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
       and the tiny SConv kernels.
 
     ``use_syrk`` routes the 4D expert-stack Newton-Schulz through QuACK's symmetric GEMM.
+    ``expert_normalization`` selects a shared Frobenius sphere for each layer's
+    routed expert bank or a separate sphere for each routed expert.
     """
 
     adam_lr: float = 6e-4
@@ -126,6 +231,26 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     use_syrk: bool = True
+    gate_router_weight_decay: float = 0.0
+    expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS
+    schedule_extension: ScheduleExtension | None = None
+
+    def __post_init__(self):
+        extension = self.schedule_extension
+        if extension is not None and extension.final_lr_ratio > self.min_lr_ratio:
+            raise ValueError(
+                f"final_lr_ratio={extension.final_lr_ratio} would raise the rate above min_lr_ratio={self.min_lr_ratio}"
+            )
+
+    def lr_scheduler(self, num_train_steps, override_lr=None):
+        schedule = super().lr_scheduler(num_train_steps, override_lr)
+        extension = self.schedule_extension
+        if extension is None:
+            return schedule
+        peak = self.learning_rate if override_lr is None else override_lr
+        tail = optax.linear_schedule(peak * self.min_lr_ratio, peak * extension.final_lr_ratio, extension.steps)
+        # The schedule itself still serves `num_train_steps`, so every step through it keeps its exact value.
+        return lambda count: jnp.where(count <= num_train_steps, schedule(count), tail(count - num_train_steps))
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -145,6 +270,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         learning_rate=learning_rate,
                         coefficient_type=self.coefficient_type,
                         use_syrk=self.use_syrk,
+                        expert_normalization=self.expert_normalization,
                     )
                 )
                 components.append(_match_named_update_sharding())
@@ -161,7 +287,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
+                if self.gate_router_weight_decay > 0.0:
+                    components.append(
+                        _scale_by_adam_gate_router_decay(
+                            self.beta1, self.beta2, self.epsilon, self.gate_router_weight_decay, num_train_steps
+                        )
+                    )
+                else:
+                    components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon))
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
@@ -183,12 +316,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         def mask_fn(param, path):
             path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
             path_lower = path_str.lower()
-            if (
-                "token_embed" in path_lower
-                or "router_bias" in path_lower
-                or path_lower.endswith(".attn_gate")
-                or ".router" in path_lower
-            ):
+            if "token_embed" in path_lower or "router_bias" in path_lower or _is_gate_or_router_weight(path_lower):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
@@ -207,6 +335,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
 
 __all__ = [
+    "ExpertNormalization",
     "GrugMoeMuonHConfig",
+    "ScheduleExtension",
     "scale_with_grug_muonh",
 ]

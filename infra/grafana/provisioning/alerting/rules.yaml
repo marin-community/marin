@@ -2,19 +2,103 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Critical rules notify operators immediately. Warning rules remain visible in
-# Grafana without sending notifications. The k8s rules read the bridge's
-# /k8s/alerts/* endpoints, which return string label columns plus exactly one
+# Grafana without sending notifications unless explicitly routed. The k8s rules
+# read the bridge's /k8s/alerts/* endpoints, which return string label columns plus exactly one
 # numeric column. Most also always emit at least one row per cluster (explicit
 # zeros when healthy), making their NoData state unreachable by construction;
-# gpu_rack_trays is the exception. Every rule still sets noDataState/execErrState
-# to Alerting so monitoring-path failures remain visible.
+# gpu_rack_trays is the exception. Every rule sets execErrState to Alerting so
+# invalid results still surface. Finelog alert endpoints turn only transient
+# query failures into valid non-firing results; FinelogFleetUnhealthy reports
+# that shared query-path failure.
 #
 # Workload-tier signals (gated pods, kueue backlog, workload crashloops) are
 # dashboard-only: they have expected benign causes (capacity pressure, user
 # error), so paging on them would be noise.
 apiVersion: 1
 
+deleteRules:
+  - orgId: 1
+    uid: infra-probe-failed
+
 groups:
+  - orgId: 1
+    name: node-filesystems
+    folder: Alerts
+    interval: 1m
+    rules:
+      - uid: node-runtime-filesystem-full
+        title: NodeRuntimeFilesystemAlmostFull
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.node }} filesystem {{ $labels.mountpoint }} has less than 5% free space"
+          description: >-
+            A full root or temporary filesystem prevents container runtime execs even
+            when the task-cache disk has space. Inspect filesystem usage and /var/log/runsc.
+            This rule requires the node-agent filesystem gauges; absent or stale samples
+            do not establish disk pressure. Finelog fleet and relay alerts cover query outages.
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#coreweave-root-filesystem-full
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH ranked AS (
+                        SELECT cluster, node_name,
+                               json_get(attributes_json, 'node_uid') AS node_uid,
+                               json_get(attributes_json, 'mountpoint') AS mountpoint,
+                               name, value,
+                               ROW_NUMBER() OVER (
+                                 PARTITION BY cluster, node_name,
+                                              json_get(attributes_json, 'node_uid'),
+                                              json_get(attributes_json, 'mountpoint'), name
+                                 ORDER BY timestamp_ms DESC, seq DESC
+                               ) AS rank
+                        FROM "telemetry_v1.node_agent"
+                        WHERE service = 'iris-node-agent'
+                          AND name IN ('node_filesystem_available_bytes', 'node_filesystem_total_bytes')
+                          AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '5 minutes') * 1000 AS BIGINT)
+                          AND json_get(attributes_json, 'mountpoint') IN ('/', '/tmp')
+                      )
+                      SELECT cluster, node_name AS node, node_uid, mountpoint,
+                             MAX(CASE WHEN name = 'node_filesystem_available_bytes' THEN value END)
+                               / NULLIF(MAX(CASE WHEN name = 'node_filesystem_total_bytes' THEN value END), 0) AS value
+                      FROM ranked
+                      WHERE rank = 1
+                      GROUP BY cluster, node_name, node_uid, mountpoint
+                      HAVING COUNT(*) = 2
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: node, text: node, type: string }
+                - { selector: node_uid, text: node_uid, type: string }
+                - { selector: mountpoint, text: mountpoint, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [0.05] }
+
   - orgId: 1
     name: k8s-control-plane
     folder: Alerts
@@ -335,6 +419,85 @@ groups:
               conditions:
                 - evaluator: { type: lt, params: [16] }
 
+  # The bridge decides idleness (b200_utilization_alert.py) and reports it as
+  # value 0|1. A, B and D read one endpoint and keep the same labels so that
+  # $values can join them; B and D only feed the summary.
+  - orgId: 1
+    name: b200-capacity
+    folder: Alerts
+    interval: 5m
+    rules:
+      - uid: b200-cluster-underutilized
+        title: B200ClusterUnderutilized
+        condition: C
+        for: 30m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $values.B.Value }}% of {{ $values.D.Value }} Ready B200 GPUs active"
+          dashboard_url: "https://grafana.oa.dev/d/marin-accel?var-cluster={{ $labels.cluster }}"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: B
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: B
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: active_percent, text: value, type: number }
+          - refId: D
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: D
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/b200_utilization
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: state, text: state, type: string }
+                - { selector: ready_gpus, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
   # The marin datasource combines a query-path probe of the GCE hub with the
   # HTTP-readiness state of each CoreWeave finelog Deployment. K8s marks a pod
   # NotReady when /health misses its fifteen-second deadline; the hub reports its
@@ -386,28 +549,23 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [0] }
 
-  # The canary writes one probe_up row per check and target. Read the newest row
-  # from the last two cadences. NoData covers a stopped probe daemon or a broken
-  # metrics path; a zero covers a completed check that failed.
-  - orgId: 1
-    name: infra-probes
-    folder: Alerts
-    interval: 1m
-    rules:
-      - uid: infra-probe-failed
-        title: InfraProbeFailed
+      # The regional process reports this state directly to the hub, outside the
+      # row-forwarding path. The bridge evaluates heartbeat and progress ages so
+      # the Grafana expression remains one explicit value per cluster/table.
+      - uid: finelog-relay-stalled
+        title: FinelogRelayStalled
         condition: C
-        for: 5m
+        for: 2m
         noDataState: Alerting
         execErrState: Alerting
         labels:
-          severity: warning
+          severity: critical
         annotations:
-          summary: "{{ $labels.probe }}: infrastructure probe failing for {{ $labels.target }}"
-          runbook_url: https://github.com/marin-community/marin/blob/main/infra/probes/README.md
+          summary: "{{ $labels.cluster }}: {{ $labels.namespace }} relay is {{ $labels.state }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/lib/finelog/OPS.md
         data:
           - refId: A
-            relativeTimeRange: { from: 3600, to: 0 }
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -416,27 +574,12 @@ groups:
               source: url
               parser: backend
               format: table
-              url: /query
-              url_options:
-                method: GET
-                params:
-                  - key: sql
-                    value: >-
-                      WITH recent AS (
-                        SELECT labels, value,
-                               ROW_NUMBER() OVER (PARTITION BY labels ORDER BY collected_at DESC) AS row_num
-                        FROM "infra.canary.metrics"
-                        WHERE metric = 'probe_up'
-                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '60 minutes'
-                      )
-                      SELECT json_get(labels, 'probe') AS probe,
-                             COALESCE(json_get(labels, 'cluster'), json_get(labels, 'zone'), 'global') AS target,
-                             value
-                      FROM recent
-                      WHERE row_num = 1
+              url: /alerts/relay_status
+              url_options: { method: GET }
               columns:
-                - { selector: probe, text: probe, type: string }
-                - { selector: target, text: target, type: string }
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: namespace, text: namespace, type: string }
+                - { selector: state, text: state, type: string }
                 - { selector: value, text: value, type: number }
           - refId: C
             datasourceUid: __expr__
@@ -446,12 +589,258 @@ groups:
               type: threshold
               expression: A
               conditions:
-                - evaluator: { type: lt, params: [1] }
+                - evaluator: { type: gt, params: [0] }
 
-  # Warning-only stalled-training detection. A fresh running task-state row is
-  # the liveness gate and service=levanter phase enrolls the job; only progress absent
-  # after enrollment is evidence, so this rule does not require task-to-node
-  # GPU attribution.
+  # The hourly collector stores CoreWeave usage and zone quotas in Finelog.
+  - orgId: 1
+    name: coreweave-storage
+    folder: Alerts
+    interval: 5m
+    rules:
+      - uid: coreweave-storage-capacity
+        title: CoreWeaveStorageQuotaExceeded
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage quota exceeded"
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 302400, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: &coreweave-storage-pressure-sql >-
+                      WITH ranked AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY collected_at, metric, zone, bucket, storage_class
+                          ORDER BY seq DESC
+                        ) AS sample_rank
+                        FROM "storage.usage"
+                        WHERE provider = 'coreweave'
+                          AND metric IN ('used_bytes', 'quota_bytes')
+                          AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '84 hours'
+                          AND collected_at <= CURRENT_TIMESTAMP
+                      ), snapshots AS (
+                        SELECT collected_at, zone, storage_class,
+                               SUM(value_bytes) FILTER (WHERE metric = 'used_bytes') AS usage_bytes,
+                               MAX(value_bytes) FILTER (WHERE metric = 'quota_bytes') AS quota_bytes,
+                               MIN(observed_at) FILTER (WHERE metric = 'used_bytes') AS observed_at
+                        FROM ranked WHERE sample_rank = 1
+                        GROUP BY collected_at, zone, storage_class
+                      ), observations AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY zone, storage_class, observed_at ORDER BY collected_at DESC
+                        ) AS observation_rank
+                        FROM snapshots
+                      ), history AS (
+                        SELECT * FROM observations
+                        WHERE observation_rank = 1 AND usage_bytes IS NOT NULL
+                      ), latest AS (
+                        SELECT *, ROW_NUMBER() OVER (
+                          PARTITION BY zone, storage_class ORDER BY collected_at DESC
+                        ) AS collection_rank
+                        FROM history
+                      ), trends AS (
+                        SELECT latest.zone, latest.storage_class, latest.usage_bytes, latest.quota_bytes,
+                               latest.observed_at,
+                               CASE WHEN COUNT(*) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) >= 3 AND latest.observed_at - MIN(history.observed_at) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) >= INTERVAL '8 hours'
+                               THEN REGR_SLOPE(history.usage_bytes, EXTRACT(EPOCH FROM history.observed_at)) FILTER (
+                                 WHERE history.observed_at >= latest.observed_at - INTERVAL '24 hours'
+                               ) ELSE 0 END AS short_rate,
+                               CASE WHEN COUNT(*) >= 6
+                                 AND latest.observed_at - MIN(history.observed_at) >= INTERVAL '24 hours'
+                               THEN REGR_SLOPE(history.usage_bytes, EXTRACT(EPOCH FROM history.observed_at))
+                               ELSE 0 END AS daily_rate
+                        FROM latest
+                        JOIN history ON history.zone = latest.zone
+                          AND history.storage_class = latest.storage_class
+                          AND history.observed_at >= latest.observed_at - INTERVAL '72 hours'
+                          AND history.observed_at <= latest.observed_at
+                        WHERE latest.collection_rank = 1 AND latest.quota_bytes > 0
+                          AND latest.collected_at >= CURRENT_TIMESTAMP - INTERVAL '12 hours'
+                          AND latest.observed_at >= CURRENT_TIMESTAMP - INTERVAL '12 hours'
+                        GROUP BY latest.zone, latest.storage_class, latest.usage_bytes,
+                                 latest.quota_bytes, latest.observed_at
+                      )
+                      SELECT zone AS region, storage_class,
+                             usage_bytes / quota_bytes AS current_value,
+                             (usage_bytes + GREATEST(0, short_rate, daily_rate) * (86400 +
+                               GREATEST(0, EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) - EXTRACT(EPOCH FROM observed_at))
+                             )) / quota_bytes AS value
+                      FROM trends
+              columns:
+                - { selector: region, text: region, type: string }
+                - { selector: storage_class, text: storage_class, type: string }
+                - { selector: current_value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1.0] }
+
+      - uid: coreweave-storage-headroom
+        title: CoreWeaveStorageHeadroomLow
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: storage-daily
+          operator_behavior: storage
+        annotations:
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage projected at {{ humanizePercentage $values.A.Value }} of quota"
+          description: >-
+            Projected quota use in 24 hours is {{ humanizePercentage $values.A.Value }}
+            if recent growth continues, with current usage as a floor.
+            Review the Storage dashboard and arrange cleanup or move new writes
+            before the end of the working day. This warning is delivered daily
+            between 15:00 and 16:00 America/Los_Angeles.
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md#coreweave-storage-telemetry
+          related_url: https://cw-s3.oa.dev/?v=time
+          related_label: Size & growth
+          __dashboardUid__: marin-storage
+          __panelId__: "2"
+        data:
+          - &coreweave-storage-pressure-query
+            refId: A
+            relativeTimeRange: { from: 302400, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: *coreweave-storage-pressure-sql
+              columns:
+                - { selector: region, text: region, type: string }
+                - { selector: storage_class, text: storage_class, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.8] }
+
+      - uid: coreweave-storage-growth
+        title: CoreWeaveStorageQuotaPredicted
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.region }} / {{ $labels.storage_class }}: CoreWeave storage may exhaust quota within 24 hours"
+          description: >-
+            Projected quota use in 24 hours is {{ humanizePercentage $values.A.Value }}
+            if recent growth continues. The projection uses the faster positive
+            linear trend over 24 or 72 hours and the current live quota. Review
+            growth and arrange cleanup or move new writes while people are available.
+            Collection gaps and changing write rates limit forecast accuracy.
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md#coreweave-storage-telemetry
+          __dashboardUid__: marin-storage
+          __panelId__: "2"
+        data:
+          - *coreweave-storage-pressure-query
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1.0] }
+
+      - uid: coreweave-storage-telemetry-stale
+        title: CoreWeaveStorageTelemetryMissing
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "CoreWeave storage telemetry has not been collected in 12 hours"
+          runbook_url: https://github.com/marin-community/marin/blob/main/scripts/ops/storage/README.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 43200, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/query
+              url_options:
+                method: GET
+                params:
+                  - key: sql
+                    value: >-
+                      WITH latest AS (
+                        SELECT MAX(collected_at) AS latest_collected_at
+                        FROM "storage.usage"
+                        WHERE provider = 'coreweave'
+                      )
+                      SELECT 1 AS value
+                      FROM latest
+                      WHERE latest_collected_at < CURRENT_TIMESTAMP - INTERVAL '12 hours'
+              columns:
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # Hero-run stalled-training detection. A fresh running task-state row whose
+  # root is named /marin/hero-*-coord or /marin/hero-*-coord-<retry> enrolls the job.
+  # Structured run_id telemetry supplies current-execution progress;
+  # task-to-node GPU attribution is not required.
   - orgId: 1
     name: training-progress
     folder: Alerts
@@ -461,15 +850,12 @@ groups:
         title: TrainingProgressStalled
         condition: C
         for: 5m
-        # Even the bounded metric-family scan exceeds Finelog's 10s production
-        # deadline. Keep the rule visible but inactive until telemetry has a
-        # filtered projection; failed evaluations otherwise consume one core
-        # for ten seconds every minute.
-        isPaused: true
         noDataState: Alerting
         execErrState: Alerting
         labels:
-          severity: warning
+          severity: critical
+          notification: hero-run
+          operator_behavior: hero
         annotations:
           summary: "{{ $labels.cluster }}: {{ $labels.job }} has {{ $labels.reason }}"
           runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-stall-alert-contract.md
@@ -489,7 +875,200 @@ groups:
               columns:
                 - { selector: cluster, text: cluster, type: string }
                 - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
                 - { selector: phase, text: phase, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # A hero run whose lowest loss over the last five minutes clears its own
+      # trailing mean plus six standard deviations, or stops being finite. It
+      # takes the same hero-run route as the stall alert: a hero run diverging
+      # unwatched costs more than a false page, which a silence answers. Grouping
+      # by root job excludes `reason`, so a spike that later goes non-finite
+      # threads under the message it already sent.
+      - uid: training-loss-spike
+        title: TrainingLossSpike
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+          operator_behavior: hero
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} training loss is {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/training-loss-spike-alert.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/loss_spikes
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # Hero run health beyond progress and loss: the telemetry path, the optimizer,
+  # MoE routing, throughput, evaluation, and Iris retries. These watch every run
+  # the Iris rollup or Levanter telemetry reports, so an outage on one path
+  # leaves the other watching. See docs/ops/hero-run-health-alerts.md.
+  - orgId: 1
+    name: training-health
+    folder: Alerts
+    interval: 1m
+    rules:
+      # Silent for ten minutes while Iris still reports the tasks running.
+      # Levanter publishes phase every minute, so this is the telemetry path or
+      # the process. TrainingProgressStalled defers rather than page again.
+      - uid: training-telemetry-gone
+        title: TrainingTelemetryGone
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+          operator_behavior: hero
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} publishes no telemetry while Iris runs its tasks"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_telemetry
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # The optimizer signals that precede a divergence TrainingLossSpike catches
+      # later: a loss floor a whole unit above its trailing floor, a gradient
+      # norm above the band this run has no clipping for, and skipped steps.
+      - uid: training-optimizer-unstable
+        title: TrainingOptimizerUnstable
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: critical
+          notification: hero-run
+          operator_behavior: hero
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} optimizer reports {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_optimizer
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
+                - { selector: reason, text: reason, type: string }
+                - { selector: value, text: value, type: number }
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              datasource: { type: __expr__, uid: __expr__ }
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # Token drops, router collapse, a throughput or MFU floor, a worse
+      # evaluation, a stale Iris state row, and controller retries. These take
+      # the explicit notification=slack exception: an operator reads them beside
+      # the run dashboard, and open a default operator triage session.
+      - uid: training-run-health-degraded
+        title: TrainingRunHealthDegraded
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Alerting
+        labels:
+          severity: warning
+          notification: slack
+        annotations:
+          summary: "{{ $labels.cluster }}: {{ $labels.run }} reports {{ $labels.reason }}"
+          runbook_url: https://github.com/marin-community/marin/blob/main/docs/ops/hero-run-health-alerts.md
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: finelog-marin
+            model:
+              refId: A
+              datasource: { type: yesoreyeram-infinity-datasource, uid: finelog-marin }
+              type: json
+              source: url
+              parser: backend
+              format: table
+              url: /alerts/training_health
+              url_options: { method: GET }
+              columns:
+                - { selector: cluster, text: cluster, type: string }
+                - { selector: job, text: job, type: string }
+                - { selector: run, text: run, type: string }
                 - { selector: reason, text: reason, type: string }
                 - { selector: value, text: value, type: number }
           - refId: C

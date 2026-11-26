@@ -16,7 +16,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 import wandb
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 from marin.scaling_laws.isoflop_analysis import QuadraticFitCoeffs, ScalingFit
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT

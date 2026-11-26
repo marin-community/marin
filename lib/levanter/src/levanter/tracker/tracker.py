@@ -4,6 +4,7 @@
 import abc
 import dataclasses
 import logging
+import os
 import typing
 from typing import Any, List, Optional
 
@@ -12,6 +13,23 @@ import jax
 
 
 logger = logging.getLogger(__name__)
+
+
+def artifact_size_bytes(artifact_path: str | os.PathLike[str]) -> int:
+    """Return the number of regular-file bytes a tracker would upload for a path."""
+    path = os.fspath(artifact_path)
+    if os.path.isfile(path):
+        return os.path.getsize(path)
+    if not os.path.isdir(path):
+        raise FileNotFoundError(path)
+
+    total = 0
+    for directory, _, filenames in os.walk(path):
+        for filename in filenames:
+            file_path = os.path.join(directory, filename)
+            if not os.path.islink(file_path):
+                total += os.path.getsize(file_path)
+    return total
 
 
 class Tracker(abc.ABC):
@@ -72,6 +90,33 @@ class Tracker(abc.ABC):
     @abc.abstractmethod
     def log_artifact(self, artifact_path, *, name: Optional[str] = None, type: Optional[str] = None):
         pass
+
+    @property
+    def max_artifact_bytes(self) -> Optional[int]:
+        """Largest artifact this tracker uploads, in bytes, or None for no limit."""
+        return None
+
+    def skip_artifact_over_limit(self, artifact_path, *, name: Optional[str] = None) -> bool:
+        """Warn and return True when ``artifact_path`` exceeds ``max_artifact_bytes``.
+
+        The caller must not upload the artifact when this returns True. A tracker
+        without a limit returns False without measuring the artifact.
+        """
+        limit = self.max_artifact_bytes
+        if limit is None:
+            return False
+        size = artifact_size_bytes(artifact_path)
+        if size <= limit:
+            return False
+        display_name = name if name is not None else os.path.basename(os.fspath(artifact_path)) or "artifact"
+        logger.warning(
+            "Skipping %s artifact %r: %s bytes exceeds the %s-byte limit.",
+            getattr(self, "name", type(self).__name__),
+            display_name,
+            f"{size:,}",
+            f"{limit:,}",
+        )
+        return True
 
     def log_html(self, key: str, html_path, *, step: Optional[int], commit: Optional[bool] = None):
         pass

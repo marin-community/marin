@@ -1,0 +1,169 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Mode reasoning-gym: score with the pinned scorer and targeted repairs.
+
+The task ships the generated entry (its reference answer or null and metadata) as JSON under tests/; the spec
+names the dataset it came from. ``score_answer`` returns a float in [0, 1], which becomes the
+reward directly -- several reasoning-gym datasets award partial credit. A reply the scorer raises on
+while parsing it scores 0.0, provided the scorer accepts the entry's own answer. A dataset name the
+library does not know, or an entry file that is missing or not an entry, is a task defect.
+"""
+
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import cast
+
+import reasoning_gym
+from reasoning_gym.factory import DATASETS
+
+from verifyit.file_ops.read import read_text
+from verifyit.grade import InvalidTask, Reward, empty_output_policy, read_output, scored
+from verifyit.json_objects import unique_object
+from verifyit.modes.extract import extract_markdown_answer
+from verifyit.modes.reasoning_gym_scorers import score_reasoning_gym_reply
+from verifyit.spec import EmptyOutputPolicy, ReasoningGymSpec
+
+CANDIDATE_DETAIL_CHARS = 200
+PRIME_FACTORIZATION = "prime_factorization"
+# What the pinned scorers raise while parsing a reply: TypeError and AttributeError (boxnet, JSON that is
+# not a list of plans), KeyError (game_of_life, an empty object), OverflowError (coin_flip,
+# calendar_arithmetic and time_intervals, a number too large for a float), RecursionError
+# (propositional_logic, 5,000 nested parentheses) and ValueError (prime_factorization, prose).
+MALFORMED_REPLY_ERRORS = (AttributeError, KeyError, OverflowError, RecursionError, TypeError, ValueError)
+
+
+def load_entry(path: Path) -> dict:
+    """The reasoning-gym entry at ``path``. Raises ``InvalidTask`` when it is absent or malformed."""
+    if not path.is_file():
+        raise InvalidTask(f"reasoning-gym entry not found: {path}")
+    try:
+        entry = json.loads(read_text(path), object_pairs_hook=unique_object)
+        json.dumps(entry, allow_nan=False)
+    except ValueError as error:
+        raise InvalidTask(f"reasoning-gym entry {path} is not JSON: {error}") from error
+    if not isinstance(entry, dict) or "metadata" not in entry:
+        raise InvalidTask(f"reasoning-gym entry {path} must be an object with a metadata field")
+    return entry
+
+
+def _load_params(spec: ReasoningGymSpec, tests_dir: Path) -> dict | None:
+    if spec.params is None:
+        return None
+    if not isinstance(spec.params, str) or not spec.params:
+        raise InvalidTask("reasoning-gym params must name a JSON file")
+    params_path = tests_dir / spec.params
+    if not params_path.is_file():
+        raise InvalidTask(f"reasoning-gym params not found: {params_path}")
+    try:
+        params = json.loads(read_text(params_path), object_pairs_hook=unique_object)
+        if not isinstance(params, dict):
+            raise ValueError("params must be an object")
+        json.dumps(params, allow_nan=False)
+    except (ValueError, UnicodeError) as error:
+        raise InvalidTask(f"invalid reasoning-gym params: {error}") from error
+    return params
+
+
+def _score_answer(dataset: str, params: dict | None) -> Callable[[str, dict], float]:
+    if params is None:
+        try:
+            return cast(Callable[[str, dict], float], reasoning_gym.get_score_answer_fn(dataset))
+        except ValueError as error:
+            raise InvalidTask(f"unknown reasoning-gym dataset {dataset!r}") from error
+    try:
+        _, config_cls = DATASETS[dataset]
+    except KeyError as error:
+        raise InvalidTask(f"unknown reasoning-gym dataset {dataset!r}") from error
+    # Upstream permits configs without validate (power_function and tsumego).
+    try:
+        config = config_cls(**params)
+        validate = getattr(config, "validate", None)
+        if validate is not None:
+            validate()
+    except (TypeError, ValueError, AssertionError) as error:
+        raise InvalidTask(f"invalid reasoning-gym configuration: {error}") from error
+    return reasoning_gym.create_dataset(dataset, **params).score_answer
+
+
+def grade_reasoning_gym_candidate(
+    spec: ReasoningGymSpec, entry: dict, candidate: str | None, *, params: dict | None = None
+) -> Reward:
+    """Score extracted text with the dataset's configured scorer, retaining partial credit.
+
+    Supply decoded params for a spec that names a params file. The caller owns isolation:
+    upstream scorers can parse or execute candidate expressions.
+    """
+    if spec.params is not None and params is None:
+        raise InvalidTask("reasoning-gym candidate grading requires decoded params")
+    score_answer = _score_answer(spec.dataset, params)
+    _validate_entry(spec, entry)
+    return _grade_candidate(spec, entry, candidate, score_answer)
+
+
+def _validate_entry(spec: ReasoningGymSpec, entry: dict) -> None:
+    metadata = entry.get("metadata")
+    if not isinstance(metadata, dict) or metadata.get("source_dataset") != spec.dataset:
+        raise InvalidTask("reasoning-gym entry dataset differs from its verifier")
+    if "answer" not in entry or (entry["answer"] is not None and not isinstance(entry["answer"], str)):
+        raise InvalidTask("reasoning-gym entry requires an answer field containing a string or null")
+
+
+def _score_candidate(dataset: str, entry: dict, answer: str, score_answer: Callable[[str, dict], float]) -> float:
+    if dataset == PRIME_FACTORIZATION:
+        reference = entry["answer"]
+        if not isinstance(reference, str):
+            raise InvalidTask("prime_factorization requires a string reference answer")
+        try:
+            score_answer(reference, entry)
+        except ValueError as error:
+            raise InvalidTask("prime_factorization reference answer is malformed") from error
+    try:
+        score = score_reasoning_gym_reply(dataset, answer, entry, score_answer)
+    except MALFORMED_REPLY_ERRORS:
+        # A broken entry raises the same types and stays an error: the scorer must accept the entry's own
+        # answer with a valid reward. An entry without an answer (boxnet, propositional_logic) cannot be
+        # checked this way.
+        if entry["answer"] is not None:
+            scored(_checked_score(dataset, score_answer(entry["answer"], entry)))
+        return 0.0
+    return _checked_score(dataset, score)
+
+
+def _checked_score(dataset: str, score: object) -> float:
+    if isinstance(score, bool) or not isinstance(score, int | float):
+        raise TypeError(f"reasoning-gym scorer for {dataset} returned {type(score).__name__}")
+    return float(score)
+
+
+def score_reasoning_gym_answer(dataset: str, entry: dict, answer: str) -> float:
+    """Score a raw answer, with 0.0 for a reply the scorer cannot parse."""
+    spec = ReasoningGymSpec(dataset=dataset)
+    score_answer = _score_answer(dataset, None)
+    _validate_entry(spec, entry)
+    return _score_candidate(dataset, entry, answer, score_answer)
+
+
+def _grade_candidate(
+    spec: ReasoningGymSpec, entry: dict, candidate: str | None, score_answer: Callable[[str, dict], float]
+) -> Reward:
+    policy = empty_output_policy(spec)
+    if candidate is None or (not candidate.strip() and policy is EmptyOutputPolicy.ZERO):
+        return scored(0.0, reason="no_output")
+    answer = extract_markdown_answer(candidate) or candidate.strip()
+    metadata = entry["metadata"]
+    output = metadata.get("output")
+    if isinstance(output, list) and all(isinstance(row, list) for row in output):
+        # JSON turns tuple grids into lists, while the grid scorers parse replies into tuples.
+        entry = {**entry, "metadata": {**metadata, "output": tuple(tuple(row) for row in output)}}
+    score = _score_candidate(spec.dataset, entry, answer, score_answer)
+    return scored(score, dataset=spec.dataset, answer=answer[:CANDIDATE_DETAIL_CHARS])
+
+
+def grade(spec: ReasoningGymSpec, tests_dir: Path, workspace: Path) -> Reward:
+    entry = load_entry(tests_dir / spec.entry)
+    params = _load_params(spec, tests_dir)
+    score_answer = _score_answer(spec.dataset, params)
+    _validate_entry(spec, entry)
+    return _grade_candidate(spec, entry, read_output(spec, workspace), score_answer)

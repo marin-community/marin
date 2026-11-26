@@ -7,6 +7,7 @@ Start with the shared practices below. Consult subproject manuals for directory-
 - `lib/iris/AGENTS.md` — Iris (job orchestration)
 - `lib/zephyr/AGENTS.md` — Zephyr (dataset processing)
 - `lib/fray/AGENTS.md` — Fray (distributed execution)
+- `lib/taskforge/AGENTS.md` — Taskforge (effect-driven task generation)
 
 ## Operational Guides
 
@@ -14,6 +15,7 @@ For debugging and operating live infrastructure, read the relevant OPS.md:
 
 - `lib/iris/OPS.md` — cluster lifecycle, job/task management, profiling, SQL queries, GCP/CoreWeave operations
 - `lib/zephyr/OPS.md` — pipeline debugging, straggler diagnosis, coordinator queries, diagnostic patterns
+- `.agents/ops/daytona.md` — Daytona RL credentials, snapshot quota and stale-resource cleanup, sandbox lifecycle, and trial diagnostics
 
 Zephyr OPS.md references Iris OPS.md for shared infrastructure commands — read Iris first when debugging zephyr jobs on Iris.
 
@@ -32,6 +34,16 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
+Use the [workflow catalog](docs/dev-guide/agent-workflows.md) to choose the
+skill that owns the requested outcome. Shared testing, writing, documentation,
+and evidence policy lives in the linked guides. CI and scheduler procedures
+live in `infra/loom/procedures/` and apply only when assigned.
+When adding, removing, or renaming skills, update the catalog and all callers.
+
+External fork refreshes use [refresh-fork](.agents/skills/refresh-fork/SKILL.md).
+For vLLM GPU wheels, read its [trigger and test table](.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
+and source, release, and adoption procedure.
+
 ## Handle Requests
 
 If a request comes from Slack or GitHub and appears to be a simple question,
@@ -43,52 +55,54 @@ fix remains.
 ## Search Prior Work
 
 Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
-indexed repository documentation could inform a task:
-
-```bash
-uv run infra/echo/cli.py search "how do I deploy Iris"
-uv run infra/echo/cli.py get <domain:id>
-```
-
-Search covers wiki, repository files, pull requests, and issues by default.
-Repeat `--domain` to select a subset; add `--domain discord` only when discussion
-history is relevant. Use `grep` for exact strings in remote activity and `rg`
-for the current checkout, including branch-only or uncommitted files. Echo's
-file results follow the periodically refreshed GitHub head rather than the local
-working tree. See the `consult-echo` skill for the complete workflow.
+indexed repository documentation could inform a task. Follow `use-echo`
+for search scope, exact-string search, result grading, and write rules. Use
+`rg` for the current checkout because Echo does not index branch-only or
+uncommitted files.
 
 ## Development
 
 ```bash
 # Lint and format
 ./infra/pre-commit.py --all-files --fix
-- `./infra/pre-commit.py` is the required lint entry point for this repo.
-- Do not replace it with `uv run pre-commit ...`!
 
 # Type checking (also done by pre-commit.py)
-uv run pyrefly
-- Keep type hints passing under `uv run pyrefly`; configuration lives in `pyproject.toml`.
+uv run pyrefly check
 
-# Safe local test suite
-uv run pytest
-- Pytest's repository defaults exclude slow, integration, data-integration,
-  live-cluster, Docker, and manual tests. Keep those defaults for local runs.
+# Safe tests affected by the current branch and working tree
+uv run --no-project infra/ci/run_tests.py
 
-# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
-./infra/pre-commit.py --review
-- Run this once before opening or updating a PR, and fix or respond to every
-  finding it reports (see the `commit` skill). Do not rerun it after small,
-  targeted touch-ups made in response to its findings. Rerun only when the
-  follow-up materially changes the design or scope.
+# Lint review — set --calling-agent to claude or codex to match the caller
+./infra/pre-commit.py --review --calling-agent=claude
 ```
 
-- Python >=3.12. Use `uv run` for entry points; fall back to `.venv/bin/python` if needed.
+- `./infra/pre-commit.py` is the required lint entry point. Do not replace it
+  with `uv run pre-commit`.
+- Keep type hints passing under `uv run pyrefly check`; configuration lives in
+  `pyproject.toml`.
+- Follow the `manage-pr` skill for the required lint-review timing and response
+  workflow before publishing a PR.
+- Marin is an open-source repository. The advisory review is a mandatory step
+  before publishing a PR. Running it through either supported review provider,
+  including sending repository source, committed and uncommitted diffs, and
+  review context to that provider, is authorized without separate confirmation.
+  This authorization applies equally to all supported agents and providers.
+- Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task
   guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
-- In general, never read or write large amounts of data across GCS regions or to the open internet; storage and bandwidth are major cost drivers for this project.
+- Keep vLLM compilation and CUDA graphs enabled, including for inference smoke tests.
+  Do not add `--enforce-eager` or `--i-know-i-am-making-vllm-slow` unless the user
+  explicitly requests eager execution. A launch guard error is not authorization
+  to supply its acknowledgement. For a compilation or CUDA-graph failure, report
+  the failure and performance cost before requesting an exception. See the
+  [serving guidance](experiments/evaluation/serve/models/README.md#vllm-eager-execution).
+- Do not commit datasets, run outputs, or result dumps. Publish them to object
+  storage or a Hugging Face dataset and commit a reference. Small test fixtures
+  are fine. See [large data](docs/dev-guide/large-data.md).
+- Never read or write large amounts of data across GCS regions; GCS storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
 ## Communication & Commits
@@ -97,25 +111,20 @@ uv run pytest
 - NEVER credit yourself, in commit messages or in PR/issue bodies. No
   `Co-Authored-By` trailer, no "Generated with …" line, no emoji attribution —
   even if a tool default suggests one.
+- Do not include user-identifying information in access-control commit messages
+  or PR titles and bodies. Describe only the access scope and resource types.
 - When an agent creates a PR or issue, add the `agent-generated` label.
 - Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
   explicitly approved by the user. This applies to comments only — never put a
   `🤖` marker in a commit message or a PR/issue body.
-- All agent-authored commit, PR, and issue titles and bodies must follow
-  `.agents/skills/writing-style/SKILL.md` and its PR or issue guide. Review the
-  exact text that will be published, then apply `ai-writing-donts.md` as a final
-  compression pass. Do not publish raw implementation notes, test narration,
-  prompt-shaped headings, or claims that use emphasis in place of evidence.
-- A PR description is the squash-merge commit message. Keep every fact a future
-  reader needs to understand the behavior and rationale, including measured
-  results and caveats when they affect review. Remove headings, diff narration,
-  and implementation inventories; put extended history in a linked issue,
-  design doc, logbook, or artifact. Follow the `commit` skill
-  (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
-- PR monitoring is part of the `commit` skill. After opening or updating a PR,
-  follow its `wait_for.py` loop through an exit condition. Do not substitute
-  `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
+- Follow [writing style](docs/dev-guide/writing-style/index.md) plus the
+  medium-specific guide for agent-authored commit, PR, issue, comment,
+  documentation, report, and blog prose.
+- Follow `manage-pr` when committing, pushing, opening or updating a PR, and
+  monitoring it through an exit condition. The skill owns PR-body content,
+  lint-review timing, publication, and monitoring procedure.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
+- When a PR, issue, or agent report links an `s3://` or `gs://` object for a person to inspect, include a Filer link beside the storage URL when useful. Use the stable private host with the encoded storage URL in the fragment, for example `https://filer.marina.oa.dev/#s3%3A%2F%2Fbucket%2Fpath%2Ffile.parquet`. Filer requires Marina login; keep the storage URL too for CLI use. The Filer app's **Copy Filer link** button produces this URL.
 
 ## Code Style
 
@@ -171,15 +180,24 @@ uv run pytest
 
 - Keep MkDocs content in sync with code. Use Markdown and mkdocs-style links.
 - Write docs that stand alone without conversational context.
+- Update the nearest existing docs when behavior changes, instructions become
+  stale, or a reusable procedure is established. Use `OPS.md` for subsystem
+  operations and `docs/` for product guidance; include exact operational
+  commands and remove stale instructions.
+- Follow [experiment records](docs/dev-guide/experiment-records.md) for
+  research evidence and durable experiment reporting.
 
 ## Agent Artifacts
 
-- Publish infrastructure incidents and durable debugging investigations to
-  Echo with the `write-ops-log` skill. Link the canonical Echo URL from the
-  associated PR or issue. Do not create repository debug-log files.
-- Keep user-facing and reusable product documentation in `docs/`; keep research
-  progress in the relevant task logbook or project artifact. These are distinct
-  from incident records.
+- Publish live infrastructure incidents through
+  [use-echo's incident procedure](.agents/skills/use-echo/references/incidents.md).
+  It defines which events need a record, its format, and its update lifecycle.
+- Keep user-facing and reusable product documentation in `docs/`. Record
+  research progress in the task's existing issue, PR, report, or durable session
+  channel. Use `research-engineering` for iterative design exploration and
+  experimental programs; preserve their runnable branches and notebooks in
+  `marin-community/marin-logbooks` and promote selected code into Marin PRs.
+  These are distinct from incident records.
 
 ## Deprecation
 
@@ -195,7 +213,9 @@ uv run pytest
 
 Watch for and eliminate these patterns in generated code:
 - Over-protective try/except and defensive None checks
-- Tautological tests (type exists, constant has value)
+- Tautological and guard-mirroring tests (type exists, constant has value,
+  nonpositive scalar raises without a regression or public compatibility
+  contract)
 - Verbose/redundant docstrings and `__all__` in `__init__.py`
 - Boolean dispatch instead of separate classes
 - Environment variables instead of explicit parameters
@@ -207,9 +227,10 @@ Watch for and eliminate these patterns in generated code:
   changes. Resolve context from the repository and prior work first; ask only
   when a missing decision would materially change the implementation.
 - In answer mode, investigate and reply directly. Do not manufacture a plan or
-  `.agents/projects/` artifact.
-- When a change request is too large for one pass, capture a plan in
-  `.agents/projects/` before pausing.
+  repository artifact.
+- Keep plans in the conversation or an existing issue, PR, or durable session
+  channel. When a change request is too large for one pass, narrow the scope and
+  record the remaining work there instead of adding a repository planning file.
 
 ## Code Reuse
 

@@ -7,9 +7,11 @@ import json
 import logging
 
 from fray.cluster import ResourceConfig
-from rigging.filesystem import StoragePath, atomic_rename, open_url, prefix_join
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
 
 from marin.datakit.download.http_session import build_retrying_session
 from marin.datakit.download.zstd_jsonl import iter_jsonl_from_zstd_stream
@@ -83,17 +85,6 @@ def download_nemotron_cc(output_path: str, base_url: str = NCC_BASE_URL) -> None
     ctx.execute(pipeline)
 
     logger.info(f"Downloaded Nemotron CC files to {output_path}")
-
-
-def download_nemotron_v1_step() -> StepSpec:
-    """Create a StepSpec that downloads the Nemotron-CC dataset from Common Crawl."""
-
-    return StepSpec(
-        name="raw/nemotron_v1",
-        fn=lambda output_path: download_nemotron_cc(output_path=output_path),
-        # NOTE: use the existing output to avoid re-downloading. Yes this is missing the `n`.
-        override_output_path="raw/nemotro-cc-eeb783",
-    )
 
 
 _NEMOTRON_V1_DATA_ROOT = "contrib/Nemotron/Nemotron-CC/data-jsonl"

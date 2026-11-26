@@ -9,11 +9,14 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
+from jax._src import config as jax_config
 
 from levanter.callbacks import ProgressEvent
 from levanter.data.dataset import ListAsyncDataset
+from levanter.data.passthrough_tokenizer import PassthroughTokenizer
 from levanter.data.text.examples import (
     GrugLmExample,
     LabeledLmExample,
@@ -29,14 +32,90 @@ from levanter.eval import (
     LossLabelSpec,
     TaggedEvaluator,
     cb_tagged_evaluate,
+    construct_log_dict,
 )
 from levanter.models.lm_model import LmExample
 from levanter.tracker import current_tracker
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.utils.tree_utils import inference_mode
 
-from test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
-from test_utils import use_test_mesh
+from levanter.testing.helpers import use_test_mesh
+from levanter.testing.toy_lm import ToyLmConfig, ToyLmHeadModel
+
+
+@pytest.mark.asyncio
+async def test_tagged_evaluator_shuffle_reorders_combined_dataset_and_preserves_tags():
+    EvalBatch = Axis("batch", max(1, len(jax.devices())))
+    first_dataset = ListAsyncDataset([jnp.array([i], dtype=jnp.int32) for i in range(8)])
+    second_dataset = ListAsyncDataset([jnp.array([100 + i], dtype=jnp.int32) for i in range(8)])
+    tagged_eval_sets = [(first_dataset, ["first"]), (second_dataset, ["second"])]
+
+    def loss_fn(_model, batch) -> LossFnOutput:
+        weights = jnp.ones_like(batch, dtype=jnp.float32)
+        return batch.astype(jnp.float32), weights, batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        ordered_evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=tagged_eval_sets,
+            loss_fn=loss_fn,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            shuffle=False,
+        )
+        shuffled_evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=tagged_eval_sets,
+            loss_fn=loss_fn,
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+            shuffle=True,
+        )
+
+    indices = list(range(16))
+    ordered = await ordered_evaluator.loader.data_store.get_batch(indices)
+    shuffled = await shuffled_evaluator.loader.data_store.get_batch(indices)
+    ordered_examples = [int(example.item()) for example, _ in ordered]
+    shuffled_examples = [int(example.item()) for example, _ in shuffled]
+
+    assert ordered_examples == list(range(8)) + list(range(100, 108))
+    assert shuffled_examples != ordered_examples
+    assert sorted(shuffled_examples) == sorted(ordered_examples)
+    for example, tags in shuffled:
+        expected_tags = [1, 0] if example.item() < 100 else [0, 1]
+        assert tags.tolist() == expected_tags
+
+
+def test_tagged_evaluator_excludes_unscored_tags_from_macros_and_logs():
+    EvalBatch = Axis("batch", len(jax.devices()))
+    first = ListAsyncDataset([jnp.array([0, 0], dtype=jnp.int32)] * EvalBatch.size)
+    second = ListAsyncDataset([jnp.array([4, 4], dtype=jnp.int32)] * (2 * EvalBatch.size))
+    empty = ListAsyncDataset([])
+
+    def loss_fn(_model, batch) -> LossFnOutput:
+        return batch.astype(jnp.float32), jnp.ones_like(batch, dtype=jnp.float32), batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[
+                (first, ["paloma/first"]),
+                (second, ["paloma/second"]),
+                (empty, ["paloma/empty"]),
+                (empty, ["other/empty"]),  # a parent with no scored child
+            ],
+            loss_fn=loss_fn,
+            tokenizer=PassthroughTokenizer(10),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        log_dict = construct_log_dict(evaluator, evaluator.evaluate(jnp.zeros(())), 0.0, prefix="eval")
+
+    # The unequal corpus sizes separate the macro, 2.0, from the micro, 8/3. Averaging in the empty tags would give 1.0.
+    assert log_dict["eval/macro_loss"] == pytest.approx(2.0)
+    assert log_dict["eval/macro_bpb"] == pytest.approx(2.0 / np.log(2))
+    assert "eval/paloma/first/loss" in log_dict
+    assert not [key for key in log_dict if "empty" in key or "eval/other" in key]
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():
@@ -300,11 +379,14 @@ def test_loss_labels_from_spans_rejects_overlapping_spans():
 
 
 def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
+    pgle_states = []
+
     class _FakeEvaluator:
         tokenizer = None
         dataset = SimpleNamespace(tag_to_index={"base": 0})
 
         def evaluate(self, _model):
+            pgle_states.append(jax_config.enable_pgle.value)
             return EvalResult(
                 micro_avg_loss=1.0,
                 macro_avg_loss=1.0,
@@ -321,11 +403,13 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
 
     events = []
     with current_tracker(tracker):
-        step0 = SimpleNamespace(step=0, model=object(), eval_model=object(), emit_event=events.append)
-        callback(step0)
-        callback(step0, force=True)
-        step1 = SimpleNamespace(step=1, model=object(), eval_model=object(), emit_event=events.append)
-        callback(step1)
+        with jax_config.enable_pgle(True):
+            step0 = SimpleNamespace(step=0, model=object(), eval_model=object(), emit_event=events.append)
+            callback(step0)
+            callback(step0, force=True)
+            step1 = SimpleNamespace(step=1, model=object(), eval_model=object(), emit_event=events.append)
+            callback(step1)
+            assert jax_config.enable_pgle.value
 
     log_events = []
     for record in caplog.records:
@@ -347,3 +431,4 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
         ProgressEvent.EVALUATION_STARTED,
         ProgressEvent.EVALUATION_FINISHED,
     ]
+    assert pgle_states == [False, False, False, False]

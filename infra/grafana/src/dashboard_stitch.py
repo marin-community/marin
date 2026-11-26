@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stitch shared panel fragments into dashboard JSON at image build time.
+"""Stitch shared panel and link fragments into dashboard JSON at image build time.
 
 A dashboard's ``panels`` array can hold a stitch marker instead of a full panel
 body: ``{"id": N, "gridPos": {...}, "panelRef": "<fragment-name>"}``. Every other
@@ -13,6 +13,11 @@ dashboard-local: they are the only two things that legitimately vary by placemen
 This keeps ``dashboards/*.json`` file-provisioned and git-reviewable end to end —
 no Grafana library-panel API, no runtime sync, no new credential — while killing
 copy-pasted panel bodies that drift out of sync with the bridge's actual schema.
+Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
+``SHARED_LINKS`` for the same reason.
+
+Targets with ``targetRef`` share endpoint parameters. Time-series targets default to
+time/series/value columns; each target specifies its view, format and other columns.
 """
 
 import argparse
@@ -20,11 +25,101 @@ import json
 from pathlib import Path
 
 PANEL_REF_KEY = "panelRef"
+LINK_REF_KEY = "linkRef"
+TARGET_REF_KEY = "targetRef"
+
+_TIMESERIES_COLUMNS = [
+    {"selector": "t", "text": "time", "type": "timestamp_epoch"},
+    {"selector": "series", "text": "series", "type": "string"},
+    {"selector": "value", "text": "value", "type": "number"},
+]
+
+_RANGE_PARAMS = (("from", "${__from}"), ("to", "${__to}"), ("bucket_ms", "${__interval_ms}"))
+_SHARED_TARGET_PARAMS = {
+    "rl_run": (("clusters", "${cluster:csv}"), ("run", "${run}"), *_RANGE_PARAMS),
+    "rl_execution": (
+        ("clusters", "${cluster:csv}"),
+        ("run", "${run}"),
+        ("job", "${job}"),
+        ("executions", "${execution:csv}"),
+        *_RANGE_PARAMS,
+    ),
+}
+
+_CLUSTER_CAPACITY_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "Cluster capacity",
+    "type": "link",
+    "url": "/d/marin-cluster-capacity",
+}
+_FLEET_ACCELERATORS_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "Fleet accelerators",
+    "type": "link",
+    "url": "/d/marin-accel",
+}
+_FLEET_HEALTH_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "Fleet health",
+    "type": "link",
+    "url": "/d/marin-clusters",
+}
+_RL_POST_TRAINING_LINK = {
+    "asDropdown": False,
+    "icon": "dashboard",
+    "includeVars": True,
+    "keepTime": True,
+    "targetBlank": False,
+    "title": "RL Post-training",
+    "type": "link",
+    "url": "/d/marin-rl-runs",
+}
+_SHARED_LINKS = {
+    "cluster_capacity": _CLUSTER_CAPACITY_LINK,
+    "cluster_capacity_without_vars": {**_CLUSTER_CAPACITY_LINK, "includeVars": False},
+    "fleet_accelerators": _FLEET_ACCELERATORS_LINK,
+    "fleet_accelerators_without_vars": {**_FLEET_ACCELERATORS_LINK, "includeVars": False},
+    "fleet_health": _FLEET_HEALTH_LINK,
+    "fleet_health_without_vars": {**_FLEET_HEALTH_LINK, "includeVars": False},
+    "rl_post_training": _RL_POST_TRAINING_LINK,
+}
 
 
 def load_panel_fragments(panels_dir: Path) -> dict[str, dict]:
     """Read every panels/<name>.json fragment, keyed by its filename stem."""
     return {path.stem: json.loads(path.read_text()) for path in panels_dir.glob("*.json")}
+
+
+def _stitch_target(target: dict) -> dict:
+    ref = target.get(TARGET_REF_KEY)
+    if ref is None:
+        return target
+    if ref not in _SHARED_TARGET_PARAMS:
+        raise KeyError(f"unknown target parameter set {ref!r}")
+    params = (*_SHARED_TARGET_PARAMS[ref], ("view", target["view"]))
+    columns = target.get("columns", _TIMESERIES_COLUMNS) if target["format"] == "timeseries" else target["columns"]
+    return {
+        "refId": target["refId"],
+        "type": "json",
+        "source": "url",
+        "format": target["format"],
+        "parser": "backend",
+        "url": target["url"],
+        "url_options": {"method": "GET", "params": [{"key": key, "value": value} for key, value in params]},
+        "columns": [dict(column) for column in columns],
+    }
 
 
 def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]:
@@ -36,24 +131,41 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
     resolved = []
     for panel in panels:
         ref = panel.get(PANEL_REF_KEY)
+        if ref is not None:
+            if ref not in fragments:
+                raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
+            panel = {**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]}
+        if panel.get("panels"):
+            panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
+        if "targets" in panel:
+            panel = {**panel, "targets": [_stitch_target(target) for target in panel["targets"]]}
+        resolved.append(panel)
+    return resolved
+
+
+def _stitch_links(links: list[dict]) -> list[dict]:
+    resolved = []
+    for link in links:
+        ref = link.get(LINK_REF_KEY)
         if ref is None:
-            if panel.get("panels"):
-                panel = {**panel, "panels": _stitch_panels(panel["panels"], fragments)}
-            resolved.append(panel)
+            resolved.append(link)
             continue
-        if ref not in fragments:
-            raise KeyError(f"panel {panel.get('id')} references unknown panel fragment {ref!r}")
-        resolved.append({**fragments[ref], "id": panel["id"], "gridPos": panel["gridPos"]})
+        if ref not in _SHARED_LINKS:
+            raise KeyError(f"unknown dashboard link fragment {ref!r}")
+        resolved.append(dict(_SHARED_LINKS[ref]))
     return resolved
 
 
 def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
-    """Replace every panelRef marker in source's panels with its fragment body.
+    """Resolve panelRef, linkRef and targetRef in a dashboard.
 
     Raises:
-        KeyError: A panel references a fragment name missing from ``fragments``.
+        KeyError: A panel, link or target references an unknown fragment.
     """
-    return {**source, "panels": _stitch_panels(source["panels"], fragments)}
+    dashboard = {**source, "panels": _stitch_panels(source["panels"], fragments)}
+    if "links" in source:
+        dashboard["links"] = _stitch_links(source["links"])
+    return dashboard
 
 
 def stitch_all(src_dir: Path, panels_dir: Path) -> dict[str, dict]:

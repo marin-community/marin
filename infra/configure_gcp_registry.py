@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 
-from rigging.filesystem import load_cluster_config
+from rigging.filesystem.cluster_config import load_cluster_config
 
 _MARIN_CONFIG = load_cluster_config("marin")
 

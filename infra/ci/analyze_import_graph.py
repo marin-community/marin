@@ -37,7 +37,7 @@ from pathlib import Path
 from infra.ci.select_tests import (
     SCOPES,
     SOURCE_ROOTS,
-    TEST_DIR,
+    TEST_DIRS,
     affected_modules,
     build_importers,
     dependencies_by_test_file,
@@ -99,7 +99,10 @@ def reexport_hubs(modules: dict[str, Path]) -> dict[str, set[str]]:
 
 def scope_of(test_file: str) -> str:
     """Which workspace scope a repo-relative test file belongs to."""
-    return next((scope for scope in SCOPES if test_file.startswith(f"{TEST_DIR[scope]}/")), "?")
+    return next(
+        (scope for scope in SCOPES if any(test_file.startswith(f"{directory}/") for directory in TEST_DIRS[scope])),
+        "?",
+    )
 
 
 def rank_by_blast_radius(

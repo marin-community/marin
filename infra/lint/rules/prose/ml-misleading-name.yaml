@@ -1,0 +1,19 @@
+schema_version: 1
+code: ml-misleading-name
+lane: prose
+title: Name doesn't match what the function returns or does
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Function names should reflect return types and behavior.
+  `cpu_wall_ms` that measures wall time (not CPU time), or `labeled_lm_eval`
+  that does generic masked-span eval, mislead future readers and bugs follow.
+
+  **When allowed:** Never knowingly. Rename when discovered.
+
+  **Bad example:**
+  ```python
+  cpu_wall_ms = task_wall_time - start_time   # not CPU time. task_wall_ms.
+
+  def labeled_lm_eval(model, data):   # generic masked-span eval. masked_span_eval.
+      ...
+  ```

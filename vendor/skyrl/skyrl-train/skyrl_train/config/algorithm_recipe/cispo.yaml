@@ -1,0 +1,15 @@
+# @package trainer.algorithm
+# MiniMax-M1, CISPO: https://arxiv.org/abs/2506.13585
+advantage_estimator: grpo
+policy_loss_type: cispo
+loss_reduction: token_mean
+grpo_norm_by_std: true
+advantage_batch_normalize: false
+cispo:
+  cispo_eps_clip_low: 1.0
+  cispo_eps_clip_high: 5.0
+use_kl_in_reward: false
+use_kl_loss: false
+dynamic_sampling:
+  type: filter
+  min_reward_std: 0.0

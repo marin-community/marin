@@ -1,103 +1,782 @@
 # Grug MoE EP Hero
 
-This self-contained variant is the one-rack EP64 baseline for GB200 NVL72.
+This self-contained variant is the selected configuration for GB200 NVL72. Each
+data-parallel rack uses 16 expert shards of 4 context shards. The separate pipeline variant
+lives in [`moe_hero_pipeline`](../moe_hero_pipeline/README.md).
 
 ## Configuration
 
-- Model: d6144, 48 layers, 128 routed experts, top-4 routing, and two shared experts of width 3072.
-  This is 359.6 B total parameters and 20.9 B active per token.
-- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 4096,
-  sliding window 512, and every sixth layer full-causal. SConv and fused RoPE are on.
-- Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Two whole experts
-  land on each device.
-- Batch: 1024 sequences.
-- Router: top-4 quantile balancing with next-step, stop-gradient expert biases and no auxiliary
-  balancing loss.
-- MoE backend: `fixed_all_to_all` with gather dispatch, structured custom VJPs, and capacity
-  factor 1.0.
+- Model: d6144, 48 layers, 384 routed experts of width 3072, top-8 routing, latent width 3072, and
+  two shared experts of width 3072. Depth rounds up to the nearest even count.
+- Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 262144
+  (4096 through step 257553, 16384 through step 372000, 65536 through step 390251), query/key multiplier
+  1.66 (1.3 at 4K, 1.48 at 16K, 1.66 at 65K), with global-layer queries past 65536 keys scaled by
+  (1 + 0.1 ln(n/65536))^2, up to 2.15 at 262K, sliding window 2048, and every
+  fourth layer full-causal with the final layer also global. SConv and fused RoPE are on.
+- Mesh: each rack's 64 GB200 GPUs, on 16 workers with four GPUs each, form 16 expert shards of 4 context
+  shards each (CP1 x EP64 through step 390251). Additional racks use the `replica_dcn` axis. Six experts are
+  on each GPU in each rack.
+- Batch: Each rack holds 4,194,304 tokens per update. The d6144 production run uses 176 global
+  sequences across 11 racks at 262K (11264 at 4K, 2816 at 16K, 704 at 65K). A one-rack diagnostic defaults
+  to 16 sequences.
+- Router: top-8 quantile balancing uses a global histogram with 10,000 bins. It has next-step,
+  stop-gradient expert biases and no auxiliary balancing loss.
+- MoE backend: `ragged_all_to_all`. One update carries each (peer, local expert) pair, so rows
+  arrive grouped by expert, and local experts run in two chunks that share the 1.5 receiver
+  capacity. The transport reaches XLA's device-initiated (NCCL LSA) kernel, which needs Marin's patched
+  PJRT build, installed on GB200 through the `gpu` extra (`lib/marin/pyproject.toml`); a run that
+  reaches the stock plugin fails at startup.
+  The production hero trained on `fixed_pooled_wave_all_to_all` through step 81716 (3.77T of its 18T
+  tokens); `hero-ragged_a2a-ep-step81k` continues from that checkpoint on the ragged transport.
 - Optimizer: MuonH, with its state offloaded to pinned host memory.
-- Runtime: GPU command buffers off, `cuda_async`, PGLE off, and collective overlap limit 4.
-- Output: Metrics only. This throughput run does not write a checkpoint.
+- Gradient clip: the global gradient norm is clipped to 1.0 (`HERO_MAX_GRAD_NORM`).
+- Weights: fp32 on device with bf16 compute. A checkpoint written with a pinned-host fp32 master
+  migrates in process on restore: its stored fp32 master is read directly into the run's params
+  (the bf16 compute copy goes unread), and the next save writes the new layout. The reverse
+  (synthesizing a master) is refused.
+- Runtime: Each GPU has one JAX process. The recipe uses `cuda_async`, no PGLE, and no GPU
+  command buffers. The ragged transport stages each layer's residual carry on pinned host, which
+  frees the HBM the latency-hiding scheduler needs to run. Collective overlap stays at 1: the
+  offload, the scheduler, and a higher limit corrupt training together, though no pair of them
+  does.
+- Resources: Each four-GPU worker requests 120 CPU, 890 GB of RAM, and 1 TB of disk.
 
 The attention, shared-expert, language-model-head, and optimizer states use the combined `data` and
 `expert` axes. The expert axis stays sharded during Newton-Schulz.
 
-## Result
+Bounded diagnostics write metrics only by default. `--save-checkpoints` writes checkpoints below
+`--checkpoint-path` and resumes from the newest complete checkpoint.
 
-A 200-step gate on one rack measures 26.2835% median MFU, 309,091 tokens/s, 7.2280% MoE drops, and
-3.2971 final loss over 201 samples with a 2.3460 deviation. A 25-step gate at the same shape
-measures 26 samples with a 6.5623 deviation, thus its 27.5501% median runs about 1.3 points high.
-Use the 200-step number.
+## Inference export
 
-The same model under FSDP-64 on one rack measures 19.3951% median MFU and 235,125 tokens/s. Both
-arms share one analytic FLOP count of 44.491 GFLOP per token, because that count depends only on the
-model config, so their MFU values share a denominator. They do not do equal work at capacity 1.0:
-EP discards 9.97% of assignments against 1.88%. At capacity factor 1.5 the EP drop rate falls to
-1.5719%, below the FSDP rate, and EP still measures 22.9037%.
+Use [CPU export](#cpu-export) for current Hero OCDBT checkpoints. Every export writes
+`grugmoe_artifact_schema_version` 3 with `log_scaling_n_floor`, `log_scaling_alpha` and `log_scaling_power` in
+`config.json`, null when log scaling is off. Serving and training stacks that predate schema 3, including the pinned
+Marin vLLM wheel and SkyRL, reject these exports rather than apply only the fixed per-layer scale. Exports written
+before schema 3 keep their schema-2 configuration. The device
+exporter below remains a byte-parity reference and supports checkpoint layouts
+handled by the native loader, including flat checkpoints.
 
-## Sweeps
+Choose a permanent checkpoint and fresh destination in the same region.
+Copy `model` from the training run's recorded `config.yaml` artifact or resolved
+launch configuration into `export.yaml`:
 
-Four launcher options move the shape from the hero spec. They keep the hidden dimension, so the
+```yaml
+checkpoint: s3://marin-us-east-02a/marin/<run>/checkpoints/step-144000
+metadata_digest: <digest from the command below>
+model: <complete GrugModelConfig mapping>
+destination: s3://marin-us-east-02a/marin/<new-export-root>
+source_revision: <40-character lowercase hexadecimal Marin exporter commit>
+expert_axis_size: 32
+replica_axis_size: 1
+export_host_budget_bytes: 34359738368
+max_concurrent_shards: 2
+```
+
+Compute `metadata_digest`; replace `<checkpoint>` with the YAML's checkpoint URL:
+
+```bash
+uv run --package marin-levanter --extra gpu python - <<'PYTHON'
+import json
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
+configure_coreweave_s3()
+print(digest(json.loads(StoragePath("<checkpoint>/metadata.json").read_text())))
+PYTHON
+```
+
+Launch the checkout or bundle pinned by `source_revision` on every JAX process
+with the same YAML. Use [Iris launch procedures](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md):
+
+```bash
+TMPDIR=/cache uv run --package marin-levanter --extra gpu python -m \
+  experiments.grug.moe_hero_ep.ops.export_vllm --config_path export.yaml
+```
+
+For remote output, use writable disk-backed scratch (`/cache` in Iris containers)
+with space for the largest serialized shard. Iris Docker's `/tmp` uses RAM.
+Local output is written directly to the destination.
+
+Keep the checkpoint immutable. Run one exporting gang per destination. The
+global device count must be divisible by `expert_axis_size * replica_axis_size`;
+both axes default to one. Every device must fit the largest expert bank in full.
+Files use Levanter's 5 GB shard target; a larger expert bank stays in one file.
+Two writers overlap shard serialization and upload with the next device gather.
+Process zero reserves twice each in-flight shard's payload against a 32 GiB
+host-memory budget; allow additional RAM for the restored model and runtime.
+An oversized shard runs alone. Set `max_concurrent_shards: 1` to serialize writes.
+
+### CPU export
+
+OCDBT checkpoints can also be exported on one CPU host, without restoring the
+model onto accelerators. Use the same checkpoint, model, destination and source
+revision fields above; remove `expert_axis_size` and `replica_axis_size` and add:
+
+```yaml
+read_host_budget_bytes: 103079215104  # 96 GiB
+request_concurrency: 16
+```
+
+```bash
+TMPDIR=/cache uv run --package marin-levanter python -m \
+  experiments.grug.moe_hero_ep.ops.export_cpu --config_path export.yaml
+```
+
+The CPU reader prefers FP32 master weights when present and applies pending
+router bias before writing BF16 tensors. It caches ordinary weights and one
+block of routed experts, aligned to the checkpoint's stored layer chunks.
+Expert shards are processed by projection and layer chunk to avoid repeatedly
+decoding the same source chunks. Filenames and tensor layouts match the device
+exporter.
+
+`read_host_budget_bytes` bounds the BF16 source cache and is checked before
+reading arrays. The writer's separate `export_host_budget_bytes` bounds detached
+shard copies and serialization buffers. TensorStore's decode buffers and the
+runtime need additional RAM; these budgets are not a process memory limit.
+For the 535B Hero checkpoint with six-layer expert chunks, use a 256 GiB CPU
+worker with disk-backed scratch. `request_concurrency` limits concurrent storage
+requests and decoding. CPU export supports OCDBT Zarr3 checkpoints, including
+legacy `train_state` wrappers and checkpoints without `manifest.json`.
+
+Load the BF16 output with [Marin vLLM's split-expert loader](https://github.com/marin-community/vllm/pull/77).
+Tokenizer files are not copied. Set vLLM's `--tokenizer` and
+`--tokenizer-revision` to the training run's tokenizer ID and pinned revision.
+
+### Resume and completion
+
+After interruption, keep the checkpoint, metadata digest, model, destination
+and source revision fixed. Memory budgets, request concurrency, writer count
+and device mesh sizes may change on retry. These execution settings are recorded
+in completion metadata separately from the artifact identity. Use the original
+exporter revision when resuming an older request schema.
+
+Resume preserves shards only after checking their identity, names, size and
+freshly computed SHA-256. Uncommitted uploads may be rewritten. If corruption is
+reported, inspect the object; restore its original bytes or choose a fresh
+destination. Changed artifact inputs require a fresh destination.
+
+Use the output only when `export-manifest.json` exists. It is written after
+all shards, `config.json` and `model.safetensors.index.json`. Completed
+destinations are refused on subsequent runs.
+
+### Hugging Face upload
+
+After CPU export completes, upload it to a checkpoint-specific branch:
+
+```yaml
+export: <the complete CpuExportConfig mapping used for conversion>
+expected_payload_bytes: <BF16 tensor payload from the export index>
+repo_id: open-athena/Marin-Mochi-535B-A23B
+expected_visibility: private
+branch: step-378000
+base_revision: <immutable HF main commit containing only repository metadata>
+model_card: README.md
+license_file: LICENSE
+tokenizer: marin-community/marin-tokenizer
+tokenizer_revision: <pinned tokenizer commit>
+staging_dir: /cache/mochi-hf-staging
+max_files_per_commit: 8
+min_commit_interval: 75
+max_rate_limit_retries: 4
+```
+
+```bash
+uv run --package marin-levanter python -m \
+  experiments.grug.moe_hero_ep.ops.upload_hf --config_path upload.yaml
+```
+
+The repository must already exist. `expected_visibility` defaults to `private`;
+set it to `public` when uploading to an existing public repository. The uploader
+checks visibility before branch setup and every commit, and stops on a mismatch.
+It does not change repository visibility. This delivery setting may change when
+resuming the same artifact inputs; it is outside the pinned upload identity.
+New branches start from the pinned metadata-only commit. The uploader binds each
+branch to its export, card, license and tokenizer through `hf-upload-request.json`,
+then stages at most eight missing shards per commit. It validates source BF16
+headers and hashes and checks Hub sizes and hashes before reusing uploaded files.
+Eight largest Hero shards need about 58 GB of staging disk per worker; use a
+128 GB disk-backed scratch volume for each worker. Hugging Face also documents a
+separate [preupload workflow](https://huggingface.co/docs/huggingface_hub/en/guides/upload#preupload-lfs-files-before-commit)
+for pre-staging LFS files when a future uploader needs a smaller working set.
+
+Every commit, including request and completion metadata, shares a per-worker
+limiter. The default 75-second interval also delays the first commit. Before
+starting uploads, coordinate the workers so that no more than four are active
+and no other job or client is creating commits in the repository. This keeps the
+workers below the repository commit limit of 256 per hour observed for Mochi.
+Increase the interval when running more uploaders, sharing the quota with other
+writers, or using a lower quota.
+
+HTTP 429 responses retry up to four times. A repository commit-limit response
+waits at least one hour, even when its generic API `Retry-After` header names a
+shorter delay. Other HTTP failures propagate. Completed shards remain reusable
+if the retry limit is exhausted.
+
+Rerun the same artifact inputs after an interrupted transfer; batch size and
+commit pacing may change. The uploader accepts completed v2 and v3 CPU exports
+without rewriting their requests. V2 exports require the original full export
+configuration; v3 separates execution limits from artifact identity. Changed
+artifact inputs or unexpected Hub weights stop reuse. A checkpoint branch is
+complete only when `hf-upload-manifest.json` pins a verified weights commit. The uploader
+checks the published model card and official OpenMDW 1.1 license before writing
+that marker. Artifact checks do not establish serving numerical parity; serving
+also needs a vLLM revision with the split-expert loader.
+
+## Hero cutovers and W&B lineage
+
+Hero launchers disable W&B source capture (`save_code=False`). The git commit remains
+run metadata; startup does not scan the bundled working directory for source files.
+
+```python
+from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
+
+paths = hero_checkpoint_paths()
+```
+
+The function returns permanent checkpoint paths for the current run and its ancestors, in step order.
+Pass a run ID to select another run. The launcher and function share `CURRENT_HERO_RUN_ID` in [`current_run.py`](current_run.py).
+
+The current run is `hero-lce-log65536sq-step390k`. It trained the 262K extension with log floor 65536 squared, the hero's
+262K recipe (see [Context-length switches](#context-length-switches)), and ended at
+`s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491`, the starting point
+for downstream training. The comparison against a global 1.84 arm is in the
+[#8435 result](https://github.com/marin-community/marin/issues/8435#issuecomment-6748198431) and
+[marin-logbooks #37](https://github.com/marin-community/marin-logbooks/issues/37). Its exports carry log scaling in
+`config.json` (see [Inference export](#inference-export)); serving them needs a vLLM Grug model that applies it.
+
+Use the [deployment checklist](../../../.agents/skills/manage-hero-run/references/code-cutover.md)
+for preflight, the 200-step trial, and rollback. `current_run.py` records the
+current run ID. `trigger_hero.sh` records the handoff checkpoint and W&B fork point.
+Update the run ID, handoff checkpoint, and fork point together and land them on main.
+Record the old run's exact launch SHA and command for rollback.
+The handoff must be a complete permanent checkpoint: the newest scheduled one, or one requested from the old
+run's `training-control` endpoint with the `request-permanent-checkpoint` header value (see
+[Train an LM](../../../docs/tutorials/train-an-lm.md)). Permanent checkpoints are written to the run's
+output root and never pruned. Temporary checkpoints expire three days after they are written, so
+those a replaced run leaves behind clear themselves.
+
+`HERO_SCHEDULE_EXTENSION` in `hero_recipe.py` is set to `ScheduleExtension(steps=3240, final_lr_ratio=0.01)`,
+which stops the hero at step 393491. A cutover that trains past the schedule sets it in the deploy PR as
+`ScheduleExtension(steps=N, final_lr_ratio=R)`: the run stops at 390251 + N, and over those steps the learning
+rates move linearly from the schedule's floor, 5% of peak, to `R` of peak. The heuristic, weight decay, data stages,
+and checkpoint keeps still size from 390251.
+
+A restore past the stop step fails and one at it trains nothing, so a handoff at the stop needs the extension already
+merged. The run writes its final checkpoint before the final dropless eval. A retry that restores the permanent
+checkpoint of the stop step skips the eval, logs `ZERO-STEP SUCCESS`, and succeeds, so run a missing final eval
+offline. Each periodic eval (`HERO_STEPS_PER_EVAL`) runs before that step's checkpoint, so a failure in one costs the
+steps since the last checkpoint and fails again on retry. A rehearsal at a new context length should include an eval
+with `--eval-every`.
+
+Both commands below require `WANDB_API_KEY`, an authenticated GitHub CLI (`gh`),
+and a pristine checkout. Fork creation requires fetched main; subsequent launches
+use the same SHA recorded on the child, even if main advances.
+
+For checkpoint `step-N`, the first replayed update logs `global_step=N`. Find the
+parent row with `global_step=N-1` and use its actual W&B `_step` in
+`WANDB_FORK_FROM='<parent-run-id>?_step=<history-step>'`. Inspect the parent with
+`wandb.Api().run("marin-community/marin_moe/<parent>")` and
+`run.scan_history(keys=["_step", "global_step"], min_step=N-2, max_step=N+1)`.
+These bounds use W&B `_step`; if the indices differ or the row is missing,
+adjust the history range and locate `global_step=N-1` explicitly before forking.
+Do not inherit parent results for the replayed updates.
+
+Create the child tracker once, outside training retry loops:
+
+```bash
+experiments/grug/moe_hero_ep/trigger_hero.sh fork-wandb
+```
+
+After preflight and confirmation that the old coordinator is terminal, submit:
+
+```bash
+experiments/grug/moe_hero_ep/trigger_hero.sh launch
+```
+
+For recovery, verify no child coordinator is live, then use `launch` from the
+recorded SHA. Do not fork again. For rollback, use the old run's recorded revision
+and command with `IRIS_USER=marin`. One operator owns submissions; verify exactly
+one live coordinator after launch.
+
+W&B forks preserve history, while `--initialize-from-checkpoint` restores training
+state. Confirm new child progress from its Finelog execution, not inherited W&B
+rows. Before submission, the launcher posts source SHA, run and coordinator IDs,
+fork point, and checkpoint to [#8506](https://github.com/marin-community/marin/issues/8506);
+a failed post aborts submission. Iris also records `MARIN_PROVENANCE`.
+
+## Context-length switches
+
+The scaling ladder holds 4,194,304 tokens per rack per update, so the 11-rack hero uses batch 11264
+at 4K, 5632 at 8K, 2816 at 16K, 704 at 65K, and 176 at 262K with the same 390251-step schedule, learning rates, and weight
+decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch. Training evals drop each corpus's final partial window, so at 262K `ptb` and `wikitext_103` have no window and log no loss. `eval_dropless/macro_loss` and `eval_dropless/paloma/macro_loss` exclude them, which raises the Paloma macro from 1.960 to 2.043 at step-390251. Do not lengthen the schedule
+to train longer: its length sizes the learning rates and prior context phases. Set the extension described in
+[Hero cutovers](#hero-cutovers-and-wb-lineage) instead.
+
+A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
+(`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, `capacity_factor`, or
+`attention_context_layout` as needed), appends the
+context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES` in
+`launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
+`throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
+both. A context that needs context parallelism also sets `HERO_CONTEXT_AXIS_SIZE` in
+`hero_recipe.py`, and `HERO_BALANCE_ATTENTION_ROWS` when row balancing pays off at that context. Each
+rack's 64 GPUs then form 64 / CP expert shards of CP sequence shards each, and the eval batch follows
+(see [Scaling ladder](#scaling-ladder)). Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
+only `--qk-mult` and `--qk-mult-long-scale` on the command line, plus `--log-scaling-n-floor`,
+`--log-scaling-alpha` and `--log-scaling-power` on `launch_diagnostics.py`, the only launcher with those flags.
+`qk_mult_long_scale` multiplies `qk_mult` on the global layers only. `log_scaling_n_floor`, `log_scaling_alpha` and `log_scaling_power`, which must be set together, add a
+position-dependent factor on the global layers, in the form of Inkling's log scaling: a query that sees `n`
+keys in its document is multiplied by `1 + log_scaling_alpha * ln(max(n / log_scaling_n_floor, 1))`, so queries within
+the floor are unchanged. At the end of a 262K document, a floor of 65536 gives `1 + 1.386 * log_scaling_alpha` and a floor of 128000
+gives `1 + 0.717 * log_scaling_alpha`. `log_scaling_power` raises that factor to an exponent, so a floor of 65536, slope 0.1 and power 2 give 1.296 at the end of a 262K document. `to_hf_config` writes the three fields with artifact schema 3, so a serving or training stack that applies only a
+fixed scale per layer rejects the export instead of running the wrong temperature past the floor. Each Harrier bucket skips the unread rest of the shuffle window
+it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
+data seed, component order, and token store unchanged. The QK and capacity values need measured
+evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
+thresholds; see the
+[context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
+
+### Long-context data
+
+The 262K extension reads the existing Harrier token caches. Each cache is split into virtual streams of documents
+at most 65,536 tokens and above 65,536 tokens. `harrier_long_context_mix.py` gives long tokens four times the
+sampling weight of short tokens within each cell. For a cell with cooldown weight `w`, short-token total `S`, and
+long-token total `L`, the sampler weights are `w*S/(S+4L)` and `w*4L/(S+4L)`. The two weights sum to the cell's
+cooldown weight. Each virtual stream contains its source tokens once and is shuffled independently. No token cache or
+document index is written. Both launchers build the length-statistics artifact as a training dependency when this
+mix is selected. The scan uses one Zephyr task per Harrier cell, reads only cache offsets, and writes
+small per-cell metadata containing total tokens, tokens in documents strictly above 65,536, 131,072, and
+262,144 tokens, and chunk totals for locating virtual reads. To precompute the same artifact before launching:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.harrier_length_stats
+```
+
+The loader uses these totals for sampling weights and dataset lengths, and builds the chunk index in memory. It reads
+document offsets only for the chunks touched by a batch, resolves batch reads concurrently, and retains at most four
+offset chunks per cell in an LRU cache. The command below reports the long-document token share and passes implied
+by the statistics:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.harrier_long_context_mix
+```
+
+`launch_scaling_ladder.py` selects the mix for a hero whose context length exceeds `LONG_CONTEXT_THRESHOLD`. The
+hero reads it from step 390251. The Harrier skip-to-window replay cannot carry over, since the virtual sources
+have different token counts across phases. Instead
+`LmDataConfig.mixture_start_step` makes the step at the end of `HERO_CONTEXT_PHASES` read the mixture's first
+sequence, so each bucket starts at the beginning of its shuffled order. Without it, a run with no history would read
+at `step * batch`, a position that depends on the rack count and that is 18T tokens in for the hero. A restore at a
+later step continues in place, a retry repeats the same data, and a restore before the start step raises.
+`HERO_CONTEXT_PHASES` and the FLOPs baseline keep their meaning.
+
+Diagnostic arms pass `--long-context-start-step N` with their `--restore-from` step and the same `--seed`. The sequence
+stream then depends only on steps since `N`, so a one-rack arm reads a prefix of what a partial-rack arm reads. The
+sampler advances through each selected bucket's shuffled order and wraps that bucket when it runs out.
+
+Under context parallelism, `attention_context_layout` sets how FA4 assigns query rows to context
+shards. The default, `"zigzag"`, swaps the late half of each shard's queries with its mirror shard so
+every shard does equal causal work; `"contiguous"` keeps each shard's own rows and skips the swap.
+Keep `"zigzag"` at 262K and set `"contiguous"` at 65K; the measurements are in
+[#10610](https://github.com/marin-community/marin/pull/10610). The field has no effect without a
+context axis.
+
+## Coordinated garbage collection
+
+The scaling-ladder launcher, including the production hero launched by `trigger_hero.sh`,
+enables coordinated GC every 100 completed training steps. For diagnostics, pass
+`--gc-interval 100` to `python -m experiments.grug.moe_hero_ep.launch_diagnostics`.
+Other callers can set `gc_interval=100` in `hero_grug_trainer_config`; its default `None`
+preserves automatic Python garbage collection. The launcher distributes one configuration to all ranks. After ten
+training steps in each process (including after resume), disable automatic cyclic collection
+and collect once. Then a training hook collects at completed global steps divisible by the
+interval, after evaluation hooks and before checkpoint work. It also collects on the forced
+final callback pass. Training collectives bound rank skew; GC adds no barriers. Collect after each
+evaluation hook as well, so cycles holding temporary eval buffers do not wait for the next periodic boundary.
+Reference-count deallocation continues. The previous GC policy is restored on exit.
+
+`throughput/gc_time` records local startup and hook collection time when GC runs; the `garbage_collection`
+profiler annotation also covers evaluation cleanup. Evaluation cleanup is included in callback
+and iteration time. `throughput/checkpoint_time` includes the save-decision broadcast and any
+synchronous checkpoint work. `throughput/iteration_time` includes batch loading, training,
+callbacks, checkpoint work, and GC. The existing `throughput/duration` excludes loading,
+callbacks, checkpoints, and GC. Tracker steps are zero-based: collections after completed updates
+100/200/300 appear at x=99/199/299. Use elapsed time per update for comparisons.
+
+The [single-rack validation](https://iris.oa.dev/#/job/%2Fmwittmann%2Fgc-sync-9205-hook-20260917-coord)
+used the full model with one sequence per GPU on 64 GPUs. Across 300 measured updates after ten
+warmup steps, elapsed time including initial and final collection fell from 795.576 to 776.003
+seconds (2.46%; 2.652 to 2.587 seconds/update). Before the final callback pass, elapsed time fell
+from 795.575 to 774.700 seconds (2.62%). Across all ranks, automatic GC produced 72 full
+collections across 48 steps; coordinated GC produced one collection per rank after warmup, at
+global updates 100/200/300, and on normal completion at global update 310. Scheduled collections ran through
+the training hook before checkpoint decisions. The slowest rank's periodic collections took
+1.15–1.22 seconds; final collection took up to 1.30 seconds.
+
+Both arms had identical sampled live HBM (35.094 GiB per rank) and allocator peaks (111.840 GiB),
+with no increase above their post-warmup baselines. Live memory was sampled every ten measured
+steps and at completion; the allocator peak includes warmup. The largest per-rank RSS increase in treatment was
+54.4 MiB above its post-warmup baseline. This single pair exercised checkpoint decisions with writes
+and evaluation disabled. The result supports the mechanism and short-term memory behavior at this
+batch size. Cycles can still retain device buffers between collections.
+See [#9205](https://github.com/marin-community/marin/issues/9205).
+
+## Why this recipe
+
+[#8549](https://github.com/marin-community/marin/pull/8549) selected the ragged transport in a
+head-to-head restore of the live hero: 22.87% vs 22.71% MFU against pooled-wave (inside
+run-to-run spread), 0.018% vs 2.67% assignments dropped, and 137.9 vs 149.9 GiB device peak.
+Dropping the pinned-host fp32 master is worth about 0.4 MFU on this path; pooled-wave needed the
+master to fit at all. The earlier pooled-wave gates and their per-run W&B links are in the
+[#7279](https://github.com/marin-community/marin/issues/7279) coordination record; the EP ablation
+ladder is in [#8062](https://github.com/marin-community/marin/issues/8062).
+
+## Diagnostic sweeps
+
+Five launcher options move the shape from the hero spec. They keep the hidden dimension, so the
 compute-scaled optimizer values stay constant across a sweep.
 
 | option | effect |
 | --- | --- |
-| `--num-experts` | routed expert count. Must divide the 64-way expert axis. |
+| `--num-experts` | routed expert count. Must be divisible by `--expert-axis-size` times `--context-axis-size`, the expert bank's storage split (64 by default). |
 | `--intermediate-dim` | routed expert width |
 | `--num-experts-per-token` | routed top-k |
-| `--capacity-factor` | fixed all-to-all capacity factor |
+| `--latent-dim` | routed input and output width |
+| `--capacity-factor` | receiver capacity factor |
 
-Three quantities move independently, which sets what a sweep can afford on one rack:
+Three quantities set what a sweep can fit on one rack:
 
 - Active routed neurons are top-k multiplied by width.
 - Parameters are expert count multiplied by width.
-- The all-to-all buffers are tokens multiplied by top-k.
+- The receiver buffer is token assignments multiplied by the receiver capacity factor, split
+  across the transport's two expert chunks.
 
-Width appears in the first two and not the third, thus width is the cheap way to buy active compute
-and top-k is the expensive way. Six buffers scale with top-k, and one of them is float32: top-6
-costs 30.75 GiB against 20.50 GiB for top-4 at this shape.
+The selected E384 model runs at expert width 3072 and receiver capacity factor 1.15 (1.5 at 65K and 262K).
 
-Measured limits on one rack: 591.6 B total parameters runs at 24.0032% median MFU (256 experts of
-width 2560), and 641.4 B fails with `NCCL operation ncclAlltoAll` and a CUDA out-of-memory. Lower
-top-k does not lift that limit, so parameters bind rather than the communicator. A capacity sweep at
-the hero shape measures 27.5501% MFU at 9.97% drops, 26.1065% at 5.3984%, 25.2283% at 3.2571%, and
-22.9037% at 1.5719%, or about 0.9 points of MFU for each point of drops recovered.
+## Diagnostic controls
+
+| option | effect |
+| --- | --- |
+| `--gc-interval` | opts into cyclic GC at shared completed-step boundaries after warmup |
+| `--dp-racks` | sets the data-parallel rack count; `--batch-size` stays global |
+| `--batch-size` | sets global sequences per step and the optimizer token budget; the default holds one hero rack's 4,194,304 tokens at the sequence length |
+| `--seq-len` | sets sequence length; the optimizer uses the resulting token budget |
+| `--context-axis-size`, `--expert-axis-size` | divide each rack between context and expert parallelism |
+| `--qk-mult`, `--qk-mult-long-scale` | multiply Q before attention; `--qk-mult` sets every layer (default: the hero's 1.66), and `--qk-mult-long-scale` multiplies it on the global full-causal layers only (default 1) |
+| `--log-scaling-n-floor` | scales each global-layer query that sees `n` keys in its document by `(1 + alpha * ln(max(n / this value, 1))) ** power`, on top of the QK options; must be below the sequence length, since no query is scaled otherwise |
+| `--log-scaling-alpha` | the slope `alpha` of that scale; unset keeps the hero's 0.1 |
+| `--log-scaling-power` | raises that scale to this exponent; unset keeps the hero's 2 |
+| `--no-log-scaling` | turns the hero's log scaling off, for a control arm such as global 1.84 (`--qk-mult-long-scale 1.108`); excludes the other log scaling options |
+| `--restore-from` | restores a checkpoint while keeping outputs under the diagnostic run's path |
+| `--schedule-steps` | sizes the learning-rate schedule while `--num-steps` bounds the run |
+| `--eval-every` | adds Paloma evaluation at the selected interval |
+| `--save-checkpoints` | writes periodic and final checkpoints |
+| `--checkpoint-minutes` | sets the wall-clock checkpoint interval |
+| `--checkpoint-path` | places checkpoints at an explicit storage prefix |
+| `--checkpoint-debug` | publishes checkpoint phase and memory telemetry |
+| `--training-data synthetic` | reuses a deterministic batch without opening TensorStore |
+| `--watch-interval`, `--watch-mode` | select inline or diagnostic norm collection |
+| `--profile-start-step`, `--profile-steps` | select the rank-0 XProf window |
+| `--seed` | sets the trainer seed |
 
 ## Launch
+
+Use `--version dev` for diagnostics, ablations, profiles, and scaling runs in this guide. These
+runs write under `users/<username>/grug/...`. Reserve calendar versions for coordinated major
+production runs that need a shared checkpoint path under `grug/...`.
+
+### Bounded diagnostics
+
+`launch_diagnostics.py` uses the d6144 model, process layout, watch config, and TensorStore cache from the
+production recipe. It reads the Harrier 2026.08.18 data unless `--long-context-start-step` selects the hero's
+long-context mix. Its stop step, evaluation, and checkpoint policy stay independent from the production run.
+
+The default 25-step diagnostic uses simulated epoching. Set `--schedule-steps 390251` to use the raw
+Harrier mixture. The diagnostic default now matches the production watch and 890 GB RAM request.
+
+A diagnostic uses `HERO_SCHEDULE_EXTENSION`, and with `--schedule-steps 390251`, `--num-steps` can reach its last step.
+The heuristic scales from the diagnostic's own batch, so one rack runs the same ratios at 0.69 times the 11-rack hero's
+absolute rates and with a higher beta2.
 
 Print the plan without a GPU run:
 
 ```bash
-python -m experiments.grug.moe_hero_ep.launch \
-  --run-id mhep-017-200 \
+python -m experiments.grug.moe_hero_ep.launch_diagnostics \
+  --run-id mhep-ragged \
   --num-steps 200 \
-  --version 2026.08.05
-
-python -m experiments.grug.moe_hero_ep.launch \
-  --run-id mhep-011-e256-i2560 \
-  --num-steps 25 \
-  --num-experts 256 --intermediate-dim 2560 \
-  --version 2026.08.05
+  --version dev
 ```
 
 Submit the one-rack gate through the Marin Iris controller:
 
 ```bash
-run_id="mhep-017-200"
+run_id="mhep-ragged"
 uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
-  --cpu 2 --memory 8GB --disk 32GB --timeout 21600 \
+  --cpu 2 --memory 8GB --disk 32GB \
   --job-name "${run_id}-coord" \
   -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
   -e IRIS_PORT_JAX 32575 \
-  -- python -m experiments.grug.moe_hero_ep.launch \
-    --run-id "$run_id" --num-steps 200 --version 2026.08.05 --run
+  -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
+    --run-id "$run_id" --num-steps 200 --version dev --run
 ```
 
 W&B uses the `WANDB_PROJECT` environment variable, or project `marin_moe` when it is unset, with
 group `moe-hero-ep` and the supplied run ID. The run output includes the durable W&B metrics
 artifact. Give each concurrent gang its own `IRIS_PORT_JAX`: rank 0 binds and registers that port
 for the JAX coordinator, and the default 8476 is shared by every run on the cluster.
+
+Submit a rack-local XProf trace through the Marin Iris controller:
+
+```bash
+run_id="mhep-rack-profile"
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
+  --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB \
+  --job-name "${run_id}-coord" \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
+  -e IRIS_PORT_JAX 32576 \
+  -- python -m experiments.grug.moe_hero_ep.launch_diagnostics \
+    --run-id "$run_id" --num-steps 8 --schedule-steps 390251 \
+    --profile-start-step 5 --profile-steps 2 --training-data synthetic \
+    --version dev --run
+```
+
+The default batch, 16 at 262K, keeps the production local batch of one sequence per expert shard. The trace
+does not include the 11-rack `replica_dcn` collectives or their global histogram reduction.
+
+### Daily hero canary
+
+[`marin-canary-hero-gb200.yaml`](../../../.github/workflows/marin-canary-hero-gb200.yaml) runs the
+hero model and training step from `main` daily on one rack through `launch_diagnostics.py`.
+It leaves out `gate_router_weight_decay`, which the production `launch_scaling_ladder.py` applies and which is 0
+past the schedule. The canary restores the pinned permanent checkpoint `step-390251` and trains 35 updates on the
+long-context mix with a fixed seed. One dropless eval
+runs after the last update. A healthy run holds the rack for more than 20 minutes: 35 updates take about 17 minutes at 29 s/step, before restore, compile, and eval. The diagnostic does
+not exercise cross-rack collectives or checkpoint recovery.
+
+The workflow submits at 11:00 UTC at `batch` priority, the band of the hero-completions sampler,
+so neither preempts the other. If the training job has not started within five hours,
+`iris_monitor.py wait --child-wait-timeout-policy shutdown` cancels it and the day is skipped with
+a warning; a failed run alerts through Slack and Loom.
+
+[`hero_canary_report.py`](../../../scripts/ci/hero_canary_report.py) drops 4 warmup steps and
+reports median step time, MFU and tokens/s, peak HBM, drop fraction, final train loss and dropless
+eval loss against a baseline: the per-metric median of the last 5 scheduled canaries from the same
+checkpoint, limiting the effect of one outlier. Manual dispatches (`hero-canary-manual-*`) never
+enter it. The run fails when the final train loss is above 1.5 or the dropless eval macro loss
+is above 2.5; one-rack runs at 262K end near 0.83 and 2.05. The 30-step median is within about ±0.5%; a step-time change beyond 1.5% posts to Slack.
+Re-pin `HERO_CANARY_CHECKPOINT` when the checkpoint layout or context length changes; the next run
+starts a new baseline.
+
+### Profile-guided scheduling
+
+With collective overlap limited to 1, where XLA's latency-hiding scheduler places each collective
+decides how much communication hides under compute. Its default estimator gives every collective
+the same small latency, so it hides a multi-millisecond transport under a single GEMM. A PGLE profile
+gives it measured costs instead. On one rack restored from `step-180000`, a profile built from the
+program's own trace shortened the step from 12.61 to 12.52 s.
+
+Trace the program once, build its profile, then rerun with it:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.pgle_profile \
+  s3://hero-checkpoints/tmp/ttl=30d/xprof/<run-id>/plugins/profile/<steps>/<host>.xplane.pb \
+  experiments/grug/moe_hero_ep/pgle/<run-id>.pbtxt
+# then submit the same program with
+#   -e XLA_FLAGS "--xla_gpu_pgle_profile_file_or_directory_path=/app/experiments/grug/moe_hero_ep/pgle/<run-id>.pbtxt"
+```
+
+The profile matches instructions by name, so it applies only to the program it was traced from:
+rebuild it after any change to the model, mesh, or XLA flags, and build the production profile from
+a trace of the production mesh. The job bundle carries the file from the working tree, and `/app` is
+the task's working directory. The launcher keeps its other XLA defaults when `XLA_FLAGS` names only
+the profile. Automatic PGLE (`JAX_ENABLE_PGLE`) stays off: with one process per GPU it cannot profile.
+
+### Long-context diagnostics
+
+For 262,144-token sequences on one rack, use `--seq-len 262144 --batch-size 16
+--context-axis-size 4 --expert-axis-size 16`. This keeps 4,194,304
+tokens per step, matching the 4K/batch-1024 diagnostic. FA4 gathers K/V within each
+context group; the residual stream and parameter storage remain context-sharded.
+The short convolution exchanges a left halo across sequence shards.
+
+The 4K control uses `--seq-len 4096 --batch-size 1024 --context-axis-size 1
+--expert-axis-size 64 --qk-mult 1.3 --qk-mult-long-scale 1`. Use the same checkpoint and `--schedule-steps`
+for the 4K control and 262K probe. The 262K mesh and batch are the launcher's defaults. `--num-steps` is an
+absolute stop step and must exceed the checkpoint step. Record MFU, elapsed step
+time, peak memory, and routing drops after warmup. A throughput probe alone does
+not establish long-context training quality.
+
+### Small-scale hero-shape ablations
+
+`small_scale_abl_launch.py` runs the hero shape — 384 experts / top-8, hidden/2-wide experts in a
+hidden/2 latent, capacity 1.15 — at a downsized width (`--size` in `d768`…`d2048`) on one GB200 rack.
+It fixes the batch at ~4M tokens per step per rack to hold the drop dynamics, and sizes the step
+count from the model's active-parameter count: `num_steps` trains `--tokens-per-active-param`
+(default 750) tokens per active parameter. Each flavor names its own transport rather than
+following the hero default, because comparing them is what this launcher is for: `--flavor ragged`
+is the hero's and needs a GB200 fleet, `--flavor ep` is the pooled-wave arm it replaced at a 1.15
+sender capacity over 3 waves, and `--flavor fsdp-nodrop` / `--flavor fsdp-chunk4` run the same
+shape dropless and at four-chunk capacity. The pooled gates are tunable with `--capacity-factor`
+(receiver) and `--transport-capacity-factor` (sender). Print the plan without a GPU run:
+
+```bash
+python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
+  --run-id mhep-abl-d1024-ep \
+  --size d1024 \
+  --flavor ep \
+  --version dev
+```
+
+Submit one rung through the Marin Iris controller:
+
+```bash
+run_id="mhep-abl-d1024-ep"
+uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources \
+  --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB \
+  --job-name "${run_id}-coord" \
+  -e WANDB_API_KEY "$WANDB_API_KEY" -e WANDB_PROJECT "$WANDB_PROJECT" \
+  -e IRIS_PORT_JAX 32576 \
+  -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch \
+    --run-id "$run_id" --size d1024 --flavor ep --version dev --run
+```
+
+The wider rungs need more than one rack to hold their batch: `--dp-racks N` replicates the run
+across `N` racks, and the launcher sizes the fleet request accordingly. Ablation runs report to W&B
+group `moe-hero-ep-small-abl` and carry Paloma and uncheatable evaluation at `--steps-per-eval`.
+
+### Scaling ladder
+
+`launch_scaling_ladder.py` trains one uniform hero recipe at five widths so a narrow rung predicts
+the `d6144` hero (which is the hero itself). Every rung shares the data schedule below on the
+Marin tokenizer (simulated against 18.75T for small runs; raw sampling above 1e23 training FLOPs),
+the offloaded MuonH optimizer, the hero mixed precision, 384 experts / top-8, the ragged
+all-to-all transport, the QB histogram estimator at 10k bins, and a dropless held-out eval. Only
+the width and the rack count vary; the rack count, batch, step budget, eval cadence, and
+checkpoint policy all follow `--size`:
+
+| size | racks | batch | steps | eval | checkpoints |
+|---|---|---|---|---|---|
+| d768 | 1 | 1024 | 11,420 | every 5% | final only |
+| d1024 | 2 | 2048 | 15,276 | every 5% | final only |
+| d1536 | 6 | 6144 | 15,128 | every 5% | final only |
+| d2048 | 11 | 11264 | 20,072 | every 5% | final only |
+| d6144 | 11 | 11264 at 4K, 2816 at 16K, 704 at 65K, 176 at 262K | 390,251 plus a 3,240-step extension | every 500 | every 6k, then every 500 from step 385,251 |
+
+At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
+batch is one sequence per batch shard: 64 × racks (704 on the hero) without context parallelism, and
+(64 / CP) × racks with CP-way context parallelism (176 at CP4). The step budget is 791 tokens per active parameter
+(18T at d6144); pass `--num-steps` to override.
+
+The dropless eval folds the expert axis into `data` and keeps the context axis, so one sequence per
+batch shard gives every device max_seq_len / CP tokens per eval batch at any context. A batch held at
+its CP1 size would multiply that load by CP. The eval sets are read as one stream, so the batch size
+does not change the `eval_dropless/*` losses.
+
+A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
+durable output root, and a rolling temporary checkpoint every hour goes to region-local temp
+storage with the shared 14-day lifecycle TTL. One temporary checkpoint is kept. A hardware fault, a
+host out-of-memory, or a preemption thus costs at most one hour of training. The training job
+retries 1000 times on failure and 100 times on preemption.
+
+The [new mixture](../../../docs/reports/hero-mixture-log.md) starts at ~27.7%
+of training, with cooldown weights at ~80% (hero steps 108,000 and 312,192).
+For production launch and recovery, follow
+[Hero cutovers and W&B lineage](#hero-cutovers-and-wb-lineage).
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_scaling_ladder \
+  --run-id ladder-d768 --size d768 --version dev
+```
+
+Submit a rung through the Marin Iris controller as with the launchers above, swapping the module and
+passing `--size`. Runs report to W&B group `moe-hero-ep-scaling-ladder`.
+
+### Full-model SFT
+
+`launch_hero_sft.py` continues a hero checkpoint on the SFT recipe of
+`open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.10.05`. It reads the CoreWeave copies of the SFT
+stores listed in `hero_sft_stores_2026_09_29.json`, with replay from the hero's 262K Harrier mix,
+one epoch per store. The run resumes the checkpoint's optimizer state. At the start step, it reseeds
+the seven chat special-token columns of the LM head from single-token anchors.
+
+| Option | Meaning |
+| --- | --- |
+| `--initialize-from-checkpoint` | Complete checkpoint to continue; its `metadata.json` step is the start step |
+| `--muon-lr`, `--adam-lr` | Peak MuonH/AdamH and Adam rates: constant, then linear decay to 0.1× over the final 10% |
+| `--max-grad-norm` | Global gradient-norm clip, or `none` |
+| `--replay-fraction` | Target replay share of each mixture block |
+| `--dp-racks` | Data-parallel racks, 16 sequences each |
+| `--router-bias` | `frozen` (default) keeps the restored router bias; `update` keeps quantile balancing on |
+| `--capacity-factor` | Routed expert capacity per shard; 1.625 (default) is the highest that fits in HBM, and the hero trained at 1.5 |
+| `--stop-after-steps` | Stop after this many updates; unset runs the full epoch |
+| `--eval-every` | Dropless eval at multiples of this absolute step; 0 disables it |
+| `--checkpoint-root` | Put all checkpoints below this prefix, for example a `tmp/ttl=3d` path |
+| `--expert-placement` | Expert placement JSON that renumbers the start checkpoint's routed experts |
+
+Every option above except `--router-bias`, `--capacity-factor` and the last four is required. `GrugTrainerConfig`
+gains `router_bias_mode`, `special_tokens` (`SpecialTokenInit`), and `expert_placement` (`ExpertPlacement`);
+their defaults leave pretraining unchanged.
+
+#### Expert placement
+
+The ragged expert-parallel transport drops a routed assignment when the capacity block that holds its expert
+is full. A capacity block is a contiguous run of global expert ids within one expert shard: 12 experts at
+EP16. With a frozen router bias, SFT data loads a few experts at 15-35 times the mean, so the blocks holding
+them overflow. At capacity factor 1.5 the one-rack smoke `hero-sft-smoke-v2` dropped 5.0% of assignments.
+
+An expert placement renumbers each layer's experts so every block carries a similar load. It moves the router
+columns, router bias, QB betas, expert weights, and their optimizer moments together, so the model computes the
+same function. The trainer applies it once, when it restores the placement's source checkpoint. Each checkpoint
+the run saves records the placement in its `metadata.json`, under `expert_placement`, and a restart from one is
+not placed again. The trainer refuses to restore a checkpoint whose recorded placement is not the run's, and a
+checkpoint without a record that is not the source. A placement fits one mesh: the trainer refuses it unless the
+expert axis and block width match.
+
+`expert_placement.py` builds a placement from a run's per-expert routing histograms. It assigns experts by
+greedy longest-processing-time: heaviest first, each into the lightest block with a free slot. Build one from a
+frozen-bias run that starts from the same checkpoint. A placed run logs its histograms by placed expert id, so
+the builder reads the run's placement from its W&B config and maps the loads back to the source order:
+
+```bash
+python -m experiments.grug.moe_hero_ep.expert_placement \
+  --wandb-run marin-community/marin_moe_sft/hero-sft-smoke-v2 --first-step 393491 --last-step 393515 \
+  --num-layers 48 --expert-axis-size 16 \
+  --source-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
+  --out experiments/grug/moe_hero_ep/hero_sft_expert_placement_step393491.json
+```
+
+`hero_sft_expert_placement_step393491.json` is that placement, built from all 25 steps of v2. Held-out
+scoring on v2 shows how many steps a placement needs: built from 5 steps, a placement drops 0.71% of
+assignments on v2's last 8 steps at capacity factor 1.5 (0.10% at 2.0). The per-step oracle drops 0.47%, and
+one step's placement drops 0.94%. On Snowball 10.05's full 4,750-step frozen-bias SFT, a placement built from
+the first steps stays within 0.5 points of the per-step oracle through the end of the epoch.
+
+A placed run writes its checkpoints under `expert-placement-<fingerprint>/` below its output path or
+`--checkpoint-root`, and carries the W&B tag `expert-placement-<fingerprint>`. A relaunch with another
+placement, or none, starts again from the source checkpoint instead of resuming checkpoints whose experts are
+in a different order. Tools that pair experts across checkpoints, such as weight merging against the
+pretraining checkpoint, must first apply `ExpertPlacement.inverse()` to the placement that
+`ExpertPlacement.recorded_in(metadata)` reads from the checkpoint. A Hugging Face export does not carry that
+metadata.
+
+Print the plan for a one-rack smoke test:
+
+```bash
+python -m experiments.grug.moe_hero_ep.launch_hero_sft \
+  --run-id hero-sft-smoke \
+  --initialize-from-checkpoint s3://marin-us-east-02a/marin/grug/hero-lce-log65536sq-step390k/2026.08.19.2/checkpoints/step-393491 \
+  --muon-lr 3.2905e-5 --adam-lr 7.5934e-6 --max-grad-norm 1.0 --replay-fraction 0.2035 \
+  --dp-racks 1 --stop-after-steps 20 --eval-every 393511 \
+  --checkpoint-root s3://marin-us-east-08a/tmp/ttl=3d/<username>/hero-sft-smoke \
+  --version dev
+```
+
+Submit it through the Marin Iris controller as with
+[Bounded diagnostics](#bounded-diagnostics). Runs report to W&B project `marin_moe_sft`.
 
 ## Result Record
 

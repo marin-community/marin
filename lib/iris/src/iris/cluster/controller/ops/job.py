@@ -1,14 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Aggregate-scoped commands for jobs: submit, cancel, remove_finished."""
+"""Aggregate-scoped commands for jobs: submit, cancel, complete, remove_finished."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from rigging.timing import Timestamp
 from sqlalchemy import Integer, bindparam, cast, func, insert, select
 
-from iris.cluster.controller import reads, writes
+from iris.cluster.controller import observability_rows, reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.codec import (
     constraints_to_json,
@@ -20,6 +21,7 @@ from iris.cluster.controller.projections.endpoints import EndpointsProjection
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.reconcile import ReconcileState
 from iris.cluster.controller.reconcile.commit import commit_effects
+from iris.cluster.controller.reconcile.effects import ControllerEffects
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.policy import (
     MAX_REPLICAS_PER_JOB,
@@ -28,6 +30,7 @@ from iris.cluster.controller.schema import (
     job_workdir_files_table,
     jobs_table,
 )
+from iris.cluster.egress import format_egress_rule
 from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, TERMINAL_JOB_STATES, JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.time_proto import duration_from_proto
@@ -174,6 +177,7 @@ def insert_job_and_config(
     stored verbatim. A child ignores it and inherits its root's stored value, so a
     federated subtree keeps the root's submitter no matter who spawns each child.
     """
+    assert request.HasField("termination_grace"), "termination_grace must be resolved before persistence"
     assert (
         priority_band != job_pb2.PRIORITY_BAND_INHERIT
     ), f"Job {job_id} would store an unresolved priority band; resolve it at ingestion"
@@ -276,6 +280,7 @@ def insert_job_and_config(
         constraints_json=constraints_json,
         has_coscheduling=bool(has_cosched),
         coscheduling_group_by=cosched_group,
+        coscheduling_group_sizes=request.coscheduling.group_sizes,
         scheduling_timeout_ms=sched_timeout,
         max_task_failures=max_failures,
         entrypoint_json=entrypoint_json,
@@ -285,14 +290,18 @@ def insert_job_and_config(
         max_retries_failure=int(request.max_retries_failure),
         max_retries_preemption=int(request.max_retries_preemption),
         timeout_ms=timeout_ms,
+        termination_grace_ms=int(request.termination_grace.milliseconds),
         preemption_policy=int(request.preemption_policy),
         existing_job_policy=int(request.existing_job_policy),
         priority_band=priority_band,
         task_image=request.task_image,
         container_profile=int(request.container_profile),
+        egress_policy=int(request.egress_policy),
+        egress_allow_json=[format_egress_rule(rule) for rule in request.egress_allow],
         submit_argv_json=list(request.submit_argv),
         fail_if_exists=bool(request.fail_if_exists),
     )
+    observability_rows.record_job_submit(cur, job_id)
 
     workdir_files = dict(request.entrypoint.workdir_files)
     if workdir_files:
@@ -331,12 +340,24 @@ def insert_job_and_config(
     )
 
 
-def cancel(
+def _apply_job_transition(
     cur: Tx,
     *,
     job_id: JobName,
-    reason: str,
+    transition: Callable[[ReconcileState, Timestamp], ControllerEffects],
 ) -> None:
+    """Apply one reconcile transition and remove endpoints for its subtree."""
+    now = Timestamp.now()
+    snapshot = load_closed_snapshot(cur, now=now, seed_job_ids=[job_id])
+    if job_id not in snapshot.job_configs:
+        return
+    effects = transition(ReconcileState.open(snapshot), now)
+    commit_effects(cur, effects)
+    subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
+    cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
+
+
+def cancel(cur: Tx, *, job_id: JobName, reason: str) -> None:
     """Cancel ``job_id`` and its descendant subtree through the kernel.
 
     Loads a snapshot covering every job in the subtree and all their active
@@ -347,23 +368,20 @@ def cancel(
     when one half of an atomic coscheduled group is cancelled, the kernel
     cascades termination to the surviving peers instead of stranding them.
     """
-    now = Timestamp.now()
-    # The slice closes the full descendant subtree (and every job's tasks /
-    # active rows) so the kernel can cascade-kill children and fire
-    # coscheduled-peer cascades on killed tasks.
-    snapshot = load_closed_snapshot(cur, now=now, seed_job_ids=[job_id])
-    if job_id not in snapshot.job_configs:
-        return
-    # No per-job state preload: the cascade-kill merge guard skips already-
-    # terminal rows (excluding WORKER_FAILED, which cancel overwrites).
-    effects = ReconcileState.open(snapshot).cancel_job(job_id, reason, now)
-    commit_effects(cur, effects)
-    # Fast-path clear of the cancelled subtree's endpoints (the FK CASCADE
-    # backstop): cancellation stops routing to these endpoints at once rather
-    # than waiting out their lease. Derive the subtree from the snapshot's
-    # transitive descendants.
-    subtree = [job_id, *snapshot.job_descendants[job_id].descendants]
-    cur.caches[EndpointsProjection].remove_by_job_ids(cur, subtree)
+    _apply_job_transition(
+        cur,
+        job_id=job_id,
+        transition=lambda state, now: state.cancel_job(job_id, reason, now),
+    )
+
+
+def complete(cur: Tx, *, job_id: JobName) -> None:
+    """Complete ``job_id`` successfully and stop its unfinished task attempts."""
+    _apply_job_transition(
+        cur,
+        job_id=job_id,
+        transition=lambda state, now: state.complete_job(job_id, now),
+    )
 
 
 def remove_finished(

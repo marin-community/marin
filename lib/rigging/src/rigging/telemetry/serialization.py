@@ -8,6 +8,8 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+import msgspec
+
 MAX_ATTRIBUTES = 64
 MAX_STRING_LENGTH = 4_096
 
@@ -26,14 +28,10 @@ def json_bytes(value: object) -> bytes:
 
 
 def json_bytes_bounded(value: object, limit: int) -> bytes:
-    encoded = bytearray()
-    encoder = json.JSONEncoder(allow_nan=False, separators=(",", ":"), sort_keys=True)
-    for chunk in encoder.iterencode(value):
-        chunk_bytes = chunk.encode()
-        if len(encoded) + len(chunk_bytes) > limit:
-            raise ValueError("encoded telemetry record exceeds the batch limit")
-        encoded.extend(chunk_bytes)
-    return bytes(encoded)
+    encoded = msgspec.json.encode(value, order="sorted")
+    if len(encoded) > limit:
+        raise ValueError("encoded telemetry record exceeds the batch limit")
+    return encoded
 
 
 def event_fields(body: EventBody, budget: int) -> dict[str, EventValue]:

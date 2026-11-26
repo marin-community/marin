@@ -11,9 +11,9 @@ pure — the functions return plain dicts and do no I/O.
 
 import ipaddress
 
+from iris.cluster.platforms.k8s.constants import CW_REPO_NAME
+
 # CoreWeave-hosted charts (same repo Kueue's cks-kueue chart comes from).
-CW_REPO_NAME = "coreweave"
-CW_REPO_URL = "https://charts.core-services.ingress.coreweave.com"
 TRAEFIK_CHART = f"{CW_REPO_NAME}/traefik"
 CERT_MANAGER_CHART = f"{CW_REPO_NAME}/cert-manager"
 

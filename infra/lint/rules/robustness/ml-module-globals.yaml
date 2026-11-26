@@ -1,0 +1,13 @@
+schema_version: 1
+code: ml-module-globals
+lane: robustness
+title: Module-level mutable state
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Prefer explicit parameters over ambient state. Module
+  globals scatter configuration across the codebase and create order-of-import
+  bugs.
+
+  **When allowed:** True constants (frozen sets, immutable lookup tables) at
+  module scope are fine. The smell is *mutable* globals or globals that hold
+  runtime-configured state.

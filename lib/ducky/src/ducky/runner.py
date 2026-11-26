@@ -31,14 +31,9 @@ from collections.abc import Callable
 import duckdb
 import pyarrow as pa
 from iris.env_resources import TaskResources
-from rigging.filesystem import (
-    MARIN_CROSS_REGION_OVERRIDE_ENV,
-    StoragePath,
-    cached_marin_region,
-    get_bucket_location,
-    is_cross_region_url,
-    prefix_join,
-)
+from rigging.filesystem.cluster_config import get_bucket_location
+from rigging.filesystem.cross_region import MARIN_CROSS_REGION_OVERRIDE_ENV, cached_marin_region, is_cross_region_url
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from ducky.catalog import DATAKIT_SCHEMA, FINELOG_SCHEMA, View, build_catalog
 from ducky.config import DuckyConfig
@@ -121,7 +116,7 @@ def needs_cross_region_optin(uri: str) -> bool:
     """Whether reading GCS ``uri`` requires the ``-- cross-region: allow`` opt-in.
 
     Fails closed on uncertainty. A GCS URI needs the opt-in if it's confirmed cross-region by
-    :func:`rigging.filesystem.is_cross_region_url`, or — on a GCP VM — if we cannot resolve the
+    :func:`rigging.filesystem.cross_region.is_cross_region_url`, or — on a GCP VM — if we cannot resolve the
     bucket's region at all, so a missing ``storage.buckets.get`` permission or a metadata lookup
     failure can't silently bypass the gate (``is_cross_region_url`` returns ``False`` on such
     failures). Off-GCP (no VM region) region gating doesn't apply and the fee override disables

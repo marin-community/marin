@@ -25,14 +25,23 @@ import re
 from collections import Counter
 
 import pyarrow.parquet as pq
-from marin.datakit.decon import _bloom_hash, _extract_ngrams, bloom_paths
-from rigging.filesystem import marin_prefix, prefix_join, url_to_fs
+from marin.datakit.decon import NGramConfig, _bloom_hash, _extract_features, bloom_paths
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 
-from experiments.datakit.testbed.decon_arm import NGRAM_LENGTH, PARAGRAPH_DELIMITER, build_testbed_decon_steps
+from experiments.datakit.testbed.decon_arm import (
+    MIN_MATCHED_FEATURES,
+    NGRAM_LENGTH,
+    PARAGRAPH_DELIMITER,
+    build_testbed_decon_steps,
+)
 
 logger = logging.getLogger(__name__)
 
 _SPLIT_RE = re.compile(r"^(.*)-(validation|test|training|train|dev|eval)-\d+$")
+# Uncheatable Eval ids are ``uncheatable-<subset>-<record>``; the artifact sits in ``uncheatable/<subset>/``.
+_UNCHEATABLE_ID_RE = re.compile(r"^uncheatable-(?P<subset>[a-z0-9_]+)-\d+$")
 _SAMPLES_PER_SOURCE = 60
 _MAX_MATCHED_EVALS = 5
 _MAX_MATCHED_NGRAMS = 12
@@ -63,30 +72,31 @@ def _window(text: str, ngrams: list[str], ctx: int = _CONTEXT_CHARS) -> str:
     return text[: 2 * ctx] + ("…" if len(text) > 2 * ctx else "")
 
 
-def _overlapping_ngrams(text: str, matched_hashes: set[int]) -> list[str]:
-    """The literal doc n-grams that hit the eval bloom — the honest evidence for a flag.
-
-    A single hashed n-gram maps to many eval records (a shared template or
-    formula recurs across a whole task), so the report's per-eval attribution
-    can surface an arbitrary, unrelated eval problem. The overlapping n-gram
-    text itself is unambiguous: it is exactly the string the doc and some eval
-    share. Re-extract with the same paragraph/n-gram policy as the mark side.
-    """
+def _overlapping_ngrams(text: str, matched_hashes: set[int], ngram: NGramConfig) -> list[str]:
+    """Return the matching text for the hashes that caused the mark."""
     seen: set[str] = set()
     out: list[str] = []
-    for para in text.split(PARAGRAPH_DELIMITER):
-        for ng in _extract_ngrams(para, NGRAM_LENGTH, 0):
-            if ng not in seen and _bloom_hash(ng) in matched_hashes:
-                seen.add(ng)
-                out.append(ng)
-                if len(out) >= _MAX_MATCHED_NGRAMS:
-                    return out
+    for feature in _extract_features(text, ngram):
+        if feature not in seen and _bloom_hash(feature) in matched_hashes:
+            seen.add(feature)
+            out.append(feature)
+            if len(out) >= _MAX_MATCHED_NGRAMS:
+                return out
     return out
 
 
 def eval_id_to_family(eval_id: str) -> str:
+    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
+        return f"uncheatable_{uncheatable['subset']}"
     m = _SPLIT_RE.match(eval_id)
     return m.group(1) if m else eval_id
+
+
+def _eval_artifact_dir(eval_id: str) -> str:
+    """Return the name of the corpus directory that holds *eval_id*'s artifact."""
+    if uncheatable := _UNCHEATABLE_ID_RE.match(eval_id):
+        return uncheatable["subset"]
+    return eval_id_to_family(eval_id)
 
 
 def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
@@ -97,7 +107,7 @@ def _load_eval_texts(eval_ids: set[str]) -> dict[str, str]:
     """
     if not eval_ids:
         return {}
-    tasks = {eval_id_to_family(e) for e in eval_ids}
+    tasks = {_eval_artifact_dir(e) for e in eval_ids}
     fs, root = url_to_fs(f"{marin_prefix()}/datakit/decontam/evals")
     files = [f for f in fs.find(root) if f.endswith(".parquet") and f.split("/")[-2] in tasks]
     texts: dict[str, str] = {}
@@ -209,6 +219,11 @@ def main() -> None:
     ap.add_argument("--sample-root", default=None, help="match the decon run's --sample-root (pre-materialized root)")
     args = ap.parse_args()
     rng = random.Random(0)
+    ngram = NGramConfig(
+        ngram_length=NGRAM_LENGTH,
+        paragraph_delimiter=PARAGRAPH_DELIMITER,
+        min_matched_features=MIN_MATCHED_FEATURES,
+    )
 
     steps = build_testbed_decon_steps(
         target_total_tokens_b=args.target_tokens_b,
@@ -297,7 +312,7 @@ def main() -> None:
                     eval_hits[eid] += 1
             fam_counter.update(fams.keys())
             full_text = r.get("text") or id_to_text.get(r["id"], "") or ""
-            matched_ngrams = _overlapping_ngrams(full_text, set(r["matched_hashes"]))
+            matched_ngrams = _overlapping_ngrams(full_text, set(r["matched_hashes"]), ngram)
             # Window doc + eval text around the shared span so the overlap is
             # visible (and highlightable) in both columns of the report.
             matched_evals = [

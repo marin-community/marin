@@ -221,6 +221,10 @@ class BackgroundTracker(Tracker):
         name: Optional[str] = None,
         type: Optional[str] = None,
     ) -> None:
+        # Check the wrapped tracker's size limit on the producer thread so an
+        # oversized artifact is skipped with one warning and never staged.
+        if self.wrapped.skip_artifact_over_limit(artifact_path, name=name):
+            return
         # Stage the bytes on the producer thread so the caller may delete the source
         # the moment this returns (callers often build it in a TemporaryDirectory).
         try:

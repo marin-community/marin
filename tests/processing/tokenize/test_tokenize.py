@@ -1,28 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import tempfile
 from pathlib import Path
 
-import jax
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from levanter.data.mixture import MixtureDataset
 from levanter.data.text.formats import TextLmDatasetFormat
-from levanter.store.cache import CacheLedger, TreeCache
+from levanter.store.cache import CacheLedger
 from marin.processing.tokenize.tokenize import (
     MIN_GROUP_BYTES,
-    HfTokenizeConfig,
     TokenizeConfig,
     bundle_files_by_size,
     compute_target_group_bytes,
     tokenize,
 )
 from zephyr.dataset import FileEntry
-from zephyr.readers import InputFileSpec
+from zephyr.input_file import InputFileSpec
 
 # Dummy values for other required TokenizeConfig fields
 DUMMY_CACHE_PATH = "/dummy/cache"
@@ -129,67 +124,8 @@ def test_bundle_files_single_large_file():
     assert groups[1] == ["small1.jsonl", "small2.jsonl"]
 
 
-@pytest.mark.slow
-def test_tokenize_full_pipeline_integration(tmp_path):
-    """Integration test for the full tokenization pipeline."""
-    config = HfTokenizeConfig(
-        id="dlwh/wikitext_103_detokenized",
-        cache_path=str(tmp_path / "cache"),
-        tokenizer="gpt2",
-        sample_count=100,
-        format=TextLmDatasetFormat(),
-    )
-
-    tokenize(config)
-    train_cache_dir = tmp_path / "cache" / "train"
-    train_ledger_path = train_cache_dir / "shard_ledger.json"
-    assert train_ledger_path.exists(), f"Ledger not found at {train_ledger_path}"
-
-    ledger = CacheLedger.load(str(train_cache_dir))
-    assert ledger.is_finished, "Ledger should be marked as finished"
-    assert ledger.total_num_rows > 0, f"Cache should have non-zero rows, got {ledger.total_num_rows}"
-
-    print("\nLedger info:")
-    print(f"  total_num_rows: {ledger.total_num_rows}")
-    print(f"  shard_rows: {ledger.shard_rows}")
-    print(f"  finished_shards: {ledger.finished_shards}")
-
-    # The exemplar should match the output structure of tokenization
-    exemplar = {"input_ids": np.array([0], dtype=np.int32)}
-    cache = TreeCache.load(str(train_cache_dir), exemplar=exemplar)
-
-    cache_len = len(cache)
-    assert cache_len == ledger.total_num_rows, f"Cache length {cache_len} != ledger rows {ledger.total_num_rows}"
-
-    first_example = cache[0]
-    assert "input_ids" in first_example, "Example should have input_ids field"
-
-    print("\nFirst 5 examples:")
-    for i in range(min(5, cache_len)):
-        example = cache[i]
-        print(f"  Example {i}: input_ids length = {len(example['input_ids'])}")
-        assert len(example["input_ids"]) > 0, f"Example {i} has empty input_ids"
-
-    # 8. Test that the cache can be used in a mixture without ZeroDivisionError
-
-    mixture = MixtureDataset(
-        datasets={"test": cache},
-        weights={"test": 1.0},
-        block_size=128,
-        key=jax.random.PRNGKey(0),
-    )
-
-    # This should not raise ZeroDivisionError
-    mixture_example = asyncio.run(mixture.getitem_async(0))
-    assert mixture_example is not None
-    assert "input_ids" in mixture_example
-    print("\nSuccessfully created mixture and sampled example!")
-
-
-@pytest.mark.slow
-def test_tokenize_skips_empty_leading_shard(tmp_path):
-    """Regression for #5790: a sparse leading shard (empty parquet) must not break
-    tokenization. The consolidation exemplar is taken from the first non-empty shard."""
+def test_tokenize_skips_empty_leading_data(tmp_path):
+    """Empty shards and documents must not determine the cache exemplar."""
     # train_paths must not contain "test"; pytest's tmp_path always does.
     with tempfile.TemporaryDirectory(prefix="sparse_") as raw_dir:
         data_dir = Path(raw_dir)
@@ -198,7 +134,7 @@ def test_tokenize_skips_empty_leading_shard(tmp_path):
             str(data_dir / "data-00000.parquet"),
         )
         pq.write_table(
-            pa.table({"text": ["hello world"]}),
+            pa.table({"text": ["", "hello world"]}),
             str(data_dir / "data-00001.parquet"),
         )
 

@@ -1,0 +1,21 @@
+schema_version: 1
+code: ml-there-must-be-a-better-way
+lane: meta
+title: The design imposes avoidable work on callers or maintainers
+minimum_confidence: 0.7
+prompt: |-
+  Reconstruct the contract from an actual caller and its observable outcome.
+  Sketch how the base system could meet that need. Walk the proposed and
+  alternative designs through the same use and one variation grounded in the
+  repository. Look for decisions a caller has to reconstruct or edits that
+  must agree for the change to work.
+
+  Emit when you can cite the affected sites, show the extra obligation the
+  PR creates, and name a concrete change that removes it while preserving
+  required behavior. The cost can be a misleading choice at an entry point
+  or a change that must be coordinated across owners. Count the decisions
+  callers must get right rather than the lines in the alternative.
+
+  Suppress when the responsibilities vary independently, an external contract
+  requires the distinction, or the alternative just moves the same work.
+  Prefer a more specific meta rule when it describes the same issue.

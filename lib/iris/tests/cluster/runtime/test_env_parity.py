@@ -20,12 +20,15 @@ from iris.cluster.runtime.env import (
     build_common_iris_env,
     with_slice_topology_env,
 )
+from iris.preemption import DEFAULT_TERMINATION_GRACE
 from iris.rpc import job_pb2
+from rigging.timing import Duration
 
 
 def _make_req(
     task_id: str = "/my-job/task-0",
     attempt_id: int = 0,
+    attempt_uid: str = "attempt-uid-abc",
     num_tasks: int = 1,
     bundle_id: str = "bundle-abc",
     setup_scripts: list[str] | None = None,
@@ -37,8 +40,10 @@ def _make_req(
     ports: list[str] | None = None,
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
+    req.termination_grace.milliseconds = DEFAULT_TERMINATION_GRACE.to_ms()
     req.task_id = task_id
     req.attempt_id = attempt_id
+    req.attempt_uid = attempt_uid
     req.num_tasks = num_tasks
     req.bundle_id = bundle_id
     req.entrypoint.run_command.argv.extend(["python", "train.py"])
@@ -62,13 +67,16 @@ def _common_env(req: job_pb2.RunTaskRequest, controller_address: str | None = No
     return build_common_iris_env(
         task_id=req.task_id,
         attempt_id=req.attempt_id,
+        attempt_uid=req.attempt_uid,
         num_tasks=req.num_tasks,
         bundle_id=req.bundle_id,
         controller_address=controller_address,
+        task_token=req.task_token or None,
         environment=req.environment,
         constraints=req.constraints,
         ports=req.ports,
         resources=req.resources if req.HasField("resources") else None,
+        termination_grace=Duration.from_ms(req.termination_grace.milliseconds),
     )
 
 
@@ -78,7 +86,7 @@ def _k8s_env(req: job_pb2.RunTaskRequest, controller_address: str | None = None)
     config = PodConfig(
         namespace="test", default_image="img:latest", controller_address=controller_address, local_queue="iris-lq"
     )
-    manifest = _build_pod_manifest(req, config)
+    manifest = _build_pod_manifest(req, config, worker_region=None)
     env_list = manifest["spec"]["containers"][0]["env"]
     return {e["name"]: e["value"] for e in env_list if "value" in e}
 

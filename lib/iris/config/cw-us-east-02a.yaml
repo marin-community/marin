@@ -12,7 +12,7 @@
 #
 # Workflow:
 #   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
-#      Access Keys). `iris cluster start` turns them into the iris-task-env
+#      Access Keys). `iris cluster start` turns them into the iris-storage-secrets
 #      Secret (addressing style is derived from the endpoint domain):
 #        export CW_KEY_ID=<coreweave-access-key-id>
 #        export CW_KEY_SECRET=<coreweave-access-key-secret>
@@ -29,8 +29,9 @@ name: cw-us-east-02a
 # External finelog log server (in-cluster k8s Deployment, namespace `iris`).
 # Resolves to k8s://finelog-cw-use02a.iris; see lib/finelog/config/cw-us-east-02a.yaml.
 # Without this the controller falls back to an in-process MemStore (logs lost on
-# restart). Deploy the server first: `uv run finelog deploy up cw-us-east-02a`. Forwarding
-# to the hub lives in that server's own `forwarding:` block.
+# restart). Deploy the server first with the `infra/finelog` Pulumi stack; see
+# `infra/finelog/README.md`. Forwarding to the hub lives in that server's own
+# `forwarding:` block.
 finelog:
   config: cw-us-east-02a
 
@@ -38,6 +39,10 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-02a.oa.dev
 federation_public_parent: https://iris.oa.dev
+budget_parent: marin
+endpoints:
+  /system/zephyr-history:
+    uri: https://marina.oa.dev/zephyr/
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Opaque to Iris.
 provisioning:
@@ -45,6 +50,7 @@ provisioning:
   coreweave:
     cluster: { name: marin-gpu, zone: US-EAST-02A }
     kueue:
+      cpu_scale_group: cpu-genoa
       flavor_topology: infiniband  # H100 IB cluster: bind the flavor to the infiniband topology
     ingress:
       ingress_class: traefik
@@ -57,6 +63,10 @@ provisioning:
     rbac: { service_account: iris-controller }
     grafana_observer_rbac:
       usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
+    loom_session_rbac:
+      usernames:
+        - cwtoken-uhBSRqWXRtyV7WWciRtYr-loom-token
+        - cwtoken-umHabiNiEWJbDFZqyTwbP-ops-loom-token
 
 platform:
   label_prefix: cw-use02a
@@ -87,11 +97,12 @@ storage:
 # `signing_key` signs this controller's worker and /proxy tokens. The controller pod
 # has no GCP credentials, so `iris cluster up` resolves the Secret Manager reference in
 # the operator's shell and projects it as IRIS_SIGNING_KEY through the
-# iris-controller-env Secret, which task pods do not mount. Rotate with
+# iris-controller-secrets Secret, which task pods do not mount. Rotate with
 # `iris cluster init-keys --rotate`.
 auth:
+  principal_directory:
+    - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
   signing_key:
-    - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-us-east-02a-signing-key/versions/1
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
   federation_peers:
@@ -104,25 +115,36 @@ auth:
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
   allowed_submitters:
+    - principal:human-080
     - "*@openathena.ai"
-    - infra-probes@hai-gcp-models.iam.gserviceaccount.com
+    - principal:human-076
+    - iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
+    - morrisy@stanford.edu
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris
+  # CoreWeave's gvisor RuntimeClass (deprecated by CoreWeave,
+  # https://docs.coreweave.com/products/cks/container-runtimes/reference).
+  # Sandboxes do not start under it on this cluster's nodes, so task-curation runs
+  # pass --image-backend daytona here. https://github.com/marin-community/marin/issues/11343
+  # tracks the replacement runtime.
+  sandbox_runtime_class: gvisor
+  node_health:
+    storage:
+      scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-02a
+      minimum_healthy_nodes: 2
+    max_cordoned_nodes: 1
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
+  cache_max_age:
+    seconds: 604800
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
   kueue:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
     # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
-  # CoreWeave's node health checker runs preemptible (priority -1) GPU
-  # verification pods on idle nodes. Kueue TAS counts them as fixed node usage
-  # and cannot preempt non-Kueue pods, so gangs queue behind every NHC sweep;
-  # Iris evicts them itself when it has gang work.
-  preempt_namespaces: ["cw-hpc-verification"]
-
 controller:
   image: ghcr.io/marin-community/iris-controller:latest
   checkpoint_interval_seconds: 600
@@ -130,6 +152,7 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-genoa
+    hostname: g530e1c
     # Off-cluster reach is the operator-managed, IP-locked federation ingress
     # (docs/coreweave.md, scripts/install_cw_network.py).
 
@@ -142,10 +165,7 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # The shared CoreWeave bucket (everything lives in marin-us-east-02a; LOTA
-    # caches reads locally). Task pods carry ONE endpoint/credential set, so R2
-    # data under s3://marin-na/ is not reachable from jobs unless they override
-    # AWS_ENDPOINT_URL and credentials themselves.
+    # Durable outputs remain in 02A; shared scratch uses the separate 08A bucket.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
     # H100 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
@@ -153,6 +173,12 @@ defaults:
     # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
     # silently unmatched by the current task image's NCCL build, breaking bootstrap.
     NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+    # A privileged task pod also sees the front-end Ethernet NIC's RoCE functions
+    # (mlx5_*, 100G) beside the eight InfiniBand rails (ibp0..ibp7). NCCL merges
+    # them into virtual NICs and routes channels over them; they do not reach the
+    # peer's rails, so transfers fail with IBV_WC_RETRY_EXC_ERR(12). Restrict NCCL
+    # to the rails, as CoreWeave documents.
+    NCCL_IB_HCA: "ibp"
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001
@@ -166,7 +192,7 @@ scale_groups:
     resources:
       cpu: 192       # cd-gp-a192-genoa: 192 vCPUs (96 physical Genoa 9454 cores)
       ram: 1536GB    # 1.5 TB on-node RAM (8 GB per vCPU)
-      disk: 7.68TB   # 7.68 TB local NVMe
+      disk: 6.98TiB   # 7.68 TB local NVMe (2x 3.84 TB)
       device_type: cpu
       capacity_type: on-demand
     worker:
@@ -186,7 +212,7 @@ scale_groups:
     resources:
       cpu: 128
       ram: 2048GB
-      disk: 1TB
+      disk: 27.94TiB  # 30.72 TB local NVMe (8x 3.84 TB)
       device_type: gpu
       device_variant: H100
       device_count: 8
@@ -202,27 +228,3 @@ scale_groups:
       coreweave:
         region: US-EAST-02A
         instance_type: gd-8xh100ib-i128
-
-# 42752 is 4 h100-8x nodes (32 GPUs) at full node resources.
-user_budgets:
-  - user_ids:
-      - benjaminfeuer
-      - betsy
-      - dlwh
-      - eczech
-      - held
-      - larry
-      - marin
-      - muchanem
-      - mwittmann
-      - power
-      - rav
-      - romain
-      - wmoss
-      - zack
-    budget_limit: 42752
-    max_band: PRIORITY_BAND_INTERACTIVE
-  # 171008 is 16 h100-8x nodes: half of this cluster's 32-node fleet.
-  - user_ids: [benjaminfeuer]
-    budget_limit: 171008
-    max_band: PRIORITY_BAND_INTERACTIVE

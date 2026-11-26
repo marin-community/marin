@@ -1,7 +1,7 @@
 {
   "type": "table",
   "title": "CoreWeave node health",
-  "description": "Node readiness, scheduler cordons, and CoreWeave kernel-deadlock and pending lifecycle state. KernelDeadlock=True pages after five minutes.",
+  "description": "Node inventory, readiness, scheduler cordons, and CoreWeave kernel-deadlock and pending lifecycle state. Select a node name to open its hardware history. KernelDeadlock=True pages after five minutes.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "k8s"
@@ -9,6 +9,24 @@
   "fieldConfig": {
     "defaults": {},
     "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "node"
+        },
+        "properties": [
+          {
+            "id": "links",
+            "value": [
+              {
+                "targetBlank": false,
+                "title": "Node details",
+                "url": "/d/marin-nodes?var-cluster=${__data.fields.cluster}&var-node=${__value.text}&from=${__from}&to=${__to}"
+              }
+            ]
+          }
+        ]
+      },
       {
         "matcher": {
           "id": "byName",
@@ -71,6 +89,36 @@
           "type": "string"
         },
         {
+          "selector": "node_pool",
+          "text": "node_pool",
+          "type": "string"
+        },
+        {
+          "selector": "gpu_model",
+          "text": "gpu_model",
+          "type": "string"
+        },
+        {
+          "selector": "gpu_capacity",
+          "text": "gpus",
+          "type": "number"
+        },
+        {
+          "selector": "rack_name",
+          "text": "rack",
+          "type": "string"
+        },
+        {
+          "selector": "node_state",
+          "text": "state",
+          "type": "string"
+        },
+        {
+          "selector": "ib_speed",
+          "text": "ib_speed",
+          "type": "string"
+        },
+        {
           "selector": "ready",
           "text": "ready",
           "type": "boolean"
@@ -103,6 +151,16 @@
         {
           "selector": "deadlock_message",
           "text": "deadlock_message",
+          "type": "string"
+        },
+        {
+          "selector": "error_class",
+          "text": "error_class",
+          "type": "string"
+        },
+        {
+          "selector": "error",
+          "text": "error",
           "type": "string"
         }
       ]

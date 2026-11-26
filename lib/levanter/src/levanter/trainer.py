@@ -10,7 +10,7 @@ import sys
 import typing
 import warnings
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 from pathlib import Path
 from typing import (
     Any,
@@ -30,7 +30,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath
+from rigging.filesystem.storage_path import StoragePath
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -62,11 +62,18 @@ from levanter.callbacks import (
     StepInfo,
     progress_event_scope,
 )
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfilerConfig, XlaDumpUploadConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
+from levanter.checkpoint import (
+    Checkpointer,
+    CheckpointerConfig,
+    CheckpointRetention,
+    is_checkpoint_path,
+    load_checkpoint_or_initialize,
+)
 from levanter.config import JsonAtom
+from levanter.field_dtype_overrides import check_field_dtype_overrides, with_field_dtype_overrides
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
@@ -140,7 +147,7 @@ class TrainerHooks:
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         for hook in self.hooks:
-            if force or (info.step > 1 and info.step % hook.every == 0):
+            if force or (info.next_step > 0 and info.next_step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
 
     def emit_event(self, event: ProgressEvent) -> None:
@@ -149,7 +156,7 @@ class TrainerHooks:
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
-            if force or (info.step > 1 and info.step % s_hook.every == 0):
+            if force or (info.next_step > 0 and info.next_step % s_hook.every == 0):
                 s_hook.fn.on_step(info, cb_info)
 
     def run_jit_hooks(self, state: TrainerState, jit_info: InsideJitInfo, force: bool = False) -> tuple[PyTree, ...]:
@@ -157,7 +164,7 @@ class TrainerHooks:
         hook_infos = []
         for hook in self.jit_hooks:
             hook_shape = eqx.filter_eval_shape(hook.fn.inside_step, state, jit_info)
-            fires = (state.step > 1) & (state.step % hook.every == 0)
+            fires = (state.step + 1) % hook.every == 0
             new_s = jax.lax.cond(
                 force or fires,
                 lambda: hook.fn.inside_step(state, jit_info),
@@ -297,6 +304,7 @@ class Trainer:
         self.optimizer = optimizer
         self._raw_loss_function = loss_fn
         self._checkpointer: Optional[Checkpointer] = None
+        self._xla_dump_upload: Callable[[StepInfo], None] | None = None
 
         # Use existing global tracker if available (e.g., from levanter.initialize()),
         # otherwise create a new one. This avoids calling wandb.init() twice.
@@ -334,8 +342,8 @@ class Trainer:
 
     @property
     def mp(self) -> jmp.Policy:
-        """Returns the mixed precision policy"""
-        return self.config.mp
+        """Returns the mixed precision policy, with ``field_dtype_overrides`` applied"""
+        return self.config.precision_policy
 
     @property
     def num_train_steps(self) -> int:
@@ -354,10 +362,23 @@ class Trainer:
     def add_hook(self, *, every: int = 1): ...
 
     def add_hook(self, fn: Optional[Callable[[StepInfo], Any] | Callback | JitCallback] = None, *, every: int = 1):
+        """Schedule a callback every ``every`` completed optimizer updates.
+
+        ``every=2`` runs after updates 2, 4, and 6. Callback ``StepInfo.step``
+        remains zero-based, so those updates have step indices 1, 3, and 5.
+        """
         return self.hooks.add_hook(fn, every=every)
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
+        if self._xla_dump_upload is not None:
+            self._xla_dump_upload(info)
+
+    def request_checkpoint(self, retention: CheckpointRetention) -> None:
+        """Request a checkpoint after the current step with the given retention."""
+        if self._checkpointer is None:
+            raise RuntimeError("Checkpointing is not configured")
+        self._checkpointer.request_checkpoint(retention)
 
     @property
     def parameter_axis_mapping(self) -> ResourceMapping:
@@ -448,31 +469,14 @@ class Trainer:
             TrainerState: the initial state,
         """
         model_init = _unify_model_and_model_init(model, model_init)
-
-        del model
         assert model_init is not None
 
         # first try to load a full trainer state checkpoint
-        checkpoint_search_paths = self.checkpoint_search_paths
-
-        load_checkpoint = self.config.load_checkpoint
-        # we don't save the full trainer state, so we need to filter out the non-trainable parameters
-        if load_checkpoint is True and not any(StoragePath(path).exists() for path in checkpoint_search_paths):
-            raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
-        elif load_checkpoint is None:
-            load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
-
-        if load_checkpoint is False and self.config.initialize_from is not None:
-            # we're not going to load a checkpoint from this run, so instead we can initialize from a different run
-            logger.info(f"Initializing from {self.config.initialize_from}")
-            load_checkpoint = True
-            checkpoint_path = self.config.initialize_from
-            checkpoint_search_paths = [checkpoint_path]
-            if not is_checkpoint_path(checkpoint_path):
-                raise ValueError(f"initialize_from must be a checkpoint path, got {checkpoint_path}")
+        checkpoint_search_paths, load_checkpoint = self.checkpoint_load_plan()
 
         def init_state_and_model(model_init, training_key):
             model = model_init()
+            check_field_dtype_overrides(model, self.config.field_dtype_overrides)
             # only force trainable params to param precision. Other params are cast to compute precision
             state = TrainerState.init(
                 self.optimizer,
@@ -484,6 +488,11 @@ class Trainer:
                 model_averaging=self.config.model_averaging,
             )
             return state
+
+        if model is not None and not load_checkpoint:
+            # The concrete model is on its target mesh. Avoid a compiled init/merge with
+            # another live copy of its parameters.
+            return init_state_and_model(model_init, training_key)
 
         trainer_state_shape = eqx.filter_eval_shape(init_state_and_model, model_init, training_key)
         saveable_train_state = saveable_training_mask(trainer_state_shape, is_trainable)
@@ -500,6 +509,26 @@ class Trainer:
 
         return state
 
+    def checkpoint_load_plan(self) -> tuple[list[str], bool]:
+        """Resolve whether to restore a trainer checkpoint and where to find it."""
+        checkpoint_search_paths = self.checkpoint_search_paths
+        load_checkpoint = self.config.load_checkpoint
+        if load_checkpoint is True and not any(StoragePath(path).exists() for path in checkpoint_search_paths):
+            raise FileNotFoundError(f"Checkpoint search paths do not exist: {checkpoint_search_paths}")
+        elif load_checkpoint is None:
+            load_checkpoint = any(levanter.checkpoint.is_checkpoint_path(path) for path in checkpoint_search_paths)
+
+        if load_checkpoint is False and self.config.initialize_from is not None:
+            # we're not going to load a checkpoint from this run, so instead we can initialize from a different run
+            logger.info(f"Initializing from {self.config.initialize_from}")
+            load_checkpoint = True
+            checkpoint_path = self.config.initialize_from
+            checkpoint_search_paths = [checkpoint_path]
+            if not is_checkpoint_path(checkpoint_path):
+                raise ValueError(f"initialize_from must be a checkpoint path, got {checkpoint_path}")
+
+        return checkpoint_search_paths, load_checkpoint
+
     @property
     def checkpoint_search_paths(self) -> list[str]:
         return self.config.checkpoint_search_paths(self.run_id)
@@ -515,7 +544,7 @@ class Trainer:
         # jit hooks impose a nontrivial cost even when they're not run (since they defeat some compiler optimizations)
         # so we avoid running them when they're not needed
         # this results in two compiles, but the cost of the second compile is worth it
-        hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+        hooks_this_time = any((state.step + 1) % h.every == 0 for h in self.hooks.jit_hooks)
 
         self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
@@ -606,7 +635,6 @@ class Trainer:
                 "No training steps were executed. The dataset may be empty or there are no steps left to run."
             )
 
-        # force hooks to run at the end
         self.run_hooks(info, force=True)
 
         return info
@@ -653,6 +681,8 @@ class Trainer:
                 every=1,
             )
 
+        self._xla_dump_upload = self.config.xla_dump_upload.build(self.run_id)
+
     def add_eval_hook(self, eval_dataset, name: Optional[str] = None):
         eval_loader = self.data_loader(eval_dataset, self.EvalBatch)
 
@@ -660,7 +690,6 @@ class Trainer:
 
             @eqx.filter_jit
             def eval_loss(model, *batch, **batch_kwargs):
-                model = self.mp.cast_to_compute(model)
                 return self.loss_fn(model, *batch, **batch_kwargs, key=None)
 
             self.add_hook(
@@ -700,7 +729,7 @@ class Trainer:
             max_buffered_batches=128,
             mesh=self.device_mesh,
             axis_resources=self.compute_axis_mapping,
-            prefetch_size=32,
+            fetch_batch_size=32,
             batch_axis_name=batch_name,
             allow_nondivisible_batch_size=self.config.allow_nondivisible_batch_size,
         )
@@ -773,7 +802,8 @@ class Trainer:
         Batch = _resolve_axis_in_tree((batch, batch_kwargs), self.config.batch_axis_name)
 
         # loss_fn always returns (loss, metrics), so has_aux=True
-        grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+        # Only batch inputs should be split; raw model dimensions can match the batch size.
+        grad_fn = partial(eqx.filter_value_and_grad(loss_fn, has_aux=True), model)
 
         mbs = self.config.microbatch_size
         if mbs is not None:
@@ -786,7 +816,7 @@ class Trainer:
             )
 
         with hax.axis_mapping(self.compute_axis_mapping):
-            (loss, metrics), grads = grad_fn(model, *batch, **batch_kwargs)
+            (loss, metrics), grads = grad_fn(*batch, **batch_kwargs)
 
         return loss, grads, metrics
 
@@ -846,6 +876,13 @@ def _initialize_global_tracker(config, run_id):
 class TrainerConfig:
     seed: int = 0  # random seed
     mp: jmp.Policy = jmp.get_policy("f32")  # mixed precision policy
+    field_dtype_overrides: dict[str, jnp.dtype] = field(default_factory=dict)
+    """Model attribute name, matched at any depth (e.g. ``router_bias``), to the floating dtype it keeps.
+
+    ``mp`` casts an overridden field only to its own dtype: in the trainer state and the compute view, on HF load in
+    train_lm, train_dpo and lora_lm, and in HF exports. The eval and sampling entry points still load HF checkpoints in
+    the compute dtype. In YAML: ``field_dtype_overrides: {router_bias: float32}``.
+    """
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
 
@@ -856,6 +893,7 @@ class TrainerConfig:
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
     profiler: ProfilerConfig = ProfilerConfig()
+    xla_dump_upload: XlaDumpUploadConfig = XlaDumpUploadConfig()
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig()
     """Optional deadlines for training-step and whole-process progress events."""
 
@@ -876,6 +914,11 @@ class TrainerConfig:
     This is required for code paths that call `jax.sharding.reshard(..., PartitionSpec(...))`,
     because JAX disallows using named `PartitionSpec`s under `AxisType.Auto`/`AxisType.Manual` meshes.
     """
+
+    @property
+    def precision_policy(self) -> jmp.Policy:
+        """``mp`` with ``field_dtype_overrides`` applied."""
+        return with_field_dtype_overrides(self.mp, self.field_dtype_overrides)
 
     @property
     def batch_axis_name(self) -> str | None:
@@ -904,12 +947,17 @@ class TrainerConfig:
     checkpointer: CheckpointerConfig = field(default_factory=CheckpointerConfig)
     load_checkpoint: Optional[bool] = None
     """if None (default), we'll load a checkpoint if it exists. If true, we must load a checkpoint"""
-    load_checkpoint_path: Optional[str] = None
-    """can be a parent (to find latest) or a specific checkpoint. if None, will set to checkpointer.base_path."""
+    load_checkpoint_path: Optional[str | list[str]] = None
+    """One checkpoint root/path, or ordered roots searched for the newest checkpoint.
+
+    If None, search the checkpointer's permanent and temporary roots.
+    """
 
     def checkpoint_search_paths(self, run_id: str) -> list[str]:
-        if self.load_checkpoint_path is not None:
+        if isinstance(self.load_checkpoint_path, str):
             return [self.load_checkpoint_path]
+        if self.load_checkpoint_path is not None:
+            return list(self.load_checkpoint_path)
 
         paths = [self.checkpointer.expanded_path(run_id)]
         temp_path = self.checkpointer.expanded_temporary_path(run_id)
@@ -975,19 +1023,22 @@ class TrainerConfig:
         # Can't do full logging setup until we've initialized jax b/c we use jax for rank id
         pylogging.basicConfig(level=pylogging.WARNING)
         self.distributed.initialize()
+        # Importing cutlass.jax may initialize the XLA backend, so install its
+        # cache only after jax.distributed.initialize().
+        install_cutlass_kernel_cache(cutlass_kernel_cache())
+
+        if self.require_accelerator is None:
+            self.require_accelerator = not sys.platform.startswith("darwin")
+
+        if self.require_accelerator and jax.default_backend() == "cpu":
+            raise RuntimeError("No accelerator found. Please run on a TPU or GPU.")
+
         self._validate_and_set_defaults()
 
         id = self._maybe_set_id()
         levanter.utils.logging.init_logging(self.log_dir, f"{id}.log")
         _initialize_global_tracker(self.tracker, id)
         levanter.tracker.log_summary({"hardware_topology": hardware_topology_summary()})
-
-        if self.require_accelerator is None:
-            self.require_accelerator = not sys.platform.startswith("darwin")
-
-        if self.require_accelerator:
-            if jax.default_backend() == "cpu":
-                raise RuntimeError("No accelerator found. Please run on a TPU or GPU.")
 
         if self.shutdown_at_exit is not False:
             if isinstance(self.shutdown_at_exit, bool):
@@ -1071,10 +1122,6 @@ class TrainerConfig:
 
         if self.jax_compilation_cache_dir is not None:
             jax.config.update("jax_compilation_cache_dir", self.jax_compilation_cache_dir)
-
-        # Route CuTeDSL kernel compiles through the standard persistent cache; a
-        # no-op when cutlass.jax will not import (a CPU task on the GPU image).
-        install_cutlass_kernel_cache(cutlass_kernel_cache())
 
     def _maybe_set_id(self):
         # always do this so we don't get weird hangs if the id isn't set right

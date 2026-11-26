@@ -19,7 +19,7 @@ from rigging.server_auth import (
     _extract_cookie,
     _verified_identity,
     get_verified_identity,
-    get_verified_user,
+    is_trusted_loopback,
     require_identity,
     resolve_auth,
 )
@@ -65,7 +65,7 @@ def test_policy_interceptor_passes_valid_token(interceptor):
     captured_user = []
 
     def handler(req, ctx):
-        captured_user.append(get_verified_user())
+        captured_user.append(get_verified_identity().user_id)
         return "ok"
 
     result = interceptor.intercept_unary_sync(handler, "request", ctx)
@@ -78,7 +78,7 @@ def test_policy_interceptor_accepts_session_cookie(interceptor):
     captured_user = []
 
     def handler(req, ctx):
-        captured_user.append(get_verified_user())
+        captured_user.append(get_verified_identity().user_id)
         return "ok"
 
     result = interceptor.intercept_unary_sync(handler, "request", ctx)
@@ -96,7 +96,7 @@ def test_policy_interceptor_prefers_bearer_over_cookie(interceptor):
     captured_user = []
 
     def handler(req, ctx):
-        captured_user.append(get_verified_user())
+        captured_user.append(get_verified_identity().user_id)
         return "ok"
 
     interceptor.intercept_unary_sync(handler, "request", ctx)
@@ -130,14 +130,13 @@ def test_policy_interceptor_cleans_up_context_on_handler_error(interceptor):
     ctx = _make_ctx({"authorization": "Bearer valid-token-alice"})
 
     def failing_handler(req, ctx):
-        assert get_verified_user() == "alice"
+        assert get_verified_identity().user_id == "alice"
         raise RuntimeError("handler failed")
 
     with pytest.raises(RuntimeError, match="handler failed"):
         interceptor.intercept_unary_sync(failing_handler, "request", ctx)
 
-    # Verified user should be cleaned up after handler exits
-    assert get_verified_user() is None
+    assert get_verified_identity() is None
 
 
 # --- IAP signed-header assertion -> implicit read-only dashboard identity -----
@@ -273,6 +272,59 @@ def test_resolve_auth_loopback_admin_when_no_assertion():
     assert identity == ANONYMOUS_ADMIN
 
 
+# --- Loopback trust: the SSH-tunnel path (lib/iris/docs/auth-loopback-transition.md) ---
+
+
+@pytest.mark.parametrize(
+    "client_address,headers,expected",
+    [
+        # Genuine direct loopback peer (SSH tunnel / on-host): nonzero port, no XFF.
+        ("127.0.0.1:54321", {}, True),
+        ("::1:54321", {}, True),
+        # Forwarded value: uvicorn zeroes the port when it derives the client
+        # from X-Forwarded-For, so a public client spoofing 127.0.0.1 lands here.
+        ("127.0.0.1:0", {"x-forwarded-for": "127.0.0.1"}, False),
+        # Port 0 alone (forwarded) is disqualifying even without the header check.
+        ("127.0.0.1:0", {}, False),
+        # A genuine loopback peer that nonetheless carries XFF (a proxy in front)
+        # is not trusted: trust means "no proxy between caller and controller".
+        ("127.0.0.1:54321", {"x-forwarded-for": "203.0.113.7"}, False),
+        # Non-loopback peers are never trusted.
+        ("203.0.113.7:443", {}, False),
+        ("10.0.0.5:8080", {}, False),
+        # Missing / malformed addresses.
+        (None, {}, False),
+        ("garbage", {}, False),
+    ],
+)
+def test_is_trusted_loopback(client_address, headers, expected):
+    assert is_trusted_loopback(client_address, headers) is expected
+
+
+def test_resolve_auth_token_wins_over_loopback():
+    """A present token is verified even on a loopback connection."""
+    verifier = MockVerifier({"tok": "alice"})
+    identity = resolve_auth(
+        AuthRequest(token="tok", headers={}, client_address="127.0.0.1:54321"),
+        RequestAuthPolicy.enforcing(verifier=verifier).authenticators,
+    )
+    assert identity is not None
+    assert identity.user_id == "alice"
+
+
+def test_resolve_auth_spoofed_loopback_rejected():
+    """A public caller spoofing X-Forwarded-For: 127.0.0.1 must not be trusted.
+
+    uvicorn rewrites scope["client"] to ("127.0.0.1", 0) and the X-Forwarded-For
+    header is present — both disqualify the connection from loopback trust.
+    """
+    with pytest.raises(ValueError, match="Missing authentication"):
+        resolve_auth(
+            AuthRequest(token=None, headers={"x-forwarded-for": "127.0.0.1"}, client_address="127.0.0.1:0"),
+            RequestAuthPolicy.enforcing(verifier=MockVerifier({})).authenticators,
+        )
+
+
 # --- CIDR network-location trust ---------------------------------------------
 
 
@@ -361,7 +413,7 @@ def test_different_users_get_different_identities(interceptor):
     users = []
 
     def capture_handler(req, ctx):
-        users.append(get_verified_user())
+        users.append(get_verified_identity().user_id)
         return "ok"
 
     ctx_alice = _make_ctx({"authorization": "Bearer valid-token-alice"})

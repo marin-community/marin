@@ -3,7 +3,7 @@
 
 """Per-attempt terminal reasons observed through Kubernetes reconciliation."""
 
-from .conftest import observe_pod_update
+from iris.testing.k8s import observe_pod_update
 
 TERMINAL_REASON_MAX_CHARS = 500
 

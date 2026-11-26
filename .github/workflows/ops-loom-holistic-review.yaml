@@ -1,0 +1,64 @@
+name: "Ops - Loom Holistic Review"
+
+# Keep one channel per PR and deduplicate deliveries of the same head.
+on:
+  pull_request_target:
+    types: [opened, ready_for_review, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout trusted workflow actions
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/launch-loom-run
+            .github/actions/check-write-access
+          sparse-checkout-cone-mode: false
+
+      - name: Check author write access
+        id: author
+        uses: ./.github/actions/check-write-access
+        with:
+          login: ${{ github.event.pull_request.user.login }}
+          allowed-bots: |
+            marin-ops-agent[bot]
+            loom-oa-dev[bot]
+
+      - name: Launch Loom holistic review
+        if: steps.author.outputs.allowed == 'true'
+        uses: ./.github/actions/launch-loom-run
+        with:
+          profile: ${{ vars.LOOM_PR_HOLISTIC_REVIEW_PROFILE }}
+          channel: pr-holistic:${{ github.event.pull_request.number }}
+          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          title: "Holistic review for #${{ github.event.pull_request.number }}"
+          goal: >-
+            Review pull request #${{ github.event.pull_request.number }} at head
+            ${{ github.event.pull_request.head.sha }} as a whole change. If the
+            session worktree is at a different commit, fetch this exact SHA from
+            origin and check it out detached before reviewing. Remain
+            read-only except for creating or replacing the original holistic
+            overview comment and optionally creating one new top-level
+            comment with new or materially changed actionable findings. Run
+            review-pr in holistic mode with --comment. Read the skill and its
+            references from the workflow revision ${{ github.workflow_sha }}
+            with git show, fetching that commit from origin if needed. Use the
+            PR revisions for the code and its scoped project instructions.
+            Publish a typed result.
+          base: ${{ github.event.pull_request.head.sha }}
+          github-issue: ${{ github.event.pull_request.number }}

@@ -1,0 +1,589 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+from evaldash.samples import fetch_artifact, fetch_samples, list_sample_tasks
+from evalrecords.lm_eval_samples import export_lm_eval_samples, sample_from_lm_eval
+from evalrecords.records import MetricKind
+from finestore.eval import (
+    SAMPLES_MERGE_KEY,
+    Choice,
+    EvalSample,
+    EvaluationStore,
+    SampleKind,
+    sample_to_archive_row,
+    write_sample_parquet,
+)
+from fsspec.core import url_to_fs
+
+
+def test_sample_reader_returns_typed_filtered_page(tmp_path) -> None:
+    fs, root = url_to_fs(str(tmp_path))
+    samples = [
+        EvalSample(
+            task="arc",
+            doc_id="correct",
+            kind=SampleKind.GENERATION,
+            prompt_text="Question one",
+            output="A",
+            target_text="A",
+            metrics={"acc_norm,none": 1.0},
+            correct=True,
+        ),
+        EvalSample(
+            task="arc",
+            doc_id="incorrect",
+            kind=SampleKind.GENERATION,
+            prompt_text="Question two",
+            output="B",
+            target_text="A",
+            metrics={"acc_norm,none": 0.0},
+            correct=False,
+        ),
+    ]
+    write_sample_parquet(fs, f"{root}/samples_arc_20260719.parquet", samples)
+
+    tasks = list_sample_tasks(str(tmp_path))
+    page = fetch_samples(str(tmp_path), "arc", offset=0, limit=1, correct="incorrect")
+
+    assert tasks.model_dump(mode="json") == {
+        "available": True,
+        "error": None,
+        "tasks": [{"task": "arc", "files": 1}],
+    }
+    assert page.primary_metric == "acc_norm,none"
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
+    assert page.total == 1
+    assert page.offset == 0
+    assert page.limit == 1
+    assert [row.doc_id for row in page.rows] == ["incorrect"]
+
+
+@pytest.mark.parametrize("declared", ["f1", "f1,none"])
+def test_sample_reader_uses_the_declared_primary_metric(tmp_path, declared) -> None:
+    fs, root = url_to_fs(str(tmp_path))
+    sample = EvalSample(
+        task="drop",
+        doc_id="1",
+        kind=SampleKind.GENERATION,
+        metrics={"exact_match,none": 0.0, "f1,none": 0.5},
+        correct=False,
+    )
+    write_sample_parquet(fs, f"{root}/samples_drop_20260719.parquet", [sample])
+
+    page = fetch_samples(str(tmp_path), "drop", offset=0, limit=1, correct="all", primary_metric_name=declared)
+
+    assert page.primary_metric == "f1,none"
+
+
+def test_grading_is_derived_and_round_trips(tmp_path) -> None:
+    fs, root = url_to_fs(str(tmp_path))
+    sample = sample_from_lm_eval(
+        "gsm8k",
+        {
+            "doc_id": 3,
+            "arguments": [["2+2?", " 4"]],
+            "resps": [[" 4"]],
+            "target": "4",
+            "exact_match,flexible-extract": 1.0,
+        },
+    )
+    write_sample_parquet(fs, f"{root}/samples_gsm8k_20260723.parquet", [sample])
+
+    page = fetch_samples(str(tmp_path), "gsm8k", offset=0, limit=1, correct="all")
+
+    (row,) = page.rows
+    assert row.grading is not None
+    assert row.grading.method == "lm-eval:exact_match"
+    assert row.grading.metric == "exact_match,flexible-extract"
+    assert row.grading.filter == "flexible-extract"
+    assert row.grading.passed is True
+
+
+def test_sample_export_uses_the_declared_metric():
+    sample = sample_from_lm_eval(
+        "drop",
+        {
+            "doc_id": 1,
+            "arguments": [["Question"]],
+            "resps": [["answer"]],
+            "target": "answer",
+            "exact_match,none": 0.0,
+            "f1,none": 1.0,
+        },
+        "f1",
+    )
+
+    assert sample.correct is True
+    assert sample.grading is not None
+    assert sample.grading.metric == "f1,none"
+
+
+def test_mrcr_sample_scores_survive_export_and_repair_existing_rows(tmp_path) -> None:
+    raw = {
+        "doc_id": 0,
+        "arguments": [["Prepend nonce to the requested answer"]],
+        "resps": [["nonce wrong answer"]],
+        "target": "nonce right answer",
+        "accuracy": 0.25,
+        "prefix_hit": 1.0,
+    }
+    exported = sample_from_lm_eval("mrcr", raw, "mrcr_accuracy")
+    assert exported.grading is not None
+    assert exported.grading.metric == "accuracy"
+    assert exported.grading.score == 0.25
+    assert exported.correct is False
+
+    fs, root = url_to_fs(str(tmp_path))
+    old_row = exported.model_copy(update={"grading": None, "correct": None})
+    perfect = old_row.model_copy(update={"doc_id": "1", "metrics": {"accuracy": 1.0, "prefix_hit": 1.0}})
+    write_sample_parquet(fs, f"{root}/samples_mrcr_20260927.parquet", [old_row, perfect])
+
+    page = fetch_samples(
+        str(tmp_path), "mrcr", offset=0, limit=10, correct="incorrect", primary_metric_name="mrcr_accuracy"
+    )
+    assert page.primary_metric == "accuracy"
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
+    assert [row.doc_id for row in page.rows] == ["0"]
+    assert page.rows[0].grading is not None
+    assert page.rows[0].grading.score == 0.25
+    assert page.rows[0].correct is False
+
+
+def test_artifact_fetch_returns_run_local_object(tmp_path) -> None:
+    results = tmp_path / "results"
+    trajectory = results / "trajectories" / "aime_68.json"
+    trajectory.parent.mkdir(parents=True)
+    trajectory.write_text('{"steps": []}')
+
+    artifact = fetch_artifact(str(results), str(trajectory))
+
+    assert artifact.available is True
+    assert artifact.reason is None
+    assert artifact.media_type == "application/json"
+    assert artifact.truncated is False
+    assert artifact.text == '{"steps": []}'
+
+
+def test_artifact_fetch_rejects_out_of_tree_uri(tmp_path) -> None:
+    results = tmp_path / "results"
+    results.mkdir()
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"secret": true}')
+
+    artifact = fetch_artifact(str(results), str(secret))
+
+    assert artifact.available is False
+    assert artifact.text is None
+    assert "outside the run results directory" in (artifact.reason or "")
+
+
+def test_artifact_fetch_rejects_parent_traversal(tmp_path) -> None:
+    results = tmp_path / "results"
+    (results / "trajectories").mkdir(parents=True)
+
+    artifact = fetch_artifact(str(results), f"{results}/trajectories/../../secret.json")
+
+    assert artifact.available is False
+    assert "outside the run results directory" in (artifact.reason or "")
+
+    sotopia_artifact = fetch_artifact(str(results), "sotopia-summary://../secret")
+    assert sotopia_artifact.available is False
+    assert sotopia_artifact.text is None
+    assert fetch_artifact(str(results), "sotopia-summary://..").available is False
+
+
+def test_artifact_fetch_missing_object_degrades(tmp_path) -> None:
+    results = tmp_path / "results"
+    results.mkdir()
+
+    artifact = fetch_artifact(str(results), f"{results}/trajectories/absent.json")
+
+    assert artifact.available is False
+    assert artifact.text is None
+    assert artifact.reason is not None
+
+
+def test_artifact_fetch_enforces_size_cap(tmp_path) -> None:
+    results = tmp_path / "results"
+    big = results / "trajectories" / "big.json"
+    big.parent.mkdir(parents=True)
+    big.write_text("x" * 4096)
+
+    artifact = fetch_artifact(str(results), str(big), max_bytes=1024)
+
+    assert artifact.available is False
+    assert artifact.truncated is True
+    assert artifact.text is None
+
+
+def test_artifact_fetch_without_results_path_degrades() -> None:
+    artifact = fetch_artifact(None, "gs://bucket/runs/x/results/trajectories/aime_68.json")
+
+    assert artifact.available is False
+    assert artifact.reason == "run has no results_path"
+
+
+# The tests below were part of the eval-archive suite in the main repository; they assert what this
+# reader makes of an archive the eval runners wrote, so they live with the reader.
+
+
+def _mcq(doc_id: str, *, correct: bool) -> EvalSample:
+    return EvalSample(
+        task="arc",
+        doc_id=doc_id,
+        kind=SampleKind.MULTIPLE_CHOICE,
+        prompt_text="Q?",
+        choices=[Choice(label="A", text="a", loglikelihood=-1.0), Choice(label="B", text="b", loglikelihood=-2.0)],
+        model_choice=0,
+        target_choice=0 if correct else 1,
+        metrics={"acc": 1.0 if correct else 0.0},
+        correct=correct,
+    )
+
+
+def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: str) -> dict:
+    """One lm-eval --log_samples row: a task applying two filters writes one of these per filter."""
+    return {
+        "doc_id": doc_id,
+        "doc": {"question": "2+2?"},
+        "target": "4",
+        "arguments": [["Question: 2+2?"]],
+        "resps": [[response]],
+        "filtered_resps": [response],
+        "filter": extraction_filter,
+        "metrics": ["exact_match"],
+        "exact_match": score,
+        "schema_version": 1,
+        "task_name": "gsm8k",
+    }
+
+
+def _write_jsonl(results, rows: list[dict]):
+    path = results / "gsm8k_5shot" / "model" / "samples_gsm8k_20260807.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n")
+    return path
+
+
+def test_evaldash_reads_the_archive(tmp_path):
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    store.add_sample(_mcq("1", correct=True))
+    store.add_sample(_mcq("2", correct=False))
+    store.seal()
+    store.close()
+
+    tasks = list_sample_tasks(root)
+    assert tasks.available
+    assert [task.task for task in tasks.tasks] == ["arc"]
+
+    page = fetch_samples(root, "arc", offset=0, limit=10, correct="all")
+    assert page.available
+    assert page.counts == page.counts.model_copy(update={"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0})
+    assert {row.doc_id for row in page.rows} == {"1", "2"}
+    assert page.primary_metric == "acc"
+
+    incorrect = fetch_samples(root, "arc", offset=0, limit=10, correct="incorrect")
+    assert [row.doc_id for row in incorrect.rows] == ["2"]
+
+
+def test_ungraded_sample_reads_back_with_empty_metrics(tmp_path):
+    # metrics is a pinned map<string,double>. A batch that writes no metrics leaves that column null on
+    # disk (the write path drops an all-empty dict column); the reader must normalize the null back to
+    # an empty dict, not fail validation nor invent a zero.
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    store.add_sample(EvalSample(task="gsm8k", doc_id="1", kind=SampleKind.GENERATION, output="4"))
+    store.seal()
+    store.close()
+
+    page = fetch_samples(root, "gsm8k", offset=0, limit=10, correct="all")
+    assert page.available
+    assert page.counts.ungraded == 1
+    assert page.primary_metric is None
+    assert page.rows[0].metrics == {}
+    assert page.rows[0].correct is None
+
+
+def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):
+    # Two rows per document would list every question twice and make the correctness counts
+    # disagree with the headline score, so the browser picks one filter and names the alternatives.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(
+        results,
+        [
+            _lm_eval_row(0, "strict-match", 0.0, "[invalid]"),
+            _lm_eval_row(0, "flexible-extract", 1.0, "4"),
+        ],
+    )
+    export_lm_eval_samples(str(results))
+
+    page = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all")
+    assert page.extraction_filters == ("flexible-extract", "strict-match")
+    # FILTER_PRIORITY ranks flexible-extract first, matching the headline metric's filter.
+    assert page.extraction_filter == "flexible-extract"
+    assert page.counts.all == 1
+    assert page.rows[0].correct is True
+
+    strict = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all", extraction_filter="strict-match")
+    assert strict.extraction_filter == "strict-match"
+    assert strict.counts.all == 1
+    assert strict.rows[0].correct is False
+
+
+def _write_live_v1_eval_archive(source) -> None:
+    samples_root = source / "samples"
+    blobs_root = source / "blobs"
+    for table_root in (samples_root, blobs_root):
+        (table_root / "w=legacy" / "g=0").mkdir(parents=True)
+    (samples_root / "w=legacy" / "g=1").mkdir(parents=True)
+    (source / "_archive.json").write_text('{"format_version": 1}')
+    (samples_root / "_schema.json").write_text(
+        json.dumps({"primary_key": SAMPLES_MERGE_KEY, "schema_version": 4, "on_conflict": "supersede"})
+    )
+    (blobs_root / "_schema.json").write_text('{"primary_key": ["name"], "schema_version": 1, "on_conflict": "error"}')
+
+    first = sample_to_archive_row(_mcq("1", correct=False), trial_id="")
+    second = sample_to_archive_row(_mcq("2", correct=False), trial_id="")
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {**first, "_seq": 0, "_writer": "legacy"},
+                {**second, "_seq": 1, "_writer": "legacy"},
+            ]
+        ),
+        samples_root / "w=legacy" / "g=0" / "0000000000000000-samples.parquet",
+    )
+    replacement = sample_to_archive_row(_mcq("1", correct=True), trial_id="")
+    pq.write_table(
+        pa.Table.from_pylist([{**replacement, "_seq": 2, "_writer": "legacy"}]),
+        samples_root / "w=legacy" / "g=1" / "0000000000000002-samples.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"name": "trajectory.json", "data": b'{"steps":[{"step_id":1}]}', "_seq": 0, "_writer": "legacy"}]
+        ),
+        blobs_root / "w=legacy" / "g=0" / "0000000000000000-blob.parquet",
+    )
+
+
+def test_evaldash_reads_an_unsealed_v1_finestore_archive(tmp_path):
+    results = tmp_path / "run" / "results"
+    _write_live_v1_eval_archive(results)
+
+    tasks = list_sample_tasks(str(results))
+    assert tasks.available
+    assert [(task.task, task.files) for task in tasks.tasks] == [("arc", 2)]
+
+    page = fetch_samples(str(results), "arc", offset=0, limit=10, correct="all")
+    assert page.available
+    assert page.counts == page.counts.model_copy(update={"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0})
+    assert {sample.doc_id: sample.correct for sample in page.rows} == {"1": True, "2": False}
+
+    artifact = fetch_artifact(str(results), "finestore://blobs/trajectory.json")
+    assert artifact.available
+    assert json.loads(artifact.text) == {"steps": [{"step_id": 1}]}
+    assert json.loads((results / "_archive.json").read_text()) == {"format_version": 1}
+    assert not (results / "HEAD").exists()
+
+
+def test_fetch_artifact_keys_cache_by_run(tmp_path):
+    # A finestore:// URI is archive-relative, so two runs can share one. Resolving it for run A then
+    # run B must return each run's own bytes, not A's cached response for both.
+    uri = "finestore://blobs/trial-1/trajectory.json"
+    run_a = str(tmp_path / "a" / "results")
+    run_b = str(tmp_path / "b" / "results")
+    for root, tag in ((run_a, "a"), (run_b, "b")):
+        store = EvaluationStore.open(root, writer_id="w")
+        stored_uri = store.add_artifact(
+            "trial-1/trajectory.json",
+            json.dumps({"run": tag}).encode(),
+            metadata={"task": "t", "doc_id": "d", "trial_id": "trial-1"},
+        )
+        assert stored_uri == uri
+        store.seal()
+        store.close()
+
+    first = fetch_artifact(run_a, uri)
+    second = fetch_artifact(run_b, uri)
+    assert first.available and second.available
+    assert json.loads(first.text)["run"] == "a"
+    assert json.loads(second.text)["run"] == "b"
+
+
+def test_sotopia_summary_from_harbor_trial_is_available_to_sample_viewer(tmp_path) -> None:
+    results = tmp_path / "results"
+    task = "hf://open-athena/sotopia-hard-harbor"
+    trial_id = "sotopia-01h7vkqht745xap1a4ddv8h4__xwVQFXm"
+    sample = EvalSample(
+        task=task,
+        doc_id="sotopia-01h7vkqht745xap1a4ddv8h4",
+        kind=SampleKind.AGENTIC,
+        metrics={"reward": 0.309},
+        correct=False,
+    )
+    with EvaluationStore.open(str(results), writer_id="harbor") as store:
+        store.add_sample(sample, trial_id=trial_id)
+        store.seal()
+
+    summary = {
+        "transcript": [
+            [{"sender": "Environment", "receiver": "Alice", "message": "Your goal is to negotiate."}],
+            [{"sender": "Alice", "receiver": "Environment", "message": "Hello."}],
+        ],
+        "reasoning": "The agent partly met its goal.",
+        "scores": [{"goal": 4.0}, {"goal": 2.0}],
+        "overall_scores": [0.309, 0.2],
+        "evaluated_agent_index": 0,
+        "agent_ids": ["Alice", "Bob"],
+        "models": ["candidate", "partner"],
+        "environment_id": "environment-1",
+        "combo_id": "combo-1",
+        "context_budget": {"max_input_tokens": 32768, "max_prompt_tokens": 1200, "rejected_requests": 0},
+    }
+    trial_dir = results / "harbor_jobs" / "harbor_hf___open-athena_sotopia-hard-ha_c928c249d99a" / trial_id
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "result.json").write_text(json.dumps({"trial_relpath": f"{trial_id}/attempts/001"}))
+    summary_path = trial_dir / "attempts" / "001" / "agent" / "sotopia-summary.json"
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text(json.dumps(summary))
+
+    page = fetch_samples(str(results), task, offset=0, limit=10, correct="all", primary_metric_name="reward")
+
+    assert page.rows[0].trajectory_uri is None
+    assert page.rows[0].summary_uri == f"sotopia-summary://{trial_id}"
+    assert page.model_dump(mode="json")["rows"][0]["summary_uri"] == page.rows[0].summary_uri
+    assert page.rows[0].metrics == {"reward": 0.309}
+    artifact = fetch_artifact(str(results), page.rows[0].summary_uri)
+    assert artifact.available
+    assert artifact.media_type == "application/json"
+    assert json.loads(artifact.text) == summary
+
+
+def test_sotopia_summary_does_not_use_superseded_attempt(tmp_path) -> None:
+    results = tmp_path / "results"
+    trial_id = "sotopia-trial"
+    trial_dir = results / "harbor_jobs" / "harbor_sotopia-hard_example" / trial_id
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "result.json").write_text(json.dumps({"trial_relpath": f"{trial_id}/attempts/001"}))
+    old_summary = trial_dir / "attempts" / "000" / "agent" / "sotopia-summary.json"
+    old_summary.parent.mkdir(parents=True)
+    old_summary.write_text(json.dumps({"transcript": [[{"sender": "Alice", "message": "Old attempt"}]]}))
+
+    artifact = fetch_artifact(str(results), f"sotopia-summary://{trial_id}")
+
+    assert artifact.available is False
+    assert artifact.text is None
+
+
+def test_publication_metric_overrides_saved_binary_verdict_and_keeps_missing_scores_ungraded(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    stored = [
+        EvalSample(
+            task="piqa",
+            doc_id="normalized",
+            kind=SampleKind.MULTIPLE_CHOICE,
+            metrics={"acc": 0.0, "acc_norm": 1.0},
+            correct=False,
+        ),
+        EvalSample(task="piqa", doc_id="missing", kind=SampleKind.MULTIPLE_CHOICE, metrics={"acc": 1.0}, correct=True),
+    ]
+    write_sample_parquet(fs, f"{root}/samples_piqa_20261103.parquet", stored)
+
+    page = fetch_samples(
+        str(tmp_path),
+        "piqa",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="acc_norm",
+        primary_metric_kind=MetricKind.BINARY,
+    )
+
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 0, "ungraded": 1}
+    by_id = {row.doc_id: row for row in page.rows}
+    assert by_id["normalized"].correct is True
+    assert by_id["normalized"].grading.score == 1.0
+    assert by_id["normalized"].grading.metric == "acc_norm"
+    assert by_id["missing"].correct is None
+    assert by_id["missing"].grading.score is None
+    original = fetch_samples(str(tmp_path), "piqa", offset=0, limit=10, correct="all")
+    assert {row.doc_id: row.correct for row in original.rows} == {"normalized": False, "missing": True}
+
+
+def test_continuous_publication_samples_keep_scores_without_binary_verdicts(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    stored = [
+        EvalSample(
+            task="truthfulqa_mc2",
+            doc_id=str(i),
+            kind=SampleKind.MULTIPLE_CHOICE,
+            metrics={"acc": value},
+            correct=bool(value),
+        )
+        for i, value in enumerate([0.0, 1.0])
+    ]
+    write_sample_parquet(fs, f"{root}/samples_truthfulqa_mc2_20261103.parquet", stored)
+
+    page = fetch_samples(
+        str(tmp_path),
+        "truthfulqa_mc2",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="acc",
+        primary_metric_kind=MetricKind.CONTINUOUS,
+    )
+
+    assert page.counts.model_dump() == {"all": 2, "correct": None, "incorrect": None, "ungraded": 0}
+    assert [row.grading.score for row in page.rows] == [0.0, 1.0]
+    assert all(row.correct is None and row.grading.passed is None for row in page.rows)
+
+
+def test_repeat_aggregate_sample_metric_selects_trial_accuracy(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    stored = [
+        EvalSample(task="aime24", doc_id=str(i), kind=SampleKind.GENERATION, metrics={"accuracy": score})
+        for i, score in enumerate((1.0, 0.0))
+    ]
+    write_sample_parquet(fs, f"{root}/samples_aime24_20261105.parquet", stored)
+
+    page = fetch_samples(
+        str(tmp_path),
+        "aime24",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="accuracy_avg",
+        primary_metric_kind=MetricKind.BINARY,
+    )
+
+    assert page.available is True
+    assert page.primary_metric == "accuracy"
+    assert page.counts.model_dump() == {"all": 2, "correct": 1, "incorrect": 1, "ungraded": 0}
+
+
+def test_missing_selected_sample_metric_is_reported_without_using_saved_verdict(tmp_path):
+    fs, root = url_to_fs(str(tmp_path))
+    write_sample_parquet(
+        fs,
+        f"{root}/samples_piqa_20261103.parquet",
+        [EvalSample(task="piqa", doc_id="0", kind=SampleKind.MULTIPLE_CHOICE, metrics={"acc": 1.0}, correct=True)],
+    )
+    page = fetch_samples(
+        str(tmp_path),
+        "piqa",
+        offset=0,
+        limit=10,
+        correct="all",
+        primary_metric_name="acc_norm",
+        primary_metric_kind=MetricKind.BINARY,
+    )
+    assert page.available is False
+    assert page.error is not None
+    assert page.rows == ()

@@ -1,0 +1,136 @@
+# Shared data buckets
+
+This Pulumi project manages shared Marin data buckets and lifecycle policies in
+GCS, CoreWeave AI Object Storage, and Cloudflare R2, plus public release hosting and creation of the shared
+Hugging Face bucket. The `marin-buckets` stack is operated manually because its
+provider credentials are not available to CI.
+
+Active bucket names, stores, locations, and endpoints come from the reviewed `data:` blocks in
+[`config/marin.yaml`](../../config/marin.yaml) and
+[`config/coreweave.yaml`](../../config/coreweave.yaml). The implementation is the shared
+[`DataBuckets`](../pulumi/src/iac/buckets/__init__.py) component. GCS bucket IAM remains in the
+`marin-iac/marin` stack with the other project grants. The existing R2 bucket remains
+declared in `infra/buckets/__main__.py` independently of runtime storage routing.
+
+The stack creates the private Hugging Face bucket `open-athena/marin`, addressed as
+`hf://buckets/open-athena/marin` in `fsutil`. A protected `command.local.Command`
+resource runs `.venv/bin/hf buckets create open-athena/marin --private` from the
+Marin repository root. Pulumi blocks removal while the resource is protected. After explicit
+unprotection, removing the resource leaves the HF bucket in place. The resource does
+not manage file contents or subsequent visibility changes. Creation fails if the
+bucket already exists, so an existing bucket cannot be silently adopted.
+
+`marin-na-public` is separate from the private `marin-na` data bucket. Its
+custom domain `public.oa.dev` serves objects without credentials; `r2.dev`
+access stays disabled. The stack exports `publicUrl` and `publicPrefix` for
+application stacks. Objects must carry their HTTP content type and cache policy;
+the domain cache respects origin headers, including catalog revalidation.
+A hostname-scoped configuration rule disables Browser Integrity Check so package
+clients such as Python's `urllib` can download artifacts.
+
+Before applying public hosting, audit the zone's `http_request_cache_settings`
+and `http_config_settings` rulesets. Cloudflare has one entry-point ruleset per
+phase. If one already exists, preserve its rules in the declaration and import it through the program-first
+workflow in `infra/pulumi/README.md`; do not replace unrelated zone rules.
+Provider tokens need R2 bucket management plus Zone Read, Cache Rules Edit and
+Config Rules Edit on `oa.dev`. R2 Admin Read & Write alone covers bucket and domain
+operations but does not include these zone permissions.
+
+## Credentials
+
+Install the Pulumi providers and authenticate to GCP from the repository root:
+
+```bash
+uv sync --package marin-buckets
+gcloud auth application-default login
+gcloud auth application-default set-quota-project hai-gcp-models
+```
+
+Export a current CoreWeave API token only in the operator process:
+
+```bash
+export COREWEAVE_API_TOKEN=<coreweave-object-storage-token>
+```
+
+The provider exchanges this token for temporary S3 credentials. It does not use
+`CW_KEY_ID` and `CW_KEY_SECRET`, which authenticate direct S3 access through `fsutil`.
+The managed CoreWeave token is stored in the `loom-coreweave-iris-kubeconfig` secret in
+`hai-gcp-models`, under `users[].user.token`. Use the latest secret version when a stale
+environment token returns `401` during the credential exchange.
+
+Cloudflare account tokens are stored in GCP Secret Manager. Use the read token for previews and
+the write token for updates:
+
+```bash
+export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
+  --project=hai-gcp-models --secret=cloudflare-r2-pulumi-read-token)"
+
+export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
+  --project=hai-gcp-models --secret=cloudflare-r2-pulumi-write-token)"
+```
+
+The provider credentials remain in the process environment. They are not Pulumi configuration,
+resource inputs, or stack outputs. GitHub Actions and `pulumi-ci` have no access to them.
+
+Hugging Face creation uses `HF_TOKEN` or the operator's saved `hf auth login` token.
+The token must have permission to create buckets under `open-athena`. Keep it in
+the operator environment or HF credential store; do not put it in Pulumi config.
+
+## Preview and apply
+
+Run a credentialed preview:
+
+```bash
+pulumi -C infra/buckets preview --stack marin-buckets --diff
+```
+
+Stop on any bucket replacement or deletion. An approved update is applied manually:
+
+```bash
+pulumi -C infra/buckets up --stack marin-buckets
+```
+
+Cloudflare replaces the complete R2 lifecycle configuration. Audit the live rules before the
+first lifecycle update:
+
+```bash
+curl -fsS \
+  "https://api.cloudflare.com/client/v4/accounts/74981a43be0de7712369306c7b19133d/r2/buckets/marin-na/lifecycle" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq .result.rules
+```
+
+The declared R2 policy preserves seven-day incomplete-multipart cleanup and the nine
+`tmp/ttl=Nd/` expiration prefixes from `config/marin.yaml`.
+
+CoreWeave bucket lifecycle configurations apply the same nine expiration prefixes and abort
+incomplete multipart uploads after seven days.
+
+The default shared scratch bucket for CoreWeave clusters is declared as
+`data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, separately from the region
+mirror set. Lifecycle rules expire only its `tmp/ttl=Nd/` prefixes, so RNO2A durable outputs
+under `marin/` persist. Other permanent east-region artifacts remain in `marin-us-east-02a`;
+`hero-checkpoints` is reserved for hero checkpoints.
+
+CoreWeave bucket access policies preserve S3 access for principals in the Open Athena organization.
+Only `marin-us-east-02a` denies every principal the `s3:DeleteObject` and
+`s3:DeleteObjectVersion` actions under `marin/grug/hero-*`. The `hero-checkpoints` bucket and
+temporary checkpoint staging paths remain deletable. Before a policy update, audit each bucket's
+live access policy; Pulumi replaces the complete bucket policy.
+
+Every CoreWeave bucket policy also denies the Marin Belay user (`BELAY_USER_ID`) any action
+outside its grants: writes outside its run prefixes, reads outside its data, and listing buckets
+it does not use. The `marin-belay` organization access policy grants that access, but other
+organization grants also reach the user, so the explicit bucket-policy denies are what bound it.
+
+`marin-rno2a` is the RNO2A regional data bucket. It uses the same organization access policy,
+multipart cleanup, and `tmp/ttl=Nd/` lifecycle rules as the other regional buckets. RNO2A task
+configuration does not select it: tasks write durable outputs under `s3://marin-us-east-08a/marin`
+and scratch to the shared CoreWeave temp bucket. Existing RNO2A controller state and Finelog
+archives keep their `marin-us-east-02a` paths until a verified migration preserves their
+referenced objects.
+
+## Automation boundary
+
+Pull-request CI does not preview or update this stack. Reviewers use the code diff and an
+operator-posted preview for changes under `infra/buckets` or `infra/pulumi/src/iac/buckets`.
+Routine `marin-iac` previews do not initialize the CoreWeave or R2 providers.

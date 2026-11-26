@@ -14,16 +14,32 @@ import pytest
 import zstandard
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from finelog.client import FlushResult, LogClient, RemoteLogHandler, StoragePolicy, schema_from_dataclass
+from finelog.client import (
+    BucketTransform,
+    FlushResult,
+    L0Mode,
+    LogClient,
+    OperatingPolicy,
+    PartitionField,
+    PartitionSpec,
+    RemoteLogHandler,
+    SourceLayout,
+    StoragePolicy,
+    TableSpec,
+    schema_from_dataclass,
+)
 from finelog.client import log_client as log_client_mod
 from finelog.errors import (
     InvalidNamespaceError,
+    NamespaceNotFoundError,
     QueryResultTooLargeError,
     SchemaValidationError,
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
 from finelog.schema import (
+    FLOAT64_LIST,
+    INT64_LIST,
     MAP_STRING_STRING,
     Column,
     CoveringProjection,
@@ -96,15 +112,22 @@ class _FakeStatsServiceClient:
         self.address = address
         self.registered: dict[str, stats_pb2.Schema] = {}
         self.registered_policies: dict[str, stats_pb2.StoragePolicy] = {}
+        self.registered_specs: dict[str, stats_pb2.TableSpec] = {}
+        self.registration_requests: list[stats_pb2.RegisterTableRequest] = []
         self.writes: list[stats_pb2.WriteRowsRequest] = []
         self.drops: list[str] = []
+        self.aborts: list[str] = []
         self.queries: list[str] = []
         self.errors: list[Exception] = []
         self.query_handler = None
+        self.namespaces: list[stats_pb2.NamespaceInfo] = []
 
     def register_table(self, request):
+        self.registration_requests.append(request)
         self.registered[request.namespace] = request.schema
         self.registered_policies[request.namespace] = request.storage_policy
+        if request.HasField("table_spec"):
+            self.registered_specs[request.namespace] = request.table_spec
         return stats_pb2.RegisterTableResponse(
             effective_schema=request.schema,
             effective_policy=request.storage_policy,
@@ -132,6 +155,30 @@ class _FakeStatsServiceClient:
         with paipc.new_stream(sink, table.schema) as writer:
             writer.write_table(table)
         return stats_pb2.QueryResponse(arrow_ipc=sink.getvalue(), row_count=table.num_rows)
+
+    def list_namespaces(self, request):
+        del request
+        return stats_pb2.ListNamespacesResponse(namespaces=self.namespaces)
+
+    def get_table_schema(self, request):
+        for info in self.namespaces:
+            if info.namespace == request.namespace:
+                return stats_pb2.GetTableSchemaResponse(schema=info.schema)
+        raise ConnectError(Code.NOT_FOUND, f"namespace {request.namespace!r} is not registered")
+
+    def get_table_status(self, request):
+        spec = self.registered_specs.get(request.namespace)
+        if spec is None:
+            raise ConnectError(Code.NOT_FOUND, f"namespace {request.namespace!r} has no table spec")
+        return stats_pb2.GetTableStatusResponse(active_table_spec=spec, catalog_generation=7)
+
+    def abort_table_migration(self, request):
+        self.aborts.append(request.namespace)
+        spec = self.registered_specs[request.namespace]
+        return stats_pb2.AbortTableMigrationResponse(
+            catalog_generation=8,
+            active_table_spec_version=spec.version,
+        )
 
     def close(self):
         pass
@@ -474,6 +521,111 @@ def test_get_table_forwards_storage_policy(tracked_clients):
         client.close()
 
 
+def test_get_table_registers_complete_versioned_object_backed_spec(tracked_clients):
+    schema = Schema(
+        columns=(
+            Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, trigram_index=True),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64),
+            Column(name="epoch_ms", type=stats_pb2.COLUMN_TYPE_INT64, catalog_bounds=True),
+        ),
+        key_column="timestamp_ms",
+        sort_columns=("worker_id", "timestamp_ms"),
+        max_row_group_rows=32_768,
+    )
+    table_spec = TableSpec(
+        version=3,
+        source_layout=SourceLayout(
+            partition=PartitionSpec(
+                spec_id=2,
+                fields=(PartitionField("worker_id", "worker_bucket", BucketTransform(16)),),
+            ),
+            target_object_bytes=128 * 1024 * 1024,
+        ),
+        artifact_revision=4,
+        operating_policy=OperatingPolicy(
+            l0_mode=L0Mode.OBJECT_STORE,
+            max_buffer_bytes=64 * 1024 * 1024,
+            max_flush_age_ms=5_000,
+            max_query_time_ms=600_000,
+            rollback_window_ms=86_400_000,
+        ),
+    )
+    policy = StoragePolicy(max_bytes=1024)
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", schema, storage_policy=policy, table_spec=table_spec)
+        table.write([SimpleNamespace(worker_id="w-1", timestamp_ms=1, epoch_ms=1)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        registered = tracked_clients[0].registered_specs["iris.worker"]
+        assert registered.version == 3
+        assert registered.logical_schema == schema_to_proto(schema)
+        assert registered.source_layout.partition.fields[0].bucket.buckets == 16
+        assert registered.source_layout.target_object_bytes == 128 * 1024 * 1024
+        assert registered.artifact_policy.revision == 4
+        assert registered.logical_schema.columns[2].index.catalog_bounds
+        assert [index.column for index in registered.artifact_policy.indexes] == ["worker_id"]
+        assert registered.operating_policy.l0_mode == stats_pb2.L0_MODE_OBJECT_STORE
+        assert registered.operating_policy.local_cache.max_bytes == 1024
+        assert registered.operating_policy.remote_retention.retain_forever
+        # The rollback window travels independently of the query bound.
+        assert registered.operating_policy.max_query_time_ms == 600_000
+        assert registered.operating_policy.rollback_window_ms == 86_400_000
+    finally:
+        client.close()
+
+
+def test_cached_table_handle_registers_a_new_table_spec_version(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", WorkerStat, table_spec=TableSpec(version=1))
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        same_table = client.get_table("iris.worker", WorkerStat, table_spec=TableSpec(version=2))
+        assert same_table is table
+        same_table.write([WorkerStat(worker_id="w-2", timestamp_ms=2, mem_bytes=2)])
+        assert same_table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        versions = [
+            request.table_spec.version
+            for request in tracked_clients[0].registration_requests
+            if request.namespace == "iris.worker"
+        ]
+        assert versions == [1, 2]
+    finally:
+        client.close()
+
+
+def test_table_status_and_abort_use_versioned_contract(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", WorkerStat, table_spec=TableSpec(version=2))
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        status = client.get_table_status("iris.worker")
+        assert status.active_version == 2
+        assert status.desired_version is None
+        assert status.catalog_generation == 7
+
+        aborted = client.abort_table_migration("iris.worker")
+        assert tracked_clients[0].aborts == ["iris.worker"]
+        assert aborted.active_version == 2
+    finally:
+        client.close()
+
+
+def test_table_spec_requires_positive_version():
+    with pytest.raises(ValueError):
+        TableSpec(version=0)
+
+
+def test_bucket_transform_requires_positive_bucket_count():
+    with pytest.raises(ValueError):
+        BucketTransform(0)
+
+
 def test_get_table_default_policy_is_empty(tracked_clients):
     """No policy argument sends an empty proto (all zeros = inherit defaults)."""
     client = LogClient.connect("http://h:1")
@@ -534,11 +686,11 @@ def test_drop_table_unknown_is_no_op(tracked_clients, monkeypatch):
 
 
 def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatch):
-    """A non-retryable registration failure is handled as a flush failure.
+    """A non-retryable registration failure resolves the flush as DROPPED.
 
     Registration happens on the flush thread, so a schema conflict cannot
-    propagate to the caller of get_table. The offending batch is dropped (the
-    error is non-retryable) and the Table stays usable without crashing.
+    propagate to the caller of get_table. The offending batch is dropped and
+    the Table stays usable, but the flush must not claim the rows landed.
     """
 
     def conflict(self, request):
@@ -549,9 +701,12 @@ def test_get_table_registration_conflict_drops_batch(tracked_clients, monkeypatc
     try:
         table = client.get_table("iris.worker", WorkerStat)
         table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=1)])
-        # Non-retryable: the batch is dropped, the flush resolves, nothing raises.
-        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        assert table.flush(timeout=5.0) == FlushResult.DROPPED
         assert tracked_clients[0].writes == []
+        # The verdict is per-flush: a later write that lands reports SUCCEEDED.
+        monkeypatch.undo()
+        table.write([WorkerStat(worker_id="w-2", timestamp_ms=2, mem_bytes=2)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
     finally:
         client.close()
 
@@ -599,6 +754,43 @@ def test_get_table_retries_transient_registration_failure(tracked_clients, monke
         assert calls["n"] >= 2
         landed = any(w.namespace == "iris.worker" for c in tracked_clients for w in c.writes)
         assert landed
+    finally:
+        client.close()
+
+
+def test_get_table_reregisters_after_server_loses_namespace(tracked_clients, monkeypatch):
+    """A server-side catalog reset must not strand a long-lived Table handle."""
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+
+    catalog_registered = False
+    real_register = _FakeStatsServiceClient.register_table
+    real_write = _FakeStatsServiceClient.write_rows
+
+    def register(self, request):
+        nonlocal catalog_registered
+        catalog_registered = True
+        return real_register(self, request)
+
+    def require_registration(self, request):
+        if not catalog_registered:
+            raise ConnectError(Code.NOT_FOUND, f'namespace "{request.namespace}" is not registered')
+        return real_write(self, request)
+
+    monkeypatch.setattr(_FakeStatsServiceClient, "register_table", register)
+    monkeypatch.setattr(_FakeStatsServiceClient, "write_rows", require_registration)
+    client = LogClient.connect("http://h:1")
+    try:
+        table = client.get_table("iris.worker", WorkerStat)
+        table.write([WorkerStat(worker_id="w-1", timestamp_ms=1, mem_bytes=128)])
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+
+        catalog_registered = False
+        table.write([WorkerStat(worker_id="w-2", timestamp_ms=2, mem_bytes=256)])
+
+        assert table.flush(timeout=5.0) == FlushResult.SUCCEEDED
+        rows = [_decode_ipc_table(request.arrow_ipc) for request in tracked_clients[0].writes]
+        assert pa.concat_tables(rows).column("worker_id").to_pylist() == ["w-1", "w-2"]
     finally:
         client.close()
 
@@ -660,6 +852,77 @@ def test_client_query_raises_on_too_large(tracked_clients):
         client.close()
 
 
+def test_client_lists_namespaces_with_schema_and_storage_stats(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        client.query("SELECT 1")  # construct the stats client
+        tracked_clients[0].namespaces = [
+            stats_pb2.NamespaceInfo(
+                namespace="iris.worker",
+                schema=stats_pb2.Schema(
+                    columns=[
+                        stats_pb2.Column(
+                            name="worker_id",
+                            type=stats_pb2.COLUMN_TYPE_STRING,
+                            nullable=False,
+                        )
+                    ],
+                    key_column="worker_id",
+                ),
+                row_count=12,
+                byte_size=345,
+                min_seq=2,
+                max_seq=13,
+                segment_count=4,
+                storage_policy=stats_pb2.StoragePolicy(max_bytes=1024),
+            )
+        ]
+
+        assert client.list_namespaces() == [
+            log_client_mod.NamespaceInfo(
+                namespace="iris.worker",
+                schema=Schema(
+                    columns=(
+                        Column(
+                            name="worker_id",
+                            type=stats_pb2.COLUMN_TYPE_STRING,
+                            nullable=False,
+                        ),
+                    ),
+                    key_column="worker_id",
+                ),
+                row_count=12,
+                byte_size=345,
+                min_seq=2,
+                max_seq=13,
+                segment_count=4,
+                storage_policy=StoragePolicy(max_bytes=1024),
+            )
+        ]
+    finally:
+        client.close()
+
+
+def test_client_gets_registered_schema_without_table_handle(tracked_clients):
+    client = LogClient.connect("http://h:1")
+    try:
+        client.query("SELECT 1")  # construct the stats client
+        tracked_clients[0].namespaces = [
+            stats_pb2.NamespaceInfo(
+                namespace="iris.task",
+                schema=stats_pb2.Schema(columns=[stats_pb2.Column(name="task_id", type=stats_pb2.COLUMN_TYPE_STRING)]),
+            )
+        ]
+
+        assert client.get_table_schema("iris.task") == Schema(
+            columns=(Column(name="task_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),)
+        )
+        with pytest.raises(NamespaceNotFoundError):
+            client.get_table_schema("missing")
+    finally:
+        client.close()
+
+
 def test_table_query_translates_invalid_argument(tracked_clients):
     client = LogClient.connect("http://h:1")
     try:
@@ -693,8 +956,7 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
     """
     client = LogClient.connect("http://h:1")
     try:
-        client.get_table("iris.worker", WorkerStat)
-        table = client._tables["iris.worker"]
+        table = client.get_table("iris.worker", WorkerStat, max_buffer_rows=4, max_buffer_bytes=1024)
         # Stop the bg thread so trim_oldest's notify_all has no consumer.
         # Re-enable writes by clearing the flag once the thread has exited.
         with table._cond:
@@ -703,8 +965,6 @@ def test_table_overflow_drops_oldest(tracked_clients, caplog):
         table._thread.join(timeout=2.0)
         with table._cond:
             table._closing = False
-        table._max_buffer_rows = 4
-        table._max_buffer_bytes = 1024
         table._batch_rows = 1_000_000
         # Bypass the rate limiter so the very first overflow logs.
         table._overflow_log_limiter = log_client_mod.RateLimiter(interval_seconds=0)
@@ -777,6 +1037,25 @@ def test_schema_from_dataclass_infers_dict_str_str_as_map():
     assert types["labels"] == stats_pb2.COLUMN_TYPE_MAP
     assert types["optional_labels"] == stats_pb2.COLUMN_TYPE_MAP
     assert types["timestamp_ms"] == stats_pb2.COLUMN_TYPE_INT64
+
+
+def test_schema_from_dataclass_infers_numeric_lists():
+    @dataclass
+    class Histogram:
+        bucket_limits: list[float]
+        bucket_counts: list[int]
+        optional_counts: list[int] | None
+        timestamp_ms: int
+
+    schema = schema_from_dataclass(Histogram)
+    types = {column.name: column.type for column in schema.columns}
+    assert types["bucket_limits"] == stats_pb2.COLUMN_TYPE_FLOAT64_LIST
+    assert types["bucket_counts"] == stats_pb2.COLUMN_TYPE_INT64_LIST
+    assert types["optional_counts"] == stats_pb2.COLUMN_TYPE_INT64_LIST
+
+    arrow = schema_to_arrow(schema)
+    assert arrow.field("bucket_limits").type == FLOAT64_LIST
+    assert arrow.field("bucket_counts").type == INT64_LIST
 
 
 def test_schema_to_arrow_maps_map_column_to_native_map():
@@ -857,6 +1136,110 @@ def test_table_close_drains_queue_when_thread_starts_late(monkeypatch):
     assert len(thread_targets) == 1
     assert len(sent) == 1
     assert sent[0].column("worker_id").to_pylist() == ["w-1", "w-2"]
+
+
+def test_table_sends_a_large_queue_in_bounded_requests_and_drops_only_the_refused_one(monkeypatch):
+    sent = []
+
+    def flusher(_namespace, batch):
+        workers = batch.column("worker_id").to_pylist()
+        if "refused-a" in workers:
+            raise ConnectError(Code.INVALID_ARGUMENT, "body too large")
+        sent.append(workers)
+
+    # Each row counts 9 bytes, so two rows fit in one request of 20 bytes.
+    monkeypatch.setattr(log_client_mod, "SEND_TARGET_BYTES", 20)
+    schema = Schema(columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),))
+    table = log_client_mod.Table(namespace="iris.worker", schema=schema, flusher=flusher)
+    names = ["worker-01", "worker-02", "refused-a", "refused-b", "worker-05"]
+    # One write queues the five rows together, so the flush thread takes them as one queue.
+    table.write([SimpleNamespace(worker_id=name) for name in names])
+    table.close()
+
+    assert sent == [["worker-01", "worker-02"], ["worker-05"]]
+    assert table.flush() is FlushResult.DROPPED
+
+
+def test_table_sends_a_failed_request_again_without_the_rows_already_sent(monkeypatch):
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+    # Each row counts 9 bytes, so two rows fit in one request of 20 bytes.
+    monkeypatch.setattr(log_client_mod, "SEND_TARGET_BYTES", 20)
+    sent = []
+    failures = [ConnectError(Code.UNAVAILABLE, "server restarting")]
+
+    def flusher(_namespace, batch):
+        workers = batch.column("worker_id").to_pylist()
+        if "worker-03" in workers and failures:
+            raise failures.pop()
+        sent.append(workers)
+
+    schema = Schema(columns=(Column(name="worker_id", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),))
+    table = log_client_mod.Table(namespace="iris.worker", schema=schema, flusher=flusher)
+    table.write([SimpleNamespace(worker_id=f"worker-0{number}") for number in range(1, 6)])
+
+    assert table.flush(timeout=10) is FlushResult.SUCCEEDED
+    assert sent == [["worker-01", "worker-02"], ["worker-03", "worker-04"], ["worker-05"]]
+    table.close()
+
+
+def test_table_halves_a_request_above_the_encoded_bound_and_drops_a_row_that_cannot_fit(monkeypatch):
+    sent = []
+    # A bytes value counts 8 bytes in the queue, so the five rows are one request by their estimated size.
+    # A 60-byte row encodes to about 70 bytes: two fit below the bound, and the 400-byte row never does.
+    monkeypatch.setattr(log_client_mod, "MAX_REQUEST_BYTES", 150)
+    schema = Schema(columns=(Column(name="payload", type=stats_pb2.COLUMN_TYPE_BYTES, nullable=False),))
+    table = log_client_mod.Table(
+        namespace="iris.blob",
+        schema=schema,
+        flusher=lambda _namespace, batch: sent.append([len(value) for value in batch.column("payload").to_pylist()]),
+    )
+    table.write([SimpleNamespace(payload=bytes(size)) for size in (400, 60, 60, 60, 60)])
+    table.close()
+
+    assert sent == [[60], [60], [60, 60]]
+    assert table.flush() is FlushResult.DROPPED
+
+
+@pytest.mark.parametrize("failing_row", [0, 2], ids=["first-half", "second-half"])
+def test_table_sends_each_row_once_when_one_half_of_a_split_request_fails(monkeypatch, failing_row):
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_INITIAL", 1e-9)
+    monkeypatch.setattr(log_client_mod, "_BACKOFF_MAX", 1e-9)
+    # The four rows are one request by their estimated size; two rows encode below the bound and four do not.
+    monkeypatch.setattr(log_client_mod, "MAX_REQUEST_BYTES", 150)
+    sent = []
+    failures = [ConnectError(Code.UNAVAILABLE, "server restarting")]
+
+    def flusher(_namespace, batch):
+        rows = [value[0] for value in batch.column("payload").to_pylist()]
+        if failing_row in rows and failures:
+            raise failures.pop()
+        sent.append(rows)
+
+    schema = Schema(columns=(Column(name="payload", type=stats_pb2.COLUMN_TYPE_BYTES, nullable=False),))
+    table = log_client_mod.Table(namespace="iris.blob", schema=schema, flusher=flusher)
+    table.write([SimpleNamespace(payload=bytes([row]) * 60) for row in range(4)])
+
+    assert table.flush(timeout=10) is FlushResult.SUCCEEDED
+    assert sent == [[0, 1], [2, 3]]
+    table.close()
+
+
+def test_get_table_keeps_the_buffer_bounds_that_a_caller_set_whatever_the_order():
+    client = LogClient.connect("http://h:1")
+    try:
+        raised_first = client.get_table("iris.worker", WorkerStat, max_buffer_rows=50_000)
+        assert client.get_table("iris.worker", WorkerStat) is raised_first
+        default_first = client.get_table("iris.task", WorkerStat)
+        assert client.get_table("iris.task", WorkerStat, max_buffer_rows=50_000) is default_first
+        for table in (raised_first, default_first):
+            assert (table._max_buffer_rows, table._max_buffer_bytes) == (50_000, log_client_mod.DEFAULT_MAX_BUFFER_BYTES)
+
+        with pytest.raises(ValueError, match="max_buffer_rows=50000, not 4"):
+            client.get_table("iris.worker", WorkerStat, max_buffer_rows=4)
+        assert raised_first._max_buffer_rows == 50_000
+    finally:
+        client.close()
 
 
 def test_schema_from_proto_consistency():
@@ -945,6 +1328,20 @@ def test_grouped_extrema_round_trip_through_proto():
                 extrema_column="timestamp",
             ),
         ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema
+
+
+def test_compaction_layout_round_trips_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="service", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="timestamp_ms", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+        ),
+        key_column="timestamp_ms",
+        sort_columns=("service", "timestamp_ms"),
+        max_row_group_rows=131_072,
     )
 
     assert schema_from_proto(schema_to_proto(schema)) == schema

@@ -295,7 +295,7 @@ def open_tunnel(
             current = proc_ref[0]
         if current is not None:
             terminate_process_group(current)
-        raise RuntimeError(f"tunnel {label} did not open local port {local_port} within {timeout:.0f}s")
+        raise TimeoutError(f"tunnel {label} did not open local port {local_port} within {timeout:.0f}s")
 
     logger.info("Tunnel ready: 127.0.0.1:%d -> %s", local_port, label)
 

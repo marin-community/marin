@@ -1,0 +1,26 @@
+# DARE-TIES-02 retains the Base checkpoint's GrugMoE configuration and tokenizer.
+name: open-athena-Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10
+location: open-athena/Grug-67B-A2B-Merge-Campaign2-DARE-TIES-02-2026.10.10
+revision: 153f5369f69a0c0a7203779099ec94e98c66748f
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  reasoning_parser: grug
+  hf_hub_disable_xet: true
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

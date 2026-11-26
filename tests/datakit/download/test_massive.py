@@ -8,9 +8,11 @@ import json
 import tarfile
 
 import pyarrow.parquet as pq
+from marin.datakit.chat_normalize import _normalize_chat_record
 from marin.datakit.download import massive
 from marin.datakit.download.massive import (
     parse_annot_utt,
+    row_to_chat_doc,
     row_to_doc,
     transform_staged_massive,
 )
@@ -59,6 +61,17 @@ def test_row_to_doc_renders_full_training_document():
     assert call["name"] == "alarm_set"
     # Responses API encodes ``arguments`` as a JSON string, not a nested object.
     assert json.loads(call["arguments"]) == {"date": ["friday"], "time": ["nine am"]}
+
+
+def test_massive_normalizes_to_harmony_function_call():
+    [source] = row_to_chat_doc(_row("alarm_set"))
+    doc = _normalize_chat_record(source, "messages", "id")
+    call = doc["messages"][-1]
+    assert call["recipient"] == "functions.alarm_set"
+    assert call["channel"] == "commentary"
+    assert json.loads(call["content"][0]["text"]) == {"date": ["friday"], "time": ["nine am"]}
+    tools = json.loads(doc["chat_template_kwargs"])["tools"]
+    assert "alarm_set" in {tool["name"] for tool in tools}
 
 
 def test_transform_staged_massive_end_to_end(tmp_path):

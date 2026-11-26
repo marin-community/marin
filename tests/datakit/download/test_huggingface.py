@@ -13,6 +13,8 @@ from marin.datakit.download.huggingface import (
     FileDownloadTask,
     _relative_path_in_source,
     download_hf,
+    finish_download,
+    plan_download,
     stream_file_to_fsspec,
 )
 from requests import Response
@@ -52,6 +54,37 @@ def test_download_hf_basic(tmp_path):
     assert provenance["version"] == "abc1234"
     assert "access_time" in provenance
     assert len(provenance["links"]) == 3
+
+
+@pytest.mark.parametrize("damage", ["delete", "truncate"])
+def test_download_hf_restores_missing_or_truncated_file_after_completed_run(tmp_path, damage):
+    source_root = tmp_path / "src"
+    _write(source_root, "data/first.txt", b"first")
+    _write(source_root, "data/second.txt", b"second")
+    output_path = tmp_path / "output"
+    cfg = DownloadConfig(
+        hf_dataset_id="test-org/test-dataset",
+        revision="abc1234",
+        gcs_output_path=str(output_path),
+        source_url_override=str(source_root),
+    )
+
+    download_hf(cfg)
+    damaged = output_path / "data/second.txt"
+    if damage == "delete":
+        damaged.unlink()
+    else:
+        damaged.write_bytes(b"short")
+    download_hf(cfg)
+
+    assert (output_path / "data/first.txt").read_bytes() == b"first"
+    assert (output_path / "data/second.txt").read_bytes() == b"second"
+    receipts = [
+        json.loads(line)
+        for metrics_file in (output_path / ".metrics").glob("*.jsonl")
+        for line in metrics_file.read_text().splitlines()
+    ]
+    assert sorted(receipt["status"] for receipt in receipts) == ["skipped", "success"]
 
 
 def test_download_hf_overlapping_globs_download_each_file_once(tmp_path):
@@ -229,3 +262,27 @@ def test_stream_file_to_fsspec_reads_local_source(tmp_path):
 
     assert result["status"] == "success"
     assert destination.read_bytes() == content
+
+
+def test_scheduler_free_plan_transfers_pinned_files_and_commits_provenance(tmp_path):
+    source = tmp_path / "source"
+    _write(source, "data/task.json", b'{"instruction":"original"}')
+    _write(source, "README.md", b"Unselected metadata")
+    destination = tmp_path / "destination"
+    plan = plan_download(
+        DownloadConfig(
+            hf_dataset_id="fixture/tasks",
+            revision="immutable",
+            hf_urls_glob=["data/*.json"],
+            gcs_output_path=str(destination),
+            source_url_override=str(source),
+        )
+    )
+    receipts = [stream_file_to_fsspec(task) for task in plan.tasks]
+    finish_download(plan)
+    assert (destination / "data/task.json").read_bytes() == b'{"instruction":"original"}'
+    assert not (destination / "README.md").exists()
+    assert len(receipts) == 1
+    provenance = json.loads((destination / ".provenance.json").read_text())
+    assert provenance["dataset"] == "fixture/tasks"
+    assert provenance["version"] == "immutable"

@@ -1,18 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run the S3-backed Zephyr stages of the Datakit reference pipeline.
+"""Run the Zephyr stages of the Datakit reference pipeline on GCS or S3.
 
 The benchmark starts from an existing normalized Datakit sample, so its measured
 pipeline does not include Hugging Face corpus download time. It runs global exact
 deduplication, per-source tokenization and MinHash, then cross-source fuzzy dedup.
 Every generated stage output is routed under a seven-day temporary prefix keyed by
-the required run tag.
+the required run tag. ``--sample-prefix`` defaults to the 100B GCS sample in
+``europe-west4``; select the us-central1 GCS sample for a us-central1 run or
+the equivalent S3 path to run on CoreWeave.
 
 Example::
 
     python -m experiments.datakit.zephyr_benchmark \
-        --sample-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
         --sources all --run-tag zephyr-100b-v1 \
         --pool-workers 60 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
         --first-stage exact --last-stage fuzzy \
@@ -27,7 +28,8 @@ from enum import StrEnum
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_temp_bucket, prefix_join
+from rigging.filesystem.cluster_config import marin_temp_bucket
+from rigging.filesystem.storage_path import prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
@@ -40,6 +42,8 @@ from experiments.datakit.reference_pipeline import (
 
 BENCHMARK_OUTPUT_TTL_DAYS = 7
 BENCHMARK_OUTPUT_PREFIX = "zephyr-benchmark"
+GCP_BENCHMARK_SAMPLE_PREFIX = "gs://marin-eu-west4/datakit/sample_100b_8ae7a94f"
+COREWEAVE_BENCHMARK_SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f"
 
 
 class BenchmarkStage(StrEnum):
@@ -73,20 +77,13 @@ def _steps_between(
     return [step for stage in _STAGE_ORDER[first_index : last_index + 1] for step in stage_steps[stage]]
 
 
-def _route_outputs(steps: ZephyrDatakitSteps, output_prefix: str) -> ZephyrDatakitSteps:
-    tokenize = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.tokenize.items()}
-    minhash = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.minhash.items()}
-    return ZephyrDatakitSteps(
-        exact_dedup=replace(steps.exact_dedup, output_path_prefix=output_prefix),
-        tokenize=tokenize,
-        minhash=minhash,
-        fuzzy_dedup=replace(steps.fuzzy_dedup, output_path_prefix=output_prefix, deps=list(minhash.values())),
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sample-prefix", required=True)
+    parser.add_argument(
+        "--sample-prefix",
+        default=GCP_BENCHMARK_SAMPLE_PREFIX,
+        help=f"Pre-normalized sample root (default: {GCP_BENCHMARK_SAMPLE_PREFIX}).",
+    )
     parser.add_argument("--sources", required=True, help="Comma-separated source names or 'all'.")
     parser.add_argument("--run-tag", required=True, help="Fresh identity tag that forces uncached benchmark stages.")
     parser.add_argument("--pool-workers", required=True, type=int)
@@ -113,7 +110,7 @@ def main() -> None:
         prefix=prefix_join(prefix_join(BENCHMARK_OUTPUT_PREFIX, args.run_tag), "outputs"),
         source_prefix=args.sample_prefix,
     )
-    steps = _route_outputs(zephyr_datakit_steps(sources, scale), output_prefix)
+    steps = zephyr_datakit_steps(sources, scale, output_prefix=output_prefix)
     StepRunner().run(
         _steps_between(steps, args.first_stage, args.last_stage),
         max_concurrent=args.max_concurrent,

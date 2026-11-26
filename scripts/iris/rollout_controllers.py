@@ -27,10 +27,12 @@ import click
 import yaml
 from iris.cli.build import get_git_sha
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, connect_controller, rpc_client
-from iris.client import IrisClient
+from iris.client.client import IrisClient
+from iris.client.workload import JobStatus
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.provenance import provenance_from_proto
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.state import JobState
 from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
 from rigging.filesystem.cluster_config import StoreType, store_config
@@ -91,9 +93,9 @@ JOB_PENDING = "pending"
 JOB_BUILDING = "building"
 
 WATCHED_JOB_STATES = (
-    (JOB_RUNNING, job_pb2.JOB_STATE_RUNNING),
-    (JOB_PENDING, job_pb2.JOB_STATE_PENDING),
-    (JOB_BUILDING, job_pb2.JOB_STATE_BUILDING),
+    (JOB_RUNNING, JobState.RUNNING),
+    (JOB_PENDING, JobState.PENDING),
+    (JOB_BUILDING, JobState.BUILDING),
 )
 
 
@@ -358,8 +360,8 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
     """The operator-side inputs a restart of ``config`` reads from this session.
 
     Derived from the config so it cannot drift from what the deploy actually
-    resolves: ``defaults.inject_env`` (``iris.cluster.inject_env``), the S3
-    credentials a Kubernetes controller folds into ``iris-task-env``, and the
+    resolves: the S3 credentials a Kubernetes controller stores in
+    ``iris-storage-secrets``, and the
     signing-key references a Kubernetes deploy resolves in the operator shell.
 
     Args:
@@ -375,9 +377,6 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
         Requirement(Need.COMMAND_RUNS, "docker buildx version", "the image build and push runs through buildx"),
         Requirement(Need.COMMAND, "git", "the image tag is a hash of the working tree content"),
     ]
-    for name in config.defaults.inject_env:
-        needs.append(Requirement(Need.ENV, name, "defaults.inject_env: the deploy aborts when it is unset"))
-
     kind = config.controller.controller_kind()
     if kind == "coreweave":
         needs.append(Requirement(Need.COMMAND, "kubectl", "the controller Deployment is driven over the k8s API"))
@@ -393,25 +392,17 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
             )
         if config.storage.remote_state_dir.startswith("s3://"):
             for name in s3_env if s3_env is not None else _s3_credential_env():
-                needs.append(Requirement(Need.ENV, name, "S3 state auth projected into the iris-task-env Secret"))
+                needs.append(Requirement(Need.ENV, name, "S3 state auth projected into the iris-storage-secrets Secret"))
         # A Kubernetes controller pod holds no cloud credentials, so the deploy resolves
         # the signing key in the operator's shell and projects it into the Secret. It
-        # resolves `persistent or refs`, so an `env:` reference addresses the pod only
-        # while a persistent source backs it. Alone, it is what the deploy reads here.
+        # resolves sources in their configured order; projected file references are
+        # installed only in the rendered controller config.
         if config.auth and config.auth.signing_key:
             refs = as_secret_spec(config.auth.signing_key)
-            persistent = [ref for ref in refs if not ref.startswith(ENV_SCHEME)]
-            for ref in persistent:
-                needs.append(Requirement(Need.SECRET, ref, "signing key projected as IRIS_SIGNING_KEY"))
-            if not persistent:
-                needs.extend(
-                    Requirement(
-                        Need.ENV,
-                        ref.removeprefix(ENV_SCHEME),
-                        "the only signing-key source: the deploy reads it from this shell",
-                    )
-                    for ref in refs
-                )
+            for ref in refs:
+                kind = Need.ENV if ref.startswith(ENV_SCHEME) else Need.SECRET
+                target = ref.removeprefix(ENV_SCHEME) if kind is Need.ENV else ref
+                needs.append(Requirement(kind, target, "controller signing-key source"))
     elif kind == "gcp":
         needs.append(Requirement(Need.COMMAND, "gcloud", "the restart drives the controller VM over IAP SSH"))
 
@@ -641,7 +632,7 @@ def take_snapshot(cluster: str) -> Snapshot:
         return Snapshot(cluster=cluster, captured_at=_now(), reachable=False, error=f"{type(exc).__name__}: {exc}")
 
 
-def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> job_pb2.JobStatus:
+def run_smoke_job(cluster: str, *, workspace: Path, timeout: float) -> JobStatus:
     """Submit one throwaway `echo hello world` job and wait for it to finish.
 
     ``setup_scripts=[]`` skips the default workspace ``uv sync`` so the job tests
@@ -831,10 +822,10 @@ def verify(cluster: str, baseline: Path, duration: int, interval: int, expect_tr
 def smoke(cluster: str, timeout: int, workspace: Path) -> None:
     """Run one `echo hello world` job end to end through the restarted controller."""
     status = run_smoke_job(cluster, workspace=workspace, timeout=timeout)
-    state = job_pb2.JobState.Name(status.state)
+    state = status.state.name
     click.echo(f"Smoke job finished: {state}")
-    if status.state != job_pb2.JOB_STATE_SUCCEEDED:
-        raise click.ClickException(f"Smoke job ended {state}: {status.error or 'no error text'}")
+    if status.state is not JobState.SUCCEEDED:
+        raise click.ClickException(f"Smoke job ended {state}: {status.error_message or 'no error text'}")
 
 
 def main() -> None:

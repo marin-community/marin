@@ -1,0 +1,19 @@
+schema_version: 1
+code: ml-stale-docstring
+lane: prose
+title: Docstring describes the old behavior
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** Readers trust docstrings. Stale parameter descriptions
+  or "returns True if X" lines that no longer match the implementation cause
+  callers to read the source — and the next refactor misses the docstring.
+
+  **When allowed:** Never knowingly. If you discover one, update it.
+
+  **Bad example:**
+  ```python
+  def find_groups(events):
+      """Return True if the detector labels a group HOSTILE."""
+      # implementation no longer returns False merely on HOSTILE label.
+      ...
+  ```

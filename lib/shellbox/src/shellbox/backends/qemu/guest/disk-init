@@ -1,0 +1,12 @@
+#!/bin/busybox sh
+/bin/busybox --install -s /bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir /newroot
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  [ -e /dev/vda ] && break
+  sleep 0.1
+done
+mount -t ext4 /dev/vda /newroot || exit 1
+exec /bin/busybox chroot /newroot /harbor/init

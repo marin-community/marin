@@ -38,7 +38,116 @@ sets `client_url`:
 uv run finelog query marin 'SELECT * FROM "iris.profile" LIMIT 10'
 ```
 
+`query` prints JSONL by default. Pass a short query as one shell-quoted
+argument. Feed multiline SQL on stdin so SQL quotes do not need shell escaping:
+
+```bash
+uv run finelog query cw-us-east-08a <<'SQL'
+SELECT task_id, attempt_id, max(memory_peak_mb) AS peak_mib
+FROM "iris.task"
+WHERE task_id LIKE '/power/example/%'
+GROUP BY task_id, attempt_id
+ORDER BY peak_mib DESC
+SQL
+```
+
+List every namespace with its schema, index policy, retention overrides, and
+current storage statistics as JSONL. Fetch one schema as formatted JSON:
+
+```bash
+uv run finelog namespaces cw-us-east-08a
+uv run finelog schema cw-us-east-08a iris.task
+```
+
+Schema output includes `seq` under `implicit_columns`. Finelog assigns this
+column to every row; producers do not declare it, but SQL queries can select it.
+
 ## Diagnosing query latency
+
+SQL and FetchLogs have separate caps of two and four concurrent requests and a
+read pool sized to the available CPU count, including affinity and cgroup limits
+(`GET /api/server`: `readWorkers`). On Linux, async and blocking read workers run
+at process nice + 10, capped at 19, with all CPUs available; ingestion, cloud HTTP
+I/O, flushes, and maintenance keep the existing Tokio runtime and priority. This
+gives scheduling preference without a hard CPU reservation; non-Linux platforms
+use separate pools without changing priority.
+
+Start with the server's stage timings when unrelated log and SQL requests slow
+down together. For the GCE hub:
+
+```bash
+gcloud compute ssh finelog-marin --project hai-gcp-models --zone us-central1-a \
+  --tunnel-through-iap \
+  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "read execution report|slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
+```
+
+Large `visibility_wait_ms` means the request waited for a structural storage
+change before it could query. Cache eviction pins and skips individual files
+used by active scans; it does not acquire the global visibility lock. Object
+compaction also updates its accounting view without queuing a visibility writer.
+Legacy file replacement and table deletion still require that lock.
+
+Query and FetchLogs RPCs have a 30-second default budget covering admission,
+visibility waits, snapshot/provider setup, execution, and response encoding. A
+shorter caller deadline wins. `FINELOG_QUERY_TIMEOUT_MS` changes the server
+ceiling. Each object snapshot carries an absolute deadline derived from that
+same snapshot's retention policy, starting before snapshot acquisition.
+Planning consumes this lifetime; a later policy change cannot extend the read.
+Query, FetchLogs, and local forwarding reads share this bound and guard their
+optional fills against cancellation.
+Optional background warming uses immediately available download slots and is
+cancelled when the request fails or times out. After a successful response,
+admitted fills can finish within the original request deadline. The allowance
+is at most 256 MiB and 64 objects
+per query, shared across tables and repeated scans. An object larger than the
+remaining allowance is skipped; smaller later objects may still fit.
+`query_byte_limit` counts these skipped objects. This allowance covers optional
+full-object cache fills rather than all remote query
+I/O. Uncached Parquet is scanned directly through GCS/S3 range reads.
+
+Index headers and requested sections use the unified object's `read_range`
+interface: resident ranges are read under cache-file pins, and misses go
+directly to GCS/S3 without filling a whole bundle. Object-backed plans use file
+descriptors from the captured catalog without listing objects or opening
+footers and bundles. Execution checks indexes as it reaches each file.
+DataFusion keeps one current file and one lookahead open per active partition;
+file preparation stops when downstream operators finish, including after an
+unordered LIMIT has enough exact matches. Global sorts and aggregates may
+still require all candidates. The Query RPC returns one collected response.
+
+Each file's optional index reads and parsing have up to 500 ms, capped by the read deadline.
+Later files get their own optional budget; already parsed cache entries remain
+usable after it expires. Preparation reads key sections first and skips other
+sections when a segment is already excluded. Cache-local I/O and parsing use
+bounded workers whose permits remain held until the actual work finishes,
+including after async cancellation. Each store has eight cache-read workers and
+an independent pool of eight cache-fill writers, so warming cannot occupy the
+read pool. Parsed indexes have eight workers shared by the index cache. Remote
+range reads rely on DataFusion's per-query file window rather than a separate
+store-wide request cap. Already-running filesystem work may finish.
+Parsed sections share the memory-bounded index cache. Source footers needed to
+map spans or exact postings to row groups also use this range interface.
+Object-backed Parquet scans, covering projections, and maintenance reads use
+the same interface, including coalesced range requests. DataFusion retains its
+parsed-footer cache and scan-byte counters. Legacy files still use their
+recorded filesystem paths.
+Same-column substring alternatives such as
+`contains(data, 'model cache') OR contains(data, 'download complete')` combine
+their trigram masks with OR. An alternative without a supported constraint
+keeps the source scan. An unavailable, corrupt, or slow index also keeps that scan;
+indexes remain optional derived state.
+
+Maintenance reads pin cached files or read directly from object storage without
+filling misses. A nonzero `required_fill_bytes` counter means a caller still
+forces a local file; inspect the remaining `local_path` callers.
+
+When cache eviction remains high despite little query traffic, check ingestion
+and compaction activity; both write through to the cache. Compare `write_bytes`
+with `query_fill_bytes` in the activity summaries. `cleanup_ms` and
+`max_batch_us` in sweep logs, and `cleanup_time_us` and `cleanup_max_batch_us`
+in activity summaries, measure file reclamation work. A nonzero
+`remaining_excess_bytes` can reflect files pinned by active scans or staged
+objects awaiting upload. These files remain candidates for a later sweep.
 
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
@@ -66,6 +175,34 @@ row-group pruning worked and file metadata is the remaining cost. The
 tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
 one as a place to look, not as a measured cost.
 
+For ordinary object-backed scans, `EXPLAIN` performs no object I/O. Legacy
+filesystem scans still inspect local metadata. A required object missing when
+execution reaches it fails the query; a LIMIT that finishes earlier need not
+validate unread objects. Derived index failures retain the source scan.
+
+`read execution report` survives read failure and cancellation. Compare
+`phase`, `logical_plan_ms`, `physical_plan_ms`, and `execution_ms`, then
+`candidate_files`, `prepared_files`, `pruned_files`, and `source_opens`.
+`first_batch_ms` is the first nonempty engine result batch since context
+creation, before the unary RPC response is encoded. Source/index range byte
+and request counts describe requests through the unified interface, including
+cache hits; they do not measure only remote network traffic. Index cache hits
+and unavailable, timeout, corrupt, stale, or missing-bundle counters explain
+why pruning was declined. Several scans can share one request's counters.
+
+For log searches, `epoch_ms` is not the catalog key: `log` is keyed by task
+`key`. The catalog also keeps each segment's `epoch_ms` min and max
+(`catalog_bounds` on the column), so a time bound drops the segments outside
+it before any footer or index read. Write the bound as an integer comparison on
+the bare column, such as
+`epoch_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '1 hour') * 1000 AS BIGINT)`;
+the unconverted `extract(epoch from now()) * 1000` form also works. A bound on
+an expression of the column, such as `to_timestamp_millis(epoch_ms)`, is not
+used. A segment written before the column had bounds is scanned until
+maintenance reads its footer; on an object-backed table this backfill reads a
+bounded batch per tick. A legacy-local table is always scanned. Bounding `seq` as well still excludes segments when a sequence window
+is known.
+
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
 carries a trigram index; otherwise it decodes the column for every row in the
 namespace. `ListNamespaces` reports which columns are indexed. How much it prunes
@@ -79,6 +216,16 @@ tens of minutes rather than at once. Enabling a column supersedes the whole
 `.fidx` policy, so every segment's bundle is rebuilt rather than extended: budget
 one core across the namespace's full segment count.
 
+That escaping rule is specific to `LIKE`. Equality already treats underscores
+as ordinary characters, so use the stored metric name without backslashes:
+
+```sql
+WHERE name = 'grad_norm_layers_0_ln2_b'
+```
+
+`name = 'grad\_norm\_layers\_0\_ln2\_b'` asks for a different string and cannot
+use postings declared for the unescaped name.
+
 An unindexed substring predicate spends its cost in the `LIKE` kernel, not in
 IO. `bytes_scanned` stays small while `pushdown_rows_pruned` reaches the
 namespace's row count. Read both.
@@ -87,14 +234,20 @@ For repeated equality families, declare the hot string values in
 `ColumnIndex.exact_values`. Finelog stores exact source-row postings in the
 segment's `.fidx` bundle. The planner attaches them for `=` and same-column
 `IN`/`OR` predicates when they retain at most 25% of the segment; denser matches
-keep the contiguous source scan.
+keep the contiguous source scan. The bundle header records the values covered by
+each exact section, so a query for an undeclared value skips the postings payload
+instead of opening and decoding it. Bundles written before this coverage header
+remain queryable by scan and are rebuilt by the normal index backfill.
 
 Use a named `Schema.projections` entry when the recurring query also benefits
 from a compact physical copy. Each projection declares one predicate and an
 explicit included-column list. Covered segments substitute the narrow Parquet
 file while uncovered segments use postings or source Parquet, so partial
-backfill is useful. `telemetry_v1` has one `training-status` projection for the
-three dashboard metric names.
+backfill is useful. `telemetry_v1` has a `training-status` projection for three
+dashboard metric names and a `training-process-zero` projection for rows whose
+`process_index` is `0`. The latter covers the structured columns used by the
+training loss window query. `process_index = '0'` and `name = 'train_loss'`
+also have exact postings when a segment has not completed projection backfill.
 
 Change a projection in place; do not version its name. Re-registering a name
 with a different predicate or column list supersedes the registered definition:
@@ -103,6 +256,17 @@ definition they were written with (each `.fidx` section carries its own
 coverage), and the backfill rebuilds them a few per tick and deletes the
 superseded Parquet files. A widened copy under a second name leaves both being
 built for every new segment forever.
+
+The `session-discovery` projection contains `num_requests_running` telemetry
+with the structured `job_id`, `run_id`, and `execution_uid` columns plus the
+metric attributes and timestamp. Standalone vLLM and embedded SkyRL scrapes
+emit this current-snapshot gauge while they are observable. Inference dashboard
+selectors filter by this exact name and, for SkyRL, by
+`json_get(attributes_json, 'metric_source') = 'vllm'`. Keeping the time bound on
+these rows makes the picker mean “observed in the selected window,” including
+long-lived sessions whose start predates that window. The exact name posting
+accelerates uncovered segments while the projection backfills through normal
+index maintenance.
 
 For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
 Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then
@@ -114,15 +278,204 @@ result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
-`GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
+`policies.rs` is the ordered registry for programmable schema policies. The
+first matching rule owns logical routing, retention, and optional hidden
+partitioning for that namespace family. Schemas without a matching rule keep
+identity ingestion and the cluster's default storage policy.
+
+The `/v1/telemetry` protocol remains for automatically sampled service state. It
+accepts resource and record data, not a caller-selected namespace. Finelog gives
+the complete normalized Arrow batch to the telemetry policy, which classifies
+rows by service and metric name. Node-agent samples go to
+`telemetry_v1.node_agent`; Iris controller `rpc_` and `proxy_` samples go to
+`telemetry_v1.iris.rpc`; vLLM samples go to `telemetry_v1.vllm`; and an unmapped
+service receives a normalized `telemetry_v1.<service>` namespace. Levanter NCCL
+RAS samples remain automated telemetry in `telemetry_v1.levanter`.
+
+Levanter's explicitly collected training values use the generic typed-table API
+instead. A writer registers `levanter.metrics.<run_id>` and includes the same
+`run_id` in every row. Finelog rejects a mismatch, then canonicalizes the alias
+to the one SQL table `levanter.metrics`. The suffix is a writer assertion, not a
+server-maintained list or a separate SQL schema. Legacy Levanter gauge rows sent
+through `/v1/telemetry` are recognized from their complete record and converted
+to the same typed metric table while clients roll out.
+
+`levanter.metrics` version 1 is unpartitioned. Its Parquet order is
+`(run_id, name, step, timestamp_ms, seq)`, which clusters the deployed exact
+`run_id` and metric-name filters without rewriting the active object set to add
+partition metadata. The static exact-`run_id` policy remains relevant only to
+legacy-local compaction. Adding an object-native partition requires a later
+table-spec version and a separately justified migration.
+
+`levanter.metrics` intentionally has no secondary indexes. Its run-first
+Parquet order and row-group statistics serve deployed selectors without
+telemetry's `name` trigram, `kind` postings, or adaptive string value counts.
+Server-owned registration removes the old declarations, queries ignore old
+`.fidx` bundles, and bounded maintenance deletes those derived files online.
+Source Parquet remains authoritative throughout cleanup.
+
+Object-backed maintenance treats all unpartitioned files at one nonterminal
+level as a sparse stream. Sequence gaps and overlapping footer ranges therefore
+cannot split a level into sub-threshold runs and strand aggregate debt. The
+planner promotes a level once it reaches the level's compressed-byte target or
+32 segments; L3 is terminal. An L1 or L2 job takes at most 32 inputs. An L0 job
+takes up to 512, because each job pays a fixed upload, index build, and catalog
+commit, and L0s are single flushes of a few hundred KB. Partitioned table specs
+still form one independent stream per exact partition. A cycle repeats object
+compaction while work remains, for up to 20 seconds, and resumes after 100 ms
+while progress remains, returning to the 30-second cadence at quiescence. The
+resumed cycle queues for the same `QueryServing` slots as every other table,
+so on a hub with many busy tables one visit's 20 seconds is what bounds L0
+growth. A cycle that ends with compaction work remaining skips index backfill
+and runs object collection at most once an hour, so the slot returns to the
+queue sooner. Publication atomically replaces exact input
+paths under the table's writer fence, so concurrent flushes can rebase and a
+failed commit leaves all inputs live.
+
+`telemetry_v1` exposes stable resource dimensions as nullable columns:
+`run_id`, `job_id`, `execution_uid`, `region`, `node_name`, and `process_index`.
+Producers may send them directly in the request's `resource`
+object. When omitted, Finelog infers them from same-named resource attributes.
+An explicit field wins over an attribute and replaces the same key in
+`resource_attributes_json`; the JSON map is canonicalized rather than retaining
+both conflicting values. Selectors and groupings should use the structured
+columns.
+
+An existing `telemetry_v1` root retains up to 50 GiB until migration
+retirement; a retired or fresh store does not recreate that table.
+Semantic namespaces have independent limits: typed Levanter metrics and
+Levanter automated telemetry each have 32 GiB, node-agent telemetry has 15 GiB,
+Iris RPC has 1 GiB, vLLM has 2 GiB, and other telemetry services have 2 GiB.
+All `levanter.metrics` objects share its retention budget.
+
+### Migrate the root telemetry hot set
+
+`finelog-migrate` rewrites the `telemetry_v1` hot set inside the existing hub
+store. It uses the same full-batch schema policy as HTTP ingestion and
+forwarding. Start with the hub in `dual-write` migration mode; do not enable the
+mode on forwarding `cw-*` stores. A forwarding store continues to send its one
+root copy, and the hub writes that batch once to the root and once to its
+semantic destination.
+
+The first dual-write startup records
+`.finelog-telemetry-v1-migration/dual-write-fence.json` before the listener
+binds. Its `legacy_max_seq` is immutable across restarts. Migration selects root
+rows at or below this fence, including when compaction puts pre- and post-fence
+rows in one Parquet. Rows above the fence already have a semantic copy and must
+not be migrated again.
+
+The migrator rejects stores with forwarding cursors, so run it on the `marin`
+or `marin-dev` hub, not a `cw-*` sender. Preparation may run while Finelog is
+serving. It takes a consistent SQLite snapshot and hard-links exactly the local
+root Parquets named by that catalog under
+`.finelog-telemetry-v1-migration/source`. If compaction removes one during the
+snapshot, preparation retries from a newer catalog. Rewritten Parquets land
+under `.finelog-telemetry-v1-migration/staged` as flat, unpartitioned L0s with a
+negative `seq` range disjoint from live ingestion. After publication, ordinary
+runtime maintenance performs the L0-to-L1 partitioning and bounded physical
+placement described above.
+
+```bash
+finelog-migrate prepare-telemetry-v1 \
+  --store-dir /var/cache/finelog
+
+finelog-migrate verify-telemetry-v1 \
+  --store-dir /var/cache/finelog
+```
+
+Planning reads the catalog and Parquet footers and writes the initial manifest
+before conversion starts. If one compacted segment crosses the dual-write
+fence, planning reads only its `seq` column to obtain an exact input row count.
+It does not classify, checksum, or partition records. Treat planning over a
+local hot store as a sub-second operation; stop and investigate filesystem or
+catalog access if the plan itself takes longer. The conversion first builds a narrow historical-step index from
+the immutable source snapshot, then gives complete record batches to the schema
+policy. This is necessary because compacted telemetry is sorted by metric name,
+not by event time. The policy resolves the latest preceding step by execution,
+process, timestamp, and sequence, regardless of the physical Parquet row order.
+Rows before an execution's first observed step retain `NULL`.
+
+Conversion updates the manifest after each source segment is durable. A
+completed manifest records every source checksum, destination sequence range,
+row count, stable row-identity checksum, output checksum, and the source catalog
+checksum. Re-running preparation resumes from verified completed source
+segments. `verify-telemetry-v1` rereads the source snapshot and every staged
+Parquet, then records `verified_at_ms` in the manifest. Publish refuses a staged
+manifest without that marker. Wrap operational invocations in an explicit
+deadline; the current hot-store rehearsal completed preparation in under two
+minutes:
+
+```bash
+timeout 15m finelog-migrate prepare-telemetry-v1 \
+  --store-dir /var/cache/finelog
+timeout 5m finelog-migrate verify-telemetry-v1 \
+  --store-dir /var/cache/finelog
+```
+
+Publish is the first short cutover. Stop Finelog, publish, and restart it:
+
+```bash
+timeout 2m finelog-migrate publish-telemetry-v1 --store-dir /var/cache/finelog
+```
+
+Publish hard-links the staged Parquets into their semantic namespace directories
+and replaces a catalog derived from the latest live catalog. It leaves the
+root namespace queryable. Old root-only queries and new semantic-only queries
+therefore each see one complete copy: migrated rows cover `seq <= legacy_max_seq`,
+and dual writes cover later rows. A root-plus-semantic union would count them
+twice. Deploy the semantic-only Grafana and Iris queries after publish.
+Publish trusts the completed pre-cutover verification: while Finelog is stopped,
+it only hard-links the staged files, builds and swaps the catalog, and checks the
+new catalog rows before recording the phase. It does not reread Parquet contents
+or recompute checksums. After the server restarts, ordinary compaction may replace
+those L0 paths; subsequent verification checks the immutable staged outputs and
+registered semantic namespaces instead of requiring the original live filenames.
+
+Once those queries are live, stop Finelog for the second short cutover:
+
+```bash
+timeout 2m finelog-migrate retire-telemetry-v1 --store-dir /var/cache/finelog
+```
+
+Retirement moves root local files into the migration rollback directory and
+replaces the catalog again, removing the old namespace and its remote-only
+catalog rows. A restart does not recreate the root. The pre-cutover catalogs
+stay under the `rollback` subdirectory; the hard-linked source snapshot stays
+under `source`. Keep the migration directory until the new layout has passed
+the training, cluster-capacity, RPC, and vLLM dashboard checks. Do not run
+publish or retirement while a Finelog process has the catalog open; the store
+lock rejects either command if it is.
+
+The rollout order is:
+
+1. Set only the hub's `telemetry_migration_mode: dual-write`, deploy it, and
+   confirm the startup log reports the durable fence. Leave forwarding stores
+   unchanged.
+2. Write a canary through the ordinary telemetry API and confirm it appears
+   exactly once in both root and its semantic namespace.
+3. Run `prepare-telemetry-v1` and `verify-telemetry-v1` on the serving hub under
+   explicit timeouts. Continue canary writes during both commands.
+4. Validate staged row accounting and representative root-versus-semantic
+   queries. Stop the hub, run `publish-telemetry-v1`, and restart the same
+   dual-write revision.
+5. Deploy the semantic-only Grafana and Iris queries and verify the training,
+   capacity, RPC, and vLLM panels.
+6. Set the hub back to `telemetry_migration_mode: normal` and deploy it. A
+   canary must now advance only its semantic namespace; the root must remain
+   unchanged.
+7. After an observation period, stop the hub, run `retire-telemetry-v1`, and
+   restart it. Remove legacy Levanter inference only after direct typed clients
+   are fully deployed.
+
+`GET /api/segments?namespace=levanter.metrics&physical=true` reports each local
 segment identity and `.fidx` section directory. Use it to distinguish incomplete
 backfill from a planner miss. `GET /api/server` reports corrupt bundle and
 section counters; either condition is a safe scan fallback but should trigger a
 local rebuild investigation. A time bound remains the fastest containment:
-`telemetry_v1` is keyed on `timestamp_ms`, so bounded queries can prune before
-any secondary method runs.
+telemetry namespaces are keyed on `timestamp_ms`, so bounded queries can prune
+before any secondary method runs.
 
-`finelog query` applies a client deadline just past the server's own 10s one.
+`finelog query` applies a client deadline just past the server's own 30s one.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
 needs longer.
 
@@ -132,15 +485,27 @@ than in-memory bytes is what matters: a telemetry row compresses to ~8 bytes
 against a log line's hundreds, so an in-memory target under-sizes worst exactly
 where the fix is needed.
 
-Each segment's footer carries the layout revision it was written with. Since the
-terminal level is never re-compacted, a maintenance pass re-encodes segments
+A schema can impose a `max_row_group_rows` bound from 16,384 through 1,048,576
+and a multi-column `sort_columns` order. The compactor appends `seq` as the final deterministic
+tie-breaker. `telemetry_v1` uses 128K-row groups and sorts by
+`(service, run_id, name, timestamp_ms, seq)`, which clusters the common service,
+run, metric-name, and time predicates while keeping `timestamp_ms` as the
+retention key. Existing compacted telemetry files are not immediately rewritten
+for this schema-only policy change. New flushes use the row ceiling, multi-input
+compactions use the sort order, and single-input promotions preserve their input
+layout. The share of old-layout files declines through normal compaction and
+retention; complete convergence is not guaranteed without a layout-version bump.
+
+Separately, each segment's footer carries the global layout revision it was
+written with. A revision bump causes a maintenance pass to re-encode segments
 still on an older revision, a couple per namespace per 30 s tick — otherwise a
-namespace's bulk would keep its old row groups until eviction aged it out, which
-for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
-rewrite keeps the filename and preserves the rows and their order, so it costs no
+a large namespace would keep its old row groups until eviction aged them out, which
+occurs on a timescale set by the namespace's local-cache budget. The rewrite
+keeps the filename and preserves the rows and their order, so it costs no
 remote bandwidth: the archive keys objects by basename and only uploads segments
 still marked `Local`. A rewritten segment's remote copy keeps the old layout
-while holding the same rows.
+while holding the same rows. Schema-level sort-policy changes do not bump this
+revision and therefore do not schedule that rewrite.
 
 Watch it with the `rewrote segment layout` events, which report the before and
 after byte size per segment. Confirm the era split before concluding a layout
@@ -207,36 +572,71 @@ forwarding:
 The public key in `marin.yaml` must be the public half of `forwarding.signing_key` —
 that pairing is what authenticates the sender, and a wrong key is a 401 on every
 push. `forwarding.cluster` is the origin name the sender stamps on every forwarded
-row; keep it equal to the hub key entry's `cluster` label so reads line up.
+row; keep it equal to the hub key entry's `cluster` label so reads line up. A sender
+forwards rows whose `cluster` is empty or already its own `forwarding.cluster`, and
+skips rows naming any other cluster.
 
 Roll the **hub first** (a sender whose key the hub does not yet trust gets 401),
-then the sender. `deploy up` resolves `signing_key` from Secret Manager on the
-operator's machine and projects it into the pod's `<name>-env` Secret, so whoever
-runs it needs `roles/secretmanager.secretAccessor` on that secret.
+then the sender. `deploy sync-secret` resolves `signing_key` from Secret Manager
+on the operator's machine and updates the pod's `<name>-env` Secret, so whoever
+runs it needs `roles/secretmanager.secretAccessor` on that secret. The Pulumi
+stack references that existing Kubernetes Secret without reading its values.
 
 ```bash
 uv run finelog deploy restart marin              # hub: gcp backend, in-place
+export KUBECONFIG=~/.kube/coreweave-iris
 export R2_KEY_ID=... R2_KEY_SECRET=...
-uv run finelog deploy up "$CLUSTER" --no-build   # sender: k8s, applies Secret + env
+uv run finelog deploy sync-secret "$CLUSTER"
+uv run marin-deploy finelog rollout "$CLUSTER"
 ```
+
+`marin-deploy finelog rollout` captures the active Deployment revision, runs the matching
+Pulumi stack, and restores the captured ReplicaSet if the update or ingest
+verification fails. Its rollout identity and image build stamp come from the
+checked-out, content-addressed Git tree SHA. If only the Secret changed, replace
+the pod using `kube_context`, `namespace`, and `name` from
+`lib/finelog/config/$CLUSTER.yaml`, wait for the Deployment, then run `uv run
+--frozen --package marin-finelog finelog deploy verify "$CLUSTER"`. See
+[`infra/finelog/README.md`](../../infra/finelog/README.md) for preview, manual
+rollback, and first-time stack adoption. Do not run the first update without the
+import flag: the live PVC must be adopted, not recreated.
 
 Forwarding starts at the sender's current watermark: rows already in its store
 stay there and stay queryable, but they do not backfill into the hub.
 
-Confirm the hub is receiving. The sender stamps the `cluster` column, and a row
-only lands once its token verified, so a row carrying the sender's name is proof
-forwarding reached the hub. Bound the scan by time — an unbounded `GROUP BY` over
+Confirm the hub is receiving. The hub overwrites the `cluster` column with the
+cluster bound to the verified JWT, so a row carrying the sender's name proves that
+sender's forwarding reached the hub. Bound the scan by time — an unbounded `GROUP BY` over
 the whole `log` namespace will time out. An empty `cluster` is the hub's own rows;
 a sender missing from this list is a sender whose rows are not arriving.
 
 ```bash
 uv run finelog query marin --format table \
   'SELECT cluster, count(*) AS rows FROM "log"
-   WHERE epoch_ms > (extract(epoch from now()) * 1000 - 600000)
+   WHERE epoch_ms > CAST(EXTRACT(EPOCH FROM now() - INTERVAL '\''10 minutes'\'') * 1000 AS BIGINT)
    GROUP BY cluster'
 ```
 
 ### Distinguishing missing regional logs from delayed hub forwarding
+
+`FinelogRelayStalled` is the primary fleet alert for this distinction. Each
+regional process sends a complete status snapshot directly to the hub every 30
+seconds; the report does not pass through `WriteRows` or a telemetry table. Its
+states mean:
+
+- `heartbeat_missing` or `heartbeat_stale`: the hub has no current direct report
+  from the cluster.
+- `namespace_missing`: the required `telemetry_v1.node_agent` table is absent
+  from an otherwise current complete snapshot.
+- `publication_stalled`: locally visible sequence positions have not reached
+  the published R2 catalog for ten minutes.
+- `forwarding_stalled`: published positions have not advanced the hub-settled
+  cursor for ten minutes.
+
+The Grafana rule holds a classified failure for two more minutes before paging.
+NoData and bridge/RPC errors alert rather than appearing healthy. On the
+regional Finelog UI, the table's Forwarding card shows the same visible,
+published, and settled boundaries for local diagnosis.
 
 The regional Finelog is the record; the `marin` hub is an asynchronous copy. If
 logs for a federated Iris task are absent from the hub, query the exact task key
@@ -257,18 +657,43 @@ uv run finelog query "$CLUSTER" --format table \
 
 Interpret the pair as follows:
 
-- Regional rows present and hub rows absent or only a prefix: forwarding is
-  delayed. Repeat the exact hub query; do not treat an immediate empty result as
-  loss.
+- Regional rows present and hub rows absent, only a prefix, or a non-prefix subset:
+  forwarding is delayed or a batch was permanently rejected. Repeat the exact hub
+  query, then inspect the forwarder warnings and `telemetry_v1.finelog` counters below.
+  Do not classify an immediate empty result by itself as loss.
 - Rows absent regionally but present in `kubectl logs <pod> -c task`: inspect
   `kubectl logs <pod> -c log-shipper` and the regional Finelog ingest path.
 - Rows absent from both Finelog stores and the container runtime: the task did
   not emit the expected output or its runtime logs are already unavailable.
 
-The forwarder gives every live namespace one batch-sized turn per round and
-starts another round immediately while work remains. A large telemetry backlog
-therefore does not monopolize forwarding ahead of new log rows. Hub or network
-failures can still delay a turn because forwarding is best effort.
+The forwarder gives every live namespace one batch-sized turn per round, runs
+up to four namespace turns concurrently, and starts another round immediately
+while work remains. A log turn reads up to one million rows; other tables read
+up to 200,000. Requests retain their byte limit, and log chunks ship serially
+to preserve order. Independent tables can overlap their durable hub writes.
+Scan results remain separate Arrow batches until byte-bounded coalescing, so
+large log reads do not exceed the 2 GiB Utf8 offset limit before request chunking.
+Hub or network failures get three attempts, then leave the affected cursor in place and yield to
+the next namespace. The same batch is retried on the next sweep; exhaustion does
+not discard it.
+
+The hub returns `failed_precondition` when a well-formed batch conflicts with its
+registered schema. The sender preserves the cursor, clears its registration cache,
+and retries after registration refresh. A persistent conflict pins that namespace's
+cursor, holding later rows behind it until the schemas become compatible or local
+retention evicts the blocked positions. If refresh does not clear the next sweep,
+compare the source and hub registrations and deploy a compatible schema; do not reset
+the cursor. Other namespaces continue forwarding.
+
+The hub returns `invalid_argument` for malformed row content. The sender drops the
+entire outbound chunk, including otherwise valid rows in that chunk, and advances its
+cursor because resending the same bytes cannot succeed. The regional store remains the
+source of record until retention evicts those rows. `forwarding_seq_positions` with
+`outcome='permanent_rejection'` records the skipped sequence span.
+
+Roll this status-code contract to the hub before regional senders. An older hub reports
+registered-schema conflicts as `invalid_argument`, which a newer sender would treat as
+permanent. Verify the hub build first, then roll the regional forwarders.
 
 Inspect the sender's forwarder messages without changing the deployment. Read
 the deployment name and Kubernetes connection details from
@@ -282,15 +707,102 @@ kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
 
 Warnings name the affected namespace. `backlog exceeds the warning threshold`
 reports pressure but does not change the forwarding cursor; the sender continues
-draining every locally retained row. `rows evicted before they were forwarded`
-means that local retention has already made source sequence positions unreadable.
-The cumulative `skipped_seqs` progress counter also includes permanently rejected
-malformed batches and does not by itself prove that `log` rows were dropped.
+processing retained rows without moving the cursor merely because of backlog pressure.
+`object-native cursor precedes the live spool; refusing to skip rows` means the
+cursor and live segment state disagree. The sender fails closed for that namespace;
+inspect its selected HEAD and local projection instead of advancing the cursor.
+`rows evicted before they were forwarded` applies only to a legacy relay whose
+local retention already made source sequence positions unreadable.
+`batch conflicts with the hub schema; preserving the cursor` means the sender will
+re-register the namespace's current schema on the next sweep and retry the same rows.
+`hub permanently rejected the batch; dropping it` means the hub classified the content
+as invalid and the sender advanced the cursor. A current
+hub also registers an unseen server-owned destination before appending telemetry
+routed from the legacy `telemetry_v1` root. A `namespace ... is not registered`
+rejection for such a destination means the hub predates that behavior or its managed
+registration failed. The cumulative, process-lifetime `skipped_seqs` log field includes
+permanent rejections and local-retention gaps and resets after restart.
+
+Slow forwarding lines include the live and selected segment counts, rows,
+visibility-lock wait, snapshot, planning, scan, encoding, hub acknowledgement,
+settlement, and total milliseconds. A settlement line also reports removed
+segment, row, and byte counts. Maintenance lines report resource class, queue
+wait, run time, and the requested follow-up class. Object-backed relays use the
+`RelayIo` class; `SpecMigration` and `QueryServing` have independent limits.
+
+An object-backed cycle of at least 5 seconds logs `slow maintenance cycle step
+breakdown` with `total_ms`, `compaction_attempts`, and `steps_ms` for
+`flush_and_publish`, `compaction`, `state_gc`, `object_collection`, `segment_bounds`,
+and `index_artifacts`. While compaction still has runs left, the cycle skips the
+`segment_bounds` and `index_artifacts` backfills. Compare it with `object compaction rewrite finished`
+(`merge_ms`, `upload_ms`) to separate merge time from the cycle's other steps.
+A growing `segment_count` in `finelog namespaces <name>`, with `maintenance cycle
+waited for a slot` reporting waits of many minutes, means compaction is falling
+behind flushes. Reads then open every L0 because an L0
+spans the whole key range.
+
+`slow batch stage breakdown` reports `read_ms`, `chunk_encode_ms`, and `push_ms`
+for one turn, with its source cursor range, row count, chunk count, and encoded
+bytes. `push_ms` includes RPC compression, transport, retries, and the hub's
+durable acknowledgement; it is not hub CPU time. Durations are wall time and can
+include scheduling delays while another namespace encodes. Match the namespace
+and `previous_cursor` to `slow namespace turn completed` for settlement and total
+duration. Its final cursor can also cover trailing foreign-origin rows skipped
+after the batch timing line. A cold-read explanation requires a large `read_ms`;
+total turn time alone cannot establish it.
+
+The forwarding cursor and fully covered object-segment removals share one
+catalog transaction and one HEAD publication. Covered segments stop appearing
+in relay queries immediately after settlement. Their objects remain through the
+query and rollback retention window, then exact-release GC removes both the
+remote object and local cache copy. The generic 24-hour orphan grace applies to
+unselected uploads whose owning transaction is unknown, not to settled relay
+segments.
+
+State collection uses the selected catalog and its checkpoint-folded release
+set. It lists historical catalog keys for age and selected-chain membership but
+does not download them. CoreWeave S3 deletes up to 1,000 eligible keys per
+request. The `collected object table state` event reports listed catalog keys,
+selected-chain size, pending and deleted releases, deleted catalog keys, orphan
+counts, and milliseconds for each stage. `historical_nodes_opened` must remain
+zero.
+
+Sequence positions measure cursor distance, not decoded row count. Gaps and rows
+filtered because they already carry a foreign origin can make both `skipped_seqs` and
+`forwarding_seq_positions` an upper bound on affected rows. Telemetry values are
+five-minute deltas; an unreported partial interval is lost if the sender restarts.
+
+Each regional sender writes five-minute delta counters to `telemetry_v1.finelog`; the
+same forwarder copies them to the hub on a later successful sweep. Query dropped
+positions across the fleet for the last hour with:
+
+```bash
+uv run finelog query marin --format table \
+  'SELECT date_bin(INTERVAL '\''5 minutes'\'', to_timestamp_millis(timestamp_ms)) AS bucket,
+          cluster,
+          json_get(attributes_json, '\''namespace'\'') AS namespace,
+          json_get(attributes_json, '\''outcome'\'') AS outcome,
+          sum(value) AS seq_positions
+   FROM "telemetry_v1.finelog"
+   WHERE name = '\''forwarding_seq_positions'\''
+     AND json_get(attributes_json, '\''outcome'\'') IN
+         ('\''permanent_rejection'\'', '\''retention_eviction'\'')
+     AND timestamp_ms > CAST(EXTRACT(EPOCH FROM now() - INTERVAL '\''1 hour'\'') * 1000 AS BIGINT)
+   GROUP BY bucket, cluster, namespace, outcome
+   ORDER BY bucket, cluster, namespace, outcome'
+```
+
+The Fleet health Grafana dashboard plots failed batches and dropped sequence positions.
+`forwarding_batches` also exposes `schema_conflict` and `retryable_failure` outcomes.
+Check `max(timestamp_ms)` for the sender before interpreting an empty hub result. During
+a hub or network failure the diagnostic telemetry is also delayed; run the same query
+against the regional target without a `cluster` predicate to inspect its local copy.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
-hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
-drop the old public key and roll the hub again.
+hub, re-pin the sender's `signing_key` to the new version, run `deploy
+sync-secret`, update the sender's Pulumi stack, then drop the old public key and
+roll the hub again.
 
 ## Checking that a server is ingesting
 
@@ -299,10 +811,10 @@ Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
 condition a restart will not clear. The body carries the verdict: `ok`, or
 `degraded: <namespace>: registration failed: <reason>`.
 
-`telemetry_v1` must be registered before it accepts a row, and the registration
-is re-driven from the catalog's persisted schema on every boot. When the
-binary's schema and the catalog disagree in a way no merge can reconcile (a
-column type change), every write to that namespace fails until one of them
+The known semantic telemetry namespaces are registered on boot; an existing
+root is registered only until it is retired. When the binary's schema and a
+catalog entry disagree in a way no merge can reconcile
+(a column type change), writes to that namespace return 400 until one of them
 changes, across restarts.
 
 ```bash
@@ -312,9 +824,16 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 
 `/api/server`'s `ingest` block names each namespace, its state, the error, when
 it first failed, and how many attempts have been made since. The dashboard's
-System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
-`safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
-back.
+System page shows the same under **Ingest**. The GCE `deploy up`, `deploy
+restart`, and `safe_deploy` paths gate on the body; `safe_deploy` rolls back a
+failed GCE rollout. Kubernetes `marin-deploy finelog rollout` restores the captured
+ReplicaSet when Pulumi's post-Deployment `finelog deploy verify` fails.
+
+A disk-backed namespace rejects writes that would take its raw Arrow buffer
+above 200 MiB. Connect clients receive `resource_exhausted`; HTTP telemetry
+clients receive the existing 503 `storage_unavailable` response. Sustained
+rejection indicates that the cache filesystem or storage backend is not keeping
+up.
 
 ## Serving a copy of a store
 
@@ -330,6 +849,48 @@ A shadow boot over a copy of a deployment's catalog also re-runs that
 deployment's registrations, so a schema this binary can no longer merge shows
 up in `/health` as `degraded: <namespace>: registration failed: ...` with the
 per-namespace detail under `/api/server`.
+
+The dashboard benchmark extracts inline SQL from Grafana dashboard JSON.
+For bridge dataset endpoints, export the `SourceQuery` SQL from the matching
+builder in `infra/grafana/src/` as a JSON array of `{"name": "...", "sql": "..."}`
+objects. Pass that file with `--query-file`; its SQL runs verbatim, so freeze
+its time bounds before comparing servers. `--address` measures an existing
+server, including a loopback SSH tunnel, instead of starting a shadow process:
+
+```bash
+uv run python -m finelog.benchmarks.grafana_dashboard_bench \
+  --query-file queries.json --address http://127.0.0.1:19001 \
+  --warmup 1 --iterations 5 --output timings.json
+```
+
+Results include result digests, plain `EXPLAIN` wall time and plan, and
+`EXPLAIN ANALYZE` wall time and scan counters under `workloads`. Each workload
+records its rendered dashboard `window`; literal query files record `window: null`
+because their bounds come from their SQL. RPC wall time includes queueing;
+it does not isolate planner CPU. Keep the original Parquet files for the
+baseline and compare result digests before interpreting a sampled speedup.
+
+## Diagnosing blocked ingestion and registration
+
+A Ready pod can have a blocked storage path. A full blocking pool can prevent
+ingestion and publication while `/health` still returns `ok`. Compare visible,
+published, and settled positions in the table's Forwarding card. Inspect
+process threads when all three stop. The ingest buffer does not count queued
+RPC requests, so RSS can increase while the buffer stays small.
+
+Use WebSocket exec if the Kubernetes endpoint rejects SPDY upgrades:
+
+```bash
+KUBECTL_REMOTE_COMMAND_WEBSOCKETS=true kubectl \
+  --kubeconfig ~/.kube/coreweave-iris --context <context> -n iris \
+  exec <pod> -c finelog -- cat /proc/1/status
+```
+
+[Incident 1046](https://marina.oa.dev/echo/wiki/1046) shows how to capture
+thread stacks from a temporary debug container with `SYS_PTRACE`. With a
+`node-local` cache, an approved container restart in the same pod keeps the
+`emptyDir` cache. Pod replacement discards that cache. Neither action keeps
+queued requests in process memory.
 
 ## Diagnosing Kubernetes mirror readiness
 
@@ -360,6 +921,16 @@ compactions indicate ingest pressure; tune `cpu_request`, `cpu_limit`,
 `memory_request`, and `memory_limit` in the cluster's finelog config. Every
 Kubernetes deployment also has a five-minute startup probe so reopening an
 existing network-backed store does not feed a liveness restart loop.
+
+The standalone `finelog-server` treats every Rust panic as process-fatal. Its
+panic hook reports the first panic and aborts before Tokio can contain it as a
+failed task. Kubernetes then restarts the container over the existing store and
+PVC. Inspect `kubectl logs ... --previous` for the initiating panic and the pod's
+restart count. A repeated deterministic panic becomes `CrashLoopBackOff`.
+Do not recover a poisoned store mutex with `PoisonError::into_inner`; the panic
+may have interrupted a state transition protected by that mutex. The PyO3
+server embedded in Iris does not install this process-wide hook because an
+abort would terminate the controller.
 
 The startup events carry millisecond timings for SQLite open, one-time catalog
 adoption, local directory discovery, catalog reads, Parquet footer reconciliation,

@@ -4,16 +4,19 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::query::index_cache::IndexCache;
-use crate::store::exact::{coalesce_runs, RowRun};
-use crate::store::index_bundle::SectionKind;
-use crate::store::segment::{segment_id, segment_row_group_rows};
-use crate::store::segment_index::{
-    parse_projection_reference, projection_path, ProjectionReference, SOURCE_ROW_OFFSET_IDENTITY,
+use crate::indices::exact::{coalesce_runs, RowRun};
+use crate::indices::format::SectionKind;
+use crate::indices::projection::{
+    parse_projection_reference, ProjectionReference, SOURCE_ROW_OFFSET_IDENTITY,
 };
+use crate::indices::{
+    parse_exact_postings_coverage, IndexRegistry, SegmentArtifacts, EXACT_POSTINGS_METHOD_VERSION,
+};
+use crate::store::segment::{segment_id, segment_row_group_rows};
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
+use datafusion_datasource::FileExtensions;
 use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 
@@ -116,17 +119,28 @@ pub fn apply(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
-    index_cache: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> Arc<dyn ExecutionPlan> {
     if constraints.is_empty() {
         return plan;
     }
-    let projections =
-        build_projection_files(segment_paths, constraints, required_columns, index_cache);
+    let projections = build_projection_files(
+        segment_paths,
+        constraints,
+        required_columns,
+        indices,
+        artifacts,
+    );
     let projected_segments = projections.keys().cloned().collect();
     let plan = rewrite_projection_files(plan, &projections);
-    let access_plans =
-        build_access_plans(segment_paths, constraints, &projected_segments, index_cache);
+    let access_plans = build_access_plans(
+        segment_paths,
+        constraints,
+        &projected_segments,
+        indices,
+        artifacts,
+    );
     if access_plans.is_empty() {
         return plan;
     }
@@ -144,7 +158,8 @@ fn build_projection_files(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
-    index_cache: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ProjectionFile> {
     let mut projections = HashMap::new();
     let mut projected_rows = 0_u64;
@@ -154,7 +169,7 @@ fn build_projection_files(
         let Some(basename) = parquet.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(segment) = index_cache.indexed_segment(parquet) else {
+        let Some(segment) = indices.open_segment(parquet, artifacts) else {
             continue;
         };
         let source_rows = segment.row_group_rows.iter().sum::<usize>() as u64;
@@ -168,7 +183,11 @@ fn build_projection_files(
         else {
             continue;
         };
-        let projection = projection_path(parquet, &reference);
+        let Some(projection) =
+            indices.projection_file(parquet, artifacts, &reference.descriptor.name)
+        else {
+            continue;
+        };
         let Some(projection_groups) = segment_row_group_rows(&projection) else {
             continue;
         };
@@ -213,7 +232,7 @@ fn build_projection_files(
     projections
 }
 
-fn projection_covers(
+pub(crate) fn projection_covers(
     reference: &ProjectionReference,
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
@@ -235,7 +254,8 @@ fn build_access_plans(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     projected_segments: &BTreeSet<String>,
-    index_cache: &IndexCache,
+    indices: &IndexRegistry,
+    artifacts: &SegmentArtifacts,
 ) -> HashMap<String, ParquetAccessPlan> {
     let mut plans = HashMap::new();
     let mut selected_rows = 0_u64;
@@ -249,35 +269,17 @@ fn build_access_plans(
         if projected_segments.contains(basename) {
             continue;
         }
-        let Some(segment) = index_cache.indexed_segment(parquet) else {
+        let Some(segment) = indices.open_segment(parquet, artifacts) else {
             continue;
         };
         let total_segment_rows = segment.row_group_rows.iter().sum::<usize>() as u64;
-        let Some(index) =
-            index_cache.get_exact(parquet, &segment.header, SectionKind::ExactPostings)
-        else {
+        if !exact_postings_may_cover(&segment.header, constraints) {
+            continue;
+        }
+        let Some(index) = indices.exact(&segment, SectionKind::ExactPostings) else {
             continue;
         };
-        let mut selected: Option<Vec<RowRun>> = None;
-        for (column_name, values) in constraints {
-            let Some(column) = index.columns.get(column_name) else {
-                continue;
-            };
-            if !values.iter().all(|value| column.rows.contains_key(value)) {
-                continue;
-            }
-            let union = coalesce_runs(
-                values
-                    .iter()
-                    .flat_map(|value| column.rows[value].iter().copied())
-                    .collect(),
-            );
-            selected = Some(match selected {
-                None => union,
-                Some(current) => intersect_runs(&current, &union),
-            });
-        }
-        let Some(selected) = selected else {
+        let Some(selected) = selected_runs(&index, constraints) else {
             continue;
         };
         let segment_selected_rows = selected.iter().map(|run| run.len).sum::<u64>();
@@ -311,7 +313,61 @@ fn build_access_plans(
     plans
 }
 
-fn postings_are_selective(selected_rows: u64, total_rows: u64) -> bool {
+pub(crate) fn selected_runs(
+    index: &crate::indices::exact::ExactSection,
+    constraints: &HashMap<String, Vec<String>>,
+) -> Option<Vec<RowRun>> {
+    let mut selected: Option<Vec<RowRun>> = None;
+    for (column_name, values) in constraints {
+        let Some(column) = index.columns.get(column_name) else {
+            continue;
+        };
+        if !values.iter().all(|value| column.rows.contains_key(value)) {
+            continue;
+        }
+        let union = coalesce_runs(
+            values
+                .iter()
+                .flat_map(|value| column.rows[value].iter().copied())
+                .collect(),
+        );
+        selected = Some(match selected {
+            None => union,
+            Some(current) => intersect_runs(&current, &union),
+        });
+    }
+    selected
+}
+
+pub(crate) fn exact_postings_may_cover(
+    header: &crate::indices::format::BundleHeader,
+    constraints: &HashMap<String, Vec<String>>,
+) -> bool {
+    let Some(section) = header
+        .sections
+        .iter()
+        .find(|section| section.kind == SectionKind::ExactPostings)
+    else {
+        return false;
+    };
+    if section.method_version < EXACT_POSTINGS_METHOD_VERSION {
+        return true;
+    }
+    if section.method_version != EXACT_POSTINGS_METHOD_VERSION {
+        return false;
+    }
+    parse_exact_postings_coverage(&section.coverage).is_some_and(|coverage| {
+        constraints.iter().any(|(column, values)| {
+            coverage.columns.get(column).is_some_and(|covered| {
+                values
+                    .iter()
+                    .all(|value| covered.binary_search(value).is_ok())
+            })
+        })
+    })
+}
+
+pub(crate) fn postings_are_selective(selected_rows: u64, total_rows: u64) -> bool {
     total_rows > 0
         && selected_rows.saturating_mul(MAX_POSTINGS_SELECTED_DENOMINATOR)
             <= total_rows.saturating_mul(MAX_POSTINGS_SELECTED_NUMERATOR)
@@ -340,7 +396,7 @@ fn intersect_runs(left: &[RowRun], right: &[RowRun]) -> Vec<RowRun> {
     out
 }
 
-fn runs_access_plan(runs: &[RowRun], row_group_rows: &[usize]) -> ParquetAccessPlan {
+pub(crate) fn runs_access_plan(runs: &[RowRun], row_group_rows: &[usize]) -> ParquetAccessPlan {
     let mut plan = ParquetAccessPlan::new_all(row_group_rows.len());
     let mut group_start = 0_u64;
     let mut run_index = 0;
@@ -377,7 +433,7 @@ fn runs_access_plan(runs: &[RowRun], row_group_rows: &[usize]) -> ParquetAccessP
     plan
 }
 
-fn intersect_access_plans(
+pub(crate) fn intersect_access_plans(
     existing: &ParquetAccessPlan,
     additional: &ParquetAccessPlan,
 ) -> Option<ParquetAccessPlan> {
@@ -415,12 +471,10 @@ fn rewrite_file_groups(
             return file.clone();
         };
         let access = file
-            .extensions
-            .as_ref()
-            .and_then(|extension| extension.downcast_ref::<ParquetAccessPlan>())
+            .extension::<ParquetAccessPlan>()
             .and_then(|existing| intersect_access_plans(existing, additional))
             .unwrap_or_else(|| additional.clone());
-        file.clone().with_extensions(Arc::new(access))
+        crate::query::file_scan::with_only_extension(file, access)
     })
 }
 
@@ -446,7 +500,7 @@ fn rewrite_projection_files(
         projected.range = None;
         projected.statistics = None;
         projected.ordering = None;
-        projected.extensions = None;
+        projected.extensions = FileExtensions::default();
         projected.metadata_size_hint = None;
         projected
     })

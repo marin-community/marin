@@ -3,10 +3,9 @@
 
 """Bring a run's ``samples`` table up to schema v4, which added ``filter`` to the primary key.
 
-Rows written under the narrower key cannot collapse against rows written under the wider one — the
-added column reads as null on their shards — so they have to be removed rather than merged into. That
-makes this the one place in the eval pipeline that deletes, and every deletion is preceded by a
-verified copy to region-local 30-day storage.
+Rows written under the narrower key cannot collapse against rows written under the wider one. The
+old table is copied to region-local 30-day storage, then removed from the active manifest. Its
+immutable objects remain available to read views that pinned the earlier commit.
 
 An lm-eval export can only reproduce lm-eval rows, so a table holding agentic samples is refused
 here; ``migrate_archive`` replaces those from the legacy parquets that do reproduce them.
@@ -16,37 +15,49 @@ from __future__ import annotations
 
 import logging
 
+from finestore.admin import drop_table as drop_manifest_table
 from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind
-from finestore.reader import CompositeReader
-from rigging.filesystem import factory, prefix_join
+from finestore.reader import ReadView
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.migrations.archive_backup import superseded_samples_prefix
 
 logger = logging.getLogger(__name__)
 
 
-def copy_table(root: str, table: str, destination: str) -> int:
-    """Copy every object of ``table`` under ``root`` to ``destination``; return the number copied.
+def copy_table(reader: ReadView, table: str, destination: str) -> int:
+    """Copy a table's pinned metadata and shards to ``destination``; return objects copied.
 
-    Each copy's size is checked against its source before this returns, so a caller may treat success
-    as licence to delete the originals. An object already at the destination is left alone: the
-    earliest snapshot is the pristine one, and a resumed migration must not write over it.
+    Each shard copy's size is checked against its source before this returns. An object already at
+    the destination is left alone: the earliest snapshot is the pristine one, and a resumed
+    migration must not write over it.
     """
-    source_fs, source_key = factory.url_to_fs(prefix_join(root, table))
-    destination_fs, _ = factory.url_to_fs(destination)
-    if not source_fs.exists(source_key):
+    if reader.table_metadata_path(table) is None:
         return 0
+    destination_path = StoragePath(destination)
+    destination_path.mkdirs()
     copied = 0
-    for source in source_fs.find(source_key):
-        relative = source[len(source_key) :].strip("/")
-        _, target = factory.url_to_fs(prefix_join(destination, relative))
-        if destination_fs.exists(target):
+    metadata_target = destination_path / "_schema.json"
+    metadata_bytes = reader.table_metadata(table).model_dump_json(indent=2).encode()
+    if metadata_target.exists():
+        if metadata_target.read_bytes() != metadata_bytes:
+            raise ValueError(f"existing table metadata backup does not match {table!r} at {reader.root}")
+    else:
+        metadata_target.write_bytes(metadata_bytes)
+        copied += 1
+    for shard in reader.list_shards(table):
+        source = StoragePath(shard.path)
+        target = destination_path / source.name
+        if target.exists():
+            written = target.size()
+            expected = source.size()
+            if written != expected:
+                raise OSError(f"existing copy of {source} is {written} bytes, expected {expected}")
             continue
-        destination_fs.makedirs(target.rsplit("/", 1)[0], exist_ok=True)
-        with source_fs.open(source, "rb") as reader, destination_fs.open(target, "wb") as writer:
-            writer.write(reader.read())
-        written = destination_fs.info(target)["size"]
-        expected = source_fs.info(source)["size"]
+        with source.open("rb") as source_handle, target.open("wb") as writer:
+            writer.write(source_handle.read())
+        written = target.size()
+        expected = source.size()
         if written != expected:
             raise OSError(f"copy of {source} is {written} bytes, expected {expected}")
         copied += 1
@@ -54,51 +65,46 @@ def copy_table(root: str, table: str, destination: str) -> int:
     return copied
 
 
-def drop_table(root: str, table: str) -> int:
-    """Delete every shard of ``table`` under ``root``; return the number removed.
-
-    Leaves ``_schema.json`` for the next writer to overwrite.
-    """
-    shards = CompositeReader(root).list_shards(table)
-    if not shards:
+def drop_table(reader: ReadView, table: str) -> int:
+    """Remove a table from the next manifest and return its active shard count."""
+    if reader.table_metadata_path(table) is None:
         return 0
-    fs, _ = factory.url_to_fs(root)
-    for shard in shards:
-        fs.rm(shard.path)
-    logger.info("dropped %d shard(s) of table %s under %s", len(shards), table, root)
-    return len(shards)
+    count = len(reader.list_shards(table))
+    drop_manifest_table(reader.root, table, expected=reader.table_version(table))
+    logger.info("dropped table %s with %d active shard(s) under %s", table, count, reader.root)
+    return count
 
 
-def replace_table(root: str, table: str, destination: str) -> None:
+def backup_and_drop_table(reader: ReadView, table: str, destination: str) -> None:
     """Snapshot ``table`` to ``destination``, then drop it.
 
-    The snapshot is complete and size-verified before anything is deleted, so a failure at any point
-    leaves either the original table or a full copy of it outside the run.
+    The snapshot is complete and size-verified before the manifest removes the table, so a failure
+    leaves either the original logical table or a full copy outside the run.
     """
-    copy_table(root, table, destination)
-    drop_table(root, table)
+    copy_table(reader, table, destination)
+    drop_table(reader, table)
 
 
-def preserve_and_replace_samples(results_path: str, stored_version: int) -> None:
-    """Snapshot one run's samples table to its 30-day prefix, keyed by the version being replaced."""
-    destination = superseded_samples_prefix(results_path, stored_version)
+def backup_and_drop_samples(reader: ReadView, stored_version: int) -> None:
+    """Back up and drop a run's samples table under its prior schema version."""
+    destination = superseded_samples_prefix(reader.root, stored_version)
     logger.info(
         "replacing %s samples written under schema v%s at v%s, preserved at %s",
-        results_path,
+        reader.root,
         stored_version,
         SCHEMA_VERSION,
         destination,
     )
-    replace_table(results_path, ARCHIVE_SAMPLES_TABLE, destination)
+    backup_and_drop_table(reader, ARCHIVE_SAMPLES_TABLE, destination)
 
 
-def replace_stale_samples(results_path: str) -> int | None:
-    """Replace a stale samples table so a caller can rewrite it; return the version replaced.
+def backup_and_drop_stale_samples(results_path: str) -> int | None:
+    """Back up and drop a stale samples table and return its schema version.
 
     ``None`` means the table was already current and nothing was touched. Refuses a table holding
     agentic samples, which come from Harbor and no lm-eval source can regenerate.
     """
-    reader = CompositeReader(results_path)
+    reader = ReadView(results_path)
     stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is None or stored_version == SCHEMA_VERSION:
         return None
@@ -110,5 +116,5 @@ def replace_stale_samples(results_path: str) -> int | None:
                 f"{results_path} holds {agentic} agentic sample(s) that an lm-eval export cannot "
                 "regenerate; migrate the run with migrate_archive instead"
             )
-    preserve_and_replace_samples(results_path, stored_version)
+    backup_and_drop_samples(reader, stored_version)
     return stored_version

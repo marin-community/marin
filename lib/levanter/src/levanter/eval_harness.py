@@ -30,9 +30,9 @@ import time
 import typing
 from dataclasses import dataclass
 from functools import cached_property
+from itertools import batched
 from typing import Callable, Iterator, List, Optional, Tuple, TypeVar, Union
 
-import equinox as eqx
 import haliax
 import jax
 import jax.numpy as jnp
@@ -43,13 +43,14 @@ from haliax import NamedArray
 from jax.sharding import PartitionSpec
 
 import levanter.tracker
-from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
+from levanter.compat.hf_checkpoints import load_tokenizer
 from levanter.data.packing import (
     PromptCompletion,
     greedy_pack_prompt_completions,
     per_segment_correct,
     per_segment_loss,
 )
+from levanter.eval_harness_config import TaskConfig
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig
 from levanter.inference.engine import Request as GenRequest
 from levanter.inference.jit_scheduler import SeqDecodingParams
@@ -82,18 +83,30 @@ from tqdm_loggable.auto import tqdm
 
 import levanter.config
 from levanter.callbacks import StepInfo
-from levanter.checkpoint import latest_checkpoint_path, load_checkpoint
-from levanter.data.utils import batched
 from levanter.data.loader import stack_batches
+from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
+from levanter.utils.jax_utils import broadcast_shard, parameter_count
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_TASK_DATASET_PATH_OVERRIDES = {
+    "gsm8k": "openai/gsm8k",
+    "gsm8k_cot": "openai/gsm8k",
+}
+
+
+def _task_config_with_dataset_path_override(task: TaskConfig) -> dict[str, object]:
+    if task.dataset_path is None:
+        dataset_path = _TASK_DATASET_PATH_OVERRIDES.get(task.task)
+        if dataset_path is not None:
+            task = dataclasses.replace(task, dataset_path=dataset_path)
+    return task.to_dict()
 
 
 def _call_with_retry(
@@ -127,6 +140,9 @@ def _call_with_retry(
             return fn()
         except Exception as e:
             last_exception = e
+            if attempt + 1 >= max_retries:
+                break
+
             error_type = type(e).__name__
             error_msg = str(e)
 
@@ -998,76 +1014,6 @@ class LevanterHarnessLM(TemplateLM):
 
 
 @dataclass(frozen=True)
-class TaskConfig:
-    """
-    This is a dataclass that represents the configuration for a task in the LM Eval Harness. It is used to specify
-    the configuration for a task in the LM Eval Harness, and is used to generate the task dictionary that the LM Eval
-    Harness expects.
-
-    nb that LM Eval Harness has its own TaskConfig, but its defaults are not the same as just passing in
-    a dict, and we want the behavior of passing in a dict.
-
-    Nones are not included in the dictionary representation, and LM Eval Harness will use its own defaults for any
-    missing values.
-
-    Docs are copied from the LM Eval Harness task guide. The LM Eval Harness task guide is the authoritative source
-    for what these fields do. They were copied as of 2024-12-03.
-
-    See Also:
-       * [LM Eval Harness TaskConfig](https://github.com/EleutherAI/lm-evaluation-harness/blob/0ef7548d7c3f01108e7c12900a5e5eb4b4a668f7/lm_eval/api/task.py#L55)
-       * [LM Eval Harness task guide](https://github.com/EleutherAI/lm-evaluation-harness/blob/main/docs/task_guide.md#parameters)
-    """
-
-    task: str
-    """ The name of the task to run."""
-    task_alias: str | None = None
-    """ An alias for the task. We log this name to wandb."""
-    num_fewshot: int | None = None
-
-    use_prompt: str | None = None
-    """ Name of prompt in promptsource to use. if defined, will overwrite doc_to_text, doc_to_target, and doc_to_choice."""
-    description: str | None = None
-    """An optional prepended Jinja2 template or string which will be prepended to the few-shot examples passed into the model, often describing the task or providing instructions to a model, such as "The following are questions (with answers) about {{subject}}.\n\n". No delimiters or spacing are inserted between the description and the first few-shot example."""
-    target_delimiter: str | None = None
-    """String to insert between input and target output for the datapoint being tested. defaults to " " """
-    fewshot_delimiter: str | None = None
-    """ String to insert between few-shot examples. defaults to "\\n\\n" """
-    doc_to_text: str | None = None
-    """Jinja2 template string to process a sample into the appropriate input for the model."""
-    doc_to_target: str | None = None
-    """Jinja2 template string to process a sample into the appropriate target for the model."""
-    doc_to_choice: str | None = None
-    """Jinja2 template string to process a sample into a list of possible string choices for multiple_choice tasks. """
-
-    # Inline task-spec fields. Set these when passing a full task definition whose `task` name is not
-    # in lm-eval's registry — lm-eval then builds the Entry straight from the dict instead of applying
-    # registered-task override semantics (which can silently drop fields like dataset_path).
-    dataset_path: str | None = None
-    dataset_name: str | None = None
-    output_type: str | None = None
-    test_split: str | None = None
-    training_split: str | None = None
-    validation_split: str | None = None
-    fewshot_split: str | None = None
-    metric_list: list[dict] | None = None
-    tag: list[str] | None = None
-    metadata: dict | None = None
-
-    # Extra Levanter-only config to control generation stops per task
-    additional_stop_strings: list[str] | None = None
-
-    def to_dict(self):
-        """
-        Convert the TaskConfig to a dictionary, excluding None values.
-
-        Returns:
-            Dictionary representation of the task configuration
-        """
-        base_dict = dataclasses.asdict(self)
-        return {k: v for k, v in base_dict.items() if v is not None}
-
-
-@dataclass(frozen=True)
 class LmEvalHarnessConfig:
     """
     Configuration for running the LM Eval Harness.
@@ -1113,7 +1059,15 @@ class LmEvalHarnessConfig:
         Returns:
             List of task specifications, with TaskConfig objects converted to dictionaries
         """
-        return [task.to_dict() if isinstance(task, TaskConfig) else task for task in self.task_spec]
+        task_specs: list[str | dict] = []
+        for task in self.task_spec:
+            if isinstance(task, str):
+                if task not in _TASK_DATASET_PATH_OVERRIDES:
+                    task_specs.append(task)
+                    continue
+                task = TaskConfig(task=task)
+            task_specs.append(_task_config_with_dataset_path_override(task))
+        return task_specs
 
     def to_task_dict(self) -> dict:
         """
@@ -1490,29 +1444,21 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
 
         # initialize the model
         if config.checkpoint_is_hf:
-            model_config = config.model
-            converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
-            converter = converter.replaced(reference_checkpoint=config.checkpoint_path, tokenizer=tokenizer)
-            model = typing.cast(
-                LmHeadModel,
-                converter.load_pretrained(
-                    model_config.model_type,
-                    ref=config.checkpoint_path,
-                    dtype=config.trainer.mp.compute_dtype,  # type: ignore
-                    axis_mapping=parameter_axis_mapping,
-                ),
+            model = load_hf_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                axis_mapping=parameter_axis_mapping,
+                tokenizer=tokenizer,
+                compute_dtype=config.trainer.mp.compute_dtype,
             )
         else:
-            with use_cpu_device():
-                model = eqx.filter_eval_shape(config.model.build, Vocab, key=key)
-                checkpoint_path = latest_checkpoint_path(config.checkpoint_path)
-                model = load_checkpoint(
-                    model,
-                    checkpoint_path,
-                    subpath="model",
-                    axis_mapping=parameter_axis_mapping,
-                )
-            model = hax.shard(model, parameter_axis_mapping)
+            model = load_levanter_checkpoint(
+                config.model,
+                config.checkpoint_path,
+                Vocab=Vocab,
+                axis_mapping=parameter_axis_mapping,
+                key=key,
+            )
 
         model = typing.cast(LmHeadModel, inference_mode(model, True))
 

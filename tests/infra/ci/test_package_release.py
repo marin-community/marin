@@ -21,7 +21,10 @@ from scripts.ci.package_release import (
     PublishedArtifact,
     artifact_manifest,
     cargo_compatible_version,
+    latest_native_release_versions,
     latest_supported_version,
+    lock_changed_outside,
+    lock_paths_recording,
     next_development_version,
     packages_for_changes,
     python_compatible_version,
@@ -31,9 +34,11 @@ from scripts.ci.package_release import (
     update_native_requirement,
     validate_targeted_lock_change,
 )
-from scripts.python_libs_package import PACKAGES as BUNDLED_LIBRARIES
+from scripts.python_libs_package import _rewrite_sibling_pins
 
 RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
+EXTERNAL_UPDATE_WORKFLOW = Path(".github/workflows/ops-external-dependencies.yaml")
+NATIVE_UPDATE_WORKFLOW = Path(".github/workflows/ops-native-package-dependencies.yaml")
 
 PLATFORM_WHEEL_TAGS = (
     "cp312-cp312-manylinux_2_28_x86_64.whl",
@@ -128,6 +133,10 @@ def test_change_detection_maps_shared_and_owned_sources() -> None:
     assert packages_for_changes(["lib/finelog/src/finelog/client/log_client.py"]) == ["finelog"]
     assert packages_for_changes(["rust/Cargo.lock"]) == ["dupekit", "finelog", "iris"]
     assert packages_for_changes(["scripts/python_libs_package.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/iris/hatch_build.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/finestore/src/finestore/eval.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/shellbox/src/shellbox/machine.py"]) == ["python-libs"]
+    assert packages_for_changes(["lib/verifyit/README.md"]) == ["python-libs"]
     assert packages_for_changes(["scripts/ci/package_release.py"]) == [
         "dupekit",
         "finelog",
@@ -152,13 +161,13 @@ def test_pull_request_plan_uses_one_declarative_build_matrix() -> None:
     assert plan.packages == ("dupekit", "finelog", "iris", "python-libs")
     expected_builds = {
         ("dupekit", "ubuntu-latest", "linux"),
-        ("dupekit", "macos-14", "macos"),
+        ("dupekit", "macos-15", "macos"),
         ("dupekit", "ubuntu-latest", "sdist"),
         ("finelog", "ubuntu-latest", "linux"),
-        ("finelog", "macos-14", "macos"),
+        ("finelog", "macos-15", "macos"),
         ("finelog", "ubuntu-latest", "sdist"),
         ("iris", "ubuntu-latest", "linux"),
-        ("iris", "macos-14", "macos"),
+        ("iris", "macos-15", "macos"),
         ("iris", "ubuntu-latest", "sdist"),
         ("python-libs", "ubuntu-latest", "python"),
     }
@@ -228,6 +237,27 @@ def test_shared_requirement_path_is_emitted_once() -> None:
     assert requirement_paths_for_packages(["finelog", "iris"]) == (Path("lib/iris/pyproject.toml"),)
 
 
+def _release_files(wheels: int, sdists: int) -> list[str]:
+    return ["bdist_wheel"] * wheels + ["sdist"] * sdists
+
+
+def test_latest_native_releases_skip_partially_published_versions() -> None:
+    complete = _release_files(wheels=4, sdists=1)
+    published = {
+        "marin-dupekit-native": {"0.1.4.dev1": complete},
+        "marin-finelog-server": {"0.2.13.dev2": complete, "0.2.14.dev9": _release_files(wheels=1, sdists=0)},
+        "marin-iris-native": {"0.1.3": complete, "0.1.4.dev3": complete},
+    }
+
+    versions = latest_native_release_versions(published.__getitem__)
+
+    assert dict(versions) == {
+        "dupekit": "0.1.4.dev1",
+        "finelog": "0.2.13.dev2",
+        "iris": "0.1.4.dev3",
+    }
+
+
 def test_update_native_requirement_advances_floor_without_touching_neighbors() -> None:
     before = """\
 dependencies = [
@@ -252,22 +282,12 @@ def test_update_native_requirement_never_downgrades_floor() -> None:
     assert update_native_requirement(text, "marin-iris-native", "0.1.4")[0] == text
 
 
-def test_python_libs_release_expectations_track_the_bundle_builder() -> None:
-    """The release gate and the builder must agree on which libraries ship.
+def test_shellbox_iris_extra_pins_to_bundle_release() -> None:
+    pyproject = Path("lib/shellbox/pyproject.toml").read_text()
+    released = tomllib.loads(_rewrite_sibling_pins(pyproject, "0.3.0.dev30194118926"))
 
-    A library the builder produces but the release table omits is built and never
-    published; one the table requires but the builder skips fails the manifest check
-    at the end of the release run, after every wheel has already been built.
-    """
-    family = PACKAGES[PYTHON_LIBS_FAMILY]
-
-    # The builder runs `uv build --wheel --sdist` once per library.
-    assert dict(family.artifacts) == {
-        distribution: ArtifactExpectation(wheels=1, sdists=1, pure_python=True) for distribution in BUNDLED_LIBRARIES
-    }
-    assert set(family.declared_version_paths) == {
-        Path(library["path"]) / library["version_file"] for library in BUNDLED_LIBRARIES.values()
-    }
+    assert released["project"]["optional-dependencies"]["iris"] == ["marin-iris==0.3.0.dev30194118926"]
+    assert "marin-rigging==0.3.0.dev30194118926" in released["project"]["dependencies"]
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
@@ -391,6 +411,103 @@ source = { registry = "https://pypi.org/simple" }
         validate_targeted_lock_change(before, unrelated, "marin-iris-native", "0.1.4.dev30194118926")
 
 
+def test_validate_targeted_lock_change_accepts_newer_uv_lock_revision() -> None:
+    before = """\
+version = 1
+revision = 3
+
+[[package]]
+name = "marin-iris-native"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+"""
+    targeted = before.replace('version = "0.1.3"', 'version = "0.1.4.dev30194118926"')
+    newer_uv = targeted.replace("revision = 3", "revision = 5")
+
+    validate_targeted_lock_change(before, newer_uv, "marin-iris-native", "0.1.4.dev30194118926")
+    with pytest.raises(ValueError, match="lockfile metadata"):
+        validate_targeted_lock_change(
+            before, newer_uv.replace("version = 1", "version = 2"), "marin-iris-native", "0.1.4.dev30194118926"
+        )
+
+
+def test_marker_changes_pass_the_lock_guard_and_are_reported() -> None:
+    # uv 0.13.9 factors shared terms out of the markers that uv 0.13.8 and earlier wrote.
+    expanded = (
+        "(python_full_version < '3.13' and sys_platform == 'linux') or "
+        "(python_full_version < '3.13' and sys_platform == 'darwin')"
+    )
+    factored = "python_full_version < '3.13' and (sys_platform == 'darwin' or sys_platform == 'linux')"
+    lock = """\
+version = 1
+revision = 3
+resolution-markers = ["{marker}"]
+
+[[package]]
+name = "jax"
+version = "0.8.0"
+source = {{ registry = "https://pypi.org/simple" }}
+dependencies = [{{ name = "jaxlib", marker = "{marker}" }}]
+
+[[package]]
+name = "marin-iris-native"
+version = "{native}"
+source = {{ registry = "https://pypi.org/simple" }}
+"""
+    before = lock.format(marker=expanded, native="0.1.3")
+    target = "0.1.4.dev30194118926"
+    bumped = lock.format(marker=expanded, native=target)
+    respelled = lock.format(marker=factored, native=target)
+
+    validate_targeted_lock_change(before, respelled, "marin-iris-native", target)
+    assert lock_changed_outside(before, respelled, ("marin-iris-native",))
+    assert not lock_changed_outside(before, bumped, ("marin-iris-native",))
+
+
+def test_lock_paths_include_vendored_locks_that_install_the_owner_locally(tmp_path: Path) -> None:
+    lock = """\
+version = 1
+
+[[package]]
+name = "marin-iris"
+version = "0.2.0"
+source = {{ {source} }}
+"""
+    for project, source in {
+        "skyrl": 'editable = "../../lib/iris"',
+        "harbor": 'registry = "https://pypi.org/simple"',
+    }.items():
+        (tmp_path / "vendor" / project).mkdir(parents=True)
+        (tmp_path / "vendor" / project / "uv.lock").write_text(lock.format(source=source))
+
+    assert lock_paths_recording(tmp_path, "marin-iris") == [tmp_path / "uv.lock", tmp_path / "vendor/skyrl/uv.lock"]
+    assert lock_paths_recording(tmp_path, "marin-dupekit") == [tmp_path / "uv.lock"]
+
+
+def test_vendored_lock_may_record_the_floor_without_the_distribution() -> None:
+    lock = """\
+version = 1
+revision = 3
+
+[[package]]
+name = "marin-iris"
+version = "0.2.0"
+source = {{ editable = "../../lib/iris" }}
+
+[package.metadata]
+requires-dist = [{{ name = "marin-finelog-server", marker = "extra == 'controller'", specifier = "{floor}" }}]
+"""
+    before = lock.format(floor=">=0.2.67")
+    after = lock.format(floor=">=0.2.87")
+    root_before = f'{before}\n[[package]]\nname = "marin-finelog-server"\nversion = "0.2.67"\n'
+
+    validate_targeted_lock_change(before, after, "marin-finelog-server", "0.2.87", allowed_packages=("marin-iris",))
+    with pytest.raises(ValueError, match="Expected marin-finelog-server"):
+        validate_targeted_lock_change(
+            root_before, after, "marin-finelog-server", "0.2.87", allowed_packages=("marin-iris",)
+        )
+
+
 def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     workflow = _workflow(RELEASE_WORKFLOW)
     triggers = _triggers(workflow)
@@ -399,7 +516,11 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     assert push["branches"] == ["main"]
     assert "schedule" in triggers
     assert "uv.lock" not in push["paths"]
-    assert not any(item.endswith("pyproject.toml") for item in push["paths"])
+    assert "pyproject.toml" not in push["paths"]
+    python_sources = set(PACKAGES[PYTHON_LIBS_FAMILY].source_patterns)
+    assert python_sources <= set(push["paths"])
+    assert python_sources <= set(triggers["pull_request"]["paths"])
+    assert "shellbox-v*" not in push["tags"]
 
     publish = workflow["jobs"]["publish"]
     assert publish["permissions"] == {"contents": "read", "id-token": "write"}
@@ -408,11 +529,31 @@ def test_release_workflow_publishes_only_trusted_package_releases() -> None:
     assert "needs.plan.outputs.build_matrix" in str(workflow["jobs"]["build"]["strategy"])
 
 
-def test_release_workflow_uses_app_token_for_version_pr() -> None:
-    workflow = _workflow(RELEASE_WORKFLOW)
+def test_native_version_updates_run_from_main_after_trusted_releases() -> None:
+    release_workflow = _workflow(RELEASE_WORKFLOW)
+    workflow = _workflow(NATIVE_UPDATE_WORKFLOW)
+
+    assert "bump" not in release_workflow["jobs"]
     assert workflow["permissions"] == {"contents": "read"}
-    steps = workflow["jobs"]["bump"]["steps"]
+    assert "workflow_run.event != 'pull_request'" in workflow["jobs"]["update"]["if"]
+
+
+@pytest.mark.parametrize("workflow_path", [EXTERNAL_UPDATE_WORKFLOW, NATIVE_UPDATE_WORKFLOW])
+def test_dependency_update_workflows_share_scoped_app_pr_lifecycle(workflow_path: Path) -> None:
+    workflow = _workflow(workflow_path)
+    job = workflow["jobs"]["update"]
+
+    assert job["environment"] == "external-runtime-updater"
+    steps = workflow["jobs"]["update"]["steps"]
     token_step = next(step for step in steps if step.get("id") == "app-token")
     assert token_step["uses"] == "actions/create-github-app-token@v3"
-    pr_step = next(step for step in steps if step.get("name") == "Commit and open or update pull request")
+    assert token_step["with"] == {
+        "client-id": "${{ vars.DEPENDENCY_UPDATER_CLIENT_ID }}",
+        "private-key": "${{ secrets.DEPENDENCY_UPDATER_PRIVATE_KEY }}",
+        "repositories": "${{ github.event.repository.name }}",
+    }
+    pr_step = next(step for step in steps if step.get("name") == "Open or update pull request")
     assert pr_step["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+    updater_commands = [step["run"] for step in steps if "scripts.ci.dependency_update" in step.get("run", "")]
+    assert updater_commands
+    assert all("python -m scripts.ci.dependency_update" in command for command in updater_commands)

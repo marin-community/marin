@@ -5,12 +5,11 @@
 
 import contextlib
 import os
-import socket
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -19,6 +18,8 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
+from marin.inference.model_preparation import read_tool_chat_template
+from marin.inference.vllm_router import available_port
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -27,7 +28,10 @@ from marin.inference.vllm_server import (
     VllmLauncher,
     VllmLauncherWithEnvironment,
     VllmType,
+    _is_object_store_path,
 )
+
+_VLLM_ENGINE_READY_TIMEOUT_ENV = "VLLM_ENGINE_READY_TIMEOUT_S"
 
 
 def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
@@ -42,22 +46,23 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     version = config.version if source is VllmType.UPSTREAM else None
     if source is VllmType.UPSTREAM and version is None:
         version = DEFAULT_CUDA_VLLM_VERSION
-    return IsolatedCudaVllm(source=source, version=version)
+    return IsolatedCudaVllm(
+        source=source,
+        version=version,
+        extra_requirements=config.extra_requirements,
+        release=config.release or VLLM_GPU_RELEASE,
+    )
 
 
 def _with_subprocess_env(
     launcher: VllmLauncher,
     subprocess_env: Mapping[str, str] | None,
+    startup_timeout_seconds: int,
 ) -> VllmLauncher:
-    if not subprocess_env:
-        return launcher
-    return VllmLauncherWithEnvironment(launcher, subprocess_env)
-
-
-def _reserve_localhost_port(host: str) -> int:
-    with socket.socket() as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
+    environment = {_VLLM_ENGINE_READY_TIMEOUT_ENV: str(startup_timeout_seconds)}
+    if subprocess_env:
+        environment.update(subprocess_env)
+    return VllmLauncherWithEnvironment(launcher, environment)
 
 
 @contextlib.contextmanager
@@ -75,11 +80,22 @@ def _chat_template_argument(content: str | None) -> Iterator[tuple[str, ...]]:
             os.unlink(path)
 
 
+def _resolved_chat_template(spec: ModelSpec) -> str | None:
+    if spec.chat_template_content is not None:
+        return spec.chat_template_content
+    return read_tool_chat_template(spec.tokenizer_source, spec.tokenizer_revision)
+
+
 @dataclass(frozen=True)
 class VllmServedModel:
     base_url: str
     model_id: str
+    chat_template_content: str | None
     environment: VllmEnvironment
+
+    @property
+    def metrics_url(self) -> str:
+        return self.environment.metrics_url
 
     def check_alive(self) -> None:
         self.environment.check_alive()
@@ -94,11 +110,14 @@ class VllmBackend:
 
     @contextlib.contextmanager
     def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
-        with self.start(spec) as environment:
+        chat_template_content = _resolved_chat_template(spec)
+        resolved_spec = replace(spec, chat_template_content=chat_template_content)
+        with self.start(resolved_spec) as environment:
             environment.wait_until_ready()
             yield VllmServedModel(
                 base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
                 model_id=spec.api_model,
+                chat_template_content=chat_template_content,
                 environment=environment,
             )
 
@@ -110,11 +129,16 @@ class VllmBackend:
         extra_args: Sequence[str] = (),
         subprocess_env: Mapping[str, str] | None = None,
     ) -> Iterator[VllmEnvironment]:
-        """Start vLLM without imposing HTTP readiness on the caller."""
-        resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
+        """Yield a VllmEnvironment; call ``wait_until_ready()`` before using its endpoint."""
+        chat_template_content = _resolved_chat_template(spec)
+        resolved_port = available_port(self.host) if self.port is None or self.config.router is not None else self.port
         model = self._model_config(spec)
-        launcher = _with_subprocess_env(vllm_launcher(self.config), subprocess_env)
-        with _chat_template_argument(spec.chat_template_content) as chat_template_args:
+        launcher = _with_subprocess_env(
+            vllm_launcher(self.config),
+            subprocess_env,
+            self.config.startup_timeout_seconds,
+        )
+        with _chat_template_argument(chat_template_content) as chat_template_args:
             with VllmEnvironment(
                 model=model,
                 host=self.host,
@@ -123,6 +147,9 @@ class VllmBackend:
                 extra_args=self._serve_args(spec, chat_template_args, extra_args),
                 launcher=launcher,
                 compilation_cache_mode=self.config.compilation_cache,
+                extra_metric_families=self.config.extra_metric_families,
+                router=self.config.router,
+                router_port=self.port,
                 wait_for_ready=False,
             ) as environment:
                 yield environment
@@ -133,6 +160,13 @@ class VllmBackend:
         chat_template_args: Sequence[str],
         extra_args: Sequence[str],
     ) -> list[str]:
+        loader_args = (*self.config.extra_args, *extra_args)
+        if (
+            self.config.launcher is not VllmLauncherType.TPU
+            and _is_object_store_path(spec.weights)
+            and not any(arg.partition("=")[0] in {"--load-format", "--model-loader-extra-config"} for arg in loader_args)
+        ):
+            loader_args = ("--model-loader-extra-config", '{"distributed":true}', *loader_args)
         return [
             *(
                 ("--tensor-parallel-size", str(spec.tensor_parallel_size))
@@ -142,9 +176,15 @@ class VllmBackend:
             "--served-model-name",
             spec.api_model,
             *(("--revision", spec.revision) if spec.revision is not None else ()),
+            *(("--tokenizer", spec.tokenizer) if spec.tokenizer is not None else ()),
+            *(("--tokenizer-revision", spec.tokenizer_revision) if spec.tokenizer_revision is not None else ()),
             *chat_template_args,
-            *self.config.extra_args,
-            *extra_args,
+            *(
+                ("--speculative-config", self.config.speculative.vllm_argument())
+                if self.config.speculative is not None
+                else ()
+            ),
+            *loader_args,
         ]
 
     def _model_config(self, spec: ModelSpec) -> InferenceModelConfig:

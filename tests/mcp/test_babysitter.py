@@ -157,9 +157,9 @@ def test_parse_zephyr_thread_state_classifies_active_and_zombie_dumps():
     active = parse_zephyr_thread_state(
         """
         Thread actor-method_0:
-          File "zephyr/execution.py", line 873, in _wait_for_stage
+          File "zephyr/coordinator.py", line 873, in _wait_for_stage
         Thread zephyr-coordinator-loop:
-          File "zephyr/execution.py", line 444, in _coordinator_loop
+          File "zephyr/coordinator.py", line 444, in _coordinator_loop
         """
     )
     zombie = parse_zephyr_thread_state(

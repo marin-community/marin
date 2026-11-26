@@ -1,0 +1,18 @@
+schema_version: 1
+code: ml-utils-module
+lane: prose
+title: Module named `*_utils.py` / `*_helpers.py`
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** No `*_utils.py`; use descriptive names like
+  `text_cleaning.py`. Generic `_utils` modules become dumping grounds and stop
+  telling readers anything about contents.
+
+  **When allowed:** Cross-cutting utilities for a large number of callers
+  across an entire package — but even then, prefer a descriptive name
+  (`fs.py`, `time_math.py`).
+
+  **Bad example:**
+  ```
+  lib/marin/src/marin/processing/tokenize/tokenize_utils.py   # rename to byte_pair_encoding.py or similar
+  ```

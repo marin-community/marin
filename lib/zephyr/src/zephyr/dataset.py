@@ -12,11 +12,12 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 import fsspec
 from braceexpand import braceexpand
-from pyarrow import RecordBatch
-from rigging.filesystem import StoragePath, url_to_fs
+from pyarrow import RecordBatch, Schema
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath
 
 from zephyr.expr import Expr
-from zephyr.readers import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
+from zephyr.input_file import DEFAULT_FILE_PATH_COLUMN, InputFileSpec
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +212,7 @@ class WriteOp:
     writer_type: Literal["jsonl", "parquet", "binary", "vortex"]
 
     # Format-specific parameters (only used by relevant writer)
-    schema: object | None = None  # For parquet (pyarrow.Schema)
+    schema: Schema | None = None
     skip_existing: bool = False  # Skip writing if output file already exists
 
     def __repr__(self):
@@ -571,7 +572,7 @@ class Dataset(Generic[T]):
             New dataset with flat_map operation appended
 
         Example:
-            >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.readers import load_jsonl
             >>> ds = (Dataset
             ...     .from_files("/input", "*.jsonl.gz")
             ...     .flat_map(load_jsonl)  # Each file yields many records
@@ -724,7 +725,7 @@ class Dataset(Generic[T]):
             New dataset with map_shard operation appended
 
         Example:
-            >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.readers import load_jsonl
             >>> from zephyr.dataset import ShardInfo
             >>> # Deduplicate items within each shard
             >>> def deduplicate_shard(items: Iterator, _: ShardInfo):
@@ -760,7 +761,7 @@ class Dataset(Generic[T]):
             New dataset with reshard operation appended or self if num_shards is None
 
         Example:
-            >>> from zephyr.execution import load_jsonl
+            >>> from zephyr.readers import load_jsonl
             >>> ds = (Dataset
             ...     .from_files("/input", "*.jsonl.gz")  # 3 files = 3 shards
             ...     .flat_map(load_jsonl)                 # Still 3 shards
@@ -822,7 +823,7 @@ class Dataset(Generic[T]):
     def write_parquet(
         self,
         output_pattern: str | Callable[[int, int], str],
-        schema: object | None = None,
+        schema: Schema | None = None,
         skip_existing: bool = False,
     ) -> "Dataset[str]":
         """Write records as Parquet files.
@@ -850,7 +851,7 @@ class Dataset(Generic[T]):
     def write_vortex(
         self,
         output_pattern: str | Callable[[int, int], str],
-        schema: object | None = None,
+        schema: Schema | None = None,
         skip_existing: bool = False,
     ) -> "Dataset[str]":
         """Write records as Vortex files."""

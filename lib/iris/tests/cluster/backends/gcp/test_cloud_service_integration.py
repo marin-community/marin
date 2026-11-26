@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 
 import httpx
 import pytest
+from iris.cluster.platforms.gcp.cloud import CloudGcpService
 from iris.cluster.platforms.gcp.service import (
-    CloudGcpService,
     TpuCreateRequest,
     VmCreateRequest,
     operation_error,

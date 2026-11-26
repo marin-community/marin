@@ -1,0 +1,15 @@
+# @package trainer.algorithm
+# GSPO sections 4.3 and 5.1: https://arxiv.org/abs/2507.18071
+# The displayed objective has no KL term; the paper omits it for brevity and reports no coefficient.
+# This recipe sets KL off rather than inheriting the base default; reference KL is an explicit user choice.
+advantage_estimator: grpo
+policy_loss_type: gspo
+loss_reduction: sequence_mean
+grpo_norm_by_std: true
+advantage_batch_normalize: false
+use_kl_loss: false
+use_kl_in_reward: false
+eps_clip_low: 0.0003
+eps_clip_high: 0.0004
+dynamic_sampling:
+  type: null

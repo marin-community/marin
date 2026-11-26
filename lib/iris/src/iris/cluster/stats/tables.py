@@ -11,9 +11,9 @@ live next to their mechanism (the worker daemon, the k8s backend's task collecto
 the autoscaler, the controller's task-state emitter) and import their row types
 from here; ``LogStack`` resolves every table from this catalog.
 
-- ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt resource
-  rows. Kubernetes task rows come from metrics-server; physical-node hardware
-  readings use the normalized telemetry stream.
+- ``iris.worker`` / ``iris.task`` — host and per-attempt resource rows. Worker
+  daemons emit both on VM/TPU backends; Kubernetes node agents derive task rows
+  from kubelet resource metrics and publish hardware through normalized telemetry.
 - ``iris.task_status`` — markdown status text pushed from inside a running task
   via ``RemoteClusterClient.report_task_status_text``.
 - ``iris.task_event`` — backend events and controller actions per task attempt.
@@ -23,6 +23,10 @@ from here; ``LogStack`` resolves every table from this catalog.
   the autoscaler).
 - ``iris.task_state`` — periodic per-root-job task-state aggregates (producer:
   ``iris.cluster.controller.task_state_stats``).
+- ``iris.controller_db__{jobs,job_config,tasks,task_attempts}`` — durable copies of
+  the controller DB tables of the same names: one ``job_config`` row per job, at
+  submit, and one job, task or attempt row per change, written by the controller
+  that executes the work (producer: ``iris.cluster.controller.observability_rows``).
 """
 
 from dataclasses import dataclass
@@ -42,6 +46,10 @@ TASK_EVENT_NAMESPACE = "iris.task_event"
 PROFILE_NAMESPACE = "iris.profile"
 PROVISIONING_NAMESPACE = "iris.provisioning"
 TASK_STATE_NAMESPACE = "iris.task_state"
+CONTROLLER_JOB_NAMESPACE = "iris.controller_db__jobs"
+CONTROLLER_JOB_CONFIG_NAMESPACE = "iris.controller_db__job_config"
+CONTROLLER_TASK_ATTEMPT_NAMESPACE = "iris.controller_db__task_attempts"
+CONTROLLER_TASK_NAMESPACE = "iris.controller_db__tasks"
 
 
 class TaskEventSeverity(StrEnum):
@@ -60,13 +68,26 @@ TASK_STATUS_STORAGE_POLICY = StoragePolicy(
 )
 
 # Backend events and controller actions are a compact diagnostic history. The
-# producers only append when a verdict or controller decision changes, so seven
+# producers only append when a verdict or controller decision changes, so 30
 # days gives operators time to investigate without retaining high-volume pod
 # telemetry.
 TASK_EVENT_STORAGE_POLICY = StoragePolicy(
     max_bytes=1024 * 1024 * 1024,
-    max_age_seconds=7 * 24 * 60 * 60,
+    max_age_seconds=30 * 24 * 60 * 60,
 )
+
+
+# The iris.controller_db__* namespaces outlive the controller DB's 7-day
+# window. Their history stays in the archive (remote retention is retain_forever);
+# these policies only bound the hub's local copy, and older segments are read
+# back from the archive.
+_OBSERVABILITY_ROWS_MAX_AGE = 5 * 365 * 24 * 60 * 60
+CONTROLLER_JOB_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+CONTROLLER_JOB_CONFIG_STORAGE_POLICY = StoragePolicy(max_bytes=4 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
+CONTROLLER_TASK_ATTEMPT_STORAGE_POLICY = StoragePolicy(
+    max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE
+)
+CONTROLLER_TASK_STORAGE_POLICY = StoragePolicy(max_bytes=8 * 1024**3, max_age_seconds=_OBSERVABILITY_ROWS_MAX_AGE)
 
 
 def stats_timestamp() -> datetime:
@@ -146,11 +167,10 @@ class IrisWorkerStat:
 class IrisTaskStat:
     """One row per attempt resource update."""
 
-    # Dashboard hot path is ``WHERE task_id IN (...) ORDER BY ts DESC LIMIT 1``
-    # per task. Sorting compacted segments by task_id (with seq as the
-    # secondary key, monotonic with ts because seq is allocated at the
-    # insertion lock) gives parquet row-group pruning on task_id while
-    # preserving in-task time order within each group.
+    # Finelog derives the dashboard IN list's shared task prefix into a range.
+    # Sorting compacted segments by task_id (with seq as the secondary key,
+    # monotonic with ts because seq is allocated at the insertion lock) lets
+    # that range prune parquet row groups while preserving in-task time order.
     key_column: ClassVar[str] = "task_id"
 
     task_id: str
@@ -182,19 +202,34 @@ class TaskStatusRow:
     status_text_summary_md: str
 
 
+@dataclass(kw_only=True)
+class TaskEventDiagnostics:
+    """Kubernetes disruption evidence retained after the Pod is deleted."""
+
+    pod_name: str | None = None
+    pod_uid: str | None = None
+    pod_deletion_timestamp: str | None = None
+    node_name: str | None = None
+    node_uid: str | None = None
+    node_provider_id: str | None = None
+    node_boot_id: str | None = None
+    node_system_uuid: str | None = None
+    node_unschedulable: bool | None = None
+    pod_tolerations_json: str | None = None
+    pod_conditions_json: str | None = None
+    node_taints_json: str | None = None
+    node_conditions_json: str | None = None
+    node_labels_json: str | None = None
+    node_annotations_json: str | None = None
+
+
 @dataclass
-class TaskEventRow:
-    """One backend event or controller action for a task attempt.
+class TaskEventRow(TaskEventDiagnostics):
+    """One retained backend verdict or controller action for a task attempt.
 
-    The "event log for every job": producers append a row each time a backend
-    diagnostic verdict changes or the controller makes a state-changing decision
-    (retry, gang bounce, finalization), so operators can reconstruct the task's
-    lifecycle after ephemeral Kubernetes objects are gone.
-
-    Fields mirror a Kubernetes event so a future producer can relay real events
-    unchanged: ``type`` is the severity (``Warning``/``Normal``), ``reason`` the
-    short code, ``source`` the emitting layer (e.g. ``k8s/kueue``), ``count`` the
-    repeat multiplicity.
+    ``type``, ``reason``, ``source``, and ``count`` follow Kubernetes event
+    terminology. Disruption rows add stable pod/node identity and JSON snapshots
+    of the ephemeral Kubernetes evidence.
     """
 
     key_column: ClassVar[str] = "task_id"
@@ -208,6 +243,189 @@ class TaskEventRow:
     message: str
     source: str
     count: int
+
+
+@dataclass
+class IrisJob:
+    """A snapshot of one controller ``jobs`` row, written whenever a write path changes the job.
+
+    Rows are appended, never replaced: the job's current state is its row with
+    the latest ``(ts, seq)``. A job is identified by ``(cluster, root_job_id,
+    root_submitted_at_ms, job_id, submitted_at_ms)``, because job ids are reused
+    once a job ends, and a live parent can resubmit a child under the same name.
+    """
+
+    key_column: ClassVar[str] = "root_job_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    parent_job_id: str | None
+    depth: int
+    name: str
+    user_id: str
+    submitting_user: str
+    state: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    exit_code: int | None
+    error: str | None
+    num_tasks: int
+    scheduling_deadline_at: datetime | None
+    backend_id: str
+    # The controller DB's jobs.cluster: "local", or the peer the job was handed to.
+    # Named placement because this table's cluster is the writing controller.
+    placement: str
+    ts: datetime
+
+
+@dataclass
+class IrisJobConfig:
+    """A job's config, written once when the job is submitted.
+
+    Copies the controller ``job_config`` columns whose values the controller or
+    a fixed vocabulary writes. Text the user wrote is not copied: the
+    environment, command lines, setup scripts, egress hosts, ports and bundle id.
+    From the environment only the launch's git identity is kept, as the
+    ``provenance_*`` columns. ``docs/observability-rows.md`` lists each excluded
+    column.
+    """
+
+    key_column: ClassVar[str] = "root_job_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    res_cpu_millicores: int
+    res_memory_bytes: int
+    res_disk_bytes: int
+    res_device_json: str | None
+    # Flattened from res_device_json: "gpu" or "tpu", the variant (e.g. "H100",
+    # "v5p-64") and the count per task, which iris.controller_db__jobs.num_tasks multiplies for the
+    # whole job. A CPU-only job has NULL, NULL and 0.
+    accelerator_kind: str | None
+    accelerator_type: str | None
+    accelerators_per_task: int
+    constraints_json: str | None
+    has_coscheduling: bool
+    # The worker attribute coscheduled tasks share, such as "tpu-name".
+    coscheduling_group_by: str
+    # The requested locality group sizes as a JSON list of task counts; "[]" when
+    # the job asks for none.
+    coscheduling_group_sizes: str
+    priority_band: str
+    preemption_policy: str
+    existing_job_policy: str
+    max_retries_failure: int
+    max_retries_preemption: int
+    max_task_failures: int
+    timeout_ms: int | None
+    scheduling_timeout_ms: int | None
+    termination_grace_ms: int
+    task_image: str
+    fail_if_exists: bool
+    container_profile: str
+    egress_policy: str
+    # The launch's git identity from its MARIN_PROVENANCE environment variable:
+    # the commit, the content hash of the tree it ran, whether the tree had
+    # uncommitted changes, and the branch (token-like strings redacted). All NULL
+    # when the variable is unset or malformed; the branch is also NULL for a
+    # detached HEAD.
+    provenance_base_commit: str | None
+    provenance_tree_hash: str | None
+    provenance_dirty: bool | None
+    provenance_branch: str | None
+    ts: datetime
+
+
+@dataclass
+class IrisTask:
+    """A snapshot of one controller ``tasks`` row, plus the job key.
+
+    Every column except the scheduler's queue order (``priority_neg_depth``,
+    ``priority_insertion``) and ``current_worker_address``, which ``iris.worker``
+    records per worker.
+
+    Written at submit and whenever the task's state, current attempt, current
+    worker, error or exit code changes. Unlike the other observability rows, a change
+    to any other column alone writes no row: Kubernetes rewrites the pending
+    reason (``status_message``) on every reconcile. So every column other than
+    those five (``status_message``, ``container_id``, ``backend_id``, ...) holds
+    its value as of the task's last written change.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    task_id: str
+    task_index: int
+    state: str
+    error: str | None
+    exit_code: int | None
+    task_submitted_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    max_retries_failure: int
+    max_retries_preemption: int
+    current_attempt_id: int
+    priority_root_submitted_ms: int
+    priority_band: str
+    container_id: str | None
+    # The backend's reason a task is not running yet, as of this row's change.
+    status_message: str | None
+    current_worker_id: str | None
+    backend_id: str
+    # The controller DB's tasks.cluster, named as on iris.controller_db__jobs.
+    placement: str
+    ts: datetime
+
+
+@dataclass
+class IrisTaskAttempt:
+    """A snapshot of one controller ``task_attempts`` row, written when the attempt changes.
+
+    An attempt is identified by ``attempt_uid``. ``(task_id, attempt_id)`` repeats
+    when a job name is reused, so a join to ``iris.task_event`` uses its
+    ``attempt_uid``, and a join to ``iris.task`` (which has none) also needs
+    ``ts`` between ``started_at`` and ``finished_at``; ``(cluster, root_job_id,
+    root_submitted_at_ms, job_id, submitted_at_ms)`` joins ``iris.controller_db__jobs``. ``node_name`` (Kubernetes)
+    or ``worker_id`` (worker VMs) places the attempt on a machine.
+    """
+
+    key_column: ClassVar[str] = "task_id"
+
+    cluster: str
+    root_job_id: str
+    root_submitted_at_ms: int
+    job_id: str
+    submitted_at_ms: int
+    task_id: str
+    attempt_id: int
+    attempt_uid: str
+    state: str
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    exit_code: int | None
+    error: str | None
+    terminal_reason: str
+    worker_id: str | None
+    node_name: str
+    pod_name: str
+    pod_uid: str
+    backend_id: str
+    # The topology domains the scheduler selected, keyed by node label, as a JSON
+    # object; "{}" until assigned or when the backend exposes none.
+    topology_json: str
+    ts: datetime
 
 
 class ProfileType(StrEnum):

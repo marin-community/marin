@@ -33,7 +33,6 @@ the training sequence length cannot drift apart.
 import dataclasses
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
 
 import jmp
 from fray.cluster import ResourceConfig
@@ -46,8 +45,8 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.training.training import temporary_checkpoint_base_path
-from rigging.filesystem import prefix_join
+from marin.training.levanter import resolve_checkpointer_output_path
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig
 from experiments.june_tpu_67b_a2b.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
@@ -74,13 +73,11 @@ class GrugMoeSFTConfig:
     the latest under it is loaded). Optimizer state and step are not taken from it -- SFT
     starts a fresh schedule. Loaded only on the first launch; iris restarts auto-resume from
     this run's own output checkpoints instead."""
+    checkpointer: CheckpointerConfig
     profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
     grug_trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = None
     expert_parallel: int = 1
-    checkpointer: CheckpointerConfig | None = None
-    checkpoint_keep: list[dict] | None = None
-    save_interval_minutes: int = 30
     per_device_parallelism: int = -1
 
 
@@ -97,7 +94,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
 
     initialize_from = latest_checkpoint_path(config.init_from_path)
 
-    # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, expert, model) mesh for
+    # Trainer mesh bookkeeping. Grug builds its own compact (replica_dcn, data, expert, context, model) mesh for
     # the actual compute (train.py, via set_mesh + raw PartitionSpecs -- not the Trainer's logical axis
     # mapping), but the TrainerConfig still derives ``data_axis_size`` (and thus the batch-divisibility
     # check + per_device_parallelism) from this MeshConfig. With only ``expert`` declared, the
@@ -130,14 +127,7 @@ def run_grug_moe_sft_trial(config: GrugMoeSFTConfig) -> None:
         mesh=mesh_config,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
-        checkpointer=config.checkpointer
-        or CheckpointerConfig(
-            base_path=prefix_join(config.output_path, "checkpoints"),
-            temporary_base_path=temporary_checkpoint_base_path(config.output_path),
-            append_run_id_to_base_path=False,
-            save_interval=timedelta(minutes=config.save_interval_minutes),
-            keep=config.checkpoint_keep,
-        ),
+        checkpointer=config.checkpointer,
         # First launch: output dir empty -> weights-only init from initialize_from. Once this
         # run saves its own checkpoints, every restart auto-resumes from those (full SFT state).
         load_checkpoint=None,
@@ -193,8 +183,6 @@ class GrugModel:
     ema_beta: float | None = None
     log_every: int = 1
     seed: int = 0
-    save_interval_minutes: int = 30
-    checkpoint_keep: list[dict] | None = None
     wandb_tags: Sequence[str] = ()
     wandb_group: str | None = None
 
@@ -219,6 +207,12 @@ class GrugModel:
         resources: ResourceConfig,
         num_train_steps: int,
     ) -> GrugMoeSFTConfig:
+        if spec.xla_flags:
+            raise ValueError("GrugModel does not accept SFTSpec.xla_flags")
+        if spec.per_device_parallelism != -1:
+            raise ValueError("GrugModel takes per_device_parallelism from the model source")
+        if spec.timeout is not None:
+            raise ValueError("GrugModel does not accept SFTSpec.timeout")
         if isinstance(self.init_from, ArtifactStep):
             # A chained Grug stage: init from the prior stage's saved checkpoints.
             init_from_path = prefix_join(ctx.artifact_path(self.init_from), "checkpoints")
@@ -247,8 +241,7 @@ class GrugModel:
             init_from_path=init_from_path,
             expert_parallel=self.expert_parallel,
             per_device_parallelism=self.per_device_parallelism,
-            save_interval_minutes=self.save_interval_minutes,
-            checkpoint_keep=self.checkpoint_keep,
+            checkpointer=resolve_checkpointer_output_path(spec.checkpointer, ctx.output_path),
             grug_trainer=GrugTrainerConfig(
                 z_loss_weight=self.z_loss_weight,
                 ema_beta=self.ema_beta,

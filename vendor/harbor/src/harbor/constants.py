@@ -1,0 +1,21 @@
+import os
+
+from harbor_config.constants import ARCHIVE_FILENAME as ARCHIVE_FILENAME
+from harbor_config.constants import CACHE_DIR as CACHE_DIR
+from harbor_config.constants import DATASET_CACHE_DIR as DATASET_CACHE_DIR
+from harbor_config.constants import (
+    DEFAULT_HARBOR_REGISTRY_WEBSITE_URL as DEFAULT_HARBOR_REGISTRY_WEBSITE_URL,
+)
+from harbor_config.constants import DEFAULT_REGISTRY_URL as DEFAULT_REGISTRY_URL
+from harbor_config.constants import NOTIFICATIONS_PATH as NOTIFICATIONS_PATH
+from harbor_config.constants import ORG_NAME_PATTERN as ORG_NAME_PATTERN
+from harbor_config.constants import PACKAGE_CACHE_DIR as PACKAGE_CACHE_DIR
+from harbor_config.constants import TASK_CACHE_DIR as TASK_CACHE_DIR
+
+HARBOR_REGISTRY_WEBSITE_URL = os.environ.get(
+    "HARBOR_REGISTRY_WEBSITE_URL", DEFAULT_HARBOR_REGISTRY_WEBSITE_URL
+)
+HARBOR_REGISTRY_TASKS_URL = f"{HARBOR_REGISTRY_WEBSITE_URL}/tasks"
+HARBOR_REGISTRY_DATASETS_URL = f"{HARBOR_REGISTRY_WEBSITE_URL}/datasets"
+HARBOR_VIEWER_WEBSITE_URL = HARBOR_REGISTRY_WEBSITE_URL
+HARBOR_VIEWER_JOBS_URL = f"{HARBOR_VIEWER_WEBSITE_URL}/jobs"

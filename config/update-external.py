@@ -12,21 +12,32 @@ import argparse
 import json
 import re
 import subprocess
+import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 ROOT = Path(__file__).parents[1]
+# Keep this standalone script's shared validator free of workspace dependencies.
+sys.path.insert(0, str(ROOT / "lib" / "marin" / "src"))
+from marin.inference.vllm_release_schema import (  # noqa: E402
+    VllmGpuRelease,
+    VllmGpuWheel,
+    release_from_manifest,
+    validate_vllm_gpu_release,
+)
+
 EXTERNAL_ROOT = Path(__file__).with_name("external")
 GENERATED_PINS = ROOT / "lib" / "marin" / "src" / "marin" / "external_dependencies.py"
 GIT_SUFFIX = ".git"
 GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
-SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
-VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu-release.toml"
-TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu-forks.toml"
+VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
+TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
+GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
 
 
 @dataclass(frozen=True)
@@ -69,33 +80,7 @@ class DependencyUpdate:
     commits: tuple[UpstreamCommit, ...]
 
 
-@dataclass(frozen=True)
-class VllmGpuWheel:
-    architecture: str
-    sm_targets: tuple[str, ...]
-    url: str
-    sha256: str
-
-
-@dataclass(frozen=True)
-class VllmGpuRelease:
-    release_tag: str
-    source_commit: str
-    version: str
-    torch_backend: str
-    wheels: tuple[VllmGpuWheel, ...]
-
-
-EXTERNAL_PROJECTS = (
-    ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject(
-        "harbor",
-        "harbor",
-        "HARBOR",
-        runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
-    ),
-    ExternalProject("MarinSkyRL", "marinskyrl", "MARIN_SKYRL"),
-)
+EXTERNAL_PROJECTS: tuple[ExternalProject, ...] = ()
 
 
 def locked_package(lock_path: Path, distribution: str) -> dict:
@@ -121,11 +106,36 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
     return LockedGitSource(repository=repository, commit=commit)
 
 
+def project_git_distributions(project: ExternalProject) -> tuple[str, ...]:
+    """Return every locked distribution sourced from the project's repository."""
+    lock_path = project.directory / "uv.lock"
+    repository = locked_git_source(lock_path, project.distribution).repository
+    lock = tomllib.loads(lock_path.read_text())
+    distributions = []
+    for package in lock["package"]:
+        git_source = package.get("source", {}).get("git")
+        if git_source is None:
+            continue
+        parsed = urlsplit(git_source)
+        package_repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+        if package_repository == repository:
+            distributions.append(package["name"])
+    return tuple(distributions)
+
+
+def upgrade_project_lock(project: ExternalProject) -> None:
+    """Advance all distributions that share an external project's Git repository."""
+    command = ["uv", "lock", "--project", str(project.directory)]
+    for distribution in project_git_distributions(project):
+        command.extend(("--upgrade-package", distribution))
+    subprocess.run(command, check=True)
+
+
 def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
     """Read one forked TPU vLLM pin (repository + commit) from the fork descriptor.
 
     The TPU vLLM stack (``vllm`` + ``tpu-inference``) runs from an isolated uvx env rather than
-    the workspace lock, so its SHAs live in ``config/external/vllm/tpu-forks.toml`` instead of
+    the workspace lock, so its SHAs live in ``config/external/vllm/tpu.toml`` instead of
     ``uv.lock``. See ``marin.inference.vllm_server.IsolatedTpuVllm``.
     """
     config = tomllib.loads(path.read_text())
@@ -167,6 +177,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
         source_commit=config["source_commit"],
         version=config["version"],
         torch_backend=config["torch_backend"],
+        torch_version=config["torch_version"],
         wheels=tuple(
             VllmGpuWheel(
                 architecture=wheel["architecture"],
@@ -177,28 +188,31 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
             for wheel in config["wheels"]
         ),
     )
-    if GIT_COMMIT_PATTERN.fullmatch(release.source_commit) is None:
-        raise ValueError(f"{path}: expected a full vLLM source commit, found {release.source_commit!r}")
-    if not re.fullmatch(r"cu[0-9]+", release.torch_backend):
-        raise ValueError(f"{path}: expected a CUDA torch backend, found {release.torch_backend!r}")
-    architectures = tuple(wheel.architecture for wheel in release.wheels)
-    if not architectures or len(set(architectures)) != len(architectures):
-        raise ValueError(f"{path}: expected one or more unique wheel architectures, found {architectures!r}")
-    release_url_prefix = f"https://github.com/marin-community/vllm/releases/download/{release.release_tag}/"
-    wheel_filename_prefix = f"vllm-{quote(release.version, safe='')}-"
-    wheel_urls = tuple(wheel.url for wheel in release.wheels)
-    if len(set(wheel_urls)) != len(wheel_urls):
-        raise ValueError(f"{path}: expected a unique asset URL for each wheel")
-    for wheel in release.wheels:
-        if not wheel.sm_targets:
-            raise ValueError(f"{path}: {wheel.architecture} must declare at least one SM target")
-        if not wheel.url.startswith(release_url_prefix) or "#" in wheel.url:
-            raise ValueError(f"{path}: {wheel.architecture} wheel URL is not an asset from {release.release_tag}")
-        if f"/{wheel_filename_prefix}" not in wheel.url or not wheel.url.endswith(f"_{wheel.architecture}.whl"):
-            raise ValueError(f"{path}: {wheel.architecture} wheel URL does not match vLLM version {release.version}")
-        if SHA256_PATTERN.fullmatch(wheel.sha256) is None:
-            raise ValueError(f"{path}: {wheel.architecture} wheel has invalid SHA-256 {wheel.sha256!r}")
+    validate_vllm_gpu_release(release, path)
     return release
+
+
+def render_gpu_release_toml(manifest: dict) -> str:
+    """Render the shared release descriptor from a published manifest."""
+    release = release_from_manifest(manifest, Path(GPU_RELEASE_MANIFEST_NAME))
+    lines = [
+        f'release_tag = "{release.release_tag}"',
+        f'source_commit = "{release.source_commit}"',
+        f'version = "{release.version}"',
+        f'torch_backend = "{release.torch_backend}"',
+        f'torch_version = "{release.torch_version}"',
+    ]
+    for wheel in release.wheels:
+        sm_targets = ", ".join(f'"{target}"' for target in wheel.sm_targets)
+        lines += [
+            "",
+            "[[wheels]]",
+            f'architecture = "{wheel.architecture}"',
+            f"sm_targets = [{sm_targets}]",
+            f'url = "{wheel.url}"',
+            f'sha256 = "{wheel.sha256}"',
+        ]
+    return "\n".join(lines) + "\n"
 
 
 def render_pins(
@@ -247,7 +261,9 @@ def render_pins(
         f")"
         for dependency in dependencies
     )
-    constants = "\n".join(f"    {dependency.project.constant_name}," for dependency in dependencies)
+    entries = f"{entries}\n\n" if entries else ""
+    constants = ", ".join(dependency.project.constant_name for dependency in dependencies)
+    constants = f"({constants},)" if len(dependencies) == 1 else f"({constants})"
     wheel_entries = "\n".join(
         "        VllmGpuWheel(\n"
         f'            architecture="{wheel.architecture}",\n'
@@ -264,11 +280,14 @@ def render_pins(
 
 Do not edit this file directly. External project revisions come from their
 ``config/external/<name>/uv.lock`` files, the promoted GPU vLLM release comes
-from ``config/external/vllm/gpu-release.toml``, and TPU serving requirements
+from ``config/external/vllm/gpu.toml``, and TPU serving requirements
 come from the root ``uv.lock``.
 """
 
 from dataclasses import dataclass
+
+from marin.inference.vllm_release_schema import CUDA_TOOLCHAIN_VERSION_BY_BACKEND as CUDA_TOOLCHAIN_VERSION_BY_BACKEND
+from marin.inference.vllm_release_schema import VllmGpuRelease, VllmGpuWheel
 
 
 @dataclass(frozen=True)
@@ -290,34 +309,12 @@ class ExternalDependency:
         return f"{{distribution}} @ git+{{self.repository}}@{{self.commit}}"
 
 
-@dataclass(frozen=True)
-class VllmGpuWheel:
-    """One architecture-specific wheel from a promoted vLLM GPU release."""
-
-    architecture: str
-    sm_targets: tuple[str, ...]
-    url: str
-    sha256: str
-
-
-@dataclass(frozen=True)
-class VllmGpuRelease:
-    """Immutable artifacts and ABI for a promoted vLLM GPU release."""
-
-    release_tag: str
-    source_commit: str
-    version: str
-    torch_backend: str
-    wheels: tuple[VllmGpuWheel, ...]
-
-
-{entries}
-
-VLLM_GPU_RELEASE = VllmGpuRelease(
+{entries}VLLM_GPU_RELEASE = VllmGpuRelease(
     release_tag="{vllm_gpu_release.release_tag}",
     source_commit="{vllm_gpu_release.source_commit}",
     version="{vllm_gpu_release.version}",
     torch_backend="{vllm_gpu_release.torch_backend}",
+    torch_version="{vllm_gpu_release.torch_version}",
     wheels=(
 {wheel_entries}
     ),
@@ -328,9 +325,7 @@ TPU_INFERENCE_FORK_REQUIREMENT = (
     "{tpu_inference_fork_requirement}"
 )
 
-EXTERNAL_DEPENDENCIES = (
-{constants}
-)
+EXTERNAL_DEPENDENCIES = {constants}
 '''
 
 
@@ -458,6 +453,55 @@ def project_by_name(name: str) -> ExternalProject:
     return next(project for project in EXTERNAL_PROJECTS if project.config_name == name)
 
 
+def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, check: bool) -> bool:
+    """Render external_dependencies.py from the locks, TPU fork pins, and promoted GPU release.
+
+    Returns whether the generated file already matched (the drift signal `--check` reports on).
+    """
+    return synchronize_file(
+        GENERATED_PINS,
+        render_generated_pins(dependencies, load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)),
+        check=check,
+    )
+
+
+def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_release: VllmGpuRelease) -> str:
+    """Render packaged dependency pins."""
+    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
+    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
+    return render_pins(
+        dependencies,
+        vllm_gpu_release=vllm_gpu_release,
+        vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
+        tpu_inference_fork_requirement=(
+            f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
+        ),
+    )
+
+
+def promote_gpu_release(manifest_path: Path) -> None:
+    """Update the GPU descriptor and packaged pins from a published release manifest.
+
+    Validate and render both outputs before replacing the descriptor. A validation or
+    rendering failure leaves the existing pins in place.
+    """
+    manifest = json.loads(manifest_path.read_text())
+    rendered = render_gpu_release_toml(manifest)
+    directory = VLLM_GPU_RELEASE_CONFIG.parent
+    with tempfile.NamedTemporaryFile("w", dir=directory, prefix="gpu.", suffix=".toml.tmp", delete=False) as handle:
+        handle.write(rendered)
+        staging = Path(handle.name)
+    try:
+        release = load_vllm_gpu_release(staging)
+        dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
+        generated = render_generated_pins(dependencies, release)
+        staging.replace(VLLM_GPU_RELEASE_CONFIG)
+        synchronize_file(GENERATED_PINS, generated, check=False)
+    finally:
+        staging.unlink(missing_ok=True)
+    print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Upgrade external uv locks and package immutable external runtime inputs."
@@ -479,28 +523,32 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="write a Markdown summary of the resolved versions and revisions",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--promote-gpu-release",
+        type=Path,
+        metavar="MANIFEST",
+        help=(
+            f"re-pin config/external/vllm/gpu.toml from a promoted {GPU_RELEASE_MANIFEST_NAME}, then regenerate the pins"
+        ),
+    )
+    args = parser.parse_args()
+    if args.promote_gpu_release is not None and (args.check or args.projects or args.summary_file):
+        parser.error("--promote-gpu-release runs on its own; drop --check, PROJECT, and --summary-file")
+    return args
 
 
 def main() -> None:
     args = parse_args()
+    if args.promote_gpu_release is not None:
+        promote_gpu_release(args.promote_gpu_release)
+        return
     selected = tuple(project_by_name(name) for name in args.projects if name != VLLM_CONFIG_NAME)
     if not args.projects:
         selected = EXTERNAL_PROJECTS
     previous_dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     if not args.check:
         for project in selected:
-            subprocess.run(
-                [
-                    "uv",
-                    "lock",
-                    "--project",
-                    str(project.directory),
-                    "--upgrade-package",
-                    project.distribution,
-                ],
-                check=True,
-            )
+            upgrade_project_lock(project)
 
     dependencies = tuple(locked_dependency(project) for project in EXTERNAL_PROJECTS)
     vllm_gpu_release = load_vllm_gpu_release(VLLM_GPU_RELEASE_CONFIG)
@@ -517,20 +565,7 @@ def main() -> None:
     if args.summary_file is not None:
         updates = dependency_updates(previous_dependencies, dependencies)
         args.summary_file.write_text(render_summary(dependencies, updates))
-    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
-    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
-    pins_match = synchronize_file(
-        GENERATED_PINS,
-        render_pins(
-            dependencies,
-            vllm_gpu_release=vllm_gpu_release,
-            vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
-            tpu_inference_fork_requirement=(
-                f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
-            ),
-        ),
-        check=args.check,
-    )
+    pins_match = regenerate_generated_pins(dependencies, check=args.check)
     if args.check and not pins_match:
         raise SystemExit("external dependency pins are stale; run `uv run config/update-external.py`")
 

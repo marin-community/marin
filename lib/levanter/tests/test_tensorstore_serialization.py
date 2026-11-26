@@ -2,7 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
+import os
+import socket
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any
 
 import equinox as eqx
@@ -12,19 +19,76 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import pytest
+import tensorstore as ts
 from chex import assert_trees_all_close
+from jax.experimental.array_serialization import serialization as array_ser
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
-from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
+from levanter.testing.helpers import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+from levanter import tensorstore_serialization
+from levanter.checkpoint import load_checkpoint, save_checkpoint
+from levanter.checkpoint_manifest import CHECKPOINT_FORMAT_VERSION, manifest_path, read_manifest
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
+    TensorStoreReadConfig,
+    TensorStoreWriteConfig,
+    _capped_chunk_shape,
+    _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
+    build_kvstore_spec,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
 )
+from levanter.testing import eight_device_checkpoints
+from levanter.testing.eight_device_checkpoints import run_on_eight_devices
+from levanter.utils.byte_budget import HostByteBudget
+
+_ASYNC_TEST_TIMEOUT = 5
 
 
+def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
+    spec = build_kvstore_spec(f"file://{tmp_path}/cache")
+
+    assert spec == {"driver": "file", "path": str(tmp_path / "cache")}
+
+
+def test_tensorstore_s3_reads_with_mounted_credentials(tmp_path, monkeypatch):
+    credentials = tmp_path / "credentials"
+    credentials.write_text("[default]\naws_access_key_id = test-key\naws_secret_access_key = test-secret\n")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_CONFIG_FILE", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+
+    authorized_request = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if "Credential=test-key/" in self.headers.get("Authorization", ""):
+                authorized_request.set()
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, _format, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            monkeypatch.setenv("AWS_ENDPOINT_URL", f"http://127.0.0.1:{server.server_port}")
+            spec = build_kvstore_spec("s3://bucket/cache")
+            # The local server has no bucket subdomain; only credential delivery is under test.
+            spec["endpoint"] = f"http://127.0.0.1:{server.server_port}"
+            store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
+            assert store.read("missing").result(timeout=_ASYNC_TEST_TIMEOUT).state == "missing"
+            assert authorized_request.is_set()
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+@pytest.mark.tpu
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source = jnp.arange(8, dtype=jnp.float32)
 
@@ -33,6 +97,19 @@ def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source_host = np.asarray(source)
     np.testing.assert_array_equal(staged, source_host)
     assert not np.shares_memory(staged, source_host)
+
+
+def test_jemalloc_checkpoint_skips_glibc_trim_callback(monkeypatch):
+    callbacks = []
+    future = SimpleNamespace(add_done_callback=callbacks.append)
+
+    monkeypatch.setenv("LD_PRELOAD", "libjemalloc.so.2")
+    _trim_host_memory_after_commits([future])
+    assert callbacks == []
+
+    monkeypatch.delenv("LD_PRELOAD")
+    _trim_host_memory_after_commits([future])
+    assert len(callbacks) == 1
 
 
 def test_tensorstore_checkpoint_simple():
@@ -65,6 +142,7 @@ def test_tensorstore_checkpoint_simple():
         assert all(np.isclose(rkey, initial_key))
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
     with use_test_mesh():
         key0 = jax.random.PRNGKey(0)
@@ -80,6 +158,49 @@ def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
             tree_serialize_leaves_tensorstore(tmpdir, {"x": arr})
             restored = tree_deserialize_leaves_tensorstore(tmpdir, {"x": state_shape})
             assert jnp.allclose(restored["x"], arr)
+
+
+@pytest.mark.tpu
+def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
+    # Regression for #8441. A run with offload_opt_state/FP32_PINNED_HOST holds its master and
+    # optimizer leaves on `pinned_host`, so the restore template (produced by eval_shape, hence an
+    # abstract mesh) carries that memory kind. Passing it straight to tensorstore materializes device
+    # buffers and fails the memory-kind check on assembly, so the checkpoint could not be read back.
+    with use_test_mesh() as mesh:
+        arr = jax.random.normal(jax.random.PRNGKey(0), (8,), dtype=jnp.float32)
+        abs_mesh = jax.sharding.get_abstract_mesh()
+        for spec in (P(), P("data")):
+            pinned = NamedSharding(abs_mesh, spec).with_memory_kind("pinned_host")
+            template = jax.ShapeDtypeStruct(arr.shape, arr.dtype, sharding=pinned)
+            with TemporaryDirectory() as tmpdir:
+                tree_serialize_leaves_tensorstore(tmpdir, {"x": arr})
+                restored = tree_deserialize_leaves_tensorstore(tmpdir, {"x": template})["x"]
+
+            assert restored.sharding.memory_kind == "pinned_host"
+            # allclose refuses to compare across memory spaces, so pull the host copy to device first.
+            on_device = jax.device_put(restored, NamedSharding(mesh, P()))
+            assert jnp.allclose(on_device, arr)
+
+
+@pytest.mark.tpu
+def test_tensorstore_checkpoint_restores_mixed_memory_kinds_in_tree_order():
+    with use_test_mesh() as mesh:
+        first = jnp.arange(8, dtype=jnp.float32)
+        second = first + 10
+        pinned = NamedSharding(jax.sharding.get_abstract_mesh(), P("data")).with_memory_kind("pinned_host")
+        template = {
+            "device": jax.ShapeDtypeStruct(first.shape, first.dtype, sharding=NamedSharding(mesh, P("data"))),
+            "host": jax.ShapeDtypeStruct(second.shape, second.dtype, sharding=pinned),
+        }
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, {"device": first, "host": second})
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, template)
+
+        assert restored["device"].sharding.memory_kind == "device"
+        assert restored["host"].sharding.memory_kind == "pinned_host"
+        np.testing.assert_array_equal(restored["device"], first)
+        np.testing.assert_array_equal(jax.device_put(restored["host"], NamedSharding(mesh, P())), second)
 
 
 def test_checkpoint_steps():
@@ -137,7 +258,6 @@ def test_checkpoint_steps():
 
 def test_tensorstore_gpt2_mlp():
     with use_test_mesh():
-
         key0 = jax.random.PRNGKey(0)
         key1 = jax.random.PRNGKey(1)
 
@@ -209,3 +329,504 @@ def test_tensorstore_ok_with_missing():
             m3 = tree_deserialize_leaves_tensorstore(tmpdir, m2, allow_missing=True)
             assert hax.all(m3.a == hax.full(A, 4))
             assert hax.all(m3.b == hax.zeros(A))
+
+
+def test_a_staging_budget_smaller_than_one_shard_still_completes():
+    """The gate must always admit the first snapshot, or a save deadlocks."""
+    with use_test_mesh():
+        A = hax.Axis("A", 1024)
+        state = {"w": hax.full(A, 3.0)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(
+                tmpdir, state, write_config=TensorStoreWriteConfig(max_staged_host_bytes=1)
+            )
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": hax.zeros(A)})
+
+        assert hax.all(restored["w"] == state["w"])
+
+
+def test_staged_bytes_stay_admitted_until_their_write_is_released():
+    """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
+
+    async def scenario():
+        gate = HostByteBudget(100)
+        await gate.acquire(60)
+
+        queued = asyncio.create_task(gate.acquire(60))
+        await asyncio.sleep(0)
+        assert not queued.done(), "120 bytes must not be admitted against a 100 byte budget"
+
+        gate.release(60)
+        await asyncio.wait_for(queued, timeout=5)
+        assert gate.peak_bytes == 60
+
+    asyncio.run(scenario())
+
+
+def test_serialization_stages_all_leaves_before_tensorstore_open_completes(monkeypatch, tmp_path):
+    source = {
+        "first": np.arange(8, dtype=np.float32),
+        "second": np.arange(8, dtype=np.float32) + 100,
+    }
+    expected = {name: value.copy() for name, value in source.items()}
+    open_promises_and_futures = [ts.Promise.new() for _ in source]
+    commit_promise, commit_future = ts.Promise.new()
+    writes = []
+    write_started = threading.Event()
+
+    class FakeStore:
+        def write(self, data):
+            writes.append(np.array(data, copy=True))
+            write_started.set()
+            return SimpleNamespace(commit=commit_future)
+
+    open_futures = iter(future for _, future in open_promises_and_futures)
+    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *_args, **_kwargs: next(open_futures))
+
+    manager = array_ser.GlobalAsyncCheckpointManager()
+    returned = threading.Event()
+    errors = []
+
+    def serialize():
+        try:
+            tree_serialize_leaves_tensorstore(str(tmp_path), {"w": source}, manager=manager)
+        except BaseException as error:
+            errors.append(error)
+        else:
+            returned.set()
+
+    serializer = threading.Thread(target=serialize)
+    serializer.start()
+    try:
+        assert returned.wait(timeout=_ASYNC_TEST_TIMEOUT), "serialization waited for TensorStore to open after staging"
+        for value in source.values():
+            value.fill(-1)
+    finally:
+        for open_promise, _ in open_promises_and_futures:
+            open_promise.set_result(FakeStore())
+        assert write_started.wait(timeout=_ASYNC_TEST_TIMEOUT)
+        commit_promise.set_result(None)
+        serializer.join(timeout=_ASYNC_TEST_TIMEOUT)
+        manager.wait_until_finished()
+
+    assert not serializer.is_alive()
+    assert errors == []
+    writes_by_first_value = {int(value[0]): value for value in writes}
+    for value in expected.values():
+        np.testing.assert_array_equal(writes_by_first_value[int(value[0])], value)
+
+
+def test_serialization_starts_all_opens_before_the_staging_budget_waits(monkeypatch, tmp_path):
+    source = {
+        "first": np.arange(8, dtype=np.float32),
+        "second": np.arange(8, dtype=np.float32) + 100,
+    }
+    open_promises_and_futures = [ts.Promise.new() for _ in source]
+    commit_promise, commit_future = ts.Promise.new()
+    all_opens_started = threading.Event()
+    open_count = 0
+    open_count_lock = threading.Lock()
+    writes = []
+
+    class ObservedFuture:
+        def __init__(self, future):
+            self.future = future
+            self.started = False
+
+        def mark_started(self):
+            nonlocal open_count
+            with open_count_lock:
+                if self.started:
+                    return
+                self.started = True
+                open_count += 1
+                if open_count == len(source):
+                    all_opens_started.set()
+
+        def add_done_callback(self, callback):
+            self.mark_started()
+            self.future.add_done_callback(callback)
+
+        def force(self):
+            self.mark_started()
+            self.future.force()
+
+    class FakeStore:
+        def write(self, data):
+            writes.append(np.array(data, copy=True))
+            return SimpleNamespace(commit=commit_future)
+
+    open_futures = iter(ObservedFuture(future) for _, future in open_promises_and_futures)
+    monkeypatch.setattr(tensorstore_serialization.ts, "open", lambda *_args, **_kwargs: next(open_futures))
+
+    manager = array_ser.GlobalAsyncCheckpointManager()
+    errors = []
+
+    def serialize():
+        try:
+            tree_serialize_leaves_tensorstore(
+                str(tmp_path),
+                {"w": source},
+                manager=manager,
+                write_config=TensorStoreWriteConfig(max_staged_host_bytes=source["first"].nbytes),
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    serializer = threading.Thread(target=serialize)
+    serializer.start()
+    try:
+        assert all_opens_started.wait(timeout=_ASYNC_TEST_TIMEOUT), "a staging-budget wait delayed another open"
+    finally:
+        for open_promise, _ in open_promises_and_futures:
+            open_promise.set_result(FakeStore())
+        commit_promise.set_result(None)
+        serializer.join(timeout=_ASYNC_TEST_TIMEOUT)
+        manager.wait_until_finished()
+
+    assert not serializer.is_alive()
+    assert errors == []
+    assert {int(value[0]) for value in writes} == {0, 100}
+
+
+def _ocdbt_version_count(checkpoint_dir) -> int:
+    """Manifest commits since the database was created.
+
+    Old versions move out of the manifest into version tree nodes, so count generations instead
+    of the inline ``versions`` list.
+    """
+    base = ts.KvStore.open({"driver": "file", "path": str(checkpoint_dir)}).result()
+    manifest = ts.ocdbt.dump(base).result()
+    return manifest["versions"][-1]["generation_number"]
+
+
+def test_a_lock_file_save_publishes_one_manifest_version_per_wave(tmp_path):
+    """A save that spills the budget commits once per wave.
+
+    Three waves are four generations: the empty database, then one per wave. A non-atomic
+    transaction would add two generations per wave.
+    """
+    arrays = {f"w{i}": np.full(1024, i, dtype=np.float32) for i in range(6)}
+    one_array = next(iter(arrays.values())).nbytes
+    batched = tmp_path / "batched"
+    batched.mkdir()
+
+    tree_serialize_leaves_tensorstore(
+        str(batched),
+        arrays,
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=one_array * 2, file_io_locking="lockfile"),
+    )
+
+    assert _ocdbt_version_count(batched) == 4
+    restored = tree_deserialize_leaves_tensorstore(
+        str(batched), {name: jnp.zeros_like(value) for name, value in arrays.items()}
+    )
+    for name, value in arrays.items():
+        np.testing.assert_array_equal(np.asarray(restored[name]), value)
+
+
+def test_a_spilling_lock_file_save_of_a_bare_array_restores(tmp_path):
+    """A PyTree that is one array and spills the budget stays at the OCDBT root."""
+    values = np.arange(16, dtype=np.float32)
+    tree_serialize_leaves_tensorstore(
+        str(tmp_path),
+        values,
+        write_config=TensorStoreWriteConfig(max_staged_host_bytes=8, file_io_locking="lockfile"),
+    )
+    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), jnp.zeros_like(values))
+    np.testing.assert_array_equal(np.asarray(restored), values)
+
+
+def test_a_save_larger_than_the_staging_budget_rolls_through_it():
+    """Peak host memory follows the budget. The checkpoint that comes back is still complete."""
+    with use_test_mesh():
+        A = hax.Axis("A", 4096)
+        state = {f"w{i}": hax.full(A, float(i)) for i in range(8)}
+
+        with TemporaryDirectory() as tmpdir:
+            # Every array is 16 KiB, so a 32 KiB budget admits about two at a time.
+            tree_serialize_leaves_tensorstore(
+                tmpdir, state, write_config=TensorStoreWriteConfig(max_staged_host_bytes=32 * 1024)
+            )
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, {name: hax.zeros(A) for name in state})
+
+        for name, expected in state.items():
+            assert hax.all(restored[name] == expected)
+
+
+@pytest.mark.parametrize(
+    "arrays, budget",
+    [
+        # One shard larger than the whole budget: it must be admitted anyway, or the read deadlocks.
+        (1, 1),
+        # Eight 16 KiB arrays through a budget admitting about two: the read rolls through it.
+        (8, 32 * 1024),
+    ],
+)
+def test_a_restore_completes_whatever_the_read_budget_admits(arrays, budget):
+    """Concurrent reads stay bounded by the budget and still return every array intact."""
+    with use_test_mesh():
+        A = hax.Axis("A", 4096)
+        state = {f"w{i}": hax.full(A, float(i)) for i in range(arrays)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, state)
+            restored = tree_deserialize_leaves_tensorstore(
+                tmpdir,
+                {name: hax.zeros(A) for name in state},
+                read_config=TensorStoreReadConfig(max_in_flight_bytes=budget),
+            )
+
+        for name, expected in state.items():
+            assert hax.all(restored[name] == expected)
+
+
+@pytest.mark.parametrize(
+    "local_shape, itemsize, max_bytes, expected",
+    [
+        ((8, 16), 4, 4096, (8, 16)),  # already under the cap
+        ((64, 16), 4, 1024, (16, 16)),  # halve the largest even axis until it fits
+        ((3, 5), 4, 1, (3, 5)),  # nothing divides: one chunk, cap exceeded
+        ((), 4, 1024, ()),  # scalar
+        ((0, 16), 4, 1024, (1, 16)),  # zarr3 rejects a zero-length chunk dimension
+    ],
+)
+def test_capped_chunk_shape_stays_a_divisor(local_shape, itemsize, max_bytes, expected):
+    chunk = _capped_chunk_shape(local_shape, itemsize, max_bytes)
+    assert chunk == expected
+    assert all(dim % size == 0 for dim, size in zip(local_shape, chunk)), "chunks must tile the writer's slice"
+
+
+def test_every_replica_writes_a_disjoint_slice_covering_the_array():
+    """The contract replica-parallel writes rest on: no idle replicas, no byte written twice."""
+    run_on_eight_devices(eight_device_checkpoints.disjoint_slices_cover_the_array)
+
+
+def test_replicated_arrays_survive_a_replica_parallel_roundtrip():
+    run_on_eight_devices(eight_device_checkpoints.replicated_arrays_survive_a_roundtrip)
+
+
+def test_replica_aware_restore_reads_each_shard_once():
+    run_on_eight_devices(eight_device_checkpoints.replica_aware_restore_reads_each_shard_once)
+
+
+def test_replica_aware_restore_broadcasts_across_processes():
+    eight_device_checkpoints.replica_aware_restore_across_processes()
+
+
+def test_processes_sharing_a_local_checkpoint_lock_with_lock_files():
+    """Advisory OS locks do not exclude writers on different NFS clients; lock files do."""
+    assert eight_device_checkpoints.commit_waits_for_held_lock_across_processes()
+
+
+def test_ranks_on_opposite_sides_of_the_budget_finish_one_save():
+    """Two processes on different commit paths must both reach the metadata barrier and finish."""
+    results = eight_device_checkpoints.uneven_staged_bytes_save_across_processes()
+    shared = np.arange(eight_device_checkpoints._UNEVEN_SHARED, dtype=np.float32)
+    host = np.arange(eight_device_checkpoints._UNEVEN_HOST, dtype=np.float32)
+    for restored_shared, restored_host in results:
+        np.testing.assert_array_equal(restored_shared, shared)
+        np.testing.assert_array_equal(restored_host, host)
+
+
+def test_a_save_after_an_interrupted_save_to_the_same_directory_commits():
+    """A lock file left by a crashed save would otherwise block every later save to that step."""
+    results = eight_device_checkpoints.resave_after_interrupted_save_across_processes()
+
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in results:
+        np.testing.assert_array_equal(restored, np.stack([values, values + 1, values + 2]))
+
+
+def test_a_multi_process_save_of_a_bare_array_restores():
+    """A PyTree that is one array stores it at the OCDBT root, where the restore looks for it."""
+    values = np.arange(eight_device_checkpoints.DISTRIBUTED_ARRAY_SIZE, dtype=np.float32)
+    for restored in eight_device_checkpoints.bare_array_roundtrip_across_processes():
+        np.testing.assert_array_equal(restored, values)
+
+
+def test_a_single_process_save_keeps_default_locking(tmp_path):
+    assert tensorstore_serialization._file_io_locking(TensorStoreWriteConfig(), str(tmp_path)) is None
+    explicit = TensorStoreWriteConfig(file_io_locking="os")
+    assert tensorstore_serialization._file_io_locking(explicit, str(tmp_path)) == "os"
+
+
+def test_the_next_commit_rewrites_the_manifest_the_previous_holder_published(tmp_path):
+    """The next holder reads the file the previous holder published, then replaces it."""
+    manifest = tmp_path / "manifest.ocdbt"
+    manifest.write_text("v0")
+    order = tensorstore_serialization._CommitOrder(str(tmp_path))
+    first_holds = threading.Event()
+    release_first = threading.Event()
+    seen: list[str] = []
+
+    def publish_first() -> None:
+        with order.hold():
+            seen.append(manifest.read_text())
+            manifest.write_text("v1")
+            first_holds.set()
+            assert release_first.wait(5)
+
+    def publish_second() -> None:
+        assert first_holds.wait(5)
+        with order.hold():
+            seen.append(manifest.read_text())
+            manifest.write_text("v2")
+
+    writers = [threading.Thread(target=publish_first), threading.Thread(target=publish_second)]
+    for writer in writers:
+        writer.start()
+    assert first_holds.wait(5)
+    release_first.set()
+    for writer in writers:
+        writer.join(10)
+        assert not writer.is_alive()
+
+    assert seen == ["v0", "v1"]
+    assert manifest.read_text() == "v2"
+
+
+def test_a_live_remote_writer_keeps_its_lock_file(tmp_path):
+    """A lease refreshed by another host means the lock file is still a live commit."""
+    lock = tmp_path / "manifest.ocdbt.__lock"
+    lock.write_text("held")
+    lease_path = tmp_path / tensorstore_serialization._WRITER_LEASE_NAME
+    lease_path.write_text("other-host 1\n")
+    lease = tensorstore_serialization._WriterLease(str(tmp_path))
+
+    assert not lease.try_acquire()
+    assert lock.read_text() == "held"
+    assert lease_path.read_text() == "other-host 1\n"
+
+
+def test_a_stale_writer_lease_loses_its_lock_file(tmp_path):
+    """A remote lease that has not been refreshed is an abandoned save, lock file included."""
+    lock = tmp_path / "manifest.ocdbt.__lock"
+    lock.write_text("held")
+    lease = tensorstore_serialization._WriterLease(str(tmp_path))
+    lease_path = tmp_path / tensorstore_serialization._WRITER_LEASE_NAME
+    lease_path.write_text("other-host 1\n")
+    stale = time.time() - (tensorstore_serialization._WRITER_LEASE_STALE_S + 5)
+    os.utime(lease_path, (stale, stale))
+
+    assert not tensorstore_serialization._writer_lease_is_live(str(lease_path))
+    lease.acquire()
+    try:
+        assert not lock.exists()
+        host, pid = lease_path.read_text().split()
+        assert host == socket.gethostname()
+        assert int(pid) == os.getpid()
+    finally:
+        lease.release()
+    assert not lease_path.exists()
+
+
+def test_checkpoint_written_on_one_mesh_loads_on_another():
+    """Content must not depend on the mesh that wrote it, so writer layout can keep changing."""
+    run_on_eight_devices(eight_device_checkpoints.a_checkpoint_loads_on_another_mesh)
+
+
+def test_small_arrays_are_not_split_into_tiny_objects():
+    run_on_eight_devices(eight_device_checkpoints.small_arrays_are_not_split)
+
+
+def test_a_replica_count_that_divides_nothing_still_splits():
+    """A rack count that is not a power of two must not drop an array to one writer."""
+    run_on_eight_devices(eight_device_checkpoints.a_replica_count_that_divides_nothing_still_splits)
+
+
+def test_arrays_no_split_applies_to_are_spread_over_replicas():
+    """Every such array otherwise lands on replica 0, one process for the whole run."""
+    run_on_eight_devices(eight_device_checkpoints.un_splittable_arrays_spread_over_replicas)
+
+
+def test_host_arrays_without_a_sharding_roundtrip():
+    """Numpy leaves reach the serializer through ``is_jax_array_like`` and have no shards."""
+    source = {"w": np.arange(10, dtype=np.float32)}
+
+    with TemporaryDirectory() as tmpdir:
+        tree_serialize_leaves_tensorstore(tmpdir, source)
+        restored = tree_deserialize_leaves_tensorstore(tmpdir, {"w": jnp.zeros(10, dtype=jnp.float32)})
+
+    np.testing.assert_array_equal(np.asarray(restored["w"]), source["w"])
+
+
+def test_bfloat16_checkpoint_preserves_nonzero_payload(tmp_path):
+    # This 2.5 MiB shape reproduces referenced-source writes persisting fill values.
+    shape = (5, 64, 64, 64)
+    source = {"expert": np.full(shape, 0.125, dtype=jnp.bfloat16)}
+
+    tree_serialize_leaves_tensorstore(str(tmp_path), source)
+    restored = tree_deserialize_leaves_tensorstore(str(tmp_path), {"expert": jnp.zeros(shape, dtype=jnp.bfloat16)})
+
+    np.testing.assert_array_equal(np.asarray(restored["expert"]), source["expert"])
+
+
+def test_arrays_with_a_zero_length_axis_roundtrip():
+    """An empty array still needs a positive chunk grid, which zarr3 enforces on creation."""
+    with use_test_mesh():
+        source = {"empty": jnp.zeros((0, 16), dtype=jnp.float32), "w": jnp.arange(8, dtype=jnp.float32)}
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, source)
+            restored = tree_deserialize_leaves_tensorstore(
+                tmpdir, {key: jnp.zeros_like(value) for key, value in source.items()}
+            )
+
+        assert restored["empty"].shape == (0, 16)
+        np.testing.assert_array_equal(np.asarray(restored["w"]), np.asarray(source["w"]))
+
+
+def test_reading_a_newer_format_version_fails_loudly(tmp_path):
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "format_version": CHECKPOINT_FORMAT_VERSION + 1,
+                "array_driver": "zarr3",
+                "kvstore_driver": "ocdbt",
+                "arrays": [],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="Upgrade levanter"):
+        read_manifest(str(tmp_path))
+
+
+def test_saving_writes_a_manifest_listing_every_array(tmp_path):
+    with use_test_mesh():
+        A = hax.Axis("A", 8)
+
+        save_checkpoint({"model": {"w": hax.zeros(A)}, "step": jnp.array(3)}, step=3, checkpoint_path=str(tmp_path))
+
+        manifest = read_manifest(str(tmp_path))
+        assert manifest is not None
+        assert {array.path: array.shape for array in manifest.arrays} == {"model/w": (8,), "step": ()}
+
+
+def test_checkpoints_without_a_manifest_still_load(tmp_path):
+    """Checkpoints predating the manifest have none, so the reader has to fall back."""
+    with use_test_mesh():
+        A = hax.Axis("A", 8)
+        state = {"model": {"w": hax.full(A, 5.0)}}
+
+        save_checkpoint(state, step=0, checkpoint_path=str(tmp_path))
+        (tmp_path / manifest_path("")).unlink()
+        assert read_manifest(str(tmp_path)) is None
+
+        restored = load_checkpoint({"model": {"w": hax.zeros(A)}}, str(tmp_path))
+
+        assert jax.numpy.array_equal(restored["model"]["w"].array, state["model"]["w"].array)
+
+
+def test_a_leaf_absent_from_the_exemplar_is_not_read_back():
+    fp32 = jnp.arange(8, dtype=jnp.float32) + 0.123456789
+    written = {"params": fp32.astype(jnp.bfloat16), "master_params": fp32}
+
+    with TemporaryDirectory() as tmpdir:
+        save_checkpoint(written, step=0, checkpoint_path=tmpdir)
+        restored = load_checkpoint({"params": jnp.zeros(8, jnp.float32)}, tmpdir)
+
+    assert restored["params"].dtype == jnp.bfloat16
+    assert_trees_not_close(restored["params"].astype(jnp.float32), fp32)

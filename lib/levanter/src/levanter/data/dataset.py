@@ -71,6 +71,10 @@ class AsyncDataset(DatasetBase[T_co]):
         """
         return (await self.get_batch([index]))[0]
 
+    def first_readable_index(self) -> int:
+        """Return the lowest index this dataset serves. A reader that only needs an example starts here."""
+        return 0
+
     @abc.abstractmethod
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         raise NotImplementedError
@@ -83,9 +87,6 @@ class AsyncDataset(DatasetBase[T_co]):
 
     def map(self, fn: MapFunction[U], *extra_args, **extra_kwargs) -> "MappedAsyncDataset[T_co, U]":
         return MappedAsyncDataset(self, fn, *extra_args, **extra_kwargs)
-
-    def map_batches(self, fn: MapFunction[Sequence[U]], *extra_args, **extra_kwargs) -> "BatchMappedAsyncDataset[U]":
-        return BatchMappedAsyncDataset(self, fn, *extra_args, **extra_kwargs)
 
     def slice_dataset(self, start_index: Optional[int] = None, end_index: Optional[int] = None):
         """
@@ -255,6 +256,9 @@ class MappedAsyncDataset(AsyncDataset[U], Generic[T, U]):
     async def getitem_async(self, index: int) -> U:
         return self._call_fn(index, await self.dataset.getitem_async(index))
 
+    def first_readable_index(self) -> int:
+        return self.dataset.first_readable_index()
+
     def _call_fn(self, index, item):
         if "key" in self._extra_kwargs:
             key = self._maybe_fold_in_key(self._extra_kwargs["key"], index)
@@ -305,58 +309,6 @@ class SlicedAsyncDataset(AsyncDataset[U]):
 
     def is_finite(self) -> bool:
         return self.end_index is not None or self.dataset.is_finite()
-
-
-class BatchMappedAsyncDataset(AsyncDataset[U]):
-    """
-    A dataset that applies a function to each batch of items in the dataset.
-    You can pass extra arguments to the function using `*extra_args` and `**extra_kwargs`.
-    If a kwarg called `key` is passed, it will be treated as a PRNGKey and folded in with the index of the item
-    for each call to the function. The key will be split into a key for each item in the batch.
-    """
-
-    def __init__(
-        self,
-        dataset: AsyncDataset[T],
-        fn: MapFunction[Sequence[U]],
-        *extra_args,
-        **extra_kwargs,
-    ):
-        self.dataset: AsyncDataset = dataset
-        self.fn = fn
-        self._extra_args = extra_args
-        self._extra_kwargs = extra_kwargs
-
-    async def async_len(self) -> int:
-        return await self.dataset.async_len()
-
-    def is_finite(self) -> bool:
-        return self.dataset.is_finite()
-
-    def _maybe_fold_in_key(self, key, indices: Sequence[int]):
-        if key is not None:
-            key = _fold_in_key_vmap(key, np.array(indices))
-        return key
-
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[U]:
-        items = await self.dataset.get_batch(indices)
-        return self._call_fn(indices, items)
-
-    async def getitem_async(self, index: int) -> U:
-        return self._call_fn([index], [await self.dataset.getitem_async(index)])[0]
-
-    def _call_fn(self, indices: Sequence[int], items):
-        if "key" in self._extra_kwargs:
-            key = self._maybe_fold_in_key(self._extra_kwargs["key"], indices)
-            kwargs = {**self._extra_kwargs, "key": key}
-        else:
-            kwargs = self._extra_kwargs
-        return self.fn(items, *self._extra_args, **kwargs)
-
-
-@jax.jit
-def _fold_in_key_vmap(key, indices):
-    return jax.vmap(lambda i: jax.random.fold_in(key, i))(indices)
 
 
 def _key_on_local_cpu(key: PRNGKeyArray) -> PRNGKeyArray:

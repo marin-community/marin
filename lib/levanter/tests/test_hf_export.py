@@ -8,12 +8,22 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.normalizers import Lowercase
+from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.processors import TemplateProcessing
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from levanter.compat.hf_checkpoints import (
     _save_tokenizer_pretrained,
     build_generation_config,
     save_hf_checkpoint_callback,
 )
+from levanter.compat.hf_generation_config import export_generation_config
+
+QWEN_STYLE_TEMPLATE = "{% for m in messages %}<|im_start|>{{ m['content'] }}<|im_end|>{% endfor %}"
+SAMPLING_DEFAULTS = {"do_sample": True, "temperature": 0.6, "top_p": 0.95}
 
 
 class _FakeTokenizer:
@@ -32,66 +42,18 @@ class _FakeTokenizer:
             return f"<tok_{tid}>"
         return None
 
+    def get_vocab(self) -> dict[str, int]:
+        return {"<|im_end|>": 5, "<|eot_id|>": 6, "<|endoftext|>": 7}
+
 
 class TestBuildGenerationConfig:
     def test_none_returns_none(self):
         tok = _FakeTokenizer()
         assert build_generation_config(tok, None) is None
 
-    def test_valid_ids(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2, bos_token_id=1)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert result["eos_token_id"] == [2, 50]
-        assert result["bos_token_id"] == 1
-
-    def test_deduplication(self):
+    def test_sorted_deduplicated_ids(self):
         tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        result = build_generation_config(tok, [50, 50, 2])
-        assert result is not None
-        assert result["eos_token_id"] == [2, 50]
-
-    def test_sorted_output(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        result = build_generation_config(tok, [100, 50, 75])
-        assert result is not None
-        assert result["eos_token_id"] == [2, 50, 75, 100]
-
-    def test_deterministic(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        r1 = build_generation_config(tok, [128, 64, 128])
-        r2 = build_generation_config(tok, [64, 128, 64])
-        assert r1 == r2
-
-    def test_auto_adds_tokenizer_eos(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert 2 in result["eos_token_id"]
-
-    def test_eos_already_included(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2)
-        result = build_generation_config(tok, [2, 50])
-        assert result is not None
-        assert result["eos_token_id"] == [2, 50]
-
-    def test_tokenizer_eos_none(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=None)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert result["eos_token_id"] == [50]
-
-    def test_bos_included_when_present(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2, bos_token_id=1)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert result["bos_token_id"] == 1
-
-    def test_bos_omitted_when_none(self):
-        tok = _FakeTokenizer(vocab_size=200, eos_token_id=2, bos_token_id=None)
-        result = build_generation_config(tok, [50])
-        assert result is not None
-        assert "bos_token_id" not in result
+        assert build_generation_config(tok, [100, 50, 100]) == {"eos_token_id": [50, 100]}
 
     def test_empty_list_raises(self):
         tok = _FakeTokenizer()
@@ -112,6 +74,44 @@ class TestBuildGenerationConfig:
         tok = _FakeTokenizer(vocab_size=100)
         with pytest.raises(ValueError, match="out of range"):
             build_generation_config(tok, [-1])
+
+
+def test_export_generation_config_preserves_source_and_adds_turn_stop():
+    source = {"eos_token_id": 7, "temperature": 0.7, "top_k": 20, "transformers_version": "5.16.1"}
+
+    config = export_generation_config(
+        _FakeTokenizer(eos_token_id=7),
+        chat_template=QWEN_STYLE_TEMPLATE,
+        explicit=source,
+        sampling_defaults=SAMPLING_DEFAULTS,
+    )
+
+    assert config == {
+        "eos_token_id": [5, 7],
+        "temperature": 0.7,
+        "top_k": 20,
+        "transformers_version": "5.16.1",
+        "do_sample": True,
+        "top_p": 0.95,
+        "bos_token_id": 1,
+    }
+
+
+def test_export_generation_config_keeps_greedy_sampling():
+    config = export_generation_config(
+        _FakeTokenizer(eos_token_id=7),
+        chat_template=None,
+        explicit={"do_sample": False},
+        sampling_defaults=SAMPLING_DEFAULTS,
+    )
+
+    assert config == {"do_sample": False, "eos_token_id": [7], "bos_token_id": 1}
+
+
+def test_export_generation_config_requires_caller_sampling_policy():
+    config = export_generation_config(_FakeTokenizer(eos_token_id=7), chat_template=None)
+
+    assert config == {"eos_token_id": [7], "bos_token_id": 1}
 
 
 class _CapturingConverter:
@@ -153,3 +153,61 @@ def test_save_tokenizer_pretrained_embeds_chat_template(tmp_path):
 
     tokenizer_config = json.loads((tmp_path / "tokenizer_config.json").read_text())
     assert tokenizer_config["chat_template"] == tokenizer.chat_template
+
+
+def test_save_tokenizer_pretrained_exports_portable_generic_fast_tokenizer(tmp_path):
+    backend = Tokenizer(
+        WordLevel(
+            vocab={"[UNK]": 0, "<s>": 1, "</s>": 2, "hello": 3, "world": 4, "user": 5, ":": 6},
+            unk_token="[UNK]",
+        )
+    )
+    backend.normalizer = Lowercase()
+    backend.pre_tokenizer = Whitespace()
+    backend.post_processor = TemplateProcessing(
+        single="<s> $A </s>",
+        special_tokens=[("<s>", 1), ("</s>", 2)],
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="[UNK]",
+        bos_token="<s>",
+        eos_token="</s>",
+    )
+    tokenizer.add_tokens(["portable"])
+    tokenizer.chat_template = (
+        "{% for message in messages %}{{ message['role'] }}: " "{{ message['content'] }}{{ eos_token }}{% endfor %}"
+    )
+
+    text = "HELLO portable mystery"
+    encoding = tokenizer(text, return_offsets_mapping=True, return_special_tokens_mask=True)
+    messages = [{"role": "user", "content": "HELLO world"}]
+
+    _save_tokenizer_pretrained(tokenizer, str(tmp_path))
+
+    tokenizer_config = json.loads((tmp_path / "tokenizer_config.json").read_text())
+    assert tokenizer_config["tokenizer_class"] == "PreTrainedTokenizerFast"
+    assert json.loads((tmp_path / "tokenizer.json").read_text()) == json.loads(tokenizer.backend_tokenizer.to_str())
+
+    reloaded = AutoTokenizer.from_pretrained(tmp_path, local_files_only=True)
+    assert reloaded(text, return_offsets_mapping=True, return_special_tokens_mask=True) == encoding
+    assert reloaded.get_vocab() == tokenizer.get_vocab()
+    assert reloaded.special_tokens_map == tokenizer.special_tokens_map
+    assert reloaded.apply_chat_template(messages, tokenize=True) == tokenizer.apply_chat_template(
+        messages, tokenize=True
+    )
+    assert reloaded.decode(encoding["input_ids"]) == tokenizer.decode(encoding["input_ids"])
+
+
+def test_save_tokenizer_pretrained_preserves_specialized_tokenizer_class(local_gpt2_tokenizer_path, tmp_path):
+    tokenizer = AutoTokenizer.from_pretrained(local_gpt2_tokenizer_path, local_files_only=True)
+    assert tokenizer.__class__ is not PreTrainedTokenizerFast
+    text = "Marin tokenizer compatibility"
+    encoding = tokenizer(text, return_offsets_mapping=True, return_special_tokens_mask=True)
+
+    _save_tokenizer_pretrained(tokenizer, str(tmp_path))
+
+    tokenizer_config = json.loads((tmp_path / "tokenizer_config.json").read_text())
+    assert tokenizer_config["tokenizer_class"] == "GPT2Tokenizer"
+    reloaded = AutoTokenizer.from_pretrained(tmp_path, local_files_only=True)
+    assert reloaded(text, return_offsets_mapping=True, return_special_tokens_mask=True) == encoding

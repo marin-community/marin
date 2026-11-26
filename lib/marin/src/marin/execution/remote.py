@@ -24,6 +24,7 @@ from typing import Generic, ParamSpec, TypeVar, overload
 
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
+from rigging.timing import Duration
 
 from marin.training.run_environment import dependency_groups_for_resources
 
@@ -53,7 +54,9 @@ class RemoteCallable(Generic[P, R]):
     resources: ResourceConfig
     env_vars: dict[str, str] = field(default_factory=dict)
     pip_dependency_groups: list[str] | None = None
+    pip_packages: list[str] | None = None
     name: str | None = None
+    timeout: Duration | None = None
 
     def named(self, name: str) -> "RemoteCallable":
         """Noop if already has a name. Otherwise use provided name."""
@@ -77,8 +80,10 @@ class RemoteCallable(Generic[P, R]):
                 name=sanitize_job_name(name),
                 entrypoint=Entrypoint.from_callable(lambda: self.fn(*args, **kwargs)),
                 resources=self.resources,
+                timeout=self.timeout,
                 environment=create_environment(
                     extras=dependency_groups,
+                    pip_packages=self.pip_packages,
                     env_vars=self.env_vars,
                 ),
             )
@@ -94,6 +99,8 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
+    pip_packages: list[str] | None = None,
+    timeout: Duration | None = None,
 ) -> RemoteCallable[P, R]: ...
 
 
@@ -104,6 +111,8 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
+    pip_packages: list[str] | None = None,
+    timeout: Duration | None = None,
 ) -> Callable[[Callable[P, R]], RemoteCallable[P, R]]: ...
 
 
@@ -114,6 +123,8 @@ def remote(
     resources: ResourceConfig | None = None,
     env_vars: dict[str, str] | None = None,
     pip_dependency_groups: list[str] | None = None,
+    pip_packages: list[str] | None = None,
+    timeout: Duration | None = None,
 ) -> RemoteCallable[P, R] | Callable[[Callable[P, R]], RemoteCallable[P, R]]:
     """Mark a step function for remote execution via Fray.
 
@@ -130,7 +141,9 @@ def remote(
             resources=resources,
             env_vars=env_vars or {},
             pip_dependency_groups=pip_dependency_groups,
+            pip_packages=pip_packages,
             name=name,
+            timeout=timeout,
         )
 
     if fn is not None:

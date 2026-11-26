@@ -1,0 +1,6 @@
+applet_id = "7f536ce3-0562-40f1-b209-e6110d8ab4e8"
+
+title = "Filer"
+description = "Browse Marin object storage and preview datasets, documents, and images. Inspect file contents and selected Parquet columns without downloading whole datasets."
+python_entrypoint = "server.app:create_api"
+build_command = "npm ci && npm run build"

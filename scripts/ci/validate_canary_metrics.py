@@ -20,8 +20,8 @@ import os
 import sys
 from collections.abc import Callable
 
-from rigging.filesystem import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.ferries.canary_ferry import build
 
@@ -41,10 +41,13 @@ def _thresholds() -> list[tuple[str, str, Callable[[float, float], bool], float]
 def resolve_canary_output_path() -> str:
     """Resolve the canary ferry's output path from its lazy checkpoint.
 
-    Uses mirror:// so the read works regardless of which region the canary
-    wrote to (a CoreWeave/S3 pin resolves to its absolute bucket path instead).
+    GCS canaries write to a region-selected temporary bucket, so validation reads
+    the same object key through ``mirror://``. S3 pins keep their absolute path.
     """
-    return build().path("mirror://")
+    output_path = StoragePath(build().path("mirror://"))
+    if output_path.scheme != "gs":
+        return str(output_path)
+    return str(StoragePath(scheme="mirror", segments=output_path.segments, rooted=False))
 
 
 def read_summary(output_path: str) -> dict:

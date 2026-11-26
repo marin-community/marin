@@ -1,66 +1,91 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare AA + lm-eval-harness eval text as decon bloom input.
+"""Prepare Artificial Analysis and lm-eval-harness text for decontamination.
 
-Two sub-corpora written under ``{MARIN_PREFIX}/datakit/decontam/evals/`` (the
-iris ``--region`` selects the store MARIN_PREFIX resolves to):
+The mandatory AA corpus and its manifests are written under a versioned path
+in ``MARIN_PREFIX``:
 
-- ``aa/<eval>/<split>.parquet`` -- AA Intelligence Index v4.0 core 8.
+- ``aa/<eval>/<split>.parquet`` -- all nine AA Intelligence Index v4.1.1
+  benchmarks. These artifacts are mandatory.
+- ``uncheatable/<subset>/test.parquet`` -- the Uncheatable Eval subsets that
+  ``experiments/datasets/uncheatable.py`` evaluates, pinned to an upstream
+  commit. These artifacts are mandatory.
 - ``lmh/<task>/<split>.parquet`` -- every unique task in
   ``experiments/evals/task_configs.py`` bundles, loaded via lm-eval-harness.
-  Group names (``mmlu``, ``agieval``, ``bbh_zeroshot``, ``leaderboard_bbh``,
-  ...) are expanded to their leaf tasks; one file per leaf.
+  These artifacts keep their extraction-version sidecars in the same immutable
+  corpus-version root.
 
-Each record: ``{id: str, text: str}`` where ``text`` concatenates every
-string-typed field of the source row in deterministic key order. Generic
-extraction (no per-eval schema config) trades a bit of noise for uniform
-treatment of arbitrary HF / lm-eval schemas.
+Each record has the form ``{id: str, text: str}``. Mandatory extraction is
+pinned by benchmark. Preparation of a mandatory suite fails if a source cannot
+load or if its extracted record count differs from the registered count. A
+complete suite manifest is written only after all of its artifacts pass
+validation. Bloom creation requires both mandatory manifests. Source downloads
+and required lm-eval task loads are retried with backoff.
 
 Test split is preferred; tasks without a test split fall back to
-validation, then training. Tasks that fail to load (e.g. removed from
-lm-eval since our pinned commit, gated HF datasets) are logged and skipped.
+validation, then training. Every lm-eval task is required: if one fails to
+load, loads a number of leaf tasks other than its pinned count
+(:data:`LMH_LEAF_TASK_COUNTS`), or has a leaf task without records,
+preparation stops before it seals the lm-eval manifest. The exceptions are the
+tasks in :data:`BEST_EFFORT_LMH_TASKS`, each with the reason that it does not
+load; a failure of one of them is logged and skipped. A new eval must load, or
+be added to that table on purpose.
 
-Submit on iris (eu-west4, CPU-only, has HF access). The ``eval`` extra is
-needed for ``lm-eval``; AA prep accumulates rows in memory before writing
-so bump RAM (1GB default OOMs on livecodebench):
+Submit on a CPU Iris cluster. The ``lm_eval`` extra supplies the optional
+lm-eval-harness package:
 
-    uv run iris --cluster=marin job run --region europe-west4 \\
-        --extra=cpu --extra=eval --priority interactive \\
+    uv run iris --cluster=cw-rno2a job run --no-wait \\
+        --extra=cpu --extra=lm_eval --priority interactive \\
         --memory 16GB --cpu 2 --enable-extra-resources \\
+        -e MARIN_PREFIX s3://marin-us-east-02a/marin \\
         -- python experiments/datakit/decontam/prepare_eval_corpus.py
 
-The iris worker pulls lm-eval via the marin image's ``eval`` extras. To
-include ifeval / leaderboard_ifeval we depend on ``lm-eval[ifeval]`` so
-``langdetect`` is available; see ``lib/marin/pyproject.toml`` (the ``eval``
-extra). The script monkey-patches ``datasets.load_dataset`` to force
+The job needs an ``HF_TOKEN`` with access to the gated ``Idavidrein/gpqa``
+dataset, which the required ``leaderboard_gpqa`` task reads. The Iris CLI
+copies the token from the shell or from ``.marin.yaml`` at the checkout root.
+
+The Iris worker installs lm-eval through the Levanter ``lm_eval`` extra. The
+script monkey-patches ``datasets.load_dataset`` to force
 ``trust_remote_code=True`` and sets ``HF_ALLOW_CODE_EVAL=1`` before
-loading any task, so tasks shipping custom HF loading scripts (logiqa,
-piqa, ethics_*, crows_pairs_*, ...) and humaneval load without per-task
-plumbing.
+loading any task, so piqa and humaneval load without per-task plumbing. It
+also maps legacy dataset IDs such as ``gsm8k`` to their namespaced
+repositories. Tasks whose dataset is only a loading script (logiqa,
+ethics_*, crows_pairs_*, ...) do not load on ``datasets`` 4; they are in
+:data:`BEST_EFFORT_LMH_TASKS`.
 """
 
 import dataclasses
 import io as io_mod
 import json
 import logging
-import urllib.request
+import os
 import zipfile
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Container, Iterable, Iterator, Mapping
+from enum import StrEnum
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Image as DatasetsImage
 from datasets import load_dataset
-from huggingface_hub import hf_hub_download
-from rigging.filesystem import StoragePath, marin_prefix
+from marin.datakit.decon import required_task_failures
+from marin.datakit.download.http_session import build_retrying_session
+from rigging.filesystem.cluster_config import marin_prefix
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from experiments.datakit.decontam.lmh_loader import (
     flatten_task_dict,
     materialize_first_nonempty_split,
-    trust_remote_code_for_hf,
+    patch_hf_dataset_loading,
+)
+from experiments.datasets.uncheatable import (
+    UNCHEATABLE_COMMIT,
+    UNCHEATABLE_REPOSITORY_NAME,
+    UNCHEATABLE_REPOSITORY_OWNER,
+    UNCHEATABLE_SUBSETS,
 )
 from experiments.evals.task_configs import (
     ACTION_TASKS,
@@ -87,12 +112,29 @@ from experiments.evals.task_configs import (
 
 logger = logging.getLogger(__name__)
 
-_EVALS_RELATIVE = "datakit/decontam/evals"
+AA_INDEX_VERSION = "4.1.1"
+EVAL_CORPUS_VERSION = "aa-index-v4.1.1-v6"
+EVALS_RELATIVE = f"datakit/decontam/evals/{EVAL_CORPUS_VERSION}"
+LMH_EVALS_RELATIVE = f"{EVALS_RELATIVE}/lmh"
+AA_MANIFEST_RELATIVE = "aa/_manifest.json"
+UNCHEATABLE_MANIFEST_RELATIVE = "uncheatable/_manifest.json"
+LMH_MANIFEST_RELATIVE = "lmh/_manifest.json"
+
+# Required lm-eval task loads retry transient failures such as "Server
+# disconnected" before preparation stops.
+LOAD_ATTEMPTS = 5
+LOAD_BACKOFF = ExponentialBackoff(initial=2.0, maximum=60.0, factor=2.0)
+DOWNLOAD_TIMEOUT = 120
 
 
 def _output_root() -> str:
     """Eval-corpus write root, relative to the active ``MARIN_PREFIX`` (store-agnostic)."""
-    return f"{marin_prefix()}/{_EVALS_RELATIVE}"
+    return f"{marin_prefix()}/{EVALS_RELATIVE}"
+
+
+def _lmh_output_root() -> str:
+    """Versioned lm-eval artifact root."""
+    return f"{marin_prefix()}/{LMH_EVALS_RELATIVE}"
 
 
 # Bump when the LMH text-extraction policy (`_lmh_doc_text`) changes. Written to a
@@ -113,61 +155,142 @@ def _staged_lmh_version(version_path: str) -> str | None:
         return f.read().strip()
 
 
-# AA Intelligence Index v4.0 core (8 text benchmarks). Each entry pins
-# the HF source + the canonical "eval content" fields. ``text_fields`` are
-# string columns concatenated in order; ``list_fields`` are list<string>
-# columns flattened in order. When both are empty the loop falls back to
-# the generic _concat_strings extractor (for schemas not yet pinned).
+class AARecordType(StrEnum):
+    """AA source-row conversion policy."""
+
+    ROW = "row"
+    SCICODE_SUBPROBLEM = "scicode_subproblem"
+    TAU3_TASK = "tau3_task"
+    TERMINAL_BENCH_TASK = "terminal_bench_task"
+
+
 @dataclasses.dataclass(frozen=True)
 class AAEvalConfig:
+    name: str
     subdir: str
-    hf_id: str
+    source_revision: str
+    expected_records: int
+    official_records: int
+    hf_id: str | None
     subset: str | None
     split: str
+    source_url: str | None = None
+    record_type: AARecordType = AARecordType.ROW
     text_fields: tuple[str, ...] = ()
     list_fields: tuple[str, ...] = ()
     skip_if: Callable[[dict], bool] | None = None
-    # When set, bypass `datasets.load_dataset` and pull raw jsonl files via
-    # ``huggingface_hub.hf_hub_download``. Needed for repos that ship a
-    # Python loading script (deprecated in datasets>=4) but commit usable
-    # jsonl alongside it (e.g. livecodebench).
-    hf_jsonl_files: tuple[str, ...] = ()
-    # When set, download a zip from an HTTP URL and stream a jsonl member
-    # inside it. Used for evals not on the HF Hub (e.g. scicode lives on
-    # the project's GitHub Pages repo).
-    download_zip_url: str | None = None
-    zip_jsonl_member: str | None = None
+    coverage_note: str = "Full official task set."
+    filter_note: str | None = None
 
 
 AA_EVALS: tuple[AAEvalConfig, ...] = (
-    # Humanity's Last Exam: text-only subset; skip multimodal rows.
     AAEvalConfig(
-        subdir="hle",
-        hf_id="cais/hle",
+        name="GDPval-AA v2",
+        subdir="gdpval_aa_v2",
+        source_revision="11e7900cdcac61bc4daf59e65feb238acda98fbf",
+        expected_records=220,
+        official_records=220,
+        hf_id="openai/gdpval",
+        subset=None,
+        split="train",
+        text_fields=("prompt", "rubric_pretty"),
+        coverage_note="All public GDPval tasks; prompt and hidden grading rubric are indexed.",
+    ),
+    AAEvalConfig(
+        name="tau3-Banking",
+        subdir="tau3_banking",
+        source_revision="fc0055dc4e0a316c3f83133267fbd6faaa770992",
+        expected_records=97,
+        official_records=97,
+        hf_id=None,
+        subset=None,
+        split="test",
+        source_url=(
+            "https://raw.githubusercontent.com/sierra-research/tau2-bench/"
+            "fc0055dc4e0a316c3f83133267fbd6faaa770992/data/tau2/domains/banking_knowledge/tasks.json"
+        ),
+        record_type=AARecordType.TAU3_TASK,
+        coverage_note="Full upstream v1.0.1 task set; user scenarios and hidden evaluation criteria are indexed.",
+    ),
+    AAEvalConfig(
+        name="Terminal-Bench v2.1",
+        subdir="terminal_bench_2_1",
+        source_revision="c5ee500c185224c97cd6caff7866a990a0057f41",
+        expected_records=89,
+        official_records=89,
+        hf_id=None,
+        subset=None,
+        split="test",
+        source_url=(
+            "https://github.com/harbor-framework/terminal-bench-2-1/archive/"
+            "c5ee500c185224c97cd6caff7866a990a0057f41.zip"
+        ),
+        record_type=AARecordType.TERMINAL_BENCH_TASK,
+        text_fields=("instruction", "solution"),
+        coverage_note="All 89 task instructions and oracle solutions from the pinned v2.1 task tree.",
+    ),
+    AAEvalConfig(
+        name="SciCode",
+        subdir="scicode",
+        source_revision="4510f6a6aa27c43fad7b43da2c59602a86e88480",
+        expected_records=291,
+        official_records=288,
+        hf_id="SciCode1/SciCode",
+        subset=None,
+        split="test",
+        record_type=AARecordType.SCICODE_SUBPROBLEM,
+        coverage_note=(
+            "Pinned public test split. It contains 291 subproblems, three more than the 288 reported by AA; "
+            "the conservative superset is indexed."
+        ),
+    ),
+    AAEvalConfig(
+        name="AA-LCR",
+        subdir="aa_lcr",
+        source_revision="bdae010bbce259820c0e34c1d7cce210d966fb75",
+        expected_records=100,
+        official_records=100,
+        hf_id="ArtificialAnalysis/AA-LCR",
         subset=None,
         split="test",
         text_fields=("question", "answer"),
-        skip_if=lambda r: bool(r.get("image")) or bool(r.get("image_url")),
+        coverage_note=(
+            "All public questions and answers. Public source documents are prompt context and are not indexed."
+        ),
     ),
     AAEvalConfig(
+        name="AA-Omniscience",
         subdir="aa_omniscience",
+        source_revision="4a8ffc87c4650054825fb767fe0da4a4fc97ff32",
+        expected_records=600,
+        official_records=6000,
         hf_id="ArtificialAnalysis/AA-Omniscience-Public",
         subset=None,
         split="train",
         text_fields=("question", "answer"),
+        coverage_note="The mandatory public release contains 600 of the 6,000 private evaluation questions.",
     ),
-    # IFBench is instruction-following; the prompt IS the eval content.
-    # The dataset is named IFBench_test so the only split is "train".
     AAEvalConfig(
-        subdir="ifbench",
-        hf_id="allenai/IFBench_test",
+        name="Humanity's Last Exam",
+        subdir="hle",
+        source_revision="5a81a4c7271a2a2a312b9a690f0c2fde837e4c29",
+        expected_records=2500,
+        official_records=2500,
+        hf_id="cais/hle",
         subset=None,
-        split="train",
-        text_fields=("prompt",),
+        split="test",
+        text_fields=("question", "answer"),
+        coverage_note=(
+            "All 2,500 questions from the May 2025 revision. For multimodal rows, the question and answer text "
+            "are indexed; image bytes are not."
+        ),
     ),
-    # GPQA: HF schema uses Title-Case field names; filter to the diamond subset.
     AAEvalConfig(
+        name="GPQA Diamond",
         subdir="gpqa_diamond",
+        source_revision="633f5ee89ab8ad4522a9f850766b73f62147ffdd",
+        expected_records=198,
+        official_records=198,
         hf_id="Idavidrein/gpqa",
         subset="gpqa_diamond",
         split="train",
@@ -180,46 +303,24 @@ AA_EVALS: tuple[AAEvalConfig, ...] = (
         ),
     ),
     AAEvalConfig(
-        subdir="mmlu_pro",
-        hf_id="TIGER-Lab/MMLU-Pro",
-        subset=None,
-        split="test",
-        text_fields=("question",),
-        list_fields=("options",),
-    ),
-    # SciCode lives on GitHub Pages, not the HF Hub. The data zip ships
-    # ``data/problems_all.jsonl`` with one record per problem (fields:
-    # problem_name, problem_id, problem_description_main, sub_steps, ...).
-    AAEvalConfig(
-        subdir="scicode",
-        hf_id="scicode-bench/SciCode",  # informational; real source is download_zip_url
-        subset=None,
-        split="test",
-        text_fields=("problem_description_main",),
-        download_zip_url="https://raw.githubusercontent.com/scicode-bench/scicode-bench.github.io/main/data/data.zip",
-        zip_jsonl_member="data/problems_all.jsonl",
-    ),
-    # GDPval rows are ~20KB each: large rubric JSON + URLs to deliverable files.
-    # Pin to ``prompt`` (the actual task description) to avoid polluting the bloom.
-    AAEvalConfig(
-        subdir="gdpval",
-        hf_id="openai/gdpval",
+        name="CritPt",
+        subdir="critpt",
+        source_revision="9b9fc8498596ec08ab5437a72f4aa18beef2b876",
+        expected_records=70,
+        official_records=70,
+        hf_id="CritPt-Benchmark/CritPt",
         subset=None,
         split="train",
-        text_fields=("prompt",),
-    ),
-    # LiveCodeBench commits its eval items as plain jsonl at repo root; the
-    # `code_generation_lite.py` loader is deprecated. test6.jsonl is the
-    # latest version per the dataset README.
-    AAEvalConfig(
-        subdir="livecodebench",
-        hf_id="livecodebench/code_generation_lite",
-        subset=None,
-        split="test",  # informational; real source is hf_jsonl_files
-        text_fields=("question_content", "starter_code"),
-        hf_jsonl_files=("test6.jsonl",),
+        text_fields=("problem_description", "code_template", "answer_code", "answer_only_code"),
+        coverage_note=(
+            "All 70 public composite challenges used by AA, with response templates and published answer code. "
+            "CritPt reports 189 modular checkpoints for the 70 test challenges, but those checkpoint prompts are "
+            "not part of the public dataset."
+        ),
     ),
 )
+
+AA_BENCHMARK_NAMES: tuple[str, ...] = tuple(cfg.name for cfg in AA_EVALS)
 
 
 def _extract_aa_text(row: dict[str, Any], cfg: AAEvalConfig) -> str:
@@ -334,39 +435,59 @@ def _write_parquet(path: str, records: Iterator[dict]) -> int:
     return n
 
 
+def _download(url: str) -> bytes:
+    response = build_retrying_session().get(url, timeout=DOWNLOAD_TIMEOUT)
+    response.raise_for_status()
+    return response.content
+
+
 def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
-    """Stream raw rows for one AA eval. Three loaders, picked in order:
-
-    1. ``download_zip_url`` + ``zip_jsonl_member`` -- HTTP zip with a jsonl
-       member (e.g. scicode on GitHub Pages).
-    2. ``hf_jsonl_files`` -- raw jsonl files via huggingface_hub
-       (e.g. livecodebench, which ships a deprecated loading script).
-    3. ``datasets.load_dataset`` (default) -- the normal HF Hub path.
-    """
-    if cfg.download_zip_url:
-        if not cfg.zip_jsonl_member:
-            raise ValueError(f"aa/{cfg.subdir}: zip_jsonl_member must be set with download_zip_url")
-        with urllib.request.urlopen(cfg.download_zip_url) as resp:
-            data = resp.read()
-        with zipfile.ZipFile(io_mod.BytesIO(data)) as zf, zf.open(cfg.zip_jsonl_member) as jf:
-            for line in jf:
-                if line.strip():
-                    yield json.loads(line)
+    """Stream raw rows for one pinned AA source."""
+    if cfg.record_type == AARecordType.TERMINAL_BENCH_TASK:
+        if cfg.source_url is None:
+            raise ValueError(f"{cfg.name}: source_url is required")
+        archive = _download(cfg.source_url)
+        with zipfile.ZipFile(io_mod.BytesIO(archive)) as source_zip:
+            instructions: dict[str, str] = {}
+            solutions: dict[str, str] = {}
+            for path in source_zip.namelist():
+                if "/tasks/" not in path:
+                    continue
+                task_path = path.split("/tasks/", 1)[1]
+                task_name, separator, relative_path = task_path.partition("/")
+                if not separator:
+                    continue
+                if relative_path == "instruction.md":
+                    instructions[task_name] = source_zip.read(path).decode("utf-8")
+                elif relative_path == "solution/solve.sh":
+                    solutions[task_name] = source_zip.read(path).decode("utf-8")
+        if instructions.keys() != solutions.keys():
+            missing_instructions = sorted(solutions.keys() - instructions.keys())
+            missing_solutions = sorted(instructions.keys() - solutions.keys())
+            raise ValueError(
+                f"{cfg.name}: task archive is incomplete; missing instructions={missing_instructions}, "
+                f"missing solutions={missing_solutions}"
+            )
+        for task_name in sorted(instructions):
+            yield {
+                "task_name": task_name,
+                "instruction": instructions[task_name],
+                "solution": solutions[task_name],
+            }
         return
 
-    if cfg.hf_jsonl_files:
-        for fname in cfg.hf_jsonl_files:
-            local = hf_hub_download(repo_id=cfg.hf_id, filename=fname, repo_type="dataset")
-            with open(local, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        yield json.loads(line)
+    if cfg.source_url is not None:
+        rows = json.loads(_download(cfg.source_url))
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise ValueError(f"{cfg.name}: expected a JSON list of objects")
+        yield from rows
         return
 
-    ds = load_dataset(cfg.hf_id, name=cfg.subset, split=cfg.split)
-    # Disable Image-feature decoding so iteration doesn't pull in Pillow on
-    # multimodal datasets (e.g. HLE) -- we filter out those rows via skip_if
-    # without ever touching the bytes.
+    if cfg.hf_id is None:
+        raise ValueError(f"{cfg.name}: hf_id or source_url is required")
+    ds = load_dataset(cfg.hf_id, name=cfg.subset, split=cfg.split, revision=cfg.source_revision)
+    # Disable Image-feature decoding so iteration does not decode HLE image
+    # bytes. The row still supplies question and answer text for decontamination.
     features = getattr(ds, "features", None) or {}
     for col, ftype in features.items():
         if isinstance(ftype, DatasetsImage):
@@ -375,41 +496,258 @@ def _iter_aa_rows(cfg: AAEvalConfig) -> Iterator[dict[str, Any]]:
         yield dict(row)
 
 
-def _prepare_aa() -> None:
-    for cfg in AA_EVALS:
-        out_path = f"{_output_root()}/aa/{cfg.subdir}/{cfg.split}.parquet"
-        if StoragePath(out_path).exists():
-            logger.info("aa/%s: exists, skipping", cfg.subdir)
-            continue
-        try:
-            raw_rows = list(_iter_aa_rows(cfg))
-        except Exception as exc:
-            logger.warning(
-                "aa/%s: load(%s subset=%s split=%s) failed: %s",
-                cfg.subdir,
-                cfg.hf_id,
-                cfg.subset,
-                cfg.split,
-                exc,
-            )
+def _row_identifier(row: dict[str, Any], index: int) -> str:
+    for field in ("id", "question_id", "problem_id"):
+        value = row.get(field)
+        if isinstance(value, str | int):
+            return str(value)
+    return str(index)
+
+
+def _scicode_text(row: dict[str, Any], subproblem: dict[str, Any]) -> str:
+    parts = [
+        row.get("problem_description_main"),
+        row.get("problem_background_main"),
+        row.get("required_dependencies"),
+        subproblem.get("step_description_prompt"),
+        subproblem.get("step_background"),
+        subproblem.get("function_header"),
+        *(subproblem.get("test_cases") or []),
+        subproblem.get("return_line"),
+        subproblem.get("ground_truth_code"),
+    ]
+    return "\n\n".join(part for part in parts if isinstance(part, str) and part.strip())
+
+
+def _aa_records(raw_rows: Iterable[dict[str, Any]], cfg: AAEvalConfig) -> list[dict[str, str]]:
+    """Convert one AA source to validated decontamination records."""
+    records: list[dict[str, str]] = []
+    for index, row in enumerate(raw_rows):
+        if cfg.skip_if is not None and cfg.skip_if(row):
             continue
 
-        def rows(raw_rows=raw_rows, cfg=cfg) -> Iterator[dict]:
-            n_skipped = 0
-            for i, row_dict in enumerate(raw_rows):
-                if cfg.skip_if is not None and cfg.skip_if(row_dict):
-                    n_skipped += 1
-                    continue
-                text = _extract_aa_text(row_dict, cfg)
+        if cfg.record_type == AARecordType.SCICODE_SUBPROBLEM:
+            subproblems = row.get("sub_steps")
+            if not isinstance(subproblems, list):
+                raise ValueError(f"{cfg.name}: row {_row_identifier(row, index)} has no sub_steps list")
+            for subproblem in subproblems:
+                if not isinstance(subproblem, dict):
+                    raise ValueError(f"{cfg.name}: row {_row_identifier(row, index)} has an invalid subproblem")
+                subproblem_id = subproblem.get("step_number")
+                if not isinstance(subproblem_id, str) or not subproblem_id:
+                    raise ValueError(f"{cfg.name}: row {_row_identifier(row, index)} has a subproblem without an ID")
+                text = _scicode_text(row, subproblem)
                 if not text:
-                    n_skipped += 1
-                    continue
-                yield {"id": f"{cfg.hf_id}-{cfg.split}-{i}", "text": text}
-            if n_skipped:
-                logger.info("aa/%s: skipped %d rows", cfg.subdir, n_skipped)
+                    raise ValueError(f"{cfg.name}: subproblem {subproblem_id} has no indexed text")
+                records.append({"id": f"{cfg.subdir}-{subproblem_id}", "text": text})
+            continue
 
-        n = _write_parquet(out_path, rows())
-        logger.info("aa/%s: %d records -> %s", cfg.subdir, n, out_path)
+        if cfg.record_type == AARecordType.TAU3_TASK:
+            task_id = row.get("id")
+            scenario = row.get("user_scenario")
+            criteria = row.get("evaluation_criteria")
+            if not isinstance(task_id, str) or not isinstance(scenario, dict) or not isinstance(criteria, dict):
+                raise ValueError(f"{cfg.name}: task {index} has an invalid schema")
+            instructions = scenario.get("instructions")
+            if not isinstance(instructions, str) or not instructions.strip():
+                raise ValueError(f"{cfg.name}: task {task_id} has no user instructions")
+            text = f"{instructions}\n\n{json.dumps(criteria, sort_keys=True, ensure_ascii=False)}"
+            records.append({"id": f"{cfg.subdir}-{task_id}", "text": text})
+            continue
+
+        text = _extract_aa_text(row, cfg)
+        if not text:
+            raise ValueError(f"{cfg.name}: row {_row_identifier(row, index)} has no indexed text")
+        if cfg.record_type == AARecordType.TERMINAL_BENCH_TASK:
+            identifier = row.get("task_name")
+            if not isinstance(identifier, str):
+                raise ValueError(f"{cfg.name}: task {index} has no task_name")
+        else:
+            identifier = _row_identifier(row, index)
+        records.append({"id": f"{cfg.subdir}-{identifier}", "text": text})
+
+    if len(records) != cfg.expected_records:
+        raise ValueError(f"{cfg.name}: expected {cfg.expected_records} records, extracted {len(records)}")
+    return records
+
+
+def _aa_manifest_entry(cfg: AAEvalConfig) -> dict[str, Any]:
+    source = cfg.hf_id if cfg.hf_id is not None else cfg.source_url
+    assert source is not None
+    return {
+        "name": cfg.name,
+        "artifact": f"{cfg.subdir}/{cfg.split}.parquet",
+        "source": source,
+        "source_revision": cfg.source_revision,
+        "subset": cfg.subset,
+        "split": cfg.split,
+        "record_type": cfg.record_type.value,
+        "text_fields": list(cfg.text_fields),
+        "list_fields": list(cfg.list_fields),
+        "expected_records": cfg.expected_records,
+        "official_records": cfg.official_records,
+        "coverage_note": cfg.coverage_note,
+        "filter_note": cfg.filter_note,
+    }
+
+
+def _write_json(path: str, value: dict[str, Any]) -> None:
+    parent = StoragePath(path).parent
+    if parent.key:
+        parent.mkdirs()
+    with StoragePath(path).open("w") as output:
+        json.dump(value, output, indent=2, sort_keys=True)
+        output.write("\n")
+
+
+def _staged_artifact_is_current(out_path: str, sidecar_path: str, entry: dict[str, Any]) -> bool:
+    if not StoragePath(out_path).exists() or not StoragePath(sidecar_path).exists():
+        return False
+    with StoragePath(sidecar_path).open("r") as source:
+        staged_entry = json.load(source)
+    if staged_entry != entry:
+        return False
+    with StoragePath(out_path).open("rb") as source:
+        return pq.ParquetFile(source).metadata.num_rows == entry["expected_records"]
+
+
+def _aa_manifest(status: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "corpus_version": EVAL_CORPUS_VERSION,
+        "suite": f"Artificial Analysis Intelligence Index v{AA_INDEX_VERSION}",
+        "required": True,
+        "status": status,
+        "benchmarks": [_aa_manifest_entry(cfg) for cfg in AA_EVALS],
+    }
+
+
+def _prepare_required_suite(
+    label: str,
+    manifest_relative: str,
+    manifest: Callable[[str], dict[str, Any]],
+    records: Mapping[str, Callable[[], Iterable[dict[str, str]]]],
+) -> dict[str, Any]:
+    """Write every artifact of a mandatory suite, then seal its manifest.
+
+    ``manifest(status)`` builds the suite manifest. ``records`` maps each
+    benchmark name in it to a function that returns the benchmark's records.
+    A sealed manifest is returned as is; one whose content changed raises.
+    """
+    manifest_path = f"{_output_root()}/{manifest_relative}"
+    manifest_storage = StoragePath(manifest_path)
+    if manifest_storage.exists():
+        with manifest_storage.open("r") as source:
+            existing_manifest = json.load(source)
+        if not isinstance(existing_manifest, dict):
+            raise ValueError(f"{label} manifest must be an object: {manifest_path}")
+        if existing_manifest.get("status") == "complete":
+            if existing_manifest != manifest("complete"):
+                raise ValueError(
+                    f"{label} manifest content changed within EVAL_CORPUS_VERSION; "
+                    "change EVAL_CORPUS_VERSION before preparation"
+                )
+            logger.info("%s: version %s is already sealed at %s", label, EVAL_CORPUS_VERSION, manifest_path)
+            return existing_manifest
+
+    _write_json(manifest_path, manifest("building"))
+    suite_root = os.path.dirname(manifest_path)
+    benchmarks = manifest("complete")["benchmarks"]
+    for entry in benchmarks:
+        out_path = prefix_join(suite_root, entry["artifact"])
+        sidecar_path = f"{out_path.removesuffix('.parquet')}.source.json"
+        if _staged_artifact_is_current(out_path, sidecar_path, entry):
+            logger.info("%s/%s: validated existing artifact", label, entry["artifact"])
+            continue
+        n = _write_parquet(out_path, iter(records[entry["name"]]()))
+        if n != entry["expected_records"]:
+            raise ValueError(f"{entry['name']}: wrote {n} records, expected {entry['expected_records']}")
+        _write_json(sidecar_path, entry)
+        logger.info("%s/%s: %d records -> %s", label, entry["artifact"], n, out_path)
+
+    sealed = manifest("complete")
+    _write_json(manifest_path, sealed)
+    logger.info("%s: all %d mandatory benchmarks are complete", label, len(benchmarks))
+    return sealed
+
+
+def _prepare_aa() -> dict[str, Any]:
+    return _prepare_required_suite(
+        "aa",
+        AA_MANIFEST_RELATIVE,
+        _aa_manifest,
+        {cfg.name: lambda cfg=cfg: _aa_records(_iter_aa_rows(cfg), cfg) for cfg in AA_EVALS},
+    )
+
+
+# The Uncheatable Eval dumps that ``experiments/datasets/uncheatable.py`` evaluates,
+# read from the commit that it downloads, with their record counts.
+UNCHEATABLE_WINDOW = "20250901to20250914"
+UNCHEATABLE_RECORDS: dict[str, int] = {
+    "wikipedia_english": 1000,
+    "github_python": 973,
+    "github_cpp": 998,
+    "bbc_news": 1081,
+    "arxiv_physics": 1000,
+    "arxiv_computer_science": 1000,
+    "ao3_english": 1000,
+}
+if UNCHEATABLE_RECORDS.keys() != UNCHEATABLE_SUBSETS.keys():
+    raise ValueError("UNCHEATABLE_RECORDS must list exactly the evaluated UNCHEATABLE_SUBSETS")
+
+
+def _uncheatable_name(subset: str) -> str:
+    return f"Uncheatable Eval {subset}"
+
+
+UNCHEATABLE_BENCHMARK_NAMES: tuple[str, ...] = tuple(_uncheatable_name(subset) for subset in UNCHEATABLE_RECORDS)
+
+
+def _uncheatable_url(subset: str) -> str:
+    return (
+        f"https://raw.githubusercontent.com/{UNCHEATABLE_REPOSITORY_OWNER}/{UNCHEATABLE_REPOSITORY_NAME}/"
+        f"{UNCHEATABLE_COMMIT}/"
+        f"data/{subset}_{UNCHEATABLE_WINDOW}.json"
+    )
+
+
+def _uncheatable_manifest(status: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "corpus_version": EVAL_CORPUS_VERSION,
+        "suite": f"Uncheatable Eval {UNCHEATABLE_WINDOW}",
+        "required": True,
+        "status": status,
+        "benchmarks": [
+            {
+                "name": _uncheatable_name(subset),
+                "artifact": f"{subset}/test.parquet",
+                "source": _uncheatable_url(subset),
+                "source_revision": UNCHEATABLE_COMMIT,
+                "expected_records": expected_records,
+            }
+            for subset, expected_records in UNCHEATABLE_RECORDS.items()
+        ],
+    }
+
+
+def _uncheatable_records(subset: str) -> list[dict[str, str]]:
+    texts = json.loads(_download(_uncheatable_url(subset)))
+    if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
+        raise ValueError(f"{_uncheatable_name(subset)}: expected a JSON list of strings")
+    return [{"id": f"uncheatable-{subset}-{i}", "text": text} for i, text in enumerate(texts)]
+
+
+def _prepare_uncheatable() -> dict[str, Any]:
+    return _prepare_required_suite(
+        "uncheatable",
+        UNCHEATABLE_MANIFEST_RELATIVE,
+        _uncheatable_manifest,
+        {
+            _uncheatable_name(subset): lambda subset=subset: _uncheatable_records(subset)
+            for subset in UNCHEATABLE_RECORDS
+        },
+    )
 
 
 # Eval tasks excluded from the *decontamination* bloom (they remain valid
@@ -449,6 +787,179 @@ DECON_EXCLUDED_EVAL_TASKS: frozenset[str] = frozenset(
 )
 
 
+_HUB_ID_REASON = "un-namespaced Hub dataset ID no longer resolves (marin#11503)"
+_SCRIPT_REASON = "the dataset needs a loading script, which datasets 4 does not run (marin#11503)"
+_LANGDETECT_REASON = "the task imports langdetect, which the lm_eval extra does not install (marin#11503)"
+_UNREGISTERED_REASON = "the pinned lm-eval does not register this task name (marin#11503)"
+
+# lm-eval tasks that are allowed to fail, each with the reason that it does not
+# load. Every other task from ``_lmh_task_names`` is required. To add an eval
+# that cannot load yet, add it here with a reason or an issue.
+BEST_EFFORT_LMH_TASKS: dict[str, str] = {
+    **dict.fromkeys(
+        (
+            "anli_r1",
+            "anli_r2",
+            "anli_r3",
+            "boolq",
+            "copa",
+            "medmcqa",
+            "nq_open",
+            "openbookqa",
+            "qa4mre_2011",
+            "qa4mre_2012",
+            "qa4mre_2013",
+            "sciq",
+            "squadv2",
+            "swag",
+            "triviaqa",
+            "truthfulqa_gen",
+            "truthfulqa_mc1",
+            "truthfulqa_mc2",
+            "webqs",
+            "winogrande",
+        ),
+        _HUB_ID_REASON,
+    ),
+    **dict.fromkeys(
+        (
+            "arithmetic_1dc",
+            "arithmetic_2da",
+            "arithmetic_2dm",
+            "arithmetic_2ds",
+            "arithmetic_3da",
+            "arithmetic_3ds",
+            "arithmetic_4da",
+            "arithmetic_4ds",
+            "arithmetic_5da",
+            "arithmetic_5ds",
+            "cmmlu",
+            "crows_pairs_english_age",
+            "crows_pairs_english_autre",
+            "crows_pairs_english_disability",
+            "crows_pairs_english_gender",
+            "crows_pairs_english_nationality",
+            "crows_pairs_english_physical_appearance",
+            "crows_pairs_english_race_color",
+            "crows_pairs_english_religion",
+            "crows_pairs_english_sexual_orientation",
+            "crows_pairs_english_socioeconomic",
+            "ethics_cm",
+            "ethics_deontology",
+            "ethics_justice",
+            "ethics_utilitarianism",
+            "ethics_virtue",
+            "logieval",
+            "logiqa",
+            "logiqa2",
+            "mathqa",
+            "mc_taco",
+            "moral_stories",
+            "mutual",
+            "mutual_plus",
+            "prost",
+            "pubmedqa",
+            "qasper_bool",
+            "qasper_freeform",
+            "social_iqa",
+            "wsc273",
+        ),
+        _SCRIPT_REASON,
+    ),
+    **dict.fromkeys(
+        (
+            "ifeval",
+            "leaderboard_ifeval",
+        ),
+        _LANGDETECT_REASON,
+    ),
+    **dict.fromkeys(
+        (
+            "include_base_44_albanian_few_shot_og",
+            "include_base_44_arabic_few_shot_og",
+            "include_base_44_armenian_few_shot_og",
+            "include_base_44_azerbaijani_few_shot_og",
+            "include_base_44_basque_few_shot_og",
+            "include_base_44_belarusian_few_shot_og",
+            "include_base_44_bengali_few_shot_og",
+            "include_base_44_bulgarian_few_shot_og",
+            "include_base_44_chinese_few_shot_og",
+            "include_base_44_croatian_few_shot_og",
+            "include_base_44_dutch_few_shot_og",
+            "include_base_44_finnish_few_shot_og",
+            "include_base_44_french_few_shot_og",
+            "include_base_44_georgian_few_shot_og",
+            "include_base_44_german_few_shot_og",
+            "include_base_44_greek_few_shot_og",
+            "include_base_44_hebrew_few_shot_og",
+            "include_base_44_hindi_few_shot_og",
+            "include_base_44_hungarian_few_shot_og",
+            "include_base_44_indonesian_few_shot_og",
+            "include_base_44_italian_few_shot_og",
+            "include_base_44_japanese_few_shot_og",
+            "include_base_44_kazakh_few_shot_og",
+            "include_base_44_korean_few_shot_og",
+            "include_base_44_lithuanian_few_shot_og",
+            "include_base_44_malay_few_shot_og",
+            "include_base_44_nepali_few_shot_og",
+            "include_base_44_north macedonian_few_shot_og",
+            "include_base_44_persian_few_shot_og",
+            "include_base_44_portuguese_few_shot_og",
+            "include_base_44_russian_few_shot_og",
+            "include_base_44_serbian_few_shot_og",
+            "include_base_44_spanish_few_shot_og",
+            "include_base_44_tagalog_few_shot_og",
+            "include_base_44_tamil_few_shot_og",
+            "include_base_44_telugu_few_shot_og",
+            "include_base_44_turkish_few_shot_og",
+            "include_base_44_ukrainian_few_shot_og",
+            "include_base_44_uzbek_few_shot_og",
+            "include_base_44_vietnamese_few_shot_og",
+            "mmmlu_ar_xy",
+            "mmmlu_bn_bd",
+            "mmmlu_de_de",
+            "mmmlu_es_la",
+            "mmmlu_fr_fr",
+            "mmmlu_hi_in",
+            "mmmlu_id_id",
+            "mmmlu_it_it",
+            "mmmlu_ja_jp",
+            "mmmlu_ko_kr",
+            "mmmlu_pt_br",
+            "mmmlu_sw_ke",
+            "mmmlu_yo_ng",
+            "mmmlu_zh_cn",
+        ),
+        _UNREGISTERED_REASON,
+    ),
+}
+
+# Number of leaf tasks that each lm-eval group task expands to. A task that is
+# not listed must load as exactly one leaf task.
+LMH_LEAF_TASK_COUNTS: dict[str, int] = {
+    "agieval": 21,
+    "bbh_cot_fewshot": 27,
+    "bbh_cot_zeroshot": 27,
+    "bbh_fewshot": 27,
+    "bbh_zeroshot": 27,
+    "blimp_nl": 84,
+    "cabbq": 10,
+    "haerae": 5,
+    "kmmlu": 45,
+    "leaderboard_bbh": 24,
+    "leaderboard_gpqa": 3,
+    "leaderboard_math_hard": 7,
+    "leaderboard_musr": 3,
+    "lm_syneval": 72,
+    "med_concepts_qa": 15,
+    "minerva_math": 7,
+    "mmlu": 57,
+    "mmlu_pro": 14,
+    "turblimp_core": 16,
+    "zhoblimp": 118,
+}
+
+
 def _lmh_task_names() -> list[str]:
     bundles: tuple[Iterable, ...] = (
         CORE_TASKS,
@@ -479,19 +990,89 @@ def _lmh_task_names() -> list[str]:
     return sorted(names - DECON_EXCLUDED_EVAL_TASKS)
 
 
-def _prepare_lmh() -> None:
-    trust_remote_code_for_hf()
+def _required_lmh_tasks(names: Iterable[str]) -> dict[str, int]:
+    """Map each required task in ``names`` to its pinned number of leaf tasks."""
+    names = set(names)
+    unknown = sorted(BEST_EFFORT_LMH_TASKS.keys() - names) + sorted(LMH_LEAF_TASK_COUNTS.keys() - names)
+    if unknown:
+        raise ValueError(f"BEST_EFFORT_LMH_TASKS or LMH_LEAF_TASK_COUNTS lists tasks that are not configured: {unknown}")
+    return {name: LMH_LEAF_TASK_COUNTS.get(name, 1) for name in sorted(names - BEST_EFFORT_LMH_TASKS.keys())}
+
+
+def required_lmh_tasks() -> dict[str, int]:
+    """Map each required lm-eval task to its pinned number of leaf tasks."""
+    return _required_lmh_tasks(_lmh_task_names())
+
+
+def _load_task_dict(get_task_dict: Callable[[list[str]], dict], name: str, required: Container[str]) -> dict:
+    """Load one lm-eval task, retrying required tasks on any error."""
+    if name not in required:
+        return get_task_dict([name])
+    return retry_with_backoff(
+        lambda: get_task_dict([name]),
+        max_attempts=LOAD_ATTEMPTS,
+        backoff=LOAD_BACKOFF,
+        operation=f"load lm-eval task {name}",
+    )
+
+
+def _prepare_lmh() -> dict[str, Any]:
+    """Build and seal the LMH manifest for one eval-corpus version."""
+    manifest_path = f"{_output_root()}/{LMH_MANIFEST_RELATIVE}"
+    manifest_storage = StoragePath(manifest_path)
+    if manifest_storage.exists():
+        with manifest_storage.open("r") as source:
+            existing_manifest = json.load(source)
+        if not isinstance(existing_manifest, dict):
+            raise ValueError(f"lmh manifest must be an object: {manifest_path}")
+        if existing_manifest.get("corpus_version") != EVAL_CORPUS_VERSION:
+            raise ValueError(
+                f"lmh manifest version is {existing_manifest.get('corpus_version')!r}, "
+                f"expected {EVAL_CORPUS_VERSION!r}"
+            )
+        if existing_manifest.get("status") not in {"complete", "complete_with_failures"}:
+            raise ValueError(f"lmh manifest is not complete: {manifest_path}")
+        if existing_manifest.get("artifact_root") != LMH_EVALS_RELATIVE:
+            raise ValueError(
+                f"lmh manifest artifact root is {existing_manifest.get('artifact_root')!r}, "
+                f"expected {LMH_EVALS_RELATIVE!r}"
+            )
+        if existing_manifest.get("extraction_version") != _LMH_EXTRACTION_VERSION:
+            raise ValueError(
+                f"lmh manifest extraction version is {existing_manifest.get('extraction_version')!r}, "
+                f"expected {_LMH_EXTRACTION_VERSION!r}"
+            )
+        sealed_required = existing_manifest.get("required_tasks", {})
+        if {task: len(leaves) for task, leaves in sealed_required.items()} != required_lmh_tasks():
+            raise ValueError(
+                "lmh manifest required tasks changed within EVAL_CORPUS_VERSION; "
+                "change EVAL_CORPUS_VERSION before preparation"
+            )
+        logger.info("lmh: version %s is already sealed at %s", EVAL_CORPUS_VERSION, manifest_path)
+        return existing_manifest
+
+    patch_hf_dataset_loading()
+    names = _lmh_task_names()
+    required = _required_lmh_tasks(names)
+    logger.info("lmh: %d unique task names from task_configs.py, %d required", len(names), len(required))
+
     from lm_eval.tasks import get_task_dict  # noqa: PLC0415  # optional dep: lm_eval
 
-    names = _lmh_task_names()
-    logger.info("lmh: %d unique task names from task_configs.py", len(names))
-
-    succeeded = 0
-    skipped_existing = 0
+    succeeded: list[str] = []
+    skipped_existing: list[str] = []
     failed: list[tuple[str, str]] = []
+    task_leaves: dict[str, list[str]] = {}
     for name in names:
+        direct_out_path = f"{_lmh_output_root()}/{name}/eval.parquet"
+        direct_version_path = f"{_lmh_output_root()}/{name}/{_LMH_VERSION_SIDECAR}"
+        if StoragePath(direct_out_path).exists() and _staged_lmh_version(direct_version_path) == _LMH_EXTRACTION_VERSION:
+            logger.info("lmh/%s: exists (extraction %s), skipping", name, _LMH_EXTRACTION_VERSION)
+            skipped_existing.append(name)
+            task_leaves[name] = [name]
+            continue
+
         try:
-            task_dict = get_task_dict([name])
+            task_dict = _load_task_dict(get_task_dict, name, required)
         except Exception as exc:
             logger.warning("lmh/%s: load failed: %s", name, exc)
             failed.append((name, f"load: {exc}"))
@@ -504,15 +1085,16 @@ def _prepare_lmh() -> None:
             continue
         if len(leaves) > 1:
             logger.info("lmh/%s: group expanded to %d leaf tasks", name, len(leaves))
+        task_leaves[name] = [child_name for child_name, _ in leaves]
 
         for child_name, task in leaves:
-            out_path = f"{_output_root()}/lmh/{child_name}/eval.parquet"
-            version_path = f"{_output_root()}/lmh/{child_name}/{_LMH_VERSION_SIDECAR}"
+            out_path = f"{_lmh_output_root()}/{child_name}/eval.parquet"
+            version_path = f"{_lmh_output_root()}/{child_name}/{_LMH_VERSION_SIDECAR}"
             # Skip only if the shard exists AND was built with the current extraction
             # policy; a version bump forces a rewrite so policy changes reach the corpus.
             if StoragePath(out_path).exists() and _staged_lmh_version(version_path) == _LMH_EXTRACTION_VERSION:
                 logger.info("lmh/%s: exists (extraction %s), skipping", child_name, _LMH_EXTRACTION_VERSION)
-                skipped_existing += 1
+                skipped_existing.append(child_name)
                 continue
 
             chosen = materialize_first_nonempty_split(task)
@@ -534,26 +1116,72 @@ def _prepare_lmh() -> None:
                 with StoragePath(version_path).open("w") as vf:
                     vf.write(_LMH_EXTRACTION_VERSION)
                 logger.info("lmh/%s: %d records (%s split) -> %s", child_name, n, split, out_path)
-                succeeded += 1
+                succeeded.append(child_name)
             except Exception as exc:
                 logger.warning("lmh/%s: write failed: %s", child_name, exc)
                 failed.append((child_name, f"write: {exc}"))
 
     logger.info(
         "lmh summary: %d succeeded, %d skipped (existing), %d failed",
-        succeeded,
-        skipped_existing,
+        len(succeeded),
+        len(skipped_existing),
         len(failed),
     )
     if failed:
         for n, reason in failed:
             logger.info("  FAIL lmh/%s: %s", n, reason)
 
+    included_leaf_tasks = sorted(set(succeeded + skipped_existing))
+    artifacts: list[dict[str, Any]] = []
+    for task_name in included_leaf_tasks:
+        artifact = f"{task_name}/eval.parquet"
+        artifact_path = f"{_lmh_output_root()}/{artifact}"
+        with StoragePath(artifact_path).open("rb") as source:
+            records = pq.ParquetFile(source).metadata.num_rows
+        artifacts.append({"task": task_name, "artifact": artifact, "records": records})
+
+    required_failures = required_task_failures(
+        required, task_leaves, {entry["task"]: entry["records"] for entry in artifacts}
+    )
+    if required_failures:
+        raise ValueError(
+            f"required lm-eval tasks are not complete: {required_failures}; the FAIL lines above give reasons. "
+            "Make each task load, or add it to BEST_EFFORT_LMH_TASKS with a reason"
+        )
+
+    manifest = {
+        "schema_version": 1,
+        "corpus_version": EVAL_CORPUS_VERSION,
+        "required": False,
+        "status": "complete_with_failures" if failed else "complete",
+        "artifact_root": LMH_EVALS_RELATIVE,
+        "extraction_version": _LMH_EXTRACTION_VERSION,
+        "configured_tasks": names,
+        "required_tasks": {task: task_leaves[task] for task in required},
+        "best_effort_tasks": BEST_EFFORT_LMH_TASKS,
+        "included_leaf_tasks": included_leaf_tasks,
+        "artifacts": artifacts,
+        "failed": [{"task": name, "reason": reason} for name, reason in failed],
+    }
+    _write_json(manifest_path, manifest)
+    return manifest
+
 
 def main() -> None:
     configure_logging(logging.INFO)
-    _prepare_aa()
-    _prepare_lmh()
+    aa_manifest = _prepare_aa()
+    uncheatable_manifest = _prepare_uncheatable()
+    lmh_manifest = _prepare_lmh()
+    _write_json(
+        f"{_output_root()}/_manifest.json",
+        {
+            "schema_version": 1,
+            "corpus_version": EVAL_CORPUS_VERSION,
+            "artificial_analysis": aa_manifest,
+            "uncheatable_eval": uncheatable_manifest,
+            "lm_eval_harness": lmh_manifest,
+        },
+    )
 
 
 if __name__ == "__main__":

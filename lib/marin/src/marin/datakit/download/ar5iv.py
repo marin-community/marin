@@ -13,12 +13,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 import draccus
-from rigging.filesystem import atomic_rename, open_url
+from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.factory import open_url
 from rigging.log_setup import configure_logging
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
-from zephyr.execution import ZephyrContext
-
-from marin.execution.step_spec import StepSpec
 
 logger = logging.getLogger(__name__)
 
@@ -122,30 +121,6 @@ def download(cfg: Ar5ivDownloadConfig) -> None:
     ctx.execute(pipeline)
 
     logger.info("Transfer completed successfully!")
-
-
-def ar5iv_step(
-    name: str = "raw/ar5iv",
-    *,
-    input_path: str,
-    max_files: int | None = None,
-    deps: list[StepSpec] | None = None,
-    output_path_prefix: str | None = None,
-    override_output_path: str | None = None,
-) -> StepSpec:
-    """Create a StepSpec that downloads and processes the Ar5iv dataset from a zip file."""
-
-    def _run(output_path: str) -> None:
-        download(Ar5ivDownloadConfig(input_path=input_path, output_path=output_path, max_files=max_files))
-
-    return StepSpec(
-        name=name,
-        fn=_run,
-        deps=deps or [],
-        hash_attrs={"input_path": input_path, "max_files": max_files},
-        output_path_prefix=output_path_prefix,
-        override_output_path=override_output_path,
-    )
 
 
 @draccus.wrap()

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import inspect
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Type, Union, cast
@@ -39,10 +38,6 @@ from levanter.utils.logging import silence_transformer_nag
 silence_transformer_nag()
 from transformers import MixtralConfig as HfMixtralConfig  # noqa: E402
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
-
-
-_SHARD_MAP_CHECK_KWARG = "check_vma" if "check_vma" in inspect.signature(shard_map).parameters else "check_rep"
-_SHARD_MAP_CHECK_KWARGS = {_SHARD_MAP_CHECK_KWARG: False}
 
 
 @LmConfig.register_subclass("mixtral")
@@ -386,7 +381,7 @@ class MixtralSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis((Token, TopExperts)),
                 hax.partitioning.pspec_for_axis((Token, TopExperts)),
             ),
-            **_SHARD_MAP_CHECK_KWARGS,
+            check_vma=False,
         )
         def sharded_route(router_probs_):
             selected_weights_, selected_experts_ = jax.lax.top_k(router_probs_, TopExperts.size)
@@ -421,7 +416,7 @@ class MixtralSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis((Experts,)),
                 hax.partitioning.pspec_for_axis((TokenRepeat,)),
             ),
-            **_SHARD_MAP_CHECK_KWARGS,
+            check_vma=False,
         )
         def permute_sharded(x_flat_: Array, topk_idx_flat_: Array):
             sort_idx_ = jnp.argsort(topk_idx_flat_, axis=-1)
@@ -458,7 +453,7 @@ class MixtralSparseMoeBlock(eqx.Module):
                 hax.partitioning.pspec_for_axis(sort_idx.axes),
             ),
             out_specs=hax.partitioning.pspec_for_axis((Token, TopExperts, self.config.Embed)),
-            **_SHARD_MAP_CHECK_KWARGS,
+            check_vma=False,
         )
         def unpermute_sharded(out_repeat_sort_: Array, sort_idx_: Array):
             inv_sort_idx_ = jnp.argsort(sort_idx_)

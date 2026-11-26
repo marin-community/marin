@@ -83,6 +83,18 @@ class CancelTarget:
     peer_id: str
 
 
+class BudgetExchange(Protocol):
+    """Budget data carried alongside the existing federation sync."""
+
+    def budget_policy(self, peer_id: str) -> controller_pb2.Controller.FederationBudgetPolicy | None:
+        """Return complete child policy with usage excluding that child."""
+        ...
+
+    def record_usage(self, peer_id: str, usage: controller_pb2.Controller.FederationBudgetUsage) -> None:
+        """Replace the peer's complete local usage snapshot."""
+        ...
+
+
 class FederationStore(Protocol):
     """Durable operations the federation manager performs against the parent DB."""
 

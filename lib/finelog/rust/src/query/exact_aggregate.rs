@@ -9,7 +9,6 @@
 //! ordinary aggregate, preserving exact results without derived-index work on
 //! the write acknowledgement path.
 
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -19,19 +18,21 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::common::tree_node::Transformed;
+use datafusion::catalog::Session;
+use datafusion::common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion::common::DFSchemaRef;
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::{SessionState, TaskContext};
 use datafusion::functions_aggregate::expr_fn::{count, sum};
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{
     col, lit, Cast, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
@@ -42,10 +43,11 @@ use datafusion::physical_plan::{
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use futures::TryStreamExt;
 
-use crate::query::index_cache::{AggregateOutcome, IndexCache};
+use crate::indices::cache::AggregateOutcome;
+use crate::indices::format::SectionKind;
+use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::query::predicate::{half_open_int_range, HalfOpenIntRange};
 use crate::query::provider::NamespaceProvider;
-use crate::store::index_bundle::SectionKind;
 use crate::store::segment::segment_bounds;
 
 const MAX_COMBINED_COUNT_VALUES: usize = 16_384;
@@ -112,7 +114,7 @@ impl PartialEq for ExactAggregateNode {
             && range_signature(&self.request) == range_signature(&other.request)
             && self.request.output == other.request.output
             && self.source.segment_paths == other.source.segment_paths
-            && Arc::ptr_eq(&self.source.index_cache, &other.source.index_cache)
+            && Arc::ptr_eq(&self.source.indices, &other.source.indices)
             && self.fallback == other.fallback
     }
 }
@@ -128,7 +130,7 @@ impl PartialOrd for ExactAggregateNode {
             range_signature(&self.request),
             self.request.output,
             &self.source.segment_paths,
-            Arc::as_ptr(&self.source.index_cache) as usize,
+            Arc::as_ptr(&self.source.indices) as usize,
             &self.fallback,
         )
             .partial_cmp(&(
@@ -138,7 +140,7 @@ impl PartialOrd for ExactAggregateNode {
                 range_signature(&other.request),
                 other.request.output,
                 &other.source.segment_paths,
-                Arc::as_ptr(&other.source.index_cache) as usize,
+                Arc::as_ptr(&other.source.indices) as usize,
                 &other.fallback,
             ))
     }
@@ -152,7 +154,7 @@ impl Hash for ExactAggregateNode {
         range_signature(&self.request).hash(state);
         self.request.output.hash(state);
         self.source.segment_paths.hash(state);
-        (Arc::as_ptr(&self.source.index_cache) as usize).hash(state);
+        (Arc::as_ptr(&self.source.indices) as usize).hash(state);
         self.fallback.hash(state);
     }
 }
@@ -207,7 +209,9 @@ pub struct ExactAggregateRewrite {
 #[derive(Debug, Clone)]
 pub struct AggregateSource {
     pub segment_paths: Vec<String>,
-    pub index_cache: Arc<IndexCache>,
+    pub indices: Arc<IndexRegistry>,
+    /// The artifacts each snapshotted segment advertises.
+    pub artifacts: Arc<SegmentArtifacts>,
     pub schema: SchemaRef,
 }
 
@@ -271,16 +275,18 @@ impl ExtensionPlanner for ExactAggregatePlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DFResult<Option<Arc<dyn ExecutionPlan>>> {
         let Some(node) = node.as_any().downcast_ref::<ExactAggregateNode>() else {
             return Ok(None);
         };
+        let session_state = session_state(session)?;
         Ok(Some(Arc::new(AdaptiveAggregateExec::new(
             node.request.clone(),
             node.source.clone(),
             node.fallback.clone(),
-            session_state.clone(),
+            session_state,
         ))))
     }
 }
@@ -334,12 +340,17 @@ impl ExecutionPlan for AdaptiveAggregateExec {
         "AdaptiveAggregateExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    // The fallback is planned at execution time, so this node holds no
+    // physical expressions.
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> DFResult<TreeNodeRecursion>,
+    ) -> DFResult<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -407,7 +418,8 @@ async fn adaptive_physical_plan(
             .await
             .map_err(|error| {
                 source
-                    .index_cache
+                    .indices
+                    .cache()
                     .record_aggregate(AggregateOutcome::Fallback);
                 DataFusionError::Execution(format!("value-count coverage task failed: {error}"))
             })?;
@@ -415,7 +427,8 @@ async fn adaptive_physical_plan(
         Some(coverage) if coverage.covered_segments > 0 => coverage,
         _ => {
             source
-                .index_cache
+                .indices
+                .cache()
                 .record_aggregate(AggregateOutcome::Declined);
             return DefaultPhysicalPlanner::default()
                 .create_physical_plan(&fallback, session_state)
@@ -427,7 +440,8 @@ async fn adaptive_physical_plan(
         Ok(plan) => plan,
         Err(error) => {
             source
-                .index_cache
+                .indices
+                .cache()
                 .record_aggregate(AggregateOutcome::Fallback);
             tracing::warn!(%error, "could not plan value-count aggregate; using source aggregate");
             return DefaultPhysicalPlanner::default()
@@ -442,16 +456,21 @@ async fn adaptive_physical_plan(
         Ok(plan) => {
             if partial_coverage {
                 source
-                    .index_cache
+                    .indices
+                    .cache()
                     .record_aggregate(AggregateOutcome::Partial);
             } else {
-                source.index_cache.record_aggregate(AggregateOutcome::Full);
+                source
+                    .indices
+                    .cache()
+                    .record_aggregate(AggregateOutcome::Full);
             }
             Ok(plan)
         }
         Err(error) => {
             source
-                .index_cache
+                .indices
+                .cache()
                 .record_aggregate(AggregateOutcome::Fallback);
             tracing::warn!(%error, "could not build value-count aggregate; using source aggregate");
             DefaultPhysicalPlanner::default()
@@ -459,6 +478,16 @@ async fn adaptive_physical_plan(
                 .await
         }
     }
+}
+
+/// The `SessionState` behind `session`. The adaptive execs keep one to plan
+/// their fallback at execution time.
+pub(crate) fn session_state(session: &dyn Session) -> DFResult<SessionState> {
+    session
+        .as_any()
+        .downcast_ref::<SessionState>()
+        .cloned()
+        .ok_or_else(|| DataFusionError::Internal("Finelog plans only with a SessionState".into()))
 }
 
 /// Query planner that teaches DataFusion how to execute Finelog extension nodes.
@@ -470,13 +499,13 @@ impl QueryPlanner for FinelogQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         DefaultPhysicalPlanner::with_extension_planners(vec![
             Arc::new(ExactAggregatePlanner),
             Arc::new(crate::query::group_extrema::GroupExtremaPlanner),
         ])
-        .create_physical_plan(logical_plan, session_state)
+        .create_physical_plan(logical_plan, session)
         .await
     }
 }
@@ -624,6 +653,10 @@ fn classify_coverage(
                 uncovered_paths.push(path.clone());
                 continue;
             };
+            let (Ok(min), Ok(max)) = (min.parse::<i64>(), max.parse::<i64>()) else {
+                uncovered_paths.push(path.clone());
+                continue;
+            };
             let disjoint = max < range.bounds.lower || min >= range.bounds.upper;
             if disjoint {
                 covered_segments += 1;
@@ -635,15 +668,11 @@ fn classify_coverage(
                 continue;
             }
         }
-        let Some(segment) = source.index_cache.indexed_segment(parquet) else {
+        let Some(segment) = source.indices.open_segment(parquet, &source.artifacts) else {
             uncovered_paths.push(path.clone());
             continue;
         };
-        let Some(index) =
-            source
-                .index_cache
-                .get_exact(parquet, &segment.header, SectionKind::ValueCounts)
-        else {
+        let Some(index) = source.indices.exact(&segment, SectionKind::ValueCounts) else {
             uncovered_paths.push(path.clone());
             continue;
         };
@@ -731,8 +760,9 @@ fn indexed_aggregate_plan(
         let provider = NamespaceProvider::build(
             Arc::clone(&source.schema),
             &coverage.uncovered_paths,
-            Arc::clone(&source.index_cache),
-        )?;
+            Arc::clone(&source.indices),
+        )?
+        .with_segment_artifacts((*source.artifacts).clone());
         let count_expr = match request.mode {
             CountMode::AllRows => count(lit(1_i64)),
             CountMode::GroupingColumn => count(col(&request.column)),
@@ -819,9 +849,9 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     use super::*;
-    use crate::store::exact::ExactIndexConfig;
+    use crate::indices::exact::ExactIndexConfig;
+    use crate::indices::{write_segment_index, SegmentIndexConfig};
     use crate::store::segment::write_segment_to_dir;
-    use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
 
     async fn plan(sql: &str) -> LogicalPlan {
         let schema = Arc::new(ArrowSchema::new(vec![
@@ -920,10 +950,12 @@ mod tests {
             indexed.to_string_lossy().into_owned(),
             fresh.to_string_lossy().into_owned(),
         ];
-        let index_cache = Arc::new(IndexCache::new(16));
+        let indices = crate::indices::test_index_registry();
+        let artifacts = Arc::new(crate::indices::sidecar_artifacts(&paths));
         let provider =
-            NamespaceProvider::build(Arc::clone(&source_schema), &paths, Arc::clone(&index_cache))
-                .unwrap();
+            NamespaceProvider::build(Arc::clone(&source_schema), &paths, Arc::clone(&indices))
+                .unwrap()
+                .with_segment_artifacts((*artifacts).clone());
         let ctx = crate::query::make_ctx();
         ctx.register_table("telemetry_v1", Arc::new(provider))
             .unwrap();
@@ -931,7 +963,8 @@ mod tests {
             "telemetry_v1".to_string(),
             AggregateSource {
                 segment_paths: paths,
-                index_cache,
+                indices,
+                artifacts,
                 schema: source_schema,
             },
         )]))));
@@ -1020,10 +1053,12 @@ mod tests {
             .into_iter()
             .map(|path| path.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        let index_cache = Arc::new(IndexCache::new(16));
+        let indices = crate::indices::test_index_registry();
+        let artifacts = Arc::new(crate::indices::sidecar_artifacts(&paths));
         let provider =
-            NamespaceProvider::build(Arc::clone(&source_schema), &paths, Arc::clone(&index_cache))
-                .unwrap();
+            NamespaceProvider::build(Arc::clone(&source_schema), &paths, Arc::clone(&indices))
+                .unwrap()
+                .with_segment_artifacts((*artifacts).clone());
         let context = crate::query::make_ctx();
         context
             .register_table("telemetry_v1", Arc::new(provider))
@@ -1032,7 +1067,8 @@ mod tests {
             "telemetry_v1".to_string(),
             AggregateSource {
                 segment_paths: paths,
-                index_cache,
+                indices,
+                artifacts,
                 schema: source_schema,
             },
         )]))));
@@ -1104,10 +1140,9 @@ mod tests {
         )
         .unwrap();
         let path = parquet.to_string_lossy().into_owned();
-        let provider = crate::query::provider::NamespaceProvider::build(
+        let provider = crate::query::provider::NamespaceProvider::build_with_local_artifacts(
             Arc::clone(&source_schema),
             std::slice::from_ref(&path),
-            crate::query::index_cache::test_index_cache(),
         )
         .unwrap();
         let ctx = crate::query::make_ctx();
@@ -1116,8 +1151,9 @@ mod tests {
         ctx.add_optimizer_rule(Arc::new(ExactAggregateRewrite::new(HashMap::from([(
             "telemetry_v1".to_string(),
             AggregateSource {
-                segment_paths: vec![path],
-                index_cache: crate::query::index_cache::test_index_cache(),
+                segment_paths: vec![path.clone()],
+                indices: crate::indices::test_index_registry(),
+                artifacts: Arc::new(crate::indices::sidecar_artifacts(&[path])),
                 schema: source_schema,
             },
         )]))));

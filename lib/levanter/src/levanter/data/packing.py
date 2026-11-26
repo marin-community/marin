@@ -4,16 +4,17 @@
 """
 Implements sequence packing, mostly for doing evaluation on lots of short sequences.
 
-Our strategy is basically to maintain a pool of SequencePackers, each of which can hold a fixed number of tokens
-(and a maximum number of segments). We then iterate over the sequences, adding them to the packers if they fit, and
-yielding the packed examples when they are full.
+Our strategy is to greedily fill each pack with consecutive documents until the next one would exceed the
+sequence length (or the maximum number of segments), then start a new pack.
 
 This achieves about a 90% "real token" rate, compared to like 10% without packing.
 """
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Iterable, Iterator, Literal, Sequence, TypeVar
+from itertools import islice
+from typing import Iterable, Literal, Sequence, TypeVar
 
 import haliax as hax
 import jax
@@ -26,71 +27,13 @@ from levanter.data.dataset import AsyncDataset
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.store.jagged_array import JaggedArrayStore
-from levanter.utils.jax_utils import leaf_key_paths, local_cpu_mesh, tree_broadcast_to
+from levanter.utils.jax_utils import leaf_key_paths, tree_broadcast_to
 
 # cf https://github.com/tensorflow/tensor2tensor/blob/bafdc1b67730430d38d6ab802cbd51f9d053ba2e/tensor2tensor/data_generators/generator_utils.py#L623
 
 # todo should we use something like this: https://arxiv.org/pdf/2107.02027?
 
 T = TypeVar("T", bound=PyTree)
-
-
-class SequencePacker:
-    """
-    Packs sequences into a single LmExample.
-    """
-
-    def __init__(self, Pos: hax.Axis, max_pack_size: int, pad_token: int):
-        self.Pos = Pos
-        self._ids: list[int] = []
-        self._segment_ids: list[int] = []
-        self._loss_weight: list[float] = []
-        self.num_segments = 0
-        self.pad_token = pad_token
-        self.max_pack_size = max_pack_size
-        assert pad_token is not None, "pad_token must be set"
-
-    def can_pack(self, ids: list[int]) -> bool:
-        return len(ids) + len(self._ids) <= self.Pos.size and self.num_segments < self.max_pack_size
-
-    def add_example(self, ids: list[int], loss_weight: list[float] | np.ndarray, segment_id: int | None = None):
-        if len(ids) != len(loss_weight):
-            raise ValueError("ids and loss_weight must have the same length")
-
-        if len(ids) == 0:
-            return
-
-        if len(ids) + len(self._ids) > self.Pos.size:
-            raise ValueError("Too many tokens")
-
-        if self.num_segments >= self.max_pack_size:
-            raise ValueError("Too many segments")
-
-        self._ids.extend(ids)
-        if segment_id is None:
-            segment_id = self.num_segments
-
-        self.num_segments += 1
-
-        self._segment_ids.extend([segment_id] * len(ids))
-
-        self._loss_weight.extend(loss_weight)
-
-    def pack(self) -> LmExample:
-        ids = self._ids + [self.pad_token] * (self.Pos.size - len(self._ids))
-
-        segment_ids = self._segment_ids + [-1] * (self.Pos.size - len(self._segment_ids))
-
-        loss_weight = self._loss_weight + [0.0] * (self.Pos.size - len(self._loss_weight))
-
-        with local_cpu_mesh():
-            tokens = hax.named(ids, self.Pos).astype(jnp.int32)
-            segment_ids = hax.named(segment_ids, self.Pos).astype(jnp.int32)
-            loss_weight = hax.named(loss_weight, self.Pos).astype(jnp.float32)
-
-            attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
-
-            return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
 
 @dataclass(frozen=True)
@@ -109,45 +52,6 @@ class PromptCompletion:
                 f"PromptCompletion must have strictly more tokens than the prompt length. Got {len(self.ids)} tokens"
                 f" and prompt length {self.prompt_length}"
             )
-
-
-def pack_prompt_completions(
-    Pos: hax.Axis,
-    sequences: Iterable[PromptCompletion],
-    pad_token: int,
-    max_segments_per_example: int = 64,
-    max_buffered_examples: int = 64,
-) -> Iterator[LmExample]:
-    """
-    Packs a list of prompt completions into LmExamples using the SequencePacker
-    """
-
-    packers = [SequencePacker(Pos, max_segments_per_example, pad_token)]
-
-    for sequence in sequences:
-        loss_weight = (np.arange(len(sequence.ids)) >= sequence.prompt_length - 1).astype(np.float32)
-        loss_weight[-1] = 0
-        assert np.any(loss_weight)
-
-        for packer in packers:
-            if packer.can_pack(sequence.ids):
-                packer.add_example(sequence.ids, loss_weight, sequence.segment_id)
-
-                if packer.num_segments == max_segments_per_example:
-                    yield packer.pack()
-                    packers.remove(packer)
-                break
-        else:
-            # no packer could fit the example, create a new one
-            packer = SequencePacker(Pos, max_segments_per_example, pad_token)
-            packer.add_example(sequence.ids, loss_weight, sequence.segment_id)
-            packers.append(packer)
-
-        while len(packers) >= max_buffered_examples:
-            yield packers.pop(0).pack()
-
-    for packer in packers:
-        yield packer.pack()
 
 
 def per_segment_loss(
@@ -306,9 +210,11 @@ def pack_documents(
     max_length: PyTree[int],
     max_segments_per_example: int | None = None,
     slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
-) -> list[range]:
+    lookahead_window: int | None = None,
+) -> Sequence[Sequence[int]]:
     """
-    Greedily pack documents into contiguous groups without storing full token ranges.
+    Greedily pack documents into packs without storing full token ranges. Without a lookahead
+    the packs are contiguous document ranges; with a lookahead they can be non-contiguous.
 
     Args:
         lengths: A PyTree of numpy arrays, each containing the lengths of documents for a leaf.
@@ -317,9 +223,23 @@ def pack_documents(
         max_length: A PyTree of integers, each specifying the maximum number of tokens allowed per pack for that leaf
         max_segments_per_example: Optional maximum number of documents per pack
         slice_strategy: One of "left", "right", "raise", or "drop".
+        lookahead_window: Optional bounded first-fit lookahead. When None (default), documents
+            are consumed strictly in order: each pack takes consecutive documents until the
+            next one would exceed capacity, then a new pack starts. When a positive integer,
+            when the next in-order document does not fit, the pack instead takes the first
+            document among up to ``lookahead_window`` documents starting at that one that
+            does fit (``lookahead_window=1`` is equivalent to sequential packing when no
+            documents are dropped; lookahead skips dropped documents without closing a pack);
+            skipped documents stay pending and keep their relative order. This trades a
+            bounded amount of document reordering for substantially less padding. With a
+            lookahead, packs may not be contiguous, so the return value is a list of lists
+            of document indices (in pack order) instead of a list of ``range`` objects.
 
     Returns:
-        A list of ranges, where each range represents the document indices in a pack
+        A list of packs. Without a lookahead, each pack is a ``range`` of document indices.
+        With a lookahead, each pack is a list of document indices, in pack order. Either
+        way the packs partition all documents (except those dropped by
+        ``slice_strategy="drop"``), and every pack is a ``Sequence[int]``.
     """
     # Input validation
     if max_segments_per_example is not None and (
@@ -351,6 +271,10 @@ def pack_documents(
     if slice_strategy not in ["left", "right", "raise", "drop"]:
         raise ValueError(f"slice_strategy must be one of 'left', 'right', 'raise', or 'drop', got {slice_strategy}")
 
+    if lookahead_window is not None:
+        if not isinstance(lookahead_window, int) or lookahead_window <= 0:
+            raise ValueError(f"lookahead_window must be a positive integer or None, got {lookahead_window}")
+
     # Validate document lengths
     drop_mask = np.ones(n_docs, dtype=bool) if slice_strategy == "drop" else None
     for lens, allowed, leaf_name in zip(lengths_leaves, max_length_leaves, leaf_names):
@@ -365,6 +289,11 @@ def pack_documents(
                         f"maximum allowed length {allowed}. Consider setting slice_strategy to 'left', 'right', "
                         "'drop', or increasing max_length."
                     )
+
+    if lookahead_window is not None:
+        return _pack_documents_lookahead(
+            lengths_leaves, max_length_leaves, drop_mask, max_segments_per_example, lookahead_window
+        )
 
     pack_doc_ranges = []
     i = 0
@@ -421,6 +350,74 @@ def pack_documents(
     return pack_doc_ranges
 
 
+def _pack_documents_lookahead(
+    lengths_leaves: Sequence[np.ndarray],
+    max_length_leaves: Sequence[int],
+    drop_mask: np.ndarray | None,
+    max_segments_per_example: int | None,
+    lookahead_window: int,
+) -> list[list[int]]:
+    """Bounded-window first-fit packing.
+
+    Documents are consumed from a frontier of remaining documents. A pack first takes the
+    frontier document, then repeatedly takes the first fitting document among up to
+    ``lookahead_window`` documents starting at the frontier (raw cumulative token sums from
+    the pack start, as in the sequential packer, and every leaf must fit). Because the scan
+    starts at the frontier, ``lookahead_window=1`` matches sequential packing when no
+    documents are dropped, and ``lookahead_window=w`` looks at up to ``w - 1`` documents
+    beyond it. Dropped documents are removed before packing, so they do not close a pack.
+    Documents skipped by the scan stay pending and keep their relative order, so reordering
+    stays local. Over-long documents (exceeding capacity in any leaf) become singleton
+    packs -- the slice itself is applied at read time, exactly as for the sequential packer.
+
+    Deterministic: no randomness; ties resolve to the earliest document in cache order.
+    """
+    n_docs = len(lengths_leaves[0])
+    n_leaves = len(lengths_leaves)
+    lens = [[int(v) for v in leaf] for leaf in lengths_leaves]
+    allowed = [int(v) for v in max_length_leaves]
+
+    remaining = iter(range(n_docs)) if drop_mask is None else (doc for doc in range(n_docs) if drop_mask[doc])
+    pending = deque(islice(remaining, lookahead_window))
+
+    def take(index: int) -> int:
+        if index == 0:
+            doc = pending.popleft()
+        else:
+            doc = pending[index]
+            del pending[index]
+        # Refill after every removal so the buffer holds the first window of remaining documents.
+        next_doc = next(remaining, None)
+        if next_doc is not None:
+            pending.append(next_doc)
+        return doc
+
+    packs: list[list[int]] = []
+    while pending:
+        head = take(0)
+        members = [head]
+        used = [lens[l][head] for l in range(n_leaves)]
+        over_long = any(lens[l][head] > allowed[l] for l in range(n_leaves))
+        if not over_long:
+            while max_segments_per_example is None or len(members) < max_segments_per_example:
+                taken = -1
+                for index, doc in enumerate(pending):
+                    fits = all(
+                        used[l] + lens[l][doc] <= allowed[l] and lens[l][doc] <= allowed[l] for l in range(n_leaves)
+                    )
+                    if fits:
+                        taken = index
+                        break
+                if taken < 0:
+                    break
+                doc = take(taken)
+                for l in range(n_leaves):
+                    used[l] += lens[l][doc]
+                members.append(doc)
+        packs.append(members)
+    return packs
+
+
 class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
     """
     Prepacks a dataset into a new dataset where examples are packed into a single example.
@@ -446,6 +443,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         max_segments_per_example: int | None = None,
         pad_with_zeros: bool = True,
         slice_strategy: Literal["left", "right", "raise", "drop"] = "raise",
+        lookahead_window: int | None = None,
     ):
         """
         Args:
@@ -454,6 +452,9 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             max_segments_per_example: Maximum number of documents that can be packed into a single example.
             pad_with_zeros: If True, pad examples to max_length with zeros. If False, return examples as-is.
             slice_strategy: One of "left", "right", "raise", or "drop". Determines how to handle examples that exceed max_length.
+            lookahead_window: Optional bounded first-fit lookahead window, passed through to
+                [pack_documents][]. None (default) keeps the sequential packer; with a
+                lookahead, packs may be non-contiguous lists of document indices.
         """
         super().__init__()
 
@@ -467,6 +468,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         self.max_segments_per_example = max_segments_per_example
         self.pad_with_zeros = pad_with_zeros
         self.slice_strategy = slice_strategy
+        self.lookahead_window = lookahead_window
 
         _offsets = jax.tree.map(lambda store: store.offsets[0 : store.num_rows + 1].read(), self.dataset)
         self._offsets = jax.tree.map(lambda fut: fut.result(), _offsets)
@@ -486,6 +488,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             max_length,
             max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead_window=lookahead_window,
         )
 
     def is_finite(self) -> bool:
@@ -494,11 +497,28 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
     async def async_len(self) -> int:
         return len(self._pack_indices)
 
+    def _sliced_doc_span(self, doc_idx: int, offsets: np.ndarray, allowed: int) -> tuple[int, int]:
+        """Token span for one document, applying the slice strategy to over-long documents."""
+        doc_start = offsets[doc_idx] if doc_idx > 0 else 0
+        doc_end = offsets[doc_idx + 1]
+        doc_length = doc_end - doc_start
+        if doc_length > allowed:
+            if self.slice_strategy == "raise":
+                raise ValueError(
+                    f"Document {doc_idx} has length {doc_length} which exceeds maximum allowed length {allowed}. "
+                    "Consider using slice_strategy='left', 'right', or 'drop', or increasing max_length."
+                )
+            if self.slice_strategy == "right":
+                return doc_end - allowed, doc_end
+            return doc_start, doc_start + allowed
+        return doc_start, doc_end
+
     async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[PyTree[np.ndarray], PyTree[np.ndarray]]]:
         """
         For each requested packed example (by index into self._pack_indices), reconstruct the
         token data on the fly from the underlying dataset. In our packing scheme the pack holds, for each leaf,
-        a range of document IDs. Using the JaggedArrayStore's offsets and allowed maximum (from self.max_length),
+        a range of document IDs (or, with a lookahead window, a non-contiguous list of document IDs). Using the
+        JaggedArrayStore's offsets and allowed maximum (from self.max_length),
         we compute the corresponding token slice (data range) and then read that slice using tensorstore's ts.Batch context.
         We then pad the data (if pad_with_zeros is set) up to allowed length.
 
@@ -509,50 +529,45 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         pack_doc_ranges = [self._pack_indices[i] for i in indices]
 
         async def get_data_for_leaf(store, offsets, allowed: int) -> tuple[list[np.ndarray], list[np.ndarray]]:
-            out_data = []
+            futures = []
+            group_sizes = []  # number of read futures per packed example (slices concatenated)
             out_segment_ids = []
             # Using ts.Batch to group reads.
             with ts.Batch():
                 for dr in pack_doc_ranges:
-                    # Compute token boundaries using the store's offsets.
-                    token_start = offsets[dr.start] if dr.start > 0 else 0
-                    token_end = offsets[dr.stop]
-                    token_count = token_end - token_start
-                    if token_count > allowed:
-                        if self.slice_strategy != "raise":
-                            assert len(dr) == 1, "We shouldn't have packed two examples together if one is too long."
-                            if self.slice_strategy == "right":
-                                # slice from the right
-                                token_start = token_end - allowed
-                            else:  # left
-                                # slice from the left
-                                token_end = token_start + allowed
-                        else:
-                            raise ValueError(
-                                f"Token count {token_count} exceeds allowed maximum {allowed} for documents "
-                                f"{list(dr)}. Consider using slice_strategy='left', 'right', or 'drop', or "
-                                "increasing max_length."
-                            )
-                    # Read the slice from the underlying data.
-                    out_data.append(store.data[token_start:token_end].read())
+                    doc_ids = list(dr)
+                    spans = [self._sliced_doc_span(doc_idx, offsets, allowed) for doc_idx in doc_ids]
+                    # A sliced (over-long) document always forms a singleton pack.
+                    if any(
+                        span != (offsets[doc_idx] if doc_idx > 0 else 0, offsets[doc_idx + 1])
+                        for doc_idx, span in zip(doc_ids, spans, strict=True)
+                    ):
+                        assert len(doc_ids) == 1, "We shouldn't have packed two examples together if one is too long."
 
-                    # Create segment IDs for this pack
+                    # Use the global document index as the segment ID.
                     segment_ids = []
-                    for doc_idx in range(len(dr)):
-                        doc_start = offsets[dr.start + doc_idx] if dr.start + doc_idx > 0 else 0
-                        doc_end = offsets[dr.start + doc_idx + 1]
-                        doc_length = doc_end - doc_start
-                        # Use the global document index as the segment ID
-                        global_doc_idx = dr.start + doc_idx
-                        # If this is a sliced document, adjust the segment IDs to match the sliced portion
-                        if doc_length > allowed and self.slice_strategy != "raise":
-                            segment_ids.extend([global_doc_idx] * allowed)
-                        else:
-                            segment_ids.extend([global_doc_idx] * doc_length)
+                    for doc_idx, (doc_start, doc_end) in zip(doc_ids, spans, strict=True):
+                        segment_ids.extend([doc_idx] * (doc_end - doc_start))
                     out_segment_ids.append(np.array(segment_ids))
 
-            # Await all reads concurrently.
-            out_data = await asyncio.gather(*out_data)
+                    if all(spans[i][1] == spans[i + 1][0] for i in range(len(spans) - 1)):
+                        # Contiguous spans (the sequential packer's packs) read as one slice.
+                        futures.append(store.data[spans[0][0] : spans[-1][1]].read())
+                        group_sizes.append(1)
+                    else:
+                        # Non-contiguous packs need separate reads, concatenated below.
+                        for doc_start, doc_end in spans:
+                            futures.append(store.data[doc_start:doc_end].read())
+                        group_sizes.append(len(spans))
+
+            # Await all reads concurrently, then reassemble one array per packed example.
+            flat_data = await asyncio.gather(*futures)
+            out_data = []
+            k = 0
+            for size in group_sizes:
+                parts = flat_data[k : k + size]
+                k += size
+                out_data.append(np.concatenate(parts) if size > 1 else parts[0])
 
             if self.pad_with_zeros:
                 out_data = [np.pad(x, (0, allowed - x.shape[0])) for x in out_data]

@@ -27,8 +27,7 @@ from iris.cluster.constraints import (
     split_hard_soft,
 )
 from iris.rpc import job_pb2
-
-from .conftest import eq_constraint, in_constraint
+from iris.testing.cluster import eq_constraint, in_constraint
 
 # --- is_cpu_device_type_constraint ---
 
@@ -99,6 +98,10 @@ def test_evaluate_constraint_in():
             PlacementRequirements(None, None, None, frozenset({"us-central1"}), None),
         ),
         (
+            [eq_constraint("zone", "us-central2-b")],
+            PlacementRequirements(None, None, None, None, frozenset({"us-central2-b"})),
+        ),
+        (
             [in_constraint("zone", ["us-central1-a", "us-central1-b"])],
             PlacementRequirements(None, None, None, None, frozenset({"us-central1-a", "us-central1-b"})),
         ),
@@ -120,12 +123,21 @@ def test_extract_placement_requirements_parameterized(constraints, expected):
 # --- merge_constraints canonical override ---
 
 
-def test_merge_canonical_key_child_overrides_parent():
-    parent = [Constraint.create(key="device-type", op=ConstraintOp.EQ, value="gpu")]
-    child = [Constraint.create(key="device-type", op=ConstraintOp.EQ, value="tpu")]
+@pytest.mark.parametrize(
+    "key, parent_value, child_value",
+    [
+        (WellKnownAttribute.DEVICE_TYPE, "gpu", "tpu"),
+        (WellKnownAttribute.REGION, "us-west4", "eu-west4"),
+        (WellKnownAttribute.PREEMPTIBLE, "true", "false"),
+        (WellKnownAttribute.ZONE, "a", "b"),
+    ],
+)
+def test_merge_canonical_key_child_overrides_parent(key, parent_value, child_value):
+    parent = [Constraint.create(key=key, op=ConstraintOp.EQ, value=parent_value)]
+    child = [Constraint.create(key=key, op=ConstraintOp.EQ, value=child_value)]
     merged = merge_constraints(parent, child)
     assert len(merged) == 1
-    assert merged[0].values[0].value == "tpu"
+    assert merged[0].values[0].value == child_value
 
 
 def test_merge_non_canonical_key_appends():
@@ -133,6 +145,7 @@ def test_merge_non_canonical_key_appends():
     child = [Constraint.create(key="tpu-name", op=ConstraintOp.EQ, value="pod-b")]
     merged = merge_constraints(parent, child)
     assert len(merged) == 2
+    assert {c.values[0].value for c in merged} == {"pod-a", "pod-b"}
 
 
 # --- ANY-region marker (region EXISTS) ---
@@ -344,6 +357,25 @@ def test_attribute_value_normalizes_at_construction():
     # Integers and floats pass through untouched.
     assert AttributeValue(64).value == 64
     assert AttributeValue(1.5).value == 1.5
+
+
+def test_nvlink_domain_constraint_preserves_label_case_on_the_wire():
+    """Kubernetes compares node-affinity values byte-exactly against node labels.
+
+    CoreWeave writes `ds.coreweave.com/nvlink.domain` uppercase
+    (`DH1-136-US-EAST-08A` on cw-us-east-08a), so the wire must carry the
+    supplied spelling while Iris-side matching stays case-insensitive.
+    """
+    c = Constraint.create(key="nvlink.domain", op=ConstraintOp.NE, value="DH1-136-US-EAST-08A")
+    assert c.values[0].value == "dh1-136-us-east-08a"
+    assert c.to_proto().value.string_value == "DH1-136-US-EAST-08A"
+
+    restored = Constraint.from_proto(c.to_proto())
+    assert restored.label_value == "DH1-136-US-EAST-08A"
+    assert restored.to_proto().value.string_value == "DH1-136-US-EAST-08A"
+    # Iris-side evaluation remains case-insensitive: the labeled node is excluded.
+    assert not evaluate_constraint(AttributeValue("DH1-136-US-EAST-08A"), restored)
+    assert evaluate_constraint(AttributeValue("DH1-137-US-EAST-08A"), restored)
 
 
 def test_constraint_rejects_invalid_arity():

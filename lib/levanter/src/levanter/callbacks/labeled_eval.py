@@ -13,7 +13,7 @@ from jax.sharding import Mesh
 import haliax as hax
 from haliax.partitioning import ResourceMapping
 
-from rigging.filesystem import prefix_join
+from rigging.filesystem.storage_path import prefix_join
 
 import levanter.tracker
 from levanter.callbacks._core import ProgressEvent, StepInfo, progress_event_scope
@@ -201,7 +201,7 @@ def add_labeled_lm_eval_callbacks(
                 prefix=os.path.join(labeled_eval_config.prefix, dataset_name),
                 eval_current=labeled_eval_config.eval_current,
                 eval_model=labeled_eval_config.eval_model,
-                mp=trainer_config.mp,
+                mp=trainer_config.precision_policy,
             ),
             every=labeled_eval_config.steps or trainer_config.steps_per_eval,
         )
