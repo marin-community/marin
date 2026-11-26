@@ -16,7 +16,11 @@ from pathlib import Path
 from finestore.rl.licenses import LICENSE_REGISTRY_ISSUE, LicenseReceipt
 from pydantic import ValidationError
 
-from experiments.post_training.task_curation.receipt_shards import read_receipt_shards, receipts_from_documents
+from experiments.post_training.task_curation.receipt_shards import (
+    RECEIPTS_PER_SHARD,
+    read_receipt_shards,
+    receipts_from_documents,
+)
 from experiments.post_training.task_curation.reference_data import (
     DataReferenceIndex,
     commit_reference_documents,
@@ -56,6 +60,38 @@ def read_license_receipts(path: Path) -> dict[str, LicenseReceipt]:
     if any(key != receipt.source_id for key, receipt in receipts.items()):
         raise ValueError("License registry key differs from the receipt source identity")
     return receipts
+
+
+def adopt_license_receipt(index_path: Path, receipt: LicenseReceipt, *, message: str, namespace: str) -> str:
+    """Re-pin one source's receipt through a complete immutable selection namespace.
+
+    The selected view is the union of every existing receipt with this source's row
+    replaced by ``receipt``. The union lands as a NEW shard family under
+    ``namespace/`` and the index is atomically re-pinned to reference only that
+    family — shared shards keep their exact bytes, the reader's strict duplicate
+    rejection stays intact, and no newest-wins rule exists (ingest B's design,
+    coordinator ruling 2026-11-26). The index re-pin lands in git through the
+    caller's landing flow.
+    """
+    key = canonical_source_id(receipt.source_id)
+    if key != receipt.source_id:
+        raise ValueError("License registry key differs from the receipt source identity")
+    if not namespace or namespace.endswith("/") or ".." in namespace:
+        raise ValueError("The selection namespace must be a relative directory name")
+    documents = load_referenced_json(index_path)
+    existing = receipts_from_documents(documents, LicenseReceipt, "license receipt")
+    union = {
+        **{name: row.model_dump(mode="json") for name, row in existing.items()},
+        key: receipt.model_dump(mode="json"),
+    }
+    documents_out: dict[str, bytes] = {}
+    entries = sorted(union.items())
+    for part, offset in enumerate(range(0, len(entries), RECEIPTS_PER_SHARD)):
+        chunk = dict(entries[offset : offset + RECEIPTS_PER_SHARD])
+        documents_out[f"{namespace}/part-{part:03d}.json"] = (
+            json.dumps(chunk, indent=2, sort_keys=True) + "\n"
+        ).encode()
+    return commit_reference_documents(index_path, documents_out, message=message, retain_references=False)
 
 
 class AppendWouldRewriteSharedShard(ValueError):
