@@ -218,11 +218,7 @@ def test_verified_copy_rejects_alias_for_source_as_destination(tmp_path):
 
 
 class _GcsRewriteDestination:
-    """A destination whose store-side copy lands the object in a new generation.
-
-    GCS server-side copies (staged object promoted to its final path) assign the
-    copied object a fresh ETag without changing its bytes.
-    """
+    """Simulate GCS rewrites assigning copied objects fresh ETags."""
 
     protocol = "gcs"
 
@@ -239,8 +235,7 @@ class _GcsRewriteDestination:
         self.etags[path] = f"GENERATION-{self.generations}="
 
     def _etag_for(self, path):
-        self.etags.setdefault(path, None)
-        if self.etags[path] is None:
+        if path not in self.etags:
             self._new_etag(path)
         return self.etags[path]
 

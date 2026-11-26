@@ -505,9 +505,7 @@ def _destination_matches_marker(
         return _sha256(filesystem, path) == marker.staging_identity.removeprefix(SHA256_IDENTITY_PREFIX)
     if destination.identity == marker.staging_identity:
         return True
-    # Identity can change without the bytes changing: UploadPartCopy rewrites a
-    # multipart ETag, and a store-side copy such as a GCS rewrite assigns the
-    # copied object a fresh ETag in a new generation. Fall back to content.
+    # Store-side copies can change ETags without changing content.
     return _sha256(filesystem, path) == marker.sha256
 
 
