@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import yaml
@@ -17,7 +18,14 @@ RULE_CODE = re.compile(r"^ml-[a-z0-9-]+$")
 DEFAULT_CATALOG_DIR = Path(__file__).parent
 CATALOG_FIELDS = frozenset({"schema_version", "shared_prompt", "lanes"})
 LANE_FIELDS = frozenset({"name", "prompt", "include_complexity_leads", "min_diff_lines", "rules"})
-RULE_FIELDS = frozenset({"schema_version", "code", "lane", "title", "minimum_confidence", "prompt"})
+RULE_FIELDS = frozenset({"schema_version", "code", "lane", "title", "minimum_confidence", "inputs", "prompt"})
+
+
+class RuleInput(StrEnum):
+    """Review-time text that the runner appends to the prompt of a lane whose rule declares it."""
+
+    PR_TEXT = "pr_text"
+    RL_GLOSSARY = "rl_glossary"
 
 
 @dataclass(frozen=True)
@@ -29,6 +37,7 @@ class LintRule:
     title: str
     prompt: str
     minimum_confidence: float
+    inputs: frozenset[RuleInput]
     path: Path
 
 
@@ -98,6 +107,16 @@ def _integer(value: object, *, path: Path, field: str) -> int:
     return value
 
 
+def _rule_inputs(value: object, *, path: Path) -> frozenset[RuleInput]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{path}: inputs must be a list of input names")
+    known = {item.value for item in RuleInput}
+    unknown = sorted(set(value) - known)
+    if unknown:
+        raise ValueError(f"{path}: unknown inputs {unknown}; choose from {sorted(known)}")
+    return frozenset(RuleInput(item) for item in value)
+
+
 def _load_rule(rule_path: Path, lane_name: str, declared_code: str, config_path: Path) -> LintRule:
     if not rule_path.is_file():
         raise ValueError(f"{config_path}: declared rule does not exist: {rule_path}")
@@ -124,6 +143,7 @@ def _load_rule(rule_path: Path, lane_name: str, declared_code: str, config_path:
         title=_text(value.get("title"), path=rule_path, field="title"),
         prompt=_text(value.get("prompt"), path=rule_path, field="prompt"),
         minimum_confidence=float(confidence),
+        inputs=_rule_inputs(value.get("inputs", []), path=rule_path),
         path=rule_path,
     )
 

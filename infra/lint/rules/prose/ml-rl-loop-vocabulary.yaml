@@ -3,6 +3,9 @@ code: ml-rl-loop-vocabulary
 lane: prose
 title: RL loop name conflicts with the current glossary
 minimum_confidence: 0.7
+inputs:
+- pr_text
+- rl_glossary
 prompt: |-
   **Why it's bad:** The RL loop has many closely related concepts, and the RL
   Loop Glossary gives each one a single name. A name that means something else

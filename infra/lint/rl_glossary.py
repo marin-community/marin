@@ -8,7 +8,6 @@ import re
 import urllib.request
 from dataclasses import dataclass
 
-RULE_CODE = "ml-rl-loop-vocabulary"
 DOC_ID = "1hi-EZaEDPMlpmCoPAJVfdVxsvTXy3gPFVFraiYol-Uc"
 DOC_URL = f"https://docs.google.com/document/d/{DOC_ID}/edit"
 EXPORT_URL = f"https://docs.google.com/document/d/{DOC_ID}/export?format=md"

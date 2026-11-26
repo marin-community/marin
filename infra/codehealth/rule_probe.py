@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.engine import Engine
 
 from infra.lint.catalog import LintCatalog, LintRule, catalog_sha
-from infra.lint.rl_glossary import RULE_CODE as RL_VOCABULARY_RULE
 
 from .review_store import (
     ProbeStatus,
@@ -149,9 +148,9 @@ def _probe_identity(
     if effort not in SUPPORTED_EFFORTS:
         raise ValueError(f"unsupported effort {effort!r}; choose from {sorted(SUPPORTED_EFFORTS)}")
     rule = catalog.rule(rule_code)
-    if rule.code == RL_VOCABULARY_RULE:
-        # The rule's source of truth is the live glossary, which the probe identity does not record.
-        raise ValueError(f"{rule.code} reads the live RL glossary at review time; rule probes cannot replay it")
+    if rule.inputs:
+        inputs = ", ".join(sorted(rule.inputs))
+        raise ValueError(f"{rule.code} needs review-time inputs ({inputs}) that rule probes cannot replay")
     return rule, ProbeIdentity(
         event_id=context.event.event_id,
         context_sha=context.context_sha,
