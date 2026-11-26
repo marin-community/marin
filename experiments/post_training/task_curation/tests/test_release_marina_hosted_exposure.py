@@ -20,7 +20,12 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from experiments.post_training.task_curation.release_stages import exposure_probe, hosted_check, marina_release
+from experiments.post_training.task_curation.release_stages import (
+    exposure_probe,
+    hosted_check,
+    live_applet,
+    marina_release,
+)
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from infra.marina.apps.rl_data_catalog.server.content_access import LICENSE_CONTENT_MARKER
 
@@ -139,6 +144,12 @@ def _prior_manifest(tmp_path: Path, name: str = "prior-manifest.json", revision:
     )
 
 
+@pytest.fixture(autouse=True)
+def _live_preview(monkeypatch):
+    """The preview is live at the base revision the hosted check recorded."""
+    monkeypatch.setattr(live_applet, "live_applet", lambda _url, _app: live_applet.LiveApplet(BASE_VERSION, "private"))
+
+
 def _marina_inputs(tmp_path: Path, revision: str, **overrides) -> marina_release.MarinaReleaseInputs:
     package_root, modules = _stage_package(tmp_path)
     defaults = dict(
@@ -151,6 +162,7 @@ def _marina_inputs(tmp_path: Path, revision: str, **overrides) -> marina_release
         hosted_receipt=_release_receipt(tmp_path, "hosted-receipt.json", "hosted", revision),
         prior_manifest=_prior_manifest(tmp_path),
         base_version=BASE_VERSION,
+        access_mode="private",
         output_root=str(tmp_path / "release" / "marina"),
     )
     defaults.update(overrides)
@@ -204,6 +216,38 @@ def test_marina_release_write_seals_release_and_manifest_documents(tmp_path):
     assert manifest["prior_manifest"]["sha256"] == inputs.prior_manifest.sha256
     assert proof["manifest"]["uri"].endswith("deployment-manifest.json")
     assert _last_alert(tmp_path)["kind"] == marina_release.alerts.KIND_FINISH
+
+
+def test_marina_release_continues_the_live_public_revision_and_refuses_a_moved_one(tmp_path, monkeypatch):
+    """R40: publish against the recorded live revision in the live mode; never change the mode."""
+    revision = _init_repo(tmp_path / "repo")
+    monkeypatch.setattr(live_applet, "live_applet", lambda _url, _app: live_applet.LiveApplet(BASE_VERSION, "public"))
+    inputs = _marina_inputs(tmp_path, revision, access_mode="public", prior_manifest=None)
+    seen: list[dict] = []
+
+    def publish(payload: bytes) -> dict:
+        seen.append({"mode": inputs.access_mode, "base": inputs.base_version})
+        return {
+            "id": APPLET_ID,
+            "version": NEW_VERSION,
+            "url": f"{SERVICE_URL}/a/{APPLET_ID}/v/{NEW_VERSION}/",
+            "mode": "public",
+        }
+
+    proof = marina_release.run_marina_release(
+        inputs, dry_run=False, repo_root=tmp_path / "repo", publish=publish, feeds=_feeds(tmp_path)
+    )
+    assert seen == [{"mode": "public", "base": BASE_VERSION}]
+    assert proof["access_mode"] == "public" and proof["publish"]["mode"] == "public"
+    monkeypatch.setattr(
+        live_applet, "live_applet", lambda _url, _app: live_applet.LiveApplet(BASE_VERSION + 1, "public")
+    )
+    moved = _marina_inputs(tmp_path / "moved", revision, access_mode="public", prior_manifest=None)
+    with pytest.raises(ValueError, match="moved to v31"):
+        marina_release.run_marina_release(
+            moved, dry_run=False, repo_root=tmp_path / "repo", publish=publish, feeds=_feeds(tmp_path)
+        )
+    assert len(seen) == 1
 
 
 def test_marina_release_refuses_rerun_without_republishing(tmp_path):

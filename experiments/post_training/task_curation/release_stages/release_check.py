@@ -37,6 +37,7 @@ from pathlib import Path
 from rigging.filesystem.storage_path import StoragePath
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.release_stages import live_applet as live_applet_module
 from experiments.post_training.task_curation.release_stages.guard import attested_revision
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 from experiments.post_training.task_curation.release_stages.package_preview import receipt_kind as package_receipt_kind
@@ -92,8 +93,10 @@ class ReleaseCheckInputs:
             raise ValueError(f"the {self.phase} check runs the published revision with its preflight baseline inputs")
         if self.preflight_receipt is None:
             raise ValueError(f"the {self.phase} check requires the sealed preflight receipt ref")
-        if self.published_revision is None:
-            raise ValueError(f"the {self.phase} check requires the published revision to verify")
+        if self.phase == "hosted" and self.published_revision is not None:
+            raise ValueError("the hosted check verifies the live revision; it must not name one")
+        if self.phase == "postpublish" and self.published_revision is None:
+            raise ValueError("the postpublish check requires the published revision to verify")
         if self.phase == "postpublish" and self.hosted_receipt is None:
             raise ValueError("the postpublish audit requires the blocking hosted receipt ref")
 
@@ -207,7 +210,11 @@ def verify_package_receipt(inputs: ReleaseCheckInputs) -> dict:
 
 
 def planned_checker_arguments(
-    inputs: ReleaseCheckInputs, package_document: dict | None, paths: dict[str, Path], attested: str | None
+    inputs: ReleaseCheckInputs,
+    package_document: dict | None,
+    paths: dict[str, Path],
+    attested: str | None,
+    live: live_applet_module.LiveApplet,
 ) -> list[str]:
     """The exact maintained-checker arguments for the phase, computed as data.
 
@@ -222,6 +229,9 @@ def planned_checker_arguments(
         inputs.service_url,
         "--production-version",
         str(inputs.production_version),
+        # The release never changes the preview's access mode (R40 ruling).
+        "--expected-mode",
+        live.mode,
     ]
     if inputs.phase == "preflight":
         if package_document is None:
@@ -235,7 +245,8 @@ def planned_checker_arguments(
             str(paths["oracle_inventory"]),
         ]
         return argv
-    argv += ["--revision", str(inputs.published_revision), "--baseline", str(paths["baseline"])]
+    revision = live.version if inputs.phase == "hosted" else inputs.published_revision
+    argv += ["--revision", str(revision), "--baseline", str(paths["baseline"])]
     if inputs.phase == "postpublish":
         argv.append("--full-browser-sweep")
     return argv
@@ -308,7 +319,8 @@ def run_release_check(
             verify_phase_receipt(inputs.hosted_receipt, "hosted", inputs.source_revision)
         paths = local_checker_paths(inputs)
         receipt_path = str(paths["receipt"])
-        argv = planned_checker_arguments(inputs, package_document, paths, attested_revision())
+        live = live_applet_module.live_applet(inputs.service_url, inputs.applet_id)
+        argv = planned_checker_arguments(inputs, package_document, paths, attested_revision(), live)
         proof: dict = {
             "kind": f"atlas-{inputs.release_id}-release-check",
             "release_id": inputs.release_id,
@@ -319,7 +331,8 @@ def run_release_check(
             "package": _ref_pointer(inputs.package),
             "preflight_receipt": _ref_pointer(inputs.preflight_receipt),
             "hosted_receipt": _ref_pointer(inputs.hosted_receipt),
-            "published_revision": inputs.published_revision,
+            "published_revision": live.version if inputs.phase == "hosted" else inputs.published_revision,
+            "live": {"version": live.version, "mode": live.mode},
             "planned_checker": {"module": CHECKER_MODULE, "arguments": argv, "receipt": receipt_path},
             "dry_run": dry_run,
             "sql_writes": 0,

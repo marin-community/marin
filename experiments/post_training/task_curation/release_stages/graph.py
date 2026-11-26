@@ -2082,9 +2082,7 @@ def _release_check_step(
             inputs["source_counts"] = package_proof["source_counts"]
         else:
             inputs["preflight_receipt"] = _resolved_receipt(ctx, preflight)
-            if phase == "hosted":
-                inputs["published_revision"] = plan.service.preview_base_version
-            else:
+            if phase != "hosted":
                 inputs["published_revision"] = _resolved_proof(ctx, marina)["publish"]["version"]
                 inputs["hosted_receipt"] = _resolved_receipt(ctx, hosted)
         return inputs
@@ -2120,7 +2118,10 @@ def _marina_release_step(
             "preflight_receipt": _resolved_receipt(ctx, preflight),
             "hosted_receipt": _resolved_receipt(ctx, hosted),
             "prior_manifest": _ref_dict(plan.pins.prior_manifest),
-            "base_version": plan.service.preview_base_version,
+            # The live revision and mode the hosted check observed, not the plan's
+            # cut-time preview_base_version (R40: planned 32, live 39).
+            "base_version": _resolved_proof(ctx, hosted)["published_revision"],
+            "access_mode": _resolved_proof(ctx, hosted)["live"]["mode"],
             "output_root": stage_output_root(plan, "marina-release"),
         }
 
