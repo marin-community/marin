@@ -9,9 +9,9 @@ from finestore.rl.difficulty import DifficultyGap, MeasurementStatus
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from infra.marina.apps.rl_data_catalog.release_evidence import json_sha256
-from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld, content_marker
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
+from .content_access import content_is_withheld, content_marker
+from .json_digest import json_sha256
+from .source_identity import canonical_source_id
 
 _LEDGER_GAP_ALIASES = {
     "COVERAGE_SHORTFALL": DifficultyGap.AWAITING_SCORED_COVERAGE,

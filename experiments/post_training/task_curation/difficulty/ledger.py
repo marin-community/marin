@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     LedgerRow,
     Outcome,
 )
-from infra.marina.apps.rl_data_catalog.release_evidence import json_sha256
+from infra.marina.apps.rl_data_catalog.server.json_digest import json_sha256
 
 LEDGER_VERSION = "v1"
 ACTIONS_DIRECTORY = "actions"

@@ -54,7 +54,6 @@ from .release_curriculum import curriculum_invariants
 from .release_evidence import (
     SqlQuery,
     catalog_state,
-    json_sha256,
     projected_contract_inventory,
     projected_duplicate_inventory,
     projected_sources,
@@ -87,6 +86,7 @@ from .server.curriculum import (
     task_response,
 )
 from .server.derived_contract import PROFILE_FIELDS
+from .server.json_digest import json_sha256
 from .server.source_counts import SourceCounts
 
 LOGGER = logging.getLogger(__name__)

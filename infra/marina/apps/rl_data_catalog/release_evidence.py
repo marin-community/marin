@@ -3,7 +3,6 @@
 
 """Read-only release evidence and task-population accounting."""
 
-import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -27,11 +26,6 @@ from .server.source_counts import SourceCounts
 
 SqlQuery = Callable[[str, dict[str, Any]], dict[str, Any]]
 HISTORY_PIPELINE_BATCH = 8
-
-
-def json_sha256(value: Any) -> str:
-    """Hash JSON independently of object key order and whitespace."""
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
