@@ -765,6 +765,8 @@ def test_full_cli_appends_selection_and_saved_corpus_can_reselect(tmp_path, monk
     options = [
         "--mode",
         "full",
+        "--task-store",
+        "fixture@2026.11.26.1",
         "--skip-assessment",
         "--cache-dir",
         str(cache),

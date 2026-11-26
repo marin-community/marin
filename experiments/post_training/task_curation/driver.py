@@ -18,6 +18,7 @@ from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from iris.cluster.client.job_info import get_job_info
+from marin.execution.artifact import validate_path_segment, validate_version
 from marin.execution.lazy import ArtifactStep, run
 from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRIER_REVISION, HarrierConfig, load_harrier
 from rigging.filesystem.cluster_config import marin_prefix
@@ -58,7 +59,7 @@ from experiments.post_training.task_curation.config import (
     PipelineOptions,
     RecipeSettings,
 )
-from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY
+from experiments.post_training.task_curation.curation_catalog import CATALOG_DIRECTORY, MANIFEST_FILENAME
 from experiments.post_training.task_curation.embedding import (
     INPUTS_VERSION,
     DescriptionEndpoint,
@@ -75,6 +76,7 @@ from experiments.post_training.task_curation.selection import (
 )
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
 from experiments.post_training.task_curation.sources import all_sources, runnable_sources
+from experiments.post_training.task_curation.task_store import task_store_path, task_store_step
 from experiments.post_training.task_curriculum.catalog_artifact import TASK_CURRICULUM
 
 LOCAL_MAX_WORKERS = 4
@@ -84,6 +86,7 @@ WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
 TASK_SELECTION_KEY = "task_selection"
+TASK_STORE_KEY = "task_store"
 EMBEDDING_STAGES = (
     "inputs",
     "descriptions",
@@ -278,10 +281,22 @@ def _selection_pass(step: ArtifactStep, *, cache_dir: Path | None, do_run: bool)
             result = run(step, max_concurrent=1)[0]
             click.echo(json.dumps({TASK_SELECTION_KEY: result.path}, indent=2))
         else:
-            click.echo(json.dumps({TASK_SELECTION_KEY: _selection_plan(step)}, indent=2))
+            click.echo(json.dumps({TASK_SELECTION_KEY: _step_plan(step)}, indent=2))
 
 
-def _selection_plan(step: ArtifactStep) -> dict[str, object]:
+def _task_store_identity(value: str) -> tuple[str, str]:
+    name, separator, version = value.rpartition("@")
+    try:
+        if not separator:
+            raise ValueError("use NAME@VERSION")
+        validate_path_segment("task store name", name)
+        validate_version(version)
+    except ValueError as error:
+        raise click.BadParameter(str(error), param_hint="--task-store") from None
+    return name, version
+
+
+def _step_plan(step: ArtifactStep) -> dict[str, object]:
     return {
         "name": step.name,
         "version": step.version,
@@ -393,6 +408,10 @@ def _embedding_pass(
 @click.option("--corpus", help="Run embedding or selection from a completed corpus.json without rerunning curation.")
 @click.option("--embed", type=click.Choice(EMBEDDING_STAGES), help="Run this embedding stage after curation.")
 @click.option("--selection", help="Selection recipe JSON: append task-selection after FULL or an admitted --corpus.")
+@click.option(
+    "--task-store",
+    help="NAME@VERSION of the task store a SAMPLE/FULL campaign builds from its sources; required for SAMPLE/FULL.",
+)
 @click.option("--eval-lite", help="EvalLite recipe JSON: select from a completed converted --corpus.")
 @click.option("--representation", type=click.Choice(["direct", "rewrite"]), default="direct", show_default=True)
 @click.option("--embedding-sample-size", type=click.IntRange(min=1), help="Seeded embedding sample per source.")
@@ -501,6 +520,7 @@ def main(
     corpus: str | None,
     embed: str | None,
     selection: str | None,
+    task_store: str | None,
     eval_lite: str | None,
     representation: str,
     embedding_sample_size: int | None,
@@ -553,6 +573,12 @@ def main(
     processing_mode = SourceProcessingMode(mode) if mode else SourceProcessingMode.QUICK
     if selection is not None and corpus is None and processing_mode != SourceProcessingMode.FULL:
         raise click.UsageError("--selection requires --mode full or an admitted --corpus")
+    campaign = corpus is None and processing_mode != SourceProcessingMode.QUICK
+    if campaign and task_store is None:
+        raise click.UsageError("SAMPLE/FULL requires --task-store NAME@VERSION")
+    if not campaign and task_store is not None:
+        raise click.UsageError("--task-store requires a SAMPLE/FULL campaign")
+    store_identity = _task_store_identity(task_store) if task_store is not None else None
     selection_recipe = (
         SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
     )
@@ -780,15 +806,9 @@ def main(
         assert report_path is not None
         publication_root = publication_catalog or str(StoragePath(report_path).parent / CATALOG_DIRECTORY)
         steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
-        curation_steps = steps
-        selection_step = (
-            task_selection_step(
-                {source.info.id: step for source, step in zip(selected.values(), curation_steps, strict=True)},
-                selection_recipe,
-            )
-            if selection_recipe is not None
-            else None
-        )
+        curated = {source.info.id: step for source, step in zip(selected.values(), steps, strict=True)}
+        assert store_identity is not None
+        selection_step = task_selection_step(curated, selection_recipe) if selection_recipe is not None else None
         assessments = {}
         if assessment is not None:
             stages = [
@@ -810,7 +830,8 @@ def main(
             plan["publication_catalog"] = publication_root
             plan["quality_policy"] = {"sample_size": quality_sample_size, "seed": seed}
             plan["embedding_stage"] = embed
-            plan[TASK_SELECTION_KEY] = _selection_plan(selection_step) if selection_step is not None else None
+            plan[TASK_STORE_KEY] = {"path": task_store_path(*store_identity)}
+            plan[TASK_SELECTION_KEY] = _step_plan(selection_step) if selection_step is not None else None
             click.echo(json.dumps(plan, indent=2))
             return
         if cache_dir is not None:
@@ -836,8 +857,16 @@ def main(
             raise
         else:
             _publish_campaign(report_path, selected, publication_root)
+        # A dataset-owned pipeline without a curation manifest admits no tasks to pin.
+        pinned = {
+            source_id: step
+            for source_id, step in curated.items()
+            if (StoragePath(step.path()) / MANIFEST_FILENAME).exists()
+        }
+        store = run(task_store_step(*store_identity, curated=pinned, released={}), max_concurrent=1)[0]
+        click.echo(json.dumps({TASK_STORE_KEY: store.path}, indent=2))
         if selection_step is not None or embedding is not None:
-            roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
+            roots = {source_id: step.path() for source_id, step in curated.items()}
             _write_corpus(roots, inventory, report_path, "admitted")
         if selection_step is not None:
             result = run(selection_step, max_concurrent=1)[0]

@@ -19,26 +19,32 @@ for the handoff to [Snowball RL experiments](../../../docs/recipes/rl-experiment
 
 ## Task store
 
-[`task_store_step`](task_store.py) binds curated source artifacts and released
-task files into a versioned `TaskStore`. The store records where each source's
-tasks live and the SHA-256 that pins them: the canonical `manifest.json` of a
-curation artifact, or the bytes of a released Parquet file. It copies no task
-data, and it does not hash a curated source's `final/` files. `to_dataset()`
-returns a Zephyr dataset of `TaskRow(source_id, task_id, task_spec)` over each
-curated source's admitted `final/` rows and each released file's `task_spec`
-rows. It fails when a pinned manifest or released file changed.
-`select_sources(...)` restricts the store to the named sources. Training
-selection reads its sources through the same readers.
+Every SAMPLE or FULL campaign takes `--task-store NAME@VERSION`. After the
+campaign succeeds, the driver builds that [`TaskStore`](task_store.py) from the
+run's sources. A store records where each source's tasks live and the SHA-256
+that pins them: a curation artifact's canonical `manifest.json`, or the bytes of
+a released Parquet file. It copies no task data and does not hash a curated
+source's `final/` files. A dataset-owned pipeline that writes no curation
+manifest admits no tasks, so the store leaves it out. A failed campaign builds
+no store.
 
 ```python
-run(task_store_step("snowball", "2026.11.26.1", curated=curated, released={uri: sha256}))
-
 store = TaskStore.open("snowball", "2026.11.26.1")
 rows = store.select_sources("MarinSkyRL:openscience").to_dataset()
 ```
 
 `TaskStore.open(name, version)` reads an existing record under
-`rl-data/task-store/<name>/<version>` of the configured artifact prefix.
+`rl-data/task-store/<name>/<version>` of the configured artifact prefix and
+raises `FileNotFoundError` when none is there. `to_dataset()` returns a Zephyr
+dataset of `TaskRow(source_id, task_id, task_spec)` over each curated source's
+admitted `final/` rows and each released file's `task_spec` rows; it fails when
+a pinned manifest or released file changed. `select_sources(...)` restricts the
+store to the named sources. An existing `NAME@VERSION` is reused, so a new set
+of sources needs a new version. A rerun of an earlier campaign reuses its
+completed source artifacts, so building a store for it costs one manifest read
+per source. Training selection reads its sources through the same readers.
+`task_store_step(name, version, curated=..., released=...)` builds a store
+outside the driver.
 
 ## EvalLite
 
@@ -114,7 +120,7 @@ source's panel, while FULL expands sources accepted by its panel review.
 ```bash
 uv run --with-editable './lib/taskcompendium[pipeline]' python \
   -m experiments.post_training.task_curation.driver \
-  --mode sample --cache-dir ~/.cache/marin/rl-curation \
+  --mode sample --task-store local-preview@dev --cache-dir ~/.cache/marin/rl-curation \
   --source aime24 --source svamp --quality-sample-size 5 \
   --assess --assessment-sample-size 3 --excluded-sample-size 2 \
   --max-workers 2 --concurrent-sources 1 --review-concurrency 1 \

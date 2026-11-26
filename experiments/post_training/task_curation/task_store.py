@@ -108,8 +108,11 @@ class TaskStore(Artifact):
 
     @classmethod
     def open(cls, name: str, version: str) -> "TaskStore":
-        """Load a store record from the configured artifact prefix."""
-        path = prefix_join(marin_prefix(), f"{TASK_STORE_PREFIX}/{name}/{version}")
+        """Load the store record ``name@version`` from the configured artifact prefix.
+
+        Raises ``FileNotFoundError`` when the prefix holds no record for it.
+        """
+        path = task_store_path(name, version)
         if read_record(path) is None:
             raise FileNotFoundError(f"No task store {name}@{version} at {path}")
         return cls.raw_load(path)
@@ -171,6 +174,11 @@ def task_store_step(
         run=build_task_store,
         build_config=build_config,
     )
+
+
+def task_store_path(name: str, version: str) -> str:
+    """Where ``task_store_step(name, version, ...)`` writes its record under the artifact prefix."""
+    return prefix_join(marin_prefix(), f"{TASK_STORE_PREFIX}/{name}/{version}")
 
 
 def manifest_sha256(root: str) -> str:

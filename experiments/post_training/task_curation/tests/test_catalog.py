@@ -39,6 +39,8 @@ def test_cli_catalog_preserves_archived_packets_and_reuses_curation_for_new_rubr
     args = [
         "--mode",
         "full",
+        "--task-store",
+        "fixture@2026.11.26.1",
         "--cache-dir",
         str(cache),
         "--source",

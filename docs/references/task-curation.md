@@ -877,7 +877,7 @@ Run the driver inside an Iris job whose `EnvironmentSpec` includes
 uv run --with-editable './lib/taskcompendium[pipeline]' python -m \
   experiments.post_training.task_curation.driver \
   --review-mode chat --model-revision YOUR_GLM_REVISION \
-  --review-cache CACHE_PREFIX --mode sample \
+  --review-cache CACHE_PREFIX --mode sample --task-store NAME@VERSION \
   --max-workers 64 --coordinator-memory 16g --concurrent-sources 10 \
   --normalized-shards 32 \
   --image-backend gvisor \
@@ -951,6 +951,13 @@ Incomplete curation produces retained artifacts and downstream assessment, then
 the campaign reports failure. `--curation-attempt N` selects a new curation key
 when controls need a retry; successful exact review requests and pinned downloads
 remain cached. Rerun the same campaign to reuse completed dependencies.
+
+`--task-store NAME@VERSION` is required for SAMPLE and FULL. After a campaign
+succeeds, the driver builds that
+[task store](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#task-store)
+from the run's sources and prints its path; `TaskStore.open(NAME, VERSION)`
+reads it. An existing version is reused, so use a new version when the sources
+change.
 `--assessment-model-revision` changes the grading model revision separately from
 the curation review revision.
 
