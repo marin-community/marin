@@ -18,6 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import yaml
 from finestore.reader import ReadView
+from finestore.rl.rl_progress import AttemptSummary
 from finestore.rl.run_records import (
     EVALUATIONS_TABLE,
     METRIC_METADATA_KEYS,
@@ -27,11 +28,13 @@ from finestore.rl.run_records import (
     EvaluationTaskRow,
     LaunchReceipt,
     MetricRow,
+    RunIndexIdentity,
     read_attempt,
     read_attempts,
     register_run_tables,
     run_records_root,
     update_attempt,
+    write_attempt,
     write_evaluations,
 )
 from finestore.rl.strata import (
@@ -52,6 +55,7 @@ from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl_records import read_stored_skyrl_attempt
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
@@ -65,6 +69,7 @@ from experiments.post_training import rl as runner
 from experiments.post_training import rl_command as command
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_index, rl_publication
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, run_inputs
@@ -95,35 +100,34 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value))
 
 
-def cache_native_compositions(monkeypatch) -> None:
-    """Reuse successful compositions of equivalent launch documents within one test."""
+def native_compositions():
+    """Cache real native compositions of equivalent fixture documents."""
     compose_configs = gate.compose_configs
     cached = {}
-    # Attempt IDs also appear in derived fields such as the Iris job name.
-    attempt_placeholder = "<generated-attempt-id>"
 
     def compose(paths, *, validate_driver=False):
         documents = [Path(path).read_text() for path in paths]
         attempts = [yaml.safe_load(document)["run"]["attempt_id"] for document in documents]
-        key = (
-            validate_driver,
-            tuple(
-                document.replace(attempt, attempt_placeholder)
-                for document, attempt in zip(documents, attempts, strict=True)
-            ),
+        token = "<fixture-attempt>"
+        key = validate_driver, tuple(
+            document.replace(attempt, token) for document, attempt in zip(documents, attempts, strict=True)
         )
         if key not in cached:
             configs = compose_configs(paths, validate_driver=validate_driver)
             cached[key] = [
-                json.dumps(config).replace(attempt, attempt_placeholder)
-                for config, attempt in zip(configs, attempts, strict=True)
+                json.dumps(config).replace(attempt, token) for config, attempt in zip(configs, attempts, strict=True)
             ]
         return [
-            json.loads(config.replace(attempt_placeholder, attempt))
-            for config, attempt in zip(cached[key], attempts, strict=True)
+            json.loads(config.replace(token, attempt)) for config, attempt in zip(cached[key], attempts, strict=True)
         ]
 
-    monkeypatch.setattr(gate, "compose_configs", compose)
+    return compose
+
+
+def cache_native_compositions(monkeypatch, native_compositions):
+    """Enable the native fixture cache for a test's gate calls."""
+
+    monkeypatch.setattr(gate, "compose_configs", native_compositions)
 
 
 def fake_s3(monkeypatch, *paths: str) -> None:
@@ -281,18 +285,26 @@ def edit_receipt(root: Path) -> Iterator[dict]:
     write_receipt(root, receipt)
 
 
-def controls(write, name, **kwargs):
-    pin = gate.control_pin(snowball_model.SNOWBALL.by_name[name], table=snowball_model.SNOWBALL)
-    return [
-        write(
-            name,
-            gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
-            speed=100 + index,
-            score=0.49 + index * 0.01,
-            **kwargs,
+def controls(write, name, *, speed=None, score=None, **kwargs):
+    def record(index):
+        options = {
+            "speed": 100 + index if speed is None else speed,
+            "score": 0.48 + index * 0.01 if score is None else score,
+        }
+        return write(
+            name, f"controls/{name}/r{index}", control=True, attempt_id=f"control-r{index}", **(options | kwargs)
         )
-        for index in range(pin.replicates)
-    ]
+
+    return [record(index) for index in range(gate.CONTROL_COUNT)]
+
+
+def cohort_from_fixtures(root: Path) -> gate.ControlCohort:
+    """Select the same indexed cohort as the gate CLI for a recorded candidate."""
+    attempt = read_attempt(
+        str(root / "exports"), json.loads((root / "terminal.json").read_text())["config"]["run"]["attempt_id"]
+    )
+    assert attempt is not None and attempt.index is not None
+    return gate.select_controls(attempt.index)
 
 
 def preset_table(monkeypatch):
@@ -405,9 +417,9 @@ def evaluation_task_rows(
 
 
 def recorded_runs(selection, tmp_path, monkeypatch, request):
-    table = snowball_model.SNOWBALL
-    pins = {name: replace(pin, version=recipe.RUN_ARTIFACT_VERSION) for name, pin in table.control_pins.items()}
-    monkeypatch.setattr(snowball_model, "SNOWBALL", replace(table, control_pins=pins))
+    indexed_controls: dict[tuple[str, str], AttemptSummary] = {}
+    base_versions: dict[str, str] = {}
+    monkeypatch.setattr(rl_index, "list_attempts", lambda _url=None: list(indexed_controls.values()))
     set_job_info(None)
     request.addfinalizer(lambda: set_job_info(None))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
@@ -504,6 +516,9 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         fingerprint="",
         missing_steps=(),
         attempt_id="recorded-attempt",
+        control=False,
+        cohort_run_id=None,
+        completed_at="2026-11-06T19:40:00+00:00",
         table=None,
     ):
         table = table or snowball_model.SNOWBALL
@@ -529,21 +544,43 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         launch, result = native["config"], native["result"]
         max_steps = launch["skyrl"]["trainer"]["max_steps"]
         generating = isinstance(preset.recipe.layout.workload, presets.Generation)
-        pin = gate.control_pin(preset, table=table) if preset.gated else None
         result.update(
             iris_job_id="/tests/native-run",
             started_at="2026-11-06T18:40:00+00:00",
-            finished_at="2026-11-06T19:40:00+00:00",
+            finished_at=completed_at,
         )
         result["provenance"].update(
-            base_commit=pin.commit if pin else "commit-one",
+            base_commit="commit-one",
             dirty=False,
             command_line=["unrelated-command", "--preset", "train-long"],
         )
         write_receipt(root, native)
+        version = gate.config_version(config)
+        if control:
+            base_versions[preset_name] = version
+        identity = RunIndexIdentity(
+            run_id=cohort_run_id or run_id,
+            model=table.model,
+            preset=preset_name,
+            preset_version=version,
+            base_preset_version=base_versions.get(preset_name, version),
+            base_commit="commit-one",
+            is_control=control,
+            user="tests",
+            branch="main" if control else "candidate",
+            source_revision="commit-one",
+            dirty=False,
+        )
+        write_attempt(str(root / "exports"), AttemptRecord(run_id=run_id, attempt_id=attempt, index=identity))
         write_json(root / RUN_INPUTS_FILENAME, inputs.model_dump(mode="json"))
         write_skyrl_run_record(
-            root, name, recipe.RUN_ARTIFACT_VERSION, fingerprint=fingerprint, global_step=0 if generating else max_steps
+            root,
+            name,
+            recipe.RUN_ARTIFACT_VERSION,
+            fingerprint=fingerprint,
+            global_step=0 if generating else max_steps,
+            run_id=run_id,
+            attempt_id=attempt,
         )
         (root / ".executor_status").write_text("SUCCESS")
         stored_metrics = {}
@@ -640,6 +677,12 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             values.update(metrics or {})
             values["attempt_id"] = attempt
         write_metrics(root, {step: values for step, values in stored_metrics.items() if step not in missing_steps})
+        if control:
+            stored = read_stored_skyrl_attempt(str(root))
+            assert stored is not None
+            indexed_controls[run_id, attempt] = rl_publication.build_record(
+                str(root), preset, table=table, attempt=stored
+            )
         return root
 
     return write

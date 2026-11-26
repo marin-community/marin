@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from finestore.rl.rl_progress import AttemptSummary
+from finestore.rl.rl_progress import AttemptSummary, completed_controls
 from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -127,10 +127,10 @@ def create_api(services):
                         },
                     )
                 if older_publication:
-                    response = {key: normalized[key] for key in record}
+                    response = {key: normalized.get(key, incoming.get(key)) for key in record}
                     groups = (
-                        response.get("evaluations", ()),
-                        (response.get("gate_result") or {}).get("comparisons", ()),
+                        response.get("evaluations") or (),
+                        (response.get("gate_result") or {}).get("comparisons") or (),
                     )
                     for group in groups:
                         for comparison in group:
@@ -146,6 +146,7 @@ def create_api(services):
     @api.get("/runs")
     def runs():
         records = []
+        summaries = []
         skipped = []
         with engine.connect() as connection:
             rows = connection.execute(
@@ -179,6 +180,10 @@ def create_api(services):
                     continue
                 record["has_grader_report"] = row["has_grader_report"]
                 records.append(record)
+                summaries.append(summary)
+        controls = {(summary.run_id, summary.attempt_id) for summary in completed_controls(summaries)}
+        for record in records:
+            record["is_main_control"] = (record["run_id"], record["attempt_id"]) in controls
         return {"runs": records, "skipped_records": skipped}
 
     @api.get("/configuration")

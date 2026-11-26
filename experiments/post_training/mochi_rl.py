@@ -24,12 +24,15 @@ from experiments.post_training.rl_presets import (
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
+    UPDATE_SECONDS_METRIC,
     Evaluation,
     Layout,
+    Metric,
     ModelPresets,
     Preset,
     Recipe,
     Training,
+    WindowStatistic,
 )
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -217,7 +220,6 @@ _TRAIN_LONG = Preset(
     tasks_input="optional",
     accepts_settings=True,
     accepts_init=True,
-    control_preset=None,
     checkpoints="none",
     data_settings=frozenset({"shuffle"}),
     tasks="snowball-100k@2026.11.25.1",
@@ -244,18 +246,41 @@ _TRAIN_MEDIUM = replace(
     evaluations=(),
 )
 
+_UPDATE_SECONDS = Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN)
+_SPEED_MEDIUM = replace(
+    _TRAIN_MEDIUM.with_updates(10),
+    name="speed-medium",
+    measured=range(2, 11),
+    tasks_input="forbidden",
+    temporary_output=False,
+    guards=(_UPDATE_SECONDS,),
+    objectives=(_UPDATE_SECONDS,),
+)
+_LEARNING_SCORE = Metric(f"{_EVALUATION.name}/family_mean", True)
+_LEARNING_MEDIUM = replace(
+    _TRAIN_LONG.with_updates(10),
+    name="learning-medium",
+    evaluations=(replace(_EVALUATION, every=None, at_start=True),),
+    temporary_output=False,
+    guards=(_LEARNING_SCORE,),
+    objectives=(_LEARNING_SCORE,),
+)
+
+_TRAIN_LONG_AGENTIC = agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS)
+
 MOCHI = ModelPresets(
     model="mochi",
     presets=(
+        _SPEED_MEDIUM,
+        _LEARNING_MEDIUM,
         _TRAIN_MEDIUM,
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
         agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
-        agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS),
+        _TRAIN_LONG_AGENTIC,
         agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
     ),
     namespace="mochi-rl",
-    control_pins={},
     default_export_marker=MODEL_MANIFEST_FILENAME,
 )
 

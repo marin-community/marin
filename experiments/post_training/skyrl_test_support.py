@@ -6,7 +6,9 @@ from collections.abc import Mapping, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.rl.run_records import read_attempt_metrics
 from marin.rl.skyrl import prepare_skyrl_cpu_python, run_skyrl_cpu, skyrl_project_root
+from marin.rl.skyrl_records import read_skyrl_launch_config
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.selection import TRAIN_FILENAME
@@ -35,3 +37,9 @@ def run_native_test(module: str, args: Sequence[str]):
     result = run_skyrl_cpu([str(interpreter), "-I", "-m", module, str(checkout), *args], timeout=170)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def read_skyrl_metrics(run_output: str, attempt_id: str | None = None) -> dict[int, dict]:
+    """Read one native attempt's metrics and bounded checkpoint ancestors."""
+    config = read_skyrl_launch_config(run_output)
+    return read_attempt_metrics(config["artifacts"]["export_root"], attempt_id or config["run"]["attempt_id"])

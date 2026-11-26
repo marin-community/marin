@@ -15,7 +15,9 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import ComparisonRole
+from finestore.rl.rl_progress import (
+    ComparisonRole,
+)
 from finestore.rl.run_records import (
     read_attempt,
     read_evaluations,
@@ -33,9 +35,9 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
-from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
+from marin.rl.skyrl_records import RecordedLaunch, read_stored_skyrl_attempts
 from scipy.stats import t
-from skyrlrecipe.documents import get_path, set_path
+from skyrlrecipe.documents import set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
@@ -43,13 +45,21 @@ from taskcompendium.identity import canonical_sha256
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_index
 from experiments.post_training import rl_measurements as measurements
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunOptions, read_run_inputs, run_inputs
+from experiments.post_training.rl_measurements import (
+    RUN_INPUTS_FILENAME,
+    RunInputs,
+    RunOptions,
+    read_run_inputs,
+    run_inputs,
+)
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
+    cohort_from_fixtures,
     controls,
     edit_receipt,
     evaluation_task_rows,
@@ -61,6 +71,7 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import answer as _answer
 from experiments.post_training.rl_tests.fixtures import write_json as _json
+from experiments.post_training.skyrl_test_support import read_skyrl_metrics
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TASK_MANIFEST_FILENAME,
@@ -92,23 +103,51 @@ def edit_metrics(root, edit):
     write_metrics(root, metrics)
 
 
-def test_compare_leave_one_out_writes_the_printed_report(recorded_runs):
-    controls(recorded_runs, "speed-medium")
-    report = compare("speed-medium", "--leave-out", "r0")
+def test_compare_writes_the_report_for_the_five_newest_base_version_controls(
+    recorded_runs, cache_native_compositions, monkeypatch
+):
+    preset = "speed-medium"
+    for index, minute in enumerate((5, 2, 4, 3, 6, 1)):
+        recorded_runs(
+            preset,
+            f"controls/{preset}/r{index}",
+            control=True,
+            attempt_id=f"control-r{index}",
+            cohort_run_id="nightly-batch",
+            completed_at=f"2026-11-06T19:{minute:02d}:00+00:00",
+            speed=100 + index,
+        )
+    candidate_settings = RunInputs(preset_name=preset, settings=("trainer.policy.optimizer_config.lr=2e-6",))
+    candidate = recorded_runs(preset, "users/test/baseline", speed=102, inputs=candidate_settings)
+    (_, records) = read_stored_skyrl_attempts(str(candidate))
+    index = records["recorded-attempt"].index
+    assert index is not None and index.base_preset_version != index.preset_version
+    indexed = rl_index.list_attempts()
+    different = indexed[0].model_copy(
+        update={
+            "native_run_id": "wrong-version",
+            "attempt_id": "wrong-version",
+            "preset_version": index.preset_version,
+            "completed_at": "2026-11-06T20:00:00+00:00",
+        }
+    )
+
+    monkeypatch.setattr(rl_index, "list_attempts", lambda _service=None: [*indexed, different])
+    report = compare(preset, "--candidate", "users/test/baseline")
     assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
+    assert report["run"]["attempt_ids"] == ["recorded-attempt"]
+    assert report["control"]["version"] == index.base_preset_version
+    assert [attempt["attempt_id"] for attempt in report["control"]["attempts"]] == [
+        "control-r4",
+        "control-r0",
+        "control-r2",
+        "control-r3",
+        "control-r1",
+    ]
+    assert {attempt["run_id"] for attempt in report["control"]["attempts"]} == {"nightly-batch"}
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}
-    assert all(row["comparator"] is not None for row in report["invariants"])
-    for name, speed, kl, verdict, effect in (
-        ("improvement", 90, 0.1, "pass", "improves"),
-        ("regression", 150, 0.1, "fail", "regression"),
-        ("trade-off", 90, 0.2, "fail", "trade-off"),
-    ):
-        candidate = "users/test/" + name
-        recorded_runs("speed-medium", candidate, speed=speed, metrics={KL: kl})
-        result = compare("speed-medium", "--candidate", candidate)
-        assert (result["verdict"], result["effect"]) == (verdict, effect), result
 
 
 def test_compare_validates_staged_model_and_tokenizer_bindings(recorded_runs):
@@ -166,20 +205,15 @@ def test_compare_checks_hf_draft_mirror_against_the_requested_revision(recorded_
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     preset = snowball_model.SNOWBALL.by_name["speed-medium"]
     key = "policy/raw_grad_norm"
-    pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
-    control_roots = []
-    for index in range(pin.replicates):
-        root = recorded_runs(
-            preset.name,
-            gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL),
-            speed=100 + index,
-            metrics={key: 100 + index},
-        )
-        control_roots.append(root)
+    control_roots = controls(recorded_runs, preset.name)
+    for index, root in enumerate(control_roots):
+        edit_metrics(root, lambda row, i=index: row.update({key: 100 + i}))
     candidates = []
+    roots = []
     for index, value in enumerate((0, 0.01)):
         name = f"users/test/requirements-r{index}"
         root = recorded_runs(preset.name, name, speed=108, metrics={key: value})
+        roots.append(root)
         candidates.append(ArtifactStep.adopt(name, recipe.RUN_ARTIFACT_VERSION, str(root), kind=SkyRLRun))
 
     def gate_for_candidates():
@@ -191,28 +225,37 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
                 requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
                 preset=preset,
             ),
-            table=snowball_model.SNOWBALL,
+            cohort=cohort_from_fixtures(roots[0]),
+            group_name="users/test/requirements",
         )
 
     report = run(gate_for_candidates())[0]
     assert report.verdict == "fail" and report.effect == "regression"
     speed_guard = next(row for row in report.comparisons if row.metric == "speed/update_seconds")
     assert speed_guard.passes is False
-    assert speed_guard.tolerance == pytest.approx(t.ppf(1 - 0.025 / 2, 3) * math.sqrt(5 / 3) * math.sqrt(0.75))
+    assert speed_guard.tolerance == pytest.approx(t.ppf(1 - 0.025 / 2, 4) * math.sqrt(2.5) * math.sqrt(0.7))
     requirement = report.rows(ComparisonRole.REQUIREMENT)
     assert len(requirement) == 1 and requirement[0].passes
-    assert requirement[0].tolerance == pytest.approx(t.ppf(0.975, 3) * math.sqrt(5 / 3) * math.sqrt(0.5 + 0.25))
+    assert requirement[0].tolerance == pytest.approx(t.ppf(0.975, 4) * math.sqrt(2.5) * math.sqrt(0.7))
     assert [(row.replicate, row.holds) for row in report.invariants if row.name == "require/" + key] == [
         (0, True),
         (1, False),
     ]
 
-    for root in control_roots:
-        with edit_receipt(root) as receipt:
-            receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
+    edit_metrics(roots[1], lambda row: row.update({key: 0.0}))
+    updated = run(gate_for_candidates())[0]
+    assert updated.path != report.path
+    assert [(row.replicate, row.holds) for row in updated.invariants if row.name == "require/" + key] == [
+        (0, True),
+        (1, True),
+    ]
+
+    other = cohort_from_fixtures(roots[0]).attempts[1]
+    with edit_receipt(Path(other.path)) as receipt:
+        receipt["config"]["skyrl"]["trainer"]["policy"]["optimizer_config"]["lr"] *= 2
     stale = run(gate_for_candidates())[0]
-    assert stale.path != report.path
-    assert stale.verdict == "invalid" and "control config differs from current preset defaults" in stale.reason
+    assert stale.path != updated.path
+    assert stale.verdict == "invalid" and "stored control config version" in stale.reason
 
 
 def test_mismatch_uses_selected_tokens_over_the_measured_window(recorded_runs, preset_table):
@@ -282,7 +325,7 @@ def test_training_invariants_from_recorded_values(recorded_runs, preset_table):
 
 
 @pytest.mark.parametrize("preset", ["speed-short", "learning-medium"])
-def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset):
+def test_current_generation_counters_compare_with_stored_controls(recorded_runs, preset, cache_native_compositions):
     controls(recorded_runs, preset)
     root = recorded_runs(preset, "users/test/current-generation", speed=101)
     if preset == "speed-short":
@@ -557,25 +600,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
     complete = evaluation_task_rows(version_answers, attempt_id=attempt_id, step=25, evaluation="eval/", selection=child)
     write_evaluations(export, complete)
     stored = read_evaluations(export, attempt_id=attempt_id, evaluation="eval/", step=25)
-    assert scoring.score_eval_lite_version(stored, parent, expected_answers=2) == scoring.EvalLiteVersionScore(
-        5 / 6, 6, (), ()
-    )
-    assert scoring.score_eval_lite_version(stored, child, expected_answers=2) == scoring.EvalLiteVersionScore(
-        1.0, 6, (), ()
-    )
-
-    repairs = {
-        "coding": {"task_digest": "different-content"},
-        "general": {"answers": []},
-        "mixed": {"answers": next(row.answers[:1] for row in stored if row.task_id == "mixed")},
-    }
-    damaged = [row.model_copy(update=repairs.get(row.task_id, {})) for row in stored if row.task_id != "stem"]
-    assert scoring.score_eval_lite_version(damaged, parent, expected_answers=2) == scoring.EvalLiteVersionScore(
-        None, 2, ("general", "mixed", "stem"), ("coding",)
-    )
-    with pytest.raises(ValueError, match="select one evaluation, attempt and step"):
-        scoring.score_eval_lite_version([*stored, stored[0].model_copy(update={"step": 0})], parent)
-
     old_launch = RecordedLaunch.from_document(launch, attempt=attempt_id)
     old_receipt = read_attempt(export, attempt_id)
     previous = measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt)
@@ -591,8 +615,6 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
             if child.tasks[row.task_id].state == MembershipState.ACTIVE
         ],
     )
-    active = read_evaluations(export, attempt_id=active_attempt, evaluation="eval/", step=25)
-    assert scoring.score_eval_lite_version(active, parent, expected_answers=2).missing == ("bounded",)
     with pytest.raises(measurements.InvalidComparison, match="differs from the selected attempt record"):
         measurements.read_answers(evaluation, str(tmp_path), launch=old_launch)
     assert measurements.read_answers(evaluation, str(tmp_path), launch=old_launch, attempt=old_receipt).equals(previous)
@@ -626,10 +648,11 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
         (subprocess.TimeoutExpired("compose", 120), "timed out after 120 s"),
         (subprocess.CompletedProcess([], 0, "", ""), "returned invalid JSON"),
         (subprocess.CompletedProcess([], 0, "{", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 0, "[null]", ""), "expected 1 configuration objects"),
         (subprocess.CompletedProcess([], 1, "", ""), "exited with status 1"),
         (FileNotFoundError("native composer executable missing"), "native composer executable missing"),
     ],
-    ids=["redacted-timeout", "timeout", "empty", "invalid-json", "nonzero", "missing-executable"],
+    ids=["redacted-timeout", "timeout", "empty", "invalid-json", "invalid-shape", "nonzero", "missing-executable"],
 )
 def test_native_composition_reports_failure(monkeypatch, outcome, expected):
     monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", lambda *args, **kwargs: sys.executable)
@@ -674,39 +697,25 @@ def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
         "initializer",
         "initializer-hf",
         "priority",
-        "stale-default",
-        "control-commit",
         "unbound-data",
         "allocation",
         "cached-default",
         "zero-spread",
         "missing-guard",
-        "omitted-default",
-        "omitted-current-nondefault",
-        "omitted-schema-nondefault",
         "omitted-candidate-default",
         "protocol-temperature",
+        "family-assignment",
+        "initial-family-assignment",
         "evaluation-cadence",
         "malformed-seed",
     ],
 )
-def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorded_runs, tmp_path, monkeypatch, case):
+def test_gate_compares_recorded_configuration_and_defaults(
+    preset_table, recorded_runs, tmp_path, monkeypatch, cache_native_compositions, case
+):
     preset = snowball_model.SNOWBALL.by_name["speed-medium" if case == "missing-guard" else "learning-medium"]
     setting = "trainer.policy.optimizer_config.lr=2e-6"
-    settings = (
-        ()
-        if case
-        in (
-            "stale-default",
-            "cached-default",
-            "zero-spread",
-            "omitted-default",
-            "omitted-current-nondefault",
-            "omitted-schema-nondefault",
-            "omitted-candidate-default",
-        )
-        else (setting,)
-    )
+    settings = () if case in {"cached-default", "zero-spread", "omitted-candidate-default"} else (setting,)
     inputs = run_inputs(preset.name, settings=settings, preset=preset)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
@@ -732,26 +741,14 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             )
             initializer = SkyRLPolicyModel(ArtifactStep.adopt(name, version, str(root), kind=SkyRLRun))
         inputs = inputs.model_copy(update={"init": recipe.stored_initializer(initializer, preset=preset)})
-    control_roots = controls(recorded_runs, preset.name)
-    if case == "zero-spread":
-        pin = gate.control_pin(preset, table=snowball_model.SNOWBALL)
-        control_roots = [
-            recorded_runs(
-                preset.name, gate.control_name(pin.preset, pin.commit, index, table=snowball_model.SNOWBALL), score=0.5
-            )
-            for index in range(pin.replicates)
-        ]
-    if case in ("stale-default", "omitted-current-nondefault"):
-        changed = setting if case == "stale-default" else 'generator.chat_template_kwargs={"enable_thinking":false}'
-        preset = replace(preset, recipe=replace(preset.recipe, config=preset.recipe.config.with_settings((changed,))))
-        preset_table(preset)
+    controls(recorded_runs, preset.name, score=0.5 if case == "zero-spread" else None)
     name = "users/test/config-" + case
     if case == "initializer-hf":
         with monkeypatch.context() as planning:
             planning.setattr(
                 skyrl_api, "discover_hf_checkpoints", lambda *_: pytest.fail("gate planning read the initializer export")
             )
-            planned = gate.validate_candidate(preset, inputs, table=snowball_model.SNOWBALL)
+            planned = gate.compose_preset(preset, inputs)
             assert planned["inputs"]["model"]["uri"].endswith("/<terminal-hf-export>")
         return
     if case == "priority":
@@ -760,41 +757,24 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, priority="production")),
         )
         inputs = inputs.model_copy(update={"options": RunOptions.from_preset(override)})
-        gate.validate_candidate(override, inputs, table=snowball_model.SNOWBALL)
+        gate.compose_preset(override, inputs)
         table = snowball_model.SNOWBALL
         with monkeypatch.context() as altered:
-            altered.setattr(snowball_model, "SNOWBALL", replace(table, presets=(override,)))
+            single = replace(table, presets=(override,))
+            altered.setattr(snowball_model, "SNOWBALL", single)
             candidate = recorded_runs(preset.name, name, inputs=inputs)
         assert json.loads((candidate / "terminal.json").read_text())["config"]["iris"]["priority"] == "production"
     else:
         candidate = recorded_runs(preset.name, name, inputs=inputs)
-    omissions = {
-        "omitted-default": {
-            "config.skyrl.generator.chat_template_kwargs": {},
-            "config.inputs.starting_checkpoint": None,
-            "config.iris.role_topology": None,
-        },
-        "omitted-current-nondefault": {"config.skyrl.generator.chat_template_kwargs": {}},
-        "omitted-schema-nondefault": {"config.skyrl.trainer.policy.optimizer_config.weight_decay": 0.0},
-        "omitted-candidate-default": {"config.skyrl.generator.chat_template_kwargs": {}},
-    }.get(case, {})
-    if omissions:
-        omitted = [candidate] if case == "omitted-candidate-default" else control_roots
-        for old in omitted:
-            with edit_receipt(old) as receipt:
-                for path, original in omissions.items():
-                    parent, key = path.rsplit(".", 1)
-                    assert get_path(receipt, parent).pop(key) == original
+    if case == "omitted-candidate-default":
+        with edit_receipt(candidate) as receipt:
+            assert receipt["config"]["skyrl"]["generator"].pop("chat_template_kwargs") == {}
     reasons = {
-        "stale-default": ("control config differs",),
         "zero-spread": ("variation is zero",),
         "missing-guard": ("missing or non-finite guard metric",),
-        "omitted-current-nondefault": ("control config differs",),
-        "omitted-schema-nondefault": ("control config differs",),
         "omitted-candidate-default": ("skyrl.generator.chat_template_kwargs",),
     }.get(case, ())
     mutation = {
-        "control-commit": (control_roots[0], "result.provenance.base_commit", "wrong-commit", "does not match its pin"),
         "unbound-data": (candidate, "config.skyrl.data.train_data", ["/unbound/train.parquet"], "skyrl.data.train_data"),
         "allocation": (
             candidate,
@@ -816,6 +796,19 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             set_path(receipt, path, value)
     if case == "missing-guard":
         edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
+    if case in {"family-assignment", "initial-family-assignment"}:
+        current = read_stored_skyrl_attempts(str(candidate))[0]
+        export_root = str(candidate / "exports")
+        rows = read_evaluations(export_root, attempt_id=current, evaluation="eval/")
+        task = next(row.task_id for row in rows if row.step == preset.updates)
+        reassigned = [
+            row.model_copy(update={"strata": row.strata.model_copy(update={"family": "alternate"})})
+            for row in rows
+            if row.task_id == task and (case == "family-assignment" or row.step == 0)
+        ]
+        assert {row.step for row in reassigned} == ({0, preset.updates} if case == "family-assignment" else {0})
+        write_evaluations(export_root, reassigned)
+        reasons = ("scoring groups differ",)
     if case == "evaluation-cadence":
         with edit_receipt(candidate) as receipt:
             evaluation = next(
@@ -874,11 +867,11 @@ def test_task_set_content_hash_is_order_independent_and_checked(recorded_runs):
     pq.write_table(pa.Table.from_pylist([*pool, {"task_spec": json.dumps(inactive)}]), panel_root / pool_filename)
     summary["selection_strata"]["task_files"] = [pool_filename]
     summary_path.write_text(json.dumps(summary))
-    task_set = measurements.read_recorded_task_set(
-        RecordedLaunch.from_document(receipt["config"], attempt=receipt["config"]["run"]["attempt_id"]), "eval_lite_100"
-    )
-    assert set(task_set.task_ids) == {json.loads(row["task_spec"])["id"] for row in rows}
-    assert inactive["id"] not in task_set.task_ids
+    evaluation = snowball_model.SNOWBALL.by_name[preset].evaluations[0]
+    answers = measurements.read_answers(evaluation, str(source))
+    task_ids = set(answers["task_id"].to_pylist())
+    assert task_ids == {json.loads(row["task_spec"])["id"] for row in rows}
+    assert inactive["id"] not in task_ids
     pq.write_table(pa.Table.from_pylist(list(reversed(rows))), original)
     report = compare(preset, "--candidate", "users/test/task-content")
     assert report["verdict"] == "pass", report
@@ -932,7 +925,8 @@ def test_python_run_saves_typed_inputs_for_comparison(
             kind=preset.model.step.artifact_type,
         ),
     )
-    preset = replace(preset, model=local)
+    guards = snowball_model.SNOWBALL.by_name["learning-medium"].guards
+    preset = replace(preset, model=local, guards=guards)
     preset_table(preset)
     controls(recorded_runs, preset_name)
     tasks = selection if preset_name == "data-medium" else None

@@ -98,7 +98,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     settings = ("context_budget.max_new_tokens_per_turn=24576", "trainer.train_batch_size=128")
     run = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, settings=settings)
     assert run.inputs is not None
-    config = rl_gate.validate_candidate(preset, run.inputs, table=SNOWBALL)["skyrl"]
+    config = rl_gate.compose_preset(preset, run.inputs)["skyrl"]
     buffer = config["trainer"]["rollout_buffer"]
     assert (buffer["max_in_flight"], buffer["groups_per_family"]) == (32, {"agentic": 64, "nonagentic": 64})
     (step,) = run.runs
@@ -296,6 +296,16 @@ def test_resume_inherits_the_source_runs_initializer(
         monkeypatch.setattr(rl_compose, "marin_temp_bucket", lambda *_args, **_kwargs: str(resume_prefix))
 
     resume_args = ("--resume", f"{source.name}@{source.version}")
+    composed = []
+    if not explicit_init:
+        compose_preset = rl_gate.compose_preset
+
+        def record_composition(preset, inputs):
+            config = compose_preset(preset, inputs)
+            composed.append(config)
+            return config
+
+        monkeypatch.setattr(rl_gate, "compose_preset", record_composition)
     planned = plan(table, preset.name, *resume_args)
     assert planned.exit_code == 0, (planned.output, planned.exception)
     assert f"  model: {source_model['identity']}\n" in planned.output
@@ -306,9 +316,7 @@ def test_resume_inherits_the_source_runs_initializer(
     assert inputs["model"] == source_model
     assert inputs["starting_checkpoint"]["uri"] == str(checkpoint)
     if not explicit_init:
-        launch = tmp_path / "resumed.yaml"
-        launch.write_text(resumed_config.launch_config_yaml)
-        (plan_document,) = rl_gate.compose_configs([str(launch)])
+        (plan_document,) = composed
         worker_document = deepcopy(plan_document)
         runtime = worker_document["skyrl"].setdefault("runtime", {})
         runtime["model_source_identity"] = inputs["model"]["identity"]
@@ -356,7 +364,7 @@ def test_mochi_plan_refuses_an_incomplete_default_export(
     assert "--sft PRESET" in result.output and "--init NAME@VERSION" in result.output
 
 
-@pytest.mark.usefixtures("source_provenance")
+@pytest.mark.usefixtures("source_provenance", "cache_native_compositions")
 @pytest.mark.parametrize(
     ("model", "override"),
     [("snowball", True), ("mochi", False), ("mochi", True)],
@@ -402,6 +410,7 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     else:
         monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: durable)
+    fake_s3(monkeypatch)
     monkeypatch.setattr(rl, "_status", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(sys, "argv", [module, *argv])
     monkeypatch.delitem(sys.modules, module)
@@ -504,8 +513,8 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
         (
             "snowball",
             "learning-medium",
-            ("--control", "--priority", "production"),
-            "controls use only the preset's pinned run options",
+            ("--control", "test-batch", "--priority", "production"),
+            "controls use only the preset's default run options",
             None,
         ),
         ("snowball", "train-long", ("--checkpoint-every", "3"), "fall on checkpoint steps", None),
