@@ -240,7 +240,7 @@ def test_row_facts_match_payload_shaping_with_repeated_marker_penalties(worker_c
     assert {key: value for key, value in actual.items() if key.startswith(shaping)} == {
         key: value for key, value in expected.items() if key.startswith(shaping)
     }
-    # Main's diagnostic also counts six marker subtraction residuals in this fixture.
+    # The diagnostic counts six marker subtraction residuals as well as five loop charges.
     assert actual[shaping + "loop_charged_tokens_mean"] == 11 / 5
 
 
