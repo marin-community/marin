@@ -6,6 +6,7 @@
 import json
 import sys
 import uuid
+from ctypes import POINTER, cast
 from types import SimpleNamespace
 
 import pynvml
@@ -19,9 +20,29 @@ from cloud.iris.role_topology import (
     FabricSample,
     RoleTopology,
     node_physical_labels,
+    probe_fabric_info,
 )
 
 CLUSTER_UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
+
+
+def test_fabric_probe_passes_writable_nvml_result_storage(monkeypatch):
+    monkeypatch.setattr(pynvml, "nvmlInit", lambda: None)
+    monkeypatch.setattr(pynvml, "nvmlShutdown", lambda: None)
+    monkeypatch.setattr(pynvml, "nvmlDeviceGetCount", lambda: 4)
+    monkeypatch.setattr(pynvml, "nvmlDeviceGetHandleByIndex", lambda index: index)
+
+    def read_fabric(handle, address):
+        info = cast(address, POINTER(pynvml.c_nvmlGpuFabricInfoV_t)).contents
+        info.clusterUuid[:] = CLUSTER_UUID.bytes
+        info.cliqueId = 7
+        info.state = pynvml.NVML_GPU_FABRIC_STATE_COMPLETED
+        info.status = pynvml.NVML_SUCCESS
+        return pynvml.NVML_SUCCESS
+
+    monkeypatch.setattr(pynvml, "_nvmlGetFunctionPointer", lambda name: read_fabric)
+    labels = node_physical_labels(rank=0, gpus_per_node=4, host="host", fabric_info=probe_fabric_info())
+    assert labels[FABRIC_LABEL] == f"{CLUSTER_UUID}:7"
 
 
 def fabric_info(**overrides):

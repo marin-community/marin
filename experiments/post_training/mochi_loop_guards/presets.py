@@ -317,8 +317,8 @@ S1_RP = replace(
 )
 # Fixed before submission under the November 26 user deadline override: 7 h/update
 # plus 3 h for startup fits four updates before the extended T32 cutoff.
-S2_CONTROL = replace(rl_arm("s2-antithrash-control", antithrash=False, updates=4), revision="2026.11.26.3")
-S2_TREATMENT = replace(rl_arm("s2-antithrash-treatment", antithrash=True, updates=4), revision="2026.11.26.3")
+S2_CONTROL = replace(rl_arm("s2-antithrash-control", antithrash=False, updates=4), revision="2026.11.26.4")
+S2_TREATMENT = replace(rl_arm("s2-antithrash-treatment", antithrash=True, updates=4), revision="2026.11.26.4")
 
 
 def s3_panel(name: str, export: ArtifactHfModel) -> Preset:
