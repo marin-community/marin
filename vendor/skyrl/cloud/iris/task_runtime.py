@@ -2284,6 +2284,7 @@ def _write_final_config(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bootstrap Ray and run one typed MarinSkyRL launch config.")
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--environment-prepared", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -2308,6 +2309,8 @@ def main() -> None:
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
     launch_config = load_launch_config(config_path)
+    if not cli_args.environment_prepared:
+        os.environ.update({str(key): str(value) for key, value in launch_config.runtime.task_env.items()})
     args = _runtime_namespace(launch_config)
     if args.role_topology is not None:
         args.ray_labels = {

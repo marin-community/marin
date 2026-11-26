@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -933,33 +934,32 @@ def run_skyrl_cpu(
     deadline = None if timeout is None else monotonic() + timeout
     with (
         tempfile.TemporaryFile() as stdout,
-        tempfile.TemporaryFile() as stderr,
-        subprocess.Popen(command, stdout=stdout, stderr=stderr, env=environment, start_new_session=True) as process,
+        subprocess.Popen(
+            command, stdout=stdout, stderr=subprocess.PIPE, env=environment, start_new_session=True
+        ) as process,
     ):
-        forwarded = 0
+        pipe = process.stderr
+        tail = b""
 
-        def forward() -> None:
-            nonlocal forwarded
-            if stream_stderr:
-                size = os.fstat(stderr.fileno()).st_size
-                while forwarded < size:
-                    data = os.pread(stderr.fileno(), min(size - forwarded, _CPU_DIAGNOSTIC_BYTES), forwarded)
-                    sys.stderr.write(data.decode(errors="replace"))
-                    forwarded += len(data)
-
-        def diagnostics() -> bytes:
-            forward()
-            offset = max(0, os.fstat(stderr.fileno()).st_size - _CPU_DIAGNOSTIC_BYTES)
-            return os.pread(stderr.fileno(), _CPU_DIAGNOSTIC_BYTES, offset)
+        def read_diagnostics(wait: float) -> None:
+            nonlocal pipe, tail
+            if pipe is None:
+                sleep(wait)
+            elif select.select([pipe], [], [], wait)[0]:
+                data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
+                if data:
+                    tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
+                    if stream_stderr:
+                        sys.stderr.write(data.decode(errors="replace"))
+                else:
+                    pipe = None
 
         try:
             while process.poll() is None:
-                forward()
                 remaining = 0.25 if deadline is None else min(0.25, deadline - monotonic())
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
-                with suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=remaining)
+                read_diagnostics(remaining)
         except BaseException as error:
             try:
                 if stream_stderr and isinstance(error, KeyboardInterrupt):
@@ -970,21 +970,22 @@ def run_skyrl_cpu(
                         while monotonic() < cleanup:
                             process.poll()
                             os.killpg(process.pid, 0)
-                            forward()
-                            sleep(0.1)
+                            read_diagnostics(0.1)
             finally:
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
             if isinstance(error, subprocess.TimeoutExpired):
-                error.stderr = diagnostics()
+                read_diagnostics(0)
+                error.stderr = tail
             raise
         returncode = process.wait()
         if returncode:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
+        read_diagnostics(0)
         stdout.seek(0)
         return subprocess.CompletedProcess(
-            command, returncode, stdout.read().decode(errors="replace"), diagnostics().decode(errors="replace")
+            command, returncode, stdout.read().decode(errors="replace"), tail.decode(errors="replace")
         )
 
 

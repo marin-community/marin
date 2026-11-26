@@ -163,6 +163,17 @@ def test_bootstrap_activation_exposes_runtime_commands(tmp_path: Path) -> None:
     ]
     assert linker.split(os.pathsep) == [str(environment / "lib"), process_environment["LIBRARY_PATH"]]
 
+    runtime_file = environment / RUNTIME_FILE
+    complete = runtime_file.read_bytes()
+    runtime_file.write_bytes(complete[:-1])
+    failed = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
+    assert failed.returncode != 0
+    assert "Unterminated SkyRL runtime assignment" in failed.stderr
+    runtime_file.write_bytes(complete.split(b"\0", 1)[0] + b"\0")
+    partial = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
+    assert partial.returncode != 0
+    assert "Incomplete SkyRL runtime assignments" in partial.stderr
+
 
 def test_bootstrap_exposes_cuda_linker_compatibility_paths(tmp_path: Path) -> None:
     environment, process_environment = fake_frozen_runtime(tmp_path)
@@ -253,7 +264,7 @@ def test_node_entrypoint_checks_transport_before_starting_controller(tmp_path):
         assert record["python_path"].split(os.pathsep)[:3] == [str(app), str(skyrl), str(skyrl / "skyrl-train")]
     assert transport["argv"] == ["--mode", "gate", "--gate-coverage", "all-gpus", "--gate-report-prefix",
                                  "s3://test/interconnect-gate", "--pynccl-init"]
-    assert controller["argv"] == ["--config", "launch.yaml"]
+    assert controller["argv"] == ["--config", "launch.yaml", "--environment-prepared"]
     failed = subprocess.run(command, env=environment | {"EXIT_TRANSPORT_FIXTURE": "1"},
                             capture_output=True, text=True, timeout=15)
     assert failed.returncode == 19 and len(failed.stdout.splitlines()) == 1
