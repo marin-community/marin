@@ -20,9 +20,10 @@ uv run python -m experiments.post_training.long_loop.campaign \
 Without `--run`, this constructs the graph and runs the frozen native CPU
 recipe validator on the existing .131 input bindings. This validates recipe
 and role geometry against the existing model binding. It does not claim that
-an unmaterialized candidate has passed data or agent admission. With `--run`,
-the graph prepares the candidate pools on an
-08a CPU worker, checks every published parquet SHA and population count, lowers
+an unmaterialized candidate has passed data or agent admission. Before invoking
+`--run`, the operator builds the graph's canonical pool dependency in a CPU-only
+08a job. The RL graph then reuses that completed artifact. Pool preparation
+checks every published parquet SHA and population count, lowers
 the unchanged TaskSpecs through the native adapter, and removes a random
 200-prompt holdout (seed 20261020). The curriculum records the selected tasks
 and the equal source weights. Cross-source holdout leakage fails closed.
@@ -77,5 +78,6 @@ above is a dry-run candidate, not a queue selection. Never infer completion,
 coverage or a score from rollout progress.
 
 An OOM in any pool or training worker halts new submissions and refills until
-the coordinator responds. Record the stage, rank, memory and sequence evidence;
-other active runs continue. Never cancel a running job without explicit permission.
+the coordinator explicitly authorizes resumption. Record the stage, rank, memory
+and sequence evidence; other active runs continue. The reset authorizes cancellation
+of .529 only. Other running jobs require separate explicit permission.
