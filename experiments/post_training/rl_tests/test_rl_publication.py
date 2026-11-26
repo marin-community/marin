@@ -357,26 +357,8 @@ def test_concurrent_issue_claims_keep_one_lineage_issue(tmp_path, monkeypatch):
     assert {attempt.issue for attempt in read_attempts(export_root).values()} == {winner}
 
 
-@pytest.mark.parametrize(
-    ("training_state", "terminal_task", "reason", "reconcile_exit"),
-    [
-        (JobState.WORKER_FAILED, TaskState.PREEMPTED, "WorkloadEvictedDueToPreempted: priority", 0),
-        (JobState.WORKER_FAILED, TaskState.WORKER_FAILED, "PodDeleted: pod was deleted while active", 0),
-        (JobState.WORKER_FAILED, TaskState.WORKER_FAILED, "Evicted", 0),
-        (JobState.FAILED, TaskState.FAILED, "Cumulative failed task attempts exceeded max_task_failures", 1),
-    ],
-    ids=["kueue-preemption", "pod-deletion", "pod-eviction", "training-failure"],
-)
 def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
-    recorded_runs,
-    monkeypatch,
-    tmp_path,
-    cache_native_compositions,
-    capsys,
-    training_state,
-    terminal_task,
-    reason,
-    reconcile_exit,
+    recorded_runs, monkeypatch, tmp_path, cache_native_compositions, capsys, subtests
 ):
     monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
     sources = ("accepted", "failed", "unprepared")
@@ -408,6 +390,7 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         base.model_copy(update={"native_run_id": "failed-control", "status": "failed"}),
     ]
     rows, requests, states = {}, {}, {}
+    child_status = None
     monkeypatch.setattr(rl_index, "list_attempts", lambda: [*previous, *rows.values()])
 
     def job_state(job):
@@ -416,8 +399,8 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         return states[str(job)]
 
     def job_status(job):
-        assert str(job) == child_job
-        return SimpleNamespace(state=training_state, task_state_counts={terminal_task: 1}, error_message=reason)
+        assert str(job) == child_job and child_status is not None
+        return child_status
 
     client = SimpleNamespace(job_state=job_state, job_status=job_status)
     monkeypatch.setattr(nightly, "open_iris_client", lambda **_: nullcontext(client))
@@ -504,14 +487,28 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         with edit_receipt(output) as receipt:
             receipt["config"]["run"]["coordinator_iris_job_id"] = coordinator
             if attempt_id == "failed":
-                receipt["result"].update(state="failed", iris_job_id=child_job, iris_job_state=training_state)
+                receipt["result"].update(state="failed", iris_job_id=child_job, iris_job_state=JobState.WORKER_FAILED)
     states[coordinator] = JobState.FAILED
     assert tick("125-1") == 1
     assert requests == {(preset.name, "123-1"): 3}
     assert "accepted" not in rows and rows["failed"].status == "failed"
-    assert tick("126-1") == reconcile_exit
-    assert not pending.exists()
-    assert requests == {(preset.name, "123-1"): 3}
+    diagnostics = (
+        (JobState.WORKER_FAILED, TaskState.PREEMPTED, "WorkloadEvictedDueToPreempted: priority", 0),
+        (JobState.WORKER_FAILED, TaskState.WORKER_FAILED, "PodDeleted: pod was deleted while active", 0),
+        (JobState.WORKER_FAILED, TaskState.WORKER_FAILED, "Evicted", 0),
+        (JobState.FAILED, TaskState.FAILED, "Cumulative failed task attempts exceeded max_task_failures", 1),
+    )
+    _, failed_output, _ = first_handoff.outputs
+    # Replay the same cohort to check each terminal diagnostic with the same native evidence.
+    for state, task_state, reason, reconcile_exit in diagnostics:
+        with subtests.test(reason=reason):
+            child_status = SimpleNamespace(state=state, task_state_counts={task_state: 1}, error_message=reason)
+            pending.write_text(first_handoff.model_dump_json())
+            with edit_receipt(Path(failed_output)) as receipt:
+                receipt["result"]["iris_job_state"] = state
+            assert tick("126-1") == reconcile_exit
+            assert not pending.exists()
+            assert requests == {(preset.name, "123-1"): 3}
     states[legacy_job] = JobState.SUCCEEDED
     assert tick("127-1") == 0
     assert requests == {(preset.name, "123-1"): 3, (preset.name, "127-1"): 1}
@@ -521,9 +518,10 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
     assert rows["failed"].status == "failed" and "native_attempt" in rows["failed"].failed_facts
 
 
-@pytest.mark.parametrize(
-    ("scenario", "exit_code"),
-    [
+def test_nightly_recovers_pending_controls(
+    recorded_runs, monkeypatch, tmp_path, cache_native_compositions, capsys, subtests
+):
+    scenarios = (
         ("failed-before-preparation", 1),
         ("missing-handoff", 1),
         ("expired-grace", 0),
@@ -532,20 +530,23 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         ("failed-coordinator-nonterminal", 1),
         ("evicted-coordinator-nonterminal", 0),
         ("evicted-coordinator-failed-child-nonterminal", 1),
-    ],
-)
-def test_nightly_recovers_pending_controls(
-    recorded_runs, monkeypatch, tmp_path, cache_native_compositions, capsys, scenario, exit_code
-):
+    )
+    for scenario, exit_code in scenarios:
+        with subtests.test(scenario=scenario), monkeypatch.context() as case_env:
+            _assert_nightly_recovery(recorded_runs, case_env, tmp_path, capsys, scenario, exit_code)
+
+
+def _assert_nightly_recovery(recorded_runs, monkeypatch, tmp_path, capsys, scenario, exit_code):
     monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
     monkeypatch.setenv("IRIS_USER", "runner")
     preset = nightly.SNOWBALL.by_name["speed-medium"]
-    state_dir = StoragePath(str(tmp_path))
+    (tmp_path / scenario).mkdir()
+    state_dir = StoragePath(str(tmp_path / scenario))
     pending = state_dir / "snowball-speed-medium.json"
     job_prefix = "/runner/checkpoints-snowball-rl-controls-speed-medium-"
     previous = job_prefix + "previous-coordinator"
     replacement = job_prefix + "new-coordinator"
-    output_name = "checkpoints/snowball-rl/controls/speed-medium-previous"
+    output_name = f"checkpoints/snowball-rl/controls/speed-medium-{scenario}"
     output = tmp_path / output_name / recipe.RUN_ARTIFACT_VERSION
     rows, launches, states = {}, {}, {}
 
