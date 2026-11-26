@@ -336,7 +336,11 @@ def s3_panel(name: str, export: ArtifactHfModel) -> Preset:
     The export binds after S2x conversion; the plan preflight validates the
     stage with the declared start checkpoint standing in for the export.
     """
-    return panel_preset(name, model=export, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS)
+    return replace(
+        panel_preset(name, model=export, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS),
+        revision="2026.11.26.1",
+        budget="64 GB200; 723 frozen follow-up trials on one verified S2 step4 export",
+    )
 
 
 def export_command(
@@ -385,9 +389,33 @@ def export_command(
     )
 
 
+S3_CONTROL = s3_panel(
+    "s3-control-panel",
+    ArtifactHfModel(
+        ArtifactStep.adopt(
+            "users/benfeuer/mochi-loop-guards/exports/s2-control-r4-step4",
+            "2026.11.26.4",
+            f"{PANEL_ROOT}/exports/s2-control-r4/global_step_4/policy",
+        ),
+        relative_path="",
+    ),
+)
+S3_TREATMENT = s3_panel(
+    "s3-treatment-panel",
+    ArtifactHfModel(
+        ArtifactStep.adopt(
+            "users/benfeuer/mochi-loop-guards/exports/s2-treatment-r4-step4",
+            "2026.11.26.4",
+            f"{PANEL_ROOT}/exports/s2-treatment-r4/global_step_4/policy",
+        ),
+        relative_path="",
+    ),
+)
+
+
 GUARDS = ModelPresets(
     model="mochi",
-    presets=(S0, S0_TB2_RECOVERY, S1_STOP, S1_RP, S2_CONTROL, S2_TREATMENT),
+    presets=(S0, S0_TB2_RECOVERY, S1_STOP, S1_RP, S2_CONTROL, S2_TREATMENT, S3_CONTROL, S3_TREATMENT),
     namespace="mochi-loop-guards",
     control_pins={},
     needs_completed_default_export=False,
