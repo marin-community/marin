@@ -31,7 +31,7 @@ from skyrl_train.config.rollout_validation import (
 )
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
 from skyrl_train.dataset import PromptDataset
-from skyrl_train.domain_sampling import DomainWeightedOrder
+from skyrl_train.domain_sampling import ROUTE_COLUMN, DomainWeightedOrder, consumed_prompt_routes
 from skyrl_train.dynamic_sampling import (
     DynamicSamplingType,
     GroupSelectionPolicy,
@@ -220,11 +220,9 @@ class TrainingContext:
             if not isinstance(dataset, PromptDataset):
                 raise ValueError("Consumed route quotas require explicit source provenance in PromptDataset")
             source_routes = dict(config.trainer.rollout_buffer.source_routes)
-            sources = dataset.dataframe["data_source"]
-            unknown = set(sources) - set(source_routes)
-            if unknown:
-                raise ValueError(f"Missing consumed-route classification for sources: {sorted(unknown)}")
-            routes = {dataset.uid(index): source_routes[source] for index, source in enumerate(sources)}
+            column = ROUTE_COLUMN if ROUTE_COLUMN in dataset.dataframe.column_names else "data_source"
+            classified = consumed_prompt_routes(dataset.dataframe[column], source_routes)
+            routes = {dataset.uid(index): route for index, route in enumerate(classified)}
             counts = collections.Counter(routes.values())
             if set(counts) != set(buffer_config.consumed_route_quotas):
                 raise ValueError("Consumed route pools differ from configured quotas")

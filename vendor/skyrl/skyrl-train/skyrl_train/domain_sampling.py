@@ -15,6 +15,14 @@ from skyrl_train.rollouts.loader import JudgedGroup
 ROUTE_COLUMN = "teacher_route"
 
 
+def consumed_prompt_routes(sources: Sequence[str], source_routes: Mapping[str, str]) -> list[str]:
+    """Classify curriculum populations without rewriting original task provenance."""
+    unknown = set(sources) - set(source_routes)
+    if unknown:
+        raise ValueError(f"Missing consumed-route classification for sources: {sorted(unknown)}")
+    return [source_routes[source] for source in sources]
+
+
 def weighted_quotas(total: int, weights: Mapping[str, float], batch_index: int) -> dict[str, int]:
     """Allocate an exact batch with stable, rotating ties."""
     if total <= 0 or not weights or any(not math.isfinite(weight) or weight <= 0 for weight in weights.values()):

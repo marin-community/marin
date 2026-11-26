@@ -30,6 +30,7 @@ from rolloutengine.models import TaskRolloutSpec
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
 from skyrl_train.config.driver_validation import validate_cfg, validate_generator_cfg
 from skyrl_train.dataset.tasks import TASK_ROLLOUT_COLUMN, TASK_SPEC_COLUMN, canonical_task_spec
+from skyrl_train.domain_sampling import ROUTE_COLUMN, consumed_prompt_routes
 from skyrl_train.models.grug_context_parallel import grug_cp_communication, validate_cp_attention
 from skyrl_train.models.grug_moe import GrugMoeConfig, grug_long_layer_flags
 from skyrl_train.rollouts.agent_runtime import InstalledAgentSettings
@@ -106,7 +107,8 @@ def validate_source_tasks(launch, worker) -> list[dict]:
                 # SourceTaskDataset consumes the prepared rollout when both columns
                 # exist. Admit that same task, including its selected machines.
                 column = TASK_ROLLOUT_COLUMN if TASK_ROLLOUT_COLUMN in parquet.schema.names else TASK_SPEC_COLUMN
-                for batch in parquet.iter_batches(batch_size=1, columns=[column]):
+                columns = [column, ROUTE_COLUMN] if ROUTE_COLUMN in parquet.schema.names else [column]
+                for batch in parquet.iter_batches(batch_size=1, columns=columns):
                     row = batch.to_pylist()[0]
                     lowered = (
                         canonical_task_spec(
@@ -116,6 +118,11 @@ def validate_source_tasks(launch, worker) -> list[dict]:
                         else TaskRolloutSpec.model_validate_json(row[column])
                     )
                     source = lowered.task.source.dataset
+                    quotas = OmegaConf.select(launch, "skyrl.trainer.rollout_buffer.consumed_route_quotas", default={})
+                    if phase == "train" and quotas:
+                        consumed_prompt_routes(
+                            [row.get(ROUTE_COLUMN, source)], launch.skyrl.trainer.rollout_buffer.source_routes
+                        )
                     if source not in seen:
                         prepared = worker.prepare_task(lowered, phase=phase, session_id=f"preflight-{len(receipts)}")
                         receipts.append(

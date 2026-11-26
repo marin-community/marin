@@ -11,7 +11,7 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.task_inputs import task_messages
-from skyrl_train.domain_sampling import DomainWeightedOrder
+from skyrl_train.domain_sampling import DomainWeightedOrder, consumed_prompt_routes
 from tests.cpu.task_specs import text_task
 
 
@@ -64,6 +64,11 @@ def test_task_spec_curriculum_routes_survive_preprocessing_and_reach_collation(t
     pq.write_table(pa.table({"task_spec": [task.model_dump_json() for task in tasks], "teacher_route": routes}), path)
     dataset = SourceTaskDataset([str(path)], _StubTokenizer(), 100, environment_configs=configs, num_workers=1)
     order = DomainWeightedOrder(dataset.dataframe, {"route-0": .5, "route-1": .5}, seed=17, window_size=4)
+    assert consumed_prompt_routes(dataset.dataframe["teacher_route"], {"route-0": "agentic", "route-1": "nonagentic"}) == [
+        "agentic", "nonagentic", "agentic", "nonagentic", "agentic", "nonagentic"
+    ]
+    with pytest.raises(ValueError, match="Missing consumed-route classification"):
+        consumed_prompt_routes(dataset.dataframe["teacher_route"], {"route-0": "agentic"})
     indices = [order.next_index() for _ in range(4)]
     prepared = dataset.collate_fn([dataset[index] for index in indices])
     assert Counter(row["input"].metadata.teacher_route for row in prepared) == {"route-0": 2, "route-1": 2}

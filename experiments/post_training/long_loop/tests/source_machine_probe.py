@@ -136,12 +136,32 @@ def main(tmp_path: Path) -> None:
         pa.Table.from_pylist([row]),
         tmp_path / f"{actor.id}.parquet",
     )
+    OmegaConf.update(
+        launch,
+        "skyrl.trainer.rollout_buffer",
+        {
+            "consumed_route_quotas": {"nonagentic": 1, "agentic": 1},
+            "source_routes": {"curriculum-plain": "nonagentic", "curriculum-actor": "agentic"},
+        },
+        force_add=True,
+    )
+    for task, label in ((plain, "curriculum-plain"), (actor, "curriculum-actor")):
+        path = tmp_path / f"{task.id}.parquet"
+        table = pq.read_table(path)
+        pq.write_table(table.append_column("teacher_route", pa.array([label])), path)
     receipts = validate_source_tasks(launch, worker)
     assert [row["task_id"] for row in receipts] == ["plain", "thin-actor"]
     assert receipts[0]["task_machine"] is None
     assert receipts[1]["task_machine"]["backend"] == "daytona"
     assert receipts[1]["task_machine"]["network"] == "deny"
 
+    launch.skyrl.trainer.rollout_buffer.source_routes.pop("curriculum-actor")
+    try:
+        validate_source_tasks(launch, worker)
+    except ValueError as error:
+        assert "curriculum-actor" in str(error)
+    else:
+        raise AssertionError("CPU admission accepted a missing curriculum population route")
     print(json.dumps({"unbound_error": failure, "receipts": receipts}))
 
 
