@@ -48,11 +48,12 @@ from rigging.log_setup import configure_logging
 from experiments.amd.june_67b_a2b import rehearsal, train
 from experiments.amd.june_67b_a2b.run_config import (
     add_run_arguments,
+    build_grug_trainer,
     build_model,
     global_batch_size,
     initialize_distributed,
 )
-from experiments.amd.june_67b_a2b.train import GrugRunConfig, GrugTrainerConfig, _run_grug_local
+from experiments.amd.june_67b_a2b.train import GrugRunConfig, _run_grug_local
 
 logger = logging.getLogger(__name__)
 
@@ -125,15 +126,9 @@ def build_run_config(args: argparse.Namespace) -> GrugRunConfig:
         ),
         resources=ResourceConfig(),
         optimizer=_optimizer(batch_size, model.hidden_dim, model.max_seq_len),
-        trainer=GrugTrainerConfig(
-            trainer=trainer,
-            expert_axis_size=args.expert_axis,
-            replica_axis_size=args.replica_axis,
-            microbatches=args.microbatches,
-            zero1=args.zero1,
-            save_checkpoints=args.output_root is not None,
+        trainer=dataclasses.replace(
+            build_grug_trainer(args, trainer, save_checkpoints=args.output_root is not None),
             diagnose_numerics=args.diagnose_numerics,
-            step_timeout=args.step_timeout or None,
         ),
         eval=None,
     )
