@@ -69,9 +69,9 @@ from experiments.post_training.task_curation.task_store import (
     PARQUET_BATCH_ROWS,
     TASK_JSON_COLUMN,
     TASK_SPEC_COLUMN,
+    ReleasedFile,
     curated_rows,
     curated_task_files,
-    released_parquet,
 )
 
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -504,19 +504,18 @@ def with_agentic_tag(task: TaskSpec) -> TaskSpec:
 
 
 def _released_records(source: ReleasedSource, attempts: list[dict[str, Any]]) -> Iterator[tuple[TaskSpec, str]]:
-    parquet = released_parquet(source.uri, source.sha256)
-    count = parquet.metadata.num_rows
+    released = set()
+    count = 0
+    for row in ReleasedFile(uri=source.uri, sha256=source.sha256).rows(source.uri, source.uri):
+        count += 1
+        task = row.task
+        if "agentic" in task.tags and not source.agentic:
+            raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
+        published = with_agentic_tag(task) if source.agentic else task
+        released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
+        yield task, published.model_dump_json()
     if count != source.rows:
         raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
-    released = set()
-    for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
-        for raw in batch.column(0).to_pylist():
-            task = TaskSpec.model_validate_json(raw)
-            if "agentic" in task.tags and not source.agentic:
-                raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
-            published = with_agentic_tag(task) if source.agentic else task
-            released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
-            yield task, published.model_dump_json()
     _check_release_admission(source, released, attempts)
 
 

@@ -82,7 +82,7 @@ class ReleasedFile(BaseModel):
         return (self.uri,)
 
     def rows(self, source_id: str, path: str) -> Iterator[TaskRow]:
-        parquet = released_parquet(path, self.sha256)
+        parquet = _released_parquet(path, self.sha256)
         for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
             for raw in batch.column(0).to_pylist():
                 yield TaskRow(source_id, json.loads(raw)["id"], raw)
@@ -198,7 +198,7 @@ def curated_rows(path: str) -> Iterator[tuple[str, str]]:
             yield from zip(batch.column(0).to_pylist(), batch.column(1).to_pylist(), strict=True)
 
 
-def released_parquet(uri: str, sha256: str) -> pq.ParquetFile:
+def _released_parquet(uri: str, sha256: str) -> pq.ParquetFile:
     """The released file at ``uri``, after checking its bytes against ``sha256``."""
     contents = StoragePath(uri).read_bytes()
     if hashlib.sha256(contents).hexdigest() != sha256:

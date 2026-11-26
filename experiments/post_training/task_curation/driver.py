@@ -5,6 +5,7 @@
 
 import json
 import os
+from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from functools import partial
@@ -294,6 +295,15 @@ def _task_store_identity(value: str) -> tuple[str, str]:
     except ValueError as error:
         raise click.BadParameter(str(error), param_hint="--task-store") from None
     return name, version
+
+
+def _build_task_store(identity: tuple[str, str], curated: Mapping[str, ArtifactStep]) -> str:
+    """Build the campaign's task store from its sources that wrote a curation manifest; return its path."""
+    # A dataset-owned pipeline without a curation manifest admits no tasks to pin.
+    pinned = {
+        source_id: step for source_id, step in curated.items() if (StoragePath(step.path()) / MANIFEST_FILENAME).exists()
+    }
+    return run(task_store_step(*identity, curated=pinned, released={}), max_concurrent=1)[0].path
 
 
 def _step_plan(step: ArtifactStep) -> dict[str, object]:
@@ -857,14 +867,7 @@ def main(
             raise
         else:
             _publish_campaign(report_path, selected, publication_root)
-        # A dataset-owned pipeline without a curation manifest admits no tasks to pin.
-        pinned = {
-            source_id: step
-            for source_id, step in curated.items()
-            if (StoragePath(step.path()) / MANIFEST_FILENAME).exists()
-        }
-        store = run(task_store_step(*store_identity, curated=pinned, released={}), max_concurrent=1)[0]
-        click.echo(json.dumps({TASK_STORE_KEY: store.path}, indent=2))
+        click.echo(json.dumps({TASK_STORE_KEY: _build_task_store(store_identity, curated)}, indent=2))
         if selection_step is not None or embedding is not None:
             roots = {source_id: step.path() for source_id, step in curated.items()}
             _write_corpus(roots, inventory, report_path, "admitted")

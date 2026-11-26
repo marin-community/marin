@@ -83,10 +83,14 @@ def catalog(monkeypatch, tmp_path):
     return pipelines
 
 
+STORE_NAME, STORE_VERSION = "fixture", "2026.11.26.1"
+STORE_OPTION = f"{STORE_NAME}@{STORE_VERSION}"
+
+
 def arguments(tmp_path) -> list[str]:
     options = {
         "--mode": "sample",
-        "--task-store": "fixture@2026.11.26.1",
+        "--task-store": STORE_OPTION,
         "--review-mode": "chat",
         "--model-revision": "fixture-revision",
         "--review-cache": str(tmp_path / "cache"),
@@ -123,7 +127,7 @@ def test_local_canary_cannot_write_an_explicit_production_catalog(tmp_path, cata
             "--mode",
             "full",
             "--task-store",
-            "fixture@2026.11.26.1",
+            STORE_OPTION,
             "--cache-dir",
             str(tmp_path / "canary"),
             "--publish-catalog",
@@ -268,7 +272,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
     else:
         report = tmp_path / "report.json"
         options += ["--coordinator-memory", "1g", "--worker-image", "fixture-image", "--report-path", str(report)]
-        options += ["--task-store", "fixture@2026.11.26.1"]
+        options += ["--task-store", STORE_OPTION]
     runner = CliRunner()
     planned = runner.invoke(main, options)
     assert planned.exit_code == 0, planned.output
@@ -300,7 +304,7 @@ def test_dataset_cli_runs_own_ingestion_without_review_controller_or_build_setti
             assert Path(os.environ["MARIN_PREFIX"]) == tmp_path / "artifacts"
         else:
             # The generated pipeline writes no curation manifest, so its campaign's store holds no source.
-            assert TaskStore.open("fixture", "2026.11.26.1").sources == {}
+            assert TaskStore.open(STORE_NAME, STORE_VERSION).sources == {}
     finally:
         client.shutdown()
 
@@ -335,7 +339,7 @@ def test_recipe_cli_requires_model_settings_only_when_review_is_chosen(tmp_path,
         "--mode",
         mode,
         "--task-store",
-        "fixture@2026.11.26.1",
+        STORE_OPTION,
         "--skip-assessment",
         "--max-workers",
         "1",
@@ -413,7 +417,7 @@ def test_local_sample_reviews_selected_tasks_and_reuses_request_cache(tmp_path, 
         "--mode",
         "sample",
         "--task-store",
-        "fixture@2026.11.26.1",
+        STORE_OPTION,
         "--cache-dir",
         str(cache),
         "--source",
@@ -464,7 +468,7 @@ def test_sample_campaign_assesses_only_with_assess_flag(tmp_path, monkeypatch, r
         "--mode",
         "sample",
         "--task-store",
-        "fixture@2026.11.26.1",
+        STORE_OPTION,
         "--cache-dir",
         str(cache),
         "--source",
@@ -523,7 +527,7 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
         "--mode",
         "full",
         "--task-store",
-        "fixture@2026.11.26.1",
+        STORE_OPTION,
         "--cache-dir",
         str(cache),
         "--input-root",
@@ -545,7 +549,7 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
     with artifact_prefix(str(cache)), pytest.raises(FileNotFoundError):
-        TaskStore.open("fixture", "2026.11.26.1")
+        TaskStore.open(STORE_NAME, STORE_VERSION)
     campaign = json.loads((cache / "campaigns/campaign.json").read_text())
     outcome = campaign["sources"][0]
     assert campaign["status"] == "failed" and outcome["status"] == "incomplete"
@@ -569,7 +573,7 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
     assert recovered["sources"][0]["status"] == "completed"
     assert recovered["sources"][0]["path"] != outcome["path"]
     with artifact_prefix(str(cache)):
-        store = TaskStore.open("fixture", "2026.11.26.1")
+        store = TaskStore.open(STORE_NAME, STORE_VERSION)
     entry = store.sources[source.info.id]
     # The report records the assessment step; the store pins the curation artifact it assessed.
     assert isinstance(entry, CuratedSource) and Path(entry.root).parent.parent == cache / "data/rl"
