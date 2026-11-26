@@ -662,17 +662,21 @@ def _source_identity(info: dict[str, Any], *, matching: str | None = None) -> st
 
 
 def _destination_identity(info: dict[str, Any]) -> str | None:
-    # Prefer content-derived digests: a store-side copy such as a GCS rewrite
-    # lands the object in a new generation with a fresh ETag but preserves
-    # md5Hash and crc32c, so staged and promoted objects match without
-    # re-reading. S3 listings carry neither digest and keep their ETag identity.
-    for key in ("md5Hash", "crc32c", "ChecksumSHA256", "checksum", "version_id", "VersionId"):
+    # Prefer the content-derived digests a store-side copy such as a GCS rewrite
+    # preserves across its generation change; S3 listings carry neither, so S3
+    # keeps its ETag identity. Version ids are not content identities and S3
+    # HEAD can report a constant "null", so they stay behind the ETag.
+    for key in ("md5Hash", "crc32c"):
         value = info.get(key)
         if value is not None:
             return f"{key}={value!s}"
     etag = _etag(info)
     if etag is not None:
         return f"{ETAG_IDENTITY_PREFIX}{etag}"
+    for key in ("ChecksumSHA256", "checksum", "version_id", "VersionId"):
+        value = info.get(key)
+        if value is not None:
+            return f"{key}={value!s}"
     return None
 
 

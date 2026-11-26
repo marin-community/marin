@@ -302,6 +302,60 @@ def test_verified_copy_promotes_gcs_objects_whose_copy_changes_the_etag(tmp_path
     assert rewrite_destination.reads == 1
 
 
+def test_verified_copy_rejects_corrupted_promotion_when_head_reports_a_null_version(tmp_path, monkeypatch):
+    """Model an S3 HEAD that reports VersionId: "null" (CoreWeave, #11432).
+
+    The listing carries the ETag but no VersionId; the promotion copy writes
+    the wrong bytes. Ranking a version id above the ETag would make both the
+    staged and promoted identities the constant "VersionId=null" and accept the
+    corruption; the ETag-first identity must reject it.
+    """
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "weights.bin").write_bytes(b"abc")
+
+    destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
+    original_filesystem_for = verified_copy_module.filesystem_for
+
+    def object_info(path, *, with_version):
+        info = destination_filesystem.info(path)
+        result = {"name": path, "size": info["size"], "type": info["type"]}
+        result["ETag"] = f'"{hashlib.md5(Path(path).read_bytes(), usedforsecurity=False).hexdigest()}"'
+        if with_version:
+            result["VersionId"] = "null"
+        return result
+
+    class S3NullVersionDestination:
+        protocol = "s3"
+
+        def __getattr__(self, name):
+            return getattr(destination_filesystem, name)
+
+        def find(self, path, *, detail):
+            if not detail:
+                return destination_filesystem.find(path, detail=detail)
+            return {name: object_info(name, with_version=False) for name in destination_filesystem.find(path)}
+
+        def info(self, path):
+            return object_info(path, with_version=True)
+
+        def cp_file(self, source_path, destination_path, **kwargs):
+            Path(destination_path).write_bytes(b"XYZ")
+
+    def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
+        if url == str(destination):
+            return S3NullVersionDestination(), destination_path
+        return original_filesystem_for(url, s3_upload_policy=s3_upload_policy)
+
+    monkeypatch.setattr(verified_copy_module, "filesystem_for", routed_filesystem)
+
+    with pytest.raises(VerifiedCopyError, match="promoted object does not match"):
+        verified_copy_prefix(str(source), str(destination), workers=1)
+
+    assert not (destination / COMPLETION_MANIFEST).exists()
+
+
 @pytest.mark.parametrize("reverse", [False, True])
 def test_verified_copy_rejects_contained_prefixes(tmp_path, reverse):
     parent = tmp_path / "parent"
