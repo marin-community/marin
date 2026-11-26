@@ -3,6 +3,7 @@
 
 """Recover rollout spend and close sampling feedback when the policy skips training."""
 
+from collections import Counter
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,7 +37,7 @@ class CheckpointPolicy:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"policy")
         elif operation == "load_checkpoint":
-            assert path.read_bytes() == b"policy"
+            assert kwargs["load_training_state"] and path.read_bytes() == b"policy"
         else:
             raise AssertionError(operation)
         return []
@@ -180,6 +181,67 @@ async def test_budget_requires_compatible_history_or_a_new_stage(budget_trainer)
     await old_zero.save_checkpoints()
     checkpoint = Path(old_zero.cfg.trainer.ckpt_path) / "global_step_0"
     assert budget_trainer(mode=ResumeMode.FROM_PATH, resume_path=str(checkpoint)).load_checkpoints()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_allocation_forks_restore_one_source_and_force_distinct_next_windows(budget_trainer, tmp_path):
+    prompts = [
+        PublicPrompt(str(index), "easy" if index < 64 else "intermediate", f"Reverse letters of word {index}.")
+        for index in range(128)
+    ]
+
+    def order():
+        return PromptThompsonOrder(
+            prompts,
+            set(),
+            {"easy": 0.5, "intermediate": 0.5},
+            acquisition=PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE,
+            seed=2,
+            window_size=16,
+            decay=0.95,
+            epsilon=1,
+            reference_tokens=100,
+        )
+
+    parent_order = order()
+    warm_rows = [parent_order.next_index() for _ in range(16)]
+    assert Counter(prompts[row].source for row in warm_rows) == {"easy": 8, "intermediate": 8}
+    state = TrainingContextState(PromptLoaderState(parent_order.state_dict(), []), [], None)
+    parent = budget_trainer()
+    parent.cfg.trainer.ckpt_path = str(tmp_path / "warmup")
+    parent.context.state_dict = AsyncMock(return_value=state)
+    parent.global_step = 1
+    parent.rollout_gross_response_tokens_total = 104
+    await parent.save_checkpoints()
+    checkpoint = Path(parent.cfg.trainer.ckpt_path) / "global_step_1"
+
+    for easy_quota in (6, 10):
+        fork = budget_trainer(budget=200, resume_path=str(checkpoint))
+        fork.cfg.trainer.ckpt_path = str(tmp_path / f"fork-{easy_quota}")
+        fork.cfg.trainer.callbacks = [{"type": "fork_source_quota", "easy_quota": easy_quota}]
+        fork.cfg.trainer.train_batch_size = 16
+        fork.cfg.data.sampling.kind = PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE
+        fork.cfg.data.sampling.epsilon = 1
+        validate_rollout_launch(fork.cfg)
+        fork.callback_handler = DefaultCallbackHandler(fork.cfg)
+        fork_order = order()
+        fork.context.loader = SimpleNamespace(order=fork_order)
+        fork.global_step, fork.loaded_checkpoint_path = fork.load_checkpoints()
+        assert (fork.global_step, fork.rollout_gross_response_tokens_total) == (1, 104)
+        fork_order.load_state_dict(fork._restored_rollout_state.loader.order)
+        assert fork_order.state_dict() == parent_order.state_dict()
+        state = fork._create_trainer_state(epoch=0)
+        await fork.callback_handler.call_event_async("on_train_begin", state, TrainerControl(), trainer=fork)
+        assert fork_order.state_dict() == parent_order.state_dict()
+        rows = [fork_order.next_index() for _ in range(16)]
+        assert not set(warm_rows).intersection(rows)
+        assert Counter(prompts[row].source for row in rows) == {"easy": easy_quota, "intermediate": 16 - easy_quota}
+
+        fork.global_step = 2
+        fork.all_metrics[GROSS_ROLLOUT_TOKENS_METRIC] = 96
+        await fork._run_step_end_callbacks(fork._create_trainer_state(epoch=0))
+        assert fork.all_metrics[CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC] == 200
+        assert fork._control.should_training_stop
 
 
 @pytest.mark.asyncio

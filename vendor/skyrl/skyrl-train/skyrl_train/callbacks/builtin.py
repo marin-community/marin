@@ -73,6 +73,7 @@ from .types import (
     CallbackErrorBehavior,
     CHECKPOINT_CALLBACK_TYPE,
     HF_MODEL_SAVE_CALLBACK_TYPE,
+    FORK_SOURCE_QUOTA_TYPE,
 )
 
 # Registry mapping callback type names to classes
@@ -264,6 +265,32 @@ def _pinned_eval_digests(dataset, expected: int, fingerprint: str) -> set[str]:
     if panel_identity(digests) != fingerprint:
         raise ValueError("Evaluation dataset does not match its pinned task digests")
     return digests
+
+
+@register_callback(FORK_SOURCE_QUOTA_TYPE)
+class ForkSourceQuotaCallback(TrainerCallback):
+    """Force one allocation on a restored source pass before it dispatches."""
+
+    error_behavior = CallbackErrorBehavior.RAISE
+
+    def __init__(self, easy_quota: int):
+        self.easy_quota = easy_quota
+
+    def on_train_begin(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
+        order = trainer.context.loader.order
+        if not isinstance(order, PromptThompsonOrder) or state.global_step <= 0 or trainer.loaded_checkpoint_path is None:
+            raise ValueError("The allocation fork requires a native source-pass checkpoint")
+        order.fix_fork_quota(self.easy_quota)
+        record_event(
+            FORK_SOURCE_QUOTA_TYPE,
+            {
+                "source_checkpoint": trainer.loaded_checkpoint_path,
+                "source_step": state.global_step,
+                "gross_training_tokens": trainer.rollout_gross_response_tokens_total,
+                "easy_quota": self.easy_quota,
+            },
+        )
+        return control
 
 
 @register_callback(DEVELOPMENT_MIX_TYPE)

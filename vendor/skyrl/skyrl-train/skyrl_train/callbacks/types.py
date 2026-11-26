@@ -7,5 +7,6 @@ class CallbackErrorBehavior(StrEnum):
     IGNORE = "ignore"
 
 
+FORK_SOURCE_QUOTA_TYPE = "fork_source_quota"
 CHECKPOINT_CALLBACK_TYPE = "checkpoint"
 HF_MODEL_SAVE_CALLBACK_TYPE = "hf_model_save"

@@ -254,6 +254,20 @@ class PromptThompsonOrder(PromptOrder):
             self._window = self._draw_window(available, self._window_size, self._source_boundaries)
         return self._window.pop()
 
+    def fix_fork_quota(self, easy_quota: int) -> None:
+        """Apply a forced action at an empty resumed source window."""
+        if (
+            not self.uses_source_passes
+            or self.development_mix is not None
+            or self._sources != ["easy", "intermediate"]
+            or self._window_size != PROBE_WINDOW
+            or self._epsilon != 1
+            or self._pass_sources
+            or easy_quota not in (6, 10)
+        ):
+            raise ValueError("The allocation fork requires an empty uniform 16-group source window")
+        self._source_shares = np.array((easy_quota, PROBE_WINDOW - easy_quota), dtype=float)
+
     def observe_development_probe(
         self, *, boundary: int, step: int, accuracy: float, gross_tokens: int, development_tokens: int
     ) -> ProbeMixDecision | None:

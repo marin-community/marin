@@ -30,6 +30,7 @@ from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
+from skyrl_train.callbacks.types import FORK_SOURCE_QUOTA_TYPE
 from skyrl_train.rollouts.context import RolloutBatchMetadata, TrainingContext, TrainingContextState
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
 from skyrl_train.trajectory_runners.base import (
@@ -3015,15 +3016,27 @@ class RayPPOTrainer:
         saved_config = trainer_state["config"]
         reset_step = not recovering_own_checkpoint and self.cfg.trainer.get("reset_global_step_on_resume", False)
         budget = self.cfg.trainer.get("rollout_token_budget")
+        fork = not recovering_own_checkpoint and any(
+            callback.type == FORK_SOURCE_QUOTA_TYPE for callback in (self.cfg.trainer.get("callbacks") or ())
+        )
+        if fork and (
+            reset_step or not self.cfg.trainer.restore_dataloader_state or self.resume_mode != ResumeMode.LATEST
+        ):
+            raise ValueError("The allocation fork must restore the source's absolute step and rollout state")
         if budget is not None:
             total = 0 if reset_step else trainer_state.get(_ROLLOUT_GROSS_TOTAL_CHECKPOINT_KEY)
+            saved_budget = saved_config["trainer"].get("rollout_token_budget")
+            if fork and (
+                type(saved_budget) is not int or type(total) is not int or not 0 < saved_budget <= total < budget
+            ):
+                raise ValueError("The allocation fork requires a completed source budget and a larger continuation budget")
             if total is None and global_step == saved_global_step == 0:
                 total = 0
             elif not reset_step and (
                 type(total) is not int
                 or total < 0
                 or saved_global_step != global_step
-                or saved_config["trainer"].get("rollout_token_budget") != budget
+                or (not fork and saved_budget != budget)
             ):
                 raise ValueError(
                     "A rollout token budget can only continue from a checkpoint with the same budget "
@@ -3061,7 +3074,7 @@ class RayPPOTrainer:
             logger.warning(f"Global step mismatch: path={global_step}, saved={saved_global_step}. Using path value.")
 
         # 2. Load rollout state if requested and available
-        if self.resume_mode == ResumeMode.LATEST and not recovering_own_checkpoint:
+        if self.resume_mode == ResumeMode.LATEST and not recovering_own_checkpoint and not fork:
             logger.info("Starting checkpoint imported; starting the configured dataset from the beginning")
         elif not self.cfg.trainer.restore_dataloader_state:
             logger.info("Rollout state restoration disabled; starting the configured dataset from the beginning")
@@ -3069,7 +3082,11 @@ class RayPPOTrainer:
             with io.open_file(rollout_state_path, "rb") as f:
                 rollout_state = torch.load(f, map_location="cpu", weights_only=False)
             self._restore_rollout_state(rollout_state)
+            if fork and (rollout_state.ready or rollout_state.loader.retries):
+                raise ValueError("The allocation fork requires an empty source rollout buffer")
             logger.info("Successfully loaded rollout state")
+        elif fork:
+            raise FileNotFoundError(f"Allocation fork rollout state not found: {rollout_state_path}")
         else:
             logger.warning(f"No rollout state found at {rollout_state_path}; the dataset will start from the beginning")
 

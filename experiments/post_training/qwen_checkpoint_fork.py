@@ -1,20 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare one balanced, development-only source for a Qwen allocation fork."""
+"""Compare two Qwen task allocations from one native recovery checkpoint."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Literal
 
 from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe.declared import Callback, EvaluationProfile, ForkSourceQuotaCallback
 
 from experiments.post_training import rl
 from experiments.post_training.qwen_probe_curriculum import BLOCK_TOKENS, DEVELOPMENT, TRAIN
 from experiments.post_training.qwen_sampler import EVAL, LAYOUT, WITHIN_SOURCE_PASS, budget_preset
-from experiments.post_training.rl_presets import ModelPresets
+from experiments.post_training.rl_presets import Evaluation, ModelPresets, Preset, Training
 
 SEED = 157
 REVISION = "2026.11.26.5"
 WARMUP_NAME = "warmup"
+FORK_REVISION = "2026.11.26.6"
+ENDPOINT = "qwen-string-fork384@2026.11.26.1"
+FORKS: tuple[tuple[str, Literal[6, 10]], ...] = (("easy10", 10), ("easy06", 6))
 
 
 def warmup_preset():
@@ -43,13 +48,53 @@ def warmup_preset():
     )
 
 
-QWEN_WARMUP = ModelPresets(
+@dataclass(frozen=True)
+class ForkTraining(Training):
+    easy_quota: Literal[6, 10]
+
+    def callbacks(
+        self,
+        preset: Preset,
+        evaluation: Evaluation | None,
+        profiles: dict[str, EvaluationProfile],
+        expected_tasks: int,
+        initial_model_uri: str | None,
+    ) -> tuple[Callback, ...]:
+        return (
+            *super().callbacks(preset, evaluation, profiles, expected_tasks, initial_model_uri),
+            ForkSourceQuotaCallback(type="fork_source_quota", easy_quota=self.easy_quota),
+        )
+
+
+def fork_preset(name: str, easy_quota: Literal[6, 10]) -> Preset:
+    """Continue the same source pass to a shared absolute two Mi-token cap."""
+    source = warmup_preset()
+    layout = source.recipe.layout
+    assert isinstance(layout.workload, Training)
+    config = source.recipe.config.merge(RecipePatch(trainer=sections.Trainer(rollout_token_budget=2 * BLOCK_TOKENS)))
+    return replace(
+        source,
+        name=name,
+        revision=FORK_REVISION,
+        evaluations=(
+            replace(EVAL, name="development", at_start=False),
+            replace(EVAL, name="confirmation", at_start=False, selection=ENDPOINT),
+        ),
+        recipe=replace(
+            source.recipe,
+            config=config,
+            layout=replace(layout, workload=ForkTraining(layout.workload.plan, easy_quota)),
+        ),
+    )
+
+
+QWEN_FORK = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-checkpoint-fork",
-    presets=(warmup_preset(),),
+    presets=(warmup_preset(), *(fork_preset(name, quota) for name, quota in FORKS)),
     control_pins={},
 )
 
 
 if __name__ == "__main__":
-    raise SystemExit(rl.main(QWEN_WARMUP))
+    raise SystemExit(rl.main(QWEN_FORK))

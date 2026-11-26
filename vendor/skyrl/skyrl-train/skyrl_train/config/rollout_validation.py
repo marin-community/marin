@@ -8,6 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 from marinskyrl.distillation import compile_distillation_plan_from_config
 from marinskyrl.runtime_options import WeightSyncTransport
 from skyrlrecipe.declared import PromptAcquisition
+from skyrl_train.callbacks.types import FORK_SOURCE_QUOTA_TYPE
 from skyrl_train.probe_mix import CALLBACK_TYPE as DEVELOPMENT_MIX_TYPE, WINDOW as PROBE_WINDOW
 
 GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
@@ -114,6 +115,22 @@ def validate_rollout_launch(
 
 
     callbacks = cfg.trainer.get("callbacks") or ()
+    forks = [item for item in callbacks if item.type == FORK_SOURCE_QUOTA_TYPE]
+    if forks and (
+        len(forks) != 1
+        or forks[0].easy_quota not in (6, 10)
+        or cfg.trainer.resume_mode != "latest"
+        or not cfg.trainer.get("resume_path")
+        or not cfg.trainer.restore_dataloader_state
+        or cfg.trainer.get("reset_global_step_on_resume", False)
+        or budget is None
+        or milestones
+        or cfg.trainer.train_batch_size != PROBE_WINDOW
+        or cfg.data.sampling.kind != PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE
+        or cfg.data.sampling.epsilon != 1
+        or any(item.type == DEVELOPMENT_MIX_TYPE for item in callbacks)
+    ):
+        raise ValueError("A source allocation fork requires a native checkpoint, a gross budget and uniform source passes")
     mixes = [item for item in callbacks if item.type == DEVELOPMENT_MIX_TYPE]
     if mixes:
         evaluation = [item for item in callbacks if item.type == "evaluation"]

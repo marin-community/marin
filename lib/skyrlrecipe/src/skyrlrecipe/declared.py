@@ -158,6 +158,11 @@ class EvaluationCallback(Section):
     stop_when: SectionMap[EvaluationMinimum | EvaluationImprovement] | None = unset_field()
 
 
+class ForkSourceQuotaCallback(Section):
+    type: Literal["fork_source_quota"]
+    easy_quota: Literal[6, 10]
+
+
 class DevelopmentProbeMixCallback(Section):
     type: Literal["development_probe_mix"]
     panel_sha256: str
@@ -238,6 +243,7 @@ Callback = Annotated[
     | DistillationTokenBudgetCallback
     | EvaluationCallback
     | DevelopmentProbeMixCallback
+    | ForkSourceQuotaCallback
     | ReferenceLikelihoodCallback
     | HFModelSaveCallback
     | DatabaseRegistrationCallback
