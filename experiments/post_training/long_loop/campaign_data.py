@@ -235,11 +235,11 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
     prepared = partition_mix(mix, rows, pool_version)
     curriculum, training, validation = prepared.curriculum, prepared.training, prepared.validation
     destination = StoragePath(output)
-    files = {
-        f"source-{index}/train.parquet": write_parquet(destination, f"source-{index}/train.parquet", records)
-        for index, records in enumerate(training.values())
-    }
-    training_files = {label: name for label, name in zip(training, files, strict=True)}
+    files, training_files = {}, {}
+    for index, (label, records) in enumerate(training.items()):
+        name = f"source-{index}/train.parquet"
+        files[name] = write_parquet(destination, name, records)
+        training_files[label] = name
     files["validation.parquet"] = write_parquet(destination, "validation.parquet", validation)
     definition = asdict(curriculum)
     definition.pop("fingerprint")
