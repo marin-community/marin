@@ -358,15 +358,25 @@ def test_concurrent_issue_claims_keep_one_lineage_issue(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("terminal_task", "reason", "reconcile_exit"),
+    ("training_state", "terminal_task", "reason", "reconcile_exit"),
     [
-        (TaskState.PREEMPTED, "WorkloadEvictedDueToPreempted: priority", 0),
-        (TaskState.WORKER_FAILED, "PodDeleted: pod was deleted while the attempt was active", 0),
-        (TaskState.WORKER_FAILED, "Training worker crashed", 1),
+        (JobState.WORKER_FAILED, TaskState.PREEMPTED, "WorkloadEvictedDueToPreempted: priority", 0),
+        (JobState.WORKER_FAILED, TaskState.WORKER_FAILED, "PodDeleted: pod was deleted while active", 0),
+        (JobState.WORKER_FAILED, TaskState.WORKER_FAILED, "Evicted", 0),
+        (JobState.FAILED, TaskState.FAILED, "Cumulative failed task attempts exceeded max_task_failures", 1),
     ],
+    ids=["kueue-preemption", "pod-deletion", "pod-eviction", "training-failure"],
 )
 def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
-    recorded_runs, monkeypatch, tmp_path, cache_native_compositions, capsys, terminal_task, reason, reconcile_exit
+    recorded_runs,
+    monkeypatch,
+    tmp_path,
+    cache_native_compositions,
+    capsys,
+    training_state,
+    terminal_task,
+    reason,
+    reconcile_exit,
 ):
     monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
     sources = ("accepted", "failed", "unprepared")
@@ -407,7 +417,7 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
 
     def job_status(job):
         assert str(job) == child_job
-        return SimpleNamespace(state=JobState.WORKER_FAILED, task_state_counts={terminal_task: 1}, error_message=reason)
+        return SimpleNamespace(state=training_state, task_state_counts={terminal_task: 1}, error_message=reason)
 
     client = SimpleNamespace(job_state=job_state, job_status=job_status)
     monkeypatch.setattr(nightly, "open_iris_client", lambda **_: nullcontext(client))
@@ -494,7 +504,7 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         with edit_receipt(output) as receipt:
             receipt["config"]["run"]["coordinator_iris_job_id"] = coordinator
             if attempt_id == "failed":
-                receipt["result"].update(state="failed", iris_job_id=child_job, iris_job_state="worker_failed")
+                receipt["result"].update(state="failed", iris_job_id=child_job, iris_job_state=training_state)
     states[coordinator] = JobState.FAILED
     assert tick("125-1") == 1
     assert requests == {(preset.name, "123-1"): 3}
@@ -519,6 +529,8 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         ("expired-grace", 0),
         ("legacy-nonterminal", 1),
         ("durable-nonterminal", 1),
+        ("failed-coordinator-nonterminal", 1),
+        ("evicted-coordinator-nonterminal", 0),
     ],
 )
 def test_nightly_recovers_pending_controls(
@@ -545,6 +557,13 @@ def test_nightly_recovers_pending_controls(
             raise ConnectError(Code.NOT_FOUND, f"Job {job} not found")
         return states[str(job)]
 
+    def job_status(job):
+        if str(job) == previous:
+            return SimpleNamespace(state=states[previous], task_state_counts={}, error_message="Evicted")
+        assert str(job) == f"{previous}/training"
+        state = JobState.KILLED if scenario == "failed-coordinator-nonterminal" else JobState.SUCCEEDED
+        return SimpleNamespace(state=state, task_state_counts={}, error_message="")
+
     def submit(command, *, env):
         key = (command[command.index("--preset") + 1], command[command.index("--control") + 1])
         launches[key] = int(command[command.index("--replicates") + 1])
@@ -557,14 +576,18 @@ def test_nightly_recovers_pending_controls(
 
     monkeypatch.setattr(rl_index, "list_attempts", lambda: list(rows.values()))
     monkeypatch.setattr(publication, "publish_result", publish)
-    monkeypatch.setattr(nightly, "open_iris_client", lambda **_: nullcontext(SimpleNamespace(job_state=job_state)))
+    client = SimpleNamespace(job_state=job_state, job_status=job_status)
+    monkeypatch.setattr(nightly, "open_iris_client", lambda **_: nullcontext(client))
     monkeypatch.setattr(nightly, "subprocess", SimpleNamespace(Popen=submit))
     if scenario.endswith("nonterminal"):
         assert output == recorded_runs(preset.name, output_name, control=True, attempt_id="partial")
         with edit_receipt(output) as receipt:
             receipt["config"]["run"]["coordinator_iris_job_id"] = previous
-            receipt["result"].update(state="submitted", iris_job_id=f"{previous}/training")
-        states[previous] = JobState.SUCCEEDED
+            receipt["result"].update(state="submitted", iris_job_id=f"{previous}/training", finished_at=None)
+        states[previous] = {
+            "failed-coordinator-nonterminal": JobState.FAILED,
+            "evicted-coordinator-nonterminal": JobState.WORKER_FAILED,
+        }.get(scenario, JobState.SUCCEEDED)
     if scenario == "failed-before-preparation":
         states[previous] = JobState.FAILED
     if scenario == "legacy-nonterminal":
@@ -576,7 +599,22 @@ def test_nightly_recovers_pending_controls(
         )
         pending.write_text(handoff.model_dump_json())
 
-    assert nightly._run_controls("new", [("snowball", preset)], state_dir) == exit_code
+    def tick(batch):
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "rl_nightly_controls",
+                "--batch",
+                batch,
+                "--presets",
+                "snowball/speed-medium",
+                "--state-dir",
+                str(state_dir),
+            ],
+        )
+        return nightly.main()
+
+    assert tick("new") == exit_code
     captured = capsys.readouterr()
     if scenario == "durable-nonterminal":
         assert not launches and not rows
@@ -596,8 +634,11 @@ def test_nightly_recovers_pending_controls(
     if scenario == "legacy-nonterminal":
         assert rows["partial"].status == "failed"
         assert rows["partial"].failed_facts == ["missing_terminal_receipt"]
-        assert nightly._run_controls("later", [("snowball", preset)], state_dir) == 0
+        assert tick("later") == 0
         assert "missing_terminal_receipt" not in capsys.readouterr().out
+    if "coordinator-nonterminal" in scenario:
+        assert rows["partial"].status == "failed"
+        assert rows["partial"].failed_facts == ["coordinator_interrupted"]
 
 
 def test_control_presets_select_multiple_models_without_duplicates():

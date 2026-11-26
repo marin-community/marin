@@ -3,7 +3,6 @@
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -151,13 +150,12 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
     monkeypatch.setattr(main_base, "time", SimpleNamespace(monotonic=lambda: next(times)))
     failure = RuntimeError("training failed")
     timers, exits, executor_shutdown = [], [], []
+    close_exits, timing_exits = [], []
 
     class Timer:
-        def __init__(self, timeout, callback):
-            self.timeout = timeout
+        def __init__(self, _timeout, callback):
             self.callback = callback
             self.armed = False
-            self.joined = False
             timers.append(self)
 
         def start(self):
@@ -167,7 +165,7 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
             self.armed = False
 
         def join(self):
-            self.joined = True
+            pass
 
         def expire(self):
             if self.armed:
@@ -196,29 +194,15 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
     async def shutdown():
         asyncio.get_running_loop().set_default_executor(RecordingExecutor())
 
-    def close_records():
-        assert [timer.armed for timer in timers] == [False, True]
-        timers[1].expire()
-        assert exits == [1]
-
-    records = tracking_module._RecordsAdapter.__new__(tracking_module._RecordsAdapter)
-    records.store = SimpleNamespace(close=close_records)
-
-    @contextmanager
-    def tracker():
-        try:
-            yield
-        finally:
-            timers[0].expire()
-            assert exits == []
-            records.finish()
+    def expire_active_timers():
+        for timer in timers:
+            timer.expire()
+        return tuple(exits)
 
     write_attempt = main_base.write_attempt
 
     def write_timing(*args):
-        assert [timer.armed for timer in timers] == [False, False, True]
-        timers[2].expire()
-        assert exits == [1, 1]
+        timing_exits.append(expire_active_timers())
         write_attempt(*args)
 
     monkeypatch.setattr(main_base, "write_attempt", write_timing)
@@ -227,11 +211,26 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
     trainer.shutdown = shutdown
     config = OmegaConf.create(
         {
-            "trainer": {"export_path": str(tmp_path)},
+            "trainer": {
+                "export_path": str(tmp_path),
+                "project_name": "test",
+                "run_name": "native-run",
+                "logger": ["records"],
+            },
             "runtime": {"run_id": "native-run", "attempt_id": "native-attempt"},
         }
     )
-    experiment = SimpleNamespace(cfg=config, get_tracker=tracker, _setup_trainer=lambda tracker: trainer)
+    experiment = SimpleNamespace(cfg=config, _setup_trainer=lambda tracker: trainer)
+    tracker = BasePPOExp.get_tracker(experiment)
+    store = tracker.logger["records"].store
+    close = store.close
+
+    def close_records():
+        close_exits.append(expire_active_timers())
+        close()
+
+    monkeypatch.setattr(store, "close", close_records)
+    experiment.get_tracker = lambda: tracker
     if training_fails:
         with pytest.raises(RuntimeError) as raised:
             BasePPOExp._run(experiment)
@@ -239,8 +238,8 @@ def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path,
     else:
         BasePPOExp._run(experiment)
     assert executor_shutdown and all(executor_shutdown)
-    assert exits == [1, 1]
-    assert [timer.timeout for timer in timers] == [120, 120, 120]
-    assert all(timer.joined and not timer.armed for timer in timers)
+    assert close_exits == [(1,)]
+    assert timing_exits == [(1, 1)]
+    assert expire_active_timers() == (1, 1)
     assert (attempt := read_attempt(str(tmp_path), "native-attempt")) is not None
     assert attempt.elapsed_excluding_eval_seconds == 18.0

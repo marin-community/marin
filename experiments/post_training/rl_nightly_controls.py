@@ -120,24 +120,30 @@ def _job_was_interrupted(client: IrisClient, job: JobName) -> bool:
     if status.state == JobState.KILLED:
         return True
     # An exhausted worker failure can come from the workload or a lost pod.
+    reason = status.error_message.partition(":")[0]
     return (
         status.state == JobState.WORKER_FAILED
         and not status.task_state_counts.get(TaskState.FAILED)
         and (
             bool(status.task_state_counts.get(TaskState.PREEMPTED))
-            or status.error_message.startswith(("PodDeleted:", "Evicted:", "WorkloadEvicted"))
+            or reason in {"PodDeleted", "Evicted", "Preempting"}
+            or reason.startswith("WorkloadEvicted")
         )
     )
 
 
-def _control_was_interrupted(client: IrisClient, coordinator: JobName, receipt: AttemptRecord) -> bool:
+def _control_was_interrupted(
+    client: IrisClient, coordinator: JobName, receipt: AttemptRecord, coordinator_interrupted: bool
+) -> bool:
     result = receipt.native.result
-    if result.state == LaunchState.SUCCEEDED or (not result.state.is_terminal and receipt.interruption is None):
-        return False
-    if job_id := result.iris_job_id or receipt.iris_job_id:
+    if not result.state.is_terminal:
+        # Iris can kill a child when its coordinator fails. Use the coordinator's cause.
+        return receipt.interruption is not None and coordinator_interrupted
+    job_id = result.iris_job_id or receipt.iris_job_id
+    if result.state == LaunchState.FAILED and job_id is not None:
         job = JobName.from_wire(job_id)
         return job.root_job == coordinator and _job_was_interrupted(client, job)
-    return receipt.interruption is not None and _job_was_interrupted(client, coordinator)
+    return False
 
 
 def _publish_submission(
@@ -199,9 +205,15 @@ def _publish_submission(
     print(outcome.model_dump_json(), flush=True)
     if outcome.unserved_records:
         raise RuntimeError(f"Terminal publication remains pending for {submission.job}")
-    failed = any(not _control_was_interrupted(client, job, receipt) for receipt in outcome.ineligible_controls)
+    coordinator_interrupted = state == JobState.KILLED or (
+        state == JobState.WORKER_FAILED and _job_was_interrupted(client, job)
+    )
+    failed = any(
+        not _control_was_interrupted(client, job, receipt, coordinator_interrupted)
+        for receipt in outcome.ineligible_controls
+    )
     if not outcome.attempts and not missing:
-        failed = state != JobState.KILLED and (state != JobState.WORKER_FAILED or not _job_was_interrupted(client, job))
+        failed = not coordinator_interrupted
     if pending_file is not None:
         pending_file.rm()
     return _Observation.FAILED if failed else _Observation.FINISHED
