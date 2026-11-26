@@ -35,6 +35,7 @@ from iris.resources.state import JobState
 from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
 from rigging.config_discovery import find_project_root
+from rigging.secrets import get_secret, require_secret
 
 from cloud.iris.launch_config import SubmissionMode, derive_launch_topology, load_launch_config
 from cloud.iris.launch import LaunchOutcome
@@ -612,16 +613,15 @@ def _daytona_rl_api_key_from_secret_manager() -> Optional[str]:
 
 
 def _resolve_daytona_rl_api_key() -> str:
-    """Resolve the RL-org Daytona key from the launch environment or Secret Manager.
+    """Resolve the named RL-org Daytona key, falling back to Secret Manager.
 
-    ``--secrets-env`` is loaded before this function runs. Keep its RL-specific name at
-    the launch boundary, then let the caller expose the resolved value as
+    Keep its RL-specific name at the launch boundary, then expose the resolved value as
     ``DAYTONA_API_KEY`` because that is the name expected by Daytona and Harbor.
     """
-    env_key = os.environ.get(DAYTONA_RL_SECRET_NAME)
+    env_key = get_secret(DAYTONA_RL_SECRET_NAME)
     if env_key:
         print(
-            f"[rl-iris] Daytona: using {DAYTONA_RL_SECRET_NAME} from --secrets-env.",
+            f"[rl-iris] Daytona: using {DAYTONA_RL_SECRET_NAME} from its configured named secret.",
             flush=True,
         )
         return env_key
@@ -692,11 +692,11 @@ def config_task_environment(config: DictConfig) -> dict[str, str]:
         for backend in ("remote_judge", "daytona"):
             key_env = OmegaConf.select(config, f"skyrl.environment.task_sessions.{backend}.api_key_env")
             if key_env is not None:
-                out[key_env] = os.environ[key_env]
+                out[key_env] = require_secret(key_env)
         for callback in OmegaConf.select(config, "skyrl.trainer.callbacks", default=[]) or []:
             if callback.get("type") == "harbor_evaluation":
                 key_env = callback["daytona_api_key_env"]
-                out[key_env] = os.environ[key_env]
+                out[key_env] = require_secret(key_env)
     return out
 
 
@@ -958,7 +958,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
         "GEMINI_API_KEY",
         "TOGETHER_API_KEY",
     ):
-        v = os.environ.get(k)
+        v = get_secret(k)
         if v:
             env_vars[k] = v
     env_vars.update(_forwarded_environment(forward_env))
@@ -967,7 +967,7 @@ def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ..
         for field in ("daytona_api_key_env", "eval_daytona_api_key_env"):
             name = OmegaConf.select(args.config, f"skyrl.terminal_bench_config.harbor.{field}")
             if name is not None:
-                value = os.environ.get(name)
+                value = get_secret(name)
                 if not value:
                     raise ValueError(f"Missing Daytona credential environment variable: {name}")
                 env_vars[name] = value

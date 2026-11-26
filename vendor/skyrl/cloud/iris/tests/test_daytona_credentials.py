@@ -2,6 +2,7 @@
 
 import pytest
 from omegaconf import OmegaConf
+from rigging.secrets import SecretResolutionError
 
 import cloud.iris.iris_backend as launcher
 
@@ -30,7 +31,7 @@ def test_backend_secret_is_resolved_for_training_without_mutating_launch_config(
     if export:
         assert launcher.config_task_environment(config) == expected
     else:
-        with pytest.raises(KeyError, match="JUDGE_TEST_KEY"):
+        with pytest.raises(SecretResolutionError, match="JUDGE_TEST_KEY"):
             launcher.config_task_environment(config)
 
 
@@ -61,7 +62,7 @@ def test_inline_validation_forwards_separate_org_credentials_without_serializing
     }
     assert OmegaConf.to_yaml(config) == serialized
     monkeypatch.delenv("EVAL_ORG_KEY")
-    with pytest.raises(KeyError, match="EVAL_ORG_KEY"):
+    with pytest.raises(SecretResolutionError, match="EVAL_ORG_KEY"):
         launcher.config_task_environment(config)
 
 
@@ -98,3 +99,25 @@ def test_daytona_preflight_follows_task_backend(entrypoint, terminal_bench_data,
     )
 
     assert launcher._rl_config_uses_daytona(config) is expected
+
+
+@pytest.mark.parametrize("backend", ["remote_judge", "daytona", "validation_callback"])
+def test_mounted_credentials_override_environment_and_leave_launch_document_unchanged(tmp_path, monkeypatch, backend):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("CAMPAIGN_BACKEND_KEY", "stale-environment-key")
+    (tmp_path / "CAMPAIGN_BACKEND_KEY").write_text("mounted-credential")
+    (tmp_path / "UNRELATED_KEY").write_text("must-not-forward")
+    sessions = {} if backend == "validation_callback" else {backend: {"api_key_env": "CAMPAIGN_BACKEND_KEY"}}
+    callbacks = (
+        [{"type": "harbor_evaluation", "daytona_api_key_env": "CAMPAIGN_BACKEND_KEY"}]
+        if backend == "validation_callback" else []
+    )
+    config = OmegaConf.create({
+        "runtime": {"entrypoint": "train", "task_env": {}},
+        "skyrl": {"environment": {"task_sessions": sessions}, "trainer": {"callbacks": callbacks}},
+    })
+    original = OmegaConf.to_yaml(config)
+    assert launcher.config_task_environment(config) == {"CAMPAIGN_BACKEND_KEY": "mounted-credential"}
+    monkeypatch.delenv("CAMPAIGN_BACKEND_KEY")
+    assert launcher.config_task_environment(config) == {"CAMPAIGN_BACKEND_KEY": "mounted-credential"}
+    assert OmegaConf.to_yaml(config) == original
