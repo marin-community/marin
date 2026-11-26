@@ -32,12 +32,10 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
-    FINGERPRINT_KEY,
     STEP_RUNNER_EXECUTOR_VERSION,
-    VERSION_KEY,
     StepRecordIdentity,
     check_drift,
-    is_mutable_version,
+    is_mutable_step,
     write_step_record,
 )
 from marin.execution.remote import RemoteCallable, sanitize_job_name
@@ -112,10 +110,6 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _is_mutable_step(step: StepSpec) -> bool:
-    return step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, ""))
-
-
 def step_is_built(step: StepSpec) -> bool:
     """True when the runner will serve ``step`` from cache rather than rebuild it.
 
@@ -125,7 +119,7 @@ def step_is_built(step: StepSpec) -> bool:
     instead of rebuilt; the launcher re-checks authoritatively before serving the
     node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
     """
-    if _is_mutable_step(step):
+    if is_mutable_step(step):
         return False
     return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
 
@@ -303,7 +297,7 @@ class StepRunner:
             """
             path = step.output_path
             status = StatusFile(path, worker_id="check").status
-            if status == STATUS_SUCCESS and not _is_mutable_step(step):
+            if status == STATUS_SUCCESS and not is_mutable_step(step):
                 check_drift(step)
                 logger.info(f"Skip {step.name_with_hash}: already succeeded (pruned subtree)")
                 completed.add(path)
@@ -363,7 +357,7 @@ class StepRunner:
 
         # Quick read-only status check to avoid submitting unnecessary jobs
         status = StatusFile(output_path, worker_id="check").status
-        mutable = _is_mutable_step(step)
+        mutable = is_mutable_step(step)
         if status == STATUS_SUCCESS and not mutable:
             check_drift(step)
             logger.info(f"Skip {step_name}: already succeeded")
@@ -433,7 +427,7 @@ def run_step(step: StepSpec) -> None:
     step_label = step.name_with_hash
 
     # 1. Cache check
-    mutable = _is_mutable_step(step)
+    mutable = is_mutable_step(step)
     if not mutable and check_cache(output_path):
         check_drift(step)
         return
@@ -463,7 +457,8 @@ def run_step(step: StepSpec) -> None:
                 status_file.write_status(STATUS_FAILED)
                 raise
     except StepAlreadyDone:
-        check_drift(step)
+        if not mutable:
+            check_drift(step)
         logger.info(f"Step {step_label} completed by another worker")
 
 
