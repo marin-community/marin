@@ -31,6 +31,7 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from experiments.post_training.task_curation import task_health
 from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
+    TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
 )
 from experiments.post_training.task_curation.task_health import (
@@ -41,7 +42,6 @@ from experiments.post_training.task_curation.task_health import (
     extract_attempts,
     publish_skip_list,
 )
-from experiments.post_training.task_curation.task_store import TASK_SPEC_COLUMN
 
 STARTED = "2026-11-20T10:00:00Z"
 SETUP = "pip install -e ."

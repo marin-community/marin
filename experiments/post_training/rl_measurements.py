@@ -37,7 +37,7 @@ from taskcompendium.grading_result import Outcome
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_scoring import ANSWER_SCHEMA, answer_table, score_answers, score_slices
-from experiments.post_training.task_curation.task_store import TASK_SPEC_COLUMN
+from experiments.post_training.task_curation.selection import TASK_SPEC_COLUMN
 
 
 class InvalidComparison(ValueError):

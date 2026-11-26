@@ -43,7 +43,7 @@ from experiments.post_training.task_curation.pipeline import (
     process_rows,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
-from experiments.post_training.task_curation.task_store import CuratedSource, TaskStore
+from experiments.post_training.task_curation.task_store import TaskStore
 from experiments.post_training.task_curation.tests.image_builds import (
     DATA_PATH,
     REPOSITORY,
@@ -584,7 +584,7 @@ def test_full_campaign_grades_incomplete_curation_before_reporting_failure(tmp_p
         store = TaskStore.open(STORE_NAME, RETRY_VERSION)
     entry = store.sources[source.info.id]
     # The report records the assessment step; the store pins the curation artifact it assessed.
-    assert isinstance(entry, CuratedSource) and Path(entry.root).parent.parent == cache / "data/rl"
+    assert Path(entry.root).parent.parent == cache / "data/rl"
     with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         rows = context.execute(store.to_dataset()).results
     assert rows and {row.source_id for row in rows} == {source.info.id}

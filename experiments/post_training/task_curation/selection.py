@@ -68,8 +68,6 @@ from experiments.post_training.task_curation.curation_catalog import MANIFEST_FI
 from experiments.post_training.task_curation.task_store import (
     PARQUET_BATCH_ROWS,
     TASK_JSON_COLUMN,
-    TASK_SPEC_COLUMN,
-    ReleasedFile,
     admitted_task_files,
     curated_rows,
 )
@@ -87,6 +85,7 @@ VALIDATION_FILENAME = "validation.parquet"
 SUMMARY_FILENAME = "summary.json"
 FULL_VALIDATION_FILENAME = "full_validation.parquet"
 TASK_MANIFEST_FILENAME = "task_manifest.parquet"
+TASK_SPEC_COLUMN = "task_spec"
 LOWERED_TASK_SPEC_COLUMN = "lowered_task_spec"
 TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False), *arrow_schema(TaskStrata)])
 HELDOUT_SCHEMA_VERSION = "0.27"
@@ -504,18 +503,22 @@ def with_agentic_tag(task: TaskSpec) -> TaskSpec:
 
 
 def _released_records(source: ReleasedSource, attempts: list[dict[str, Any]]) -> Iterator[tuple[TaskSpec, str]]:
-    released = set()
-    count = 0
-    for row in ReleasedFile(uri=source.uri, sha256=source.sha256).rows(source.uri, source.uri):
-        count += 1
-        task = row.task
-        if "agentic" in task.tags and not source.agentic:
-            raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
-        published = with_agentic_tag(task) if source.agentic else task
-        released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
-        yield task, published.model_dump_json()
+    contents = StoragePath(source.uri).read_bytes()
+    if hashlib.sha256(contents).hexdigest() != source.sha256:
+        raise ValueError(f"Released source SHA-256 mismatch: {source.uri}")
+    parquet = pq.ParquetFile(io.BytesIO(contents))
+    count = parquet.metadata.num_rows
     if count != source.rows:
         raise ValueError(f"Panel source row count changed: {source.uri}: expected {source.rows}, read {count}")
+    released = set()
+    for batch in parquet.iter_batches(batch_size=PARQUET_BATCH_ROWS, columns=[TASK_SPEC_COLUMN]):
+        for raw in batch.column(0).to_pylist():
+            task = TaskSpec.model_validate_json(raw)
+            if "agentic" in task.tags and not source.agentic:
+                raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
+            published = with_agentic_tag(task) if source.agentic else task
+            released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
+            yield task, published.model_dump_json()
     _check_release_admission(source, released, attempts)
 
 

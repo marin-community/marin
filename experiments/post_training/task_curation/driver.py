@@ -313,7 +313,7 @@ def _build_task_store(
         for source_id, step in curated.items()
         if source_id in finished and (StoragePath(step.path()) / MANIFEST_FILENAME).exists()
     }
-    store = run(task_store_step(*identity, curated=pinned, released={}), max_concurrent=1)[0]
+    store = run(task_store_step(*identity, sources=pinned), max_concurrent=1)[0]
     return {"path": store.path, "left_out": sorted(curated.keys() - pinned.keys())}
 
 

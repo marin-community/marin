@@ -28,10 +28,11 @@ from experiments.post_training.task_curation.selection import (
     SUMMARY_FILENAME,
     TASK_MANIFEST_FILENAME,
     TASK_MANIFEST_SCHEMA,
+    TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
     GraderKind,
 )
-from experiments.post_training.task_curation.task_store import PARQUET_BATCH_ROWS, TASK_SPEC_COLUMN
+from experiments.post_training.task_curation.task_store import PARQUET_BATCH_ROWS
 
 SWESMITH_DATASET = "long-loop-smartie-swesmith"
 SWESMITH_PI_VERSION = "0.87.0"

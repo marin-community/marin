@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -63,31 +62,15 @@ def curated_source(root: Path, *shards: list[str]) -> ArtifactStep:
     return ArtifactStep.adopt(f"curated/{root.name}", "2026.11.26.1", str(root))
 
 
-def released_file(path: Path, *identifiers: str) -> str:
-    pq.write_table(
-        pa.Table.from_pylist([{"task_spec": task(identifier).model_dump_json()} for identifier in identifiers]), path
-    )
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def read(store: TaskStore, tmp_path: Path) -> list[TaskRow]:
     with ZephyrContext(client=LocalClient(), max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
         return list(context.execute(store.to_dataset()).results)
 
 
-def test_opened_store_reads_admitted_curated_and_released_tasks_as_one_dataset(tmp_path):
-    release = tmp_path / "release.parquet"
-    run(
-        task_store_step(
-            "fixture",
-            "2026.11.26.1",
-            curated={
-                "fixture:math": curated_source(tmp_path / "math", ["m1", "m2"], ["m3"]),
-                "fixture:code": curated_source(tmp_path / "code", ["c1"]),
-            },
-            released={str(release): released_file(release, "r1", "r2")},
-        )
-    )
+def test_opened_store_reads_every_admitted_task_as_one_dataset(tmp_path):
+    math = curated_source(tmp_path / "math", ["m1", "m2"], ["m3"])
+    code = curated_source(tmp_path / "code", ["c1"])
+    run(task_store_step("fixture", "2026.11.26.1", sources={"fixture:math": math, "fixture:code": code}))
 
     store = TaskStore.open("fixture", "2026.11.26.1")
     rows = read(store, tmp_path)
@@ -97,34 +80,21 @@ def test_opened_store_reads_admitted_curated_and_released_tasks_as_one_dataset(t
         ("fixture:math", "m1"),
         ("fixture:math", "m2"),
         ("fixture:math", "m3"),
-        (str(release), "r1"),
-        (str(release), "r2"),
     ]
     assert all(row.task.id == row.task_id for row in rows)
-    selected = read(store.select_sources(str(release), "fixture:math"), tmp_path)
-    assert [row.task_id for row in selected] == ["r1", "r2", "m1", "m2", "m3"]
+    selected = read(store.select_sources("fixture:math", "fixture:code"), tmp_path)
+    assert [row.task_id for row in selected] == ["m1", "m2", "m3", "c1"]
     with pytest.raises(FileNotFoundError, match=r"No task store fixture@2026\.11\.26\.2"):
         TaskStore.open("fixture", "2026.11.26.2")
 
 
-def test_store_refuses_sources_whose_pins_changed(tmp_path):
-    release = tmp_path / "release.parquet"
-    store = resolve(
-        task_store_step(
-            "fixture",
-            "2026.11.26.1",
-            curated={"fixture:math": curated_source(tmp_path / "math", ["m1"])},
-            released={str(release): released_file(release, "r1")},
-        )
-    )
-
-    released_file(release, "r1", "replaced")
-    with pytest.raises(Exception, match="Released source SHA-256 mismatch"):
-        read(store.select_sources(str(release)), tmp_path)
+def test_store_refuses_a_source_whose_manifest_changed(tmp_path):
+    source = curated_source(tmp_path / "math", ["m1"])
+    store = resolve(task_store_step("fixture", "2026.11.26.1", sources={"fixture:math": source}))
 
     (tmp_path / "math/manifest.json").write_text(json.dumps({"intended_use": "train", "mode": "sample"}))
     with pytest.raises(ValueError, match="Curated source manifest changed after the task store pinned it"):
-        store.select_sources("fixture:math").to_dataset()
+        store.to_dataset()
 
 
 def test_store_reads_the_admitted_files_its_manifest_records_and_refuses_missing_ones(tmp_path):
@@ -134,7 +104,7 @@ def test_store_reads_the_admitted_files_its_manifest_records_and_refuses_missing
     (tmp_path / "math/final").rename(moved)
     manifest = json.loads((tmp_path / "math/manifest.json").read_text())
     (tmp_path / "math/manifest.json").write_text(json.dumps({**manifest, "datasets": {"final": str(moved)}}))
-    store = resolve(task_store_step("fixture", "2026.11.26.1", curated={"fixture:math": source}, released={}))
+    store = resolve(task_store_step("fixture", "2026.11.26.1", sources={"fixture:math": source}))
 
     assert [row.task_id for row in read(store, tmp_path)] == ["m1", "m2"]
     for path in moved.iterdir():
@@ -146,11 +116,9 @@ def test_store_reads_the_admitted_files_its_manifest_records_and_refuses_missing
 def test_a_store_version_keeps_the_sources_it_was_first_built_with(tmp_path):
     math = curated_source(tmp_path / "math", ["m1"])
     code = curated_source(tmp_path / "code", ["c1"])
-    run(task_store_step("fixture", "2026.11.26.1", curated={"fixture:math": math}, released={}))
-    run(task_store_step("fixture", "2026.11.26.1", curated={"fixture:math": math}, released={}))
+    run(task_store_step("fixture", "2026.11.26.1", sources={"fixture:math": math}))
+    run(task_store_step("fixture", "2026.11.26.1", sources={"fixture:math": math}))
 
     with pytest.raises(FingerprintMismatchError):
-        run(
-            task_store_step("fixture", "2026.11.26.1", curated={"fixture:math": math, "fixture:code": code}, released={})
-        )
+        run(task_store_step("fixture", "2026.11.26.1", sources={"fixture:math": math, "fixture:code": code}))
     assert list(TaskStore.open("fixture", "2026.11.26.1").sources) == ["fixture:math"]

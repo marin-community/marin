@@ -42,10 +42,10 @@ from experiments.post_training.rl_compose import SELECTION_ROOT, artifact_prefix
 from experiments.post_training.task_curation import CANONICAL_ARTIFACT_ROOT, publish_once
 from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
+    TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
     with_agentic_tag,
 )
-from experiments.post_training.task_curation.task_store import TASK_SPEC_COLUMN
 
 MIN_FAILED_ATTEMPTS = 2
 MIN_FAILED_TASKS_PER_ENVIRONMENT = 2
