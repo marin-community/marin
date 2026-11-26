@@ -77,9 +77,9 @@ def all_sources() -> dict[str, RlDataSource]:
         *nemo_tool_calls.sources(),
         *campaign_releases.sources(),
         *unconverted.sources(),
-        *atlas_admissions.sources(),
     ]
     sources = atlas_retained_pins.bind_retained_pins(sources)
+    sources.extend(atlas_admissions.sources())
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")

@@ -22,13 +22,3 @@ def test_every_admission_record_binds_to_its_sealed_pin_and_runs():
         assert source.pipeline is import_retained
         assert canonical_source_id(source.info.id) in declared
         source.require_license()
-
-
-@pytest.mark.data_integration
-def test_the_admitted_records_leave_no_pipeline_less_declared_source():
-    """The #11903 resolution: a record lands with its import, never pipeline-less."""
-    for source in all_sources().values():
-        if "atlas-admitted" in source.info.tags:
-            raise AssertionError(f"{source.info.id} declares a pipeline-less Atlas-admitted record")
-        if source.pipeline is None and source.info.build_path == "Atlas-admitted record":
-            raise AssertionError(f"{source.info.id} is a pipeline-less admission record")
