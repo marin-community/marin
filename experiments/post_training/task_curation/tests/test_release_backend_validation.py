@@ -7,6 +7,7 @@ import dataclasses
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from rigging.filesystem.storage_path import StoragePath
@@ -148,3 +149,18 @@ def test_missing_census_row_refuses(tmp_path):
     broken = dataclasses.replace(inputs, targets=("Marin:other",))
     with pytest.raises(ValueError, match="targets carry no census row"):
         stage.run_backend_validation(broken, dry_run=True, repo_root=tmp_path)
+
+
+def test_verified_disk_pool_reports_its_outcome(monkeypatch):
+    """The survey's pool: configured on a capable worker, reported — not hidden — otherwise."""
+    pool, status = stage._verified_disk_pool()
+    assert pool is None
+    assert status["configured"] is False
+    assert status["root"] == str(stage.LOCAL_DISK_POOL_ROOT)
+    assert status["reason"]
+
+    capable = SimpleNamespace(root=Path("/pool"))
+    monkeypatch.setattr("shellbox.backends.local.disk.LocalDiskPool", lambda root: capable)
+    pool, status = stage._verified_disk_pool()
+    assert pool is capable
+    assert status == {"configured": True, "root": "/pool"}
