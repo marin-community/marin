@@ -18,6 +18,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from skyrlrecipe.declared import PromptAcquisition
+from skyrl_train.probe_mix import DevelopmentProbeMix
 from skyrl_train.rollouts.prompt_order import PromptFeedback, PromptOrder, PromptSelection, SamplingFeedbackPhase
 
 _HASH_DIMENSION = 12
@@ -144,6 +145,7 @@ class PromptThompsonOrder(PromptOrder):
         epsilon: float,
         reference_tokens: int,
         groups_per_family: Mapping[str, int] | None = None,
+        development_mix: DevelopmentProbeMix | None = None,
     ):
         if not 1 <= window_size <= len(prompts):
             raise ValueError("Thompson window must fit in the training prompt catalog")
@@ -179,6 +181,11 @@ class PromptThompsonOrder(PromptOrder):
         self._rng = np.random.default_rng(seed)
         self._exploration_rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
         self._source_boundaries: NDArray[np.float64] | None = None
+        self.development_mix = development_mix
+        if development_mix is not None and (
+            not self.uses_source_passes or epsilon != 1 or self._sources != ["easy", "intermediate"]
+        ):
+            raise ValueError("Development probe mix requires uniform easy/intermediate source passes")
         if self.uses_source_passes:
             if groups_per_family:
                 raise ValueError("groups_per_family cannot partition a per-source prompt pass")
@@ -228,6 +235,8 @@ class PromptThompsonOrder(PromptOrder):
         )
         if self._groups_per_family:
             signature += (sorted(self._groups_per_family.items()), [prompt.family for prompt in prompts])
+        if development_mix is not None:
+            signature += (development_mix.panel_sha256,)
         signature_bytes = json.dumps(signature, separators=(",", ":")).encode()
         self._signature = hashlib.sha256(signature_bytes + self._features.astype("<f8").tobytes()).hexdigest()
 
@@ -245,6 +254,14 @@ class PromptThompsonOrder(PromptOrder):
             self._window = self._draw_window(available, self._window_size, self._source_boundaries)
         return self._window.pop()
 
+    def observe_development_probe(self, *, step: int, accuracy: float, gross_tokens: int):
+        if self.development_mix is None:
+            raise ValueError("The prompt order has no development probe controller")
+        decision = self.development_mix.observe(step=step, accuracy=accuracy, gross_tokens=gross_tokens)
+        if decision is not None:
+            self._pass_sources.clear()
+        return decision
+
     def next_pass_index(self, excluded: Collection[str]) -> int | None:
         """Schedule a source and count the offer of one of its least-visited eligible rows."""
         available = np.ones(len(self._rows), dtype=bool)
@@ -261,9 +278,15 @@ class PromptThompsonOrder(PromptOrder):
             else:
                 self._pass_sources.clear()
         capacities = np.bincount(self._source_ids[available], minlength=len(self._sources))
+        shares = self._source_shares
+        if self.development_mix is not None:
+            decision = self.development_mix.decision
+            if decision is None:
+                raise ValueError("The development baseline must complete before prompt selection")
+            shares = np.array((decision.easy_share, 1 - decision.easy_share))
         if not self._pass_sources:
             size = min(self._window_size, int(capacities.sum()))
-            boundaries = _source_quota_boundaries(self._source_shares, capacities, size)
+            boundaries = _source_quota_boundaries(shares, capacities, size)
             self._pass_sources = self._source_window(boundaries, size).tolist()[::-1]
             self._pass_priority = self._priorities()
             self._pass_used.clear()
@@ -274,7 +297,7 @@ class PromptThompsonOrder(PromptOrder):
         )
         if position is None:
             size = min(len(self._pass_sources), int(capacities.sum()))
-            boundaries = _source_quota_boundaries(self._source_shares, capacities, size)
+            boundaries = _source_quota_boundaries(shares, capacities, size)
             self._pass_sources = self._source_window(boundaries, size).tolist()[::-1]
             position = -1
         source = self._pass_sources.pop(position)
@@ -435,6 +458,8 @@ class PromptThompsonOrder(PromptOrder):
                 "sources": list(self._pass_sources),
                 "priority": self._pass_priority.tolist(),
             }
+        if self.development_mix is not None:
+            state["development_mix"] = self.development_mix.state_dict()
         if self._groups_per_family:
             state["family_windows"] = {family: list(window) for family, window in self._family_windows.items()}
         return state
@@ -452,6 +477,8 @@ class PromptThompsonOrder(PromptOrder):
             self._pass_priority = np.asarray(saved["priority"], dtype=float)
         if self._groups_per_family:
             self._family_windows = {family: list(window) for family, window in state["family_windows"].items()}
+        if self.development_mix is not None:
+            self.development_mix.load_state_dict(state["development_mix"])
         self._rng.bit_generator.state = state["rng"]
         self._exploration_rng.bit_generator.state = state["exploration_rng"]
         self._assigned = Counter(state["assigned"])

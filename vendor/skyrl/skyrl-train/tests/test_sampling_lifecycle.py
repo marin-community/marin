@@ -3,12 +3,14 @@
 
 """Recover rollout spend and close sampling feedback when the policy skips training."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 import torch
+from datasets import Dataset
 from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
 from skyrlrecipe.declared import PromptAcquisition
 
@@ -17,6 +19,8 @@ from skyrl_train.callbacks.builtin import DefaultCallbackHandler
 from skyrl_train.config.rollout_validation import validate_rollout_launch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.contextual_sampling import PromptFeedback, PromptThompsonOrder, PublicPrompt
+from skyrl_train.dataset.tasks import TASK_EVALUATION_IDENTITY
+from skyrl_train.probe_mix import DevelopmentProbeMix, panel_identity
 from skyrl_train.rollouts.buffer import AdmittedRollout, GroupDisposition, SamplingGroupResult
 from skyrl_train.rollouts.context import RolloutBatchMetadata, TrainingContext, TrainingContextState
 from skyrl_train.rollouts.loader import PromptLoaderState
@@ -217,3 +221,144 @@ async def test_empty_ftpo_batch_closes_paid_sampling_feedback(monkeypatch):
     assert [(name, data["feedback_batch"]) for name, data in events] == [("sampling_feedback_observed", 1)]
     with pytest.raises(ValueError, match="only once"):
         order.finish_step(2, [PromptFeedback("lease", "prompt", 1, 2, (0.0, 1.0), 100, None)])
+
+
+def configure_development_probe(trainer):
+    digests = tuple(f"{i:064x}" for i in range(4))
+    identity = panel_identity(digests)
+    trainer.cfg.data.sampling.kind = PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE.value
+    trainer.cfg.data.sampling.epsilon = 1.0
+    trainer.cfg.generator.eval_n_samples_per_prompt = 1
+    trainer.cfg.trainer.callbacks = [
+        {"type": "checkpoint", "save_steps": 1},
+        {"type": "evaluation", "eval_steps": 0, "eval_before_train": True},
+        {"type": "development_probe_mix", "expected_tasks": 4, "panel_sha256": identity},
+    ]
+    validate_rollout_launch(trainer.cfg)
+    trainer.callback_handler = DefaultCallbackHandler(trainer.cfg)
+    trainer.rollout_gross_response_tokens_last_update = 0
+    trainer.eval_dataset = SimpleNamespace(
+        dataframe=Dataset.from_dict({TASK_EVALUATION_IDENTITY: [json.dumps({"task_digest": d}) for d in digests]})
+    )
+    prompts = [
+        PublicPrompt(str(index), "easy" if index < 128 else "intermediate", f"Reverse the letters of word {index}.")
+        for index in range(256)
+    ]
+    order = PromptThompsonOrder(
+        prompts,
+        set(),
+        {},
+        acquisition=PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE,
+        seed=2,
+        window_size=16,
+        decay=0.95,
+        epsilon=1,
+        reference_tokens=100,
+        development_mix=DevelopmentProbeMix(seed=2, panel_sha256=identity),
+    )
+
+    def load(state):
+        order.load_state_dict(state.loader.order)
+
+    trainer.context.loader = SimpleNamespace(order=order)
+    trainer.context.state_dict = AsyncMock(side_effect=lambda: TrainingContextState(
+        PromptLoaderState(order.state_dict(), []), [], None
+    ))
+    trainer.context.load_state_dict = AsyncMock(side_effect=load)
+    return prompts
+
+
+async def emit_probe(trainer, state, accuracy, *, scored=4):
+    await trainer.callback_handler.call_event_async(
+        "on_evaluate",
+        state,
+        TrainerControl(),
+        trainer=trainer,
+        metrics={
+            "eval/all/num_attempted": 4,
+            "eval/all/num_scored": scored,
+            "eval/all/avg_verifier_score": accuracy,
+            "eval/all/response_tokens": 100,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_development_probe_updates_one_fresh_window_after_boundary_resume(budget_trainer, monkeypatch):
+    total, milestone = 2_097_152, 1_048_576
+    events = []
+    monkeypatch.setattr("skyrl_train.callbacks.builtin.record_event", lambda name, data: events.append((name, data)))
+    original = budget_trainer(budget=total, milestones=(milestone,))
+    prompts = configure_development_probe(original)
+    original_order = original.context.loader.order
+    state = original._create_trainer_state(epoch=0)
+    await original.callback_handler.call_event_async("on_train_begin", state, TrainerControl(), trainer=original)
+    await emit_probe(original, state, 0.25)
+    first_rows = [original_order.next_index() for _ in range(16)]
+    assert sum(prompts[index].source == "easy" for index in first_rows) in (12, 13)
+
+    async def interrupt_after_probe(state, _timer, **_kwargs):
+        await emit_probe(original, state, 0.75)
+        raise OSError("interrupted after development feedback")
+
+    original.global_step = 1
+    original.all_metrics[GROSS_ROLLOUT_TOKENS_METRIC] = 1_100_000
+    original._evaluate_and_log.side_effect = interrupt_after_probe
+    with pytest.raises(OSError, match="interrupted after development feedback"):
+        await original._run_step_end_callbacks(original._create_trainer_state(epoch=0))
+    await original._drain_checkpoint_upload()
+    uninterrupted_rows = [original_order.next_index() for _ in range(16)]
+    assert sum(prompts[index].source == "easy" for index in uninterrupted_rows) in (3, 4)
+    assert not set(first_rows).intersection(uninterrupted_rows)
+    assert events[0][1]["easy_rich_probability"] == 0.5
+    assert events[1][1]["easy_rich_probability"] == pytest.approx(0.6726396133)
+
+    retry = budget_trainer(budget=total, milestones=(milestone,))
+    configure_development_probe(retry)
+    order = retry.context.loader.order
+
+    async def rerun_probe(state, timer, **_kwargs):
+        with timer:
+            await emit_probe(retry, state, 0.75)
+            await emit_probe(retry, state, 0.75)
+
+    async def consume_next_window(step):
+        assert step == 2
+        assert [order.next_index() for _ in range(16)] == uninterrupted_rows
+        raise RuntimeError("reached next rollout window")
+
+    retry.context.start.side_effect = None
+    retry._evaluate_and_log.side_effect = rerun_probe
+    retry._publish = AsyncMock(side_effect=consume_next_window)
+    with pytest.raises(RuntimeError, match="reached next rollout window"):
+        await retry._train_loop()
+    assert retry.rollout_gross_response_tokens_total == 1_100_000
+    assert events[1] == events[2]
+    assert len(events) == 3
+
+    retry.global_step = 2
+    retry.rollout_gross_response_tokens_total = total
+    await emit_probe(retry, retry._create_trainer_state(epoch=0), 0.0, scored=0)
+    assert len(events) == 3
+
+
+@pytest.mark.asyncio
+async def test_development_probe_rejects_wrong_panel_and_partial_feedback(budget_trainer):
+    trainer = budget_trainer(budget=100, milestones=(50,))
+    configure_development_probe(trainer)
+    valid = trainer.eval_dataset.dataframe
+    trainer.eval_dataset.dataframe = valid.select(range(4)).map(
+        lambda row: {TASK_EVALUATION_IDENTITY: row[TASK_EVALUATION_IDENTITY].replace("0", "a", 1)}
+    )
+    state = trainer._create_trainer_state(epoch=0)
+    with pytest.raises(ValueError, match="not the pinned development probe"):
+        await trainer.callback_handler.call_event_async("on_train_begin", state, TrainerControl(), trainer=trainer)
+    trainer.eval_dataset.dataframe = valid
+    await trainer.callback_handler.call_event_async("on_train_begin", state, TrainerControl(), trainer=trainer)
+    with pytest.raises(ValueError, match="complete verifier coverage"):
+        await emit_probe(trainer, state, 0.25, scored=3)
+    order = trainer.context.loader.order
+    with pytest.raises(ValueError, match="baseline must complete"):
+        order.next_index()
+    await emit_probe(trainer, state, 0.25)
+    assert 0 <= order.next_index() < 256
