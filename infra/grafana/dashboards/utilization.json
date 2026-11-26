@@ -1,7 +1,7 @@
 {
   "uid": "marin-utilization",
   "title": "Utilization",
-  "description": "Fleet-wide GPU use with a table of nodes to inspect, TPU VMs held, and the selected node: its jobs, their requests, and what the node and each attempt used. Two fleet queries per load; three more once a node is selected.",
+  "description": "Which node to look at, and what ran on it: GPU use per cluster, GPU nodes ranked by busy share, TPU VMs held, and the selected node's jobs, requests and per-attempt CPU and memory. Its hardware is in Node details. Two hub queries per load; two more once a node is selected.",
   "tags": [
     "marin"
   ],
@@ -231,7 +231,7 @@
       "id": 102,
       "type": "table",
       "title": "Nodes to inspect",
-      "description": "One row per GPU node in the range: its GPU type, and GPUs held, busy and tensor-active averaged over the range's bins. GPUs held are the GPUs that reported inventory in a bin (a GPU present for part of the bin counts fully); GPUs busy and tensor-active are the sums of each GPU's mean ratio over its samples in the bin. Idle GPUs are held minus busy. Sorted by busy share, lowest first, so idle nodes come first whatever their size. Rack, slot, node pool, instance type and IB fabric come from the Kubernetes node labels (/k8s/nodes, which needs the CoreWeave read token). Click a node to show it in the Node section below.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH gpu AS ( SELECT \"cluster\", node_name,  date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin,  json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,  max(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) AS held,  max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model,  avg(CASE WHEN name = 'gpu_sm_active_ratio' THEN value END) AS sm_active,  avg(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value END) AS tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND \"cluster\" IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}}) SELECT \"cluster\", node_name, bin, sum(held) AS gpus_held, sum(COALESCE(sm_active, 0)) AS gpus_busy,  sum(COALESCE(tensor_active, 0)) AS gpus_tensor_active, max(gpu_model) AS gpu_model FROM gpu GROUP BY 1, 2, 3 ORDER BY 3, 1, 2\n```",
+      "description": "One row per GPU node in the range: its GPU type, and GPUs held, busy and tensor-active averaged over the range's bins. GPUs held are the GPUs that reported inventory in a bin (a GPU present for part of the bin counts fully); GPUs busy and tensor-active are the sums of each GPU's mean ratio over its samples in the bin. Idle GPUs are held minus busy. Sorted by busy share, lowest first, so idle nodes come first whatever their size. Rack, slot, node pool, instance type and IB fabric come from the Kubernetes node labels (/k8s/nodes, which needs the CoreWeave read token). Click a node for its jobs in the Node section below, or its hardware in Node details.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH gpu AS ( SELECT \"cluster\", node_name,  date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin,  json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,  max(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) AS held,  max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model,  avg(CASE WHEN name = 'gpu_sm_active_ratio' THEN value END) AS sm_active,  avg(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value END) AS tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND \"cluster\" IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}}) SELECT \"cluster\", node_name, bin, sum(held) AS gpus_held, sum(COALESCE(sm_active, 0)) AS gpus_busy,  sum(COALESCE(tensor_active, 0)) AS gpus_tensor_active, max(gpu_model) AS gpu_model FROM gpu GROUP BY 1, 2, 3 ORDER BY 3, 1, 2\n```",
       "datasource": {
         "type": "datasource",
         "uid": "-- Mixed --"
@@ -480,8 +480,12 @@
                 "id": "links",
                 "value": [
                   {
-                    "title": "Inspect this node",
-                    "url": "/d/marin-utilization?var-node=${__value.raw}&var-cluster=${__data.fields.cluster}&var-bin=${bin}&${__url_time_range}"
+                    "title": "Jobs on this node",
+                    "url": "/d/marin-utilization?var-cluster=${__data.fields.cluster}&var-node=${__value.raw}&${__url_time_range}"
+                  },
+                  {
+                    "title": "Hardware in Node details",
+                    "url": "/d/marin-nodes?var-cluster=${__data.fields.cluster}&var-node=${__value.raw}&${__url_time_range}"
                   }
                 ]
               }
@@ -695,7 +699,7 @@
       "description": "The selected node, as text to copy. It is also in the page URL as var-node.",
       "options": {
         "mode": "markdown",
-        "content": "**Node:** `${node}`"
+        "content": "**Node:** `${node}` · hardware (GPUs, host, labels): [Node details](/d/marin-nodes?var-cluster=${cluster}&var-node=${node}&from=${__from}&to=${__to})"
       }
     },
     {
@@ -1101,491 +1105,6 @@
       }
     },
     {
-      "id": 202,
-      "type": "timeseries",
-      "title": "GPU SM-active per GPU",
-      "description": "Per-minute SM-active ratio of each GPU on ${node} (CoreWeave nodes only).\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3\n```",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "minute",
-              "text": "minute",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "gpu_index",
-              "text": "gpu_index",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "type": "include",
-            "match": "any",
-            "filters": [
-              {
-                "fieldName": "name",
-                "config": {
-                  "id": "equal",
-                  "options": {
-                    "value": "gpu_sm_active_ratio"
-                  }
-                }
-              }
-            ]
-          }
-        },
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "name",
-              "gpu_index"
-            ],
-            "keepFields": false
-          }
-        }
-      ],
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 50
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "never"
-          },
-          "min": 0,
-          "max": 1
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 203,
-      "type": "timeseries",
-      "title": "GPU tensor-active per GPU",
-      "description": "Per-minute tensor-active ratio of each GPU on ${node}.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3\n```",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "minute",
-              "text": "minute",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "gpu_index",
-              "text": "gpu_index",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "type": "include",
-            "match": "any",
-            "filters": [
-              {
-                "fieldName": "name",
-                "config": {
-                  "id": "equal",
-                  "options": {
-                    "value": "gpu_tensor_active_ratio"
-                  }
-                }
-              }
-            ]
-          }
-        },
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "name",
-              "gpu_index"
-            ],
-            "keepFields": false
-          }
-        }
-      ],
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 50
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "never"
-          },
-          "min": 0,
-          "max": 1
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 204,
-      "type": "timeseries",
-      "title": "Host CPU",
-      "description": "Per-minute host CPU utilization of ${node}. The node agent writes host rows only while it can read the node's host source (node-exporter on CoreWeave), so a node without one shows no data.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3\n```",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "minute",
-              "text": "minute",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "gpu_index",
-              "text": "gpu_index",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "type": "include",
-            "match": "any",
-            "filters": [
-              {
-                "fieldName": "name",
-                "config": {
-                  "id": "equal",
-                  "options": {
-                    "value": "node_cpu_utilization_percent"
-                  }
-                }
-              }
-            ]
-          }
-        },
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "name",
-              "gpu_index"
-            ],
-            "keepFields": false
-          }
-        }
-      ],
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 58
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
-      "id": 205,
-      "type": "timeseries",
-      "title": "Host memory",
-      "description": "Per-minute host memory used and total on ${node}.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3\n```",
-      "datasource": {
-        "type": "yesoreyeram-infinity-datasource",
-        "uid": "finelog-marin"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "yesoreyeram-infinity-datasource",
-            "uid": "finelog-marin"
-          },
-          "type": "json",
-          "source": "url",
-          "format": "table",
-          "parser": "backend",
-          "url": "/query",
-          "url_options": {
-            "method": "GET",
-            "params": [
-              {
-                "key": "sql",
-                "value": "SELECT date_bin(INTERVAL '1 minute', to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS minute, name, json_get(attributes_json, 'gpu_index') AS gpu_index, avg(value) AS value FROM \"telemetry_v1.node_agent\" WHERE ${node:sqlstring} <> '' AND service = 'iris-node-agent' AND node_name = ${node:sqlstring} AND name IN ('gpu_sm_active_ratio', 'gpu_tensor_active_ratio', 'gpu_power_watts', 'node_cpu_utilization_percent', 'node_memory_used_bytes', 'node_memory_total_bytes') AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
-              },
-              {
-                "key": "from",
-                "value": "${__from}"
-              },
-              {
-                "key": "to",
-                "value": "${__to}"
-              }
-            ]
-          },
-          "columns": [
-            {
-              "selector": "minute",
-              "text": "minute",
-              "type": "timestamp_epoch"
-            },
-            {
-              "selector": "name",
-              "text": "name",
-              "type": "string"
-            },
-            {
-              "selector": "gpu_index",
-              "text": "gpu_index",
-              "type": "string"
-            },
-            {
-              "selector": "value",
-              "text": "value",
-              "type": "number"
-            }
-          ]
-        }
-      ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "type": "include",
-            "match": "any",
-            "filters": [
-              {
-                "fieldName": "name",
-                "config": {
-                  "id": "equal",
-                  "options": {
-                    "value": "node_memory_used_bytes"
-                  }
-                }
-              },
-              {
-                "fieldName": "name",
-                "config": {
-                  "id": "equal",
-                  "options": {
-                    "value": "node_memory_total_bytes"
-                  }
-                }
-              }
-            ]
-          }
-        },
-        {
-          "id": "partitionByValues",
-          "options": {
-            "fields": [
-              "name",
-              "gpu_index"
-            ],
-            "keepFields": false
-          }
-        }
-      ],
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 58
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "custom": {
-            "drawStyle": "line",
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      }
-    },
-    {
       "id": 206,
       "type": "timeseries",
       "title": "CPU cores per attempt",
@@ -1670,7 +1189,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 65
+        "y": 50
       },
       "fieldConfig": {
         "defaults": {
@@ -1777,7 +1296,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 65
+        "y": 50
       },
       "fieldConfig": {
         "defaults": {

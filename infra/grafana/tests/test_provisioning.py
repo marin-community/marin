@@ -1326,9 +1326,10 @@ def test_training_moe_health_queries_show_routing_signals():
 
 
 UTILIZATION = DASHBOARDS / "utilization.json"
-# Two fleet queries (GPUs by node, TPU VMs) and three node queries. The bridge's cache only shares
-# byte-identical SQL, so a later edit to one copy of a shared query would add a hub scan per load.
-UTILIZATION_MAX_DISTINCT_SQL = 5
+# Two fleet queries (GPUs by node, TPU VMs) and two node queries (the node's attempts, their usage).
+# The bridge's cache only shares byte-identical SQL, so a later edit to one copy of a shared query
+# would add a hub scan per load.
+UTILIZATION_MAX_DISTINCT_SQL = 4
 
 
 def _finelog_sql(panel: dict) -> list[str]:
