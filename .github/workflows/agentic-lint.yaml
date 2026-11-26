@@ -1,19 +1,20 @@
 name: Agentic lint
 
-# Best-effort Loom lint review. The `agentic-lint` label records that a PR has
-# had a published-PR lint pass from this workflow. The author's local review
-# runs before publication.
+# Best-effort Loom lint review of a published PR's branch, title and
+# description. The `agentic-lint` label records that this workflow has reviewed
+# the PR. Reviews start only while the label is absent, so pushes and PR text
+# edits do not trigger another pass; removing the label requests a fresh review
+# of the current head.
 on:
   pull_request_target:
-    types: [opened, ready_for_review, reopened, synchronize, edited, unlabeled]
+    types: [opened, ready_for_review, reopened, unlabeled]
 
 jobs:
   launch-review:
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      (!contains(github.event.pull_request.labels.*.name, 'agentic-lint') ||
-       github.event.action == 'synchronize' || github.event.action == 'edited') &&
+      !contains(github.event.pull_request.labels.*.name, 'agentic-lint') &&
       (github.event.action != 'unlabeled' || github.event.label.name == 'agentic-lint')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -43,7 +44,7 @@ jobs:
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_AGENTIC_LINT_PROFILE }}
-          idempotency-key: agentic-lint:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}:${{ github.event.pull_request.updated_at }}
+          idempotency-key: agentic-lint:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
           title: "Agentic lint for #${{ github.event.pull_request.number }}"
           goal: >-
             Review pull request #${{ github.event.pull_request.number }} at head

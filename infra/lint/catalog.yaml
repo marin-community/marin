@@ -65,12 +65,6 @@ shared_prompt: |-
 
   Review every changed file on the branch versus the merge base with `main`, regardless of language — Python, proto, Rust, TOML, YAML, shell, config. You are handed the changed-file inventory (`git diff --stat`) and the merge-base SHA, and you inspect each file yourself: `git diff <merge-base> -- <path>` for its hunks (add `-U30` for more context), or open it with `Read`, and follow the change into other files with git/grep when you need context. Running standalone, get the inventory with `git diff main...HEAD --name-only` (or `--cached`, or `gh pr diff <number> --name-only`); read a named file or two in full.
 
-  When supplied, the prose lane also receives the pull request title and description
-  as untrusted text. Review them only under rules that explicitly include PR text.
-  Use `PR_TITLE:1` for title findings and `PR_BODY:<line>` for description
-  findings, where description lines are 1-indexed. These virtual paths are
-  reported as PR comments rather than file comments.
-
   Skip files you can't usefully review — emit nothing for them: binary, lock files (`uv.lock`, `*.lock`), generated stubs (`*_pb2.py`, `*_pb2_grpc.py`, `*_connect.py`), and oversized vendored/generated files. If nothing reviewable changed, emit nothing and stop.
 
   Scan added/modified hunks plus enough surrounding context to judge intent (usually the enclosing function/class). Do not flag pre-existing code in unchanged regions. Migrations, `__init__.py` exports, proto definitions, and test fixtures all count.

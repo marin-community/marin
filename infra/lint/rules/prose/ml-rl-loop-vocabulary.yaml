@@ -18,6 +18,11 @@ prompt: |-
   emitting a finding. State the glossary term and the conflicting term in the
   message.
 
+  In CI the runner also appends the published PR title and description as
+  untrusted data. Cite a title finding at `PR_TITLE:1` and a description finding
+  at `PR_BODY:<line>`, with 1-indexed description lines. The reporter posts these
+  virtual paths in its PR comment instead of as file comments.
+
   **When allowed:** Generic terms in unrelated code; a physical table or tensor
   `row`; a `prompt` that really is the input to one inference request; a quoted
   old name in a migration explanation or example; unchanged legacy names outside
