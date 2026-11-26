@@ -502,13 +502,16 @@ async def episode_turn(request: ModelRequest, *, model: Model, options: Mapping[
 
 def episode_machine(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> MachineRuntimeSpec:
     """The run's task machine with the task's network policy and the resources it sets."""
+    return episode_resources(runtime, inputs).model_copy(update={"network": inputs.network, "gpus": inputs.gpus})
+
+
+def episode_resources(runtime: MachineRuntimeSpec, inputs: EpisodeInputs) -> MachineRuntimeSpec:
+    """``runtime`` with the CPUs, memory and storage the task sets, keeping the run's for any it leaves unset."""
     return runtime.model_copy(
         update={
-            "network": inputs.network,
             "cpus": runtime.cpus if inputs.cpus is None else inputs.cpus,
             "memory_mb": runtime.memory_mb if inputs.memory_mb is None else inputs.memory_mb,
             "storage_mb": runtime.storage_mb if inputs.storage_mb is None else inputs.storage_mb,
-            "gpus": inputs.gpus,
         }
     )
 
@@ -790,6 +793,10 @@ async def _score_rollout(
         else grader_environment(task.grader)
     )
     verifier = config.verifier_machine if grader_build is not None else None
+    if verifier is not None and isinstance(operation, AgentEpisode):
+        # A separate grader runs the agent's work, so it gets the resources the task gives the agent's machine.
+        assert case.item.episode is not None
+        verifier = episode_resources(verifier, case.item.episode)
     if (
         verifier is not None
         and grader_build is not None
