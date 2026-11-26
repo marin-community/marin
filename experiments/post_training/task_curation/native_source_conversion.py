@@ -573,6 +573,8 @@ def pinned_dockerfile(text: str, resolve: Callable[[str], str] = resolve_base_di
         if base not in pins:
             try:
                 pinned = resolve(base)
+            except BasePinRejected:
+                raise
             except (ValueError, OSError) as error:
                 raise BasePinRejected(f"FROM base {base} does not resolve: {error}") from error
             pins[base] = BasePin(base=base, pinned=pinned)
