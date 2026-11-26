@@ -1,6 +1,7 @@
 """Resolve trainer.callbacks[*].additional_evaluations into recorded native configuration.
 
-Named results use eval/<name>/ metrics and <trainer.export_path>/<name>/ outputs.
+Named results use eval/<name>/ metrics. The default grader report directory for
+each named profile is <trainer.export_path>/<name>/.
 """
 
 from collections.abc import Mapping
