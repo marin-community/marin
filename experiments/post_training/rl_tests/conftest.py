@@ -3,8 +3,24 @@
 
 import pytest
 
+from experiments.post_training import rl_gate
 from experiments.post_training.rl_tests import fixtures
+from experiments.post_training.rl_tests.native_composer import NativeComposer
 from infra.marina.tests.rl_progress_fixtures import rl_progress_client as rl_progress_client
+
+
+@pytest.fixture(scope="session")
+def native_composer():
+    composer = NativeComposer()
+    yield composer
+    composer.close()
+
+
+@pytest.fixture(autouse=True)
+def reuse_native_composer(native_composer, monkeypatch):
+    """Run native compositions in one SkyRL process instead of one per call."""
+    monkeypatch.setattr(rl_gate, "_run_native", native_composer.run_native)
+
 
 selection = pytest.fixture(fixtures.selection)
 source_provenance = pytest.fixture(fixtures.source_provenance)
