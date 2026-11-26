@@ -6,6 +6,7 @@
 from dataclasses import replace
 
 from skyrlrecipe import RecipePatch, sections
+from skyrlrecipe.declared import PromptAcquisition
 
 from experiments.post_training import rl
 from experiments.post_training.rl_presets import ModelPresets, Preset
@@ -16,12 +17,12 @@ REVISION = "2026.11.25.2"
 SECOND_SEED = 20261021
 SMOKE_UPDATES = 4
 PROMPT_EXPLORATION = 0.05
-WITHIN_SOURCE = "prompt-thompson-within-source-cost-aware"
+WITHIN_SOURCE = PromptAcquisition.WITHIN_SOURCE_COST_AWARE.value
 MATCHED_ARMS = (
     ("fixed", "adaptive-source", 1.0),
-    ("source-only", "prompt-thompson-source", PROMPT_EXPLORATION),
-    ("contextual", "prompt-thompson-contextual", PROMPT_EXPLORATION),
-    ("cost-aware", "prompt-thompson-cost-aware", PROMPT_EXPLORATION),
+    ("source-only", PromptAcquisition.SOURCE.value, PROMPT_EXPLORATION),
+    ("contextual", PromptAcquisition.CONTEXTUAL.value, PROMPT_EXPLORATION),
+    ("cost-aware", PromptAcquisition.COST_AWARE.value, PROMPT_EXPLORATION),
     ("within-source", WITHIN_SOURCE, PROMPT_EXPLORATION),
     ("within-source-random", WITHIN_SOURCE, 1.0),
 )

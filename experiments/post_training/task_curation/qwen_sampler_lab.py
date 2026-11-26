@@ -86,7 +86,7 @@ class EvalPanel:
 
 SOURCE_EVAL = EvalPanel("qwen-sampler-source-eval", "2026.11.25.1", 20261127)
 PASS_EVAL = EvalPanel("qwen-sampler-pass-eval", "2026.11.25.1", 20261128, prior_panels=(SOURCE_EVAL,))
-EVAL_PANELS = {"source": SOURCE_EVAL, "pass": PASS_EVAL}
+EVAL_PANELS = MappingProxyType({"source": SOURCE_EVAL, "pass": PASS_EVAL})
 
 
 def arithmetic(rng: random.Random, difficulty: Difficulty) -> tuple[str, str]:

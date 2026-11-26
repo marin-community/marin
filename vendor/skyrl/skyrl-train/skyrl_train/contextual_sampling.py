@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from skyrl_train.config.sampling import PromptAcquisition
+from skyrlrecipe.declared import PromptAcquisition
 
 _HASH_DIMENSION = 12
 _PRIOR_PRECISION = 2.0
@@ -258,7 +258,7 @@ class PromptThompsonOrder:
         return self._window.pop()
 
     def next_pass_index(self, excluded: Collection[str]) -> int | None:
-        """Choose a least-visited eligible row of the requested source, counting actual offers."""
+        """Schedule a source and count the offer of one of its least-visited eligible rows."""
         available = np.ones(len(self._rows), dtype=bool)
         available[[self._rows[uid] for uid in excluded]] = False
         if not available.any():

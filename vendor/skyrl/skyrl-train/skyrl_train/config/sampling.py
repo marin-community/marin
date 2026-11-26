@@ -7,17 +7,7 @@ from enum import StrEnum
 
 from omegaconf import DictConfig
 
-
-class PromptAcquisition(StrEnum):
-    SOURCE = "prompt-thompson-source"
-    CONTEXTUAL = "prompt-thompson-contextual"
-    COST_AWARE = "prompt-thompson-cost-aware"
-    WITHIN_SOURCE_COST_AWARE = "prompt-thompson-within-source-cost-aware"
-    WITHIN_SOURCE_PASS_COST_AWARE = "prompt-thompson-within-source-pass-cost-aware"
-
-    @property
-    def within_source(self) -> bool:
-        return self in (self.WITHIN_SOURCE_COST_AWARE, self.WITHIN_SOURCE_PASS_COST_AWARE)
+from skyrlrecipe.declared import PromptAcquisition
 
 
 class SamplingKind(StrEnum):

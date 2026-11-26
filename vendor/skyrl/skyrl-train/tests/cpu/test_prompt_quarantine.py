@@ -10,7 +10,7 @@ from loguru import logger
 
 from skyrl_train.adaptive_sampling import AdaptiveSourceOrder
 from skyrl_train.config.rollout_validation import minimum_family_pool_sizes
-from skyrl_train.config.sampling import PromptAcquisition
+from skyrlrecipe.declared import PromptAcquisition
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.contextual_sampling import PromptThompsonOrder, PublicPrompt
 from skyrl_train.dynamic_sampling import GroupSelectionResult

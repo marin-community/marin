@@ -8,7 +8,7 @@ from dataclasses import replace
 from iris.rpc import job_pb2
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLRetentionPolicy
 from skyrlrecipe import ContextBudget, RecipePatch, sections
-from skyrlrecipe.declared import EvaluationProfile
+from skyrlrecipe.declared import EvaluationProfile, PromptAcquisition
 from skyrlrecipe.sampling import EvalSamplingParams
 from taskcompendium.models import CommandSemantics
 
@@ -138,9 +138,9 @@ def sampler_preset(
 
 
 PROMPT_ARMS = (
-    ("source-only", "prompt-thompson-source"),
-    ("contextual", "prompt-thompson-contextual"),
-    ("cost-aware", "prompt-thompson-cost-aware"),
+    ("source-only", PromptAcquisition.SOURCE.value),
+    ("contextual", PromptAcquisition.CONTEXTUAL.value),
+    ("cost-aware", PromptAcquisition.COST_AWARE.value),
 )
 THOMPSON_ARM = ("thompson", "adaptive-source-thompson", LOW_EXPLORATION)
 ARMS = (
@@ -154,14 +154,14 @@ RNO_PAIR_PILOT_ARMS = (
 )
 FULL_VALIDATION = replace(EVAL, name="qwen_lab_full", file="full_validation", at_start=False)
 CONFIRMATION_ARMS = ("fixed", "thompson", "cost-aware-eps05")
-WITHIN_SOURCE = "prompt-thompson-within-source-cost-aware"
+WITHIN_SOURCE = PromptAcquisition.WITHIN_SOURCE_COST_AWARE.value
 WITHIN_SOURCE_ARM = ("within-source", WITHIN_SOURCE, LOW_EXPLORATION)
 SOURCE_ARMS = (
     WITHIN_SOURCE_ARM,
     ("within-source-random", WITHIN_SOURCE, 1.0),
 )
 SOURCE_EVAL = replace(EVAL, name="qwen_source_eval")
-WITHIN_SOURCE_PASS = "prompt-thompson-within-source-pass-cost-aware"
+WITHIN_SOURCE_PASS = PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE.value
 SOURCE_PASS_ARMS = (
     ("within-source-pass", WITHIN_SOURCE_PASS, LOW_EXPLORATION),
     ("within-source-pass-random", WITHIN_SOURCE_PASS, 1.0),
@@ -202,7 +202,7 @@ def budget_preset(
     evaluation: Evaluation,
     held_out_tasks: str,
 ) -> Preset:
-    """Evaluate at initialization and the first complete update that reaches the token budget."""
+    """Evaluate at the token budget or update cap, and optionally before training."""
     preset = sampler_preset(
         name,
         max_updates,

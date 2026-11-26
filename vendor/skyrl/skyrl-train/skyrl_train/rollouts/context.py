@@ -23,6 +23,7 @@ from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from taskcompendium.chat import ChatFunction, message_text
 
 from marinskyrl.environment_contract import EXECUTION_UID_ENV, TrainingType
+from skyrlrecipe.declared import PromptAcquisition
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from skyrl_train.adaptive_sampling import AdaptiveSourceOrder
@@ -37,7 +38,6 @@ from skyrl_train.config.rollout_validation import (
 )
 from skyrl_train.config.sampling import (
     ADAPTIVE_SOURCE_KINDS,
-    PromptAcquisition,
     SamplingKind,
     validate_sampling_reversion,
 )

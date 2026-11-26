@@ -7,7 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from marinskyrl.distillation import compile_distillation_plan_from_config
 from marinskyrl.runtime_options import WeightSyncTransport
-from skyrl_train.config.sampling import PromptAcquisition
+from skyrlrecipe.declared import PromptAcquisition
 
 GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
 FAMILY_COLUMN = "family"
