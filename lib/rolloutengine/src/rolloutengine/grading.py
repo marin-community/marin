@@ -12,11 +12,13 @@ from typing import Any
 
 from pydantic import ValidationError
 from shellbox.machine import Machine, MachineFactory, MachineSpec
-from taskcompendium.chat import assistant_message, chat_conversation
+from taskcompendium.chat import assistant_message, chat_conversation, conversation_event
 from taskcompendium.grading import grade_answer, grade_remote_judge_answer
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AgentMachine,
+    AssistantToolCalls,
+    ConversationEvent,
     GraderMachine,
     GradingAttempt,
     NoGrader,
@@ -62,7 +64,7 @@ def judge_connection(spec: TaskRolloutSpec) -> JudgeConnection:
 async def _grade_rollout(
     spec: TaskRolloutSpec,
     messages: tuple[dict[str, Any], ...],
-    model_messages: tuple[dict[str, Any], ...],
+    model_message_indices: tuple[int, ...],
     outputs: dict[str, bytes],
     machine: Machine | None,
     factories: Mapping[str, MachineFactory],
@@ -82,11 +84,30 @@ async def _grade_rollout(
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
-    for message in model_messages:
+    events: list[ConversationEvent | None] = [None] * len(messages)
+    model_indices = set(model_message_indices)
+    for index, message in enumerate(messages):
+        if index not in model_indices:
+            events[index] = conversation_event(message)
+    invalid_model_message: str | None = None
+    for index in model_message_indices:
         try:
-            assistant_message(message)
-        except ValidationError as error:
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, f"Invalid model message: {error}")
+            events[index] = assistant_message(messages[index])
+        except (ValidationError, ValueError) as error:
+            invalid_model_message = str(error)
+    seen_call_ids: set[str] = set()
+    for index, event in enumerate(events):
+        if isinstance(event, AssistantToolCalls):
+            for call in event.calls:
+                if call.call_id in seen_call_ids:
+                    if index in model_indices:
+                        return GradeResult(
+                            Outcome.SUBMISSION_FAILURE, 0.0, f"Duplicate model tool-call ID: {call.call_id}"
+                        )
+                    raise ValueError(f"Duplicate tool-call ID in harness prompt: {call.call_id}")
+                seen_call_ids.add(call.call_id)
+    if invalid_model_message is not None:
+        return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, f"Invalid model message: {invalid_model_message}")
     attempt = GradingAttempt(chat_conversation(list(messages)), outputs, stop_reason=stop_reason)
     if isinstance(grader, VerifyitGrader) and grades_with_judge(grader):
         return await asyncio.to_thread(grade_remote_judge_answer, task, attempt, judge_connection(spec))

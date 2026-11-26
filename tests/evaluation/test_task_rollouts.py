@@ -1326,6 +1326,42 @@ def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
     return str(output)
 
 
+@pytest.mark.asyncio
+async def test_reused_model_tool_call_id_scores_zero_without_cancelling_other_attempts(tmp_path, run_config):
+    corpus = publish_episodes(tmp_path, ("episode/reused", "episode/solve"), ShellAgent())
+
+    async def model(request):
+        question = request.messages[0]["content"]
+        observations = sum(message["role"] == "tool" for message in request.messages)
+        if question == "episode/reused" and observations < 2:
+            call = {
+                "id": "reused",
+                "type": "function",
+                "function": {"name": "shell", "arguments": json.dumps({"command": "echo red"})},
+            }
+            message = {"role": "assistant", "content": "", "tool_calls": [call]}
+        else:
+            message = {"role": "assistant", "content": "red"}
+        return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(5, 2))
+
+    config = run_config.model_copy(update={"source_limit": None, "task_machine": machine_runtime(backend="shellsim")})
+    output = str(tmp_path / "results")
+    await run_evaluation(
+        (corpus,),
+        output,
+        config,
+        model,
+        machine_factories={"shellsim": ShellSimMachineFactory()},
+        harnesses={"shell": lambda _agent, _budget: ShellHarness(command_timeout=None)},
+    )
+
+    reader = ReadView(output)
+    finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 1}
+    failed = next(row for row in finished if row["outcome"] == "submission_failure")
+    assert json.loads(reader.read_blob(failed["result_blob"]))["grade"]["reward"] == 0.0
+
+
 @pytest.fixture
 def episode_corpus(tmp_path):
     return publish_episodes(tmp_path, ("episode/flaky", STALL, "episode/solve"), ShellAgent())
