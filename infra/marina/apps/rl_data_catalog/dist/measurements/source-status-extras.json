@@ -3,7 +3,7 @@
     "Nemotron:Nemotron-Cascade-2-RL-data/IF-RL": "ingest B \u00b7 Codex 01a1e039",
     "Nemotron:Nemotron-Cascade-2-RL-data/SWE-RL": "ingest B \u00b7 Codex 01a1e039",
     "marcusm117:ProofNet-Verified": "atlas-source-coverage \u00b7 RLVR declarations registry",
-    "project-numina:NuminaMath-LEAN": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "project-numina:NuminaMath-LEAN": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119": "swe-repair \u00b7 ses_e15d1c017ffe",
     "TaskTrove:laion__nemotron-gym-identity-following-v4@repaired-20261123": "identity-following-repair \u00b7 repair sealed, registers at the R41 load",
     "TaskTrove:laion__stackexchange-codereview-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
@@ -27,24 +27,24 @@
     "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
     "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
     "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1": "ingest A \u00b7 ses_de826fccdffe",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Anthropic:hh_rlhf/harmless-base": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Anthropic:hh_rlhf/helpful-base": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Anthropic:hh_rlhf/helpful-online": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Anthropic:hh_rlhf/helpful-rejection-sampled": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/hs3_en": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/hs3_multi": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/hs3_multiturn": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/safety_en": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
-    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Anthropic:hh_rlhf/harmless-base": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Anthropic:hh_rlhf/helpful-base": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Anthropic:hh_rlhf/helpful-online": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Anthropic:hh_rlhf/helpful-rejection-sampled": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/hs3_en": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/hs3_multi": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/hs3_multiturn": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/safety_en": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
+    "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
     "TaskTrove:laion__nemotron-gym-structured-outputs-v4": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:laion__glaive-code-assistant-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:laion__stackexchange-tezos-sandboxes-verified-v2": "ingest B \u00b7 Codex 01a1e039",
@@ -1339,7 +1339,7 @@
       "stage": "Intake queued",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1771,7 +1771,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1789,7 +1789,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1807,7 +1807,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1825,7 +1825,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1843,7 +1843,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1861,7 +1861,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1879,7 +1879,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1897,7 +1897,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1915,7 +1915,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1933,7 +1933,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1951,7 +1951,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1969,7 +1969,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -1987,7 +1987,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -2005,7 +2005,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -2023,7 +2023,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -2041,7 +2041,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -2059,7 +2059,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"
@@ -2077,7 +2077,7 @@
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
-      "owner": "unclaimed \u2014 staged for R41 intake; owner rotation pending",
+      "owner": "ingest C \u00b7 ses_de69f162affeNDxM7uXXruALFm",
       "use": "train",
       "method_tags": [
         "RL"

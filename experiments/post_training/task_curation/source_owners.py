@@ -38,20 +38,20 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         note="excluded",
     ),
     "Anthropic:hh_rlhf/harmless-base": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; MIT card — NoGrader fail-closed validity decision pending",
     ),
     "Anthropic:hh_rlhf/helpful-base": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; MIT card — NoGrader fail-closed validity decision pending",
     ),
     "Anthropic:hh_rlhf/helpful-online": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; MIT card — NoGrader fail-closed validity decision pending",
     ),
     "Anthropic:hh_rlhf/helpful-rejection-sampled": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; MIT card — NoGrader fail-closed validity decision pending",
     ),
     "CyBench:andyzorigin-cybench": SourceOwner(
         owner="by design — ban registry / rulings; nothing to burn down",
@@ -206,72 +206,72 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         note="metadata exclusion",
     ),
     "Nemotron:nemotron_ultra_mopd/hs3_en": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_mopd/hs3_multi": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_mopd/hs3_multiturn": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_mopd/makeshn_ultra_v3_ipi_train": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_mopd/safety_en": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/SWE-Gym/SWE-Gym": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_mopd/swe_pivot_len40k/nebius/SWE-rebench-V2": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; wave 1 — license gate then conversion chain",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_math_tir": SourceOwner(
         owner="R41 self-executing · ses_deccb722",
         note="release readmission from sealed receipts / disk_root / host-image routes",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; wave 1 — license gate then conversion chain",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
         note="Measurements pending",
     ),
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; wave 2 — same conversion path as the mopd pair",
     ),
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": SourceOwner(
         owner="R41 self-executing · ses_deccb722",
         note="release readmission from sealed receipts / disk_root / host-image routes",
     ),
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; wave 2 — same conversion path as the mopd pair",
     ),
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": SourceOwner(
         owner="R41 self-executing · ses_deccb722",
         note="release readmission from sealed receipts / disk_root / host-image routes",
     ),
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="Measurements pending",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; wave 2 — same conversion path as the mopd pair",
     ),
     "Nvidia:Nemotron-RL-InverseIFEval-v1": SourceOwner(
         owner="ingest B · Codex 01a1e039",
@@ -738,8 +738,8 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
         note="P0 republish of the repaired variant; grader reseal in flight",
     ),
     "project-numina:NuminaMath-LEAN": SourceOwner(
-        owner="unclaimed — staged for R41 intake; owner rotation pending",
-        note="intake queued",
+        owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
+        note="intake; wave 1 — license gate then conversion chain",
     ),
 }
 
