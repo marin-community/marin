@@ -55,6 +55,7 @@
     "TaskTrove:swesmith-verifier-repaired-v5",
     "TerminalWorld:TerminalWorld",
     "di-zhang-fdu:aime_1983_2024",
-    "marin-community:mcp-atlas-easy"
+    "marin-community:mcp-atlas-easy",
+    "Nvidia:Nemotron-RL-QA-Abstention-v1"
   ]
 }

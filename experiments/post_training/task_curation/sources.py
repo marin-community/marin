@@ -21,6 +21,7 @@ from experiments.post_training.task_curation.datasets import (
     native_releases,
     nemo_mcqa,
     nemo_structured,
+    qa_abstention_admitted,
     repair_releases,
     structure_closure,
     tasktrove_structured_native,
@@ -212,6 +213,7 @@ R41_PENDING_SOURCE_IDS = (
         "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
         "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
         "Nvidia:Nemotron-RL-InverseIFEval-v1",
+        "Nvidia:Nemotron-RL-QA-Abstention-v1",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
         # The native TaskTrove structured-output cohort qualified after the R40 freeze.
         "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
@@ -236,6 +238,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *hierarchy_intake.sources(),
     *dolci_precise_if_admitted.sources(),
     *inverse_ifeval_admitted.sources(),
+    *qa_abstention_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -320,6 +323,7 @@ def configured_sources() -> list[RlDataSource]:
         *hierarchy_intake.sources(),
         *dolci_precise_if_admitted.sources(),
         *inverse_ifeval_admitted.sources(),
+        *qa_abstention_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
