@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import json
+import re
 
 import pytest
 from finestore.rl.difficulty import MeasurementStatus
@@ -11,9 +13,12 @@ from experiments.post_training.task_curation.difficulty.ledger import append_row
 from experiments.post_training.task_curation.difficulty.seal import seal_ledger
 from experiments.post_training.task_curation.difficulty.state import CatalogSource
 from experiments.post_training.task_curation.tests.test_difficulty_seal import attempt
+from infra.marina.apps.rl_data_catalog.load import LOAD_ENSURED_TABLES
 from infra.marina.apps.rl_data_catalog.load_difficulty_seal import load_difficulty_seal
+from infra.marina.apps.rl_data_catalog.server import sealed_difficulty
 from infra.marina.apps.rl_data_catalog.server.difficulty import table_difficulty
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import difficulty_coverage
+from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 from infra.marina.apps.rl_data_catalog.server.sealed_difficulty import sealed_difficulty_summary
 from infra.marina.apps.rl_data_catalog.tests.test_difficulty_coverage import declaration
 
@@ -104,3 +109,11 @@ def test_release_loader_reads_back_cells_and_rejects_changed_snapshot_identity(t
     snapshots[result["snapshot_id"]]["manifest_sha256"] = "changed"
     with pytest.raises(ValueError, match="different evidence"):
         load_difficulty_seal(reference, query, "r41-load")
+
+
+def test_every_catalog_load_ensures_the_tables_the_sealed_reader_queries():
+    """R40: a load without a difficulty seal left the seal tables absent; the served reader then 422'd."""
+    reader_tables = set(re.findall(r"\b(atlas_difficulty_seal\w*)", inspect.getsource(sealed_difficulty)))
+    assert reader_tables and reader_tables <= set(LOAD_ENSURED_TABLES)
+    declared = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", SCHEMA_SQL))
+    assert set(LOAD_ENSURED_TABLES) <= declared

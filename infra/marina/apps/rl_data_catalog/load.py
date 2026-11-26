@@ -179,6 +179,16 @@ def served_declaration_projection(declaration: dict[str, Any]) -> dict[str, Any]
     return {**declaration, "oracle_filtration": trimmed}
 
 
+# Additive tables every catalog load ensures: the served app reads them for every
+# load, including the difficulty-seal tables when the load seals no difficulty.
+LOAD_ENSURED_TABLES = (
+    "atlas_cohort_summaries",
+    "atlas_difficulty_seals",
+    "atlas_difficulty_seal_cells",
+    "atlas_difficulty_seal_loads",
+)
+
+
 def ensure_tables(query: AppletQuery, names: tuple[str, ...]) -> None:
     """Create explicitly requested additive measurement tables from the app's schema."""
     statements: dict[str, str] = {
@@ -437,7 +447,7 @@ def load_catalog(
         raise ValueError("Source identity map belongs to another catalog snapshot")
     identity_id = canonical_sha256(identity_survey_payload(identities))
     survey_id = canonical_sha256(backend_survey_payload(backend_map))
-    ensure_tables(query, ("atlas_cohort_summaries",))
+    ensure_tables(query, LOAD_ENSURED_TABLES)
     current = query(
         """
         SELECT c.load_id, l.catalog_root, l.snapshot_id, l.review_completeness_version, l.display_policy,
