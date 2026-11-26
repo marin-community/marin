@@ -564,7 +564,9 @@ def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, t
     resolved = result.stdout.partition("\nResolved versions:\n")[2].split()
     (run,) = status["runs"]
     assert status["output"]["root"] == str(scratch)
+    assert status["run_options"]["export"] == "none"
     assert f"rl-data/task-health/attempts/by-run/{run['name']}@{run['version']}" in resolved
+    # The composed launch config turns the "none" export policy into export_hf=False.
     experiment = rl.build_experiment(MOCHI.by_name["train-medium-agentic"], table=MOCHI, tasks=selection)
     (step,) = experiment.runs
     document = yaml.safe_load(materialized_config(step, str(scratch)).launch_config_yaml)
