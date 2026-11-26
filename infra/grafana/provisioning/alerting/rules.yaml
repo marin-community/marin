@@ -1156,7 +1156,7 @@ groups:
           runbook_url: https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#controller-checkpoint-storage
         data:
           - refId: A
-            relativeTimeRange: { from: 1800, to: 0 }
+            relativeTimeRange: { from: 10800, to: 0 }
             datasourceUid: finelog-marin
             model:
               refId: A
@@ -1178,7 +1178,7 @@ groups:
                         WHERE service = 'iris-controller'
                           AND name = 'iris_controller_checkpoint_upload_success'
                           AND "cluster" LIKE 'cw-%'
-                          AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT)
+                          AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '3 hours') * 1000 AS BIGINT)
                       )
                       SELECT "cluster", 1 - value AS value
                       FROM latest WHERE row_rank = 1

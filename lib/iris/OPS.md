@@ -98,9 +98,12 @@ check [controller storage and placement](docs/coreweave.md#controller-state).
 ### Controller checkpoint storage
 
 `IrisControllerCheckpointFailed` pages when the latest periodic checkpoint
-outcome reported by a CoreWeave controller failed. The controller retries at its
-configured interval; the next successful upload clears the alert. Check the
-controller log for the exception under `Periodic checkpoint failed`, then verify
+outcome reported by a CoreWeave controller in the last three hours failed. The
+controller retries at its configured interval; the next successful upload clears
+the alert. Missing telemetry does not fire this rule; check controller liveness
+and Finelog health separately.
+
+Check the controller log for the exception under `Periodic checkpoint failed`, then verify
 the controller's storage credentials and write access to `storage.remote_state_dir`
 in its cluster config. The node storage health probe may use a different bucket,
 so a healthy node probe does not establish checkpoint write access.

@@ -259,12 +259,17 @@ def test_controller_checkpoint_alert_tracks_latest_attempt_per_cluster():
             ("cw-rno2a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 120_000, 1),
             ("cw-rno2a", "iris-controller", CHECKPOINT_METRIC, 1, now_ms - 60_000, 2),
             ("cw-us-east-02a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 30_000, 3),
-            ("cw-us-east-08a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 3_600_000, 4),
+            ("cw-us-east-08a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 14_400_000, 4),
             ("cw-rno2a", "iris-controller", "unrelated_metric", 0, now_ms, 5),
+            ("cw-us-west-04a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 5_400_000, 6),
         ],
     )
 
-    assert dict(database.execute(sql).fetchall()) == {"cw-rno2a": 0, "cw-us-east-02a": 1}
+    assert dict(database.execute(sql).fetchall()) == {
+        "cw-rno2a": 0,
+        "cw-us-east-02a": 1,
+        "cw-us-west-04a": 1,
+    }
     database.execute('DELETE FROM "telemetry_v1.iris"')
     assert database.execute(sql).fetchall() == []
 
