@@ -18,6 +18,7 @@
 import dataclasses
 from enum import Enum
 from functools import partial
+from hashlib import sha256
 from pathlib import Path
 from datetime import datetime, timezone
 from types import TracebackType
@@ -47,8 +48,20 @@ from finestore.rl.run_records import (
 from finestore.store import DataStore
 
 _WANDB_STEP_METRIC = "trainer/global_step"
+_WANDB_GROUP_NAME_LIMIT = 128
 # Bound SDK uploads too: timing out a Ray get alone leaves the primary finish unbounded.
 _WANDB_LOGGER_SHUTDOWN_TIMEOUT = 30
+
+
+def _wandb_group_name(run_id: str) -> str:
+    encoded = run_id.encode("utf-8")
+    # Budget UTF-8 bytes so multibyte labels also fit the service limit.
+    if len(encoded) <= _WANDB_GROUP_NAME_LIMIT:
+        return run_id
+    suffix = "-" + sha256(encoded).hexdigest()[:24]
+    # The byte slice may leave a partial character at the end.
+    prefix = encoded[: _WANDB_GROUP_NAME_LIMIT - len(suffix)].decode("utf-8", errors="ignore")
+    return prefix + suffix
 
 
 @ray.remote
@@ -133,6 +146,7 @@ class Tracking:
         if "wandb" in backends:
             import wandb
 
+            group_name = _wandb_group_name(tracking_config["run_id"])
             current_node_ip = "head"
             if ray.is_initialized():
                 try:
@@ -145,7 +159,7 @@ class Tracking:
                 name=experiment_name,
                 id=tracking_config["attempt_id"],
                 config=tracking_config,
-                group=tracking_config["run_id"],
+                group=group_name,
                 tags=[model] if model is not None else None,
                 resume="allow",
                 settings=wandb.Settings(
@@ -162,7 +176,7 @@ class Tracking:
             run.define_metric("*", step_metric=_WANDB_STEP_METRIC)
             self.logger["wandb"] = run
             self._prepare_worker_nodes_systems_logging_wandb(
-                project_name, experiment_name, run_id, tracking_config, current_node_ip
+                project_name, experiment_name, run_id, group_name, tracking_config, current_node_ip
             )
 
         if "mlflow" in backends:
@@ -195,7 +209,7 @@ class Tracking:
             self.logger["console"] = self.console_logger
 
     def _prepare_worker_nodes_systems_logging_wandb(
-        self, project_name, experiment_name, run_id, config, current_node_ip
+        self, project_name, experiment_name, run_id, group_name, config, current_node_ip
     ):
         """
         In multi-node training, we spawn WandbNodeLogger actors on each worker node to capture system metrics like
@@ -231,7 +245,7 @@ class Tracking:
                             experiment_name=experiment_name,
                             config=config,
                             run_id=run_id,
-                            group_name=config["run_id"],
+                            group_name=group_name,
                             x_label=f"node-{node_ip}",
                         )
                         self.remote_loggers.append(logger_actor)

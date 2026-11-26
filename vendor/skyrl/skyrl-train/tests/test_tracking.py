@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
+from unittest.mock import Mock
 
 import pytest
 import wandb
@@ -12,7 +13,50 @@ from omegaconf import OmegaConf
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 
 import ray
-from skyrl_train.utils.tracking import Tracking
+from skyrl_train.utils import tracking
+from skyrl_train.utils.tracking import Tracking, _wandb_group_name
+
+
+@pytest.mark.parametrize("run_id", ["experiment", "x" * 128, "🐍" * 32])
+def test_wandb_group_preserves_names_within_limit(run_id):
+    assert _wandb_group_name(run_id) == run_id
+
+
+@pytest.mark.parametrize("prefix", ["x" * 128, "🐍" * 33, "x" * 102 + "界" * 12])
+def test_wandb_group_bounds_long_names_and_distinguishes_suffixes(prefix):
+    first = _wandb_group_name(f"{prefix}-seed83")
+    second = _wandb_group_name(f"{prefix}-seed97")
+
+    assert len(first.encode("utf-8")) <= 128
+    assert len(second.encode("utf-8")) <= 128
+    assert prefix.startswith(first.rsplit("-", 1)[0])
+    assert first != second
+    assert _wandb_group_name(f"{prefix}-seed83") == first
+
+
+def test_wandb_group_shared_by_primary_and_workers(monkeypatch, tmp_path):
+    canonical_run_id = "users/team/checkpoints/sampler/" + "run-with-configured-policy-" * 5
+    primary = Mock(return_value=Mock(id="shared-run"))
+    worker = Mock()
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+    monkeypatch.setattr(wandb, "init", primary)
+    monkeypatch.setattr(tracking, "WandbNodeLogger", worker)
+    monkeypatch.setattr(ray, "is_initialized", lambda: True)
+    monkeypatch.setattr(ray.util, "get_node_ip_address", lambda: "head")
+    monkeypatch.setattr(
+        ray, "nodes", lambda: [{"Alive": True, "NodeManagerAddress": "worker", "NodeID": ray.NodeID.from_random().hex()}]
+    )
+    trainer = {"export_path": str(tmp_path), "epochs": 4}
+    config = OmegaConf.create({"trainer": trainer, "runtime": {"run_id": canonical_run_id}})
+
+    Tracking("project", "experiment", backends=("wandb",), config=config)
+
+    primary_call = primary.call_args.kwargs
+    worker_call = worker.options.return_value.remote.call_args.kwargs
+    assert primary_call["group"] == worker_call["group_name"] == _wandb_group_name(canonical_run_id)
+    assert primary_call["config"] == worker_call["config"]
+    assert primary_call["config"]["run_id"] == config.runtime.run_id == canonical_run_id
+    assert primary_call["config"]["trainer"] == trainer
 
 
 @dataclass
