@@ -492,7 +492,14 @@ image pins, and smoke selection before allocation. The evaluation record include
 the verified `native_sha256`, `native_inputs_uri`, and `smoke_rows`. The production
 native artifact pins its fingerprint; bump `PREPARED_INPUTS_VERSION` and update
 `NATIVE_INPUTS_FINGERPRINT` when the converter or image lock changes.
-The launch uses a generation plan and retains the policy's vLLM startup settings.
+The launch accepts a completed RL or SFT export dependency. It binds the SHA-256 of
+`.marinskyrl-model-manifest.json` or `export-manifest.json` when available, and uses
+the producer's artifact identity for exports without a manifest. Use
+`python -m experiments.post_training.snowball_rl micro210` or
+`python -m experiments.post_training.mochi_rl micro210` for standalone evaluation.
+The standalone Snowball command uses `cw-us-east-02a`. Both layouts use the sealed
+sampling settings. A full evaluation writes one aggregate verifier score after
+all 434 rows are scored.
 Context overflow and agent timeout retain the verifier verdict; unnamed errors
 are excluded from scored denominators.
 

@@ -44,13 +44,13 @@ def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> Role
     if not is_rack_based(variant) or width != NVL72_GPUS_PER_NODE:
         raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
 
-    policy = plan.claim("policy")
-    roles = ["policy"]
+    policy = next((claim for claim in plan.claims if claim.kind is ModelRoleKind.POLICY), None)
+    roles = ["policy"] if policy is not None else []
     shared_reference = True
     for claim in plan.claims:
         if claim.execution is RoleExecution.REMOTE or claim.kind in (ModelRoleKind.POLICY, ModelRoleKind.ROLLOUT):
             continue
-        if claim.kind is not ModelRoleKind.REFERENCE:
+        if claim.kind is not ModelRoleKind.REFERENCE or policy is None:
             raise ValueError("NVLink role placement supports only policy, a shared reference, and local inference engines")
         shared_reference = claim.colocation_group == policy.colocation_group
     rollout = next((claim for claim in plan.claims if claim.kind is ModelRoleKind.ROLLOUT), None)
@@ -59,14 +59,14 @@ def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> Role
             raise ValueError("NVLink role placement requires separate policy and local inference GPUs")
         roles.extend(f"inference_{index}" for index in range(rollout.replicas))
     locality = plan_nvlink_roles(
-        policy_gpus=policy.num_nodes * policy.gpus_per_node,
+        policy_gpus=policy.num_nodes * policy.gpus_per_node if policy is not None else 0,
         num_inference_engines=rollout.replicas if rollout is not None else 0,
         tensor_parallel_size=rollout.tensor_parallel_size if rollout is not None else 1,
         pipeline_parallel_size=rollout.pipeline_parallel_size if rollout is not None else 1,
         data_parallel_size=rollout.data_parallel_size if rollout is not None else 1,
         expert_parallel_size=rollout.expert_parallel_size if rollout is not None else 1,
         inference_backend=rollout.backend if rollout is not None else "",
-        colocate_all=plan.colocate_all,
+        colocate_all=policy is not None and plan.colocate_all,
         colocate_policy_ref=shared_reference,
         gpus_per_node=width,
         max_nodes_per_domain=SCHEDULABLE_RACK_NODES,

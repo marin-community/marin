@@ -204,6 +204,33 @@ def test_retaining_best_and_final_reports_selection_without_hf_export(recorded_r
     assert status["runs"][0]["best_checkpoint_step"] == "none eligible"
 
 
+@pytest.mark.parametrize("table", ["snowball", "mochi"], indirect=True)
+def test_named_micro210_uses_the_rl_export_and_its_placement(selection, table, tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    handles = []
+    monkeypatch.setattr("marin.experiment.cli._print_plan", handles.extend)
+    rack = ("DH1-136-US-EAST-08A",) if table is MOCHI else ()
+    options = ("--priority", "interactive")
+    if rack:
+        options += ("--init", "mochi-v5", "--exclude-rack", rack[0])
+    result = plan(table, "train-long-agentic-micro210", *options)
+    assert result.exit_code == 0, (result.output, result.exception)
+    run = handles[0]
+    [evaluation] = [step for step in handles if step.name.endswith("/micro210")]
+    assert any(step.name.startswith("rl-data/task-health/attempts/") for step in handles)
+    assert run in evaluation.deps
+    execution = rl.skyrl_execution(evaluation)
+    assert (execution.cluster, execution.priority, execution.excluded_nvlink_domains) == (
+        rl.skyrl_execution(run).cluster,
+        "interactive",
+        rack,
+    )
+    assert rl.skyrl_execution(run).coordinator_timeout_hours >= 146
+    assert materialized_config(run, str(tmp_path)).output.checkpoint_root == str(
+        Path(run.path(str(tmp_path))) / "checkpoints"
+    )
+
+
 @pytest.mark.parametrize(
     ("dataset", "settings", "error"),
     [

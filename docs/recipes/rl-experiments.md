@@ -167,13 +167,9 @@ corpus and tokenizer in that region before any launch; this command performs
 no cross-region transfer. The existing `--init NAME@VERSION` path remains
 available for previously published models.
 
-Micro210 remains deferred until [PR #12249](https://github.com/marin-community/marin/pull/12249)
-lands its native frozen 2026.11.23 binding. Its export consumer must evaluate the
-best-window RL export, optionally evaluate SFT, and use the model-specific
-`mochi-gb200-cw-us-east-08a` or `snowball-h100-cw-us-east-02a` serving profile.
-When a row seals, the same follow-up must automatically publish the matching
-FineStore/EvalDash record under `CW_RECORDS_PREFIX` with model, checkpoint and
-policy in the run name.
+Use `train-long-agentic-micro210` to score the terminal RL export on the sealed
+Micro210 task set. The evaluation uses the model's serving recipe and inherits
+the training run's cluster, priority, and rack exclusions.
 
 ### Task selection and native resume
 
@@ -652,10 +648,11 @@ names such as `mmlu-smoke,gsm8k-smoke`. The result gives the evaluation group ID
 records prefix, and result paths. Each run writes a record and an archive with per-question results.
 An RL policy record includes `rl_attempt` when both the training run ID and attempt ID are available.
 
-Use Snowball's `eval-short` to score published weights with the same EvalLite protocol as the
+Use `eval-short` to score published weights with the same EvalLite protocol as the
 trainer, in a generation-only job. Use trainer evaluation to track policy scores at the run's
-scheduled training steps. `eval-short` runs the full EvalLite pool on one node with eight H100s.
+scheduled training steps. Snowball scores the full EvalLite pool on one node with eight H100s.
 A recorded run used 1.1 H100-hours.
+Mochi scores the same pool on four GB200 hosts in one NVLink domain.
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl \

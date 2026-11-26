@@ -3,16 +3,18 @@
 
 """Run reinforcement learning from the production Mochi SFT export."""
 
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 from marin.execution.lazy import ArtifactStep
-from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLRetentionPolicy, SkyRLRolePlan
+from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLGenerationPlan, SkyRLRetentionPolicy, SkyRLRolePlan
 from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
+from experiments.evaluation.micro210 import micro210_after_rl, micro210_command
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
 from experiments.post_training.rl_presets import (
@@ -20,13 +22,15 @@ from experiments.post_training.rl_presets import (
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
     Evaluation,
+    Generation,
     Layout,
     ModelPresets,
     Preset,
     Recipe,
     Training,
 )
-from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
+from experiments.post_training.task_curation.task_health import task_health_step
 
 _MODEL = ArtifactHfModel(
     ArtifactStep.adopt(
@@ -185,6 +189,43 @@ _THREE_RACK_PATCH = RecipePatch(
     extra_env={"NCCL_NET": "IB", "NCCL_IB_DISABLE": "0", "NCCL_SOCKET_FAMILY": "AF_INET"},
 )
 
+_EVAL_LAYOUT = replace(
+    ONE_RACK,
+    name="mochi-evaluation",
+    workload=Generation(
+        SkyRLGenerationPlan(
+            gpus_per_node=4,
+            num_inference_engines=1,
+            inference_engine_tensor_parallel_size=1,
+            inference_engine_pipeline_parallel_size=1,
+            inference_engine_data_parallel_size=16,
+            inference_engine_expert_parallel_size=16,
+            n_samples_per_prompt=1,
+        )
+    ),
+)
+
+_EVAL_SERVING = RecipePatch(
+    generator=sections.Generator(
+        vllm_attention_backend="FLASHINFER",
+        max_num_seqs=128,
+        max_num_batched_tokens=2048,
+        gpu_memory_utilization=0.90,
+        enable_prefix_caching=False,
+        vllm_v1_disable_multiproc=False,
+        engine_init_kwargs={
+            "load_format": "runai_streamer",
+            **{
+                key: _ONE_TURN.generator.engine_init_kwargs[key]
+                for key in ("model_loader_extra_config", "compilation_config")
+            },
+        },
+    ),
+    extra_env=_THREE_RACK_PATCH.extra_env,
+)
+
+MICRO210_RECIPE = Recipe(layout=_EVAL_LAYOUT, fixed_reply_tokens=None, config=_EVAL_SERVING)
+
 _EVALUATION = Evaluation(
     name="eval_lite_100",
     file=Path(VALIDATION_FILENAME).stem,
@@ -245,17 +286,43 @@ _TRAIN_LONG_AGENTIC = replace(
     agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS), revision="2026.11.23.1"
 )
 
+_EVAL_SHORT = replace(
+    _TRAIN_LONG,
+    name="eval-short",
+    recipe=Recipe(layout=_EVAL_LAYOUT, fixed_reply_tokens=None, config=_ONE_TURN.merge(_EVAL_SERVING)),
+    updates=0,
+    measured=range(1),
+    tasks_input="forbidden",
+    evaluations=(replace(_EVALUATION, name="eval_lite", file=Path(FULL_VALIDATION_FILENAME).stem, every=None),),
+)
+
+_TRAIN_LONG_MICRO210 = replace(
+    _TRAIN_LONG_AGENTIC,
+    name="train-long-agentic-micro210",
+    checkpoints="best_and_final",
+    export="best_and_final",
+    checkpoint_every=2,
+    temporary_output=False,
+    retention=replace(_TRAIN_LONG_AGENTIC.retention, checkpoints_in_run_output=True),
+    recipe=replace(
+        _TRAIN_LONG_AGENTIC.recipe, layout=replace(_TRAIN_LONG_AGENTIC.recipe.layout, coordinator_timeout_hours=146)
+    ),
+    then=lambda run: (task_health_step(run), micro210_after_rl(run, serving=MICRO210_RECIPE)),
+)
+
 MOCHI = ModelPresets(
     model="mochi",
     presets=(
         _TRAIN_MEDIUM,
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
+        _EVAL_SHORT,
         replace(
             agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
             revision=_TRAIN_LONG_AGENTIC.revision,
         ),
         _TRAIN_LONG_AGENTIC,
+        _TRAIN_LONG_MICRO210,
         replace(
             agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
             revision=_TRAIN_LONG_AGENTIC.revision,
@@ -269,6 +336,8 @@ MOCHI = ModelPresets(
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["micro210"]:
+        micro210_command(MICRO210_RECIPE).main(args=sys.argv[2:])
 
     def sft_presets():
         # Load the SFT training dependencies only for --sft.

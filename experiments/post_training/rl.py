@@ -1042,8 +1042,11 @@ def command(
             raise click.exceptions.Exit(EXIT_CODES[Verdict.FAIL])
         if not do_run and "verdict" in snapshot:
             raise click.exceptions.Exit(EXIT_CODES[snapshot["verdict"]])
-        after_run = preset.then
-        following = tuple(after_run(step) for step in run.runs) if after_run is not None else ()
+        following = ()
+        if preset.then is not None:
+            for step in run.runs:
+                result = preset.then(step)
+                following += result if isinstance(result, tuple) else (result,)
         rl_handles = (*run.runs, *((run.gate,) if run.gate else ()))
         click.get_current_context().meta["rl_handle_count"] = len(rl_handles)
         return (*rl_handles, *following)

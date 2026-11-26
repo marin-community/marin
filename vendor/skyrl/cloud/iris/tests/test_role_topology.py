@@ -66,6 +66,19 @@ def test_policy_only_launch_keeps_trainer_local_without_inference(tmp_path, mode
     assert topology.locality.group_sizes == (8,)
 
 
+def test_multi_host_generation_binds_only_the_inference_selector(tmp_path, monkeypatch):
+    path = launch_config(tmp_path, nodes=4, engines=1, dp=16)
+    raw = yaml.safe_load(path.read_text())
+    raw["skyrl"]["entrypoint"] = "generate"
+    path.write_text(yaml.safe_dump(raw))
+    launched = []
+    monkeypatch.setattr("skyrl_train.entrypoints.main_generate.run", launched.append)
+    run_config(path)
+    [config] = launched
+    assert config.runtime.placement.policy is None
+    assert config.runtime.placement.engines == [{LOCALITY_GROUP_LABEL: "0"}]
+
+
 @pytest.mark.slow
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("locality,dp", [(True, 1), (False, 1), (True, 8)])

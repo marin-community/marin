@@ -62,7 +62,8 @@
           "use_kl_loss": false
         },
         "placement": {
-          "colocate_all": true
+          "colocate_all": true,
+          "ref_num_gpus_per_node": 8
         }
       },
       "generator": {

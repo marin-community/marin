@@ -35,6 +35,7 @@ from experiments.evaluation.micro210_policy import Micro210Model
 from experiments.post_training import iceball_micro, rl, skyrl_port_smoke, snowball_online_eagle
 from experiments.post_training import mochi_rl as mochi_model
 from experiments.post_training import rl_compose as recipe
+from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.cat_count_canary import launcher as canary
 from experiments.post_training.curriculum_rl import launch as curriculum
 from experiments.post_training.mismatch_probe import launch as mismatch
@@ -110,6 +111,7 @@ def _micro210_step(artifact_root):
         return micro210_step(
             Micro210Model(str(artifact_root / "policy"), "sha256:" + "a" * 64, "test/tokenizer", "b" * 40),
             name="micro210/census",
+            serving=snowball_model.MICRO210_RECIPE,
             version=VERSION,
         )
 

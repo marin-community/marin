@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -23,6 +24,7 @@ from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
 
+from experiments.evaluation.micro210 import micro210_after_rl, micro210_command
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import (
     NO_AGENTIC_TASKS,
@@ -54,6 +56,7 @@ from experiments.post_training.task_curation.selection import (
     TRAIN_FILENAME,
     VALIDATION_FILENAME,
 )
+from experiments.post_training.task_curation.task_health import task_health_step
 
 SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
@@ -232,6 +235,18 @@ _REPORTING_P40 = replace(
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
+MICRO210_RECIPE = Recipe(
+    layout=replace(
+        E8,
+        workload=Generation(replace(E8.workload.plan, num_inference_engines=16, n_samples_per_prompt=1)),
+        host_memory="512GB",
+        host_disk="256GB",
+        priority="production",
+    ),
+    fixed_reply_tokens=None,
+    config=RecipePatch(generator=sections.Generator(max_num_seqs=8, gpu_memory_utilization=0.85)),
+)
+
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
 _TASK_SET = EVALUATIONS["eval_lite_100"]
@@ -409,6 +424,19 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     name="train-medium-tools",
 )
 
+_TRAIN_LONG_MICRO210 = replace(
+    _TRAIN_LONG_AGENTIC,
+    name="train-long-agentic-micro210",
+    checkpoints="best_and_final",
+    export="best_and_final",
+    temporary_output=False,
+    retention=replace(_TRAIN_LONG_AGENTIC.retention, checkpoints_in_run_output=True),
+    recipe=replace(
+        _TRAIN_LONG_AGENTIC.recipe, layout=replace(_TRAIN_LONG_AGENTIC.recipe.layout, coordinator_timeout_hours=146)
+    ),
+    then=lambda run: (task_health_step(run), micro210_after_rl(run, serving=MICRO210_RECIPE)),
+)
+
 _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
@@ -493,6 +521,7 @@ _PRESETS = (
     _TRAIN_LONG,
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
+    _TRAIN_LONG_MICRO210,
     _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,
@@ -531,6 +560,8 @@ SNOWBALL = ModelPresets(
 )
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["micro210"]:
+        micro210_command(MICRO210_RECIPE).main(args=sys.argv[2:])
 
     def sft_presets():
         # Load the SFT training dependencies only for --sft.

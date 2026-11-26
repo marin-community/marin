@@ -5,27 +5,52 @@ import hashlib
 import json
 import re
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
-import draccus
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import yaml
-from marin.execution.artifact import FingerprintMismatchError, read_record
-from marin.execution.lazy import ArtifactStep, StepContext, lower, run
+from finestore.rl.run_records import METRICS_TABLE, AttemptRecord, register_run_tables, run_records_root, write_attempt
+from finestore.store import DataStore
+from marin.execution.artifact import (
+    RECORD_FILENAME,
+    ArtifactRecord,
+    FingerprintMismatchError,
+    read_record,
+    result_type_name,
+)
+from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, lower, materialized_config, run
+from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 from rigging.filesystem.storage_path import StoragePath
+from skyrlrecipe import RecipePatch, sections
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import PREPARED_INPUTS, micro210_step, native_binding_code_sha256, run_micro210
+from experiments.evaluation.micro210 import (
+    PREPARED_INPUTS,
+    native_binding_code_sha256,
+    run_micro210,
+)
+from experiments.evaluation.micro210 import (
+    micro210_step as build_micro210_step,
+)
 from experiments.evaluation.micro210_policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
     Micro210Model,
-    Micro210Record,
     micro210_evaluation,
     read_micro210_policy,
 )
+from experiments.grug.moe_hero_ep.ops.export_metadata import MANIFEST_FILENAME as SFT_EXPORT_MANIFEST
+from experiments.post_training.mochi_rl import MICRO210_RECIPE as MOCHI_SERVING
+from experiments.post_training.rl_gate import compose_configs
+from experiments.post_training.snowball_rl import MICRO210_RECIPE as SNOWBALL_SERVING
 from tests.rl.micro210_fixture import policy_fixture_reference
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
+
+micro210_step = partial(build_micro210_step, serving=SNOWBALL_SERVING)
 
 
 @pytest.fixture(autouse=True)
@@ -61,13 +86,21 @@ def test_default_policy_references_pin_immutable_hugging_face_revisions():
         assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
 
 
+@pytest.mark.parametrize("producer_kind", ["rl", "sft", "levanter", "rl-initializer"])
 def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
-    tmp_path, monkeypatch, policy_reference
+    tmp_path, monkeypatch, policy_reference, producer_kind
 ):
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     manifest = b'{"files": []}'
-    (model_dir / ".marinskyrl-model-manifest.json").write_bytes(manifest)
+    manifest_name = MODEL_MANIFEST_FILENAME if producer_kind == "rl" else SFT_EXPORT_MANIFEST
+    manifest_path = model_dir / manifest_name
+    unmanifested = producer_kind in ("levanter", "rl-initializer")
+    tokenizer = ("test/tokenizer", "a" * 40) if producer_kind == "rl" else (None, None)
+    for filename in ("config.json", "model.safetensors", "tokenizer.json"):
+        (model_dir / filename).write_bytes(b"model fixture")
+    if not unmanifested:
+        manifest_path.write_bytes(manifest)
     inputs = tmp_path / "inputs"
     inputs.mkdir()
     task_bytes = b"pinned-prepared-task-fixture"
@@ -85,12 +118,42 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
-    monkeypatch.setattr(
-        "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
-        lambda *args, **kwargs: SimpleNamespace(convert_ids_to_tokens=token_content.__getitem__),
-    )
-    binding = Micro210Model(str(model_dir), "sha256:" + hashlib.sha256(manifest).hexdigest(), "test/tokenizer", "a" * 40)
-    step = micro210_step(binding, name="test/micro210", version="2026.11.18")
+    producer_dir = tmp_path / "producer"
+    producer_dir.mkdir()
+    if producer_kind in ("rl", "rl-initializer"):
+        producer = ArtifactStep.adopt("test/rl", "2026.11.25", str(producer_dir), kind=SkyRLRun)
+        result = SkyRLRun(
+            path=str(producer_dir),
+            hf_model_uri=str(model_dir),
+            global_step=0 if producer_kind == "rl-initializer" else 3,
+            tokenizer_uri=tokenizer[0],
+            tokenizer_revision=tokenizer[1],
+            checkpoint_root=str(producer_dir / "checkpoints"),
+            draft_checkpoint_root=None,
+            terminal_manifest_uri=str(producer_dir / "terminal.json"),
+            iris_job_id="/test/run",
+        )
+        (producer_dir / RECORD_FILENAME).write_text(
+            ArtifactRecord(
+                name=producer.name,
+                version=producer.version,
+                result_type=result_type_name(SkyRLRun),
+                result=result.result_payload(),
+            ).model_dump_json()
+        )
+        model = SkyRLPolicyModel(producer)
+    else:
+        producer = ArtifactStep.adopt("test/sft", "2026.11.25", str(model_dir))
+        model = ArtifactHfModel(producer, relative_path="")
+
+    def load_bound_tokenizer(uri, *, revision, trust_remote_code):
+        assert (uri, revision) == (tokenizer[0] or str(model_dir), tokenizer[1])
+        assert not trust_remote_code
+        return SimpleNamespace(convert_ids_to_tokens=token_content.__getitem__)
+
+    monkeypatch.setattr("experiments.evaluation.micro210.load_tokenizer", load_bound_tokenizer)
+    step = micro210_step(model, name="test/micro210", version="2026.11.18")
+    assert producer in step.deps
     output = tmp_path / "result"
     output.mkdir()
     config = step.build_config(
@@ -104,7 +167,10 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     native_inputs_uri = yaml.safe_load(config.skyrl.launch_config_yaml)["inputs"]["validation_data"][0]["uri"]
     native_root = Path(native_inputs_uri)
     native_root.mkdir(parents=True)
-    native_bytes = b"native-prepared-task-fixture"
+    expected_rows = 434
+    writer = pa.BufferOutputStream()
+    pq.write_table(pa.table({"row": range(expected_rows)}), writer)
+    native_bytes = writer.getvalue().to_pybytes()
     native_digest = hashlib.sha256(native_bytes).hexdigest()
     (native_root / "rollouts.parquet").write_bytes(native_bytes)
     (native_root / "binding.json").write_text(
@@ -129,9 +195,31 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
 
     monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
 
+    scored = expected_rows
+    score = 0.5
+
     def submit_evaluation(skyrl, *, env_vars):
         assert env_vars == {"JUDGE_API_KEY": "test-together-key", "OPENAI_API_KEY": "test-together-key"}
-        submitted.append(yaml.safe_load(skyrl.launch_config_yaml))
+        launch = yaml.safe_load(skyrl.launch_config_yaml)
+        assert "records" in launch["skyrl"]["trainer"]["logger"]
+        terminal = Path(skyrl.output.terminal_manifest_uri)
+        assert not terminal.exists()
+        terminal.parent.mkdir(parents=True, exist_ok=True)
+        terminal.touch()
+        submitted.append(launch)
+        write_attempt(skyrl.output.export_root, AttemptRecord(run_id=skyrl.run_id, attempt_id=skyrl.attempt_id))
+        with DataStore.open(run_records_root(skyrl.output.export_root)) as store:
+            register_run_tables(store)[METRICS_TABLE].extend(
+                [
+                    {"attempt_id": skyrl.attempt_id, "step": 0, "name": name, "value": value}
+                    for name, value in (
+                        ("eval/all/num_attempted", expected_rows),
+                        ("eval/all/num_scored", scored),
+                        ("eval/all/avg_verifier_score", score),
+                    )
+                ]
+            )
+            store.flush()
         return None
 
     def refuse_hosted_judge(*args, **kwargs):
@@ -142,12 +230,19 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     run_micro210(config)
     launch = submitted[0]
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
+    assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["api_key_env"] == "JUDGE_API_KEY"
     assert launch["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]["pi"]["version"] == "0.87.0"
     assert all("test-together-key" not in str(value) for value in launch.values())
-    record = draccus.decode(Micro210Record, json.loads((output / "canonical-evaluation.json").read_text()))
-    assert record.canonical_spec_sha256 == hashlib.sha256(raw).hexdigest()
-    assert record.native_sha256 == native_digest
-    assert record.native_inputs_uri == native_inputs_uri
+    record = json.loads((output / "canonical-evaluation.json").read_text())
+    identity = (
+        {"artifact": artifact_identity(producer)} if unmanifested else {"sha256": hashlib.sha256(manifest).hexdigest()}
+    )
+    assert record["model"]["identity"] == identity
+    assert record["attempt_id"] == config.skyrl.attempt_id
+    assert record["score"] == 0.5
+    assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert record["native_sha256"] == native_digest
+    assert record["native_inputs_uri"] == native_inputs_uri
     assert (
         submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
@@ -172,14 +267,39 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     assert submitted == []
     (native_root / "rollouts.parquet").write_bytes(native_bytes)
     with pytest.raises(ValueError, match="different smoke rows"):
-        run_micro210(replace(config, evaluation=replace(config.evaluation, smoke_rows=(1,))))
+        run_micro210(replace(config, smoke_rows=(1,)))
     assert submitted == []
-    manifest_path = model_dir / ".marinskyrl-model-manifest.json"
-    manifest_path.write_bytes(b'{"files": ["changed"]}')
-    with pytest.raises(ValueError, match="export manifest differs"):
-        run_micro210(config)
+    if not unmanifested:
+        manifest_path.write_bytes(b"changed")
+        with pytest.raises(ValueError, match="export manifest differs"):
+            run_micro210(replace(config, expected_manifest_sha256=hashlib.sha256(manifest).hexdigest()))
+        manifest_path.write_bytes(manifest)
     assert submitted == []
-    manifest_path.write_bytes(manifest)
+    scored -= 1
+    incomplete = tmp_path / "incomplete"
+    incomplete.mkdir()
+    incomplete_config = step.build_config(
+        StepContext.for_run(str(incomplete), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
+    with pytest.raises(ValueError, match="434 scored rows"):
+        run_micro210(incomplete_config)
+    assert not (incomplete / "canonical-evaluation.json").exists()
+    scored += 1
+    score = float("nan")
+    rejected = step.build_config(
+        StepContext.for_run(str(incomplete), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
+    with pytest.raises(ValueError, match="one finite score"):
+        run_micro210(rejected)
+    assert not (incomplete / "canonical-evaluation.json").exists()
+    score = 0.5
+    retry = step.build_config(
+        StepContext.for_run(str(incomplete), str(tmp_path), runtime_args=step.runtime_args, deps=step.deps)
+    )
+    run_micro210(retry)
+    assert Path(incomplete_config.skyrl.output.terminal_manifest_uri).exists()
+    assert json.loads((incomplete / "canonical-evaluation.json").read_text())["attempt_id"] == retry.skyrl.attempt_id
+    submitted.clear()
     token_content[128009] = "ordinary-token"
     with pytest.raises(ValueError, match="incompatible stop token ID: 128009"):
         run_micro210(config)
@@ -191,11 +311,34 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     assert submitted == []
 
 
-def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():
+@pytest.mark.parametrize("serving", [SNOWBALL_SERVING, MOCHI_SERVING], ids=["snowball", "mochi"])
+def test_canonical_evaluation_uses_model_serving_in_native_launch(tmp_path, serving):
+    model = Micro210Model(str(tmp_path / "export"), "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
+    step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.74", serving=serving)
+    launch_path = tmp_path / "launch.yaml"
+    launch_path.write_text(materialized_config(step, str(tmp_path)).skyrl.launch_config_yaml)
+    [launch] = compose_configs([str(launch_path)], validate_driver=True)
+    assert "records" in launch["skyrl"]["trainer"]["logger"]
+    generator = launch["skyrl"]["generator"]
+    assert generator["max_num_seqs"] == serving.config.generator.max_num_seqs
+    if serving is MOCHI_SERVING:
+        assert launch["iris"]["allocation"]["num_nodes"] == 4
+
+
+def test_micro210_serving_refuses_training_overrides_and_multiple_samples():
     model = Micro210Model("s3://fixture/export", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
-    step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.74")
-    plan = lower(step)
-    assert "fixture/final-eval@2026.11.18.74" in plan.fingerprint_payload
+    patch = RecipePatch(trainer=sections.Trainer(eval_batch_size=99))
+    with pytest.raises(ValueError, match="only change inference serving settings"):
+        micro210_step(model, name="fixture/eval", version="2026.11.18", serving=replace(SNOWBALL_SERVING, config=patch))
+    layout = SNOWBALL_SERVING.layout
+    workload = replace(layout.workload, plan=replace(layout.workload.plan, n_samples_per_prompt=2))
+    with pytest.raises(ValueError, match="one sample per row"):
+        micro210_step(
+            model,
+            name="fixture/eval",
+            version="2026.11.18",
+            serving=replace(SNOWBALL_SERVING, layout=replace(layout, workload=workload)),
+        )
 
 
 @pytest.mark.parametrize("change", ["digest", "byte_size"])
