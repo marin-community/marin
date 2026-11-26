@@ -278,7 +278,12 @@ _LEARNING_MEDIUM = _snowball(
     guards=(Metric("eval_lite/family_mean", True),),
     objectives=(
         Metric("eval_lite/family_mean", True),
-        Metric("eval_lite/family_mean/gain_per_gpu_hour", True, WindowStatistic.GAIN_PER_GPU_HOUR),
+        Metric(
+            "eval_lite/family_mean/gain_per_gpu_hour",
+            True,
+            WindowStatistic.GAIN_PER_GPU_HOUR,
+            source="eval_lite/family_mean/gain",
+        ),
     ),
     budget="asynchronous runtime unmeasured",
 )

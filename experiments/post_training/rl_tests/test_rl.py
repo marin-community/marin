@@ -7,6 +7,7 @@ import sys
 from copy import deepcopy
 from dataclasses import replace
 from importlib.util import find_spec
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse, urlsplit
@@ -61,7 +62,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import native_json
+from experiments.post_training.skyrl_test_support import run_native_test
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 
@@ -405,48 +406,7 @@ def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path
     step = recipe.run_step(preset, spec)
     path = tmp_path / "checkpoint-evaluation.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
-    results = native_json()(
-        """
-import asyncio, json, sys
-from pathlib import Path
-from types import SimpleNamespace
-from cloud.iris.launch_config import load_launch_config
-from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
-from skyrl_train.callbacks.builtin import create_callbacks_from_config
-
-path = Path(sys.argv[1])
-config = load_launch_config(path)
-assert not config.skyrl.generator.enable_http_endpoint
-state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
-scenarios = ((100, 99, 30, 27), (100, 98, 30, 30), (100, 100, 30, 26),
-             (100, 100, 29, 29), (99, 99, 31, 30))
-results = []
-for index, (primary_attempted, primary_scored, bfcl_attempted, bfcl_scored) in enumerate(scenarios):
-    directory = path.parent / f"coverage-{index}"
-    config.skyrl.trainer.ckpt_path = str(directory)
-    config.skyrl.trainer.export_path = str(directory / "exports")
-    metrics = {
-        "eval/all/num_attempted": primary_attempted,
-        "eval/all/num_scored": primary_scored,
-        "eval/all/avg_verifier_score": 0.25,
-    }
-    for name, attempted, scored, average in (
-        ("bfcl_parity", bfcl_attempted, bfcl_scored, 1.0),
-        ("swebench_verified", 30, 28, 0.5),
-        ("openthoughts_tblite", 30, 30, 0.0),
-    ):
-        prefix = f"eval/{name}/all/"
-        metrics.update({prefix + "num_attempted": attempted, prefix + "num_scored": scored,
-                        prefix + "avg_verifier_score": average})
-    handler = CallbackHandler(create_callbacks_from_config(config.skyrl))
-    asyncio.run(handler.call_event_async("on_evaluate", state, TrainerControl(), metrics=metrics,
-                                         trainer=SimpleNamespace(cfg=config.skyrl)))
-    record = directory / "best_checkpoint.json"
-    results.append(json.loads(record.read_text()) if record.exists() else None)
-print(json.dumps(results))
-""",
-        [str(path)],
-    )
+    results = run_native_test("cloud.iris.tests.native_checkpoint_coverage", [str(path)])
     chosen, *rejected = results
     assert chosen["attempted"] == 190
     assert chosen["scored"] == 184
@@ -890,6 +850,7 @@ def test_submission_exit_codes_and_publication_retries(
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
     if "candidate-compose" in case:
         assert "native configuration cannot be composed:" in result.output and "gspo" in result.output.lower()
+        assert "Compose document 1/1" in result.output
     if case == "unexpected":
         assert "KeyError" in result.output and "grader_kind_counts" in result.output
     if case == "child":
@@ -1067,29 +1028,26 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     source.rename(staged)
     native_calls = []
 
+    compose = gate.compose_configs
+
     def native(command, *, env_vars=None):
-        inspection = native_json()(
-            "import json,sys\nfrom cloud.iris import launch\n"
-            "args=launch.create_parser().parse_args(sys.argv[1:])\n"
-            "config=launch.load_launch_config(args.config)\n"
-            "print(json.dumps({'forward_env':args.forward_env,'disk':config.iris.allocation.disk,"
-            "'tokenizer':config.inputs.model.tokenizer_uri,'model':config.run.model,"
-            "'attempt':config.run.attempt_id,'export':config.artifacts.export_root}))\n",
-            command[command.index("marinskyrl") + 1 :],
-        )
-        assert (inspection["forward_env"], inspection["disk"], inspection["tokenizer"]) == (
+        (config,) = compose([command[command.index("--config") + 1]])
+        forward_env = [value for flag, value in pairwise(command) if flag == "--forward-env"]
+        assert (forward_env, config["iris"]["allocation"]["disk"], config["inputs"]["model"]["tokenizer_uri"]) == (
             ["HF_TEST_KEY"],
             "3TB",
             "tests/python-tokenizer",
         )
-        assert read_attempt(inspection["export"], inspection["attempt"]) is None
+        run = config["run"]
+        export_root = config["artifacts"]["export_root"]
+        assert read_attempt(export_root, run["attempt_id"]) is None
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
         stored = json.loads((source / "terminal.json").read_text())
-        stored["config"]["run"]["model"] = inspection["model"]
+        stored["config"]["run"]["model"] = run["model"]
         write_receipt(source, stored)
         write_attempt(
-            inspection["export"],
+            export_root,
             AttemptRecord(
                 run_id=stored["config"]["run"]["id"],
                 attempt_id=stored["config"]["run"]["attempt_id"],
