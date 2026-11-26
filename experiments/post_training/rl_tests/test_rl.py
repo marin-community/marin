@@ -22,6 +22,11 @@ from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.mochi_assets import (
+    MOCHI_STEP_400407_EXPORT,
+    MOCHI_TOKENIZER_REVISION,
+    MOCHI_TOKENIZER_URI,
+)
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_tests.fixtures import (
     RL_TEST_MARKS,
@@ -409,17 +414,43 @@ def test_published_init_binds_export_tokenizer(
     )
 
 
-def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_path, mochi_sft_presets):
+@pytest.mark.parametrize(
+    "table,preset_name",
+    [
+        pytest.param(MOCHI, "train-medium", id="mochi"),
+        pytest.param(snowball_model.SNOWBALL, "speed-short", id="snowball"),
+    ],
+)
+def test_draft_opt_out_preserves_other_generator_settings_and_inputs(selection, tmp_path, table, preset_name):
+    preset = table.by_name[preset_name]
+    settings = ("generator.speculative_decoding=null",)
+    (draft_run,) = snowball.build_experiment(preset, table=table).runs
+    (plain_run,) = snowball.build_experiment(preset, table=table, settings=settings).runs
+    draft = yaml.safe_load(materialized_config(draft_run, str(tmp_path)).launch_config_yaml)
+    plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
+
+    config = draft["skyrl"]["generator"]
+    speculator = config.pop("speculative_decoding")
+    assert draft_run.name != plain_run.name
+    assert speculator["method"] == "dspark"
+    assert speculator["num_speculative_tokens"] == 4
+    assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
+    assert config == plain["skyrl"]["generator"]
+    assert draft["inputs"] == plain["inputs"]
+
+
+def test_mochi_three_rack_launch_configures_evaluation_without_model_exports(selection, tmp_path):
     preset = MOCHI.by_name["train-long-3rack"]
     (step,) = snowball.build_experiment(preset, table=MOCHI).runs
     path = tmp_path / "mochi.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
 
     (config,) = gate.compose_configs([str(path)], validate_driver=True)
-    producer = mochi_sft_presets["periodic"].model()
-    assert producer.relative_path is not None
-    export = StoragePath(producer.step.path("s3://marin-us-east-02a/marin")) / producer.relative_path
-    assert config["inputs"]["model"]["uri"] == str(export)
+    assert config["skyrl"]["generator"].get("speculative_decoding") is None
+    model = config["inputs"]["model"]
+    assert model["uri"] == MOCHI_STEP_400407_EXPORT
+    assert model["tokenizer_uri"] == MOCHI_TOKENIZER_URI
+    assert model["tokenizer_revision"] == MOCHI_TOKENIZER_REVISION
 
     (source,) = config["inputs"]["validation_data"]
     held_out = recipe.selection_artifact(preset.held_out_tasks)
@@ -433,21 +464,6 @@ def test_mochi_three_rack_launch_evaluates_without_model_exports(selection, tmp_
     section = docs.split("`mochi-inference.yaml`", 1)[1]
     fragment = yaml.safe_load(section.split("```yaml\n", 1)[1].split("```", 1)[0])
     assert merge_mappings(config["skyrl"], fragment) == config["skyrl"]
-
-
-def test_speed_short_opt_out_preserves_other_generator_settings_and_inputs(selection, tmp_path):
-    table = snowball_model.SNOWBALL
-    preset = table.by_name["speed-short"]
-    [default_run] = snowball.build_experiment(preset, table=table).runs
-    [plain_run] = snowball.build_experiment(preset, table=table, settings=("generator.speculative_decoding=null",)).runs
-    default = yaml.safe_load(materialized_config(default_run, str(tmp_path)).launch_config_yaml)
-    plain = yaml.safe_load(materialized_config(plain_run, str(tmp_path)).launch_config_yaml)
-
-    assert default_run.name != plain_run.name
-    assert default["skyrl"]["generator"].pop("speculative_decoding")["method"] == "dspark"
-    assert plain["skyrl"]["generator"].pop("speculative_decoding", None) is None
-    assert default["skyrl"]["generator"] == plain["skyrl"]["generator"]
-    assert default["inputs"] == plain["inputs"]
 
 
 def test_snowball_omits_default_draft_for_an_alternate_initializer(selection, tmp_path):

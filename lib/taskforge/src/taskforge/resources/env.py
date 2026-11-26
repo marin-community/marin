@@ -15,7 +15,7 @@ from tempfile import TemporaryDirectory
 from typing import Protocol, override
 from uuid import uuid4
 
-from rolloutengine.machines import prepare_machine
+from rolloutengine.machines import MachineSetupError, prepare_machine
 from rolloutengine.models import MachineRuntimeSpec
 from shellbox.backends.iris.machine import IrisMachine, never_connected
 from shellbox.machine import (
@@ -33,11 +33,18 @@ from shellbox.machine import (
     MachineTerminated,
 )
 from shellsim import SimulationError
-from taskcompendium.models import EnvironmentRequirements
+from taskcompendium.models import EnvironmentRequirements, TaskResource
 from taskcompendium.runtime.staging import StagedFile, write_archive
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy, digest
-from taskforge.effects.issues import Hold, OutputBudgetExhausted, Restart, Transient, describe_exception
+from taskforge.effects.issues import (
+    EnvironmentSetupFailed,
+    Hold,
+    OutputBudgetExhausted,
+    Restart,
+    Transient,
+    describe_exception,
+)
 from taskforge.resources.execution import Notify, retry_effect
 from taskforge.resources.sandbox.factories import DEFAULT_WORKDIR
 
@@ -85,7 +92,9 @@ class Env(Protocol):
 
 
 class EnvFactory(Protocol):
-    async def create(self, requirements: EnvironmentRequirements) -> Env: ...
+    """Start an environment; ``resources`` are installed before its setup commands run, as RolloutEngine does."""
+
+    async def create(self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()) -> Env: ...
 
 
 def _stable(result: CommandResult) -> tuple[str, ...]:
@@ -301,16 +310,22 @@ class ShellboxEnvFactory(EnvFactory):
     notify: Notify
 
     @override
-    async def create(self, requirements: EnvironmentRequirements) -> ShellboxEnv:
+    async def create(
+        self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+    ) -> ShellboxEnv:
         owned = AsyncExitStack()
         try:
             machine = await owned.enter_async_context(
-                prepare_machine(requirements, (), self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout)
+                prepare_machine(
+                    requirements, resources, self.factory, self.runtime, cleanup_timeout=self.cleanup_timeout
+                )
             )
         except (MachineTerminated, ExecSetupFailed, MachineCancelled) as error:
             raise _machine_issue(error) from error
         except (TimeoutError, ConnectionError) as error:
             raise Transient("Environment startup did not resolve") from error
+        except MachineSetupError as error:
+            raise EnvironmentSetupFailed(str(error)) from error
         image = digest((requirements, self.runtime))
         return ShellboxEnv(machine, image, self.notify, owned, requirements.working_directory or DEFAULT_WORKDIR)
 

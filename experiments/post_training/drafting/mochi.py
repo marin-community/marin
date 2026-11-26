@@ -1,37 +1,46 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run Mochi teacher prefill and cached DSpark training on an Iris GPU gang."""
+"""Prefill a Mochi activation cache and fit DSpark drafts on a separate worker."""
 
 import fcntl
+import hashlib
 import json
 import logging
-import shutil
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 
 import requests
 from datasets import Dataset, load_from_disk
+from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity, lower
-from marin.execution.step_runner import StepRunner, step_is_built
+from marin.execution.step_runner import StepRunner
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.config import InferenceModelConfig, ServingGeometry
 from marin.inference.iris_vllm import (
     IrisVllmLaunch,
     iris_vllm_followers,
     iris_vllm_launch,
     notify_iris_vllm_stopped,
+    start_iris_vllm_followers,
     wait_for_iris_vllm_shutdown,
+    wait_for_iris_vllm_start_decision,
 )
 from marin.inference.vllm_server import IsolatedCudaVllm, VllmEnvironment, VllmLauncherWithEnvironment, VllmType
-from marin.training.drafting.activation_store import activation_path
+from marin.training.drafting.activation_store import (
+    activation_path,
+    get_or_build_activation_cache,
+    read_activation_cache,
+)
 from marin.training.drafting.dspark_data import (
     ARROW_DATASET_DIR,
-    DRAFT_CONFIG_FILE,
     PREPARED_DIR,
     SPLITS_FILE,
     TOKEN_FREQUENCIES_FILE,
@@ -42,14 +51,17 @@ from marin.training.drafting.dspark_distillation import (
     HIDDEN_STATES_DIR,
     DraftRecipe,
     DSparkExport,
+    TrainedDraft,
     extraction_config,
-    train_cached_and_export,
+    train_cached_draft,
 )
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 from safetensors.torch import load_file
+
+from vendor.skyrl.marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, snapshot_model_manifest
 
 logger = logging.getLogger(__name__)
 _GPUS_PER_NODE = 4
@@ -59,6 +71,8 @@ _SMOKE_MAX_TOKENS = 2048
 _SMOKE_MAX_ANCHORS = 128
 _SMOKE_ROW_LENGTH = range(720, 1537)
 _ACTIVATION_TTL_DAYS = 3
+_ACTIVATION_REUSE_WINDOW = Duration.from_hours(48)
+_ACTIVATION_FORMAT_VERSION = 1
 _MODEL_ALIAS = "mochi"
 _SHORT_CONV_COMPILATION = json.dumps(
     {
@@ -93,15 +107,6 @@ class DraftSize(StrEnum):
 
 
 @dataclass(frozen=True)
-class CachedPrefill:
-    """Run-time state for one distributed prefill and single-host trainer."""
-
-    scratch: Path
-    hidden_states: StoragePath
-    split: PreparedSplits
-
-
-@dataclass(frozen=True)
 class CachedTraining:
     output: str
     teacher: str
@@ -109,6 +114,38 @@ class CachedTraining:
     prepared: str
     recipe: DraftRecipe
     sample: Sample
+
+
+@dataclass(frozen=True)
+class MochiPrefillInputs:
+    teacher_identity: str
+    prepared_identity: str
+    sample: Sample
+    sequence_length: int
+    extraction_taps: tuple[int, ...]
+    teacher_replicas: int
+    vllm_source: str = VLLM_GPU_RELEASE.source_commit
+    format_version: int = _ACTIVATION_FORMAT_VERSION
+
+
+def activation_cache_key(teacher_identity: str, prepared: ArtifactStep, recipe: DraftRecipe, sample: Sample) -> str:
+    """Identify the exact teacher tensors independently of the draft being trained."""
+    inputs = MochiPrefillInputs(
+        teacher_identity,
+        artifact_identity(prepared),
+        sample,
+        recipe.data.max_sequence_length,
+        recipe.extraction_taps,
+        recipe.teacher_replicas,
+    )
+    return hashlib.sha256(canonical_json(inputs).encode()).hexdigest()
+
+
+def _activation_cache_root(key: str, prefix: str) -> StoragePath:
+    root = StoragePath(marin_temp_bucket(_ACTIVATION_TTL_DAYS, prefix="dspark/mochi", source_prefix=prefix)) / key
+    if root.scheme not in ("s3", "gs"):
+        raise ValueError(f"Mochi needs a temporary object-storage bucket, got {root}")
+    return root
 
 
 def cached_recipe(recipe: DraftRecipe, sample: Sample) -> DraftRecipe:
@@ -132,6 +169,7 @@ def checkpoint_step(
     """Bind Mochi's cached training phase to the teacher and prepared mix."""
 
     identity = artifact_identity(teacher)
+    key = activation_cache_key(identity, prepared, recipe, sample)
 
     def config(ctx: StepContext) -> CachedTraining:
         return CachedTraining(
@@ -147,29 +185,48 @@ def checkpoint_step(
         name="checkpoints/dspark/mochi",
         version=version,
         artifact_type=DSparkExport,
-        run=partial(_train_cached, cache=None),
+        run=partial(_train_cached, cache_key=key),
         build_config=config,
         deps=(teacher, prepared),
     )
 
 
-def _train_cached(config: CachedTraining, *, cache: CachedPrefill | None) -> DSparkExport:
+def _publish_draft(draft: TrainedDraft, destination: StoragePath) -> str:
+    manifest = snapshot_model_manifest(draft.directory, None, None, tokenizer_mode="policy", model_files=draft.files)
+    destination.mkdirs()
+    marker = destination / MODEL_MANIFEST_FILENAME
+    # The artifact record write can fail after the draft has been uploaded.
+    if marker.exists():
+        marker.rm()
+    for entry in manifest.files:
+        (destination / entry.path).upload_from(str(draft.directory / entry.path))
+    marker.write_text(manifest.model_dump_json(indent=2) + "\n")
+    return manifest.identity
+
+
+def _train_cached(config: CachedTraining, *, cache_key: str) -> DSparkExport:
+    root = _activation_cache_root(cache_key, config.output)
+    cache = read_activation_cache(root, reusable_for=_ACTIVATION_REUSE_WINDOW)
     if cache is None:
-        raise ValueError("Mochi training must collect the teacher's hidden states in the Iris gang first")
-    return train_cached_and_export(
-        output=config.output,
-        teacher=config.teacher,
-        teacher_identity=config.teacher_identity,
-        recipe=config.recipe,
-        scratch=cache.scratch,
-        hidden_states=cache.hidden_states,
-        split=cache.split,
-    )
+        raise ValueError(f"No reusable Mochi teacher activations at {root}. Run --stage prefill with the same inputs.")
+    logger.info("Training on Mochi teacher activations in %s", cache)
+    with TemporaryDirectory(prefix="mochi-dspark-fit-") as directory:
+        scratch = Path(directory)
+        _, split = _stage_data(config.prepared, scratch, config.sample)
+        draft = train_cached_draft(
+            teacher=config.teacher,
+            teacher_identity=config.teacher_identity,
+            recipe=config.recipe,
+            scratch=scratch,
+            hidden_states=cache,
+            split=split,
+        )
+        destination = StoragePath(config.output) / draft.result.hf_subdirectory
+        identity = _publish_draft(draft, destination)
+        return draft.result.model_copy(update={"source_identity": identity})
 
 
-def _select_smoke_data(
-    data: Dataset, split: PreparedSplits, source: Path, destination: Path
-) -> tuple[Dataset, PreparedSplits]:
+def _select_smoke_data(data: Dataset, split: PreparedSplits, destination: Path) -> tuple[Dataset, PreparedSplits]:
     train, validation = [], []
     for index, length in enumerate(data["seq_len"]):
         if length in _SMOKE_ROW_LENGTH:
@@ -185,7 +242,6 @@ def _select_smoke_data(
         for token in supervised_token_ids(row["input_ids"], row["loss_mask"])
     )
     (destination / TOKEN_FREQUENCIES_FILE).write_text(json.dumps(frequencies))
-    shutil.copyfile(source / DRAFT_CONFIG_FILE, destination / DRAFT_CONFIG_FILE)
     return subset, PreparedSplits.from_counts(len(train), len(validation))
 
 
@@ -198,13 +254,15 @@ def _stage_data(prepared: str, scratch: Path, sample: Sample) -> tuple[Dataset, 
     assert isinstance(dataset, Dataset)
     split = PreparedSplits(**json.loads((staged / SPLITS_FILE).read_text()))
     if sample is Sample.SMOKE:
-        dataset, split = _select_smoke_data(dataset, split, staged, data)
+        dataset, split = _select_smoke_data(dataset, split, data)
     return dataset, split
 
 
 def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: DraftRecipe) -> None:
-    def cache_row(row_index: int) -> None:
+    def cache_row(row_index: int) -> tuple[int, float]:
+        """Cache a row and return the prompt token count and upload duration in seconds."""
         ids = dataset[row_index]["input_ids"]
+        # Rank zero writes the activation file on the prefill leader.
         response = requests.post(
             f"{url}/completions",
             headers={"X-data-parallel-rank": "0"},
@@ -228,22 +286,40 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: 
         if not bool(tensors["hidden_states"].isfinite().all()):
             raise ValueError(f"Mochi returned non-finite features for row {row_index}")
         fs, key = filesystem_for(str(activation_path(hidden_states, row_index)))
+        upload_start = monotonic()
         fs.put_file(str(path), key)
+        upload_seconds = monotonic() - upload_start
         path.unlink()
         lock_path.unlink()
+        return len(ids), upload_seconds
 
-    # Pin requests to a local rank so the extracted tensors stay on the trainer's worker.
+    started = monotonic()
+    cached_tokens = 0
+    total_upload_seconds = 0.0
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for count, _ in enumerate(pool.map(cache_row, range(len(dataset))), start=1):
+        for count, (tokens, upload_seconds) in enumerate(pool.map(cache_row, range(len(dataset))), start=1):
+            cached_tokens += tokens
+            total_upload_seconds += upload_seconds
             if count % 32 == 0 or count == len(dataset):
-                logger.info("Cached %d/%d Mochi rows for taps %s", count, len(dataset), recipe.extraction_taps)
+                elapsed = monotonic() - started
+                logger.info(
+                    "Cached %d/%d Mochi rows for taps %s (%.2f rows/s, %.0f prompt tokens/s, %.2f s mean upload)",
+                    count,
+                    len(dataset),
+                    recipe.extraction_taps,
+                    count / elapsed,
+                    cached_tokens / elapsed,
+                    total_upload_seconds / count,
+                )
 
 
-def _teacher_environment(teacher: str, recipe: DraftRecipe, launch: IrisVllmLaunch, hidden: Path) -> VllmEnvironment:
+def _teacher_environment(teacher: str, recipe: DraftRecipe, launch: IrisVllmLaunch, scratch: Path) -> VllmEnvironment:
+    hidden = scratch / HIDDEN_STATES_DIR
+    hidden.mkdir()
     speculative, transfer = extraction_config(recipe, hidden)
     length = recipe.data.max_sequence_length + 1
     launcher = VllmLauncherWithEnvironment(
-        IsolatedCudaVllm(source=VllmType.MARIN_FORK),
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK, release=VLLM_GPU_RELEASE),
         {**launch.subprocess_env, "MAX_JOBS": "2", "PYTHONPATH": ""},
     )
     return VllmEnvironment(
@@ -274,16 +350,37 @@ def _teacher_environment(teacher: str, recipe: DraftRecipe, launch: IrisVllmLaun
     )
 
 
-def train_mochi(
+def _cache_activations(
+    teacher: str,
+    recipe: DraftRecipe,
+    launch: IrisVllmLaunch,
+    prepared: str,
+    sample: Sample,
+    root: StoragePath,
+    scratch: Path,
+) -> StoragePath:
+    with ExitStack() as teacher_runtime, iris_vllm_followers(launch):
+
+        def populate(cache: StoragePath) -> None:
+            logger.info("Caching Mochi teacher activations in %s", cache)
+            dataset, _ = _stage_data(prepared, scratch, sample)
+            start_iris_vllm_followers(launch)
+            server = teacher_runtime.enter_context(_teacher_environment(teacher, recipe, launch, scratch))
+            _cache_rows(server.server_url, dataset, cache, recipe)
+
+        return get_or_build_activation_cache(root, reusable_for=_ACTIVATION_REUSE_WINDOW, populate=populate)
+
+
+def prefill_mochi(
     *,
     teacher: str,
+    teacher_identity: str,
     prepared: ArtifactStep,
-    draft: ArtifactStep[DSparkExport],
     recipe: DraftRecipe,
     prefix: str,
     sample: Sample,
-) -> bool:
-    """Run the gang and return whether this task is the leader reporting the checkpoint."""
+) -> StoragePath | None:
+    """Build the activation cache on the teacher gang and return its path on the leader."""
 
     geometry = ServingGeometry(
         tensor_parallel_size=1,
@@ -291,35 +388,18 @@ def train_mochi(
         pipeline_parallel_size=1,
         gpus_per_task=_GPUS_PER_NODE,
     )
-    if recipe.teacher_replicas < 8 or recipe.trainer_ranks > _GPUS_PER_NODE:
-        raise ValueError("Mochi needs at least eight teacher GPUs and at most four trainer ranks on the leader")
-    with TemporaryDirectory(prefix="mochi-dspark-") as directory, iris_vllm_launch(geometry) as launch:
+    if recipe.teacher_replicas < 8:
+        raise ValueError("Mochi needs at least eight teacher GPUs")
+    with TemporaryDirectory(prefix="mochi-dspark-prefill-") as directory, iris_vllm_launch(geometry) as launch:
         scratch = Path(directory)
-        if launch.is_leader:
-            checkpoint = lower(draft)
-            if step_is_built(checkpoint):
-                with iris_vllm_followers(launch):
-                    StepRunner().run([checkpoint])
-                return True
-            StepRunner().run([lower(prepared)])
-            dataset, split = _stage_data(prepared.path(prefix), scratch, sample)
-            cache = StoragePath(
-                marin_temp_bucket(_ACTIVATION_TTL_DAYS, prefix=f"dspark/{scratch.name}", source_prefix=prefix)
-            )
-            if cache.scheme not in ("s3", "gs"):
-                raise ValueError(f"Mochi needs a temporary object-storage bucket, got {cache}")
-            logger.info("Staging Mochi teacher activations in %s", cache)
-        hidden = scratch / HIDDEN_STATES_DIR
-        hidden.mkdir()
-        with _teacher_environment(teacher, recipe, launch, hidden) as server:
-            if launch.is_leader:
-                with iris_vllm_followers(launch):
-                    _cache_rows(server.server_url, dataset, cache, recipe)
-            else:
-                wait_for_iris_vllm_shutdown(launch, server.check_alive)
         if not launch.is_leader:
+            if wait_for_iris_vllm_start_decision(launch):
+                with _teacher_environment(teacher, recipe, launch, scratch) as server:
+                    wait_for_iris_vllm_shutdown(launch, server.check_alive)
             notify_iris_vllm_stopped(launch)
-            return False
-        ready = replace(draft, run=partial(_train_cached, cache=CachedPrefill(scratch, cache, split)))
-        StepRunner().run([lower(ready)])
-        return True
+            return None
+
+        StepRunner().run([lower(prepared)])
+        key = activation_cache_key(teacher_identity, prepared, recipe, sample)
+        root = _activation_cache_root(key, prefix)
+        return _cache_activations(teacher, recipe, launch, prepared.path(prefix), sample, root, scratch)

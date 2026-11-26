@@ -42,6 +42,7 @@ from experiments.evaluation.benchmarks import (
     reasoning,
     simpleqa,
     supergpqa,
+    swebench_science,
     truthfulqa,
 )
 from experiments.evaluation.preparation import EvaluationCorpusRecipe
@@ -92,6 +93,7 @@ def evaluation_benchmarks() -> dict[str, EvaluationBenchmark]:
             agentic,
             supergpqa,
             pdbthink,
+            swebench_science,
             physics_verified,
             arc_agi,
             truthfulqa,

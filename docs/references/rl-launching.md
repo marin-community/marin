@@ -58,9 +58,23 @@ MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_trai
   --preset train-long --sft mixture-262k-32node --version 2026.11.19.1 --plan
 ```
 
-The Mochi RL presets default to the completed production Mochi SFT export. The export
-supplies its own tokenizer. Use `--init NAME@VERSION` to start from another published model,
-or select an SFT preset with `--sft`. Mochi writes artifacts under the cluster's
+The Mochi RL presets default to the verified CoreWeave copy of the production Mochi SFT
+step-400407 export. Its SkyRL model manifest binds the weights to the SFT run's tokenizer.
+Use the `train-long` preset to plan the standard one-rack loop with the default initializer.
+
+```bash
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-long --version YYYY.MM.DD --plan
+```
+
+The one-rack presets use the pinned two-layer DSpark draft with four proposals when
+the resolved initializer matches step 400407. Selecting a different task mix with
+`--tasks` keeps that default. Three-rack presets use plain decoding pending
+measurements with their 262k context and FlashInfer serving configuration.
+
+Use `--init NAME@VERSION`
+to start from another published model or select an SFT preset with `--sft`.
+Mochi writes artifacts under the cluster's
 `tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix.
 
 ```bash
@@ -291,11 +305,14 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+A rollout window holds `max_staleness_steps + 1` batches. The training pool needs a distinct
+prompt for each group slot in the window and one spare after dataset preparation.
+
 Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
 each training batch. Each Parquet training row supplies its `family`. The counts must sum to
 `trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
-Each family needs its group count times `max_staleness_steps + 1` usable rows so that every batch in
-the rollout window can use distinct prompts. A rejected group releases a slot in its own family.
+Apply the prompt minimum to each family using its group count per batch. A rejected group releases
+a slot in its own family.
 Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
 family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
 

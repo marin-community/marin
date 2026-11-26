@@ -82,22 +82,18 @@ uploads screenshots for inspection through the `Marin - Unit` run.
 
 `ops-loom-holistic-review.yaml` launches a whole-change review session for a
 non-draft pull request from this repository whose author has write access or
-is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. A gate step reads the pull
-request's size and file patches through the API: the review runs when the
-change has at least 250 changed lines or adds a class, dataclass, or
-`Protocol` under `lib/*/src/` or `experiments/`. The session runs the
-`review-pr` skill in holistic mode with the `pr-holistic-review` profile and maintains
+is `marin-ops-agent[bot]` or `loom-oa-dev[bot]`. Each distinct head gets a run in the PR's Loom
+channel. The session reads the `review-pr` skill from the workflow revision
+so an older branch receives the current rubric. The reviewer maintains
 one compact overview ending in
 `<!-- marin-holistic-review:<sha> -->`. Re-reviews replace the original
 overview by comment ID, preserving finding numbers and updating their status.
 A separate new top-level comment may announce only new or materially changed
 actionable findings; it links to the overview and uses
 `<!-- marin-holistic-followup:<sha> -->` so it cannot become the overview.
-Unlike the correctness review, the workflow also launches on `synchronize`;
-runs for an earlier head are cancelled, and the session posts nothing when the
-delta since the last reviewed head is under 100 changed lines, touches only
-fixtures or documentation, or consists only of `Deslop` commits. The review is
-advisory and is not a required check.
+On push, the session checks the delta and open findings against the current
+head before updating the overview. A rebase gets a full review. A session
+for a superseded head exits before posting. The review is advisory.
 
 The `deslop` job in `ops-loom-github.yaml` launches a `github-automation`
 session when a holistic packet is posted on a pull request carrying
@@ -107,8 +103,7 @@ applies only the packet's mechanical items and the `simplify-code` skill, pushes
 `<!-- marin-deslop:<sha> -->`. The launcher's per-PR idempotency key permits
 one automatic deslop session; follow-up findings are advisory.
 Pull requests without `agent-generated` receive
-committable suggestions and no push. The holistic session ignores a head whose
-delta is only `Deslop` commits, which closes the review-then-deslop loop.
+committable suggestions and no push.
 
 ## Nightshift area reviews
 

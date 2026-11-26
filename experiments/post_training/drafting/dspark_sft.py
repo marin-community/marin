@@ -15,7 +15,7 @@ import click
 import draccus
 from levanter.models.snowball import SnowballConfig
 from marin.execution.artifact import is_mutable_version
-from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity, lower
+from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity, lower, resolve
 from marin.execution.step_runner import StepRunner
 from marin.training.drafting.dspark_data import (
     DraftDataConfig,
@@ -26,7 +26,6 @@ from marin.training.drafting.dspark_data import (
 )
 from marin.training.drafting.dspark_distillation import (
     DEFAULT_DRAFT_SEED,
-    HF_DRAFT_SUBDIRECTORY,
     DraftRecipe,
     DSparkExport,
     require_supported_vllm_release,
@@ -41,6 +40,11 @@ from experiments.grug.moe_hero_ep.heuristic import HERO_MODEL
 from experiments.models import ModelConfig, download_model
 from experiments.post_training.drafting import mochi
 from experiments.post_training.drafting.mochi_mix import scaled_mix, smoke_mix
+from experiments.post_training.mochi_assets import (
+    MOCHI_STEP_400407_EXPORT,
+    MOCHI_TOKENIZER_REVISION,
+    MOCHI_TOKENIZER_URI,
+)
 
 
 class TeacherFamily(StrEnum):
@@ -61,7 +65,8 @@ _TARGETS = MappingProxyType(
         ),
     }
 )
-_RECIPE_VERSION = "2026.11.22.4"
+_RECIPE_VERSION = "2026.11.24"
+_MOCHI_CHECKPOINT_VERSION = "2026.11.25"
 _MOCHI_AGENTIC_PRESET = "mochi-agentic"
 _MOCHI_SCALE_PRESET = "mochi-agentic-50m"
 
@@ -79,10 +84,8 @@ class CompletedSFT:
 
 MOCHI_STEP_400407 = CompletedSFT(
     family=TeacherFamily.MOCHI,
-    source=(
-        "s3://marin-us-east-02a/marin/exports/mochi-sft/" "hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1"
-    ),
-    tokenizer_source="hf://marin-community/marin-tokenizer-tools@3f6879acdaf3dae7874b2d48c7d11b9d8c6faf09",
+    source=MOCHI_STEP_400407_EXPORT,
+    tokenizer_source=f"hf://{MOCHI_TOKENIZER_URI}@{MOCHI_TOKENIZER_REVISION}",
     artifact_version="2026.11.13",
 )
 
@@ -110,9 +113,9 @@ class OfflineDSpark:
                 shape=shape,
                 mask_token_id=128004,
                 max_sequence_length=self.max_sequence_length,
-                draft_layers=layers,
-                draft_intermediate_size=intermediate_size,
             ),
+            draft_layers=layers,
+            draft_intermediate_size=intermediate_size,
             feature_taps=taps,
             max_anchors=self.max_anchors,
             max_steps=self.max_steps,
@@ -181,7 +184,7 @@ def artifacts(
             config.teacher.relative_path,
             prepared,
             mochi.cached_recipe(recipe, config.mochi_sample),
-            _RECIPE_VERSION,
+            _MOCHI_CHECKPOINT_VERSION,
             config.mochi_sample,
         )
     else:
@@ -249,17 +252,25 @@ def _preflight(recipe: OfflineDSpark, teacher: ArtifactStep, prefix: str) -> dic
         raise click.UsageError("Run the prepare stage to stage the pinned Hub teacher in Marin storage")
     tokenizer = _hub_model(recipe.teacher.tokenizer_source) if recipe.teacher.tokenizer_source else None
     tokenizer_ref = f"{tokenizer.hf_repo_id}@{tokenizer.hf_revision}" if tokenizer else None
-    decoder = inspect_teacher(teacher_root, settings.data, tokenizer_source=tokenizer_ref)
+    decoder = inspect_teacher(
+        teacher_root,
+        settings.data,
+        layers=settings.draft_layers,
+        intermediate_size=settings.intermediate_size,
+        tokenizer_source=tokenizer_ref,
+    )
     train, validation = inspect_mix(StoragePath(recipe.data))
-    total_gpus = settings.teacher_replicas
+    resources = {"gpus": settings.trainer_ranks}
     if recipe.teacher.family is TeacherFamily.SNOWBALL:
-        total_gpus += settings.trainer_ranks
+        resources["gpus"] += settings.teacher_replicas
+    else:
+        resources["prefill_gpus"] = settings.teacher_replicas
     return {
         "decoder": decoder,
         "extraction_taps": settings.extraction_taps,
         "train_shards": len(train),
         "validation_shards": len(validation),
-        "gpus": total_gpus,
+        **resources,
         "trainer_ranks": settings.trainer_ranks,
     }
 
@@ -275,6 +286,21 @@ def _validate_training_locations(recipe: OfflineDSpark, prefix: str) -> None:
             raise click.UsageError(f"Iris training requires regional inputs and output, got {location}")
 
 
+def _prefill(recipe: OfflineDSpark, teacher: ArtifactStep, prepared: ArtifactStep, prefix: str) -> None:
+    if recipe.teacher.family is not TeacherFamily.MOCHI:
+        raise click.UsageError("The prefill stage is available only for Mochi")
+    cache = mochi.prefill_mochi(
+        teacher=str(StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path),
+        teacher_identity=artifact_identity(teacher),
+        prepared=prepared,
+        recipe=mochi.cached_recipe(recipe.training_recipe(), recipe.mochi_sample),
+        prefix=prefix,
+        sample=recipe.mochi_sample,
+    )
+    if cache is not None:
+        click.echo(str(cache))
+
+
 @click.command()
 @click.option("--config", help="Path or object storage URI of the DSpark JSON recipe.")
 @click.option("--preset", type=click.Choice((_MOCHI_AGENTIC_PRESET, _MOCHI_SCALE_PRESET)))
@@ -285,7 +311,7 @@ def _validate_training_locations(recipe: OfflineDSpark, prefix: str) -> None:
     type=click.Choice([size.value for size in mochi.DraftSize]),
     help="Mochi draft architecture for the named preset.",
 )
-@click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "train")), default="plan")
+@click.option("--stage", type=click.Choice(("plan", "preflight", "prepare", "prefill", "train")), default="plan")
 def main(
     config: str | None,
     preset: str | None,
@@ -294,36 +320,35 @@ def main(
     draft_size: str | None,
     stage: str,
 ) -> None:
-    """Plan and preflight offline DSpark or execute it in one Iris GPU job."""
+    """Plan, prepare, and run offline DSpark training on Iris."""
 
-    if stage == "train" and "IRIS_TASK_ID" not in os.environ:
-        raise click.UsageError("Submit the train stage through Iris")
+    requires_iris = stage in ("prefill", "train")
+    if requires_iris and "IRIS_TASK_ID" not in os.environ:
+        raise click.UsageError(f"Submit the {stage} stage through Iris")
     configure_coreweave_s3()
     prefix = marin_prefix()
     size = mochi.DraftSize(draft_size) if draft_size is not None else None
     recipe, mix = _resolve_recipe(config, preset, data, prefix, steps=steps, draft_size=size)
-    if stage == "train":
+    if requires_iris:
         _validate_training_locations(recipe, prefix)
     teacher = _teacher_artifact(recipe.teacher)
     prepared, draft = artifacts(recipe, teacher=teacher, mix=mix)
     if stage == "preflight":
         click.echo(json.dumps(_preflight(recipe, teacher, prefix), indent=2))
         return
-    if stage == "train" and recipe.teacher.family is TeacherFamily.MOCHI:
-        if mochi.train_mochi(
-            teacher=str(StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path),
-            prepared=prepared,
-            draft=draft,
-            recipe=mochi.cached_recipe(recipe.training_recipe(), recipe.mochi_sample),
-            prefix=prefix,
-            sample=recipe.mochi_sample,
-        ):
-            click.echo(str(StoragePath(draft.path(prefix)) / HF_DRAFT_SUBDIRECTORY))
+    if stage == "prefill":
+        _prefill(recipe, teacher, prepared, prefix)
+        return
+    if stage == "train":
+        result = resolve(draft)
+        source_uri = str(StoragePath(result.path) / result.hf_subdirectory)
+        if result.source_identity is not None:
+            click.echo(json.dumps({"source_uri": source_uri, "source_identity": result.source_identity}))
+        else:
+            click.echo(source_uri)
         return
     terminal = prepared if stage == "prepare" else draft
     StepRunner().run([lower(terminal)], dry_run=stage == "plan")
-    if stage == "train":
-        click.echo(str(StoragePath(draft.path(prefix)) / HF_DRAFT_SUBDIRECTORY))
 
 
 if __name__ == "__main__":
