@@ -208,6 +208,18 @@ class EvaluationTaskRow(BaseModel):
         return value
 
 
+class EvaluationTraceVerification(BaseModel):
+    """The raw verifier verdict and its allowlisted diagnostics."""
+
+    status: str
+    reason: str | None
+    score: float | None
+    passed: bool | None
+    score_min: float
+    score_max: float
+    diagnostics_json: str
+
+
 class EvaluationTraceRow(BaseModel):
     """One evaluation answer or intermediate turn, including its model and grader inputs."""
 
@@ -232,6 +244,8 @@ class EvaluationTraceRow(BaseModel):
     error_treatment: str | None
     env_class: str
     subset_id: str | None
+    verification: EvaluationTraceVerification | None
+    # Tool messages, environment metrics and server errors have variable shapes.
     details_json: str
 
 

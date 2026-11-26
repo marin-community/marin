@@ -10,7 +10,13 @@ from dataclasses import dataclass, replace
 from math import fsum
 import numpy as np
 
-from finestore.rl.run_records import EvaluationAnswerRow, EvaluationTaskRow, EvaluationTraceRow, write_evaluations
+from finestore.rl.run_records import (
+    EvaluationAnswerRow,
+    EvaluationTaskRow,
+    EvaluationTraceRow,
+    EvaluationTraceVerification,
+    write_evaluations,
+)
 from finestore.rl.strata import TaskEvaluationIdentity
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
@@ -47,6 +53,7 @@ from omegaconf import DictConfig
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 
+# The persisted diagnostics schema excludes arbitrary provider and verifier data.
 EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
         GRADING_DURATION_SECONDS,
@@ -355,20 +362,20 @@ def _evaluation_trace_rows(
         response_ids = batch["response_ids"][index]
         reward = batch["rewards"][index]
         verification = verifications[index]
-        # Keep the operational diagnostics that were retained for grader debugging.
         verification_details = None
         if verification is not None:
-            verification_details = {
-                "status": verification.status.value,
-                "reason": verification.reason,
-                "score": verification.score,
-                "passed": verification.passed,
-                "score_min": verification.score_min,
-                "score_max": verification.score_max,
-                "diagnostics": {
-                    key: value for key, value in verification.diagnostics.items() if key in EVAL_DIAGNOSTIC_FIELDS
-                },
-            }
+            verification_details = EvaluationTraceVerification(
+                status=verification.status.value,
+                reason=verification.reason,
+                score=verification.score,
+                passed=verification.passed,
+                score_min=verification.score_min,
+                score_max=verification.score_max,
+                diagnostics_json=json.dumps(
+                    {key: value for key, value in verification.diagnostics.items() if key in EVAL_DIAGNOSTIC_FIELDS},
+                    ensure_ascii=False,
+                ),
+            )
         rows.append(
             EvaluationTraceRow(
                 attempt_id=attempt_id,
@@ -392,12 +399,12 @@ def _evaluation_trace_rows(
                 error_treatment=treatments[index],
                 env_class=metadata.metric_class,
                 subset_id=metadata.subset_id,
+                verification=verification_details,
                 details_json=json.dumps(
                     {
                         "messages": messages[index],
                         "server_error": server_errors[index],
                         "env_metrics": env_metrics[index],
-                        "verification": verification_details,
                     },
                     ensure_ascii=False,
                 ),

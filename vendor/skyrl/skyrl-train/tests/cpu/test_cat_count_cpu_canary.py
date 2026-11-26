@@ -628,15 +628,15 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
                 trace.task_id, trace.native_uid, len(trace.response_token_ids)
             )
             assert answer.optimization_reward == trace.score
-            verification = json.loads(trace.details_json)["verification"] or {}
             assert (answer.error_type, answer.error_treatment) == (trace.exception_type, trace.error_treatment)
+            verification = trace.verification
+            assert verification is not None
             assert (answer.verification_status, answer.raw_verifier_score, answer.score_min, answer.score_max) == (
-                verification.get("status"), verification.get("score"), verification.get("score_min"),
-                verification.get("score_max"),
+                verification.status, verification.score, verification.score_min, verification.score_max
             )
-            if verification.get("status") == "verified":
+            if verification.status == "verified":
                 assert answer.passed == (
-                    verification["passed"] if verification["passed"] is not None else answer.optimization_reward > 0
+                    verification.passed if verification.passed is not None else answer.optimization_reward > 0
                 )
                 assert answer.outcome == "graded"
             else:
