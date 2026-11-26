@@ -28,6 +28,8 @@ DEEP_SEEDS = (181, 191, 193)
 DEEP_ENDPOINT = "qwen-string-deep384@2026.11.26.1"
 DEEP_BUDGET = 3_703_021
 NO_SAVE_REVISIONS = (EXTENSION_REVISION, DEEP_REVISION)
+CAP_AUDIT_REVISION = "2026.11.26.9"
+CAP_AUDIT_TOKENS = 8192
 
 
 def warmup_preset():
@@ -106,6 +108,35 @@ def fork_preset(name: str, easy_quota: Literal[6, 10], seed: int, *, revision: s
     )
 
 
+def cap_audit_preset(name: str, easy_quota: Literal[6, 10], seed: int) -> Preset:
+    """Replay a deep continuation and evaluate the same weights at two response caps."""
+    preset = fork_preset(name, easy_quota, seed, revision=DEEP_REVISION)
+    development, original_confirmation = preset.evaluations
+    profile = original_confirmation.profile
+    assert profile.sampling_params is not None
+    confirmation = replace(
+        original_confirmation,
+        profile=profile.replace(sampling_params=profile.sampling_params.replace(max_generate_length=CAP_AUDIT_TOKENS)),
+    )
+    config = preset.recipe.config
+    budget = config.context_budget
+    assert budget is not None
+    config = config.replace(
+        context_budget=budget.replace(serving_window_tokens=budget.max_input_tokens + 2 * CAP_AUDIT_TOKENS)
+    )
+    return replace(
+        preset,
+        name=f"cap-{preset.name}",
+        revision=CAP_AUDIT_REVISION,
+        evaluations=(development, confirmation, replace(original_confirmation, name="confirmation_4k")),
+        recipe=replace(
+            preset.recipe,
+            config=config,
+            layout=replace(preset.recipe.layout, job_timeout_seconds=3_600),
+        ),
+    )
+
+
 QWEN_FORK = ModelPresets(
     model="qwen3-0.6b",
     namespace="qwen-checkpoint-fork",
@@ -118,6 +149,7 @@ QWEN_FORK = ModelPresets(
             for name, quota in FORKS
         ),
         *(fork_preset(name, quota, seed, revision=DEEP_REVISION) for seed in DEEP_SEEDS for name, quota in FORKS),
+        *(cap_audit_preset(name, quota, seed) for seed in DEEP_SEEDS for name, quota in FORKS),
     ),
     control_pins={},
 )
