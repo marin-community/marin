@@ -67,6 +67,8 @@ SEED = 0
 
 GPUS_PER_NODE = 8
 EXPERT_AXIS = 8
+# Only the step policy saves; a time-based temporary save would make two runs' checkpoints differ.
+NO_TIMED_SAVES = timedelta(days=1)
 
 BATCH = 128
 DOUBLED_BATCH = 256
@@ -229,8 +231,7 @@ def _checkpointer(checkpoint_dir: str) -> CheckpointerConfig:
         base_path=os.path.join(checkpoint_dir, "checkpoints"),
         temporary_base_path=os.path.join(checkpoint_dir, "checkpoints-temp"),
         append_run_id_to_base_path=False,
-        # Only the step policy saves; a time-based temporary save would make two runs' checkpoints differ.
-        save_interval=timedelta(days=1),
+        save_interval=NO_TIMED_SAVES,
         keep=[{"every": CHECKPOINT_EVERY}],
     )
 
@@ -300,7 +301,7 @@ def double_config(args: argparse.Namespace) -> GrugRunConfig:
             diagnose_numerics=True,
             step_timeout=STEP_TIMEOUT,
             checkpoint_keep=[{"every": CHECKPOINT_EVERY}],
-            save_interval=timedelta(days=1),
+            save_interval=NO_TIMED_SAVES,
             initialize_from_path=args.initialize_from,
             source_batch_size=BATCH,
             resume_step=DOUBLE_STEP,
@@ -339,7 +340,7 @@ def cooldown_config(args: argparse.Namespace) -> GrugRunConfig:
             diagnose_numerics=True,
             step_timeout=STEP_TIMEOUT,
             checkpoint_keep=[{"every": CHECKPOINT_EVERY}],
-            save_interval=timedelta(days=1),
+            save_interval=NO_TIMED_SAVES,
             initialize_from_path=args.initialize_from,
             log_dir=args.log_dir,
             initialize_jax_distributed=False,

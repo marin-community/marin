@@ -7,7 +7,7 @@
 
 WORK=/work/openathena-ihodes/asartran
 
-# Pinned stack: JAX 0.12.0 on ROCm 10.1 (the `rocm` extra). The 2x-loss and memory-corruption studies ran on it.
+# Pinned stack: JAX 0.12.0 on ROCm 10.1 (the `rocm` extra). The settings below were tested on it.
 # jax-rocm10-plugin 0.12.1 (and 0.12.1.post1) has an exact, deterministic embedding scatter-add; it is not adopted.
 PY=$WORK/rocm-extra-test/.venv/bin/python
 pp=$PWD
