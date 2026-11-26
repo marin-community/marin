@@ -30,7 +30,7 @@ from experiments.post_training.task_curation.full_content_binding import Retaine
 from experiments.post_training.task_curation.license_binding import licensed_source
 from experiments.post_training.task_curation.receipt_shards import write_receipt_shards
 from experiments.post_training.task_curation.remediation_publish import ReleasePlan
-from experiments.post_training.task_curation.retained_grading import RetainedGrading
+from experiments.post_training.task_curation.retained_grading import RetainedGrading, parse_retained_grading
 from experiments.post_training.task_curation.retained_release import (
     RETAINED_IMPORT_VERSION,
     RetainedCohort,
@@ -479,7 +479,7 @@ def main() -> None:
         raise ValueError(f"Unknown pending source IDs: {sorted(unknown)}")
     original_actors = actor_census_receipts() if args.pending_source else {}
     censuses = {record["source_id"]: record for path in args.censuses for record in json.loads(path.read_text())}
-    grading = {row["source_id"]: RetainedGrading.model_validate(row) for row in json.loads(args.grading.read_text())}
+    grading = {row["source_id"]: parse_retained_grading(row) for row in json.loads(args.grading.read_text())}
     receipts = {}
     for path in args.releases:
         for record in json.loads(path.read_text()):

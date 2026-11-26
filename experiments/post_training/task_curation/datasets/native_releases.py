@@ -48,11 +48,12 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
         measurement = DaytonaMeasurement.model_validate(release["daytona_measurement"])
         if (measurement.dataset_id, measurement.dataset_revision) != (release["repo"], release["revision"]):
             raise ValueError(f"Native actor measurement does not cover the private source pin: {entry['id']}")
+        conversion_version = release.get("conversion_version") or "2026.11.12.1"
         evidence = f"https://huggingface.co/datasets/{release['repo']}/blob/{release['revision']}/manifest.json"
         config = PrebuiltCohort(
             intended_use=IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN,
             name=entry["name"],
-            version="2026.11.12.1",
+            version=conversion_version,
             repo=release["repo"],
             revision=release["revision"],
             expected_rows=release["converted_rows"],
@@ -108,7 +109,12 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                     daytona_unsafe_details=measurement.daytona_unsafe_details,
                     daytona_unsafe_counts=measurement.daytona_unsafe_counts,
                     grading_environment=GradingEnvironmentEvidence(
-                        **release["grading_environment"], evidence_url=evidence
+                        **{
+                            name: value
+                            for name, value in release["grading_environment"].items()
+                            if name != "evidence_url"
+                        },
+                        evidence_url=release["grading_environment"].get("evidence_url") or evidence,
                     ),
                     converted_examples=ConvertedExamples(
                         count=release["converted_rows"],
@@ -118,7 +124,7 @@ def sources() -> list[RlDataSource[PrebuiltCohort]]:
                         source_dataset_id=entry["dataset_id"],
                         source_revision=entry["dataset_revision"],
                         converter_revision=release["converter_identity"],
-                        converter_version="2026.11.12.1",
+                        converter_version=conversion_version,
                         evidence_url=evidence,
                     ),
                 ),
