@@ -684,6 +684,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """With ``muonc_anneal_decay``: the late-annealed matrix LR is clamped from below at the schedule's floor,
     ``lr_m = max(lr_t s(t) / s(t0), min_lr_ratio lr_max)`` from ``t0``; the matrix decay ``lambda_t`` follows the
     clamped ``lr_m``."""
+    muonc_anneal_law_cap_ball: bool = False
+    """With ``muonc_anneal_decay``: the ``muonh`` and ``kda_beta`` groups take the law-cap ball of
+    ``muonh_law_cap_ball`` at the late-annealed matrix LR in place of MuonC's matrix decay; the head and Adam groups
+    keep ``muonc_anneal_decay``'s rules (and ``muonc_anneal_adamc``'s when set)."""
     muonh_law_cap_ball: bool = False
     """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
     groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
@@ -927,6 +931,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         ),
                         _match_named_update_sharding(),
                     )
+            if self.muonc_anneal_law_cap_ball:
+                transforms["muonh"] = muon_law_cap_at(matrix_lr)
+                transforms["kda_beta"] = muon_law_cap_at(matrix_lr * KDA_BETA_LR_MULT)
             if self.muonh_law_cap_ball:
                 transforms["muonh"] = muon_law_cap_at(matrix_lr)
                 transforms["kda_beta"] = muon_law_cap_at(matrix_lr * KDA_BETA_LR_MULT)
@@ -992,6 +999,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             self.muonc_anneal_adam_decay_lr_steps and not self.muonc_anneal_decay
         ):
             raise ValueError("muonc_anneal_adam_decay_lr_steps must be non-negative and needs muonc_anneal_decay")
+        if self.muonc_anneal_law_cap_ball and (not self.muonc_anneal_decay or self.muonc_anneal_decay_lr_steps):
+            raise ValueError(
+                "muonc_anneal_law_cap_ball needs muonc_anneal_decay and excludes muonc_anneal_decay_lr_steps"
+            )
         if self.muonc_anneal_lr_floor and not self.muonc_anneal_decay:
             raise ValueError("muonc_anneal_lr_floor needs muonc_anneal_decay")
         if self.muonh_law_cap_ball and (
