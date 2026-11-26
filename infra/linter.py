@@ -509,19 +509,8 @@ def _lane_prompt(
 
 
 def _run_lanes(
-    lanes: list[LintLane],
-    shared_text: str,
-    merge_base: str,
-    stat: str,
-    leads: str,
-    pr_metadata: ReviewMetadata | None,
-    glossary: GlossarySource | None,
-    agent_cmd: list[str],
-    env: dict[str, str],
+    lanes: list[LintLane], prompts: dict[str, str], agent_cmd: list[str], env: dict[str, str]
 ) -> list[LaneResult]:
-    prompts = {
-        lane.name: _lane_prompt(shared_text, lane, merge_base, stat, leads, pr_metadata, glossary) for lane in lanes
-    }
     results: dict[str, LaneResult] = {}
     with ThreadPoolExecutor(max_workers=len(lanes)) as pool:
         futures = {pool.submit(_timed_agent, agent_cmd, env, prompts[lane.name]): lane for lane in lanes}
@@ -781,7 +770,8 @@ def run_lint_review(
     Findings are advisory and never block. Returns 0 for every outcome that fits
     that contract (no findings, findings emitted, merge-base unresolved,
     lane/composer timeout). Returns 1 on an unknown lane, an unavailable agent,
-    or when every lane's agent failed to run.
+    PR text or an RL glossary that cannot be read, or when every lane's agent
+    failed to run.
     """
     lanes = list(LINT_LANES)
     if lane_names:
@@ -833,7 +823,10 @@ def run_lint_review(
     env = _lint_review_env()
     started = time.time()
 
-    lane_results = _run_lanes(lanes, shared_text, merge_base, stat, leads, pr_metadata, glossary, agent_cmd, env)
+    prompts = {
+        lane.name: _lane_prompt(shared_text, lane, merge_base, stat, leads, pr_metadata, glossary) for lane in lanes
+    }
+    lane_results = _run_lanes(lanes, prompts, agent_cmd, env)
     for r in lane_results:
         if r.returncode is None:
             click.echo(f"  ⚠ Lint lane '{r.name}' timed out after {LINT_REVIEW_TIMEOUT}s")
