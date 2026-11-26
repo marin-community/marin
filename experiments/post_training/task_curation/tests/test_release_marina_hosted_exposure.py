@@ -149,7 +149,7 @@ def _prior_manifest(tmp_path: Path, name: str = "prior-manifest.json", revision:
 
 @pytest.fixture(autouse=True)
 def _live_preview(monkeypatch):
-    """The preview is live at the base revision the hosted check recorded."""
+    """The preview is live at the base revision the preflight check recorded."""
     monkeypatch.setattr(live_applet, "live_applet", lambda _url, _app: live_applet.LiveApplet(BASE_VERSION, "private"))
 
 
@@ -162,7 +162,6 @@ def _marina_inputs(tmp_path: Path, revision: str, **overrides) -> marina_release
         service_url=SERVICE_URL,
         package=_package_receipt(tmp_path, "package-receipt.json", package_root, modules, revision),
         preflight_receipt=_release_receipt(tmp_path, "preflight-receipt.json", "preflight", revision),
-        hosted_receipt=_release_receipt(tmp_path, "hosted-receipt.json", "hosted", revision),
         prior_manifest=_prior_manifest(tmp_path),
         base_version=BASE_VERSION,
         access_mode="private",
@@ -215,7 +214,7 @@ def test_marina_release_write_seals_release_and_manifest_documents(tmp_path):
     assert manifest["kind"] == f"atlas-{RELEASE_ID}-deployment-manifest"
     assert manifest["revision"] == NEW_VERSION and manifest["base_version"] == BASE_VERSION
     assert manifest["app_id"] == APPLET_ID and manifest["mode"] == "private" and manifest["source_sha"] == revision
-    assert set(manifest["receipts"]) == {"preflight", "hosted", "package"}
+    assert set(manifest["receipts"]) == {"preflight", "package"}
     assert manifest["prior_manifest"]["sha256"] == inputs.prior_manifest.sha256
     assert proof["manifest"]["uri"].endswith("deployment-manifest.json")
     assert _last_alert(tmp_path)["kind"] == marina_release.alerts.KIND_FINISH

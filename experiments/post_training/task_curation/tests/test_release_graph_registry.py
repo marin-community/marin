@@ -442,36 +442,24 @@ def test_release_check_phases_bind_their_receipts(tmp_path):
     assert preflight_inputs["applet_id"] == plan.service.applet_id
 
     preflight_receipt = {"uri": "s3://bucket/preflight.json", "sha256": "d" * 64}
+    live_revision = plan.service.preview_base_version + 7
     _write_dep(
         built.stages["release_check_preflight"],
         prefix,
         "release_check_preflight",
         plan.release_id,
         preflight_receipt,
-    )
-    hosted_inputs = _materialized_inputs(built.stages["release_check_hosted"], prefix)
-    assert hosted_inputs["preflight_receipt"] == preflight_receipt
-    # The hosted check reads the live revision at run time; the plan's cut-time base is not an input.
-    assert "published_revision" not in hosted_inputs
-
-    hosted_check_receipt = {"uri": "s3://bucket/hosted-check.json", "sha256": "1" * 64}
-    live_revision = plan.service.preview_base_version + 7
-    _write_dep(
-        built.stages["release_check_hosted"],
-        prefix,
-        "release_check_hosted",
-        plan.release_id,
-        hosted_check_receipt,
-        published_revision=live_revision,
         live={"version": live_revision, "mode": "public"},
     )
     package_dep = {"uri": "s3://bucket/package.json", "sha256": "c" * 64}
     marina_inputs = _materialized_inputs(built.stages["marina_release"], prefix)
     # A stale planned base never blocks the publish: it compare-and-sets against the
-    # live revision and mode the hosted check recorded (R40: planned 32, live 39, public).
+    # live revision and mode the preflight check recorded (R40: planned 32, live 39, public).
     assert marina_inputs["base_version"] == live_revision != plan.service.preview_base_version
     assert marina_inputs["access_mode"] == "public"
     assert marina_inputs["package"] == package_dep
+    assert marina_inputs["preflight_receipt"] == preflight_receipt
+    assert "hosted_receipt" not in marina_inputs
     marina_receipt = {"uri": "s3://bucket/manifest.json", "sha256": "e" * 64}
     _write_dep(
         built.stages["marina_release"],
@@ -486,6 +474,20 @@ def test_release_check_phases_bind_their_receipts(tmp_path):
             "url": "https://applets.example.test",
             "mode": "private",
         },
+    )
+    # RELEASE.md: the hosted check runs after the publish, on the new revision (R40 #51).
+    hosted_inputs = _materialized_inputs(built.stages["release_check_hosted"], prefix)
+    assert hosted_inputs["preflight_receipt"] == preflight_receipt
+    assert hosted_inputs["published_revision"] == 31
+    assert "hosted_receipt" not in hosted_inputs
+    hosted_check_receipt = {"uri": "s3://bucket/hosted-check.json", "sha256": "1" * 64}
+    _write_dep(
+        built.stages["release_check_hosted"],
+        prefix,
+        "release_check_hosted",
+        plan.release_id,
+        hosted_check_receipt,
+        published_revision=31,
     )
     postpublish_inputs = _materialized_inputs(built.stages["release_check_postpublish"], prefix)
     assert postpublish_inputs["published_revision"] == 31

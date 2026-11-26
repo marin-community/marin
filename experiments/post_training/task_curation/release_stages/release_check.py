@@ -93,10 +93,9 @@ class ReleaseCheckInputs:
             raise ValueError(f"the {self.phase} check runs the published revision with its preflight baseline inputs")
         if self.preflight_receipt is None:
             raise ValueError(f"the {self.phase} check requires the sealed preflight receipt ref")
-        if self.phase == "hosted" and self.published_revision is not None:
-            raise ValueError("the hosted check verifies the live revision; it must not name one")
-        if self.phase == "postpublish" and self.published_revision is None:
-            raise ValueError("the postpublish check requires the published revision to verify")
+        # RELEASE.md: the hosted check runs after the publish, against the new immutable revision.
+        if self.published_revision is None:
+            raise ValueError(f"the {self.phase} check requires the published revision to verify")
         if self.phase == "postpublish" and self.hosted_receipt is None:
             raise ValueError("the postpublish audit requires the blocking hosted receipt ref")
 
@@ -246,8 +245,7 @@ def planned_checker_arguments(
             str(paths["oracle_inventory"]),
         ]
         return argv
-    revision = live.version if inputs.phase == "hosted" else inputs.published_revision
-    argv += ["--revision", str(revision), "--baseline", str(paths["baseline"])]
+    argv += ["--revision", str(inputs.published_revision), "--baseline", str(paths["baseline"])]
     if inputs.phase == "postpublish":
         argv.append("--full-browser-sweep")
     return argv
@@ -333,7 +331,7 @@ def run_release_check(
             "package": _ref_pointer(inputs.package),
             "preflight_receipt": _ref_pointer(inputs.preflight_receipt),
             "hosted_receipt": _ref_pointer(inputs.hosted_receipt),
-            "published_revision": live.version if inputs.phase == "hosted" else inputs.published_revision,
+            "published_revision": inputs.published_revision,
             "live": {"version": live.version, "mode": live.mode},
             "planned_checker": {"module": CHECKER_MODULE, "arguments": argv, "receipt": receipt_path},
             "dry_run": dry_run,

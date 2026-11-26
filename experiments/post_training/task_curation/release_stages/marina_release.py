@@ -9,8 +9,8 @@ landed checkout, publishes the packaged preview through Marina's applet API, and
 seals two write-once documents under the release prefix: the publish record and the
 deployment manifest that the hosted stages verify against.
 
-Receipt contracts (decided here): the preflight and hosted receipts are the
-maintained release-check receipts (``ReleaseReceipt`` in
+Receipt contracts (decided here): the preflight receipt is the
+maintained release-check receipt (``ReleaseReceipt`` in
 ``infra.marina.apps.rl_data_catalog.release_receipts``) and must record ``passed``
 true (the receipt's boolean outcome field), the matching ``phase``, the typed
 ``source_revision``, and the typed applet id in ``target.id``. The package receipt
@@ -62,7 +62,6 @@ class MarinaReleaseInputs:
     service_url: str
     package: ArtifactRef
     preflight_receipt: ArtifactRef
-    hosted_receipt: ArtifactRef
     prior_manifest: ArtifactRef | None
     base_version: int
     access_mode: str
@@ -238,13 +237,11 @@ def run_marina_release(
     try:
         inputs.validate()
         verify_release_check_receipt(inputs.preflight_receipt, "preflight", inputs)
-        verify_release_check_receipt(inputs.hosted_receipt, "hosted", inputs)
         package = verify_package_receipt(inputs.package, inputs)
         prior = verify_prior_manifest(inputs.prior_manifest, inputs) if inputs.prior_manifest is not None else None
         verify_checkout(repo_root, inputs.source_revision)
         receipts = {
             "preflight": ref_fields(inputs.preflight_receipt),
-            "hosted": ref_fields(inputs.hosted_receipt),
             "package": ref_fields(inputs.package),
         }
         proof: dict = {
@@ -269,12 +266,12 @@ def run_marina_release(
         for path, label in ((release_path, "release document"), (manifest_path, "deployment manifest")):
             if path.exists():
                 raise ValueError(f"{label} already exists at {path}; bump the release prefix instead of republishing")
-        # The hosted check recorded the live revision and mode; the publish continues
+        # The preflight check recorded the live revision and mode; the publish continues
         # exactly that state (the compare-and-set also refuses a moved base).
         live = live_applet_module.live_applet(inputs.service_url, inputs.applet_id)
         if (live.version, live.mode) != (inputs.base_version, inputs.access_mode):
             raise ValueError(
-                f"the preview moved to v{live.version} ({live.mode}) since the hosted check recorded"
+                f"the preview moved to v{live.version} ({live.mode}) since the preflight check recorded"
                 f" v{inputs.base_version} ({inputs.access_mode})"
             )
         payload = package_applet(Path(package["package"]["uri"]))
@@ -334,7 +331,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=("dry-run", "write"), default="dry-run")
     args = parser.parse_args()
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
-    for name in ("package", "preflight_receipt", "hosted_receipt"):
+    for name in ("package", "preflight_receipt"):
         document[name] = ArtifactRef(**document[name])
     if document.get("prior_manifest") is not None:
         document["prior_manifest"] = ArtifactRef(**document["prior_manifest"])

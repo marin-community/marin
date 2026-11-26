@@ -537,6 +537,7 @@ class _FakeChecker:
 
 
 LIVE_VERSION = 39
+PUBLISHED_VERSION = LIVE_VERSION + 1
 
 
 @pytest.fixture(autouse=True)
@@ -684,6 +685,13 @@ def test_release_check_phase_gating_refusals(tmp_path):
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
         )
+    with pytest.raises(ValueError, match="requires the published revision"):
+        release_check.run_release_check(
+            _release_check_inputs(tmp_path, "hosted", preflight_receipt=preflight_ref),
+            dry_run=True,
+            repo_root=tmp_path,
+            feeds=_feeds(tmp_path),
+        )
     with pytest.raises(ValueError, match="runs the published revision"):
         release_check.run_release_check(
             _release_check_inputs(tmp_path, "hosted", package=package_ref),
@@ -703,13 +711,16 @@ def test_release_check_phase_gating_refusals(tmp_path):
 def test_release_check_hosted_delegates_with_baseline_and_seals(tmp_path):
     preflight_ref = _preflight_stage_receipt(tmp_path)
     checker = _FakeChecker("hosted", REVISION)
-    inputs = _release_check_inputs(tmp_path, "hosted", preflight_receipt=preflight_ref)
+    inputs = _release_check_inputs(
+        tmp_path, "hosted", preflight_receipt=preflight_ref, published_revision=PUBLISHED_VERSION
+    )
     release_check.run_release_check(
         inputs, dry_run=False, repo_root=tmp_path / "repo", feeds=_feeds(tmp_path), checker=checker
     )
     _, argv, receipt_path = checker.calls[0]
-    # The hosted check verifies the live revision and keeps the live mode.
-    assert argv[argv.index("--revision") + 1] == str(LIVE_VERSION)
+    # RELEASE.md: the hosted check verifies the newly published revision, never the
+    # preceding live one (R40 #51), and keeps the live mode.
+    assert argv[argv.index("--revision") + 1] == str(PUBLISHED_VERSION)
     assert argv[argv.index("--expected-mode") + 1] == "public"
     baseline = Path(argv[argv.index("--baseline") + 1])
     assert (
@@ -747,7 +758,7 @@ def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
     failed = _preflight_stage_receipt(tmp_path, "failed", passed=False)
     with pytest.raises(ValueError, match="did not pass"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", preflight_receipt=failed),
+            _release_check_inputs(tmp_path, "hosted", preflight_receipt=failed, published_revision=PUBLISHED_VERSION),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
@@ -755,7 +766,7 @@ def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
     stale = _preflight_stage_receipt(tmp_path, "stale", source_revision="d" * 40)
     with pytest.raises(ValueError, match="pins revision"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", preflight_receipt=stale),
+            _release_check_inputs(tmp_path, "hosted", preflight_receipt=stale, published_revision=PUBLISHED_VERSION),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
@@ -763,7 +774,9 @@ def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
     wrong_phase = _preflight_stage_receipt(tmp_path, "wrong-phase", phase="hosted")
     with pytest.raises(ValueError, match="prior receipt phase is"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", preflight_receipt=wrong_phase),
+            _release_check_inputs(
+                tmp_path, "hosted", preflight_receipt=wrong_phase, published_revision=PUBLISHED_VERSION
+            ),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),
@@ -771,7 +784,7 @@ def test_release_check_refuses_failed_or_stale_prior_receipts(tmp_path):
     drifted = _preflight_stage_receipt(tmp_path, "drifted", production_version=42)
     with pytest.raises(ValueError, match="different production version"):
         release_check.run_release_check(
-            _release_check_inputs(tmp_path, "hosted", preflight_receipt=drifted),
+            _release_check_inputs(tmp_path, "hosted", preflight_receipt=drifted, published_revision=PUBLISHED_VERSION),
             dry_run=True,
             repo_root=tmp_path,
             feeds=_feeds(tmp_path),

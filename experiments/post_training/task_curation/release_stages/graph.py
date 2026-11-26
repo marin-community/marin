@@ -1044,17 +1044,27 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "release_check_preflight", "release_check", release_check_stage.__name__, ("package_preview",), False
     ),
     "release_check_hosted": StageSpec(
-        "release_check_hosted", "release_check", release_check_stage.__name__, ("release_check_preflight",), False
+        "release_check_hosted",
+        "release_check",
+        release_check_stage.__name__,
+        ("release_check_preflight", "marina_release"),
+        False,
     ),
     "marina_release": StageSpec(
         "marina_release",
         "marina_release",
         marina_release_stage.__name__,
-        ("package_preview", "release_check_preflight", "release_check_hosted"),
+        ("package_preview", "release_check_preflight"),
         False,
         receipt_key="manifest",
     ),
-    "hosted_check": StageSpec("hosted_check", "hosted_check", hosted_check_stage.__name__, ("marina_release",), False),
+    "hosted_check": StageSpec(
+        "hosted_check",
+        "hosted_check",
+        hosted_check_stage.__name__,
+        ("declarations", "identity_backend_compose", "census", "marina_release"),
+        False,
+    ),
     "release_check_postpublish": StageSpec(
         "release_check_postpublish",
         "release_check",
@@ -1066,7 +1076,7 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "exposure_probe",
         "exposure_probe",
         exposure_probe_stage.__name__,
-        ("marina_release", "hosted_check", "release_check_postpublish", "strict_audit_after"),
+        ("declarations", "marina_release", "hosted_check", "release_check_postpublish", "strict_audit_after"),
         False,
     ),
     # The main-source sync is a plan-gated leaf: it never joins another stage's
@@ -2091,8 +2101,8 @@ def _release_check_step(
             inputs["source_counts"] = package_proof["source_counts"]
         else:
             inputs["preflight_receipt"] = _resolved_receipt(ctx, preflight)
-            if phase != "hosted":
-                inputs["published_revision"] = _resolved_proof(ctx, marina)["publish"]["version"]
+            inputs["published_revision"] = _resolved_proof(ctx, marina)["publish"]["version"]
+            if phase == "postpublish":
                 inputs["hosted_receipt"] = _resolved_receipt(ctx, hosted)
         return inputs
 
@@ -2112,7 +2122,7 @@ def _node_of(handle: ArtifactStep) -> str:
 
 
 def _marina_release_step(
-    plan: ReleasePlan, package: ArtifactStep, preflight: ArtifactStep, hosted: ArtifactStep
+    plan: ReleasePlan, package: ArtifactStep, preflight: ArtifactStep
 ) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["marina_release"]
     identity = _identity_fields(plan, "release_id", "source_revision", "service", "pins")
@@ -2125,12 +2135,12 @@ def _marina_release_step(
             "service_url": plan.service.service_url,
             "package": _resolved_receipt(ctx, package),
             "preflight_receipt": _resolved_receipt(ctx, preflight),
-            "hosted_receipt": _resolved_receipt(ctx, hosted),
             "prior_manifest": _ref_dict(plan.pins.prior_manifest),
-            # The live revision and mode the hosted check observed, not the plan's
-            # cut-time preview_base_version (R40: planned 32, live 39).
-            "base_version": _resolved_proof(ctx, hosted)["published_revision"],
-            "access_mode": _resolved_proof(ctx, hosted)["live"]["mode"],
+            # The live revision and mode the preflight check observed, not the plan's
+            # cut-time preview_base_version (R40: planned 32, live 39). The hosted
+            # check then verifies the published revision (RELEASE.md).
+            "base_version": _resolved_proof(ctx, preflight)["live"]["version"],
+            "access_mode": _resolved_proof(ctx, preflight)["live"]["mode"],
             "output_root": stage_output_root(plan, "marina-release"),
         }
 
@@ -2138,7 +2148,7 @@ def _marina_release_step(
         plan,
         "marina_release",
         spec,
-        (package, preflight, hosted),
+        (package, preflight),
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=marina_release_stage.MarinaReleaseInputs,
@@ -2300,8 +2310,8 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     )
     package = _package_preview_step(plan, audit_before, census)
     check_preflight = _release_check_step(plan, "preflight", package, None, None, None)
-    check_hosted = _release_check_step(plan, "hosted", None, check_preflight, None, None)
-    marina = _marina_release_step(plan, package, check_preflight, check_hosted)
+    marina = _marina_release_step(plan, package, check_preflight)
+    check_hosted = _release_check_step(plan, "hosted", None, check_preflight, None, marina)
     audit_after = _strict_audit_step(plan, declarations, identity_backend, "after", census, origin_handle=marina)
     hosted = _hosted_check_step(plan, declarations, identity_backend, census, marina)
     check_postpublish = _release_check_step(plan, "postpublish", None, check_preflight, check_hosted, marina)
