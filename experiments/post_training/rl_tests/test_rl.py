@@ -83,6 +83,36 @@ def test_preset_table_rejects_duplicate_names():
         replace(table, presets=(*table.presets, table.by_name["eval-short"]))
 
 
+def test_native_launch_preserves_numeric_like_run_index_fingerprints(selection, tmp_path, monkeypatch):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["speed-short"]
+    planned = snowball.build_experiment(preset, table=table)
+    (step,) = planned.runs
+    config = materialized_config(step, str(tmp_path))
+    index = RunIndexIdentity(
+        run_id="indexed-run",
+        model=table.model,
+        preset=preset.name,
+        preset_version="1243e785",
+        base_preset_version="1029e733",
+        user="test-user",
+        branch="test-branch",
+        source_revision="60c74110",
+        dirty=False,
+    )
+    monkeypatch.setenv(RUN_INDEX_ENV, json.dumps({config.run_id: index.model_dump(mode="json")}))
+    path = tmp_path / "indexed-launch.yaml"
+
+    def capture(launch, *, forward_env):
+        path.write_text(launch.launch_config_yaml)
+
+    monkeypatch.setattr(snowball, "run_skyrl", capture)
+    assert planned.inputs is not None
+    snowball._run_rl(config, inputs=planned.inputs, issue=None)
+    (parsed,) = gate.compose_configs([str(path)])
+    assert RunIndexIdentity.model_validate(parsed["run"]["index"]) == index
+
+
 def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch):
     launch_paths = {}
 
