@@ -107,13 +107,15 @@ def test_unhealthy_node_fabric_is_rejected(overrides):
 
 
 def test_fabric_probe_reads_versioned_nvml_output(monkeypatch):
+    sample = fabric_info()[0]
+
     def write_fabric_info(_handle, output):
         info = cast(output, POINTER(pynvml.c_nvmlGpuFabricInfoV_t)).contents
-        assert info.version in (pynvml.nvmlGpuFabricInfo_v2, pynvml.nvmlGpuFabricInfo_v3)
-        info.clusterUuid[:] = CLUSTER_UUID.bytes
-        info.cliqueId = 1
-        info.state = pynvml.NVML_GPU_FABRIC_STATE_COMPLETED
-        info.status = pynvml.NVML_SUCCESS
+        assert info.version == pynvml.nvmlGpuFabricInfo_v2
+        info.clusterUuid[:] = sample.cluster_uuid.bytes
+        info.cliqueId = sample.clique_id
+        info.state = sample.state
+        info.status = sample.status
 
     monkeypatch.setattr(pynvml, "nvmlInit", lambda: None)
     monkeypatch.setattr(pynvml, "nvmlShutdown", lambda: None)
@@ -121,7 +123,7 @@ def test_fabric_probe_reads_versioned_nvml_output(monkeypatch):
     monkeypatch.setattr(pynvml, "nvmlDeviceGetHandleByIndex", lambda index: index)
     monkeypatch.setattr(pynvml, "nvmlDeviceGetGpuFabricInfoV", write_fabric_info)
 
-    assert probe_fabric_info() == fabric_info()[:1]
+    assert probe_fabric_info() == (sample,)
 
 
 def test_wrong_gpu_count_is_rejected():
