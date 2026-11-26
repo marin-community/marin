@@ -1434,6 +1434,23 @@
       "reasons": []
     },
     {
+      "id": "Nvidia:Nemotron-RL-InverseIFEval-v1",
+      "display_name": "Nvidia \u00b7 Nemotron-RL-InverseIFEval-v1",
+      "status": "Pending",
+      "origin": "Nvidia",
+      "upstream_dataset": "Nemotron-RL-InverseIFEval-v1",
+      "upstream_url": null,
+      "notes": "TRAIN InverseIFEval with original public user messages, private per-check YES/NO polarity, native independent judge calls and ALL aggregation preserved. The source policy_model_name alias is bound to the declared MEDIUM MiniMax-M3 judge, with the native prompt and top_p0.8/max10000 settings. No native oracle or live endpoint execution is claimed. Original and retained populations contain1,000 tasks with zero within-source duplicates and zero lexical drops; release CLEAN evidence binds the exact private pin. Static retention covers all1,000 under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE attempted100, reviewed99, recorded6findings,1unavailable and0uncertain; ResultGOOD,1%no-verdict. All individual findings remain verbatim, including reported inverted private checks, a hidden newline requirement, disputed factual keys and a date-dependent criterion; QC is not a veto and no grader repair is implied. The neighbor survey records9DISTINCT and1PARTIAL pair: TaskTrove:laion__nemotron-gym-instruction-following-adversarial-v5, directional nearest-neighbor fractions76.6%/76.6%(766/1000both), exact0/0. The measured label and digest stay unchanged; any authorized disposition is separately bound. Canonical consumerb9373278 diagnostics are advisory: bespoke failures0/1000;global schema rejections1000/1000,paths{'integrity_contract': 1000, 'grader.script.timeout': 1000, 'grader.script.judge.context_char_limit': 1000, 'grader.script.judge.max_turns': 1000, 'grader.script.judge.temperature': 1000, 'grader.script.judge.parse_attempts': 1000, 'grader.script.judge.chat_template_kwargs': 1000}. CUSTOM_JUDGE needs are retained; no globalruntime pin changes or alias across cohorts. Evidence:s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemotron-inverse-ifeval/2026.11.25.1/final-pin-sample-v1/result.json,s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemotron-inverse-ifeval/2026.11.25.1/admission-evidence-v1/result.json,s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemotron-inverse-ifeval/2026.11.25.1/consumer-binding-v1/result.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
       "id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
       "display_name": "TaskTrove \u00b7 tasktrove-competitive-coding-rebuilt-v1",
       "status": "Pending",

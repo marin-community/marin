@@ -21,6 +21,7 @@
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
+    "Nvidia:Nemotron-RL-InverseIFEval-v1",
     "Nvidia:Nemotron-RL-agent-workplace_assistant",
     "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
     "OpenAthena:pdbthink-coordinate-tasks",

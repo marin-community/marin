@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "43cf1387389f032de0b9cbc9bff4f390a69044cc",
-  "path": "experiments/post_training/task_curation/source_population_locators_dolci_precise_if_20261125_b_v1.json",
-  "sha256": "2e19da5bf4c02cd7eca25aa391ba6c2596d241322bd265e0354ca85f9521235f"
+  "revision": "7f5e4afc68d8e6cb793437bfc922748e9eb8db0d",
+  "path": "experiments/post_training/task_curation/source_population_locators_inverse_ifeval_20261126_b_v1.json",
+  "sha256": "ef02ab0318ec880016a50f9014304790e3be1d316a73c61f5412ed18ae570efe"
 }
