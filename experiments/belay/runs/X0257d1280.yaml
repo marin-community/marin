@@ -20,3 +20,8 @@ runs:
     variant: competitive-d1280 control
     control: true
     shared: s7n-d1280L16
+launched:
+  seed0: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d1280 --opt-set muonc_anneal_decay=0.2
+    --opt-set muonc_anneal_adamc=12.5 --opt-set adamc_adam_decay=0.3 --opt-set muonc_anneal_decay_lr_steps=145.16257629560624
+    --opt-set muonc_anneal_adam_decay_lr_steps=33.49905606821683 --seed 0 --run-id belay-X0257d1280-seed0 --output-path tmp/ttl=30d/belay/runs/belay-X0257d1280-seed0
+    --submit --target-cluster cw-us-east-02a --priority batch
