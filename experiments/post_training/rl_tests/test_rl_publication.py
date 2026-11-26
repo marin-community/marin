@@ -422,6 +422,7 @@ def test_control_presets_select_multiple_models_without_duplicates():
         (True, "write", "mochi unknown", "unknown"),
         (True, "write", "", "at least one model"),
         (True, "write", "mochi snowball/learning-medium", None),
+        (True, "admin", "snowball/speed-medium mochi/learning-medium", None),
     ],
 )
 def test_control_comment_checks_repository_access_and_dispatches_main(
@@ -437,24 +438,27 @@ def test_control_comment_checks_repository_access_and_dispatches_main(
         )
     )
     monkeypatch.setenv("GITHUB_REPOSITORY", "example/marin")
-    writes = []
+    calls = []
+    pull = "repos/example/marin/pulls/14"
+    access = "repos/example/marin/collaborators/contributor/permission"
 
     def github(command, **options):
-        if "repos/example/marin/pulls/14" in command:
+        calls.append((command, options.get("input")))
+        if pull in command:
             return json.dumps({"merged": merged}).encode()
-        if "repos/example/marin/collaborators/contributor/permission" in command:
+        if access in command:
             return json.dumps({"permission": permission}).encode()
-        writes.append((command, options.get("input")))
         return b'{"html_url":"https://github.com/example/marin/actions/runs/145"}'
 
     monkeypatch.setattr(nightly.subprocess, "check_output", github)
     if error:
         with pytest.raises(ValueError, match=error):
             nightly.dispatch_comment(event)
-        assert writes == []
+        assert [command[-1] for command, _ in calls] == ([pull, access] if merged else [pull])
     else:
         nightly.dispatch_comment(event)
-        (dispatch, payload), (reply, _) = writes
+        (pull_request, _), (permissions, _), (dispatch, payload), (reply, _) = calls
+        assert pull_request[-1] == pull and permissions[-1] == access
         assert "repos/example/marin/actions/workflows/marin-skyrl-nightly.yaml/dispatches" in dispatch
         assert json.loads(payload) == {"ref": "main", "inputs": {"controls": "true", "presets": selection}}
         assert "repos/example/marin/issues/14/comments" in reply
