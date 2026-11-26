@@ -16,7 +16,6 @@ import click
 import draccus
 import yaml
 from finestore.rl.run_records import read_attempt_metrics
-from levanter.compat.hf_checkpoints import load_tokenizer
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply
 from marin.rl.cli import rl_build_options
@@ -53,7 +52,6 @@ from experiments.evaluation.micro210_policy import (
     Micro210PolicyReference,
     runtime_policy_config,
 )
-from experiments.grug.moe_hero_ep.ops.export_metadata import MANIFEST_FILENAME as SFT_EXPORT_MANIFEST
 from experiments.post_training.rl_compose import layout_execution
 from experiments.post_training.rl_presets import Generation, Recipe
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -182,6 +180,8 @@ def prepare_native_inputs(
 
 def validate_inputs(protocol: dict, model: ResolvedModelLocator, inputs: str) -> None:
     """Verify prepared tasks and the bound tokenizer before GPU allocation."""
+    from levanter.compat.hf_checkpoints import load_tokenizer  # noqa: PLC0415
+
     table = (StoragePath(inputs) / protocol["evaluation"]["data_relative_path"]).read_bytes()
     if hashlib.sha256(table).hexdigest() != protocol["prepared_rollouts_sha256"]:
         raise ValueError("Canonical Micro210 prepared task bytes changed")
@@ -197,8 +197,10 @@ def validate_inputs(protocol: dict, model: ResolvedModelLocator, inputs: str) ->
 
 def export_identity(model: ResolvedModelLocator, expected: str | None) -> ExportManifestIdentity | ProducerIdentity:
     """Identify the completed export by its manifest or immutable producer."""
+    from experiments.grug.moe_hero_ep.ops import export_metadata  # noqa: PLC0415
+
     root = StoragePath(model.uri)
-    for filename in (MODEL_MANIFEST_FILENAME, SFT_EXPORT_MANIFEST):
+    for filename in (MODEL_MANIFEST_FILENAME, export_metadata.MANIFEST_FILENAME):
         try:
             digest = file_sha256(root / filename)
         except FileNotFoundError:
