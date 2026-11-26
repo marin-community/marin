@@ -489,6 +489,7 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
             if attempt_id == "failed":
                 receipt["result"].update(state="failed", iris_job_id=child_job, iris_job_state=JobState.WORKER_FAILED)
     states[coordinator] = JobState.FAILED
+    rows_before_publication = rows.copy()
     assert tick("125-1") == 1
     assert requests == {(preset.name, "123-1"): 3}
     assert "accepted" not in rows and rows["failed"].status == "failed"
@@ -502,6 +503,8 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
     # Replay the same cohort to check each terminal diagnostic with the same native evidence.
     for state, task_state, reason, reconcile_exit in diagnostics:
         with subtests.test(reason=reason):
+            rows.clear()
+            rows.update(rows_before_publication)
             child_status = SimpleNamespace(state=state, task_state_counts={task_state: 1}, error_message=reason)
             pending.write_text(first_handoff.model_dump_json())
             with edit_receipt(Path(failed_output)) as receipt:
@@ -509,13 +512,12 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
             assert tick("126-1") == reconcile_exit
             assert not pending.exists()
             assert requests == {(preset.name, "123-1"): 3}
+            assert rows["accepted"].status == "succeeded" and rows["accepted"].preset_version == version
+            assert rows["failed"].status == "failed" and "native_attempt" in rows["failed"].failed_facts
     states[legacy_job] = JobState.SUCCEEDED
     assert tick("127-1") == 0
     assert requests == {(preset.name, "123-1"): 3, (preset.name, "127-1"): 1}
     assert rows["legacy"].status == "succeeded"
-
-    assert rows["accepted"].status == "succeeded" and rows["accepted"].preset_version == version
-    assert rows["failed"].status == "failed" and "native_attempt" in rows["failed"].failed_facts
 
 
 def test_nightly_recovers_pending_controls(
@@ -537,6 +539,7 @@ def test_nightly_recovers_pending_controls(
 
 
 def _assert_nightly_recovery(recorded_runs, monkeypatch, tmp_path, capsys, scenario, exit_code):
+    capsys.readouterr()
     monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
     monkeypatch.setenv("IRIS_USER", "runner")
     preset = nightly.SNOWBALL.by_name["speed-medium"]
