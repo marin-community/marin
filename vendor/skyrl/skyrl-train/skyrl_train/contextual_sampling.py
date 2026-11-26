@@ -86,7 +86,7 @@ def _prompt_features(
 
 
 def _source_quota_boundaries(shares: NDArray[np.float64], capacities: NDArray, size: int) -> NDArray[np.float64]:
-    """Cumulative expected counts after redistributing shares that exceed a source's catalog."""
+    """Return cumulative expected counts after redistributing quotas above each eligible row count."""
     quotas = np.zeros(len(shares))
     remaining = size
     indices = np.flatnonzero(capacities)
@@ -110,7 +110,8 @@ class PromptThompsonOrder(PromptOrder):
     Source-only ranks prompts from the same source equally. Contextual ranking also
     uses public prompt text. Cost-aware ranking gives additional weight to prompts
     predicted to spend fewer generated tokens. Within-source cost-aware ranking
-    preserves the reference mixture in each window up to randomized rounding and pool capacity.
+    rounds reference source quotas within each window and redistributes excess
+    quotas when a source has too few candidate rows.
     """
 
     feedback_phase = SamplingFeedbackPhase.OPTIMIZER

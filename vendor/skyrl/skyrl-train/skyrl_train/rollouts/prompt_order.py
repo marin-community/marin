@@ -102,10 +102,18 @@ class PromptOrder(ABC):
     def load_state_dict(self, state: Mapping[str, Any]) -> None: ...
 
     def select_index(self, selection: PromptSelection) -> int | None:
+        """Return an eligible dataset row, or None if the selection has no available row.
+
+        The default draw filters live and quarantined rows and translates indices
+        from a family-local order into dataset indices.
+        """
         return selection.draw(self.next_index)
 
     def for_pool(self, num_rows: int) -> PromptOrder | None:
-        """Return an independent order when a family needs its own row sequence."""
+        """Return an independent order over the family's local row indices, if needed.
+
+        None keeps the existing order for family selection.
+        """
         return None
 
     def assign(self, uid: str) -> str | None:
@@ -113,7 +121,7 @@ class PromptOrder(ABC):
         return None
 
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
-        """Observe the groups judged at admission."""
+        """Update from kept and discarded groups judged for the batch and return metrics."""
         return {}
 
     def finish_step(self, step: int, groups: Sequence[PromptFeedback]) -> dict[str, float]:

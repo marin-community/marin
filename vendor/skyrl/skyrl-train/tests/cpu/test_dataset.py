@@ -18,7 +18,7 @@ from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.rollouts.context import TrainingContext, prompt_order_from_config
-from skyrl_train.rollouts.loader import JudgedGroup
+from skyrl_train.rollouts.prompt_order import JudgedGroup
 from skyrl_train.task_inputs import task_messages
 from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
 from tokenizers import Tokenizer

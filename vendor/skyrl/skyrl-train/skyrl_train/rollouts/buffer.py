@@ -29,7 +29,7 @@ from skyrl_train.group_admission import (
 from skyrl_train.grader_reporting import GraderStats, GraderSummary
 from skyrl_train.metric_names import curriculum_metric_prefix
 from skyrl_train.rollout_observability import rollout_wait
-from skyrl_train.rollouts.loader import JudgedGroup
+from skyrl_train.rollouts.prompt_order import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
 from skyrl_train.trajectory_runners.trajectory_processing import get_outcome_rewards, get_trajectory_passes
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward

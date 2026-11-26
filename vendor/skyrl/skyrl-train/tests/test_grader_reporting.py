@@ -22,7 +22,7 @@ from skyrl_train.rollouts.buffer import (
     RolloutContentPolicy,
     RolloutGroup,
 )
-from skyrl_train.rollouts.loader import JudgedGroup
+from skyrl_train.rollouts.prompt_order import JudgedGroup
 from skyrl_train.rollouts import context as rollout_context
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TrajectoryBatch

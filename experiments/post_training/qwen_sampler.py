@@ -203,7 +203,10 @@ def budget_preset(
     evaluation: Evaluation,
     held_out_tasks: str,
 ) -> Preset:
-    """Evaluate at the token budget or update cap, and optionally before training."""
+    """Evaluate after reaching the gross rollout token budget and optionally before training.
+
+    Training raises if it reaches the update cap below the token budget.
+    """
     preset = sampler_preset(
         name,
         max_updates,
