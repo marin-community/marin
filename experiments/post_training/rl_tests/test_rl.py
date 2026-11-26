@@ -481,8 +481,8 @@ def test_checkpoint_callback_uses_preset_coverage(selection, tmp_path):
     spec = recipe.run_spec(preset, name="checkpoint-coverage", model_name="snowball")
     step = recipe.run_step(preset, spec)
     trainer = yaml.safe_load(materialized_config(step, str(tmp_path)).launch_config_yaml)["skyrl"]["trainer"]
-    callback = next(callback for callback in trainer["callbacks"] if callback["type"] == "best_checkpoint")
-    assert callback["minimum_scored_tasks"] == 90
+    callback = next(callback for callback in trainer["callbacks"] if callback["type"] == "evaluation")
+    assert callback["checkpoint_scores"]["primary"]["minimum_scored_tasks"] == 90
 
 
 @pytest.mark.parametrize(
