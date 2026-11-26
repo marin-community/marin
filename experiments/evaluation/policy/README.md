@@ -71,8 +71,9 @@ uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11
 | `--model KEY` or `--model-config FILE` | a supplied model, such as a training checkpoint, on every evaluation its window fits; its window is its `serve.max_model_len`, else its checkpoint's |
 
 A supplied model leaves out each evaluation whose protocol window is larger than its own; the dry run
-and `status` list them. An object-store checkpoint without an `identity` gets one digested from its
-files' checksums, so rewriting the checkpoint in place gives its runs new IDs.
+and `status` list them. A supplied model may not reuse a candidate's name with other settings. An
+object-store checkpoint without an `identity`, supplied or declared, is identified by its files'
+checksums, so rewriting it in place gives its runs new IDs.
 
 Each candidate runs on one server at its serving window, split only when its judges need different
 keys, and the server runs several evaluations at once. A full run (no `--limit`) launches only from a
@@ -83,8 +84,8 @@ accelerator, and, for an agent, how many attempts it runs at once, so
 launching again finds the same paths. `launch` resolves every model before submitting any job, leaves
 out evaluations whose record already succeeded, and starts no server for a group with none left; the
 dry run lists them. Failed runs rerun at their old paths. A run that succeeded but is invalid (for
-example, another server window) is not rerun unless named with `--rerun RUN_ID`, which replaces its
-record and archive; `status` says so for each such run.
+example, another server window) is not rerun unless named with `--rerun RUN_ID`, which replaces the
+record and archive of a finished run that is invalid or flagged; `status` says so for each such run.
 
 Before a policy is released its run IDs do not include the commit, so a smoke run may come from a
 checkout with uncommitted changes, and a full run resumed after a failure may finish on a later commit

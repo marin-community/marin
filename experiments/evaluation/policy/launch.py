@@ -47,13 +47,9 @@ def server_groups(items: Collection[ResolvedPolicyEvaluation]) -> tuple[tuple[Re
 def model_candidate(model: ModelConfig) -> PolicyCandidate:
     """Wrap a supplied model, such as a training checkpoint, as a candidate.
 
-    Its revision is pinned, and an object-store checkpoint without an ``identity`` gets one digested from its
-    files, so rewriting the checkpoint gives its runs new identities. Its largest context is the window it is
-    served at; a model that sets no window is served at the one its checkpoint declares, stated in its config so
-    records name it.
+    Its revision is pinned, and its largest context is the window it is served at; a model that sets no window is
+    served at the one its checkpoint declares, stated in its config so records name it.
     """
-    if "://" in model.location and model.identity is None:
-        model = replace(model, identity=checkpoint_digest(model.location))
     model = pinned_model(model)
     window = resolved_serve_config(model).max_model_len
     if window is None:
@@ -108,6 +104,10 @@ def launch_specs(
     if too_long := [item.evaluation.name for item in resolved if item.context > window]:
         raise ValueError(f"{candidate.name}: the checkpoint serves at most {window} tokens, too few for {too_long}")
     model = replace(candidate.model, serve=replace(serve, max_model_len=window))
+    # An object-store checkpoint has no revision, so its files' checksums identify it: rewriting it in place
+    # gives its runs new IDs.
+    if "://" in model.location and model.identity is None:
+        model = replace(model, identity=checkpoint_digest(model.location))
     platform = default_platform(model)
     return tuple(
         LaunchSpec(

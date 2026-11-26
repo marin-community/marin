@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import click
-from evalrecords.records import EvalRunRecord
+from evalrecords.records import EvalRunRecord, RunStatus
 from iris.cli.connect import open_iris_client
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.model_config import load_model_config
@@ -22,7 +22,8 @@ from rigging.filesystem.storage_path import prefix_join
 from rigging.provenance import git_output
 
 from experiments.evaluation.cli import require_coreweave_credentials
-from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, launch_group
+from experiments.evaluation.curated import pinned_model
+from experiments.evaluation.launch import EVALUATION_CONTROLLER_CLUSTER, evaluation_group_step, launch_group
 from experiments.evaluation.models import models
 from experiments.evaluation.policy.launch import model_candidate
 from experiments.evaluation.policy.resolve import ResolvedPolicyEvaluation, catalog_variant, exclusions_for, resolve
@@ -39,6 +40,7 @@ from experiments.evaluation.policy.runs import (
 )
 from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
 from experiments.evaluation.policy.versions import POLICIES
+from experiments.post_training.task_curation.campaign import CampaignRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +214,7 @@ def _launch_plan(
 ) -> _LaunchPlan:
     """Resolve a candidate's launch, leaving out evaluations whose run at its path already succeeded.
 
-    A run named in ``rerun`` runs again if its record is not valid. Run IDs depend only on each evaluation,
+    A run named in ``rerun`` runs again if it succeeded but is invalid or warned. Run IDs depend only on each evaluation,
     so the evaluations left still group onto the same servers under the same IDs. ``placement`` is the
     priority band, cluster and release commit ``expected_runs`` takes.
     """
@@ -222,11 +224,14 @@ def _launch_plan(
         reruns = tuple(run for run in runs if run.evaluation.identity.run_id in rerun)
         for run in reruns:
             record = expected_record(run)
-            if (
-                record is not None
-                and check_run(record, run, release_commit=placement["release_commit"]).state is RunState.VALID
-            ):
-                raise ValueError(f"{run.evaluation.identity.run_id} is valid; only an invalid run is run again")
+            # A run without a finished record may still be writing; a failed one reruns without being named.
+            if record is None or record.status is not RunStatus.SUCCEEDED:
+                raise ValueError(f"{run.evaluation.identity.run_id} has not succeeded; only a finished run is replaced")
+            check = check_run(record, run, release_commit=placement["release_commit"])
+            if check.state is RunState.VALID and not check.warnings:
+                raise ValueError(
+                    f"{run.evaluation.identity.run_id} is valid; only an invalid or flagged run is replaced"
+                )
         succeeded = {
             name: record for name, record in succeeded_runs(runs).items() if name not in {run.name for run in reruns}
         }
@@ -239,12 +244,20 @@ def _launch_plan(
     return _LaunchPlan(candidate=candidate, git_sha=git_sha, batches=batches, succeeded=succeeded, reruns=reruns)
 
 
-def _discard(run: ExpectedRun) -> None:
-    """Remove a run's directory, holding its record, archive and success marker, so its launch runs it again."""
-    path = prefix_join(run.batch.records_prefix, run.evaluation.identity.run_id)
-    fs, fs_path = url_to_fs(path)
-    if fs.exists(fs_path):
-        fs.rm(fs_path, recursive=True)
+def _discard(plan: _LaunchPlan) -> None:
+    """Remove each rerun's directory, holding its record, archive and success marker, and the success marker of
+    every server job that runs it, which a job with the same runs left before, so the launch runs it again."""
+    rerun = {run.evaluation.identity.run_id for run in plan.reruns}
+    paths = [prefix_join(run.batch.records_prefix, run.evaluation.identity.run_id) for run in plan.reruns]
+    paths += [
+        evaluation_group_step(batch, CampaignRuntime()).output_path
+        for batch in plan.batches
+        if rerun & {evaluation.identity.run_id for evaluation in batch.evaluations}
+    ]
+    for path in paths:
+        fs, fs_path = url_to_fs(path)
+        if fs.exists(fs_path):
+            fs.rm(fs_path, recursive=True)
 
 
 def _print_launch(policy: EvalPolicy, plan: _LaunchPlan) -> None:
@@ -326,8 +339,13 @@ def _targets(
             model = catalog[model_key]
         else:
             raise click.BadParameter(f"not in the model catalog: {model_key}", param_hint="--model")
+        declared = next((candidate for candidate in policy.candidates if candidate.name == model.name), None)
+        if declared is not None and pinned_model(model) != pinned_model(declared.model):
+            raise click.UsageError(
+                f"{model.name} names a candidate of {policy.version}; give the changed model its own name"
+            )
         try:
-            return (model_candidate(model),)
+            return (declared or model_candidate(model),)
         except ValueError as error:
             raise click.ClickException(str(error)) from error
     if candidate_names:
@@ -457,8 +475,7 @@ def launch(
     if dry_run or not any(plan.batches for plan in plans):
         return
     for plan in plans:
-        for run in plan.reruns:
-            _discard(run)
+        _discard(plan)
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         for plan in plans:
             for batch in plan.batches:

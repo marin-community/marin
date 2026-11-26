@@ -3,7 +3,10 @@
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
+import click
+import draccus
 import pytest
 from evalrecords.records import PromptFormat, RunStatus, TaskCoverage, read_record, record_path
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
@@ -13,7 +16,10 @@ from marin.evaluation.runner import _record
 from marin.inference import vllm_backend
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, SelectionStatus
 
+from experiments.evaluation import launch as evaluation_launch
 from experiments.evaluation.curated import selection_dataset
+from experiments.evaluation.launch import evaluation_group_step
+from experiments.evaluation.policy import cli
 from experiments.evaluation.policy.launch import model_candidate
 from experiments.evaluation.policy.resolve import exclusions_for
 from experiments.evaluation.policy.runs import (
@@ -27,8 +33,9 @@ from experiments.evaluation.policy.runs import (
     run_warnings,
     succeeded_runs,
 )
-from experiments.evaluation.policy.schema import PolicyEvaluation
+from experiments.evaluation.policy.schema import PolicyCandidate, PolicyEvaluation
 from experiments.evaluation.policy.versions import POLICIES
+from experiments.post_training.task_curation.campaign import CampaignRuntime
 
 POLICY = POLICIES["marin-2026-11-20-trial"]
 QWEN = next(candidate for candidate in POLICY.candidates if candidate.name == "qwen3.6-35b-a3b")
@@ -117,14 +124,17 @@ def test_a_run_of_a_model_outside_the_policy_is_checked_against_its_recorded_mod
 
 
 def test_rewriting_a_checkpoint_gives_its_runs_new_identities(tmp_path):
-    before = model_candidate(_checkpoint(tmp_path))
-    after = model_candidate(_checkpoint(tmp_path, weights=b"retrained weights"))
-    paths = [
-        run.record_path
-        for candidate in (before, after)
-        for run in expected_runs(POLICY, candidate, limit=None, evaluations={"aime24"})
-    ]
-    assert paths[0] != paths[1]
+    checkpoint = _checkpoint(tmp_path)
+
+    def path() -> str:
+        (run,) = expected_runs(
+            POLICY, PolicyCandidate(model=checkpoint, max_context=32_768), limit=None, evaluations={"aime24"}
+        )
+        return run.record_path
+
+    before = path()
+    _checkpoint(tmp_path, weights=b"retrained weights")
+    assert path() != before
 
 
 def test_a_supplied_model_at_a_candidates_location_is_checked_against_its_own_config(tmp_path):
@@ -164,6 +174,43 @@ def test_a_new_agent_concurrency_moves_only_that_agents_run_and_verify_names_it(
     state, problems = run_problems(_write(tmp_path, old), _evidence(new), new)
     assert state is RunState.INVALID
     assert any(problem.startswith("run_id:") for problem in problems)
+
+
+def test_a_rerun_replaces_an_invalid_run_and_the_job_marker_that_would_skip_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluation_launch, "records_prefix_for", lambda _accelerator, _spec: str(tmp_path))
+    (run,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"})
+    run_id = run.evaluation.identity.run_id
+    # A succeeded record with no archive is invalid; an earlier job with the same runs left its success marker.
+    _write(tmp_path, run)
+    marker = Path(evaluation_group_step(run.batch, CampaignRuntime()).output_path)
+    marker.mkdir(parents=True)
+    (marker / ".executor_status").write_text("SUCCESS")
+
+    plan = cli._launch_plan(POLICY, QWEN, {"aime24"}, {run_id}, limit=None, release_commit=None)
+    assert [rerun.name for rerun in plan.reruns] == ["aime24"]
+    assert not plan.succeeded
+    cli._discard(plan)
+    assert not Path(record_path(str(tmp_path), run_id)).exists()
+    assert not marker.exists()
+
+
+def test_a_rerun_refuses_a_run_that_has_not_finished(tmp_path, monkeypatch):
+    monkeypatch.setattr(evaluation_launch, "records_prefix_for", lambda _accelerator, _spec: str(tmp_path))
+    (run,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"})
+    with pytest.raises(click.ClickException):
+        cli._launch_plan(POLICY, QWEN, {"aime24"}, {run.evaluation.identity.run_id}, limit=None, release_commit=None)
+
+
+def test_a_supplied_model_may_not_reuse_a_candidates_name_with_other_settings(tmp_path):
+    changed = tmp_path / "qwen.yaml"
+    changed.write_text(
+        json.dumps(draccus.encode(replace(QWEN.model, serve=replace(QWEN.model.serve, reasoning_parser=None))))
+    )
+    with pytest.raises(click.UsageError):
+        cli._targets(POLICY, (), False, None, changed)
+    same = tmp_path / "same.yaml"
+    same.write_text(json.dumps(draccus.encode(QWEN.model)))
+    assert cli._targets(POLICY, (), False, None, same) == (QWEN,)
 
 
 def test_a_run_of_the_policy_is_valid(tmp_path):
