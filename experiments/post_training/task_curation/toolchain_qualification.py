@@ -90,11 +90,13 @@ def _qualify_daytona_storage() -> dict:
     try:
         import daytona  # noqa: F401,PLC0415 — the backend SDK the survey's stage installs
     except ImportError:
-        installed = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--quiet", "daytona==0.200.2"],
-            capture_output=True,
-            text=True,
+        uv = shutil.which("uv")
+        command = (
+            [uv, "pip", "install", "--python", sys.executable, "--quiet", "daytona==0.200.2"]
+            if uv is not None
+            else [sys.executable, "-m", "pip", "install", "--quiet", "daytona==0.200.2"]
         )
+        installed = subprocess.run(command, capture_output=True, text=True)
         if installed.returncode != 0:
             return {"backend": "daytona", "qualified": False, "reason": (installed.stderr or "").strip()[-200:]}
     try:
