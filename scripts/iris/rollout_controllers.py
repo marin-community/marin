@@ -404,7 +404,7 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
             else:
                 for name in s3_env if s3_env is not None else _s3_credential_env():
                     needs.append(
-                        Requirement(Need.NAMED_SECRET, name, "S3 state auth projected into iris-storage-secrets")
+                        Requirement(Need.NAMED_SECRET, name, "S3 credentials projected into iris-storage-secrets")
                     )
         # A Kubernetes controller pod holds no cloud credentials, so the deploy resolves
         # the signing key in the operator's shell and projects it into the Secret. It

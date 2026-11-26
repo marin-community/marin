@@ -661,7 +661,11 @@ class K8sControllerProvider:
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
     def preflight_controller(self, config: IrisClusterConfig) -> tuple[str, str] | None:
-        """Resolve controller-only secrets without changing Kubernetes resources."""
+        """Resolve controller-only secrets without changing Kubernetes resources.
+
+        Returns the configured S3 key ID and secret when needed, so the caller
+        can use the same pair for rollout record I/O.
+        """
         env = resolve_controller_secrets(config)
         auth = (
             config.auth.model_copy(update={"principal_directory": env.get(PRINCIPAL_DIRECTORY_ENV_VAR, "")})
@@ -701,13 +705,14 @@ class K8sControllerProvider:
                 f"{list(config.scale_groups.keys())}"
             )
 
+        needs_storage = needs_controller_storage_credentials(config)
         if (
             self._prepared_controller_env is None
             or self._controller_secret_specs != _controller_secret_specs(config)
             or self._storage_credentials_ref != cw.storage_credentials_ref
             or (
                 cw.storage_credentials_ref is not None
-                and (self._prepared_storage_credentials is not None) != needs_controller_storage_credentials(config)
+                and (self._prepared_storage_credentials is not None) != needs_storage
             )
         ):
             self.preflight_controller(config)
@@ -725,7 +730,7 @@ class K8sControllerProvider:
         self._s3_enabled = self.uses_s3_storage(config)
         default_env = _build_s3_task_env(self._config.object_storage_endpoint) if self._s3_enabled else {}
         storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
-        if self._s3_enabled or storage_health is not None:
+        if needs_storage:
             credentials = self._prepared_storage_credentials or _operator_storage_credentials()
             self.ensure_secret(STORAGE_SECRET_NAME, _storage_secret_files(*credentials))
         storage_environment = {

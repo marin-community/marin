@@ -38,6 +38,9 @@ class ControllerProvider(Protocol):
 
         Providers may cache the resolved inputs for the subsequent start or
         restart.
+
+        Returns an explicitly configured storage key ID and secret for rollout
+        record access, or None when the provider uses ambient credentials.
         """
         ...
 
