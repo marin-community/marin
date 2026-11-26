@@ -65,6 +65,8 @@ DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
 EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
+_CATALOG_TASKS = "snowball-100k@2026.11.25.1"
+_CATALOG_EVAL_LITE = "eval-lite@2026.11.25.1"
 
 _DSPARK = sections.SpeculatorModel(
     source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
@@ -309,7 +311,8 @@ _PACKED_TRAIN_LONG_RECIPE = replace(
 )
 
 _TRAIN_LONG = _snowball(
-    held_out_tasks=_DEFAULT_EVAL_LITE,
+    tasks=_CATALOG_TASKS,
+    held_out_tasks=_CATALOG_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
     export="best",
@@ -520,7 +523,8 @@ _PRESETS = (
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),
     _snowball(
-        held_out_tasks=_DEFAULT_EVAL_LITE,
+        tasks=_CATALOG_TASKS,
+        held_out_tasks=_CATALOG_EVAL_LITE,
         name="eval-short",
         checkpoints="none",
         recipe=_GENERATING,

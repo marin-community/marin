@@ -29,6 +29,7 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import (
     ArtifactHfModel,
     ResolvedModelLocator,
+    SkyRLModelSource,
     SkyRLPolicyModel,
     SkyRLReceiptLookupError,
     SkyRLRun,
@@ -136,7 +137,9 @@ def validate_requirements(
         raise click.BadParameter("--require needs a gated candidate preset, without --control")
     keys = [parse_requirement(text).key for text in requirements]
     pin = control_pin(preset, table=table)
-    reference = with_objectives(read_measurements(control_path(preset, pin, 0, table=table), preset), preset)
+    reference = with_objectives(
+        read_measurements(control_path(preset, pin, 0, table=table), preset, gate_profiles=True), preset
+    )
     missing = [key for key in keys if key not in reference.values]
     if missing:
         raise click.BadParameter(f"requirement metrics that the gate does not compute for control r0: {missing}")
@@ -641,6 +644,31 @@ def config_version(launch: dict, recorded: RecordedLaunch | None = None) -> str:
     return fingerprint_hash(canonical_json(_gate_config(launch, recorded)))
 
 
+def preset_launch_yaml(
+    preset: presets.Preset,
+    *,
+    name: str,
+    tasks: ArtifactStep | None = None,
+    init: SkyRLModelSource | ResolvedModelLocator | None = None,
+    resume: presets.StoredResume | None = None,
+    settings: tuple[str, ...] = (),
+) -> str:
+    spec = recipe.run_spec(preset, name=name, tasks=tasks, init=init, resume=resume, settings=settings)
+    if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
+        spec = replace(spec, model=replace(spec.model, relative_path="<terminal-hf-export>"))
+    step = recipe.run_step(preset, spec)
+    return materialized_config(step, recipe.run_prefix(preset)).launch_config_yaml
+
+
+def compose_preset(preset: presets.Preset) -> dict:
+    """Compose the nominal preset in the checkout's SkyRL CPU environment."""
+    with tempfile.TemporaryDirectory(prefix="rl-preset-") as directory:
+        path = Path(directory) / "launch.yaml"
+        path.write_text(preset_launch_yaml(preset, name="nominal"))
+        (config,) = compose_configs([str(path)])
+        return config
+
+
 def _compose_plans(
     preset: presets.Preset, inputs: Sequence[RunInputs], *, model: ResolvedModelLocator | None = None
 ) -> list[dict]:
@@ -649,19 +677,17 @@ def _compose_plans(
         paths = []
         for index, candidate in enumerate(inputs):
             try:
-                spec = recipe.run_spec(
-                    preset,
-                    name=f"current-config-{index}",
-                    tasks=recipe.selection_artifact(candidate.tasks) if candidate.tasks else None,
-                    init=(recipe.model_from_reference(candidate.init, resolved=model) if candidate.init else None),
-                    resume=candidate.resume,
-                    settings=candidate.settings,
-                )
-                if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
-                    spec = replace(spec, model=replace(spec.model, relative_path="<terminal-hf-export>"))
-                step = recipe.run_step(preset, spec)
                 path = root / f"config-{index}.yaml"
-                path.write_text(materialized_config(step, recipe.run_prefix(preset)).launch_config_yaml)
+                path.write_text(
+                    preset_launch_yaml(
+                        preset,
+                        name=f"current-config-{index}",
+                        tasks=recipe.selection_artifact(candidate.tasks) if candidate.tasks else None,
+                        init=recipe.model_from_reference(candidate.init, resolved=model) if candidate.init else None,
+                        resume=candidate.resume,
+                        settings=candidate.settings,
+                    )
+                )
                 paths.append(str(path))
             except (ValueError, click.BadParameter) as error:
                 raise InvalidComparison(f"recorded inputs cannot build the current preset: {error}") from error
@@ -835,7 +861,8 @@ def _write_gate(
                     raise InvalidComparison(f"no stored native attempt at {path}")
         runs = [
             with_requirements(
-                with_objectives(read_measurements(path, preset, inputs, attempt=receipt), preset), inputs.requirements
+                with_objectives(read_measurements(path, preset, inputs, attempt=receipt, gate_profiles=True), preset),
+                inputs.requirements,
             )
             for path, receipt in zip(run_paths, run_attempts, strict=True)
         ]
@@ -855,7 +882,7 @@ def _write_gate(
             for row in candidate.invariants
         ]
         controls = [
-            with_objectives(read_measurements(path, preset, attempt=receipt), preset)
+            with_objectives(read_measurements(path, preset, attempt=receipt, gate_profiles=True), preset)
             for path, receipt in zip(control_paths, control_attempts, strict=True)
         ]
         if not runs or not controls:

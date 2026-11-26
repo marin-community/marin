@@ -14,6 +14,7 @@ pytestmark = pytest.mark.integration
 def _projection(record: dict) -> dict:
     projected = record.copy()
     projected["has_grader_report"] = projected.pop("grader_report", None) is not None
+    projected.pop("launch_config", None)
     return projected
 
 
@@ -70,23 +71,33 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert publish(running)["status"] == "running"
     assert publish(sparse) == record
     assert publish(running) == record
-    main_publication = {
-        key: value
-        for key, value in record.items()
-        if key
-        not in {
-            "native_run_id",
-            "preset_version",
-            "is_control",
-            "user",
-            "branch",
-            "dirty",
-            "pr_number",
-            "coordinator_iris_job_id",
-            "elapsed_excluding_eval_seconds",
+    main_publication = copy.deepcopy(
+        {
+            key: value
+            for key, value in record.items()
+            if key
+            not in {
+                "native_run_id",
+                "preset_version",
+                "is_control",
+                "user",
+                "branch",
+                "dirty",
+                "pr_number",
+                "coordinator_iris_job_id",
+                "elapsed_excluding_eval_seconds",
+                "base_commit",
+                "base_preset_version",
+                "commit",
+                "evaluation_data_identity",
+                "launch_config",
+                "settings",
+            }
         }
-    }
-    assert publish(main_publication).keys() == main_publication.keys()
+    )
+    for comparison in main_publication["gate_result"]["comparisons"]:
+        comparison.pop("evaluation_score", None)
+    assert publish(main_publication | {"evaldash_run_ids": None}) == main_publication
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
@@ -99,12 +110,20 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     delayed = failed | {"status": "running", "completed_at": None, "elapsed_seconds": None, "failed_facts": []}
     assert publish(delayed) == failed
     changed = copy.deepcopy(record)
-    changed.update(issue=456, label="corrected label", model="snowball", evaldash_run_ids=["eval-start", "eval-finish"])
+    changed.update(
+        issue=456, label="corrected label", model="snowball", launch_config={"skyrl": {"trainer": {"max_steps": 25}}}
+    )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
+    config_query = {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"]}
+    assert client.get(f"/a/{APPLET_ID}/api/configuration", params=config_query).json() == changed["launch_config"]
+    control_row = changed | {"is_control": True}
+    assert publish(control_row) == control_row
+    assert publish(changed) == control_row
+    changed = control_row
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
-        for field in ("issue", "gate", "gate_result", "model", "evaldash_run_ids"):
+        for field in ("issue", "gate", "gate_result", "model", "launch_config"):
             if omit_issue:
                 missing_issue.pop(field)
             else:
@@ -120,7 +139,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "optimizer_steps": None,
         "evidence": ["Checkpoint lineage timing is unknown: a native time window is missing."],
     }
-    legacy = {key: value for key, value in unknown.items() if key not in {"model", "evaldash_run_ids", "issue"}}
+    legacy = {key: value for key, value in unknown.items() if key not in {"model", "issue"}}
     request(
         "http://localhost",
         "POST",
@@ -187,6 +206,42 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     assert rows["native-second"] == _projection(failed)
     assert rows["unknown"] == _projection(legacy | {"issue": None, "future_fact": "stored"})
     assert len(rows) == 3
+    rich = changed | {
+        "commit": "a" * 40,
+        "settings": ["trainer.max_steps=25"],
+        "is_control": True,
+        "evaluations": [
+            {
+                "metric": "eval_lite@25/family_mean",
+                "role": "slice",
+                "run": 0.7,
+                "n_run": 1,
+                "n_control": 0,
+                "evaluation_score": {
+                    "profile": "eval_lite",
+                    "step": 25,
+                    "statistic": "family_mean",
+                    "final": True,
+                    "comparability": "example-comparison",
+                },
+            }
+        ],
+    }
+    assert publish(rich)["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
+    for evaldash_ids in (None, ["existing-evaluation"]):
+        previous_format = main_publication | {
+            "preset_version": "same-version",
+            "is_control": False,
+            "evaldash_run_ids": evaldash_ids,
+        }
+        response = publish(previous_format)
+        assert response["attempt_id"] == changed["attempt_id"]
+        assert response["issue"] == changed["issue"] and response["status"] == rich["status"]
+        assert "evaluation_score" not in response["evaluations"][0]
+        served = next(row for row in client.get(api_path).json()["runs"] if row["attempt_id"] == changed["attempt_id"])
+        assert served["issue"] == changed["issue"]
+        assert (served["commit"], served["settings"], served["is_control"]) == (rich["commit"], rich["settings"], True)
+        assert served["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
     assert "status: literal_error" in skipped["test/bad-status"]

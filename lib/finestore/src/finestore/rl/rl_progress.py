@@ -51,6 +51,14 @@ class Invariant(BaseModel):
     replicate: int = 0
 
 
+class EvaluationScore(BaseModel):
+    profile: str
+    step: int
+    statistic: str
+    final: bool
+    comparability: str | None = None
+
+
 class Comparison(BaseModel):
     metric: str
     role: ComparisonRole
@@ -70,6 +78,7 @@ class Comparison(BaseModel):
     tasks: int | None = None
     control_min: float | None = None
     control_max: float | None = None
+    evaluation_score: EvaluationScore | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 Count = Annotated[StrictInt, Field(ge=0)]
@@ -130,19 +139,25 @@ class GraderReport(BaseModel):
 class AttemptSummary(BaseModel):
     model_config = ConfigDict(strict=True, extra="ignore")
     run_id: Identity
+    native_run_id: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
     attempt_id: Identity
     label: Identity
     series: str | None = None
     model: Identity | None = None
     preset_version: Identity | None = None
-    is_control: bool = False
+    base_commit: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    base_preset_version: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    evaluation_data_identity: Identity | None = Field(default=None, exclude_if=lambda value: value is None)
+    is_control: bool | None = Field(default=None, exclude_if=lambda value: value is None)
     user: Identity | None = None
     branch: str | None = None
+    commit: Identity | None = None
+    settings: list[str] = Field(default_factory=list)
+    launch_config: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
     dirty: bool | None = None
     pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
     cluster: Identity | None = None
     issue: StrictInt | None = None
-    evaldash_run_ids: list[Identity] | None = None
     iris_job_id: str | None = None
     wandb_url: str | None = None
     grafana_url: str | None = None
