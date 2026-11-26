@@ -675,6 +675,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """With ``muonc_anneal_decay``: the reference total ``lr_max N`` at which ``muonc_anneal_decay`` applies. The
     matrix ``lambda`` becomes ``muonc_anneal_decay * muonc_anneal_decay_lr_steps / (lr_max N)``, so the total matrix
     decay ``lambda lr_max N`` is the same at every rung. 0: off."""
+    muonc_anneal_lr_floor: bool = False
+    """With ``muonc_anneal_decay``: the late-annealed matrix LR is clamped from below at the schedule's floor,
+    ``lr_m = max(lr_t s(t) / s(t0), min_lr_ratio lr_max)`` from ``t0``; the matrix decay ``lambda_t`` follows the
+    clamped ``lr_m``."""
     muonh_law_cap_ball: bool = False
     """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
     groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
@@ -700,7 +704,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
             def matrix_lr_schedule(step):
                 lr = learning_rate_schedule(step)
-                return jnp.where(step >= late_anneal_start, lr * lr / lr_at_late_anneal_start, lr)
+                annealed = lr * lr / lr_at_late_anneal_start
+                if self.muonc_anneal_lr_floor:
+                    annealed = jnp.maximum(annealed, self.min_lr_ratio * self.learning_rate)
+                return jnp.where(step >= late_anneal_start, annealed, lr)
 
             hyperparams["matrix_lr"] = matrix_lr_schedule
 
@@ -968,6 +975,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("muonc_anneal_adamc must be non-negative and needs muonc_anneal_decay and router_lr_mult 1")
         if self.muonc_anneal_decay_lr_steps < 0 or (self.muonc_anneal_decay_lr_steps and not self.muonc_anneal_decay):
             raise ValueError("muonc_anneal_decay_lr_steps must be non-negative and needs muonc_anneal_decay")
+        if self.muonc_anneal_lr_floor and not self.muonc_anneal_decay:
+            raise ValueError("muonc_anneal_lr_floor needs muonc_anneal_decay")
         if self.muonh_law_cap_ball and (
             self.muonh_radial_softcap or self.muonc_decay_mult or self.muonh_nonsi_anneal or self.muonc_anneal_decay
         ):
