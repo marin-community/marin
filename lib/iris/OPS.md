@@ -142,6 +142,10 @@ The `marin` hub covers the jobs it federates. For jobs submitted directly to a
 CoreWeave controller, use `--cluster <cw-cluster>`; this needs CoreWeave
 kubeconfig access.
 
+To check that one cluster's controller rows reached Finelog, run
+`scripts/ops/observability_rows_check.py` as described in
+[finding lost rows](docs/observability-rows.md#finding-lost-rows).
+
 ### Submitting a GPU gang from a workstation
 
 Submit through the federation hub if your CoreWeave token cannot port-forward:

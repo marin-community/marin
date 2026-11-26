@@ -11,7 +11,7 @@ with ``iris.controller_db__jobs``, ``__job_config``, ``__tasks`` and
 controller key, or any finish, is missing from Finelog.
 
 Usage:
-    uv run python lib/iris/scripts/observability_rows_check.py \\
+    uv run python scripts/ops/observability_rows_check.py \\
         --cluster marin --finelog marin --start-date 2026-11-12
 
 ``--finelog`` names the Finelog that holds the cluster's rows: the hub

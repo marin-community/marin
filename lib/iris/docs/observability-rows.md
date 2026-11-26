@@ -185,14 +185,14 @@ the archive.
 
 ## Finding lost rows
 
-`lib/iris/scripts/observability_rows_check.py` finds rows lost on the way to
+`scripts/ops/observability_rows_check.py` finds rows lost on the way to
 Finelog. Run it when a gap is suspected or after a rollout; nothing runs it on a
 schedule. For one cluster it compares each recent full UTC day (5 by default; at
 most 6, inside the 7-day job retention) with the controller DB, read through the
 admin, SELECT-only `iris query` RPC:
 
 ```bash
-uv run python lib/iris/scripts/observability_rows_check.py \
+uv run python scripts/ops/observability_rows_check.py \
   --cluster cw-rno2a --finelog marin --start-date 2026-11-21
 ```
 
