@@ -131,9 +131,13 @@ def machine_backends(config: EvaluationRunConfig) -> frozenset[str]:
 
 
 def execution_config(config: EvaluationRunConfig) -> EvaluationRunConfig:
-    """Default to network-denied Shellbox graders, preserving explicit machine settings."""
+    """Default to network-denied Shellbox graders, preserving explicit machine settings.
+
+    A grader runs the agent's changes, so it runs on the task machines' backend; runs without task machines
+    grade on the local backend.
+    """
     verifier = config.verifier_machine or MachineRuntimeSpec(
-        backend=Backend.LOCAL,
+        backend=config.task_machine.backend if config.task_machine is not None else Backend.LOCAL,
         network=NetworkPolicy.DENY,
         cpus=None,
         memory_mb=None,

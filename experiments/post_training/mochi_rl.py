@@ -24,12 +24,15 @@ from experiments.post_training.rl_presets import (
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
+    UPDATE_SECONDS_METRIC,
     Evaluation,
     Layout,
+    Metric,
     ModelPresets,
     Preset,
     Recipe,
     Training,
+    WindowStatistic,
 )
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -211,21 +214,18 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.25",
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
     tasks_input="optional",
     accepts_settings=True,
     accepts_init=True,
-    publishes=False,
-    control_preset=None,
     checkpoints="none",
     data_settings=frozenset({"shuffle"}),
-    tasks="snowball-100k@2026.11.19.1",
+    tasks="snowball-100k@2026.11.25.1",
     model=_MODEL,
     speculative_decoding_model=_DSPARK,
-    held_out_tasks="eval-lite@2026.11.17.1",
+    held_out_tasks="eval-lite@2026.11.25.1",
     evaluations=(_EVALUATION,),
     seed=20261020,
     sample_namespace="datasets/mochi-rl",
@@ -245,11 +245,34 @@ _TRAIN_MEDIUM = replace(
     name="train-medium",
     evaluations=(),
 )
+
+_UPDATE_SECONDS = Metric(UPDATE_SECONDS_METRIC, False, WindowStatistic.PHASE_SUM_MEDIAN)
+_SPEED_MEDIUM = replace(
+    _TRAIN_MEDIUM.with_updates(10),
+    name="speed-medium",
+    measured=range(2, 11),
+    tasks_input="forbidden",
+    temporary_output=False,
+    guards=(_UPDATE_SECONDS,),
+    objectives=(_UPDATE_SECONDS,),
+)
+_LEARNING_SCORE = Metric(f"{_EVALUATION.name}/family_mean", True)
+_LEARNING_MEDIUM = replace(
+    _TRAIN_LONG.with_updates(10),
+    name="learning-medium",
+    evaluations=(replace(_EVALUATION, every=None, at_start=True),),
+    temporary_output=False,
+    guards=(_LEARNING_SCORE,),
+    objectives=(_LEARNING_SCORE,),
+)
+
 _TRAIN_LONG_AGENTIC = agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS)
 
 MOCHI = ModelPresets(
     model="mochi",
     presets=(
+        _SPEED_MEDIUM,
+        _LEARNING_MEDIUM,
         _TRAIN_MEDIUM,
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
@@ -258,17 +281,19 @@ MOCHI = ModelPresets(
         agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
     ),
     namespace="mochi-rl",
-    control_pins={},
     default_export_marker=MODEL_MANIFEST_FILENAME,
 )
 
 
-if __name__ == "__main__":
-
+def main() -> int:
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
         from experiments.post_training.mochi_sft import MOCHI_SFT_PRESETS  # noqa: PLC0415
 
         return MOCHI_SFT_PRESETS
 
-    raise SystemExit(rl.main(MOCHI, sft_presets=sft_presets))
+    return rl.main(MOCHI, sft_presets=sft_presets)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

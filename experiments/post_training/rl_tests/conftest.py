@@ -11,6 +11,9 @@ source_provenance = pytest.fixture(fixtures.source_provenance)
 recorded_runs = pytest.fixture(fixtures.recorded_runs)
 preset_table = pytest.fixture(fixtures.preset_table)
 
+native_compositions = pytest.fixture(scope="session")(fixtures.native_compositions)
+cache_native_compositions = pytest.fixture(fixtures.cache_native_compositions)
+
 
 @pytest.fixture
 def mochi_sft_presets(monkeypatch):

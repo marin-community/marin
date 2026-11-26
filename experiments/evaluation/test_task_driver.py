@@ -242,6 +242,32 @@ def test_in_process_graded_runs_never_build_the_local_sandbox(
 
 
 @pytest.mark.parametrize(
+    ("task_backend", "grader_backend"),
+    [(None, "local"), ("local", "local"), ("docker", "docker"), ("daytona", "daytona")],
+)
+def test_graders_run_on_the_task_machine_backend(driver_config, task_backend, grader_backend):
+    task_machine = None
+    if task_backend is not None:
+        task_machine = MachineRuntimeSpec(
+            backend=task_backend,
+            network=NetworkPolicy.ALLOW,
+            cpus=None,
+            memory_mb=None,
+            storage_mb=None,
+            gpus=0,
+            user=None,
+            startup_timeout=600,
+            cleanup_timeout=60,
+        )
+
+    verifier = task_worker.execution_config(
+        driver_config.model_copy(update={"task_machine": task_machine})
+    ).verifier_machine
+
+    assert (verifier.backend, verifier.network) == (grader_backend, NetworkPolicy.DENY)
+
+
+@pytest.mark.parametrize(
     "status,error_type", [(400, openai.BadRequestError), (401, openai.AuthenticationError), (404, openai.NotFoundError)]
 )
 def test_permanent_endpoint_errors_propagate_without_retry(
