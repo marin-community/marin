@@ -27,6 +27,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
 
+from experiments.post_training.long_loop.exp3_data import PreparedPools
 from experiments.post_training.long_loop.rl_terminal_evaluation import native_command
 
 CAMPAIGN = Path(__file__).with_name("campaign")
@@ -73,7 +74,7 @@ def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
     return CampaignMix(mix_id, sources, digest, hashlib.sha256(pins_path.read_bytes()).hexdigest())
 
 
-def partition_mix(mix: CampaignMix, rows: dict[str, list[dict]], version: str) -> tuple[RlCurriculum, dict, list]:
+def partition_mix(mix: CampaignMix, rows: dict[str, list[dict]], version: str) -> PreparedPools:
     """Preserve source rows while removing a reproducible, mixture-weighted holdout."""
     identities = {
         label: tuple(
@@ -120,7 +121,7 @@ def partition_mix(mix: CampaignMix, rows: dict[str, list[dict]], version: str) -
         stages=(),
         validation=split.validation,
     )
-    return curriculum, training, validation
+    return PreparedPools(curriculum, training, validation)
 
 
 def write_parquet(destination: StoragePath, name: str, rows: list[dict]) -> str:
@@ -175,7 +176,8 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
                 ]
             )
             rows[label] = pq.read_table(lowered).to_pylist()
-    curriculum, training, validation = partition_mix(mix, rows, pool_version)
+    prepared = partition_mix(mix, rows, pool_version)
+    curriculum, training, validation = prepared.curriculum, prepared.training, prepared.validation
     destination = StoragePath(output)
     files = {
         f"source-{index}/train.parquet": write_parquet(destination, f"source-{index}/train.parquet", records)

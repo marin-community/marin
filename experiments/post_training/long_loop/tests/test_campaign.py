@@ -38,7 +38,8 @@ def test_equal_mix_holdout_preserves_task_bytes_and_pins():
         ]
         for label in pins
     }
-    curriculum, train, held = partition_mix(mix, rows, "2026.11.26.501")
+    prepared = partition_mix(mix, rows, "2026.11.26.501")
+    curriculum, train, held = prepared.curriculum, prepared.training, prepared.validation
     assert len(held) == 200
     assert {label: len(records) for label, records in train.items()} == {"first": 80, "second": 80}
     held_ids = {json.loads(row["task_spec"])["id"] for row in held}
@@ -48,8 +49,8 @@ def test_equal_mix_holdout_preserves_task_bytes_and_pins():
     original = {row["task_spec"]: row for records in rows.values() for row in records}
     for row in [*held, *(row for records in train.values() for row in records)]:
         assert {key: value for key, value in row.items() if key != "teacher_route"} == original[row["task_spec"]]
-    repeated, _, _ = partition_mix(mix, {key: list(reversed(value)) for key, value in rows.items()}, "2026.11.26.501")
-    assert repeated.identity == curriculum.identity
+    repeated = partition_mix(mix, {key: list(reversed(value)) for key, value in rows.items()}, "2026.11.26.501")
+    assert repeated.curriculum.identity == curriculum.identity
     definition = dataclasses.asdict(curriculum)
     definition.pop("fingerprint")
     assert (
@@ -115,7 +116,7 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path):
     rows = {
         label: [{"task_spec": json.dumps({"id": f"{label}-{index}"})} for index in range(60)] for label in mix.sources
     }
-    curriculum, _, _ = partition_mix(mix, rows, spec.version)
+    curriculum = partition_mix(mix, rows, spec.version).curriculum
     definition = dataclasses.asdict(curriculum)
     definition.pop("fingerprint")
     pools = tmp_path / "pools"

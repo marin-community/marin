@@ -10,12 +10,13 @@ import os
 from pathlib import Path
 
 import click
+import draccus
 from fray.types import ResourceConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import OUT, ArtifactStep, StepContext, apply, materialized_config
 from marin.execution.remote import remote
 from marin.rl.cli import rl_build_options
-from marin.rl.skyrl import SkyRLCheckpointStorage, SkyRLPolicyModel, SkyRLRunConfig, run_skyrl
+from marin.rl.skyrl import SkyRLCheckpointStorage, SkyRLPolicyModel, SkyRLRolePlan, SkyRLRunConfig, run_skyrl
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.timing import Duration
@@ -36,6 +37,13 @@ REFERENCE = Path(__file__).with_name("campaign") / "mochi131.yaml"
 REFERENCE_SOURCE = "fe4695fbcd27e365284dccab649a40d6caa9fb2b"
 
 
+@dataclasses.dataclass(frozen=True)
+class CampaignGraph:
+    training: ArtifactStep
+    terminal: ArtifactStep
+    plan: dict
+
+
 def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> AdoptedRlRound:
     """Apply only the campaign's mix, step stop, identities and storage policy to .131."""
     if max_steps != 50:
@@ -45,7 +53,9 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
         raise TypeError(".131 is not an adopted RL round")
     recipe = copy.deepcopy(reference.rl.recipe)
     recipe["trainer"]["callbacks"] = rl_training_callbacks(
-        recipe["trainer"]["callbacks"], groups_per_step=64, stopping=RlStopping.MAX_STEPS
+        recipe["trainer"]["callbacks"],
+        groups_per_step=reference.rl.role_plan["train_batch_size"],
+        stopping=RlStopping.MAX_STEPS,
     )
     recipe["trainer"]["rollout_buffer"]["source_routes"] = {label: pin["route"] for label, pin in mix.sources.items()}
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
@@ -78,7 +88,7 @@ def run_validated(config: SkyRLRunConfig):
     return run_skyrl(config, env_vars={})
 
 
-def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> tuple[ArtifactStep, ArtifactStep, dict]:
+def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
     """Prepare data regionally, then resolve a native config against its real holdout."""
     # The existing .131 bindings validate model/role/optimizer controls without inventing
     # future holdout identities. Only the pool producer may supply the campaign holdout.
@@ -95,7 +105,6 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> tuple[ArtifactStep
                 ram="128GB",
                 disk="500GB",
                 target_cluster="cw-us-east-08a",
-                preemptible=False,
             ),
             timeout=Duration.from_hours(4),
         ),
@@ -170,6 +179,7 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> tuple[ArtifactStep
     )
     evaluation = dataclasses.replace(evaluation, deps=(*evaluation.deps, retained))
     evaluated = preserved_evaluation(evaluation)
+    roles = draccus.decode(SkyRLRolePlan, spec.rl.role_plan)
     plan = {
         "round": dataclasses.asdict(spec),
         "reference_source": REFERENCE_SOURCE,
@@ -179,10 +189,14 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> tuple[ArtifactStep
         "pool_uri": pools.path(spec.storage.output_prefix),
         "data_preflight": "regional pool hashes, holdout and actual-agent gate required before GPU allocation",
         "learning_stop": {"max_steps": 50, "wall_time_budget": None},
-        "gpu_footprint": {"trainer": 48, "rollout": 80, "total": 128},
+        "gpu_footprint": {
+            "trainer": roles.policy_num_nodes * roles.policy_num_gpus_per_node,
+            "rollout": roles.num_inference_engines * roles.engine_gpus,
+            "total": roles.num_nodes * roles.gpus_per_node,
+        },
         "operational_timeout_seconds": spec.rl.execution["job_timeout_seconds"],
     }
-    return training, evaluated, plan
+    return CampaignGraph(training, evaluated, plan)
 
 
 @click.command()
@@ -197,7 +211,8 @@ def main(mix_id: str, max_steps: int, validation_output: Path) -> ArtifactStep:
     version = resolve_version(f"rl-data-campaign/{mix.id}", None)
     spec = campaign_round(mix, version, max_steps=max_steps)
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
-    _, terminal, plan = campaign_graph(mix, spec)
+    graph = campaign_graph(mix, spec)
+    terminal, plan = graph.terminal, graph.plan
     validation_output.mkdir(parents=True, exist_ok=True)
     # This checks the recipe/model/geometry before the candidate's regional data exists.
     # It is explicitly not the candidate's actual-agent/data admission receipt.
