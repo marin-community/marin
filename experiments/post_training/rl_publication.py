@@ -206,7 +206,7 @@ def build_record(
         source_revision=(
             f"base={provenance.get('base_commit')} tree={provenance.get('tree_hash')}" if provenance else "Unknown"
         ),
-        data_identity="; ".join(dict.fromkeys(source.identity for source in data_sources)),
+        data_identity="; ".join(source.identity for source in data_sources),
         initializer_identity=launch.model_identity,
         artifact_uri=run_output,
         evidence=evidence,

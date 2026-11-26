@@ -72,6 +72,7 @@ def test_generation_attempt_publication_identifies_evaluation_data(preset_table,
     "case, expected_updates, expected_time, expected_facts",
     [
         ("native-composed", 2, 3600, []),
+        ("multiple-training-sources", 2, 3600, []),
         ("versioned-missing-evaluation", None, None, ["evaluation_records_available"]),
         ("checkpoint-lineage", 2, 7200, []),
         ("lineage-unknown-grandparent", None, None, []),
@@ -127,6 +128,12 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         inputs=inputs,
     )
     with edit_receipt(source) as receipt:
+        if case == "multiple-training-sources":
+            training_source = receipt["config"]["inputs"]["train_data"][0]
+            receipt["config"]["inputs"]["train_data"] = [
+                {**training_source, "relative_path": "agentic-train.parquet"},
+                {**training_source, "relative_path": "nonagentic-train.parquet"},
+            ]
         if case in ("untracked-native", "versioned-missing-evaluation"):
             receipt["config"]["skyrl"]["trainer"]["logger"] = ["console", "files"]
     metrics = read_skyrl_metrics(str(source))
@@ -203,6 +210,8 @@ def test_native_attempt_records_keep_identity_measurements_and_failures(
         table=table,
         attempt=read_stored_skyrl_attempts(str(source))[1]["native-attempt"],
     ).model_dump(mode="json")
+    launch = recorded_launch(read_stored_skyrl_attempts(str(source))[1]["native-attempt"])
+    assert row["data_identity"] == "; ".join(source.identity for source in launch.train_data)
     assert row["artifact_uri"] == str(source) and row["attempt_id"] == "native-attempt"
     assert row["iris_job_id"] == "/tests/native-run"
     assert row["run_id"] == receipt["config"]["run"]["id"] and row["series"] == name
