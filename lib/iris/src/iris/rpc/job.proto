@@ -751,8 +751,8 @@ enum JobCategory {
 // are omitted, and the category is its lowercase name (JOB_CATEGORY_PRE_TRAINING
 // is "pre-training").
 message JobTags {
-  // Fields 1 (a free-text project) and 2 (a free-text category) were in
-  // unreleased builds.
+  // Fields 1 (a free-text project) and 2 (a free-text category) were sent by
+  // builds of this change that ran on the marin-dev cluster before it merged.
   reserved 1, 2;
   reserved project;
   // Free-form text on what the job does, at most

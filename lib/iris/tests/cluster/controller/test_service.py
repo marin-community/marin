@@ -255,7 +255,7 @@ def test_launch_job_rejects_an_unknown_job_category(service, state):
 
 
 def test_an_earlier_builds_text_project_and_category_are_dropped_and_its_description_kept(service, state):
-    """Clients from unreleased builds sent project (field 1) and category (field 2) as text."""
+    """Builds of this change that ran on marin-dev before it merged sent project and category as text."""
     request = make_job_request("earlier-build")
     # Wire bytes: field 1 "p", field 2 "c", field 3 "made-up description".
     request.tags.ParseFromString(b"\x0a\x01p\x12\x01c\x1a\x13made-up description")
@@ -265,6 +265,23 @@ def test_an_earlier_builds_text_project_and_category_are_dropped_and_its_descrip
         controller_pb2.Controller.GetJobStatusRequest(job_id="/test-user/earlier-build"), None
     )
     assert status.request.tags == job_pb2.JobTags(description="made-up description")
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        job_pb2.JobTags(category=job_pb2.JOB_CATEGORY_EVALUATION),
+        job_pb2.JobTags(description="made-up description"),
+    ],
+    ids=["category-only", "description-only"],
+)
+def test_a_job_with_one_tag_rebuilds_with_only_that_tag_set(service, state, tags):
+    request = make_job_request("one-tag")
+    request.tags.CopyFrom(tags)
+    service.launch_job(request, None)
+
+    status = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id="/test-user/one-tag"), None)
+    assert status.request.tags == tags
 
 
 def test_launch_job_rejects_band_above_the_user_cap(service, state):

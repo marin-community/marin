@@ -152,11 +152,12 @@ def job_tags_dict(tags: job_pb2.JobTags) -> dict[str, str]:
 
 
 def job_tags_from_dict(stored: dict[str, str]) -> job_pb2.JobTags:
-    """Inverse of ``job_tags_dict``."""
-    description = stored.get("description", "")
-    if "category" not in stored:
-        return job_pb2.JobTags(description=description)
-    return job_pb2.JobTags(description=description, category=JOB_CATEGORIES[stored["category"]])
+    """Inverse of ``job_tags_dict``; a tag that is not stored stays unset (``None`` leaves a field unset)."""
+    category = stored.get("category")
+    return job_pb2.JobTags(
+        description=stored.get("description"),
+        category=JOB_CATEGORIES[category] if category is not None else None,
+    )
 
 
 def is_federated(cluster: str) -> bool:
