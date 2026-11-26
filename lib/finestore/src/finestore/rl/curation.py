@@ -201,6 +201,7 @@ class SourceOrigin(StrEnum):
     OPENGCUA = "OpenGCUA"
     PAFITIS = "pafitis"
     SWE_REBENCH = "SWE-rebench"
+    YATIN = "Yatin"
 
 
 class DatasetRelease(CatalogRecord):
