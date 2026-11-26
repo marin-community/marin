@@ -393,10 +393,10 @@ def post_seal_waiver(*source_ids: str) -> ProjectionWaivers:
 
 
 def test_post_seal_waiver_covers_named_sources_sealed_refresh_projections():
-    """Ruling 68 + interim coordinator waiver 2026-11-25 19:40 EST (pending user
-    ratification; expires with ruling 68's named-source expiry): a source declared after
-    the sealed refresh lands with a waiver naming its exact ID, covering its
-    sealed-refresh projection findings — the served-catalog, curriculum and
+    """Ruling 68 + ruling 68 extension ratified by the user 2026-11-25 ~20:00 EST
+    (previously admitted sources are re-admitted unless their code is broken): a source
+    declared after the sealed refresh lands with a waiver naming its exact ID, covering
+    its sealed-refresh projection findings — the served-catalog, curriculum and
     derived-contract projections are the same pending state (they all catch up in the one
     projection pass the expiry forces). Other sources stay blocking."""
     source = declaration()
@@ -438,9 +438,9 @@ def test_post_seal_waiver_rejects_unnamed_sources():
 
 
 def test_post_seal_waiver_rejects_other_finding_classes():
-    """Ruling 68 + interim coordinator waiver 2026-11-25 19:40 EST (pending user
-    ratification; expires with ruling 68's named-source expiry): the named sources'
-    sealed-refresh projections ride the waiver, but other finding classes stay
+    """Ruling 68 + ruling 68 extension ratified by the user 2026-11-25 ~20:00 EST
+    (previously admitted sources are re-admitted unless their code is broken): the named
+    sources' sealed-refresh projections ride the waiver, but other finding classes stay
     blocking — a served-catalog gap for a source the waiver does NOT name stays
     blocking."""
     source = declaration()
