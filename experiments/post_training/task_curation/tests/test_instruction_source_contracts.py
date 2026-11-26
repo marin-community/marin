@@ -53,6 +53,9 @@ def test_inverse_keeps_per_check_polarity_and_private_native_rubric():
     files = {file.path: resource_bytes(file) for file in task.resources.verifier}
     config = json.loads(files["config.json"])
     assert config["checks"] == native["llm_judge"] and config["aggregation"] == "all"
+    assert (
+        config["native_judge_template"] == json.loads((FIXTURES / "native-judge-template.json").read_text())["template"]
+    )
     assert json.loads(files["source-row.json"]) == native
     assert not task.resources.worker and not task.resources.oracle
     changed = {**native, "instructions": [{"uid": 999, "content": "undeclared deterministic validator"}]}

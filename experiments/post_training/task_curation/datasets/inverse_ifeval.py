@@ -45,7 +45,6 @@ MODEL RESPONSE TO EVALUATE:
 
 Does the model's response satisfy the criterion described in the evaluation question?
 Analyze carefully, then respond with exactly [[YES]] or [[NO]] on the last line.
-
 """
 
 
