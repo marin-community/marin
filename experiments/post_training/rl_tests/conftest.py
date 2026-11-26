@@ -19,7 +19,7 @@ def native_composer():
 @pytest.fixture(autouse=True)
 def reuse_native_composer(native_composer, monkeypatch):
     """Run native compositions in one SkyRL process instead of one per call."""
-    monkeypatch.setattr(rl_gate, "_native_json", native_composer.native_json)
+    monkeypatch.setattr(rl_gate, "_run_native", native_composer.run_native)
 
 
 selection = pytest.fixture(fixtures.selection)

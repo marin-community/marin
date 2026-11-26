@@ -3,10 +3,12 @@
 
 """Run the RL gate's native SkyRL programs in one long-lived process during tests.
 
-``rl_gate._native_json`` starts a fresh SkyRL CPU process for every composition, and
+``rl_gate._run_native`` starts a fresh SkyRL CPU process for every composition, and
 about half of each call is interpreter start-up and imports. The tests compose about a
 hundred distinct launch documents, so they pay that start-up every time. This worker
-runs the same program text in one SkyRL process and reports the same JSON and errors.
+runs the same program text in one SkyRL process and returns the same stdout, or raises
+the same subprocess errors, so ``rl_gate._native_json`` maps results exactly as in
+production.
 """
 
 import json
@@ -35,37 +37,21 @@ for line in sys.stdin:
 
 
 class NativeComposer:
-    """Serve ``rl_gate._native_json`` calls from one SkyRL process.
+    """Serve ``rl_gate._run_native`` calls from one SkyRL process.
 
     Calls that pass uv options, or that run while a test has replaced ``subprocess.run``
     to simulate a failing composer, keep the original subprocess path.
     """
 
     def __init__(self):
-        self._native_json = gate._native_json
+        self._run_native = gate._run_native
         self._subprocess_run = subprocess.run
         self._process: subprocess.Popen[str] | None = None
 
-    def native_json(self, *command: str, timeout: int = 120):
+    def run_native(self, *command: str, timeout: float) -> str:
         if command[:2] != ("python", "-c") or subprocess.run is not self._subprocess_run:
-            return self._native_json(*command, timeout=timeout)
+            return self._run_native(*command, timeout=timeout)
         program, *args = command[2:]
-        try:
-            reply = self._request(program, args, timeout)
-            if "stderr" in reply:
-                raise subprocess.CalledProcessError(1, command, reply["stdout"], reply["stderr"])
-            return json.loads(reply["stdout"].splitlines()[-1])
-        except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
-            # Match rl_gate._native_json's diagnostics for each failure.
-            if isinstance(error, subprocess.TimeoutExpired):
-                cause = f"timed out after {error.timeout:g} s"
-            elif isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
-                cause = error.stderr.strip().splitlines()[-1]
-            else:
-                cause = str(error)
-            raise gate.InvalidComparison(f"native configuration cannot be composed: {cause}") from error
-
-    def _request(self, program: str, args: list[str], timeout: int) -> dict:
         process = self._worker()
         assert process.stdin is not None and process.stdout is not None
         process.stdin.write(json.dumps({"program": program, "args": args}) + "\n")
@@ -73,12 +59,15 @@ class NativeComposer:
         ready, _, _ = select.select([process.stdout], [], [], timeout)
         if not ready:
             self.close()
-            raise subprocess.TimeoutExpired(["python", "-c", program], timeout)
+            raise subprocess.TimeoutExpired(command, timeout)
         line = process.stdout.readline()
         if not line:
             self.close()
-            raise subprocess.CalledProcessError(1, ["python", "-c", program], "", "native composer worker exited")
-        return json.loads(line)
+            raise subprocess.CalledProcessError(1, command, "", "native composer worker exited")
+        reply = json.loads(line)
+        if "stderr" in reply:
+            raise subprocess.CalledProcessError(1, command, reply["stdout"], reply["stderr"])
+        return reply["stdout"]
 
     def _worker(self) -> subprocess.Popen[str]:
         if self._process is None or self._process.poll() is not None:

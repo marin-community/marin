@@ -658,16 +658,21 @@ def _compose_plans(
         return compose_configs(paths)
 
 
+def _run_native(*command: str, timeout: float) -> str:
+    """Run ``command`` in SkyRL's CPU environment and return its stdout."""
+    result = subprocess.run(
+        skyrl_cpu_command(*command),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    result.check_returncode()
+    return result.stdout
+
+
 def _native_json(*command: str, timeout: int = 120):
     try:
-        result = subprocess.run(
-            skyrl_cpu_command(*command),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        result.check_returncode()
-        return json.loads(result.stdout.splitlines()[-1])
+        return json.loads(_run_native(*command, timeout=timeout).splitlines()[-1])
     except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
         cause = f"timed out after {error.timeout:g} s" if isinstance(error, subprocess.TimeoutExpired) else str(error)
         if isinstance(error, subprocess.CalledProcessError) and error.stderr and error.stderr.strip():
