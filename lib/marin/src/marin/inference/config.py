@@ -8,6 +8,7 @@ Accelerator-heavy serving implementations translate them inside worker jobs.
 """
 
 import json
+import re
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -19,6 +20,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
 from marin.external_dependencies import VllmGpuRelease
+from marin.inference.vllm_release_schema import CUDA_TOOLCHAIN_VERSION_BY_BACKEND
 
 # Worker and isolated vLLM environments use one Python version so cloudpickle
 # and the launched callable stay compatible.
@@ -220,6 +222,43 @@ class VllmLauncherType(StrEnum):
     TPU = "tpu"
 
 
+UPSTREAM_VLLM_WHEEL_INDEX_BASE = "https://wheels.vllm.ai"
+_GIT_COMMIT = re.compile(r"[0-9a-f]{40}")
+
+
+@dataclass(frozen=True)
+class UpstreamVllmNightly:
+    """An upstream vLLM main commit whose per-commit wheel index supplies the pinned ``vllm_version``.
+
+    ``torch_backend`` is the CUDA build the commit's wheels were compiled against, for example
+    ``cu132``; it selects the matching PyTorch index. ``cuda_toolchain_version`` pins the CUDA
+    compiler packages to the toolkit that PyTorch build requires, for example ``13.2.78``.
+    """
+
+    commit: str
+    torch_backend: str
+    cuda_toolchain_version: str
+
+    def __post_init__(self) -> None:
+        if not _GIT_COMMIT.fullmatch(self.commit):
+            raise ValueError(f"vLLM nightly commit must be a full 40-character lowercase SHA, got {self.commit!r}")
+        if self.torch_backend not in CUDA_TOOLCHAIN_VERSION_BY_BACKEND:
+            raise ValueError(
+                f"vLLM nightly torch_backend must be one of {sorted(CUDA_TOOLCHAIN_VERSION_BY_BACKEND)}, "
+                f"got {self.torch_backend!r}"
+            )
+        cuda_minor = CUDA_TOOLCHAIN_VERSION_BY_BACKEND[self.torch_backend].rsplit(".", 1)[0]
+        if not self.cuda_toolchain_version.startswith(f"{cuda_minor}."):
+            raise ValueError(
+                f"vLLM nightly cuda_toolchain_version {self.cuda_toolchain_version!r} does not match "
+                f"{self.torch_backend} (CUDA {cuda_minor})"
+            )
+
+    @property
+    def index_url(self) -> str:
+        return f"{UPSTREAM_VLLM_WHEEL_INDEX_BASE}/{self.commit}/"
+
+
 class VllmSource(StrEnum):
     UPSTREAM = "upstream"
     MARIN_FORK = "marin_fork"
@@ -361,6 +400,7 @@ class VllmEngineConfig:
     launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
+    nightly: UpstreamVllmNightly | None = None
     release: VllmGpuRelease | None = None
     extra_requirements: tuple[str, ...] = ()
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED
@@ -383,6 +423,8 @@ class VllmEngineConfig:
             raise ValueError("the Marin vLLM fork source requires the CUDA launcher")
         if self.release is not None and self.source is not VllmSource.MARIN_FORK:
             raise ValueError("a vLLM release pin requires the Marin CUDA fork")
+        if self.nightly is not None and (self.source is not VllmSource.UPSTREAM or self.version is None):
+            raise ValueError("a vLLM nightly pin requires upstream vLLM and an exact version")
         if self.router is not None and self.launcher is VllmLauncherType.TPU:
             raise ValueError("session routing is supported by CUDA vLLM")
         extra_metric_families = _normalize_vllm_metric_families(

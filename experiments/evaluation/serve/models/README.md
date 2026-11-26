@@ -50,7 +50,8 @@ serve:                          # ServeConfig -> model-server behavior
   vllm_use_flashinfer_sampler: null # VLLM_USE_FLASHINFER_SAMPLER; false uses the built-in sampler
   vllm_use_nccl_symm_mem: null  # VLLM_USE_NCCL_SYMM_MEM; all-reduce, all-gather and reduce-scatter
   vllm_source: null             # GPU default is marin_fork; upstream requires vllm_version
-  vllm_version: null            # exact upstream PyPI version, e.g. "0.29.0"
+  vllm_version: null            # exact upstream version, e.g. "0.29.0"
+  vllm_nightly: null            # {commit, torch_backend, cuda_toolchain_version} for an unreleased vllm_version
   vllm_plugin_requirements: []  # pinned packages installed with GPU vLLM in its isolated environment
   vllm_extra_args: ["--enable-prefix-caching"]   # escape hatch for flags without a typed field
   chat_template: null           # jinja served in place of the tokenizer's own
@@ -76,6 +77,15 @@ For a GPU model whose architecture is supplied by a vLLM plugin, set `vllm_sourc
 an exact `vllm_version`, and a plugin requirement pinned to a release or commit. These fields are
 part of the model catalog and the recorded effective serving configuration. The plugin is installed
 in the same isolated environment as vLLM; TPU serving does not accept these GPU-specific settings.
+
+A GPU model that needs upstream support not yet in a vLLM release can pin a nightly build. Set
+`vllm_source: upstream`, `vllm_nightly.commit` to the full upstream `main` commit,
+`vllm_nightly.torch_backend` to the CUDA build its wheels target (for example `cu132`),
+`vllm_nightly.cuda_toolchain_version` to the CUDA toolkit that PyTorch build pins (for example
+`13.2.78` for `torch==2.14.0+cu132`), and
+`vllm_version` to the exact version that commit's index at `https://wheels.vllm.ai/<commit>/vllm/`
+publishes, for example `0.34.1rc1.dev13+g12eb1d4ee`. Not every `main` commit has published wheels;
+pick one whose index exists. Replace the pin with a release once one includes the support.
 
 ## vLLM eager execution
 

@@ -49,6 +49,7 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     return IsolatedCudaVllm(
         source=source,
         version=version,
+        nightly=config.nightly,
         extra_requirements=config.extra_requirements,
         release=config.release or VLLM_GPU_RELEASE,
     )

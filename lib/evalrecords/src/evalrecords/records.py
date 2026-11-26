@@ -171,6 +171,16 @@ class SpeculativeServingRef(BaseModel):
     num_speculative_tokens: int
 
 
+class VllmNightlyRef(BaseModel):
+    """Upstream vLLM nightly commit build a model was served with."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    commit: str
+    torch_backend: str
+    cuda_toolchain_version: str
+
+
 class ModelServeConfig(BaseModel):
     """Normalized model-server configuration preserved in an evaluation record."""
 
@@ -198,6 +208,7 @@ class ModelServeConfig(BaseModel):
     hf_hub_disable_xet: bool = False
     vllm_source: str | None = None
     vllm_version: str | None = None
+    vllm_nightly: VllmNightlyRef | None = Field(default=None, exclude_if=lambda value: value is None)
     vllm_plugin_requirements: tuple[str, ...] = ()
     object_store_load_mode: str = "stream"
     vllm_extra_args: tuple[str, ...]

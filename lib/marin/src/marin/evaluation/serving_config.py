@@ -215,6 +215,7 @@ def _vllm_engine_config(
         launcher=launcher,
         source=source,
         version=serve.vllm_version,
+        nightly=serve.vllm_nightly,
         extra_requirements=serve.vllm_plugin_requirements,
         startup_timeout_seconds=ENDPOINT_READY_TIMEOUT_SECONDS,
         max_num_batched_tokens=(
