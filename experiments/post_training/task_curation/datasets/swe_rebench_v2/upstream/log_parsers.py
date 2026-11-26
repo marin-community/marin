@@ -3,14 +3,18 @@
 
 # Log parsers and test-name matching shared by the standalone Harbor graders.
 # task_files.grader_source() copies the definitions that a parser needs into tests/grade.py.
+# Keep typing aliases compatible with the generated grader's Python 3.8 minimum.
+# ruff: noqa: UP006, UP035
 from __future__ import annotations
 
 import contextlib
 import fnmatch
+import json
 import re
 import xml.etree.ElementTree as ET
 from bisect import bisect_left
 from enum import Enum
+from typing import Any, Callable, Dict, Iterator, Set
 
 
 class TestStatus(str, Enum):
@@ -21,6 +25,12 @@ class TestStatus(str, Enum):
 
     def __str__(self):
         return self.value
+
+
+# One parsed log: test name -> final status. The parser functions annotate with this alias.
+ParsedTestLog = Dict[str, TestStatus]
+TestParser = Callable[[str], ParsedTestLog]
+TestResults = Dict[str, Set[str]]
 
 
 def ansi_escape(text: str) -> str:

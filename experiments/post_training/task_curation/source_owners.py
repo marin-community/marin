@@ -39,19 +39,23 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
     ),
     "Anthropic:hh_rlhf/harmless-base": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="decided 2026-11-26 — not a valid RL source as declared: grader-missing (NoGrader preference pairs; MIT license PASS)",
+        note="decided 2026-11-26 — not a valid RL source as declared: grader-missing"
+        " (NoGrader preference pairs; MIT license PASS)",
     ),
     "Anthropic:hh_rlhf/helpful-base": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="decided 2026-11-26 — not a valid RL source as declared: grader-missing (NoGrader preference pairs; MIT license PASS)",
+        note="decided 2026-11-26 — not a valid RL source as declared: grader-missing"
+        " (NoGrader preference pairs; MIT license PASS)",
     ),
     "Anthropic:hh_rlhf/helpful-online": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="decided 2026-11-26 — not a valid RL source as declared: grader-missing (NoGrader preference pairs; MIT license PASS)",
+        note="decided 2026-11-26 — not a valid RL source as declared: grader-missing"
+        " (NoGrader preference pairs; MIT license PASS)",
     ),
     "Anthropic:hh_rlhf/helpful-rejection-sampled": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="decided 2026-11-26 — not a valid RL source as declared: grader-missing (NoGrader preference pairs; MIT license PASS)",
+        note="decided 2026-11-26 — not a valid RL source as declared: grader-missing"
+        " (NoGrader preference pairs; MIT license PASS)",
     ),
     "CyBench:andyzorigin-cybench": SourceOwner(
         owner="by design — ban registry / rulings; nothing to burn down",
