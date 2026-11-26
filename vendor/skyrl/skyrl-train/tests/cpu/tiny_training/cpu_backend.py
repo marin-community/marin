@@ -156,9 +156,7 @@ class CPUPolicyWorker(PolicyWorkerBase):
         return torch.device("cpu")
 
     def init_worker_process_group(self, master_addr: str, master_port: int):
-        os.environ["MASTER_ADDR"] = master_addr
-        os.environ["MASTER_PORT"] = str(master_port)
-        dist.init_process_group("gloo", rank=self._rank, world_size=self._world_size)
+        self._init_default_process_group(master_addr, master_port, backend="gloo")
         self.mesh_rank = MeshRank(
             dp=self._rank,
             sp=0,

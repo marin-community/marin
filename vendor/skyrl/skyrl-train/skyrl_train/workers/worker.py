@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import logging
 import os
-import socket
+from datetime import timedelta
 from typing import Dict, Optional, Type, List, Any, Callable
 from skyrl_train.utils.progress import configure_progress, tqdm
 from marinskyrl.runtime_options import R3Transport
@@ -131,7 +131,7 @@ class DistributedTorchRayActor:
         self._rank = rank
         self._local_rank = local_rank
         self._master_addr = self._get_current_node_ip() if rank == 0 else None
-        self._master_port = self._get_free_port() if rank == 0 else None
+        self._master_store: torch.distributed.TCPStore | None = None
         os.environ["WORLD_SIZE"] = str(self._world_size)
         os.environ["RANK"] = str(self._rank)
         # Device pinning. `LOCAL_RANK` is consumed by every strategy's
@@ -206,15 +206,19 @@ class DistributedTorchRayActor:
     def get_node_local_rank(self):
         return self._local_rank
 
-    def init_worker_process_group(self, master_addr: str, master_port: int):
-        # Device-pinned NCCL PG init via the shared helper — pins set_device(LOCAL_RANK) and
-        # passes device_id so ProcessGroupNCCL never guesses the device (fixes the cw-rno2a
-        # unmasked-CVD collective deadlock; see init_worker_process_group_with_device).
+    def _init_default_process_group(self, master_addr: str, master_port: int, *, backend: str = "nccl") -> None:
         init_worker_process_group_with_device(
             master_addr=master_addr,
             master_port=master_port,
             timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
+            rank=self._rank,
+            world_size=self._world_size,
+            master_store=self._master_store,
+            backend=backend,
         )
+
+    def init_worker_process_group(self, master_addr: str, master_port: int):
+        self._init_default_process_group(master_addr, master_port)
 
         # setup device mesh
         # Tensor and pipeline parallelism are configured by the Megatron worker.
@@ -270,14 +274,19 @@ class DistributedTorchRayActor:
     def get_ray_node_id(self):
         return ray.get_runtime_context().get_node_id()
 
-    @staticmethod
-    def _get_free_port():
-        with socket.socket() as sock:
-            sock.bind(("", 0))
-            return sock.getsockname()[1]
-
-    def get_master_addr_port(self):
-        return self._master_addr, self._master_port
+    def get_master_addr_port(self) -> tuple[str, int]:
+        if self._master_addr is None:
+            raise RuntimeError("Only worker rank zero hosts the rendezvous store")
+        if self._master_store is None:
+            # Keep the kernel-selected port bound from publication through group teardown.
+            self._master_store = torch.distributed.TCPStore(
+                self._master_addr,
+                0,
+                is_master=True,
+                timeout=timedelta(seconds=self.cfg.trainer.distributed.worker_collective_timeout_seconds),
+                wait_for_workers=False,
+            )
+        return self._master_addr, self._master_store.port
 
 
 def log_r3_resident_set(rank: int, data: TrainingInputBatch) -> None:

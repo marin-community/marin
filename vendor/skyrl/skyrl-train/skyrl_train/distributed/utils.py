@@ -18,6 +18,7 @@ from typing import Any, Optional, Union, Tuple
 
 import torch
 import torch.distributed
+from torch.distributed import TCPStore
 from torch.distributed.distributed_c10d import (
     Backend,
     PrefixStore,
@@ -38,15 +39,20 @@ ModelOrModelOptimPair = Union[nn.Module, ModelOptimPair]
 
 
 def init_worker_process_group_with_device(
-    master_addr: str, master_port: int, timeout_seconds: int, backend: str = "nccl"
+    master_addr: str,
+    master_port: int,
+    timeout_seconds: int,
+    *,
+    rank: int,
+    world_size: int,
+    master_store: TCPStore | None,
+    backend: str = "nccl",
 ) -> None:
-    """Pin this actor's CUDA device to its resolved ``LOCAL_RANK`` and create the default
-    torch.distributed process group with an explicit ``device_id`` — so ProcessGroupNCCL never
-    falls back to *"Guessing device ID based on global rank"*.
+    """Initialize the default process group with the prebound rendezvous store.
 
-    Single source of truth shared by every backend's ``init_worker_process_group`` (the base
-    Megatron policy/ref workers), so the device-pinned init is
-    not duplicated (and cannot drift) across backends.
+    For NCCL, pin the CUDA device to the resolved ``LOCAL_RANK`` and pass an explicit
+    ``device_id`` so ProcessGroupNCCL never
+    falls back to *"Guessing device ID based on global rank"*.
 
     ``LOCAL_RANK`` is resolved upstream by ``resolve_pinned_local_rank`` (workers/worker.py) for
     all three CUDA_VISIBLE_DEVICES regimes, so it is the correct ``set_device`` index in each.
@@ -66,30 +72,37 @@ def init_worker_process_group_with_device(
 
     Exports the given address and port as MASTER_ADDR and MASTER_PORT.
 
-    Idempotent: always pins the device; only creates the process group if not already initialized.
+    Rank zero uses the store it opened before publishing its port. Other ranks connect to
+    that store. For NCCL this always pins the CUDA device, even if the group already exists.
     """
     os.environ["MASTER_ADDR"] = master_addr
     os.environ["MASTER_PORT"] = str(master_port)
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    torch.cuda.set_device(local_rank)
-    # Surface the resolved rank/device + the observed CVD masking (visible_device_count)
-    # so the pinning can be validated per cluster from the logs.
-    logger.info(
-        "[pg-init] RANK={} LOCAL_RANK={} CUDA_VISIBLE_DEVICES={} visible_device_count={} -> set_device(cuda:{})",
-        os.environ.get("RANK", "?"),
-        local_rank,
-        os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"),
-        torch.cuda.device_count(),
-        local_rank,
-    )
-    if not torch.distributed.is_initialized():
-        # Default torch dist pg init timeout is 10 minutes (600 s); callers pass
-        # SKYRL_WORKER_NCCL_TIMEOUT_IN_S.
-        torch.distributed.init_process_group(
-            backend=backend,
-            timeout=timedelta(seconds=timeout_seconds),
-            device_id=torch.device("cuda", local_rank),
+    device_id = None
+    if backend == "nccl":
+        torch.cuda.set_device(local_rank)
+        device_id = torch.device("cuda", local_rank)
+        logger.info(
+            "[pg-init] RANK={} LOCAL_RANK={} CUDA_VISIBLE_DEVICES={} visible_device_count={} -> set_device(cuda:{})",
+            rank,
+            local_rank,
+            os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>"),
+            torch.cuda.device_count(),
+            local_rank,
         )
+    if torch.distributed.is_initialized():
+        return
+
+    timeout = timedelta(seconds=timeout_seconds)
+    if rank == 0:
+        if master_store is None or master_store.port != master_port:
+            raise RuntimeError("Worker rank zero must own the published rendezvous store")
+        store = master_store
+    else:
+        store = TCPStore(master_addr, master_port, is_master=False, timeout=timeout, wait_for_workers=False)
+    torch.distributed.init_process_group(
+        backend=backend, store=store, rank=rank, world_size=world_size, timeout=timeout, device_id=device_id
+    )
 
 
 # Copy from pytorch to allow creating multiple main groups.

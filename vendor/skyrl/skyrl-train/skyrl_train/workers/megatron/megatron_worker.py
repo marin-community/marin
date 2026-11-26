@@ -41,7 +41,6 @@ from skyrl_train.distributed.megatron.optimizer import (
     get_megatron_optimizer_param_scheduler,
 )
 from skyrl_train.distributed.megatron.remote_model import install_remote_hf_state, make_prefetch_hook
-from skyrl_train.distributed.utils import init_worker_process_group_with_device
 from skyrl_train.mismatch_probe.modes import TRAINER_MODES
 from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_training_strategy
 from skyrl_train.timing_observability import PhaseBreakdown
@@ -463,15 +462,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
-        # Device-pinned NCCL PG init via the shared helper — pins set_device(LOCAL_RANK) and
-        # passes device_id so ProcessGroupNCCL never "guesses device ID based on global rank".
-        # The guess deadlocks the first collective (weight-init barrier) on unmasked-CVD clusters
-        # where every actor sees all GPUs (cw-rno2a); see init_worker_process_group_with_device.
-        init_worker_process_group_with_device(
-            master_addr=master_addr,
-            master_port=master_port,
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
-        )
+        self._init_default_process_group(master_addr, master_port)
 
         # Explicitly wrap torch.distributed.broadcast in torch.no_grad() to avoid a warning in Megatron training where the
         # autograd engine tries to track gradients through the default Torch kernel. This fixes a deprecated behaviour in
@@ -1098,13 +1089,7 @@ class MegatronRefWorkerBase(MegatronWorker, RefWorkerBase):
         """
         Override DistributedTorchRayActor.init_worker_process_group to use megatron distributed setup to create the mesh.
         """
-        # Device-pinned NCCL PG init via the shared helper (see init_worker_process_group_with_device) —
-        # avoids the ProcessGroupNCCL device-guess collective deadlock on unmasked-CVD clusters (cw-rno2a).
-        init_worker_process_group_with_device(
-            master_addr=master_addr,
-            master_port=master_port,
-            timeout_seconds=int(self.cfg.trainer.distributed.worker_collective_timeout_seconds),
-        )
+        self._init_default_process_group(master_addr, master_port)
 
         self.strategy = MegatronStrategy(
             megatron_config=self.cfg.trainer.ref.megatron_config,
