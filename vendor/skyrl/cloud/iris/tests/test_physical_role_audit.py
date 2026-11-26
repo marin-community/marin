@@ -71,7 +71,7 @@ def test_healthy_single_node_writes_a_verified_report(audit):
     topology = RoleTopology(("policy",), LocalityPlan((1,), (0,)))
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 1
-    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}:1"
+    assert report["nodes"][0]["fabric"] == f"{CLUSTER_UUID}.1"
 
 
 def test_healthy_multi_node_groups_may_share_a_fabric(audit):
@@ -79,19 +79,24 @@ def test_healthy_multi_node_groups_may_share_a_fabric(audit):
     report = audit(topology, role_nodes(topology))
     assert len(report["nodes"]) == 3
     assert len({row["host"] for row in report["nodes"]}) == 3
-    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}:1"}
+    assert {row["fabric"] for row in report["nodes"]} == {f"{CLUSTER_UUID}.1"}
 
 
-@pytest.mark.parametrize(
-    "label,value", [(FABRIC_LABEL, f"{CLUSTER_UUID}:2"), (HOST_LABEL, "host-0")], ids=["split-group", "duplicate-host"]
-)
-def test_invalid_physical_placement_is_rejected(audit, tmp_path, label, value):
+def test_a_split_group_fabric_is_rejected(audit, tmp_path):
     topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
     nodes = role_nodes(topology)
-    nodes[1]["Labels"][label] = value
+    nodes[1]["Labels"][FABRIC_LABEL] = f"{CLUSTER_UUID}.2"
     with pytest.raises(ValueError):
         audit(topology, nodes)
     assert not (tmp_path / "role-topology.json").exists()
+
+
+def test_duplicate_hosts_do_not_fail_the_fabric_audit(audit, tmp_path):
+    topology = RoleTopology(("policy",), LocalityPlan((2,), (0,)))
+    nodes = role_nodes(topology)
+    nodes[1]["Labels"][HOST_LABEL] = nodes[0]["Labels"][HOST_LABEL]
+    report = audit(topology, nodes)
+    assert [row["host"] for row in report["nodes"]] == ["host-0", "host-0"]
 
 
 @pytest.mark.parametrize(

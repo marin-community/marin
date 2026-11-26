@@ -21,7 +21,6 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
-from skyrl_train.entrypoints.workload_progress import report_workload_progress
 from transformers import AutoTokenizer
 from skyrl_train.config.utils import model_expert_count
 from collections import defaultdict, deque
@@ -588,7 +587,7 @@ class RayPPOTrainer:
             await self._drain_checkpoint_upload()
         finally:
             try:
-                await self.context.close()
+                await self._guarded_async(self.context.close(), timeout=30, label="Rollout context shutdown")
             finally:
                 await self._teardown()
                 self._shutdown_complete = True
@@ -1332,7 +1331,6 @@ class RayPPOTrainer:
                     "on_log", step_state, self._control, logs=log_payload, trainer=self
                 )
             self._log_training_step_completed(epoch=epoch, duration_seconds=step_timer.duration)
-            report_workload_progress()
 
             self._step_time_history.append(step_timer.duration)
             self.all_metrics = {}

@@ -7,19 +7,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from collections.abc import Mapping
 
+from finestore.rl.run_records import AttemptRecord, write_attempt
 from skyrl_gym.task_factories import EpisodeFactory
 
 from ray.util.placement_group import placement_group, PlacementGroup
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from ray.remote_function import RemoteFunction
-from ray.util.queue import Queue
 
 from omegaconf import OmegaConf, DictConfig
 from pathlib import Path
 import ray
 
 import os
-import json
 import signal
 import time
 from loguru import logger
@@ -33,14 +32,6 @@ from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
 )
-from skyrl_train.entrypoints.workload_progress import (
-    DriverProgress,
-    poll_workload,
-    report_to_driver,
-    report_workload_progress,
-    workload_progress_queue,
-)
-from marinskyrl.driver_status import DRIVER_TIMING_FILENAME, ELAPSED_EXCLUDING_EVAL, driver_progress_path
 from marinskyrl.speculative_decoding import (
     STANDARD_TRAINING_ENTRYPOINT,
     parse_speculative_decoding_config,
@@ -96,10 +87,12 @@ class EntrypointSupervisor:
         if self._termination_signal is None:
             self._termination_signal = signum
 
-    def wait(self, entrypoint_ref: ray.ObjectRef, progress: DriverProgress | None) -> int | None:
-        """Relay progress until completion or return the exit code after termination."""
+    def wait(self, entrypoint_ref: ray.ObjectRef) -> int | None:
+        """Wait for the task, returning ``None`` normally or ``128 + signal`` after termination."""
         while self._termination_signal is None:
-            if poll_workload(entrypoint_ref, progress):
+            ready, _ = ray.wait([entrypoint_ref], timeout=1)
+            if ready:
+                ray.get(entrypoint_ref)
                 return None
 
         signum = self._termination_signal
@@ -400,10 +393,9 @@ class BasePPOExp:
                 max_completion_length=self.cfg.generator.sampling_params.max_generate_length,
             )
         prompts_dataset = self.task_dataset(self.cfg.data.train_data)
-        # make sure the dataset is large enough to train on
-        assert len(prompts_dataset) >= self.cfg.trainer.train_batch_size, (
-            f"dataset should be atleast as large as `train_batch_size` {self.cfg.trainer.train_batch_size}, got size {len(prompts_dataset)}"
-        )
+        batch_size = self.cfg.trainer.train_batch_size
+        if len(prompts_dataset) < batch_size:
+            raise ValueError(f"Training has {len(prompts_dataset)} prompts but needs {batch_size} for one batch")
         return prompts_dataset
 
     def task_dataset(self, data_files):
@@ -614,7 +606,7 @@ class BasePPOExp:
 
     def _setup_trainer(self, tracker):
         """Construct the trainer and models with the experiment's active tracker."""
-        logger.opt(lazy=True).debug("{}", lambda: self.get_cfg_as_str(self.cfg))
+        logger.info(self.get_cfg_as_str(self.cfg))
         os.makedirs(self.cfg.trainer.export_path, exist_ok=True)
         os.makedirs(self.cfg.trainer.ckpt_path, exist_ok=True)
 
@@ -686,41 +678,44 @@ class BasePPOExp:
         asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
         started = time.monotonic()
-        with self.get_tracker() as tracker:
-            trainer = None
-            try:
-                trainer = self._setup_trainer(tracker)
-                report_workload_progress()
-                asyncio.run(trainer.train())
-            finally:
-                # Release GPU actors before a Ray retry can start another attempt.
-                if trainer is not None:
-                    try:
-                        asyncio.run(trainer.shutdown())
-                    except Exception as e:
-                        logger.warning(f"Error shutting down trainer: {e}")
-
-        elapsed_excluding_eval = time.monotonic() - started - trainer.evaluation_wall_time
-        logger.info(
-            "Training run completed: elapsed_excluding_eval_seconds={:.3f}",
-            elapsed_excluding_eval,
-        )
-        return elapsed_excluding_eval
+        trainer = None
+        try:
+            with self.get_tracker() as tracker:
+                try:
+                    trainer = self._setup_trainer(tracker)
+                    asyncio.run(trainer.train())
+                finally:
+                    if trainer is not None:
+                        try:
+                            asyncio.run(trainer.shutdown())
+                        except Exception as error:
+                            logger.warning("Error shutting down trainer: {}", error)
+        finally:
+            if trainer is not None:
+                elapsed = time.monotonic() - started - trainer.evaluation_wall_time
+                logger.info("Trainer time excluding evaluation: {:.3f} seconds", elapsed)
+                runtime = self.cfg.get("runtime") or {}
+                try:
+                    write_attempt(
+                        str(self.cfg.trainer.export_path),
+                        AttemptRecord(
+                            run_id=runtime["run_id"],
+                            attempt_id=runtime["attempt_id"],
+                            elapsed_excluding_eval_seconds=elapsed,
+                        ),
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "Could not store trainer time for attempt {} ({})",
+                        runtime.get("attempt_id", "unknown"),
+                        type(error).__name__,
+                    )
 
 
 @ray.remote(num_cpus=1, max_retries=0)
-def skyrl_entrypoint(cfg: DictConfig, progress: Queue | None):
-    with report_to_driver(progress):
-        return BasePPOExp(cfg).run()
-
-
-def save_trainer_timing(progress_path: Path | None, elapsed: float) -> None:
-    if progress_path is None:
-        return
-    try:
-        progress_path.with_name(DRIVER_TIMING_FILENAME).write_text(json.dumps({ELAPSED_EXCLUDING_EVAL: elapsed}))
-    except OSError:
-        logger.exception("Could not save trainer completion time")
+def skyrl_entrypoint(cfg: DictConfig):
+    exp = BasePPOExp(cfg)
+    exp.run()
 
 
 def run_ray_driver(
@@ -757,15 +752,9 @@ def run_ray_driver(
         exit_code = None
         failure: Exception | None = None
         try:
-            progress_path = driver_progress_path()
-            with workload_progress_queue(progress_path) as progress:
-                result = entrypoint.remote(cfg, progress.queue if progress else None)
-                exit_code = supervisor.wait(result, progress)
-                if exit_code is None:
-                    elapsed_excluding_eval = ray.get(result)
-                    if operation is EntrypointOperation.TRAIN:
-                        save_trainer_timing(progress_path, elapsed_excluding_eval)
-                        logger.info("Training done!")
+            exit_code = supervisor.wait(entrypoint.remote(cfg))
+            if exit_code in (None, 0) and operation is EntrypointOperation.TRAIN:
+                logger.info("Training done!")
         except Exception as e:
             log_exception_as_text(failure_message, e)
             receipt = write_exception_receipt(

@@ -5,12 +5,10 @@ from __future__ import annotations
 import asyncio
 import collections
 import dataclasses
-import os
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, TypeVar
-from uuid import uuid4
 
 import ray
 from loguru import logger
@@ -18,12 +16,13 @@ from omegaconf import DictConfig
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from marinskyrl.environment_contract import EXECUTION_UID_ENV, TrainingType
+from marinskyrl.environment_contract import TrainingType
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from skyrl_train.config.rollout_validation import (
     FAMILY_COLUMN,
     GROUPS_PER_FAMILY_KEY,
+    SPARE_PROMPTS_PER_POOL,
     BatchPolicy,
     minimum_family_pool_sizes,
     validate_family_pools,
@@ -37,7 +36,6 @@ from skyrl_train.dynamic_sampling import (
     GroupSelectionPolicy,
     resolve_dynamic_sampling_criteria,
 )
-from skyrl_train.entrypoints.workload_progress import report_workload_progress
 from skyrl_train.grader_reporting import write_grader_report
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
@@ -133,6 +131,12 @@ def start_rollout_buffer(config: RolloutBufferConfig) -> ActorHandle:
     return ray.remote(RolloutBuffer).options(num_cpus=0, scheduling_strategy=node).remote(config)
 
 
+@dataclass(frozen=True)
+class _GraderReportTarget:
+    directory: str
+    attempt_id: str
+
+
 class TrainingContext:
     """The prompt loader, the rollout buffer, and the rollout tasks in flight between them.
 
@@ -158,15 +162,14 @@ class TrainingContext:
         payloads: PayloadStore,
         *,
         rollout_spans: bool,
-        grader_report_path: str | None = None,
+        grader_report: _GraderReportTarget | None = None,
     ):
         self.loader = loader
         self.config = config
         self._request_spec = request_spec
         self._workers = workers
         self._rollout_spans = rollout_spans
-        self._grader_report_path = grader_report_path
-        self._grader_report_attempt = os.environ.get(EXECUTION_UID_ENV) or uuid4().hex
+        self._grader_report = grader_report
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
         self._buffer = buffer
@@ -235,6 +238,7 @@ class TrainingContext:
                 dataset,
                 prompt_order_from_config(config, dataset),
                 batch_size=batch_size,
+                minimum_pool_size=buffer_config.max_untrained_groups + SPARE_PROMPTS_PER_POOL,
                 max_stale_retries=config.trainer.rollout_buffer.max_stale_retries,
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
                 families=families,
@@ -247,7 +251,11 @@ class TrainingContext:
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
-            grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
+            grader_report=(
+                _GraderReportTarget(str(config.trainer.grader_report_dir), str(config.runtime.attempt_id))
+                if report_graders
+                else None
+            ),
         )
 
     def start(self) -> None:
@@ -259,24 +267,25 @@ class TrainingContext:
         tasks = [task for task in (self._dispatcher, *self._running) if task is not None]
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
         try:
+            await asyncio.gather(*tasks, return_exceptions=True)
             await self._write_grader_report()
         finally:
             ray.kill(self._buffer)
 
     async def _write_grader_report(self) -> None:
-        if self._grader_report_path is None:
+        if self._grader_report is None:
             return
         try:
-            summary = await self._buffer.grader_summary.remote()
-        except ray.exceptions.RayError:
-            logger.exception("Failed to collect grader stats for {}", self._grader_report_path)
+            async with asyncio.timeout(10):
+                summary = await self._buffer.grader_summary.remote()
+        except (TimeoutError, ray.exceptions.RayError) as error:
+            logger.warning("Grader summary unavailable: {}", type(error).__name__)
             return
         if summary["subsets"]:
             write_grader_report(
-                self._grader_report_path,
-                self._grader_report_attempt,
+                self._grader_report.directory,
+                self._grader_report.attempt_id,
                 {"training": summary["subsets"], "training_tasks": summary["tasks"]},
             )
 
@@ -350,7 +359,6 @@ class TrainingContext:
                     )
             record_rollout_buffer(admission.ready_count, self.config.max_untrained_groups)
             if admission.admitted:
-                report_workload_progress()
                 admitted = tuple(admission.admitted)
                 groups.extend(admitted)
                 if on_admitted is not None:

@@ -8,11 +8,9 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import ray
-from ray.util.queue import Queue
 from loguru import logger
 from omegaconf import DictConfig
 from marinskyrl.runtime_options import EvaluationRunner
-from marinskyrl.driver_status import driver_progress_path
 
 from skyrl_train.evaluation_profiles import (
     additional_evaluation_metrics,
@@ -22,7 +20,6 @@ from skyrl_train.evaluation_profiles import (
 from skyrl_train.config.rollout_validation import EntrypointOperation
 from skyrl_train.config.driver_validation import validate_generation_driver_config
 from skyrl_train.entrypoints.main_base import BasePPOExp
-from skyrl_train.entrypoints.workload_progress import report_to_driver, workload_progress_queue, workload_result
 from skyrl_train.inference_engines.base import NamedWeightsUpdateRequest, lora_disk_load_request
 from skyrl_train.inference_engines.vllm.stats import IntervalReadMode
 from skyrl_train.inference_observability import configured_inference_sinks, trainer_metrics
@@ -158,15 +155,12 @@ class EvalOnlyEntrypoint(BasePPOExp):
 
 
 @ray.remote(num_cpus=1)
-def eval_entrypoint(cfg: DictConfig, progress: Queue | None) -> dict:
-    with report_to_driver(progress):
-        return EvalOnlyEntrypoint(cfg).run()
+def eval_entrypoint(cfg: DictConfig) -> dict:
+    return EvalOnlyEntrypoint(cfg).run()
 
 
 def run(cfg: DictConfig) -> None:
     validate_generation_driver_config(cfg)
     initialize_ray(cfg)
-    with workload_progress_queue(driver_progress_path()) as progress:
-        result = eval_entrypoint.remote(cfg, progress.queue if progress else None)
-        metrics = workload_result(result, progress)
+    metrics = ray.get(eval_entrypoint.remote(cfg))
     logger.info(f"Metrics from eval only run: {metrics}")

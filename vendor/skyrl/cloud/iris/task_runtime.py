@@ -30,7 +30,6 @@ import contextlib
 from dataclasses import asdict, dataclass, fields
 import errno
 import json
-import math
 import os
 from pathlib import Path
 import shutil
@@ -46,10 +45,14 @@ from typing import Any
 
 import huggingface_hub.constants
 from filelock import FileLock
+from finestore.rl.run_records import RunIndexIdentity
 from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV, IRIS_OUTPUT_DIR_ENV
+from iris.cluster.runtime.output_capture import ResolvedOutputDestination, TaskOutputLimits, capture_task_outputs
+from iris.rpc.job_pb2 import TaskOutputArchive
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
-from rigging.timing import RateLimiter
+from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Deadline, RateLimiter
 from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
@@ -61,7 +64,6 @@ from cloud.iris.artifacts import (
     file_inventory,
     fs_and_path,
     materialize,
-    write_json,
 )
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
@@ -71,7 +73,6 @@ from cloud.iris.hf_model_cache import (
     stage_artifact_model_metadata,
     stage_model_metadata,
 )
-from marinskyrl.driver_status import DRIVER_PROGRESS_PATH_ENV, DRIVER_TIMING_FILENAME, ELAPSED_EXCLUDING_EVAL
 from marinskyrl.environment_contract import (
     DEBUG_ARTIFACT_DIR_ENV,
     DebugMode,
@@ -84,6 +85,7 @@ from marinskyrl.environment_contract import (
     TRAINING_TYPE_ENV,
     TrainingType,
     ray_cluster_owner_environment,
+    safe_artifact_component,
 )
 from marinskyrl.hf_model import (
     MODEL_CACHE_SUFFIXES,
@@ -223,9 +225,8 @@ RENDEZVOUS_WRITE_TIMEOUT = 30  # seconds per attempt
 RAY_START_HEAD_TIMEOUT = 300  # seconds
 # Failure reporting must never keep an Iris task alive after its driver exits.
 FAILURE_DIAGNOSTICS_TIMEOUT = 30
-DRIVER_WATCHDOG_POLL_INTERVAL = 1.0
-DRIVER_KILL_TIMEOUT = 30
-DRIVER_STALLED_EXIT_CODE = 124
+INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT = 8
+INTERRUPTED_DEBUG_ARCHIVE_LIMITS = TaskOutputLimits(max_bytes=2 * 1024**3, max_entries=10_000)
 
 
 def _log(msg: str) -> None:
@@ -1350,30 +1351,12 @@ def verify_role_placement(ray_address: str, topology: RoleTopology, report_direc
 def log_termination_diagnostics(reason: str) -> None:
     """Report disk, memory, and GPU state to Iris before teardown."""
     task_id = os.environ.get("IRIS_TASK_ID", "unknown").replace("/", "_")
-    ts = int(time.time())
-
-    def _run(cmd: str, timeout: int = 7) -> str:
-        try:
-            return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout
-        except Exception as exc:  # noqa: BLE001 - best-effort
-            return f"<{cmd!r} failed: {exc}>"
-
-    summary = "\n".join(
-        [
-            f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===",
-            "--- df -h /tmp /dev/shm ---",
-            _run("df -h /tmp /dev/shm 2>&1"),
-            "--- top /tmp disk hogs (ephemeral-storage eviction cause) ---",
-            _run("du -sh /tmp/* /tmp/ray/session*/logs /tmp/ray/session*/*spill* 2>/dev/null | sort -rh | head -25", 9),
-            "--- nvidia-smi (VRAM OOM cause) ---",
-            _run("nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv 2>&1"),
-            "--- top RSS procs (host-RAM OOM cause) ---",
-            _run("ps -eo pid,rss,comm --sort=-rss 2>/dev/null | head -12"),
-            "--- dmesg OOM/kill tail ---",
-            _run("dmesg 2>/dev/null | grep -iE 'oom|killed process|out of memory|Xid' | tail -10"),
-        ]
-    )
-    _log(summary)
+    _log(f"=== TERMINATION ARTIFACT task={task_id} ts={int(time.time())} reason={reason} ===")
+    script = Path(__file__).with_name("termination_diagnostics.sh")
+    try:
+        subprocess.run(["bash", str(script)], check=False, timeout=FAILURE_DIAGNOSTICS_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        _log(f"Termination diagnostics stopped: {error}")
 
 
 def training_driver_command(config_path: Path) -> list[str]:
@@ -1393,41 +1376,6 @@ def launch_training_driver(config_path: Path, env: dict[str, str]) -> subprocess
     )
 
 
-def wait_for_driver(process: subprocess.Popen, progress_path: Path, timeout: float) -> int | None:
-    """Return the driver exit code, or None after a full interval without workload progress."""
-    if timeout <= 0:
-        return process.wait()
-
-    last_update = None
-    last_progress_at = time.monotonic()
-    while True:
-        modified_at = progress_path.stat().st_mtime_ns
-        now = time.monotonic()
-        if modified_at != last_update:
-            last_update = modified_at
-            last_progress_at = now
-        remaining = timeout - (now - last_progress_at)
-        if remaining <= 0:
-            return process.poll()
-        try:
-            return process.wait(timeout=min(remaining, DRIVER_WATCHDOG_POLL_INTERVAL))
-        except subprocess.TimeoutExpired:
-            continue
-
-
-def kill_driver_process_group(process: subprocess.Popen) -> None:
-    """Kill a stalled driver and its descendants before the Iris task exits."""
-    try:
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-    except ProcessLookupError:
-        process.poll()
-        return
-    try:
-        process.wait(timeout=DRIVER_KILL_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        _log(f"Training driver did not become waitable within {DRIVER_KILL_TIMEOUT}s after SIGKILL")
-
-
 def log_failure_diagnostics(reason: str) -> None:
     """Wait briefly for the daemon collecting failure diagnostics."""
     artifact_thread = threading.Thread(
@@ -1439,17 +1387,48 @@ def log_failure_diagnostics(reason: str) -> None:
         _log(f"Failure diagnostics exceeded {FAILURE_DIAGNOSTICS_TIMEOUT}s; continuing task teardown")
 
 
-def publish_trainer_timing(status_dir: Path, timing_uri: str | None) -> None:
-    """Copy the driver's completed training duration to the grader report."""
-    timing_path = status_dir / DRIVER_TIMING_FILENAME
-    if timing_uri is None or not timing_path.is_file():
+def archive_interrupted_task_debug(
+    artifact_root: Path | None, rendezvous_dir: str | None, gang_epoch: str, rank: int
+) -> None:
+    """Preserve diagnostics when Iris stops a task and skips its output capture."""
+    if artifact_root is None or not rendezvous_dir:
         return
-    try:
-        elapsed = json.loads(timing_path.read_text())[ELAPSED_EXCLUDING_EVAL]
-        if math.isfinite(elapsed) and elapsed > 0:
-            write_json(timing_uri, {ELAPSED_EXCLUDING_EVAL: elapsed})
-    except Exception as error:
-        _log(f"Could not persist the trainer completion time: {error}")
+    if not artifact_root.is_dir():
+        return
+
+    uri = join_resource_path(
+        rendezvous_dir, "debug_artifacts", safe_artifact_component(gang_epoch), f"rank-{rank}.tar.zst"
+    )
+    stop = threading.Event()
+
+    def upload() -> None:
+        if not any(path.is_file() for path in artifact_root.rglob("*")):
+            return
+        result = capture_task_outputs(
+            artifact_root,
+            ResolvedOutputDestination(StoragePath(uri), TaskOutputArchive.TASK_OUTPUT_ARCHIVE_RETENTION_UNSPECIFIED),
+            INTERRUPTED_DEBUG_ARCHIVE_LIMITS,
+            Deadline.from_seconds(INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT),
+            stop,
+        )
+        if result.uri:
+            _log(f"Archived rank {rank} debug files to {result.uri}")
+        elif result.error:
+            _log(f"Could not archive rank {rank} debug files: {result.error}")
+
+    # Storage requests may outlast the archive deadline. Leave time for task teardown.
+    thread = threading.Thread(target=upload, daemon=True, name="interrupted-debug-archive")
+    thread.start()
+    thread.join(INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT)
+    if thread.is_alive():
+        stop.set()
+        _log(f"Rank {rank} debug archive exceeded the {INTERRUPTED_DEBUG_ARCHIVE_TIMEOUT}s shutdown budget")
+
+
+class _HeadInterrupted(BaseException):
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
 
 
 def run_head(
@@ -1457,7 +1436,7 @@ def run_head(
     config_path: Path,
     derived_gloo_ifname: str | None = None,
     *,
-    trainer_timing_uri: str | None = None,
+    debug_artifact_root: Path | None = None,
 ) -> int:
     num_tasks = _num_tasks()
     gang_epoch = uuid.uuid4().hex
@@ -1466,120 +1445,109 @@ def run_head(
     ray_address = f"{head_ip}:{ray_port}"
     _log(f"ROLE=head rank=0/{num_tasks} head_ip={head_ip} ray_port={ray_port}")
 
-    # Install the SIGTERM/SIGINT handler + termination-artifact capture at the TOP of
-    # bring-up (BEFORE clear_rendezvous / ray_start_head / rendezvous write), so a reap
-    # ANYWHERE in bring-up produces the term artifact instead of dying silently.
-    # `process` is None during bring-up; the handler skips the driver kill until the
-    # training driver is launched below (closure reads the current value).
     process = None
+    termination_signal: int | None = None
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
 
-    def _shutdown(signum, _frame) -> None:
+    def _request_shutdown(signum, _frame) -> None:
+        nonlocal termination_signal
+        if termination_signal is None:
+            termination_signal = signum
+            # Unwind Popen.wait() before trying to reap the same driver during shutdown.
+            raise _HeadInterrupted(signum)
+
+    try:
+        signal.signal(signal.SIGINT, _request_shutdown)
+        signal.signal(signal.SIGTERM, _request_shutdown)
+
+        # On iris task retry, a rendezvous file from a previous attempt still points
+        # at a now-dead head. Purge before starting the new head.
+        if num_tasks > 1 and args.rendezvous_dir:
+            clear_rendezvous(args.rendezvous_dir)
+
+        ray_start_head(
+            head_ip,
+            resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+            labels=args.ray_labels,
+        )
+        _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
+
+        if num_tasks > 1:
+            if not args.rendezvous_dir:
+                raise ValueError(
+                    "Multi-node iris slice (IRIS_NUM_TASKS>1) requires --rendezvous-dir "
+                    "(or OT_AGENT_IRIS_RENDEZVOUS_DIR) so worker ranks can find the head IP."
+                )
+            _log(
+                f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
+            )
+            write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
+            wait_for_nodes(
+                ray_address,
+                num_tasks,
+                args.cluster_join_timeout,
+                rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
+            )
+        else:
+            _log("Single-node slice: skipping rendezvous and multi-node wait.")
+
+        if args.role_topology is not None:
+            verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
+
+        with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
+            env = training_driver_env(derived_gloo_ifname)
+            env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
+
+            _log("Launching MarinSkyRL training driver:")
+            _log("  " + " ".join(training_driver_command(config_path)))
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            process = launch_training_driver(config_path, env)
+            driver_outcome, outcome_receipt = write_process_outcome(
+                "training-driver",
+                process.wait(),
+                pid=process.pid,
+            )
+            exit_code = driver_outcome.public_exit_code
+            if driver_outcome.kind is ProcessOutcomeKind.SIGNAL:
+                _log(
+                    f"Training driver terminated by {driver_outcome.signal_name} "
+                    f"(raw_returncode={driver_outcome.raw_returncode}, exit_code={exit_code}, "
+                    f"receipt={outcome_receipt})"
+                )
+            if exit_code != 0:
+                log_failure_diagnostics(f"driver exit_code={exit_code} (head rank 0)")
+                ray_stop()
+                return exit_code
+        # Signal workers to unpark, then tear down.
+        if args.rendezvous_dir and num_tasks > 1:
+            write_head_result(args.rendezvous_dir, gang_epoch)
+        ray_stop()
+        return exit_code
+    except _HeadInterrupted as interruption:
+        signum = interruption.signum
         _log(f"Received signal {signum}; terminating training driver and stopping Ray...")
-        # Capture FIRST (before teardown mutates disk/GPU state) — a SIGTERM here is
-        # often a k8s eviction / OOM whose cause survives nowhere else.
+        if process is not None and process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+        archive_interrupted_task_debug(debug_artifact_root, args.rendezvous_dir, gang_epoch, 0)
         log_failure_diagnostics(f"signal {signum} (head rank 0)")
         if process is not None:
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
                 process.wait(timeout=60)
-            except (subprocess.TimeoutExpired, ProcessLookupError):
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
         ray_stop()
-        sys.exit(128 + signum)
-
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-
-    # On iris task retry, a rendezvous file from a previous attempt still points
-    # at a now-dead head. Purge before starting the new head.
-    if num_tasks > 1 and args.rendezvous_dir:
-        clear_rendezvous(args.rendezvous_dir)
-
-    ray_start_head(
-        head_ip,
-        resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
-        labels=args.ray_labels,
-    )
-    _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
-
-    if num_tasks > 1:
-        if not args.rendezvous_dir:
-            raise ValueError(
-                "Multi-node iris slice (IRIS_NUM_TASKS>1) requires --rendezvous-dir "
-                "(or OT_AGENT_IRIS_RENDEZVOUS_DIR) so worker ranks can find the head IP."
-            )
-        _log(
-            f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
-        )
-        write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
-        wait_for_nodes(
-            ray_address,
-            num_tasks,
-            args.cluster_join_timeout,
-            rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
-        )
-    else:
-        _log("Single-node slice: skipping rendezvous and multi-node wait.")
-
-    if args.role_topology is not None:
-        verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
-
-    with (
-        ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE),
-        tempfile.TemporaryDirectory(prefix="skyrl-driver-") as driver_status_dir,
-    ):
-        env = training_driver_env(derived_gloo_ifname)
-        env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
-        progress_path = Path(driver_status_dir) / "progress"
-        progress_path.touch()
-        env[DRIVER_PROGRESS_PATH_ENV] = str(progress_path)
-
-        _log("Launching MarinSkyRL training driver:")
-        _log("  " + " ".join(training_driver_command(config_path)))
-        sys.stdout.flush()
-        sys.stderr.flush()
-
-        # The SIGTERM/SIGINT handler is already installed at the top of run_head; assigning
-        # `process` here arms its driver-teardown path (the closure reads this value).
-        process = launch_training_driver(config_path, env)
-        driver_exit_code = wait_for_driver(process, progress_path, args.driver_progress_timeout)
-        if driver_exit_code is None:
-            reason = f"driver stalled after {args.driver_progress_timeout:g}s without a workload milestone (head rank 0)"
-            _log(reason)
-
-            log_failure_diagnostics(reason)
-            kill_driver_process_group(process)
-            ray_stop()
-            return DRIVER_STALLED_EXIT_CODE
-        driver_outcome, outcome_receipt = write_process_outcome(
-            "training-driver",
-            driver_exit_code,
-            pid=process.pid,
-        )
-        exit_code = driver_outcome.public_exit_code
-        if driver_outcome.kind is ProcessOutcomeKind.SIGNAL:
-            _log(
-                f"Training driver terminated by {driver_outcome.signal_name} "
-                f"(raw_returncode={driver_outcome.raw_returncode}, exit_code={exit_code}, "
-                f"receipt={outcome_receipt})"
-            )
-        if exit_code != 0:
-
-            log_failure_diagnostics(f"driver exit_code={exit_code} (head rank 0)")
-            ray_stop()
-            return exit_code
-        publish_trainer_timing(Path(driver_status_dir), trainer_timing_uri)
-    # Signal workers to unpark, then tear down.
-    if args.rendezvous_dir and num_tasks > 1:
-        write_head_result(args.rendezvous_dir, gang_epoch)
-    ray_stop()
-    return exit_code
+        return 128 + signum
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
-def run_worker(args: argparse.Namespace) -> int:
+def run_worker(args: argparse.Namespace, *, debug_artifact_root: Path | None = None) -> int:
     worker_start = time.time()
     rank = _rank()
     num_tasks = _num_tasks()
@@ -1622,6 +1590,7 @@ def run_worker(args: argparse.Namespace) -> int:
             return
         termination_signal = signum
         _log(f"Worker rank {rank} received signal {signum}; stopping Ray.")
+        archive_interrupted_task_debug(debug_artifact_root, args.rendezvous_dir, payload.gang_epoch, rank)
         # A SIGTERM on a worker node is often a k8s eviction/OOM of that node (it
         # hosts the training actors' GPUs); capture its disk/GPU state before reap.
         log_failure_diagnostics(f"signal {signum} (worker rank {rank})")
@@ -1666,7 +1635,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     model = config.inputs.model
     skyrl = config.skyrl
     checkpoint_export = config.run.mode == RunMode.CHECKPOINT_EXPORT
-    task_env = {str(key): str(value) for key, value in config.runtime.task_env.items()}
     model_uri = str(model.uri)
     model_identity = str(model.identity)
     train_data = [] if checkpoint_export else _container(config.inputs.train_data)
@@ -1681,7 +1649,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         draft_model = SpeculatorModelConfig.from_mapping(
             _container(draft_mapping), context="generator.speculative_decoding.model"
         )
-    offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
+    offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
         role_topology=derive_launch_topology(_container(config)).role_topology,
@@ -1691,10 +1659,8 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         rendezvous_dir=str(config.ray.rendezvous_dir),
         rendezvous_timeout=int(config.ray.rendezvous_timeout),
         cluster_join_timeout=int(config.ray.cluster_join_timeout),
-        driver_progress_timeout=int(config.ray.driver_progress_timeout),
         run_id=str(config.run.id),
         training_type=None if config.runtime.training_type is None else TrainingType(config.runtime.training_type),
-        task_env=task_env,
         data_sources_json=_json_list(data_sources) if data_sources else "",
         prestage_model=prestage_model,
         model_source_uri=model_uri if is_cloud_uri(model_uri) else "",
@@ -1781,6 +1747,7 @@ def _write_final_config(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bootstrap Ray and run one typed MarinSkyRL launch config.")
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--environment-prepared", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -1805,8 +1772,9 @@ def main() -> None:
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
     launch_config = load_launch_config(config_path)
+    if not cli_args.environment_prepared:
+        os.environ.update({str(key): str(value) for key, value in launch_config.runtime.task_env.items()})
     args = _runtime_namespace(launch_config)
-    os.environ.update(args.task_env)
     if args.role_topology is not None:
         args.ray_labels = {
             **args.role_topology.node_labels(_rank()),
@@ -1828,7 +1796,9 @@ def main() -> None:
     # would otherwise broadcast the head's name to every node.
     derived_gloo_ifname = pin_socket_ifname()
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
-    export_telemetry_environment(args.run_id, args.training_type, launch_config.run.get("model"))
+    index = launch_config.run.get("index")
+    run_id = RunIndexIdentity.model_validate(dict(index)).run_id if index is not None else args.run_id
+    export_telemetry_environment(run_id, args.training_type, launch_config.run.get("model"))
     trainer = launch_config.skyrl.get("trainer", {})
     debug_artifact_root = configure_task_debug_artifacts(trainer)
     ensure_fr_dump_dir()
@@ -1871,14 +1841,9 @@ def main() -> None:
             policy_tokenizer=policy_tokenizer,
             draft_model=draft_model,
         )
-        timing_uri = None
-        if launch_config.run.mode == RunMode.TRAIN and trainer.get("dump_grader_report", False):
-            timing_uri = join_resource_path(str(trainer.grader_report_dir), DRIVER_TIMING_FILENAME)
-        exit_code = run_head(
-            args, final_config_path, derived_gloo_ifname, trainer_timing_uri=timing_uri
-        )
+        exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_artifact_root=debug_artifact_root)
     else:
-        exit_code = run_worker(args)
+        exit_code = run_worker(args, debug_artifact_root=debug_artifact_root)
     if debug_artifact_root is not None:
         prune_empty_debug_directories(debug_artifact_root)
     if exit_code != 0:

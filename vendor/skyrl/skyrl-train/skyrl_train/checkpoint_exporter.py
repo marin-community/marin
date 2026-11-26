@@ -14,7 +14,6 @@ from transformers import PreTrainedTokenizerBase
 
 from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY, policy_export_path
 from skyrl_train import hf_model_io
-from skyrl_train.entrypoints.workload_progress import report_workload_progress
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.utils import get_ray_pg_ready_with_timeout
@@ -130,11 +129,8 @@ class CheckpointExporter:
         try:
             self._validate_checkpoint()
             self._workers.initialize(self._plan.model_path)
-            report_workload_progress()
             self._workers.load_model_checkpoint(self._plan.policy_checkpoint_path)
-            report_workload_progress()
             self._workers.save_hf_model(self._plan.policy_export_path, self._tokenizer)
-            report_workload_progress()
             hf_model_io.verify_hf_model_export(self._plan.policy_export_path)
             return CheckpointExportResult(step=self._plan.step, export_path=self._plan.policy_export_path)
         finally:
