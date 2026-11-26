@@ -71,6 +71,8 @@ from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 
 _T = TypeVar("_T")
+_TASK_DISPATCH_WAITS = ("lease", "task")
+_PREFERENCE_PAIR_DISPATCH_WAITS = ("slot", "prompt")
 
 
 @dataclass(frozen=True)
@@ -243,6 +245,9 @@ class TrainingContext:
         )
         object_store_root = config.trainer.rollout_buffer.object_store_root
         report_graders = bool(config.trainer.get("dump_grader_report", False))
+        wait_labels = (
+            _PREFERENCE_PAIR_DISPATCH_WAITS if static_preference_pairs_requested(config) else _TASK_DISPATCH_WAITS
+        )
         return cls(
             DatasetEntrySelector(
                 dataset,
@@ -261,7 +266,7 @@ class TrainingContext:
             workers,
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
-            wait_labels=("slot", "prompt") if static_preference_pairs_requested(config) else ("lease", "task"),
+            wait_labels=wait_labels,
             grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
         )
 

@@ -1066,7 +1066,7 @@ def test_source_launch_preserves_nested_open_mappings(tmp_path):
 @pytest.mark.parametrize(
     ("remaining_families", "error"),
     [
-        (["code"] * 8, "requires 9 distinct prompts for family 'code'.*found 8"),
+        (["code"] * 8, "requires 9 distinct entries for family 'code'.*found 8"),
         (["code"] * 9 + ["other"], r"names .* but training rows have families .*'other'"),
         (["code"] * 9, None),
     ],

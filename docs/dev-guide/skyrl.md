@@ -342,6 +342,7 @@ before updating `spec`. Use a new artifact version for the changed
 inference layout and inspect the rendered launch document before submitting it.
 Existing launch documents and settings can still use `max_in_flight`. If a
 document has both keys, `max_outstanding_leases` takes precedence.
+Plans show the historical key in fingerprint inputs to preserve artifact IDs.
 
 This example was composed for vLLM build `marin-vllm-gpu-20261113-0ac9dcb157ee`.
 CPU validation covers recipe composition,
