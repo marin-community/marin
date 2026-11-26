@@ -502,6 +502,7 @@ def _submit_iris_job(
         name=job_name,
         entrypoint=Entrypoint.from_callable(_fn_with_artifact_save),
         resources=resources,
+        timeout=step.fn.timeout if isinstance(step.fn, RemoteCallable) else None,
         environment=create_environment(
             extras=dependency_groups,
             pip_packages=pip_packages,
