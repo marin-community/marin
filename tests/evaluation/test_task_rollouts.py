@@ -99,6 +99,8 @@ from verifyit.spec import (
 )
 from zephyr.context import ZephyrContext
 
+CORPUS_TRIAL_SEED = 7
+
 
 def convert(row: RawRow, _context: ConversionContext):
     task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=False)
@@ -175,7 +177,7 @@ def published_corpora(tmp_path):
                     sampling=Sampling(
                         temperature=0.7, top_p=1, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}
                     ),
-                    trials=TrialPolicy(count=2, seed=7),
+                    trials=TrialPolicy(count=2, seed=CORPUS_TRIAL_SEED),
                     metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
                     primary_metric="accuracy",
                     summary=SummaryKind.MEAN,
@@ -243,7 +245,7 @@ async def test_malformed_model_tool_arguments_score_zero_without_cancelling_othe
 
     async def model(request):
         prompt = request.messages[-1]["content"]
-        if prompt == "colors/0" and request.options["seed"] == 7:
+        if prompt == "colors/0" and request.options["seed"] == CORPUS_TRIAL_SEED:
             message = {
                 "role": "assistant",
                 "content": None,
