@@ -111,7 +111,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
         # A CLI plan discards the composed config. Validate the emitted documents in one native process.
         (source,) = paths
         shutil.copyfile(source, launch_path)
-        return []
+        return [{}]
 
     table = snowball_model.SNOWBALL
     name, version = "tests/evaluation-init", "2026.11.17"
