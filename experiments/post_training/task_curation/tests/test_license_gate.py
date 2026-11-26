@@ -140,7 +140,9 @@ def test_hardmath_exception_admits_exactly_this_source_and_scope(monkeypatch):
     try:
         registry = json.loads(license_registry.LICENSE_BANS)
         exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
-        assert len(exceptions) == 1 and exceptions[0]["source_id"] == source_id
+        # The 2026-11-26 option-(a) ruling adds the pafitis:hardmath@rhs variant row; this row
+        # stays the base identity's exception.
+        assert len(exceptions) == 2 and exceptions[0]["source_id"] == source_id
         exception = exceptions[0]["exception"]
         assert exception["upstream_revision"] == revision
         assert exception["use"] == "train"
@@ -178,6 +180,50 @@ def test_hardmath_exception_admits_exactly_this_source_and_scope(monkeypatch):
         )
         wrapped = release_receipt.model_copy(update={"wrapper_chain": [lineage_pin]})
         assert licensing.source_license_ban(source_id, release, wrapped, "train") is None
+    finally:
+        licensing.license_bans.cache_clear()
+
+
+def test_hardmath_rhs_variant_exception_admits_the_declared_pin_and_scopes_exactly(monkeypatch):
+    """The pafitis:hardmath@rhs exception admits only the declared upstream pin at train use.
+
+    The coordinator's 2026-11-26 option-(a) ruling: a registry exception row for the variant
+    identity, same verified lineage and train scope as the base exception, with the validated
+    republish release @ b87667c4 (content bytes identical to the declared pin) as evidence. The
+    variant's receipt family binds the declared pin — the same pairing the within-source dedup
+    census carries. An unrelated variant of the same source still fails closed through the base
+    ban's upstream fallback.
+    """
+    variant_id = "pafitis:hardmath@rhs"
+    unrelated_variant = "pafitis:hardmath@other"
+    upstream = "pafitis/HARDMath_processed_training"
+    upstream_revision = "937e9f10356e31e854f6efb9a2507f1e200c8b25"
+    monkeypatch.setattr(licensing, "LICENSE_BANS", license_registry.LICENSE_BANS)
+    licensing.license_bans.cache_clear()
+    try:
+        registry = json.loads(license_registry.LICENSE_BANS)
+        exceptions = [ban for ban in registry["bans"] if ban.get("exception")]
+        assert len(exceptions) == 2
+        variant_row = next(ban for ban in exceptions if ban["source_id"] == variant_id)
+        assert variant_row["upstream_id"] == upstream
+        assert variant_row["exception"]["use"] == "train"
+        assert variant_row["exception"]["upstream_revision"] == upstream_revision
+        assert variant_row["exception"]["receipt_sha256"] == (
+            "eb4f7527271cd23953b93e0b3c8466e91ebf4f1853f098135e1849e6e0942800"
+        )
+        receipt = fixture_license(variant_id, upstream, upstream_revision)
+        assert licensing.source_license_ban(variant_id, upstream, receipt, "train") is None
+        licensing.require_unbanned(variant_id, upstream, receipt, "train")
+        assert licensing.source_license_ban(variant_id, upstream, receipt, "eval") is not None
+        with pytest.raises(ValueError, match="License banned: pafitis:hardmath@rhs"):
+            licensing.require_unbanned(variant_id, upstream, receipt, "eval")
+        wrong_pin = fixture_license(variant_id, upstream, "b" * 40)
+        assert licensing.source_license_ban(variant_id, upstream, wrong_pin, "train") is not None
+        assert licensing.source_license_ban(variant_id, upstream, None, "train") is not None
+        # An unrelated variant of the same source stays banned: the base row's upstream fallback
+        # consults no exception, so only the exact variant identity admits.
+        other = fixture_license(unrelated_variant, upstream, upstream_revision)
+        assert licensing.source_license_ban(unrelated_variant, upstream, other, "train") is not None
     finally:
         licensing.license_bans.cache_clear()
 
