@@ -13,6 +13,7 @@ import torch
 from datasets.exceptions import DatasetGenerationError
 from levanter.models.snowball import GRUG_MOE_ARCHITECTURE
 from marin.datakit.chat_normalize import CHAT_SCHEMA
+from marin.training.drafting import activation_store
 from marin.training.drafting.dspark_data import (
     EMBEDDING,
     FINAL_NORM,
@@ -27,6 +28,7 @@ from marin.training.drafting.dspark_data import (
 )
 from marin.training.drafting.dspark_distillation import DraftRecipe, extraction_config, validate_draft
 from rigging.filesystem.storage_path import StoragePath
+from rigging.timing import Duration
 from safetensors.numpy import save_file
 from tokenizers import AddedToken, Tokenizer
 from tokenizers.models import WordLevel
@@ -37,6 +39,7 @@ from transformers import PreTrainedTokenizerFast
 @pytest.fixture
 def recipe() -> DraftRecipe:
     return DraftRecipe(
+        draft_layers=3,
         data=DraftDataConfig(shape=GrugShape(16, 4, 2, 1, 8, 8), mask_token_id=7, max_sequence_length=16),
         feature_taps=(1, 3),
         max_anchors=8,
@@ -169,13 +172,20 @@ def test_prepare_data_masks_and_holds_out_rendered_rows(
 def test_teacher_preflight_rejects_an_incomplete_sharded_export(teacher: Path, recipe: DraftRecipe) -> None:
     (teacher / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {EMBEDDING: "missing.safetensors"}}))
     with pytest.raises(ValueError, match=r"missing\.safetensors"):
-        inspect_teacher(StoragePath(str(teacher)), recipe.data)
+        inspect_teacher(
+            StoragePath(str(teacher)),
+            recipe.data,
+            layers=recipe.draft_layers,
+            intermediate_size=recipe.intermediate_size,
+        )
 
 
 def test_draft_config_preserves_feature_taps_and_vocab_mapping(
     tmp_path: Path, teacher: Path, recipe: DraftRecipe
 ) -> None:
-    decoder = inspect_teacher(StoragePath(str(teacher)), recipe.data)
+    decoder = inspect_teacher(
+        StoragePath(str(teacher)), recipe.data, layers=recipe.draft_layers, intermediate_size=recipe.intermediate_size
+    )
     speculative, _ = extraction_config(recipe, tmp_path / "hidden_states")
     assert speculative["draft_model_config"]["hf_config"]["eagle_aux_hidden_state_layer_ids"] == [1, 3, 4]
     ckpt = tmp_path / "draft"
@@ -210,3 +220,48 @@ def test_draft_config_preserves_feature_taps_and_vocab_mapping(
     save_file({**weights, "d2t": np.array([0, 3, 5])}, weight_file)
     with pytest.raises(ValueError, match="vocabulary mapping"):
         validate_draft(ckpt, recipe, np.array([0, 2, 5]))
+
+
+def test_activation_cache_reuses_completed_rows_until_the_reuse_window_ends(tmp_path, monkeypatch):
+    now = 0.0
+    monkeypatch.setattr(activation_store, "time", lambda: now)
+    root = StoragePath(str(tmp_path / "cached"))
+    reusable_for = Duration.from_hours(48)
+
+    def populate(path):
+        activation_store.activation_path(path, 0).write_bytes(b"activation")
+
+    cache = activation_store.get_or_build_activation_cache(root, reusable_for=reusable_for, populate=populate)
+    assert activation_store.read_activation_cache(root, reusable_for=reusable_for) == cache
+    reused = activation_store.get_or_build_activation_cache(
+        root, reusable_for=reusable_for, populate=lambda _: pytest.fail("recomputed existing activations")
+    )
+    assert reused == cache
+    assert activation_store.activation_path(reused, 0).read_bytes() == b"activation"
+
+    now += reusable_for.to_seconds()
+    assert activation_store.read_activation_cache(root, reusable_for=reusable_for) is None
+    replacement = activation_store.get_or_build_activation_cache(root, reusable_for=reusable_for, populate=populate)
+    assert replacement != cache
+    assert activation_store.activation_path(replacement, 0).read_bytes() == b"activation"
+    assert activation_store.activation_path(cache, 0).read_bytes() == b"activation"
+
+
+def test_activation_cache_retries_without_exposing_partial_rows(tmp_path):
+    root = StoragePath(str(tmp_path / "cached"))
+    reusable_for = Duration.from_hours(48)
+
+    def fail(path):
+        activation_store.activation_path(path, 0).write_bytes(b"partial")
+        raise RuntimeError("teacher stopped")
+
+    with pytest.raises(RuntimeError):
+        activation_store.get_or_build_activation_cache(root, reusable_for=reusable_for, populate=fail)
+    assert activation_store.read_activation_cache(root, reusable_for=reusable_for) is None
+
+    def populate(path):
+        activation_store.activation_path(path, 0).write_bytes(b"complete")
+        activation_store.activation_path(path, 1).write_bytes(b"complete")
+
+    cache = activation_store.get_or_build_activation_cache(root, reusable_for=reusable_for, populate=populate)
+    assert [activation_store.activation_path(cache, row).read_bytes() for row in range(2)] == [b"complete"] * 2
