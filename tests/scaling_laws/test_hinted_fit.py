@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from marin.scaling_laws import hinted_fit
 from marin.scaling_laws.hinted_fit import (
     ForecastKind,
     HintMethod,
@@ -145,7 +146,11 @@ def _sampled_ladder(n_problems: int, rng: np.random.Generator) -> LadderScores:
     )
 
 
-def test_bootstrap_intervals_cover_truth_and_narrow_with_more_problems():
+def test_bootstrap_intervals_cover_truth_and_narrow_with_more_problems(monkeypatch):
+    # The paper checks cover the full optimizer grid. Use six starts to exercise resampling here.
+    grid = tuple(hinted_fit._joint_starts())
+    starts = grid[:: len(grid) // 6]
+    monkeypatch.setattr(hinted_fit, "_joint_starts", lambda: iter(starts))
     rng = np.random.default_rng(0)
     truth = float(BOOTSTRAP_LAW.predict(BOOTSTRAP_TARGET, 0.0))
 
