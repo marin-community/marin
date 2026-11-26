@@ -34,15 +34,12 @@ from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from transformers import AutoTokenizer
-from verifyit.modes.grade_judge import JudgeConnection
 
 from experiments.post_training.task_curation.datasets.openresearcher.assets import (
     REGIONAL_PREFIX,
     pinned_document,
 )
-from experiments.post_training.task_curation.datasets.openresearcher.grounding import screen_population
 from experiments.post_training.task_curation.datasets.openresearcher.grounding_contract import (
-    CONTRACT,
     CONTRACT_SHA256,
 )
 from experiments.post_training.task_curation.datasets.openresearcher.grounding_pipeline import (
