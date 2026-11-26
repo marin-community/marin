@@ -1,0 +1,305 @@
+{
+  "qa-abstention": [
+    {
+      "license": "CC BY-SA 4.0",
+      "id": "law-wiki-00040",
+      "question": "Which publisher released R. L. Maddex's 2008 work 'Constitutions of the World'?",
+      "answer": "CQ Press",
+      "domain": "Law",
+      "source": "Judicial review",
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "abstention_simple_agent"
+      },
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "system",
+            "content": "You will be given a question, answer with JUST the answer (no explanation).\nPut your final answer in \\boxed{your answer} format.\nIf you do not know the answer, or you need more context or tools to answer the question,\noutput \\boxed{[IDK]} instead of guessing.\nIt is better to not provide an answer when unsure than to be wrong."
+          },
+          {
+            "role": "user",
+            "content": "Which publisher released R. L. Maddex's 2008 work 'Constitutions of the World'?"
+          }
+        ],
+        "tools": [],
+        "parallel_tool_calls": false
+      },
+      "messages": [
+        {
+          "role": "system",
+          "content": "You will be given a question, answer with JUST the answer (no explanation).\nPut your final answer in \\boxed{your answer} format.\nIf you do not know the answer, or you need more context or tools to answer the question,\noutput \\boxed{[IDK]} instead of guessing.\nIt is better to not provide an answer when unsure than to be wrong."
+        },
+        {
+          "role": "user",
+          "content": "Which publisher released R. L. Maddex's 2008 work 'Constitutions of the World'?"
+        }
+      ],
+      "tools": [],
+      "uuid": "law-wiki-00040",
+      "metadata": {
+        "uuid": "law-wiki-00040"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    },
+    {
+      "license": "CC BY-SA 4.0",
+      "id": "go-swe-00484",
+      "question": "What does the template {{23 -}} < {{- 45}} format as?",
+      "answer": "`23<45`",
+      "domain": "Software Engineering",
+      "source": "go1.6.md",
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "abstention_simple_agent"
+      },
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "system",
+            "content": "You will be given a question, answer with JUST the answer (no explanation).\nPut your final answer in \\boxed{your answer} format.\nIf you do not know the answer, or you need more context or tools to answer the question,\noutput \\boxed{[IDK]} instead of guessing.\nIt is better to not provide an answer when unsure than to be wrong."
+          },
+          {
+            "role": "user",
+            "content": "What does the template {{23 -}} < {{- 45}} format as?"
+          }
+        ],
+        "tools": [],
+        "parallel_tool_calls": false
+      },
+      "messages": [
+        {
+          "role": "system",
+          "content": "You will be given a question, answer with JUST the answer (no explanation).\nPut your final answer in \\boxed{your answer} format.\nIf you do not know the answer, or you need more context or tools to answer the question,\noutput \\boxed{[IDK]} instead of guessing.\nIt is better to not provide an answer when unsure than to be wrong."
+        },
+        {
+          "role": "user",
+          "content": "What does the template {{23 -}} < {{- 45}} format as?"
+        }
+      ],
+      "tools": [],
+      "uuid": "go-swe-00484",
+      "metadata": {
+        "uuid": "go-swe-00484"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    },
+    {
+      "license": "CC BY-SA 4.0",
+      "id": "go-swe-00487",
+      "question": "What does the vet tool warn about concerning string(x) conversions with integer x?",
+      "answer": "The vet tool warns about string(x) where x is integer not rune or byte",
+      "domain": "Software Engineering",
+      "source": "go1.15.md",
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "abstention_simple_agent"
+      },
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "system",
+            "content": "You will be given a question, answer with JUST the answer (no explanation).\nPut your final answer in \\boxed{your answer} format.\nIf you do not know the answer, or you need more context or tools to answer the question,\noutput \\boxed{[IDK]} instead of guessing.\nIt is better to not provide an answer when unsure than to be wrong."
+          },
+          {
+            "role": "user",
+            "content": "What does the vet tool warn about concerning string(x) conversions with integer x?"
+          }
+        ],
+        "tools": [],
+        "parallel_tool_calls": false
+      },
+      "messages": [
+        {
+          "role": "system",
+          "content": "You will be given a question, answer with JUST the answer (no explanation).\nPut your final answer in \\boxed{your answer} format.\nIf you do not know the answer, or you need more context or tools to answer the question,\noutput \\boxed{[IDK]} instead of guessing.\nIt is better to not provide an answer when unsure than to be wrong."
+        },
+        {
+          "role": "user",
+          "content": "What does the vet tool warn about concerning string(x) conversions with integer x?"
+        }
+      ],
+      "tools": [],
+      "uuid": "go-swe-00487",
+      "metadata": {
+        "uuid": "go-swe-00487"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    }
+  ],
+  "freeform": [
+    {
+      "license": "CC BY 4.0",
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "user",
+            "content": "Question: What names (people, places, or bodies) are mentioned in the article?\n\nFormatting instructions: List each name on its own line using the pattern: number, period, space, the name in double quotes, a colon, a single space, then the answer text. Whenever a date appears, place it in parentheses immediately after the name. Ensure there is exactly one space after the colon and no extra spaces before or after the parentheses.\n\nUse the following document to answer:\n\nJohn Backup\n# John Backup\n\nJohn BackupState legislator\n\n| John Backup | |\n| --- | --- |\n|  | |\n|  | |\n| Member of the Massachusetts House of Representatives | |\n| **In office**1888 | |\n|  | |\n| Personal details | |\n| Political party | Independent Republican |\n|  | |\n\n**John Backup** was a state legislator in the state of Massachusetts. An Independent Republican, he served in the Massachusetts House of Representatives in 1888.[1] He lived in Boston.[2]\n\n## See also\n\n* 1888 Massachusetts legislature\n* William Davies Sohier"
+          }
+        ]
+      },
+      "verifier": {
+        "type": "regex",
+        "pattern_id": "mixed_inline_numbered_heading",
+        "verify_regex": [
+          "^\\d+\\.\\s*\".+\":\\s*.+"
+        ],
+        "verify_min_matches": 3
+      },
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "freeform_formatting_simple_agent"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    },
+    {
+      "license": "CC BY 4.0",
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "user",
+            "content": "<document>\nTitle: Ariel Zilber\n\n# Ariel Zilber\n\nAriel ZilberIsraeli singer-songwriter and composer (born 1943)\n\n| Ariel Zilber | |\n| --- | --- |\n|  | |\n| Background information | |\n| Birth name | Ariel Zilber |\n| Born | (1943-09-23) September 23, 1943 (age 80)Tel Aviv, British Mandate of Palestine (Now Israel) |\n| Genres | World musicRockFolk |\n| Occupation(s) | Singer-songwritercomposermusician |\n| Instrument(s) | Vocals, piano, trumpet |\n| Years active | 1967–present |\n| Labels | The Eight Note |\n|  | |\n| Website | arielzilber.com |\n\nMusical artist\n**Ariel Zilber** (Hebrew: אריאל זילבר; born September 23, 1943) is an Israeli singer-songwriter and composer.[1]\n\n## Biography\n\nAriel Zilber (left) at kibbutz Gan Shmuel, 1953\n\nAriel Zilber was born in Tel Aviv. His mother, Bracha Zefira, was a popular singer of Yemenite Jewish origin and his father, Ben Ami Zilber, played the violin in the Israeli Philharmonic Orchestra.[2] As both were busy with their international careers, they placed their son in a boarding school on kibbutz Gan Shmuel, where he lived from age four to fifteen.[3][2] After losing part of a foot while playing with explosives in his room, he was expelled from the school and returned to his parents in Tel Aviv, where he began studying the trumpet.[2] He spent several years in England and France building up a career, but eventually returned to Tel Aviv.[2]\n\nBracha Zefira, mother of Ariel Zilber\n\nLater in life, Zilber became a religious Jew and a follower of the Lubavitcher rebbe. He was a resident of Alei Sinai, but now lives with his wife on moshav Gitit.[2] In 2007, he participed in a campaign for the release of Yigal Amir, who assassinated Prime Minister of Israel Yitzhak Rabin.\n\n## Music career\n\nIn the 1970s, he established the innovative rock band Tamuz,\nwith Shalom Hanoch, and later headed the group Brosh. His songs \"Rutzi, Shmulik Koreh Lach\" (\"Run, Shmulik Is Calling You\"), \"Ani Shochev Li Al Hagav\" (\"Lying on My Back\"), \"Ten Li Koach\" (\"Give Me Strength\"), \"Milliard Sinim\" (\"A Billion Chinese\") and others were known for their amusing, somewhat bizarre lyrics.[4]\n\nIn the 1980s, he launched a solo career. His music spans various genres, from rock, pop, hip-hop and Arab music to Ethiopian-inspired music. His album \"Ha'atalef Vehatarnigol\" (\"The Bat and the Rooster\") included four Hasidic melodies composed by Rabbi Yitzhak Ginsburgh.[4] According to Zilber, the title song is taken from a Talmudic analogy in which a rooster crows excitedly as a new day dawns while the bat lives in darkness.[2]\n\n## Awards and recognition\n\nIn 2014, Zilber won an ACUM prize for his contribution to music. Initially, he was to be granted the lifetime achievement award, but due to his political views, the prize was downgraded to an award for his musical accomplishments.[5][6] In 2016, Zilber was honored with the lifetime achievement award of the Israeli Union of Performing Artists.[7]\n\n## Discography\n\n### Albums\n\n* Rutzi Shmulik, 1976\n* Ariel Zilber and the Brosh Band, 1978\n* Ariel Zilber, 1982\n* Ariel Zilber, CD, 1983\n* Ba Da Di Dia, 1988\n* Two weeks in a foreign city, 1991\n* Smoke Screen, 1999\n* Anabel, 2005\n* Politically Correct, 2008\n* The Bat and the Rooster (Ha'atalef Vehatarnigol), 2013\n* Someone (Mishehu), 2016\n\n## See also\n\n* Music of Israel\n</document>\n\nQuestion: What song titles are mentioned in the article?\n\nFormatting instructions: Please list each song title as a separate key‑value pair on its own line, using the exact format `Key = Value` with a single space before and after the equals sign. If a date appears in any value, enclose the entire date in parentheses, e.g., `(2023‑05‑01)`, and keep the parentheses as part of the value. Make sure there are no trailing spaces at the end of any line."
+          }
+        ]
+      },
+      "verifier": {
+        "type": "regex",
+        "pattern_id": "kv_equals",
+        "verify_regex": [
+          "^.{2,30}\\s*=\\s*.+"
+        ],
+        "verify_min_matches": 3
+      },
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "freeform_formatting_simple_agent"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    },
+    {
+      "license": "CC BY 4.0",
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "user",
+            "content": "Question: Which countries are represented by the overall winners of the Tour of Britain Women?\n\nFormatting instructions: Please list the countries represented by the overall winners of the Tour of Britain Women using a double dash as the bullet marker (start each line with “-- ”). Put each country on its own line and insert a completely blank line between consecutive items. Capitalize the first letter of each country name, and do not add any extra punctuation after the name.\n\nUse the following document to answer:\n\nTour of Britain Women\n# Tour of Britain Women\n\nTour of Britain WomenBritish multi-day road cycling race\n\nFor the men's event, see Tour of Britain.\n\nTour of Britain Women\n| Race details | |\n| --- | --- |\n| Date | May or June |\n| Region | Great Britain |\n| Discipline | Road |\n| Competition | UCI Women's World Tour |\n| Type | Stage race |\n| Organiser | British Cycling |\n| Web site | www.womenstour.co.uk {img Edit this at Wikidata} |\n| History | |\n| First edition | 2014 (2014) |\n| Editions | 9 (as of 2024) |\n| First winner | Marianne Vos (NED) |\n| Most wins | Lizzie Deignan (GBR) *(2 wins)* |\n| Most recent | Lotte Kopecky (BEL) |\n\n**The Tour of Britain Women** is a women's cycle stage race held in England and Wales, as part of the UCI Women's World Tour. The race was organised between 2014 and 2023 by SweetSpot, the company behind the men's Tour of Britain, and was known as **The Women's Tour**.\n\n## History\n\nIts origins trace back to 2010 when SweetSpot organised their first women's cycling race, the Horizon Fitness Grand Prix in Stoke-on-Trent. What began as a supporting event for the men's Tour Series – Britain's leading televised cycle race series – grew into a key part of the women's racing scene in Britain, thanks to television coverage on ITV4 in the UK and around the world. In 2018, Britain's leading women's teams took part in the whole series for the first time.[1]\n\nAt the launch of the 2013 Tour of Britain, SweetSpot MD Chairman Hugh Roberts and director Guy Elliott announced[2] the company's intentions to create a standalone stage race for the world's top female cyclists in Britain – the first event of its kind.\n\nAs a prelude to the inaugural race in 2014, a women's one-day race was held on the final day of the 2013 Tour of Britain in London, won by Hannah Barnes.[3] As history would show, SweetSpot's move was one that the Tour de France and Vuelta a Espana organisers would announce some months later.\n\nJust a week after this SweetSpot received the news that the Women's Tour had been granted a place on the UCI calendar for May 2014, being granted what was the highest possible ranking for a stage race (2.1) at the time.[4] This put it instantly on a par with the world's top races for women. The first edition was a widely acclaimed success, attracting the world's top riders and teams and widespread media coverage for women's cycling in the UK.\n\nWhile the first edition of the race took place in May (Wednesday 7 - Sunday 11), the second edition in 2015 moved to a mid-June position,[5] a slot it has held on the UCI calendar ever since – with the exception of the 2021 edition, where it was delayed to October due to the COVID-19 pandemic.\n\nIn 2016, the race became a part of the inaugural UCI Women's World Tour,[6] the leading series of races for professional women cyclists.\n\nIn 2017, the finished in London for the first time in race history,[7] with Belgian rider Jolien D'Hoore winning the stage.[8] Wales hosted the race for the first time in 2018, with the final stage taking place between Dolgellau and Colwyn Bay.[9][10] The Women's Tour expanded to six days for the first time in 2019.[11] The increase in days also heralded a slight shift of event days, as the race ran from Monday to Saturday.[12]\n\nSweetSpot announced in March 2020[13][14] that the planned seventh edition of the race, scheduled to take place between Monday 8 and Saturday 13 June, was postponed owing to the COVID-19 pandemic. The race's Grand Départ in Bicester, Oxfordshire[15] and final stage in Suffolk[16] had already been announced. Organisers said that they \"hope to work with the UCI and British Cycling to find an alternative date in the international cycling calendar for the race to take place should conditions permit.\"[17] On 4 May, the 2020 Tour was cancelled.[18] In February 2021, the 2021 Women's Tour was postponed from June to October.[19]\n\nThe 2022 race returned to its traditional calendar slot in June, with a mountain top finish at Black Mountain in the Brecon Beacons.\n\nSweetSpot announced the 2023 race route on 9 March 2023, but warned that the loss of key sponsors (such as previous vehicle partner Škoda) and increased running costs (20% higher than 2022 race) had left a shortfall in funding and that urgent additional income was required to ensure that the race could go ahead.[20] On 31 March 2023, SweetSpot announced that the race would go on hiatus in 2023, in light of the above financial issues.[21] In January 2024, organiser and promoter SweetSpot entered liquidation and the race was removed from the 2024 calendar.[22][23] The following month, British Cycling took over the running of the race, which was to be renamed as the **Tour of Britain Women**, and the race returned to the calendar but over a shorter four-day itinerary.[24][25]\n\n## Overall winners\n\n| Year | Country | Rider | Team |\n| --- | --- | --- | --- |\n| 2014 | Netherlands | Marianne Vos | Rabo–Liv |\n| 2015 | Germany | Lisa Brennauer | Velocio–SRAM |\n| 2016 | Great Britain | Lizzie Armitstead | Boels–Dolmans |\n| 2017 | Poland | Katarzyna Niewiadoma | WM3 Pro Cycling |\n| 2018 | United States | Coryn Rivera | Team Sunweb |\n| 2019 | Great Britain | Lizzie Deignan | Trek–Segafredo |\n| 2020 | **No race** due to the COVID-19 pandemic in the United Kingdom.[18] | | | |\n| 2021 | Netherlands | Demi Vollering | SD Worx |\n| 2022 | Italy | Elisa Longo Borghini | Trek–Segafredo |\n| 2023 | **No race** due to lack of funding.[21] | | | |\n| 2024 | Belgium | Lotte Kopecky | Team SD Worx–Protime |\n\n## Classification leaders jerseys\n\n| Classification | 2014 | 2015 | 2016 | 2017 | 2018 | 2019 | 2021 | 2022 | 2024 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| General |  | | |  | | |  |  |  |\n| Points |  |  | |  |  | |  |  |  |\n| Youth |  | | | Jersey replaced by sprints jersey | | | | |  |\n| Sprints | No award | | |  | | | | | No award |\n| Mountains |  | | |  | | |  | |  |\n| British |  |  |  | | | | *Trophy* | |  |\n| Team |  | No award |  |  | No award |  | No award | | |\n\n## Tour facts and figures\n\n**Overall winners**[26]\n\n* Eight riders have won the nine editions of the Tour of Britain Women since its inaugural 2014 race\n* Lizzie Deignan (GBR) is the sole double champion in race history to date: she won the 2016 and 2019 editions.\n* Coryn Rivera (USA) became the first non-European rider to win the race overall when she triumphed in the 2018 edition.\n* Katarzyna Niewiadoma (POL, 2017) and Lotte Kopecky (BEL, 2024) are the only riders to lead an edition of the race from start to finish.\n* The 2022 edition had the closest winning margin, with only one second separating winner Elisa Longo Borghini and runner-up Grace Brown.[27] Longo Borghini's victory made her the oldest winner at 30 years, 184 days.\n* Niewiadoma won the 2017 edition by the biggest margin to date: one minute and 18 seconds. She was also the youngest winner at 22 years, 256 days.\n\n**Stage winners**[26]\n\n* Marianne Vos (NED), Lorena Wiebes (NED) and Jolien D'Hoore (BEL) have won the most stages of the race to date: five.\n* Vos (three in 2014), Wiebes (three in 2022, two in 2021), D'Hoore (two in 2019) and Kopecky (2024) are the only riders to win multiple stages of the race in the same year.\n* Nine riders have won stages in more than one edition of the race: Vos (2014, 2016 and 2019); D'Hoore (2015, 2017 and 2018); Deignan (GBR, 2015, 2016 and 2019); Wiebes (NED, 2021, 2022 and 2024); Christine Majerus (LUX, 2015 and 2016); Amy Pieters (NED, 2016, 2017 and 2019); Lotta Henttala (2016 and 2018); Sarah Roy (AUS, 2017 and 2018) and Niewiadoma (POL, 2017 and 2019).\n* Five different riders won stages in each of the race editions except 2014 and 2021.\n* Twenty-four different riders have won stages of the Women's Tour – the most recent addition to the list being Ruby Roseman-Gannon in Manchester in 2024.\n* Thirteen different nationalities have won stages of the Women's Tour. Dutch riders have won the most (sixteen), nine ahead of Belgium.\n* Sarah Roy (AUS, stage four 2017 and stage three 2018), Chloe Hosking (AUS, stage three, 2017), Grace Brown (AUS, stage four, 2022), Coryn Rivera (USA, stage two 2018) and Ruby Roseman-Gannon (AUS, stage 4, 2024) are the only non-European stage winners in race history to date.\n\n**Host venues**[26]\n\n* On average, 300,000 people watch the Women's Tour from the roadside each year.\n* An estimated 125,000 fans watched the race's finale in London in 2017 – the race used the same 6.2 km circuit around Regent Street St James, Piccadilly, Strand and Whitehall that featured in the Tour of Britain in 2015, 2016 and 2018.\n* Atherstone (four stage starts and one finish) has hosted the race more than any other venue.\n* Suffolk has hosted the race more times than any other county: seven.\n* Wales hosted its first stage when stage five of the 2018 edition took place between Dolgellau and Colwyn Bay. The country then welcomed the final two days of the 2019 race, which took place in Powys and Carmarthenshire. It again hosted two stages in 2022 and 2024."
+          }
+        ]
+      },
+      "verifier": {
+        "type": "regex",
+        "pattern_id": "bullet_double_dash",
+        "verify_regex": [
+          "^-- .+"
+        ],
+        "verify_min_matches": 3
+      },
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "freeform_formatting_simple_agent"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    }
+  ],
+  "citation": [
+    {
+      "license": "CC BY 4.0",
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "user",
+            "content": "Read the following document parts and answer the question. Cite every source part using [ref:N].\n\n[Part 1]:\n# Dellrose, Tennessee\n\nDellrose, Tennessee\nUnincorporated community in Tennessee, United States\n\n| Dellrose, Tennessee | |\n| --- | --- |\n| Unincorporated community | |\n| {img Dellrose is located in Tennessee}{img Dellrose}DellroseShow map of Tennessee{img Dellrose is located in the United States}{img Dellrose}DellroseShow map of the United States | |\n| Coordinates: 35°06′47″N 86°48′05″W﻿ / ﻿35.11306°N 86.80139°W﻿ / 35.11306; -86.80139 | |\n| Country | United States |\n| State | Tennessee |\n| County | Lincoln |\n| Area[1] | |\n| • Total | 2.26 sq mi (5.86 km$^{2}$ ) |\n| • Land | 2.26 sq mi (5.86 km$^{2}$ ) |\n| • Water | 0.00 sq mi (0.00 km$^{2}$ ) |\n| Elevation | 673 ft (205 m) |\n| Population (2020)[2] | |\n| • Total | 73 |\n| • Density | 32.24/sq mi (12.45/km$^{2}$ ) |\n| Time zone | UTC-6 (Central (CST)) |\n| • Summer (DST) | UTC-5 (CDT) |\n| ZIP code | 38453 |\n| Area code | 931 |\n| GNIS feature ID | 1306325[3] |\n\n[Part 2]:\n**Dellrose** is an unincorporated community in Lincoln County, Tennessee, United States.[3] It has a post office, with ZIP code 38453. It is located along Tennessee State Route 273 between Elkton and Fayetteville.[4]\n\n## Demographics\n\nHistorical population\n| Census | Pop. | Note | %± |\n| --- | --- | --- | --- |\n| 2020 | 73 |  | — |\n| U.S. Decennial Census[5] | | | |\n\n## History\n\nOriginally known as \"Roosterville\", Dellrose was first formed as a village in 1867, although a post office had been present in the area since 1849. By 1886, it was home to several churches as well as a school, blacksmith, and physician.[6]\n\n[Part 3]:\n## Notes\n\n1. ↑  \"ArcGIS REST Services Directory\". United States Census Bureau. Retrieved October 15, 2022.\n2. ↑  \"Census Population API\". United States Census Bureau. Retrieved October 15, 2022.\n3. 1 2  \"Dellrose, Tennessee\". *Geographic Names Information System*. United States Geological Survey, United States Department of the Interior.\n4. ↑  United States Postal Service (2012). \"USPS - Look Up a ZIP Code\". Retrieved February 15, 2012.\n5. ↑  \"Census of Population and Housing\". Census.gov. Retrieved June 4, 2016.\n6. ↑  *History of Tennessee from the Earliest Time to the Present*. Goodspeed Publishing. 1886. ISBN 0-89308-118-3.\n\n| {img Stub icon} | This Lincoln County, Tennessee geography–related article is a stub. You can help Wikipedia by expanding it. |\n| --- | --- |\n\n[Part 4]:\n* v\n* t\n* e\n\nQuestion: What was the original name of Dellrose, Tennessee?"
+          }
+        ]
+      },
+      "verifier": {
+        "type": "string_match",
+        "patterns": [
+          "\\[ref:2\\]"
+        ],
+        "expected_markers": [
+          "[ref:2]"
+        ]
+      },
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "citation_format_simple_agent"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    },
+    {
+      "license": "CC BY 4.0",
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "user",
+            "content": "Citation format: use [N] to indicate source parts.\n\nDocument:\n[Part 1]:\n# 2015–16 Wolverhampton Wanderers F.C. season\n\n2015–16 Wolverhampton Wanderers F.C. season117th competitive season of Wolverhampton Wanderers\n\nWolverhampton Wanderers 2015–16 football season\n\nWolverhampton Wanderers\n| 2015–16 season | |\n| --- | --- |\n| Chairman | Steve Morgan |\n| Head Coach | Kenny Jackett |\n| Stadium | Molineux |\n| Championship | 14th |\n| FA Cup | 3rd Round |\n| League Cup | 3rd Round |\n| Top goalscorer | League: Benik Afobe (9)All: Benik Afobe (10) |\n| Highest home attendance | 25,488(vs Sheffield Wednesday,7 May 2016) |\n| Lowest home attendance | 7,384(vs Barnet,25 August 2015) |\n| Average home league attendance | 20,157 |\n|  | |\n| | **Home colours** | **Away colours** | | --- | --- | | |\n|  | |\n| ← 2014–152016–17 → | |\n\nThe **2015–16 season** was the 117th season of competitive league football in the history of English football club Wolverhampton Wanderers. The club are competing in the second tier of the English football system, the Football League Championship for a second consecutive year having finished 7th in the previous season following their promotion from League One.\n\nThe club ended the campaign in 14th position, one of their lowest finishes during the previous 25 years, having failed to compete for the play-offs. The season saw owner Steve Morgan resign as chairman and place the club up for sale but no sale has to date been concluded. Supporter unrest was strengthened further when Benik Afobe, who ended as the team's leading goalscorer, was sold during the January transfer window to Premier League Bournemouth.[1]\n\n[Part 2]:\n## Competitions\n\n### Pre-season\n\nChambly v Wolverhampton Wanderers\n\n| 8 July 2015 Friendly | **Chambly** | **2–3** | **Wolverhampton Wanderers** | Clairefontaine-en-Yvelines, France |\n| --- | --- | --- | --- | --- |\n| 15:00 CEST | Ouédraogo  21'Nzuzi Mata  78' | Report | Jacobs  32'Afobe  45+1'Enobakhare  89' | Stadium: INF ClairefontaineAttendance: 250 |\n\nParis FC v Wolverhampton Wanderers\n\n| 10 July 2015 Friendly | **Paris FC** | **0–1** | **Wolverhampton Wanderers** | Clairefontaine-en-Yvelines, France |\n| --- | --- | --- | --- | --- |\n| 15:00 CEST |  | Report | Wilson  84' | Stadium: INF Clairefontaine |\n\nBurton Albion v Wolverhampton Wanderers\n\n| 18 July 2015 Friendly | **Burton Albion** | **0–1** | **Wolverhampton Wanderers** | Burton upon Trent |\n| --- | --- | --- | --- | --- |\n| 13:00 BST |  | Report | Dicko  10' | Stadium: Pirelli StadiumAttendance: 2,702Referee: Darren Deadman |\n\nShrewsbury Town v Wolverhampton Wanderers\n\n| 25 July 2015 Friendly | **Shrewsbury Town** | **1–1** | **Wolverhampton Wanderers** | Shrewsbury |\n| --- | --- | --- | --- | --- |\n| 15:00 BST | Barnett  34' | Report | Dicko  10' | Stadium: Greenhous MeadowAttendance: 3,604 (1,499 away)Referee: Oliver Langford |\n\n[Part 3]:\nWolverhampton Wanderers v Aston Villa\n\n| 28 July 2015 Friendly | **Wolverhampton Wanderers** | **2–2** | **Aston Villa** | Wolverhampton |\n| --- | --- | --- | --- | --- |\n| 19:45 BST | Edwards  72'Afobe  89' | Report | Kozák  6', 76' | Stadium: MolineuxAttendance: 22,070 (3,897 away)Referee: Craig Pawson |\n\nDoncaster Rovers v Wolverhampton Wanderers\n\n| 1 August 2015 Friendly | **Doncaster Rovers** | **3–4** | **Wolverhampton Wanderers** | Doncaster |\n| --- | --- | --- | --- | --- |\n| 15:00 BST | Butler  20'Jones  45'Tyson  47' | Report | Afobe  21'Graham  29'Hause  36'Enobakhare  63' | Stadium: Keepmoat StadiumAttendance: 2,147 (588 away)Referee: Andy Madley |\n\n### Football League Championship\n\nSee also: 2015–16 Football League Championship\nA total of 24 teams competed in the Football League Championship in the 2015–16 season. Each team played every other team twice, once at their stadium, and once at the opposition's. Three points were awarded to teams for each win, one point per draw, and none for defeats.\n\nThe provisional fixture list was released on 17 June 2015, but was subject to change in the event of matches being selected for television coverage or police concerns.[2]\n\n[Part 4]:\nBlackburn Rovers v Wolverhampton Wanderers\n\n| 8 August 2015 1 | **Blackburn Rovers** | **1–2** | **Wolverhampton Wanderers** | Blackburn |\n| --- | --- | --- | --- | --- |\n| 15:00 BST | Conway  39' | Report | Afobe  29'Edwards  45' | Stadium: Ewood ParkAttendance: 16,159 (3,596 away fans)Referee: Mark Haywood |\n\nWolverhampton Wanderers v Hull City\n\n| 16 August 2015 2 | **Wolverhampton Wanderers** | **1–1** | **Hull City** | Wolverhampton |\n| --- | --- | --- | --- | --- |\n| 12:00 BST | Henry  58' | Report | Jelavić  22' (pen.) | Stadium: MolineuxAttendance: 20,062 (535 away fans)Referee: Andre Marriner |\n\nWolverhampton Wanderers v Queens Park Rangers\n\n| 19 August 2015 3 | **Wolverhampton Wanderers** | **2–3** | **Queens Park Rangers** | Wolverhampton |\n| --- | --- | --- | --- | --- |\n| 19:45 BST | Afobe  17'McDonald  24' | Report | Austin  38'Phillips  52', 72' | Stadium: MolineuxAttendance: 21,032 (594 away fans)Referee: Peter Bankes |\n\nCardiff City v Wolverhampton Wanderers\n\n| 22 August 2015 4 | **Cardiff City** | **2–0** | **Wolverhampton Wanderers** | Cardiff |\n| --- | --- | --- | --- | --- |\n| 17:15 BST | Jones  44'Ameobi  60' | Report |  | Stadium: Cardiff City StadiumAttendance: 14,820 (1,030 away fans)Referee: Andy Davies |\n\n[Part 5]:\nWolverhampton Wanderers v Charlton Athletic\n\n| 29 August 2015 5 | **Wolverhampton Wanderers** | **2–1** | **Charlton Athletic** | Wolverhampton |\n| --- | --- | --- | --- | --- |\n| 15:00 BST | Edwards  65'Le Fondre  85' | Report | Guðmundsson  55' | Stadium: MolineuxAttendance: 19,583 (698 away fans)Referee: Chris Kavanagh |\n\nBolton Wanderers v Wolverhampton Wanderers\n\n| 12 September 2015 6 | **Bolton Wanderers** | **2–1** | **Wolverhampton Wanderers** | Horwich |\n| --- | --- | --- | --- | --- |\n| 15:00 BST | Feeney  17'Clough  45+1' (pen.) | Report | Afobe  68' (pen.) | Stadium: Macron StadiumAttendance: 14,698 (1,845 away fans)Referee: Scott Duncan |\n\nWolverhampton Wanderers v Brighton & Hove Albion\n\n| 19 September 2015 7 | **Wolverhampton Wanderers** | **0–0** | **Brighton & Hove Albion** | Wolverhampton |\n| --- | --- | --- | --- | --- |\n| 15:00 BST |  | Report | Hemed {img soccer ball with red X} 23' | Stadium: MolineuxAttendance: 20,382 (1,084 away fans)Referee: Jeremy Simpson |\n\nPreston North End v Wolverhampton Wanderers\n\n| 26 September 2015 8 | **Preston North End** | **1–1** | **Wolverhampton Wanderers** | Preston |\n| --- | --- | --- | --- | --- |\n| 15:00 BST | Johnson  10' | Report | McDonald  90+1' | Stadium: DeepdaleAttendance: 13,049 (2,477 away fans)Referee: Trevor Kettle |\n\n[Part 6]:\nFulham v Wolverhampton Wanderers\n\n| 29 September 2015 9 | **Fulham** | **0–3** | **Wolverhampton Wanderers** | London |\n| --- | --- | --- | --- | --- |\n| 19:45 BST |  | Report | Le Fondre  56'Ojo  59'Henry  78' | Stadium: Craven CottageAttendance: 14,838 (1,377 away fans)Referee: Darren Drysdale |\n\nWolverhampton Wanderers v Huddersfield Town\n\n| 3 October 2015 10 | **Wolverhampton Wanderers** | **3–0** | **Huddersfield Town** | Wolverhampton |\n| --- | --- | --- | --- | --- |\n| 12:30 BST | McDonald  23'Afobe  66', 88' | Report |  | Stadium: MolineuxAttendance: 18,166 (409 away fans)Referee: Chris Kavanagh |\n\nDerby County v Wolverhampton Wanderers\n\n| 18 October 2015 11 | **Derby County** | **4–2** | **Wolverhampton Wanderers** | Derby |\n| --- | --- | --- | --- | --- |\n| 13:15 BST | Martin  3', 28' {img soccer ball with red X} 45+3'Johnson  45+3'Russell  57' | Report | Afobe  19'Le Fondre  64' | Stadium: iPro StadiumAttendance: 29,063 (1,391 away fans)Referee: Andy Madley |\n\nWolverhampton Wanderers v Brentford\n\n| 21 October 2015 12 | **Wolverhampton Wanderers** | **0–2** | **Brentford** | Wolverhampton |\n| --- | --- | --- | --- | --- |\n| 19:45 BST |  | Report | Djuricin  17'Hofmann  88' | Stadium: MolineuxAttendance: 18,167 (227 away fans)Referee: Paul Tierney |\n\n[Part 7]:\nWolverhampton Wanderers v Middlesbrough\n\n| 24 October 2015 13 | **Wolverhampton Wanderers** | **1–3** | **Middlesbrough** | Wolverhampton |\n| --- | --- | --- | --- | --- |\n| 15:00 BST | Edwards  22' | Report | Fabbrini  71'Leadbitter  82' (pen.\n\nQuestion: What was the venue for the 8 August 2015 Championship match in which Wolverhampton Wanderers defeated Blackburn Rovers 2–1?"
+          }
+        ]
+      },
+      "verifier": {
+        "type": "string_match",
+        "patterns": [
+          "\\[4\\]"
+        ],
+        "expected_markers": [
+          "[4]"
+        ]
+      },
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "citation_format_simple_agent"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    },
+    {
+      "license": "CC BY 4.0",
+      "responses_create_params": {
+        "input": [
+          {
+            "role": "user",
+            "content": "Sources:\n\n[Part 1]:\n# Steve Penny Steve PennyAmerican businessman and sports administrator | Steve Penny | | | --- | --- | | {img Portrait of Steve Penny 2016}Penny at 2016 Summer Olympics in Rio de Janeiro | | | Born | 1964 (age 59–60)Washington, U.S. | | Alma mater | University of Washington[1] | | Occupation | Businessman | | Known for | Former president of USA Gymnastics | **Stephen D. Penny Jr.** (born 1964) is an American businessman and sports administrator. He was president and CEO of USA Gymnastics (USAG) from 2005 until 2017, and is a key figure in the USA Gymnastics sex abuse scandal.[2] ## Career Penny began his career in sports\n\n[Part 2]:\nas a marketing and promotions assistant for the Seattle Mariners. His other employment has included work in the travel and tourism industries. Penny became active within the Olympic movement when he was hired by Turner Broadcasting in 1989 as a research manager for the 1990 Goodwill Games. In 1991, Penny became the director of media and public relations for USA Cycling and eventually became managing director of the United States Cycling Federation, which oversaw the amateur road and track cycling disciplines. Penny left USA Cycling in 1996, returning to his hometown of Seattle to become vice president of Bob Walsh Enterprises, focused on business development in conjunction with sports marketing, events, media and consulting.[3]\n\n[Part 3]:\n### USA Gymnastics\n\nPenny joined USA Gymnastics in March 1999 as the senior vice president, overseeing a variety of areas focused on business development. Within a few years, his responsibilities grew to oversee the marketing, sponsorship, event operations, television and communications, including the management of the 2003 World Artistic Gymnastics Championships in Anaheim, California. On April 4, 2005, Penny became president of USAG.\n\n#### Sex abuse scandal\n\nMain article: USA Gymnastics sex abuse scandal\nDuring Penny's tenure, USAG leaders routinely dismissed complaints and warnings that employees and USAG-affiliated coaches were sexually abusing gymnasts in their programs.[4][5] In a 2013 lawsuit, USAG officials admitted under oath that allegations of sexual abuse were routinely dismissed as hearsay unless they came directly from a victim or victim's parent. Even when USAG leaders believed the accusers, they sometimes allowed coaches to continue coaching for years.[4]\n\n[Part 4]:\nIn a 2015 deposition in a lawsuit against USAG, Penny testified that the organization rarely forwarded allegations of child abuse to police or child protective services. He said this was to avoid the risk of damaging a coach's reputation with false allegations. He also said that USAG officials had no duty to report abuse allegations if they had no first-hand knowledge of them. USAG dismissed complaints as hearsay unless they were signed by an alleged abuse victim or a victim's parent. \"To the best of my knowledge, there's no duty to report if you are—if you are a third-party to some allegation...You know, that lies with the person who has first-hand knowledge,\" Penny said.[4]\n\nAlso in 2015, USAG quietly fired Larry Nassar, who had served for 18 years as sports-medicine doctor for the women's national team. USAG said it acted \"after learning of athlete concerns\".[6][7][8] But Nassar continued to run a clinic and gymnastics club at MSU,[7] where he was a faculty member.[9] He would ultimately be arrested on charges of sexually assaulting at least 265 girls and women under his care.[10]\n\n[Part 5]:\nIn 2016, an investigation by *The Indianapolis Star* found that abuses by Nassar and others were widespread because \"predatory coaches were allowed to move from gym to gym, undetected by a lax system of oversight, or dangerously passed on by USA Gymnastics-certified gyms\".*[11]* More than 500 athletes alleged that they were sexually assaulted \"by gym owners, coaches, and staff working for gymnastics programs across the country\", including USAG and Michigan State University (MSU).[12][13][14]\n\nIn February 2017, Penny was accused by former Olympic gymnast Dominique Moceanu of directing USAG' efforts to downplay the abuse of gymnasts; she called for his resignation. USAG responded by saying that Penny was a leader in ensuring the safety and well-being of USAG gymnasts.[15]\n\nUnder pressure from the United States Olympic Committee, and \"amid growing outrage over the way he and other top USAG officials responded to sexual abuse complaints against coaches and other members\",[16] Penny resigned from USAG on March 16, 2017.[17]\n\n[Part 6]:\nFour years later, the USOPC and USAG would pay \\$380 million to settle lawsuits brought by more than 500 athletes who alleged that USAG was culpable in their assaults.[12]\n\n### After USA Gymnastics\n\nWhen Penny testified before Congress in June 2018, he invoked his Fifth Amendment rights to avoid answering questions, leading to a cry of \"Shame!\" from one onlooker.[18]\n\nOn October 17, 2018, the United States Marshals Smoky Mountains Fugitive Task Force arrested Penny on charges of tampering with evidence during the investigation of sexual assaults against Larry Nassar. The indictment further alleges that Penny ordered the removal of the documents from the Karolyi Ranch that were related to the activities of Nassar. If convicted, Penny would have faced a punishment of 2 to 10 years in prison and up to a \\$10,000 fine.[19] The evidence-tampering charges against Penny were dismissed in 2022. A dismissal letter filed on April 14, 2022, said, \"There is now insufficient evidence to prosecute according to current law and facts present in the case.\"[20]\n\n[Part 7]:\nThe day after his arrest, USAG placed Penny on its \"permanently ineligible\" list of members \"per the provisions in SafeSport Code for the U.S. Olympic and Paralympic Movement, III.A.4, and USA Gymnastics Bylaw 10.14(b).\"[21]\n\n## Personal life\n\nPenny graduated from Mercer Island High School, then the University of Washington in 1987. He has three daughters, triplets born in 2005.[22]\n\nPenny is a central figure in the 2020 film *Athlete A*, a documentary about the USA Gymnastics sex abuse scandal.\n\nQuestion: When did Steve Penny resign as president of USA Gymnastics?\n\nAnswer with inline citations using [web:N] after each factual sentence. Start with a direct answer. Use multiple citations like [web:1][web:3] when a claim draws from several sources."
+          }
+        ]
+      },
+      "verifier": {
+        "type": "string_match",
+        "patterns": [
+          "\\[web:3\\]",
+          "\\[web:5\\]",
+          "\\[web:6\\]",
+          "\\[web:7\\]"
+        ],
+        "expected_markers": [
+          "[web:3]",
+          "[web:5]",
+          "[web:6]",
+          "[web:7]"
+        ]
+      },
+      "agent_ref": {
+        "type": "responses_api_agents",
+        "name": "citation_format_simple_agent"
+      },
+      "used_in": [
+        "ultra_v3"
+      ]
+    }
+  ]
+}
