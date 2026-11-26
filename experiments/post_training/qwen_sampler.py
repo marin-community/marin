@@ -197,6 +197,7 @@ def budget_preset(
     seed: int,
     *,
     revision: str,
+    layout: Layout,
     max_updates: int,
     tokens: int,
     evaluation: Evaluation,
@@ -209,11 +210,46 @@ def budget_preset(
         kind,
         epsilon,
         seed,
-        layout=replace(RNO_PAIR_LAYOUT, coordinator_timeout_hours=3, job_timeout_seconds=7200),
+        layout=replace(layout, coordinator_timeout_hours=3, job_timeout_seconds=7200),
         revision=revision,
         evaluation_interval=None,
     )
     return with_rollout_token_budget(replace(preset, evaluations=(evaluation,), held_out_tasks=held_out_tasks), tokens)
+
+
+def source_pass_presets(prefix: str, layout: Layout) -> tuple[Preset, ...]:
+    """Bind the same source-pass study to an explicit two-H100 placement."""
+    return (
+        *(
+            sampler_preset(
+                f"{prefix}source-pass-smoke-{arm}",
+                4,
+                kind,
+                epsilon,
+                83,
+                layout=layout,
+                revision="2026.11.25.12",
+                evaluation_interval=4,
+            )
+            for arm, kind, epsilon in SOURCE_PASS_ARMS
+        ),
+        *(
+            budget_preset(
+                f"{prefix}source-pass-confirm-{arm}-seed{seed}",
+                kind,
+                epsilon,
+                seed,
+                revision="2026.11.25.13",
+                layout=layout,
+                max_updates=BUDGET_CONFIRM_UPDATES,
+                tokens=BUDGET_CONFIRM_TOKENS,
+                evaluation=PASS_EVAL,
+                held_out_tasks=qwen_sampler_lab.PASS_EVAL.reference,
+            )
+            for arm, kind, epsilon in (*SOURCE_PASS_ARMS, WITHIN_SOURCE_ARM, THOMPSON_ARM)
+            for seed in (83, 97)
+        ),
+    )
 
 
 def layout_presets(
@@ -267,6 +303,7 @@ QWEN_SAMPLER = ModelPresets(
                 epsilon,
                 seed,
                 revision="2026.11.25.9",
+                layout=RNO_PAIR_LAYOUT,
                 max_updates=160,
                 tokens=3_000_000,
                 evaluation=replace(FULL_VALIDATION, at_start=True),
@@ -296,6 +333,7 @@ QWEN_SAMPLER = ModelPresets(
                 epsilon,
                 seed,
                 revision="2026.11.25.11",
+                layout=RNO_PAIR_LAYOUT,
                 max_updates=BUDGET_CONFIRM_UPDATES,
                 tokens=BUDGET_CONFIRM_TOKENS,
                 evaluation=SOURCE_EVAL,
@@ -305,34 +343,8 @@ QWEN_SAMPLER = ModelPresets(
             if arm in {"thompson", "cost-aware-eps05", "within-source", "within-source-random"}
             for seed in (67, 79)
         ),
-        *(
-            sampler_preset(
-                f"rno-pair-source-pass-smoke-{arm}",
-                4,
-                kind,
-                epsilon,
-                83,
-                layout=RNO_PAIR_LAYOUT,
-                revision="2026.11.25.12",
-                evaluation_interval=4,
-            )
-            for arm, kind, epsilon in SOURCE_PASS_ARMS
-        ),
-        *(
-            budget_preset(
-                f"rno-pair-source-pass-confirm-{arm}-seed{seed}",
-                kind,
-                epsilon,
-                seed,
-                revision="2026.11.25.13",
-                max_updates=BUDGET_CONFIRM_UPDATES,
-                tokens=BUDGET_CONFIRM_TOKENS,
-                evaluation=PASS_EVAL,
-                held_out_tasks=qwen_sampler_lab.PASS_EVAL.reference,
-            )
-            for arm, kind, epsilon in (*SOURCE_PASS_ARMS, WITHIN_SOURCE_ARM, THOMPSON_ARM)
-            for seed in (83, 97)
-        ),
+        *source_pass_presets("rno-pair-", RNO_PAIR_LAYOUT),
+        *source_pass_presets("east02-pair-", LAYOUT),
         *(
             token_budget_smoke(arm, kind, epsilon)
             for arm, kind, epsilon in RNO_PAIR_PILOT_ARMS
