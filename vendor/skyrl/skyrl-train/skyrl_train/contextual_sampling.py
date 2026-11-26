@@ -18,11 +18,11 @@ import numpy as np
 from numpy.typing import NDArray
 
 from skyrlrecipe.declared import PromptAcquisition
+from skyrl_train.rollouts.prompt_order import PromptFeedback, PromptOrder, PromptSelection, SamplingFeedbackPhase
 
 _HASH_DIMENSION = 12
 _PRIOR_PRECISION = 2.0
 _CHECKPOINT_VERSION = 1
-_SCORE_SPREAD = 0.05
 _MIN_COST_WEIGHT = 0.65
 _MAX_COST_WEIGHT = 1.5
 _COST_EXPONENT = 0.6
@@ -46,36 +46,6 @@ def public_prompt_digest(text: str) -> str:
     """Fingerprint public text for training/evaluation overlap checks."""
     normalized = " ".join(text.split())
     return hashlib.sha256(normalized.encode()).hexdigest()
-
-
-@dataclass(frozen=True)
-class PromptFeedback:
-    """The outcome of one dispatched training group, including work spent on failures."""
-
-    lease_id: str
-    uid: str
-    dispatch_step: int
-    sample_count: int
-    verified_scores: tuple[float | None, ...] | None
-    generated_tokens: int
-    nonzero_advantage_tokens: int | None
-
-    @property
-    def fully_verified(self) -> bool:
-        scores = self.verified_scores
-        return (
-            scores is not None
-            and len(scores) == self.sample_count >= 2
-            and all(score is not None and math.isfinite(score) and 0 <= score <= 1 for score in scores)
-        )
-
-    @property
-    def useful(self) -> bool:
-        """Check for full verification, score spread of at least 0.05, and nonzero training advantage."""
-        if not self.fully_verified or not self.nonzero_advantage_tokens:
-            return False
-        scores = [score for score in self.verified_scores or () if score is not None]
-        return max(scores) - min(scores) >= _SCORE_SPREAD
 
 
 @lru_cache(maxsize=4096)
@@ -134,7 +104,7 @@ def _source_quota_boundaries(shares: NDArray[np.float64], capacities: NDArray, s
     return quotas.cumsum()[:-1]
 
 
-class PromptThompsonOrder:
+class PromptThompsonOrder(PromptOrder):
     """Rank distinct training prompts by sampled probability of useful optimizer input.
 
     Source-only ranks prompts from the same source equally. Contextual ranking also
@@ -142,6 +112,23 @@ class PromptThompsonOrder:
     predicted to spend fewer generated tokens. Within-source cost-aware ranking
     preserves the reference mixture in each window up to randomized rounding and pool capacity.
     """
+
+    feedback_phase = SamplingFeedbackPhase.OPTIMIZER
+
+    @property
+    def retry_stale(self) -> bool:
+        return not self.uses_source_passes
+
+    @property
+    def supports_family_leases(self) -> bool:
+        return bool(self._groups_per_family)
+
+    def select_index(self, selection: PromptSelection) -> int | None:
+        if self.uses_source_passes:
+            return self.next_pass_index(selection.quarantined | selection.live)
+        if selection.family is not None:
+            return self.next_family_index(selection.family, selection.rows, selection.eligible)
+        return super().select_index(selection)
 
     def __init__(
         self,

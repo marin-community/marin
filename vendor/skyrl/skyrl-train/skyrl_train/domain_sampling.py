@@ -10,6 +10,8 @@ from typing import Any
 
 import datasets
 
+from skyrl_train.rollouts.prompt_order import PromptOrder
+
 ROUTE_COLUMN = "teacher_route"
 
 
@@ -31,7 +33,7 @@ def weighted_quotas(total: int, weights: Mapping[str, float], batch_index: int) 
     return quotas
 
 
-class DomainWeightedOrder:
+class DomainWeightedOrder(PromptOrder):
     """Cycle shuffled route pools, composing every window of ``window_size`` rows with an exact weighted mixture.
 
     Rows within one window are unique. Groups can finish out of order or be discarded, so a training batch

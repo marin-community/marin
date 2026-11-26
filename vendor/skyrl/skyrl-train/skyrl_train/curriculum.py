@@ -29,7 +29,7 @@ from omegaconf import DictConfig
 
 from skyrl_train.config.sampling import SamplingKind
 from skyrl_train.dataset import PromptDataset
-from skyrl_train.rollouts.loader import JudgedGroup
+from skyrl_train.rollouts.prompt_order import JudgedGroup, PromptOrder
 
 EXTRA_INFO_KEY = "extra_info"
 DATA_SOURCE_KEY = "data_source"
@@ -467,7 +467,7 @@ def build_policy(config: CurriculumConfig, bins: DatasetBins) -> WeightPolicy:
     raise ValueError(f"Unknown sampling kind: {config.kind}")
 
 
-class CurriculumOrder:
+class CurriculumOrder(PromptOrder):
     """Draw dataset rows with replacement from per-bin curriculum weights, learning from each step's groups.
 
     Draws are uniform within a bin and deterministic given the seed and draw history. Rows are distinct within

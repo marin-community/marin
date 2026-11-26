@@ -30,6 +30,7 @@ from skyrl_train.rollouts.loader import (
     QUARANTINED_PROMPTS_METRIC,
     STALE_RETRIES_EXHAUSTED_METRIC,
     PromptLoader,
+    PromptLoaderState,
     SeededPasses,
 )
 from skyrl_train.telemetry import GeneratedWork
@@ -99,6 +100,97 @@ def _family_thompson_loader(families, quotas, *, staleness=0, acquisition=Prompt
         family_minimums=minimum_family_pool_sizes(quotas, staleness),
     )
     return loader, order
+
+
+def test_seeded_loader_preserves_quarantine_and_retry_budget(tmp_path):
+    original = loader(num_rows=7, batch_size=2, max_unusable_groups=2)
+    original.record_disposition("0", UNUSABLE)
+    original.record_disposition("0", UNUSABLE)
+    original.record_disposition("1", UNUSABLE)
+    retry = original.next_prompt({"0", "1"})
+    original.retry(retry)
+    original.observe([])
+
+    checkpoint = tmp_path / "seeded.pt"
+    torch.save(original.state_dict(), checkpoint)
+    restored = loader(num_rows=7, batch_size=2, max_unusable_groups=2)
+    restored.load_state_dict(torch.load(checkpoint, weights_only=False))
+    for current in (original, restored):
+        assert current.next_prompt(()) == retry
+        current.retry(retry)
+        current.record_disposition("1", UNUSABLE)
+        metrics = current.observe([])
+        assert metrics[STALE_RETRIES_EXHAUSTED_METRIC] == 1
+        assert metrics[QUARANTINED_PROMPTS_METRIC] == 2
+        assert not {"0", "1"}.intersection(offered(current, 9))
+        for _ in range(QUARANTINE_STEPS - 2):
+            current.observe([])
+        assert "0" in offered(current, 9)
+        assert "1" not in offered(current, 9)
+        current.observe([])
+        assert "1" in offered(current, 9)
+
+
+def test_legacy_loader_checkpoint_restores_queued_retry_without_eligibility(tmp_path):
+    original = loader(num_rows=5, batch_size=2, max_unusable_groups=1)
+    retry = original.next_prompt(())
+    state = PromptLoaderState(original.state_dict().order, [retry])
+    # The original pickle contained only the order and the queued retries.
+    object.__delattr__(state, "eligibility")
+    checkpoint = tmp_path / "legacy-loader.pt"
+    torch.save(state, checkpoint)
+
+    restored = loader(num_rows=5, batch_size=2, max_unusable_groups=1)
+    restored.record_disposition(retry["uid"], UNUSABLE)
+    restored.load_state_dict(torch.load(checkpoint, weights_only=False))
+    assert restored.next_prompt(()) == retry
+    assert restored.observe([])[QUARANTINED_PROMPTS_METRIC] == 0
+
+
+def test_weighted_loader_restores_fallback_scan_position():
+    def make_loader():
+        order = AdaptiveSourceOrder(
+            ["busy", "free", "free", "free"],
+            {"busy": 1, "free": 0.0001},
+            seed=37,
+            window_size=1,
+            decay=0.95,
+            epsilon=1,
+            prior_alpha=1,
+            prior_beta=1,
+        )
+        return PromptLoader(
+            Prompts(4), order, batch_size=1, minimum_pool_size=2, max_stale_retries=1, max_unusable_groups=1
+        )
+
+    original = make_loader()
+    assert original.next_prompt({"0"})["uid"] == "1"
+    restored = make_loader()
+    restored.load_state_dict(original.state_dict())
+    assert original.next_prompt({"0"})["uid"] == restored.next_prompt({"0"})["uid"] == "2"
+
+
+def test_order_without_family_leases_rejects_a_partitioned_loader():
+    order = AdaptiveSourceOrder(
+        ["one", "one", "two", "two"],
+        {},
+        seed=37,
+        window_size=2,
+        decay=0.95,
+        epsilon=1,
+        prior_alpha=1,
+        prior_beta=1,
+    )
+    with pytest.raises(ValueError, match="does not support family leases"):
+        PromptLoader(
+            Prompts(4),
+            order,
+            batch_size=2,
+            minimum_pool_size=3,
+            max_stale_retries=1,
+            max_unusable_groups=1,
+            families={"0": "agentic", "1": "agentic", "2": "math", "3": "math"},
+        )
 
 
 def test_family_thompson_resumes_retries_quarantine_and_exhaustion(tmp_path):
@@ -260,7 +352,6 @@ def test_adaptive_loader_scans_past_live_rows_and_resumes_a_stale_retry():
         )
         return PromptLoader(
             Prompts(2), order, batch_size=1, minimum_pool_size=2, max_stale_retries=1, max_unusable_groups=2,
-            observe_judged=order.observe,
         )
 
     prompts = make_loader()

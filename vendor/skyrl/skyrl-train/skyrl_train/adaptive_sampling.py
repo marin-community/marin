@@ -13,10 +13,10 @@ import numpy as np
 
 from skyrl_train.curriculum import ThompsonInformative
 from skyrl_train.metric_names import curriculum_metric_prefix
-from skyrl_train.rollouts.loader import JudgedGroup
+from skyrl_train.rollouts.prompt_order import JudgedGroup, PromptOrder, SamplingFeedbackPhase
 
 
-class AdaptiveSourceOrder:
+class AdaptiveSourceOrder(PromptOrder):
     """Weight sources by the estimated rate of informative verifier groups.
 
     Each fully graded prompt group supplies one observation. A group is informative when
@@ -25,6 +25,8 @@ class AdaptiveSourceOrder:
     epsilon for the reference mixture. The Thompson rule uses epsilon as a per-bin floor
     parameter and keeps each draw until the next feedback batch.
     """
+
+    feedback_phase = SamplingFeedbackPhase.ADMISSION
 
     def __init__(
         self,

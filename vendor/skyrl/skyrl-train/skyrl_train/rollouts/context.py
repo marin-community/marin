@@ -42,7 +42,6 @@ from skyrl_train.config.sampling import (
     validate_sampling_reversion,
 )
 from skyrl_train.contextual_sampling import (
-    PromptFeedback,
     PromptThompsonOrder,
     PublicPrompt,
     public_prompt_digest,
@@ -77,7 +76,8 @@ from skyrl_train.rollouts.buffer import (
     RolloutTask,
     SourceRejections,
 )
-from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
+from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, SeededPasses
+from skyrl_train.rollouts.prompt_order import PromptFeedback, PromptOrder, SamplingFeedbackPhase
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
 from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
@@ -324,8 +324,6 @@ class TrainingContext:
         *,
         rollout_spans: bool,
         grader_report_path: str | None = None,
-        assign_sampling_source: Callable[[str], str] | None = None,
-        observe_after_optimizer: Callable[[int, Sequence[PromptFeedback]], dict[str, float]] | None = None,
     ):
         self.loader = loader
         self.config = config
@@ -333,8 +331,6 @@ class TrainingContext:
         self._workers = workers
         self._rollout_spans = rollout_spans
         self._grader_report_path = grader_report_path
-        self._assign_sampling_source = assign_sampling_source
-        self._observe_after_optimizer = observe_after_optimizer
         self._grader_report_attempt = os.environ.get(EXECUTION_UID_ENV) or uuid4().hex
         self.mode = TrainingType.SYNC if config.max_staleness_steps == 0 else TrainingType.ASYNC
         self._policy_step = 0
@@ -407,7 +403,6 @@ class TrainingContext:
         object_store_root = config.trainer.rollout_buffer.object_store_root
         report_graders = bool(config.trainer.get("dump_grader_report", False))
         order = prompt_order_from_config(config, dataset, held_out=held_out, groups_per_family=groups_per_family)
-        assign_source = order.assign if isinstance(order, (AdaptiveSourceOrder, PromptThompsonOrder)) else None
         return cls(
             PromptLoader(
                 dataset,
@@ -418,7 +413,6 @@ class TrainingContext:
                 max_unusable_groups=config.trainer.rollout_buffer.max_unusable_groups,
                 families=families,
                 family_minimums=minimum_family_pool_sizes(groups_per_family, buffer_config.max_staleness_steps),
-                observe_judged=order.observe if isinstance(order, (AdaptiveSourceOrder, CurriculumOrder)) else None,
             ),
             buffer_config,
             start_rollout_buffer(buffer_config),
@@ -428,8 +422,6 @@ class TrainingContext:
             ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
             rollout_spans=config.trainer.rollout_spans,
             grader_report_path=str(config.trainer.grader_report_dir) if report_graders else None,
-            assign_sampling_source=assign_source,
-            observe_after_optimizer=order.finish_step if isinstance(order, PromptThompsonOrder) else None,
         )
 
     def start(self) -> None:
@@ -517,8 +509,9 @@ class TrainingContext:
         groups: list[AdmittedRollout] = []
         gross_tokens = 0
         sampling_dispositions: list[GroupDisposition] = []
-        sampling_receipts_enabled = self._assign_sampling_source is not None
-        tracks_prompt_feedback = self._observe_after_optimizer is not None
+        phase = self.loader.order.feedback_phase
+        sampling_receipts_enabled = phase is not SamplingFeedbackPhase.NONE
+        tracks_prompt_feedback = phase is SamplingFeedbackPhase.OPTIMIZER
         deadline = loop.time() + stall_timeout
         while True:
             timeout = max(deadline - loop.time(), 0.0)
@@ -542,7 +535,7 @@ class TrainingContext:
                     raise ValueError("selected batch group indices are not ordered from zero")
                 await self._write_grader_report()
                 sampling_metrics = self.loader.observe(admission.selection.judged)
-                if sampling_receipts_enabled and not tracks_prompt_feedback:
+                if phase is SamplingFeedbackPhase.ADMISSION:
                     _record_sampling_feedback(admission.batch_id)
                 return RolloutBatchMetadata(
                     self._policy_step,
@@ -558,7 +551,7 @@ class TrainingContext:
         """Update the prompt policy only once optimizer participation is known."""
         if counts is not None:
             record_sampling_training(batch, counts)
-        if self._observe_after_optimizer is None:
+        if self.loader.order.feedback_phase is not SamplingFeedbackPhase.OPTIMIZER:
             return {}
         feedback = []
         for outcome in batch.sampling_dispositions:
@@ -578,7 +571,7 @@ class TrainingContext:
                     ),
                 )
             )
-        metrics = self._observe_after_optimizer(batch.batch_id, feedback)
+        metrics = self.loader.order.finish_step(batch.batch_id, feedback)
         _record_sampling_feedback(batch.batch_id)
         return metrics
 
@@ -612,7 +605,7 @@ class TrainingContext:
             snapshot.discarded,
             snapshot.source_rejections,
             snapshot.sampling_dispositions,
-            snapshot.family_order if loader.eligibility is not None else (),
+            snapshot.family_order,
         )
 
     async def load_state_dict(self, state: TrainingContextState) -> None:
@@ -677,8 +670,8 @@ class TrainingContext:
                 # single acquired lease, but do not submit its generation yet.
                 await self._submission_allowed.wait()
                 request = self._request_spec.request(prompt, lease.policy_step)
-                if self._assign_sampling_source is not None:
-                    prompt = {**prompt, SAMPLING_SOURCE: self._assign_sampling_source(prompt["uid"])}
+                if (source := self.loader.order.assign(prompt["uid"])) is not None:
+                    prompt = {**prompt, SAMPLING_SOURCE: source}
                     metadata = prompt["input"].metadata
                     identity = metadata.evaluation_identity
                     record_event(
