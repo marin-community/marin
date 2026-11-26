@@ -381,6 +381,7 @@ def test_curriculum_load_expected_counts_come_from_the_compose_handoff(tmp_path)
         plan.release_id,
         handoff,
         handoff=handoff,
+        source_count=4,
         inventory_count=5,
         task_count=900,
         confidence_validated_rows=11,
@@ -391,6 +392,7 @@ def test_curriculum_load_expected_counts_come_from_the_compose_handoff(tmp_path)
     assert inputs["handoff"] == handoff
     assert inputs["text_scan"] == scan_receipt
     assert inputs["expected_inventory_count"] == 5
+    assert inputs["expected_aligned_sources"] == 4
     assert inputs["expected_task_count"] == 900
     assert inputs["expected_confidence_rows"] == 11
     assert inputs["prior_curriculum_load_id"] == plan.prior_curriculum_load_id

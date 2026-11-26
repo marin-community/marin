@@ -1935,7 +1935,7 @@ def _curriculum_load_step(
             "text_scan": scan_proof["receipt"],
             "expected_source_count": plan.expected_source_count,
             "expected_inventory_count": compose_proof["inventory_count"],
-            "expected_aligned_sources": plan.expected_source_count,
+            "expected_aligned_sources": compose_proof["source_count"],
             "expected_task_count": compose_proof["task_count"],
             "expected_rebound_source": plan.rebound_source,
             "expected_rebound_tasks": plan.rebound_tasks,

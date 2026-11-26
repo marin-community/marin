@@ -80,14 +80,17 @@ def read_ref(ref: ArtifactRef) -> dict:
 
 def verify_handoff(inputs: CurriculumLoadInputs, handoff: dict) -> None:
     """The composition handoff must describe a complete, unchanged composition."""
-    if handoff["source_count"] != inputs.expected_source_count:
-        raise ValueError(f"handoff has {handoff['source_count']} sources, expected {inputs.expected_source_count}")
-    if handoff["inventory_count"] != inputs.expected_inventory_count:
+    # The compose handoff's vocabulary: ``source_count`` counts the aligned (matched)
+    # sources, ``inventory_count`` the catalog sources the plan declares.
+    if handoff["source_count"] != inputs.expected_aligned_sources:
+        raise ValueError(f"handoff aligns {handoff['source_count']} sources, expected {inputs.expected_aligned_sources}")
+    if handoff["inventory_count"] not in {inputs.expected_inventory_count} & {inputs.expected_source_count}:
         raise ValueError(
             f"handoff inventories {handoff['inventory_count']} sources, expected {inputs.expected_inventory_count}"
+            f" (plan: {inputs.expected_source_count})"
         )
-    if handoff["tasks"] != inputs.expected_task_count:
-        raise ValueError(f"handoff carries {handoff['tasks']} tasks, expected {inputs.expected_task_count}")
+    if handoff["task_count"] != inputs.expected_task_count:
+        raise ValueError(f"handoff carries {handoff['task_count']} tasks, expected {inputs.expected_task_count}")
     unchanged = (
         handoff["all_retained_assignment_values_verified"],
         handoff["all_statistics_and_confidence_values_unchanged"],
@@ -104,9 +107,9 @@ def verify_handoff(inputs: CurriculumLoadInputs, handoff: dict) -> None:
             f"handoff rebound {handoff['rebound_source']!r} ({handoff['rebound_tasks']} tasks);"
             f" expected {inputs.expected_rebound_source!r} ({inputs.expected_rebound_tasks})"
         )
-    if handoff["confidence_rows_validated"] != inputs.expected_confidence_rows:
+    if handoff["confidence_validated_rows"] != inputs.expected_confidence_rows:
         raise ValueError(
-            f"handoff validated {handoff['confidence_rows_validated']} confidence rows,"
+            f"handoff validated {handoff['confidence_validated_rows']} confidence rows,"
             f" expected {inputs.expected_confidence_rows}"
         )
 
@@ -127,7 +130,7 @@ def verify_text_scan(
         raise ValueError("text scan coverage artifact disagrees with the handoff")
     if scan["artifacts"]["confidence"] != ArtifactRef(**handoff["confidence"]).model_dump(mode="json"):
         raise ValueError("text scan confidence artifact disagrees with the handoff")
-    if scan["task_count"] != handoff["tasks"] or scan["source_count"] != handoff["source_count"]:
+    if scan["task_count"] != handoff["task_count"] or scan["source_count"] != handoff["source_count"]:
         raise ValueError("text scan counts disagree with the handoff")
     if scan["sample_task_count"] != coverage["sample_task_count"]:
         raise ValueError("text scan sample task count disagrees with the coverage")
@@ -162,7 +165,7 @@ def run_curriculum_load(
                 "prior_curriculum_load_id": inputs.prior_curriculum_load_id,
                 "handoff": {"uri": inputs.handoff.uri, "sha256": inputs.handoff.sha256},
                 "source_count": handoff["source_count"],
-                "tasks": handoff["tasks"],
+                "tasks": handoff["task_count"],
                 "sql_writes": 0,
             }
             alerts.stage_finished(
@@ -224,7 +227,7 @@ def _run_write(inputs, handoff, coverage, scan_ref, query, query_factory, loader
         "SELECT COUNT(*) AS n FROM curriculum_sources WHERE load_id=:load AND alignment->>'basis'='matched'",
         {"load": selected[0]["load_id"]},
     )["rows"][0]["n"]
-    if readback["sources"] != inputs.expected_inventory_count or aligned != inputs.expected_source_count:
+    if readback["sources"] != inputs.expected_inventory_count or aligned != inputs.expected_aligned_sources:
         raise ValueError(f"curriculum readback {readback} with {aligned} matched sources disagrees with the handoff")
     if readback["tasks"] != coverage["sample_task_count"]:
         raise ValueError("curriculum readback task count disagrees with the coverage")
