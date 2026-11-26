@@ -70,7 +70,6 @@ from skyrl_train.models.grug_moe import GrugMoeForCausalLM
 from skyrl_train.batch_invariant import enable_trainer_batch_invariance
 from skyrl_train.utils.utils import (
     configure_ray_worker_logging,
-    get_tcp_url,
     resolve_actor_cuda_env,
     resolve_pinned_local_rank,
 )
@@ -395,22 +394,12 @@ class Worker(DistributedTorchRayActor):
         assert inference_engine_client is not None
 
         if torch.distributed.get_rank() == 0:
-            # Debug: understand where master_addr comes from
-            import socket as sock_module
-
-            hostname = sock_module.gethostname()
-            global_node = ray._private.worker._global_node
-            global_node_ip = global_node.node_ip_address if global_node else "None"
-
-            master_addr = ray._private.services.get_node_ip_address()
-
-            logging.info(f"[weight-sync] hostname={hostname}")
-            logging.info(f"[weight-sync] _global_node.node_ip_address={global_node_ip}")
-            logging.info(f"[weight-sync] get_node_ip_address()={master_addr}")
-
-            with socket.socket() as sock:
-                sock.bind(("", 0))
-                master_port = sock.getsockname()[1]
+            master_addr = self._master_addr
+            assert master_addr is not None
+            store = torch.distributed.TCPStore(
+                master_addr, 0, is_master=True, timeout=torch.distributed.default_pg_timeout, wait_for_workers=False
+            )
+            master_port = store.port
             logging.info(f"[weight-sync] Using master_addr={master_addr}, master_port={master_port}")
 
             num_inference_engines, tensor_parallel_size, pipeline_parallel_size, data_parallel_size = (
@@ -427,8 +416,7 @@ class Worker(DistributedTorchRayActor):
             group_name = "skyrl"
             self._model_update_group_name = group_name
 
-            tasks = []
-            tasks.append(
+            _, self._model_update_group = await asyncio.gather(
                 inference_engine_client.init_weight_update_communicator(
                     master_addr=master_addr,
                     master_port=master_port,
@@ -437,30 +425,18 @@ class Worker(DistributedTorchRayActor):
                     group_name=group_name,
                     backend=backend,
                     override_existing=override_existing,
-                )
-            )
-
-            tasks.append(
+                ),
                 asyncio.to_thread(
                     init_custom_process_group,
                     backend=backend,
-                    init_method=get_tcp_url(master_addr, master_port),
+                    store=torch.distributed.PrefixStore(group_name, store),
                     world_size=world_size,
                     rank=0,
                     group_name=group_name,
                     pg_options=self._weight_sync_pg_options,
-                )
+                ),
             )
-            results = await asyncio.gather(*tasks)
-            self._model_update_group = results[-1]
-
-            # # Register signal handlers for termination only on rank 0
-            # NOTE (sumanthrh): This doesn't work yet, and is thus commented out.
-            # The better way is to just have this specified in __del__, but there is
-            # no guarattee that __del__ will be called in general. Ray also doesn't
-            # explictly call __del__ when the actor shuts down.
-            # It's commented out so that we can fix this in the future.
-            # atexit.register(self._handle_termination)
+            self._model_update_store = store
 
         torch.distributed.barrier()
 

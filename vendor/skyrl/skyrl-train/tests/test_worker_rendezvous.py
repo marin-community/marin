@@ -3,7 +3,9 @@
 
 """Worker groups can publish and use distinct live rendezvous stores on one host."""
 
+import asyncio
 import multiprocessing
+import threading
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -11,8 +13,11 @@ from unittest.mock import patch
 import torch
 import torch.distributed as dist
 
-from skyrl_train.distributed.utils import init_worker_process_group_with_device
-from skyrl_train.workers.worker import DistributedTorchRayActor
+from skyrl_train.distributed import utils as distributed_utils
+from skyrl_train.distributed.utils import init_custom_process_group, init_worker_process_group_with_device
+from skyrl_train.utils import get_tcp_url
+from skyrl_train.workers import worker as worker_module
+from skyrl_train.workers.worker import DistributedTorchRayActor, Worker
 
 
 def _worker(rank, group, channel):
@@ -106,3 +111,84 @@ def test_worker_rendezvous_pins_cuda_before_initializing_nccl(monkeypatch):
             "device_id": torch.device("cuda", 3),
         }
     ]
+
+
+def _weight_sync_peer(channel, timeout):
+    channel.send("ready")
+    request = channel.recv()
+    # The inference worker still joins through the helper's tcp:// rendezvous.
+    group = init_custom_process_group(
+        backend=request["backend"],
+        init_method=get_tcp_url(request["master_addr"], request["master_port"]),
+        timeout=timeout,
+        world_size=request["world_size"],
+        rank=request["rank_offset"],
+        group_name=request["group_name"],
+    )
+    try:
+        value = torch.tensor(41)
+        dist.all_reduce(value, group=group)
+        assert value.item() == 42
+    finally:
+        dist.destroy_process_group(group)
+
+
+def test_weight_sync_worker_advertises_live_store_to_tcp_peer(monkeypatch):
+    timeout = timedelta(seconds=10)
+    monkeypatch.setattr(distributed_utils, "default_pg_timeout", timeout)
+    # Hold the trainer group initializer until the inference RPC has confirmed
+    # the port is live. A probe that closes before publishing cannot pass.
+    endpoint_open = threading.Event()
+
+    def init_trainer_group(**kwargs):
+        assert endpoint_open.wait(timeout.total_seconds()), "advertised weight-sync store was unreachable"
+        return init_custom_process_group(**kwargs)
+
+    monkeypatch.setattr(worker_module, "init_custom_process_group", init_trainer_group)
+    context = multiprocessing.get_context("spawn")
+    trainer_channel, peer_channel = context.Pipe()
+    peer = context.Process(target=_weight_sync_peer, args=(peer_channel, timeout))
+    peer.start()
+    peer_channel.close()
+
+    class InferencePeer:
+        async def init_weight_update_communicator(self, **request):
+            self.endpoint = request["master_addr"], request["master_port"]
+            store = dist.TCPStore(*self.endpoint, is_master=False, timeout=timedelta(seconds=3))
+            store.set("probe", "reachable")
+            endpoint_open.set()
+            trainer_channel.send(request)
+
+    worker = object.__new__(Worker)
+    worker._master_addr = "127.0.0.1"
+    worker._weight_sync_pg_options = None
+    worker.cfg = SimpleNamespace(
+        generator=SimpleNamespace(
+            num_inference_engines=1,
+            inference_engine_tensor_parallel_size=1,
+            inference_engine_pipeline_parallel_size=1,
+            inference_engine_data_parallel_size=1,
+            weight_sync_backend="gloo",
+            override_existing_update_group="disable",
+        )
+    )
+    try:
+        assert trainer_channel.poll(45) and trainer_channel.recv() == "ready"
+        dist.init_process_group("gloo", store=dist.HashStore(), rank=0, world_size=1, timeout=timeout)
+        try:
+            client = InferencePeer()
+            asyncio.run(worker.init_weight_sync_state(client))
+            value = torch.tensor(1)
+            dist.all_reduce(value, group=worker._model_update_group)
+            assert value.item() == 42
+            peer.join(timeout.total_seconds())
+            assert peer.exitcode == 0
+            store = dist.TCPStore(*client.endpoint, is_master=False, timeout=timedelta(seconds=3))
+            assert store.get("probe") == b"reachable"
+        finally:
+            dist.destroy_process_group()
+    finally:
+        trainer_channel.close()
+        if peer.is_alive():
+            peer.terminate()
+        peer.join()
