@@ -6,7 +6,7 @@ import { onViewRefresh } from '@/composables/useRefresh'
 import { formatInterval, formatScore, formatTimestamp, objectStoreUrl } from '@/utils/formatting'
 import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, fleetBest, isPartialCoverage } from '@/utils/panel'
 import { isSmokeEval } from '@/constants'
-import { INTERVAL_KIND, type Meta, type MissingCell, type ModelDetail, type ModelRun, type Panel, type PanelCell } from '@/types/api'
+import type { Meta, MissingCell, ModelDetail, ModelRun, Panel, PanelCell } from '@/types/api'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
@@ -15,19 +15,27 @@ const props = defineProps<{ model: string }>()
 const router = useRouter()
 const route = useRoute()
 
-const { data, loading, error, refresh } = useApi<ModelDetail>(() => `api/models/${encodeURIComponent(props.model)}`)
-const { data: panel, refresh: refreshPanel } = useApi<Panel>(() => 'api/panel?include_archived=1')
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
-
-onMounted(() => {
-  refresh()
-  refreshPanel()
-  refreshMeta()
+const selectedCohort = computed(() => {
+  const selected = route.query.cohort
+  return (typeof selected === 'string' && selected) || meta.value?.default_cohort || ALL_COHORTS
 })
-watch(
-  () => props.model,
-  refresh,
+const modelPath = computed(() =>
+  `api/models/${encodeURIComponent(props.model)}?cohort=${encodeURIComponent(selectedCohort.value)}`,
 )
+const fleetPath = computed(() => `api/panel?include_archived=1&cohort=${encodeURIComponent(selectedCohort.value)}`)
+const { data, loading, error, refresh } = useApi<ModelDetail>(() => modelPath.value)
+const { data: panel, refresh: refreshPanel } = useApi<Panel>(() => fleetPath.value)
+
+onMounted(refreshMeta)
+watch(modelPath, () => {
+  data.value = null
+  void refresh()
+}, { immediate: true })
+watch(fleetPath, () => {
+  panel.value = null
+  void refreshPanel()
+}, { immediate: true })
 onViewRefresh(() => {
   refresh()
   refreshPanel()
@@ -35,15 +43,6 @@ onViewRefresh(() => {
 })
 
 
-// Cohort scope lives in the URL, including the unversioned and all-runs views.
-const ALL = '__all__'
-const scope = computed<string | null>(() => {
-  const selected = route.query.cohort
-  const cohort = typeof selected === 'string' && selected ? selected : meta.value?.default_cohort
-  if (cohort === ALL_COHORTS) return ALL
-  if (cohort === UNVERSIONED_COHORT) return null
-  return cohort ?? data.value?.current_version ?? null
-})
 watch(
   [() => data.value?.model, () => meta.value?.default_cohort, () => route.query.cohort, () => props.model],
   () => {
@@ -53,8 +52,8 @@ watch(
   },
 )
 
-function selectCohort(version: string | null) {
-  router.push({ query: { ...route.query, cohort: version === ALL ? ALL_COHORTS : (version ?? UNVERSIONED_COHORT) } })
+function selectCohort(cohort: string) {
+  void router.push({ query: { ...route.query, cohort } })
 }
 
 // Benchmarks this model has runs for, in the panel's column order where known (no smoke).
@@ -65,12 +64,14 @@ const tasks = computed<string[]>(() => {
   return [...ordered, ...extra]
 })
 
-// Fleet best per benchmark (for the rail caret), from the panel across all models.
+// Use the selected cohort's panel for the fleet reference.
 const best = computed(() => fleetBest(panel.value?.rows ?? [], tasks.value))
 
 // Every run in the selected cohort (smoke included), for the Runs list.
 const scopedRuns = computed<ModelRun[]>(() =>
-  (data.value?.runs ?? []).filter((r) => scope.value === ALL || r.version === scope.value),
+  (data.value?.runs ?? []).filter((r) =>
+    selectedCohort.value === ALL_COHORTS || (r.version ?? UNVERSIONED_COHORT) === selectedCohort.value,
+  ),
 )
 
 // Per-benchmark result within the cohort: the newest run that produced a score, and — where none did
@@ -114,7 +115,7 @@ function onPick(task: string) {
   if (runId) router.push(`/runs/${runId}/samples`)
 }
 
-const cohortLabel = computed(() => (scope.value === ALL ? 'all runs' : (scope.value ?? UNVERSIONED_COHORT)))
+const cohortLabel = computed(() => selectedCohort.value === ALL_COHORTS ? 'all runs' : selectedCohort.value)
 const location = computed(() => data.value?.location ?? null)
 
 function coverageNote(cell: PanelCell): string {
@@ -159,22 +160,22 @@ function coverageNote(cell: PanelCell): string {
             :key="c.version ?? 'none'"
             class="font-mono text-xs px-2.5 py-1 rounded border"
             :class="
-              scope === c.version
+              selectedCohort === (c.version ?? UNVERSIONED_COHORT)
                 ? 'border-accent text-text bg-accent-subtle'
                 : 'border-surface-border text-text-secondary hover:bg-surface-raised'
             "
-            @click="selectCohort(c.version)"
+            @click="selectCohort(c.version ?? UNVERSIONED_COHORT)"
           >
             {{ c.version ?? UNVERSIONED_COHORT }}
           </button>
           <button
             class="font-mono text-xs px-2.5 py-1 rounded border"
             :class="
-              scope === ALL
+              selectedCohort === ALL_COHORTS
                 ? 'border-accent text-text bg-accent-subtle'
                 : 'border-surface-border text-text-secondary hover:bg-surface-raised'
             "
-            @click="selectCohort(ALL)"
+            @click="selectCohort(ALL_COHORTS)"
           >
             all runs
           </button>
@@ -214,13 +215,13 @@ function coverageNote(cell: PanelCell): string {
               ><span class="inline-block w-4 h-[3px] rounded-full" style="background: var(--c-best)"></span> fleet best
               (this benchmark)</span
             >
-            <span>sparkline under each gauge = this model's score on that benchmark across its runs</span>
+            <span>Sparklines show admitted scores across cohorts.</span>
           </div>
         </div>
         <p class="text-xs text-text-muted mt-2 leading-relaxed">
           How runs merge: a model runs each benchmark many times across versions. The profile shows the newest run that
-          produced a score within the selected cohort. Switch cohorts to pin an older model state; the sparkline under
-          each gauge keeps every run visible so a regression is one glance away. Each whisker is the run's 95% interval,
+          produced a score within the selected cohort. The selected cohort controls which runs the sparklines admit.
+          Each whisker is the run's 95% interval,
           so a benchmark whose run lost items reads as less determined rather than simply lower.
         </p>
       </div>

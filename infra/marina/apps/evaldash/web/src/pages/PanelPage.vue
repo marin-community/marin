@@ -15,7 +15,7 @@ import { onViewRefresh } from '@/composables/useRefresh'
 import { formatDelta, formatInterval, formatScore, formatTimestamp, isPercentMetric } from '@/utils/formatting'
 import { lastPageIndex } from '@/utils/pagination'
 import { scoreTint } from '@/utils/score'
-import { UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
+import { ALL_COHORTS, UNVERSIONED_COHORT, cellCoverageLabel, cellsByModel, cohortWarning, fleetBest, isPartialCoverage, scoredItemsLabel, withVariant } from '@/utils/panel'
 import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
@@ -45,7 +45,7 @@ const completeOnly = ref(false)
 const cohort = computed({
   get: () => {
     const raw = route.query.cohort
-    return (Array.isArray(raw) ? raw[0] : raw) || meta.value?.default_cohort || 'all'
+    return (Array.isArray(raw) ? raw[0] : raw) || meta.value?.default_cohort || ALL_COHORTS
   },
   set: (value: string) => {
     void router.replace({ query: { ...route.query, cohort: value || meta.value?.default_cohort } })
@@ -471,7 +471,7 @@ function goToRun(runId: string) {
 function goToModel(model: string) {
   router.push({
     path: `/models/${encodeURIComponent(model)}`,
-    query: { cohort: cohort.value || data.value?.request.cohort_version },
+    query: { cohort: cohort.value },
   })
 }
 </script>
@@ -498,7 +498,7 @@ function goToModel(model: string) {
       <label class="flex flex-col text-xs text-text-secondary gap-1">
         Cohort
         <select v-model="cohort" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[9rem]">
-          <option value="all">Newest per benchmark (all cohorts)*</option>
+          <option :value="ALL_COHORTS">Newest per benchmark (all cohorts)*</option>
           <option v-for="version in meta?.versions ?? []" :key="version" :value="version">
             {{ version }}{{ meta?.verified_cohorts.includes(version) ? '' : '*' }}
           </option>
@@ -804,6 +804,7 @@ function goToModel(model: string) {
       v-if="historyTarget"
       :model="historyTarget.model"
       :task="historyTarget.task"
+      :cohort="cohort"
       @close="historyTarget = null"
     />
   </section>

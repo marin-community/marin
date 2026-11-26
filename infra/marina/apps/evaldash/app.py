@@ -48,7 +48,6 @@ from evalrecords.eval_stats import (
     Completeness,
     MissingPolicy,
     SelectionRequest,
-    declared_protocols,
 )
 from evalrecords.records import (
     DEFAULT_SCAN_PREFIXES,
@@ -95,7 +94,6 @@ from .metrics import (
     build_model_detail,
     build_panel,
     comparison_models,
-    dashboard_measurements,
     display_status,
     panel_request,
     record_headline,
@@ -425,20 +423,27 @@ class _RecordSnapshot:
         self._metadata: PanelMetadata | None = None
         self._metadata_lock = threading.Lock()
         self._scored: ScoredRecords | None = None
+        self._scored_without_archived: tuple[frozenset[str], ScoredRecords] | None = None
         self._scored_lock = threading.Lock()
 
     def meta(self) -> PanelMetadata:
         # Panel metadata scans scores. Build it only for callers of /meta.
         with self._metadata_lock:
             if self._metadata is None:
-                self._metadata = build_meta(self.records)
+                self._metadata = build_meta(self.records, scored=self.scored())
             return self._metadata.copy()
 
-    def scored(self) -> ScoredRecords:
+    def scored(self, excluded_models: frozenset[str] = frozenset()) -> ScoredRecords:
         with self._scored_lock:
             if self._scored is None:
                 self._scored = ScoredRecords(self.records)
-            return self._scored
+            if not excluded_models:
+                return self._scored
+            filtered = self._scored_without_archived
+            if filtered is None or filtered[0] != excluded_models:
+                filtered = (excluded_models, self._scored.without_models(excluded_models))
+                self._scored_without_archived = filtered
+            return filtered[1]
 
 
 class RecordStore:
@@ -531,11 +536,9 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         snapshot = self._snapshot()
-        archived = self.archived_models()
-        if archived and not include_archived:
-            records = [record for record in snapshot.records if record.model.name not in archived]
-            return build_panel(records, request, frozenset(archived), aggregate)
-        return build_panel(snapshot.records, request, frozenset(archived), aggregate, scored=snapshot.scored())
+        archived = frozenset(self.archived_models())
+        scored = snapshot.scored() if include_archived else snapshot.scored(archived)
+        return build_panel(scored.records, request, archived, aggregate, scored=scored)
 
     def comparison_models(self, request: SelectionRequest) -> ComparisonModels:
         return comparison_models(self._snapshot().scored(), request)
@@ -553,43 +556,17 @@ class RecordStore:
         metadata["archived_models"] = sorted(self.archived_models())
         return metadata
 
-    def history(self, model: str, task: str) -> list[dict]:
-        """Return recorded scores for one model and task, oldest first.
+    def history(self, model: str, task: str, request: SelectionRequest) -> list[dict]:
+        """Return recorded scores across versions under the selected policy admission rule."""
+        return self._snapshot().scored().history(model, task, request)
 
-        A task can be a scored benchmark setting or a raw evaluation name. A task without a score
-        for this model returns an empty list.
-        """
-        snapshot = self._snapshot()
-        scored = snapshot.scored().history(model, task)
-        if scored is not None:
-            return scored
-
-        # A raw evaluation name can also identify runs outside the panel, such as smoke suites.
-        records = snapshot.records
-        task_records = [
-            record
-            for record in records
-            if record.model.name == model and record.evaluation.name == task and not record_policy_violations(record)
-        ]
-        protocol_records = [
-            record for record in records if record.evaluation.name == task and not record_policy_violations(record)
-        ]
-        protocols = declared_protocols(dashboard_measurements(protocol_records))
-        points = []
-        for record in task_records:
-            headline = record_headline(record, protocols.get(task))
-            if headline is None:
-                continue
-            points.append({**headline, "status": record.status.value})
-        points.sort(key=lambda point: point["created_at"] or "")
-        return points
-
-    def model_detail(self, model: str) -> dict | None:
+    def model_detail(self, model: str, request: SelectionRequest) -> dict | None:
         """One model's aggregated detail view: cohorts, per-eval history, and every run.
 
         ``None`` when the model has no records, so the route can answer 404.
         """
-        return build_model_detail(self._snapshot().records, model)
+        snapshot = self._snapshot()
+        return build_model_detail(snapshot.records, model, request, scored=snapshot.scored())
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         records = self._snapshot().records
@@ -1340,7 +1317,8 @@ def _analysis_router(store: RecordStore) -> APIRouter:
 
     @router.get("/models/{model_name}")
     async def api_model_detail(request: Request) -> JSONResponse:
-        detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"])
+        selection = panel_request(cohort=request.query_params.get("cohort") or ALL_COHORTS)
+        detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"], selection)
         if detail is None:
             return JSONResponse({"error": "unknown model"}, status_code=404)
         return JSONResponse(detail)
@@ -1432,10 +1410,10 @@ def _analysis_router(store: RecordStore) -> APIRouter:
         response_model=HistoryResponse,
         openapi_extra=operation_extension(OperationRisk.READ),
     )
-    async def api_history(model: str, task: str) -> HistoryResponse | JSONResponse:
+    async def api_history(model: str, task: str, cohort: str = ALL_COHORTS) -> HistoryResponse | JSONResponse:
         if not model or not task:
             return JSONResponse({"error": "model and task are required"}, status_code=400)
-        points = await asyncio.to_thread(store.history, model, task)
+        points = await asyncio.to_thread(store.history, model, task, panel_request(cohort=cohort or ALL_COHORTS))
         return HistoryResponse(model=model, task=task, points=points)
 
     @router.get("/meta")

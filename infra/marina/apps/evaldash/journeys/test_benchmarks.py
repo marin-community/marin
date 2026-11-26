@@ -85,3 +85,18 @@ def test_legacy_panel_link_restores_cohort_and_benchmark_variant(journey: Journe
     page.reload(wait_until="domcontentloaded")
     expect(variant).to_have_value(GSM8K_ZERO_SHOT)
     expect(cohort).to_have_value("2026.07.20")
+
+    fleet = page.get_by_role("table", name="Per-benchmark results", exact=True)
+    model = page.get_by_role("button", name="snowball", exact=True)
+    row = fleet.get_by_role("row").filter(has=model)
+    with page.expect_response(lambda response: urlsplit(response.url).path == "/evaldash/api/history") as history:
+        row.get_by_role("button", name=re.compile(r"^56\.4")).click()
+    assert parse_qs(urlsplit(history.value.url).query)["cohort"] == ["2026.07.20"]
+    expect(page.get_by_role("link", name="snowball-2026.07.20-gsm8k-0shot", exact=True)).to_be_visible()
+    page.get_by_role("button", name="Close", exact=True).click()
+
+    detail_api = "/evaldash/api/models/snowball"
+    with page.expect_response(lambda response: urlsplit(response.url).path == detail_api) as detail:
+        model.click()
+    assert parse_qs(urlsplit(detail.value.url).query)["cohort"] == ["2026.07.20"]
+    expect(page.get_by_role("heading", name="snowball", exact=True)).to_be_visible()

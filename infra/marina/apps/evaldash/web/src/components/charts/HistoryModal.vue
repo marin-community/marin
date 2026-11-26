@@ -17,15 +17,18 @@ import { INTERVAL_KIND, type HistoryPoint, type HistoryResponse } from '@/types/
 import PlotFigure from '@/components/charts/PlotFigure.vue'
 import StatusChip from '@/components/shared/StatusChip.vue'
 
-const props = defineProps<{ model: string; task: string }>()
+const props = defineProps<{ model: string; task: string; cohort: string }>()
 const emit = defineEmits<{ close: [] }>()
 
-const { data, loading, error, refresh } = useApi<HistoryResponse>(
-  () => `api/history?model=${encodeURIComponent(props.model)}&task=${encodeURIComponent(props.task)}`,
-)
+const requestPath = computed(() => `api/history?${new URLSearchParams({
+  model: props.model, task: props.task, cohort: props.cohort,
+})}`)
+const { data, loading, error, refresh } = useApi<HistoryResponse>(() => requestPath.value)
 
-onMounted(refresh)
-watch(() => [props.model, props.task], refresh)
+watch(requestPath, () => {
+  data.value = null
+  void refresh()
+}, { immediate: true })
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')

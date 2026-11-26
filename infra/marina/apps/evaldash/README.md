@@ -184,12 +184,12 @@ GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
-GET  /models/{model}    one model configuration's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
+GET  /models/{model}?cohort=    one model configuration's identity, cohorts, score history and runs (404 if absent)
 GET  /catalog/models?q=&cohort=&include_archived=&offset=&limit=   model directory ordered by latest activity
 GET  /comparison-models?benchmarks=&cohort=   eligible comparison models and cohort choices
 GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
-GET  /history?model=&task=   every run's headline score for one cell, over time
+GET  /history?model=&task=&cohort=   admitted scores for one model and benchmark over time
 GET  /meta              distinct models / evals / suites / families / users / statuses / versions + filter facets + archived_models + current_user
 GET  /status            store info + per-prefix ingest probes (last probe/success/error)
 POST /refresh           queue the EvalDash Cloud Run rescan; returns 202 + operation + /status
@@ -249,7 +249,13 @@ their columns remain populated alongside native results.
 The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
 benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
 a verified cohort pass it explicitly, for example `cohort=eval-policy-2026-09-24-verified`.
-Scored views retain the selected `cohort` in the URL and carry it into model-detail links. Model rows, benchmark protocols, and missing-cell explanations
+The all-cohorts view includes otherwise valid scores from runs that violated their named policy. Selecting a
+policy cohort excludes those scores and lists the rejected runs. Model detail and score history use
+the same admission rule across their timelines. Model detail keeps each run's policy violations
+visible even when the selected policy excludes its score.
+
+Scored views retain the selected `cohort` in the URL and carry it into model detail and score history.
+Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
 in the selected cohort and benchmarks. Compare's searchable Add model dropdown supports up to four
 selections, with controls to remove one model or clear the set. Model names wrap in the picker,
@@ -271,8 +277,8 @@ of the benchmark the run set out to grade; a capped run whose benchmark size is 
 admitted. The corresponding rejection reasons report low benchmark coverage, an unreported benchmark
 size for a capped run, or a metric protocol mismatch. A cohort may contain only a subset of
 its benchmarks. A `(model, benchmark)` with no admitted cell is reported in `missing` with the reason
-and the offending run. Policy-rejected runs are reported separately with their model, benchmark,
-run ID, and reasons, scoped to the selected cohort and filters.
+and the offending run. For a named cohort, `policy_rejections` lists each rejected run's model,
+benchmark, run ID and reasons.
 `complete=1` keeps only models covering every selected benchmark. No cross-benchmark aggregate is
 produced unless `aggregate=` names a missing-data policy (`require_complete` or `bound`), and one that
 is produced carries its panel, per-benchmark metrics, and policy. An unusable query value (an unknown

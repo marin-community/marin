@@ -159,8 +159,9 @@ def test_running_step_does_not_publish_its_recorded_score(client, store, tmp_pat
 
     qwen = next(row for row in _panel(store)["rows"] if row["model"] == "qwen3-8b")
     assert qwen["cells"]["mmlu"]["run_id"] != newest.run_id
-    assert all(point["run_id"] != newest.run_id for point in store.history("qwen3-8b", "mmlu"))
-    detail = store.model_detail("qwen3-8b")
+    request = metrics.panel_request()
+    assert all(point["run_id"] != newest.run_id for point in store.history("qwen3-8b", "mmlu", request))
+    detail = store.model_detail("qwen3-8b", request)
     assert detail is not None
     assert all(point["run_id"] != newest.run_id for point in detail["history"]["mmlu"])
     (run,) = client.get("/catalog", params={"view": "runs", "q": newest.run_id, "status": "running"}).json()["rows"]
