@@ -904,8 +904,8 @@ class _RecordedRollouts:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("pp", [2, 4], ids=["dp2", "dp1"])
-def test_megatron_worker_batches_match_driver_update(tmp_path, pp):
+@pytest.mark.parametrize(("pp", "cp"), [(2, 1), (4, 1), (2, 2)], ids=["dp2", "dp1", "cp2"])
+def test_megatron_worker_batches_match_driver_update(tmp_path, pp, cp):
     world_size = 4
     require_hoppers(world_size)
     model_path = tmp_path / "model"
@@ -921,6 +921,7 @@ def test_megatron_worker_batches_match_driver_update(tmp_path, pp):
     with safe_open(model_path / "model.safetensors", framework="pt", device="cpu") as checkpoint:
         parameter_names = list(checkpoint.keys())
     cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=1)
+    cfg.trainer.policy.megatron_config.context_parallel_size = cp
     cfg.trainer.policy.megatron_config.moe_router_replay = True
     with open_dict(cfg.generator.engine_init_kwargs):
         cfg.generator.engine_init_kwargs.enable_return_routed_experts = True

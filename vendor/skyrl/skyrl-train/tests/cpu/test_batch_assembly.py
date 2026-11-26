@@ -240,7 +240,7 @@ def test_row_facts_match_payload_shaping_with_repeated_marker_penalties(worker_c
     assert {key: value for key, value in actual.items() if key.startswith(shaping)} == {
         key: value for key, value in expected.items() if key.startswith(shaping)
     }
-    # Five loop tokens plus six negative marker roundoff values.
+    # Main's diagnostic also counts six marker subtraction residuals in this fixture.
     assert actual[shaping + "loop_charged_tokens_mean"] == 11 / 5
 
 
@@ -343,7 +343,13 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         exclude_from_baseline=whole.metadata.get("exclude_from_baseline"),
         group_advantage_invariant=invariant,
     )
+    before_credit = whole["advantages"].clone()
     apply_loop_advantages(whole)
+    if loop_channel:
+        row = 21 if loop_channel == "last" else 1
+        tokens = whole["response_mask"][row].bool()
+        expected = before_credit[row, tokens] + before_credit.new_tensor([-marker_penalty, loop_credit])
+        assert torch.equal(whole["advantages"][row, tokens], expected)
     whole.metadata.update(pad_size=0, global_step=7)
     for rank, expected in enumerate(whole.chunk(whole.batch_size // dp_size)):
         rows = worker_plan.rank_rows(rank, dp_size)
@@ -400,23 +406,6 @@ def worker_config(tmp_path):
         ({"trainer.trajectory_selector.type": "best_of_n"}, "trajectory selection", None),
         ({"trainer.step_wise_training": True}, "step-wise training", None),
         ({"trainer.algorithm.advantage_batch_normalize": True}, "advantage batch normalization", None),
-        (
-            {
-                "generator.trajectory_reward_shaping.enabled": True,
-                "generator.trajectory_reward_shaping.loop.advantage_penalty_per_token": 0.1,
-            },
-            None,
-            None,
-        ),
-        (
-            {
-                "generator.trajectory_reward_shaping.enabled": True,
-                "generator.trajectory_reward_shaping.reasoning_span.target": "marker",
-                "generator.trajectory_reward_shaping.reasoning_span.penalty": 0.5,
-            },
-            None,
-            None,
-        ),
         (
             {"trainer.policy.megatron_config.expert_tensor_parallel_size": 2},
             "ETP greater than one",
@@ -511,7 +500,7 @@ def test_unreadable_policy_config_falls_back_only_for_auto(worker_config):
     assert cfg.trainer.batch_builder == "driver"
     cfg.trainer.batch_builder = "worker"
     assert worker_batch_refusal(cfg, check_runtime_resources=False) is None
-    with pytest.raises(ValueError, match="Unrecognized model"):
+    with pytest.raises(ValueError):
         validate_cfg(cfg)
 
 

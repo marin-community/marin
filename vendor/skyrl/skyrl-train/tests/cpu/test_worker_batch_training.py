@@ -122,6 +122,8 @@ def _run_worker_batch_case(runs: BaseContext, cfg, target=experiment.run_tiny_tr
 def test_worker_batches_match_two_driver_updates(
     forkserver_context: BaseContext, tmp_path: Path, tiny_policy: Path, config_builder, target
 ):
+    if config_builder is _worker_batch_config:
+        tiny_policy = build_tiny_policy(tmp_path / "marker_policy", stray_reasoning_marker=True)
     results = {}
     for builder in ("driver", "worker"):
         root = tmp_path / builder
@@ -134,6 +136,7 @@ def test_worker_batches_match_two_driver_updates(
     required = {"policy/policy_loss", "policy/raw_grad_norm"}
     if config_builder is _worker_batch_config:
         assert any(row[f"{SHAPING_METRIC_PREFIX}/loop_advantage_mean"] < -1e-6 for row in steps)
+        assert any(row[f"{SHAPING_METRIC_PREFIX}/reasoning_span_penalty_mean"] < 0 for row in steps)
     for actual, expected in zip(steps, baseline, strict=True):
         shaping_keys = {key for key in expected if key.startswith(f"{SHAPING_METRIC_PREFIX}/")}
         assert_metric_parity(actual, expected, required=required | shaping_keys)
