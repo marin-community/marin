@@ -64,6 +64,7 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
+    VLLM_DATA_PARALLEL_SIZE_FLAGS,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -77,6 +78,7 @@ from marin.inference.config import (
     VllmRouterConfig,
     VllmSource,
     load_vllm_metric_family_additions,
+    normalize_vllm_option,
 )
 from marin.inference.iris import IrisServiceConfig, run_iris_service
 from marin.inference.iris_tpu_vllm import RAY_PORTS
@@ -157,8 +159,8 @@ def _resolve_serving_plan(
     """
     if vllm_source is VllmSource.MARIN_FORK and (gpu is None or backend != "vllm"):
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
-    if vllm.router is not None and (gpu is None or backend != "vllm"):
-        raise click.ClickException("--session-router requires --gpu with the vLLM backend")
+    if vllm.router is not None and backend != "vllm":
+        raise click.ClickException("--session-router requires the vLLM backend")
     if gpu is not None:
         if not in_checkout:
             raise click.ClickException(
@@ -203,6 +205,42 @@ def _resolve_serving_plan(
     # so the worker venv only needs the `tpu` extra for the serving glue's jax/libtpu.
     vllm = replace(vllm, launcher=VllmLauncherType.TPU)
     return ServingPlan(vllm, ("tpu", *extras), tpu_types=tpu_types)
+
+
+def _apply_data_parallel_size(
+    plan: ServingPlan,
+    *,
+    backend: str,
+    tensor_parallel_size: int | None,
+    data_parallel_size: int | None,
+) -> tuple[ServingPlan, ServingGeometry | None]:
+    if data_parallel_size is None:
+        return plan, None
+    if backend != "vllm" or tensor_parallel_size is None:
+        raise click.ClickException("--data-parallel-size requires --backend vllm and --tensor-parallel-size")
+    if tensor_parallel_size < 1:
+        raise click.ClickException("--tensor-parallel-size must be positive")
+    if plan.gpu_count is not None:
+        return (
+            plan,
+            ServingGeometry(
+                tensor_parallel_size=tensor_parallel_size,
+                data_parallel_size=data_parallel_size,
+                pipeline_parallel_size=1,
+                gpus_per_task=plan.gpu_count,
+            ),
+        )
+    if data_parallel_size > 1 and any(get_tpu_topology(tpu_type).vm_count > 1 for tpu_type in plan.tpu_types):
+        raise click.ClickException("multi-host TPU serving does not support --data-parallel-size > 1")
+    assert isinstance(plan.engine, VllmEngineConfig)
+    dp_flag = VLLM_DATA_PARALLEL_SIZE_FLAGS[0]
+    if any(normalize_vllm_option(arg.partition("=")[0]) == dp_flag for arg in plan.engine.extra_args):
+        raise click.ClickException("pass --data-parallel-size directly, not also in --vllm-arg")
+    updated = replace(
+        plan,
+        engine=replace(plan.engine, extra_args=(dp_flag, str(data_parallel_size), *plan.engine.extra_args)),
+    )
+    return updated, None
 
 
 def _default_job_name(model: str) -> str:
@@ -420,7 +458,7 @@ def _wait_and_report_endpoint(
     "--data-parallel-size",
     type=click.IntRange(min=1),
     default=None,
-    help="Total native GPU DP ranks; ranks per task are GPUs per task divided by TP size.",
+    help="Total native DP ranks (GPU ServingGeometry or single-host TPU multiprocess DP).",
 )
 @click.option("--session-router", is_flag=True, help="Route stable X-Session-ID values to native DP ranks.")
 @click.option(
@@ -613,18 +651,12 @@ def main(
         assert isinstance(plan.engine, VllmEngineConfig)
         plan = replace(plan, engine=replace(plan.engine, release=load_vllm_gpu_release(vllm_release)))
 
-    geometry = None
-    if data_parallel_size is not None:
-        if plan.gpu_count is None or backend != "vllm" or tensor_parallel_size is None:
-            raise click.ClickException("native DP geometry requires --gpu, --backend vllm and --tensor-parallel-size")
-        if tensor_parallel_size < 1:
-            raise click.ClickException("--tensor-parallel-size must be positive")
-        geometry = ServingGeometry(
-            tensor_parallel_size=tensor_parallel_size,
-            data_parallel_size=data_parallel_size,
-            pipeline_parallel_size=1,
-            gpus_per_task=plan.gpu_count,
-        )
+    plan, geometry = _apply_data_parallel_size(
+        plan,
+        backend=backend,
+        tensor_parallel_size=tensor_parallel_size,
+        data_parallel_size=data_parallel_size,
+    )
 
     brokered = broker or instances > 1
     if brokered and any(get_tpu_topology(tpu_type).vm_count > 1 for tpu_type in plan.tpu_types):

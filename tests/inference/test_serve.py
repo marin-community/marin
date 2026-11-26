@@ -1361,3 +1361,42 @@ def test_iris_serve_multihost_dry_run_does_not_submit(monkeypatch):
     # Submission geometry is covered by the adjacent submission test; dry-run
     # promises no controller allocation rather than a particular display format.
     client.resolve_endpoint.assert_not_called()
+
+
+def test_iris_serve_tpu_session_router_and_dp_submission(monkeypatch):
+    result, _client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--tpu",
+        "v6e-4",
+        "--tensor-parallel-size",
+        "1",
+        "--data-parallel-size",
+        "4",
+        "--session-router",
+        "--no-wait",
+    )
+    assert result.exit_code == 0, result.output
+    service = services[0]
+    assert isinstance(service.engine, VllmEngineConfig)
+    assert service.engine.launcher is VllmLauncherType.TPU
+    assert service.engine.router is not None
+    assert service.iris.serving_geometry is None
+    assert service.engine.extra_args[:2] == ("--data-parallel-size", "4")
+
+
+def test_iris_serve_rejects_multihost_tpu_dp_before_submission(monkeypatch):
+    result, client, services, _mint = _invoke_iris_serve(
+        monkeypatch,
+        "--tpu",
+        "v4-32",
+        "--tensor-parallel-size",
+        "4",
+        "--data-parallel-size",
+        "2",
+        "--session-router",
+        "--no-wait",
+    )
+    assert result.exit_code != 0
+    assert "multi-host TPU serving does not support --data-parallel-size > 1" in result.output
+    client.submit.assert_not_called()
+    assert services == []

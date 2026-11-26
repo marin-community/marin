@@ -383,8 +383,6 @@ class VllmEngineConfig:
             raise ValueError("the Marin vLLM fork source requires the CUDA launcher")
         if self.release is not None and self.source is not VllmSource.MARIN_FORK:
             raise ValueError("a vLLM release pin requires the Marin CUDA fork")
-        if self.router is not None and self.launcher is VllmLauncherType.TPU:
-            raise ValueError("session routing is supported by CUDA vLLM")
         extra_metric_families = _normalize_vllm_metric_families(
             self.extra_metric_families,
             source="VllmEngineConfig.extra_metric_families",
@@ -572,7 +570,7 @@ class RemoteInferenceConfig:
         native_group = uses_native_vllm_group(geometry)
         if native_group or session_routing:
             if not isinstance(self.engine, VllmEngineConfig):
-                raise ValueError("native GPU serving requires the vLLM backend")
+                raise ValueError("native serving and session routing require the vLLM backend")
             if geometry is not None:
                 validate_serving_geometry_args(self.engine.extra_args)
         else:
@@ -580,4 +578,4 @@ class RemoteInferenceConfig:
         if native_group and self.model.object_store_load_mode is not ObjectStoreLoadMode.STREAM:
             raise ValueError("multi-task GPU serving requires shared weights with stream loading")
         if self.instances != 1 or self.broker is not None:
-            raise ValueError("native GPU serving requires one instance and no broker")
+            raise ValueError("native multi-task or session-routed serving requires one instance and no broker")
