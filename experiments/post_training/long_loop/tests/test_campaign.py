@@ -26,6 +26,7 @@ from experiments.post_training.task_curation.curriculum_manifest import curricul
 def test_equal_mix_holdout_preserves_task_bytes_and_pins():
     pins = {
         label: {
+            "catalog_status": "Available",
             "name": label,
             "version": "3",
             "repo": f"tests/{label}",
@@ -76,6 +77,7 @@ def test_equal_mix_holdout_preserves_task_bytes_and_pins():
 
 def test_cross_source_holdout_leakage_is_rejected():
     pin = {
+        "catalog_status": "Available",
         "name": "fixture",
         "version": "1",
         "repo": "tests/pin",
@@ -146,6 +148,21 @@ def test_unpublished_source_does_not_fall_back_to_raw_converter(tmp_path):
     )
     with pytest.raises(ValueError, match=r"Served R40 catalog cannot admit.*tests:raw"):
         load_mix("v2-fixture", tmp_path)
+
+
+def test_authorized_campaign_divergence_keeps_exact_retained_pins():
+    mix = load_mix("v2-mix-033")
+    assert {label: entry["status"] for label, entry in mix.catalog_divergence.items()} == {
+        "TaskTrove:swesmith-verifier-repaired-v5": "Excluded",
+        "TaskTrove:tasktrove-codeforces-rebuilt-v1": "Pending",
+    }
+    source = mix.sources["TaskTrove:swesmith-verifier-repaired-v5"]
+    assert source["repo"] == "open-athena/campaign-release-swesmith-verifier-repaired-v5-0bfcd894-retained-20261116-v1"
+    assert source["revision"] == "758b28bf4cc0d0e770329f2944c9451fd578566a"
+    assert source["count"] == 7016
+    assert mix.weights == {label: 1 / 7 for label in mix.sources}
+    entry = mix.curriculum_catalog["TaskTrove:swesmith-verifier-repaired-v5"]
+    assert (entry.pin.name, entry.pin.revision) == (source["repo"], source["revision"])
 
 
 def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, monkeypatch):

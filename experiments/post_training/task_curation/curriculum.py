@@ -46,12 +46,14 @@ class ServedCatalogSource:
 type CurriculumCatalog = Mapping[str, RlDataSource | ServedCatalogSource]
 
 
-def served_catalog_sources(document: dict) -> dict[str, ServedCatalogSource]:
-    """Bind Available training sources, refusing inconsistent release/pipeline pins."""
+def served_catalog_sources(
+    document: dict, *, admitted_statuses: tuple[str, ...] = ("Available",)
+) -> dict[str, ServedCatalogSource]:
+    """Bind admitted training sources, refusing inconsistent release/pipeline pins."""
     load_id = document["catalog_load"]["load_id"]
     bound = {}
     for label, source in document["sources"].items():
-        if source["status"] != "Available" or source["intended_use"] != "train":
+        if source["status"] not in admitted_statuses or source["intended_use"] != "train":
             continue
         release, pipeline = source["current_release"], source["pipeline"]
         if (release["repo"], release["revision"]) != (pipeline["source"], pipeline["revision"]):

@@ -50,6 +50,14 @@ class CampaignMix:
     catalog_sha256: str
 
     @property
+    def catalog_divergence(self) -> dict[str, dict]:
+        return {
+            label: {"status": pin["catalog_status"], "repo": pin["repo"], "revision": pin["revision"]}
+            for label, pin in self.sources.items()
+            if pin["catalog_status"] != "Available"
+        }
+
+    @property
     def weights(self) -> dict[str, float]:
         return {source: 1 / len(self.sources) for source in self.sources}
 
@@ -64,7 +72,7 @@ class CampaignMix:
 
 
 def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
-    """Resolve a version-prefixed CSV candidate, refusing unsealed or changed releases."""
+    """Resolve the exact candidate pins under the campaign's recorded admission policy."""
     generation, separator, identifier = mix_id.partition("-")
     if generation not in {"v2", "v3"} or not separator:
         raise ValueError("mix-id must start with v2- or v3-")
@@ -86,7 +94,8 @@ def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
     if len(names) != len(set(names)) or len(names) != int(row["k"]):
         raise ValueError("Candidate sources repeat or disagree with k")
     available = served_catalog_sources(
-        {**catalog, "sources": {name: catalog["sources"][name] for name in names if name in catalog["sources"]}}
+        {**catalog, "sources": {name: catalog["sources"][name] for name in names if name in catalog["sources"]}},
+        admitted_statuses=tuple(catalog.get("admission_policy", {}).get("admitted_statuses", ["Available"])),
     )
     pending = {
         name: catalog["sources"].get(name, {}).get("status", "Missing") for name in names if name not in available
@@ -104,6 +113,7 @@ def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
         if not source["actor_census_input"] or source["route"] not in {"agentic", "nonagentic"}:
             raise ValueError(f"Catalog source lacks its measured population or actor route: {entry.label}")
         sources[entry.label] = {
+            "catalog_status": source["status"],
             "name": entry.source,
             "version": entry.version,
             "repo": entry.pin.name,
@@ -247,6 +257,7 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
     (destination / "curriculum.json").write_bytes(payload)
     files["curriculum.json"] = hashlib.sha256(payload).hexdigest()
     document = {
+        "catalog_divergence": mix.catalog_divergence,
         "curriculum": curriculum.identity,
         "curriculum_definition": definition,
         "validation": validation_payload(curriculum.validation),

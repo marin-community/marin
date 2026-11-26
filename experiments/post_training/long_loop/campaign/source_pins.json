@@ -4656,5 +4656,16 @@
         }
       }
     }
+  },
+  "admission_policy": {
+    "admitted_statuses": [
+      "Available",
+      "Pending",
+      "Excluded"
+    ],
+    "authority": "Campaign user directive2026-11-26 08:22EST, recorded in BRIEF.md: accept listed mixes and record admission divergence",
+    "pin_policy": "Exact declared sealed/retained release first, else declared staged pin; no population substitution",
+    "record_original_status": true,
+    "runtime_admission": "TaskSpec requirements remain binding; unsupported environments fail closed"
   }
 }

@@ -55,6 +55,11 @@ def test_served_catalog_admission_and_pins_drive_curriculum_entries():
     for label in ("pending", "excluded"):
         with pytest.raises(ValueError, match="unknown RL source"):
             curriculum_entries("mix", "1", weights={label: 1.0}, catalog=catalog)
+    campaign = served_catalog_sources(document, admitted_statuses=("Available", "Pending", "Excluded"))
+    entries = curriculum_entries("campaign", "1", weights={label: 1 / 3 for label in campaign}, catalog=campaign)
+    assert len(entries) == 3 and {entry.pin.revision for entry in entries} == {"a" * 40}
+    assert document["sources"]["pending"]["status"] == "Pending"
+    assert set(served_catalog_sources(document)) == {"available"}
     document["sources"]["available"] = {**source, "pipeline": {**source["pipeline"], "revision": "b" * 40}}
     with pytest.raises(ValueError, match="release and pipeline disagree"):
         served_catalog_sources(document)
