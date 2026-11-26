@@ -46,8 +46,9 @@ test -s /workspace/populations.json && test -s /workspace/source-ids.json
 
 # The DF masks rebuild for the new cohort set (no frozen drop sets: the new
 # populations are not in the recorded artifact); the bloom is the pinned
-# shared one and the population set is retained.
-uv run --frozen --prerelease=allow --extra cpu --extra dedup \
+# shared one and the population set is retained. The cpu/dedup extras live on
+# the marin-core package (lib/marin), not the root, so resolve them there.
+uv run --frozen --prerelease=allow --package marin-core --extra cpu --extra dedup \
   --with-editable ./lib/taskcompendium[pipeline] python -m \
   experiments.post_training.task_curation.lexical_scan \
   --populations /workspace/populations.json \

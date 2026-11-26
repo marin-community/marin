@@ -166,9 +166,11 @@ def apply_projection_waivers(
         # A stale-pin gap is the same sealed-state class for a re-pinned source: the served
         # projection still records the prior pin and catches up at the next refresh, which
         # the same expiry forces. The curriculum and derived-contract projections of the
-        # same named sources are the same sealed-refresh pending state: they catch up in
-        # the same projection pass, so the waiver covers them identically (ruling note
-        # 2026-11-25: the projection pass runs for every projection family at once).
+        # same named sources are covered by the INTERIM coordinator waiver 2026-11-25
+        # 19:40 EST, pending user ratification and expiring with ruling 68's named-source
+        # expiry: they are the same sealed-refresh pending state and catch up in the one
+        # projection pass the expiry forces. Recorded as PENDING in the atlas rulings
+        # (experiments/active/atlas-rulings/interim-projection-waiver-pending-20261125.md).
         blocking, waived, notes = [], [], []
         sealed_pending_projections = {"served-catalog", "curriculum", "derived-contract"}
         if not waivers.source_ids:
