@@ -490,6 +490,18 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "GPU type"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "busy share"
             },
             "properties": [
