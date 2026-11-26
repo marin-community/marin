@@ -139,8 +139,8 @@ def qc_browse_sizing(total_panels: int) -> StageResources:
     SQL clients; CPU stays at the measured 4-core shape because the work is
     network-bound.
     """
-    if total_panels <= 0:
-        raise ValueError(f"qc browse sizing needs a positive panel count, got {total_panels}")
+    if total_panels < 0:
+        raise ValueError(f"qc browse sizing needs a nonnegative panel count, got {total_panels}")
     scaled = round(_QC_BROWSE_ANCHOR_WORKERS * total_panels / _QC_BROWSE_ANCHOR_PANELS)
     workers = max(_QC_BROWSE_MIN_WORKERS, min(_QC_BROWSE_MAX_WORKERS, scaled))
     return StageResources(

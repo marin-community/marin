@@ -38,6 +38,7 @@ from experiments.post_training.task_curation.release_stages.paced_query import (
     RetryControl,
     open_paced_query,
 )
+from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
 from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 
 Query = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -133,8 +134,8 @@ class QcBrowseInputs:
                 raise ValueError(f"{name} must be a 32-hex load ID, got {value!r}")
         if not self.release_id or not self.source_revision or not self.output_root:
             raise ValueError("release_id, source_revision and output_root are required")
-        if self.expected_panels <= 0:
-            raise ValueError(f"expected_panels must be positive, got {self.expected_panels}")
+        if self.expected_panels < 0:
+            raise ValueError(f"expected_panels must be nonnegative, got {self.expected_panels}")
         if self.workers <= 0:
             raise ValueError(f"workers must be positive, got {self.workers}")
 
@@ -169,6 +170,19 @@ def declaration_binding(declaration: dict) -> dict:
     return {
         "actor_census_input": declaration.get("actor_census_input"),
         "evidence_url": (declaration.get("independent_qc") or {}).get("evidence_url"),
+    }
+
+
+def changed_review_sources(prior: dict[str, dict], current: dict[str, dict]) -> set[str]:
+    """Sources whose prior selected panels cannot be copied as current evidence."""
+    return {
+        source_id
+        for source_id in prior.keys() | current.keys()
+        if source_id not in prior
+        or source_id not in current
+        or content_is_withheld(current[source_id])
+        or fingerprint_input(prior[source_id]) != fingerprint_input(current[source_id])
+        or declaration_binding(prior[source_id]) != declaration_binding(current[source_id])
     }
 
 

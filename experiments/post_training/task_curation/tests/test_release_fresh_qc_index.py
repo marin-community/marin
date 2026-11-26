@@ -7,14 +7,19 @@ import dataclasses
 import gzip
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
+from marin.inference.openai_chat import OpenAIChatClient
 from marina.client import MarinaRequestError
 from rigging.filesystem.storage_path import StoragePath
+from taskcompendium.pipeline.review import ChatReviewer
 
+from experiments.post_training.task_curation.full_qc import ReviewerVersion, local_reviewer
 from experiments.post_training.task_curation.release_stages import fresh_qc_index as stage
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.sample_qc import review_panel
 
 KEY = "qc:" + "b" * 64
 
@@ -152,6 +157,7 @@ def _inputs(tmp_path: Path, **overrides) -> stage.FreshQcIndexInputs:
         applet_id="applet",
         declarations=_declarations(tmp_path),
         qc_completion=_completion(tmp_path),
+        fresh_panels={},
     )
     return dataclasses.replace(inputs, **overrides) if overrides else inputs
 
@@ -194,6 +200,107 @@ def test_dry_run_verifies_without_writing(tmp_path, fake_query):
     proof = stage.run_fresh_qc_index(inputs, dry_run=True)
     assert proof["panels"] == 1
     assert not StoragePath(f"{inputs.output_root}/{stage.STAGED_DIR}").exists()
+    assert not StoragePath(f"{inputs.output_root}/fresh-qc-index.json").exists()
+
+
+@pytest.fixture
+def fresh_panel(tmp_path, sample_panel, review_server):
+    reviewer = ChatReviewer(
+        OpenAIChatClient(f"http://127.0.0.1:{review_server.server_port}/v1", "unused", timeout=2),
+        local_reviewer(ReviewerVersion.V3),
+        query_cache_root=str(tmp_path / "cache"),
+    )
+    review = review_panel(sample_panel, reviewer, str(tmp_path / "reviews"))
+    uri = str(StoragePath(review.path) / ".artifact.json")
+    reference = ArtifactRef(uri=uri, sha256=hashlib.sha256(StoragePath(uri).read_bytes()).hexdigest())
+    declaration = {
+        "id": sample_panel.source_id,
+        "data_restriction": "open",
+        "dataset_id": sample_panel.dataset_id,
+        "dataset_revision": sample_panel.dataset_revision,
+        "pipeline": {"version": sample_panel.converter_version},
+        "actor_census_input": {
+            "task_specs_sha256": sample_panel.task_specs_sha256,
+            "measured_tasks": sample_panel.retained_tasks,
+        },
+        "independent_qc": {"evidence_url": review.path},
+    }
+    return reference, declaration
+
+
+@pytest.mark.parametrize("carry_prior", [True, False])
+def test_cli_combines_carried_panel_with_selected_current_artifact(
+    tmp_path, fake_query, fresh_panel, monkeypatch, capsys, carry_prior
+):
+    reference, declaration = fresh_panel
+    inputs = _inputs(tmp_path, fresh_panels={declaration["id"]: reference})
+    path = StoragePath(inputs.declarations.uri)
+    old = json.loads(path.read_text())["Marin:fixture"]
+    declarations = {"Marin:carried": {**old, "id": "Marin:carried"}, declaration["id"]: declaration}
+    path.write_text(json.dumps(declarations))
+    completion_path = StoragePath(inputs.qc_completion.uri)
+    completion = json.loads(completion_path.read_text())
+    completion["results"][0]["source_id"] = "Marin:carried"
+    if not carry_prior:
+        completion["results"] = []
+    completion_path.write_text(json.dumps(completion))
+    fake_query.tables["atlas_assessments"][0]["source_id"] = "Marin:carried"
+    document = dataclasses.asdict(inputs)
+    document["declarations"] = {"uri": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    document["qc_completion"] = {
+        "uri": str(completion_path),
+        "sha256": hashlib.sha256(completion_path.read_bytes()).hexdigest(),
+    }
+    document["fresh_panels"] = {declaration["id"]: reference.model_dump(mode="json")}
+    config = tmp_path / "inputs.json"
+    config.write_text(json.dumps(document))
+    monkeypatch.setattr(sys, "argv", ["fresh_qc_index", "--inputs", str(config), "--mode", "write"])
+
+    stage.main()
+
+    proof = json.loads(capsys.readouterr().out)
+    index = json.loads(StoragePath(proof["index"]["uri"]).read_text())
+    panels = {row["source_id"]: row for row in index["receipts"]}
+    assert set(panels) == ({"Marin:carried", declaration["id"]} if carry_prior else {declaration["id"]})
+    current = json.loads(gzip.decompress(StoragePath(panels[declaration["id"]]["reference"]["uri"]).read_bytes()))
+    assert current["receipt"]["artifact"] == reference.model_dump(mode="json")
+    assert current["receipt"]["current_pin"] is True
+    assert {row["task_id"] for row in current["items"]} == {"kept", "dropped", "unshaped"}
+    assert len(current["raw"]) == 3
+    if carry_prior:
+        carried = json.loads(gzip.decompress(StoragePath(panels["Marin:carried"]["reference"]["uri"]).read_bytes()))
+        assert carried["receipt"] == completion["results"][0]["original_receipt"]
+
+
+@pytest.mark.parametrize("fault", ["digest", "source", "overlap"])
+def test_fresh_panel_refuses_wrong_evidence(tmp_path, fake_query, fresh_panel, fault):
+    reference, declaration = fresh_panel
+    inputs = _inputs(tmp_path, fresh_panels={declaration["id"]: reference})
+    completion_path = StoragePath(inputs.qc_completion.uri)
+    completion = json.loads(completion_path.read_text())
+    if fault != "overlap":
+        completion["results"] = []
+    completion_path.write_text(json.dumps(completion))
+    inputs = dataclasses.replace(
+        inputs,
+        qc_completion=ArtifactRef(
+            uri=str(completion_path), sha256=hashlib.sha256(completion_path.read_bytes()).hexdigest()
+        ),
+    )
+    if fault == "digest":
+        inputs = dataclasses.replace(
+            inputs, fresh_panels={declaration["id"]: reference.model_copy(update={"sha256": "0" * 64})}
+        )
+    if fault == "source":
+        declaration = {**declaration, "id": "Marin:wrong"}
+        inputs = dataclasses.replace(inputs, fresh_panels={declaration["id"]: reference})
+    path = StoragePath(inputs.declarations.uri)
+    path.write_text(json.dumps({declaration["id"]: declaration}))
+    inputs = dataclasses.replace(
+        inputs, declarations=ArtifactRef(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    )
+    with pytest.raises(ValueError):
+        stage.run_fresh_qc_index(inputs, dry_run=False)
     assert not StoragePath(f"{inputs.output_root}/fresh-qc-index.json").exists()
 
 

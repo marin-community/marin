@@ -120,8 +120,8 @@ class CatalogLoadInputs:
         for required in ("prior_qc_completion", "fresh_qc_index", "contracts", "history_receipt"):
             if required not in self.staging:
                 raise ValueError(f"staging refs must include {required!r}")
-        if self.expected_source_count <= 0 or self.expected_selected_panels <= 0:
-            raise ValueError("expected counts must be positive")
+        if self.expected_source_count <= 0 or self.expected_selected_panels < 0:
+            raise ValueError("source count must be positive and selected panel count nonnegative")
 
 
 def read_catalog_state(catalog_root: str, inputs: CatalogLoadInputs, publication: dict) -> list:
@@ -345,7 +345,7 @@ def _run_write(
     if reviews_loader is not None:
         # An injected loader keeps the serial per-panel contract exactly (tests).
         qc_results = [_stage_qc_panel(inputs, panel, reviews_loader, query) for panel in fresh_qc["receipts"]]
-    else:
+    elif fresh_qc["receipts"]:
         staged_panels = [_validate_staged_panel(inputs, panel) for panel in fresh_qc["receipts"]]
         total = _replay_record_total(staged_panels)
         progress = _ReplayProgress(total)

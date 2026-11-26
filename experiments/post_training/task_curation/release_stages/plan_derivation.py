@@ -64,12 +64,14 @@ from experiments.post_training.task_curation.release_stages.admission_check impo
 from experiments.post_training.task_curation.release_stages.graph import PLAN_KIND, ReleasePlan, write_plan
 from experiments.post_training.task_curation.release_stages.history_staging import Query
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from experiments.post_training.task_curation.release_stages.qc_browse import changed_review_sources
 from experiments.post_training.task_curation.release_stages.release_config import (
     ReleaseConfig,
     config_fingerprint,
 )
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
 from experiments.post_training.task_curation.sources import all_sources
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 DERIVATION_RECEIPT_KIND = "atlas-release-derivation"
@@ -496,7 +498,18 @@ def derive_release_plan(
     unknown_exclusions = sorted(exclusion_ids - set(prior.review_panel_source_ids))
     if unknown_exclusions:
         raise ValueError(f"QC exclusions the prior load holds no panel for: {unknown_exclusions[:5]}")
-    expected_panels = len([sid for sid in prior.review_panel_source_ids if sid not in exclusion_ids])
+    copy_exclusions = exclusion_ids | (
+        changed_review_sources(prior_declarations, declared) & set(prior.review_panel_source_ids)
+    )
+    expected_panels = len(set(prior.review_panel_source_ids) - copy_exclusions)
+    selected_qc_sources = {
+        sid
+        for sid, row in declared.items()
+        if sid not in exclusion_ids
+        and (row.get("independent_qc") or {}).get("evidence_url")
+        and not content_is_withheld(row)
+    }
+    expected_selected_panels = len((set(prior.review_panel_source_ids) - copy_exclusions) | selected_qc_sources)
 
     registry_index = _read_registry_index(targets)
     measured = _measured_dependency(repo_root, config.freeze_source_revision)
@@ -536,9 +549,7 @@ def derive_release_plan(
         expected_browse_source_count=expected_panels,
         expected_contract_count=expected_contract_count,
         expected_contract_tasks=expected_contract_tasks,
-        # The loads re-select the prior load's current-pin review panels; the QC
-        # exclusions gate the browse copy, not the index replay.
-        expected_selected_panels=len(prior.review_panel_source_ids),
+        expected_selected_panels=expected_selected_panels,
         expected_prior_sources=len(prior.source_ids),
         expected_panels=expected_panels,
         expected_population_tasks=expected_population_tasks,
@@ -607,7 +618,8 @@ def derive_release_plan(
             "prior_snapshot_id": prior.snapshot_id,
             "prior_review_panel_source_count": len(prior.review_panel_source_ids),
             "expected_panels": expected_panels,
-            "expected_selected_panels": len(prior.review_panel_source_ids),
+            "expected_selected_panels": expected_selected_panels,
+            "qc_copy_exclusions": sorted(copy_exclusions),
             "expected_population_tasks": expected_population_tasks,
             "expected_contract_count": expected_contract_count,
             "expected_contract_tasks": expected_contract_tasks,

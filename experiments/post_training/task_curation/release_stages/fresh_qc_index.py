@@ -4,13 +4,11 @@
 """The fresh-QC-index stage: the graph's producer of the release's staged QC panel index.
 
 The release's fresh QC index is a graph output bound to the release's target load and
-snapshot (ruling 2026-11-24), not a hand-produced pin. One panel entry per browse-staged
-source: the panel's replayable staged document is exported from the prior load's review
-tables (the assessments, populations and items rows ride only on staged documents, and
-the raw-review and batch rows are re-staged from them), compressed
-byte-deterministically under the release prefix, and sealed into the index the catalog
-load replays. The exported document carries the browse-copied review receipt verbatim,
-so the load's pointer verification binds the replay to what the browse verified.
+snapshot (ruling 2026-11-24), not a hand-produced pin. Unchanged panels are exported
+from the prior load's review tables with their original receipt. Other panels are
+read from digest-bound review artifacts selected by the frozen declarations through
+the content-review loader. Both paths preserve the review's task IDs and produce
+deterministically compressed staged documents that the catalog load replays.
 """
 
 import argparse
@@ -26,6 +24,8 @@ from rigging.filesystem.storage_path import StoragePath
 import experiments.post_training.task_curation.release_stages.alerts as alerts
 from experiments.post_training.task_curation.release_stages import paced_query
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from infra.marina.apps.rl_data_catalog.load_reviews import stage_content_reviews
+from infra.marina.apps.rl_data_catalog.role_projection import ManifestReference
 
 INDEX_KIND_SUFFIX = "fresh-qc-index"
 STAGED_DIR = "staged-v1"
@@ -45,6 +45,7 @@ class FreshQcIndexInputs:
     applet_id: str
     declarations: ArtifactRef
     qc_completion: ArtifactRef
+    fresh_panels: dict[str, ArtifactRef]
 
     def validate(self) -> None:
         """Refuse malformed inputs before anything runs."""
@@ -75,13 +76,11 @@ def _completion_rows(ref: ArtifactRef) -> list[dict]:
     completion = json.loads(payload)
     if completion.get("status") != "PASS":
         raise ValueError(f"the browse completion is {completion.get('status')!r}; the index needs a PASS")
-    rows = completion.get("results") or []
-    if not rows:
-        raise ValueError("the browse completion carries no staged panels")
-    return rows
+    return completion.get("results") or []
 
 
 PAGE_ROWS = 500
+PANEL_READ_WORKERS = 4
 
 
 def _paged(query, sql: str, params: dict, order_columns: tuple[str, ...]) -> list[dict]:
@@ -222,11 +221,15 @@ def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str,
         "batch_links": links,
         "receipt": row["original_receipt"],
     }
+    return _seal_panel(inputs, source_id, staged, write=write)
+
+
+def _seal_panel(inputs: FreshQcIndexInputs, source_id: str, staged: dict, *, write: bool) -> dict:
     payload = gzip.compress(
         json.dumps(staged, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(), mtime=0
     )
-    identity = hashlib.sha256(json.dumps(row["original_receipt"], sort_keys=True).encode()).hexdigest()
-    reference = {"uri": row["original_receipt"]["artifact"]["uri"], "sha256": identity}
+    identity = hashlib.sha256(json.dumps(staged["receipt"], sort_keys=True).encode()).hexdigest()
+    reference = {"uri": staged["receipt"]["artifact"]["uri"], "sha256": identity}
     if write:
         path = StoragePath(f"{inputs.output_root}/{STAGED_DIR}/{identity}.json.gz")
         if path.exists():
@@ -241,7 +244,7 @@ def _export_panel(inputs: FreshQcIndexInputs, row: dict, declarations: dict[str,
         "source_id": source_id,
         "identity": identity,
         "status": "complete",
-        "records": len(items),
+        "records": len(staged["items"]),
         "bytes": len(payload),
         "reference": reference,
     }
@@ -262,8 +265,20 @@ def run_fresh_qc_index(
         configure_coreweave_s3()
         declarations = _read_declarations(inputs.declarations)
         rows = _completion_rows(inputs.qc_completion)
+        carried_ids = {row["source_id"] for row in rows}
+        overlap = carried_ids & inputs.fresh_panels.keys()
+        if overlap:
+            raise ValueError(f"QC sources select both carried and fresh panels: {sorted(overlap)}")
         query = paced_query.open_paced_query(inputs.service_url, inputs.applet_id, paced_query.RetryControl())
         index_rows = [_export_panel(inputs, row, declarations, query, write=not dry_run) for row in rows]
+        for source_id, reference in sorted(inputs.fresh_panels.items()):
+            staged = stage_content_reviews(
+                ManifestReference(uri=reference.uri, sha256=reference.sha256),
+                declarations[source_id],
+                PANEL_READ_WORKERS,
+            )
+            index_rows.append(_seal_panel(inputs, source_id, staged, write=not dry_run))
+        index_rows.sort(key=lambda row: row["source_id"])
         if dry_run:
             alerts.stage_finished(
                 inputs.release_id,
@@ -287,13 +302,15 @@ def run_fresh_qc_index(
             "snapshot_id": inputs.snapshot_id,
             "source_revision": inputs.source_revision,
             "basis": (
-                "The browse-staged SAMPLE QC panels at their frozen declarations' selected review evidence, "
+                "The SAMPLE QC panels selected by frozen declarations, combining unchanged prior SQL panels "
+                "with source-selected review artifacts, "
                 f"staged by this release at load {inputs.target_load_id}"
             ),
             "receipts": index_rows,
             "provenance": {
                 "browse_completion": {"uri": inputs.qc_completion.uri, "sha256": inputs.qc_completion.sha256},
                 "declarations": {"uri": inputs.declarations.uri, "sha256": inputs.declarations.sha256},
+                "fresh_panels": {key: ref.model_dump(mode="json") for key, ref in sorted(inputs.fresh_panels.items())},
             },
         }
         raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
@@ -331,7 +348,11 @@ def main() -> None:
     parser.add_argument("--inputs", type=Path, required=True, help="Path to a JSON FreshQcIndexInputs document")
     parser.add_argument("--mode", choices=("dry-run", "write"), default="dry-run")
     args = parser.parse_args()
-    inputs = FreshQcIndexInputs(**json.loads(args.inputs.read_text()))
+    document = json.loads(args.inputs.read_text())
+    for field in ("declarations", "qc_completion"):
+        document[field] = ArtifactRef(**document[field])
+    document["fresh_panels"] = {key: ArtifactRef(**value) for key, value in document["fresh_panels"].items()}
+    inputs = FreshQcIndexInputs(**document)
     proof = run_fresh_qc_index(inputs, dry_run=args.mode == "dry-run")
     print(json.dumps(proof), flush=True)
 

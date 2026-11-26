@@ -161,6 +161,7 @@ from experiments.post_training.task_curation.release_stages.sizing import (
     embedding_sizing,
     qc_browse_sizing,
 )
+from infra.marina.apps.rl_data_catalog.server.content_access import content_is_withheld
 
 PLAN_KIND = "atlas-release-plan"
 GRAPH_RECEIPT_KIND = "atlas-release-graph-receipt"
@@ -299,16 +300,16 @@ class ReleasePlan(BaseModel):
         if not self.targets or self.expected_source_count <= 0:
             raise ValueError("targets and a positive expected_source_count are required")
         for name in (
-            "expected_browse_source_count",
             "expected_contract_count",
             "expected_contract_tasks",
-            "expected_selected_panels",
             "expected_prior_sources",
-            "expected_panels",
             "expected_population_tasks",
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        for name in ("expected_browse_source_count", "expected_selected_panels", "expected_panels"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be nonnegative")
         if not self.region_prefix.endswith("/"):
             raise ValueError("region_prefix must end with '/' so region pins are unambiguous")
         if not self.populations:
@@ -1699,6 +1700,9 @@ def _text_scan_merge_step(
 
 
 def _qc_browse_inputs(plan: ReleasePlan, declarations_ref: dict) -> dict:
+    current = read_ref(ArtifactRef(**declarations_ref))
+    prior = read_ref(plan.pins.prior_declarations)
+    copy_exclusions = set(plan.qc_exclusions) | qc_browse_stage.changed_review_sources(prior, current)
     return {
         "release_id": plan.release_id,
         "prior_load_id": plan.prior.load_id,
@@ -1709,7 +1713,7 @@ def _qc_browse_inputs(plan: ReleasePlan, declarations_ref: dict) -> dict:
         "expected_panels": plan.expected_panels,
         # The copy fans panels out across paced SQL clients; the plan step stays serial.
         "workers": qc_browse_sizing(plan.expected_browse_source_count).workers,
-        "exclusions": plan.qc_exclusions,
+        "exclusions": tuple(sorted(copy_exclusions)),
         "service_url": plan.service.service_url,
         "applet_id": plan.service.applet_id,
     }
@@ -1890,6 +1894,19 @@ def _fresh_qc_index_step(
     )
 
     def build_inputs(ctx: StepContext) -> dict:
+        declarations_ref = _resolved_receipt(ctx, declarations)
+        frozen = read_ref(ArtifactRef(**declarations_ref))
+        carried = {row["source_id"] for row in _resolved_proof(ctx, qc_browse)["results"]}
+        fresh_panels = {}
+        for source_id, declaration in sorted(frozen.items()):
+            if source_id in carried or source_id in plan.qc_exclusions:
+                continue
+            if not (declaration.get("independent_qc") or {}).get("evidence_url"):
+                continue
+            if content_is_withheld(declaration):
+                continue
+            uri = qc_browse_stage.selected_uri(declaration)
+            fresh_panels[source_id] = {"uri": uri, "sha256": hashlib.sha256(StoragePath(uri).read_bytes()).hexdigest()}
         return {
             "release_id": plan.release_id,
             "prior_load_id": plan.prior.load_id,
@@ -1899,8 +1916,9 @@ def _fresh_qc_index_step(
             "output_root": stage_output_root(plan, "qc-index"),
             "service_url": plan.service.service_url,
             "applet_id": plan.service.applet_id,
-            "declarations": _resolved_receipt(ctx, declarations),
+            "declarations": declarations_ref,
             "qc_completion": _resolved_receipt(ctx, qc_browse),
+            "fresh_panels": fresh_panels,
         }
 
     return _stage_step(

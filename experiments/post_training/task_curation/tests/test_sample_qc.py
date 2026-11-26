@@ -20,7 +20,7 @@ from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import ConversationInput, TaskSpec, TextMessage
+from taskcompendium.models import ConversationInput, TextMessage
 from taskcompendium.pipeline.models import ReviewRecord
 from taskcompendium.pipeline.oracle_filter import OracleTaskReceipt
 from taskcompendium.pipeline.review import ChatReviewer
@@ -37,9 +37,9 @@ from experiments.post_training.task_curation.full_qc import REVIEW_RUBRIC, Revie
 from experiments.post_training.task_curation.full_qc_review import ContractBatch, write_observations
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
-from experiments.post_training.task_curation.published_census import population_documents, population_rows
+from experiments.post_training.task_curation.published_census import population_rows
 from experiments.post_training.task_curation.review_quality import quality_result
-from experiments.post_training.task_curation.sample_qc import SamplePanel, panel_tasks, review_panel
+from experiments.post_training.task_curation.sample_qc import panel_tasks, review_panel
 from experiments.post_training.task_curation.sample_qc_artifacts import SampleInventory, SampleQCReview
 from experiments.post_training.task_curation.sample_qc_binding import bind_sample_result
 from experiments.post_training.task_curation.sample_qc_receipts import sample_qc_receipt
@@ -47,49 +47,6 @@ from experiments.post_training.task_curation.source import SourceOrigin, SourceR
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 from lib.taskcompendium.tests.oracle_filter_fixtures import oracle_receipt
-
-
-@pytest.fixture
-def sample_panel(qc_inputs, tmp_path):
-    config, _ = qc_inputs
-    population = SourceTextPopulation.raw_load(config.population_path)
-    path = tmp_path / "panel.parquet"
-    rows = [
-        {
-            "task_id": task["id"],
-            "task_spec": TaskSpec.model_validate(task).model_dump_json(),
-            "runtime": json.dumps(runtime),
-        }
-        for task, runtime in population_documents(population)
-    ]
-    pq.write_table(pa.Table.from_pylist(rows, schema=PANEL_SCHEMA), path)
-    summary = tmp_path / "summary.json"
-    panel = SamplePanel(
-        source_id=population.source_id,
-        dataset_id=population.dataset_id,
-        dataset_revision=population.dataset_revision,
-        converter_version=population.source_version,
-        input_artifact=population.path,
-        task_specs_sha256=population.task_specs_sha256,
-        scanned_task_specs_sha256=population.task_specs_sha256,
-        retained_tasks=len(rows),
-        sample_seed=0,
-        sample_size=len(rows),
-        panel_path=str(path),
-        panel_sha256=file_sha256(StoragePath(str(path))),
-        evidence_url=str(summary),
-    )
-    inventory = SampleInventory(
-        **panel.model_dump(),
-        oracle_tasks=1,
-        execution_qualification="not_assessed",
-        runnable_grader_tasks=3,
-        no_grader_tasks=0,
-        grader_kinds={"script": 3},
-        missing_grader_reasons={},
-    )
-    summary.write_text(inventory.model_dump_json(exclude_none=True))
-    return panel
 
 
 def test_sample_filter_proof_must_cover_unselected_retained_tasks(sample_panel, tmp_path):

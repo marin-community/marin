@@ -79,8 +79,8 @@ class CatalogStageInputs:
             raise ValueError("release_id, snapshot_id and source_revision are required")
         if not self.catalog_root or not self.output_root:
             raise ValueError("catalog_root and output_root are required")
-        if self.expected_source_count <= 0 or self.expected_browse_source_count <= 0:
-            raise ValueError("expected source counts must be positive")
+        if self.expected_source_count <= 0 or self.expected_browse_source_count < 0:
+            raise ValueError("source count must be positive and browse count nonnegative")
         if self.expected_contract_count <= 0 or self.expected_contract_tasks <= 0:
             raise ValueError("expected contract counts must be positive")
 

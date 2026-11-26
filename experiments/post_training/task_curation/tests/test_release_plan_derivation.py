@@ -411,6 +411,15 @@ def test_derivation_targets_changed_existing_populations(
     assert set(plan.targets) == {RETAINED_ID, TARGET_ID}
     assert plan.expected_contract_tasks == 4
     assert derived.receipt["measured"]["replacement_sources"] == [RETAINED_ID]
+    if lagging_projection == "declarations":
+        assert plan.qc_exclusions == ()
+        assert derived.receipt["measured"]["qc_copy_exclusions"] == [RETAINED_ID]
+        assert plan.expected_browse_source_count == plan.expected_panels == 0
+        assert plan.expected_selected_panels == 0
+    else:
+        assert plan.qc_exclusions == ()
+        assert derived.receipt["measured"]["qc_copy_exclusions"] == []
+        assert plan.expected_browse_source_count == plan.expected_selected_panels == 1
 
 
 def test_derivation_applies_config_policy(tmp_path, frozen_layer, deployment, monkeypatch):

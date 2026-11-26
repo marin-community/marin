@@ -324,6 +324,16 @@ statistics for unaffected sources retain their existing values. The handoff
 records replacement source IDs and scopes its unchanged-value evidence to the
 retained sources.
 
+QC browse staging preserves only prior panels whose source inputs and selected
+evidence still match the frozen declaration. Derivation omits changed panels
+from that copy and counts copied panels separately from the final selected set.
+The fresh-QC index combines copied SQL evidence with digest-bound review artifacts
+selected by the frozen declarations through the maintained content-review loader.
+Each review keeps the task IDs recorded in its artifact; its current-pin flag is
+computed against the frozen declaration. Reviews drawn from another pin remain stale. Empty browse
+copies are valid when all prior panels were omitted. Explicit policy exclusions
+stay excluded. No new reviews are requested.
+
 ## Compose verified public-input rewrites with fresh alignment
 
 The composition-input manifest can contain `public_input_rebindings`, an array

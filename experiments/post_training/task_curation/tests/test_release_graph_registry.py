@@ -378,6 +378,49 @@ def test_catalog_load_staging_flows_from_the_catalog_stage_proof(tmp_path):
     assert inputs["previously_available"] == plan.previously_available
 
 
+def test_qc_inputs_replace_changed_panels_and_preserve_policy_exclusions(tmp_path):
+    def declaration(source_id, revision, evidence):
+        return {
+            "id": source_id,
+            "dataset_id": source_id,
+            "dataset_revision": revision,
+            "pipeline": None,
+            "data_restriction": "open",
+            "independent_qc": {"evidence_url": evidence},
+        }
+
+    review = _receipt_ref(tmp_path, "review.artifact.json", {"review": "selected"})
+    current = {
+        sid: declaration(sid, "current", review["uri"]) for sid in ("Marin:carried", "Marin:changed", "Marin:excluded")
+    }
+    prior = {**current, "Marin:changed": {**current["Marin:changed"], "dataset_revision": "old"}}
+    prior_ref = _receipt_ref(tmp_path, "prior-declarations.json", prior)
+    declarations = _receipt_ref(tmp_path, "declarations.json", current)
+    plan = fixture_plan(qc_exclusions=("Marin:excluded",))
+    plan = plan.model_copy(
+        update={"pins": plan.pins.model_copy(update={"prior_declarations": ArtifactRef(**prior_ref)})}
+    )
+    built = release_graph(plan)
+    prefix = str(tmp_path / "prefix")
+    _declarations_dep(built, prefix, plan, declarations)
+    copy_inputs = _materialized_inputs(built.stages["qc_browse_plan"], prefix)
+    assert set(copy_inputs["exclusions"]) == {"Marin:changed", "Marin:excluded"}
+
+    completion = _receipt_ref(tmp_path, "completion.json", {"status": "PASS"})
+    _write_dep(
+        built.stages["qc_browse"],
+        prefix,
+        "qc_browse",
+        plan.release_id,
+        completion,
+        results=[{"source_id": "Marin:carried"}],
+    )
+    fresh_inputs = _materialized_inputs(built.stages["fresh_qc_index"], prefix)
+    assert fresh_inputs["fresh_panels"] == {"Marin:changed": review}
+    typed = typed_inputs(release_graph_module.fresh_qc_index_stage.FreshQcIndexInputs, fresh_inputs)
+    assert typed.fresh_panels["Marin:changed"].sha256 == review["sha256"]
+
+
 def test_curriculum_load_expected_counts_come_from_the_compose_handoff(tmp_path):
     plan = fixture_plan()
     built = release_graph(plan)
