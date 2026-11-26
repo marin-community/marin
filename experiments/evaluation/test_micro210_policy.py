@@ -4,10 +4,10 @@
 import hashlib
 import json
 import re
-import runpy
 import sys
 from dataclasses import replace
 from functools import partial
+from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -361,14 +361,14 @@ def test_standalone_coordinator_reenters_the_model_command(monkeypatch, model):
         ],
     )
     with pytest.raises(SystemExit) as invoked:
-        runpy.run_module(module, run_name="__main__", alter_sys=True)
+        import_module(module).main()
     assert invoked.value.code == 0
     [(entrypoint, argv, _)] = submissions
     assert entrypoint == module and argv[0] == "micro210"
 
     monkeypatch.setattr(sys, "argv", [entrypoint, *argv])
     with pytest.raises(SystemExit) as reentered:
-        runpy.run_module(entrypoint, run_name="__main__", alter_sys=True)
+        import_module(entrypoint).main()
     assert reentered.value.code == 0
     assert submissions[0] == submissions[1]
 

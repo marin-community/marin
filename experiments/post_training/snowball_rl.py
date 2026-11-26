@@ -559,7 +559,8 @@ SNOWBALL = ModelPresets(
     },
 )
 
-if __name__ == "__main__":
+
+def main() -> int:
     if sys.argv[1:2] == ["micro210"]:
         micro210_command(MICRO210_RECIPE, entry_module="experiments.post_training.snowball_rl").main(args=sys.argv[2:])
 
@@ -569,4 +570,8 @@ if __name__ == "__main__":
 
         return SNOWBALL_SFT
 
-    raise SystemExit(rl.main(SNOWBALL, sft_presets=sft_presets))
+    return rl.main(SNOWBALL, sft_presets=sft_presets)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
