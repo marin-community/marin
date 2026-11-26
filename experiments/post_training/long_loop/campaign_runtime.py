@@ -11,7 +11,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from cloud.iris.launch_config import load_launch_config
 from omegaconf import OmegaConf
-from rolloutengine.models import MachineRuntimeSpec
 from skyrl_train.dataset.tasks import canonical_task_spec
 from taskcompendium.models import TaskSpec
 
@@ -32,18 +31,16 @@ def bind_runtime(row: dict, environment: dict, route: str) -> dict:
         # policy; the published cohort supplies the actor's exact numeric resources.
         settings["task_machine_by_dataset"][task.source.dataset] = {
             **environment["image_verifier"],
-            **runtime["task_machine"],
+            **{key: value for key, value in runtime["task_machine"].items() if value is not None},
         }
+    if runtime.get("verifier_machine") is not None:
+        shape = {key: value for key, value in runtime["verifier_machine"].items() if value is not None}
+        for field in ("image_verifier", "package_verifier"):
+            settings[field] = {**environment[field], **shape}
+    # Native lowering applies the TaskSpec's declared allocation minima and
+    # deadlines. Overlaying shapes afterward would erase those requirements.
     lowered = canonical_task_spec(task, settings)
-    updates = {}
-    for field in ("task_machine", "verifier_machine"):
-        shape = runtime.get(field)
-        if shape is None:
-            continue
-        machine = getattr(lowered, field)
-        if machine is not None:
-            updates[field] = MachineRuntimeSpec.model_validate({**machine.model_dump(), **shape})
-    return {**row, "task_rollout_spec": lowered.model_copy(update=updates).model_dump_json()}
+    return {**row, "task_rollout_spec": lowered.model_dump_json()}
 
 
 if __name__ == "__main__":

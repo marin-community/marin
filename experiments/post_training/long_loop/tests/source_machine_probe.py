@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from omegaconf import OmegaConf
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from skyrl_train.dataset.tasks import canonical_task_spec
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from taskcompendium.models import (
@@ -99,6 +100,7 @@ def main(tmp_path: Path) -> None:
         SimpleNamespace(),
         {"daytona": DaytonaMachineFactory(client_factory=allocate)},
         shutdown_timeout=5,
+        inference_queue_timeout=2280,
         retrieval_service="http://retrieval.invalid",
         judge_connection=JudgeConnection("http://judge.invalid", "fixture-key"),
     )
@@ -124,7 +126,13 @@ def main(tmp_path: Path) -> None:
             "cleanup_timeout": 120,
         }
     }
-    launch.skyrl.environment.task_sessions.task_spec.task_machine_by_dataset = machine
+    # A retained campaign row includes both raw and prepared columns. Production
+    # consumes the prepared task even when the launch has no dataset override.
+    bound = canonical_task_spec(actor, {**config, "task_machine_by_dataset": machine})
+    pq.write_table(
+        pa.table({"task_spec": [actor.model_dump_json()], "task_rollout_spec": [bound.model_dump_json()]}),
+        tmp_path / f"{actor.id}.parquet",
+    )
     receipts = validate_source_tasks(launch, worker)
     assert [row["task_id"] for row in receipts] == ["plain", "thin-actor"]
     assert receipts[0]["task_machine"] is None

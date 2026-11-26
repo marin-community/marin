@@ -12,7 +12,7 @@ from marin.execution.lazy import materialized_config
 from marin.rl.curriculum import validation_payload
 from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
-from taskcompendium.models import CommandSemantics, EnvironmentRequirements
+from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ExecutionRequirements
 
 from experiments.post_training.long_loop import campaign
 from experiments.post_training.long_loop.campaign import REFERENCE, campaign_round
@@ -246,3 +246,32 @@ def test_retained_runtime_lowering_preserves_grader_and_declared_resources():
     assert lowered.verifier_machine.cpus == 3
     assert lowered.verifier_machine.memory_mb == 6144
     assert lowered.verifier_machine.backend == environment["package_verifier"]["backend"]
+
+
+def test_null_catalog_sizes_keep_provider_defaults_and_declared_minima():
+    task = arithmetic_task().model_copy(
+        update={
+            "environment_requirements": EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                docker_image="fixture@sha256:" + "a" * 64,
+            ),
+            "execution_requirements": ExecutionRequirements(
+                cpus=4, memory_mb=8192, storage_mb=2048, agent_timeout_sec=600, verifier_timeout_sec=600
+            ),
+        }
+    )
+    row = {
+        "task_spec": task.model_dump_json(),
+        "runtime": json.dumps({"task_machine": {"cpus": None, "memory_mb": None, "storage_mb": None, "gpus": 0}}),
+    }
+    defaults = REFERENCE.parents[4] / "vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml"
+    environment = yaml.safe_load(defaults.read_text())["task_spec"]
+    environment["image_verifier"].update(cpus=2, memory_mb=4096, storage_mb=10240)
+    projected = bind_runtime(row, environment, "nonagentic")
+    lowered = TaskRolloutSpec.model_validate_json(projected["task_rollout_spec"])
+    assert lowered.task == task
+    assert projected["task_spec"] == row["task_spec"]
+    assert lowered.task_machine.cpus == 4
+    assert lowered.task_machine.memory_mb == 8192
+    assert lowered.task_machine.storage_mb == 10240
+    assert lowered.limits.total_turn_timeout == 600

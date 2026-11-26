@@ -102,7 +102,9 @@ def validate_source_tasks(launch, worker) -> list[dict]:
                 parquet = pq.ParquetFile(stream)
                 if parquet.metadata.num_rows == 0:
                     raise ValueError(f"No task to admit from {uri}")
-                column = TASK_SPEC_COLUMN if TASK_SPEC_COLUMN in parquet.schema.names else TASK_ROLLOUT_COLUMN
+                # SourceTaskDataset consumes the prepared rollout when both columns
+                # exist. Admit that same task, including its selected machines.
+                column = TASK_ROLLOUT_COLUMN if TASK_ROLLOUT_COLUMN in parquet.schema.names else TASK_SPEC_COLUMN
                 for batch in parquet.iter_batches(batch_size=1, columns=[column]):
                     row = batch.to_pylist()[0]
                     lowered = (
