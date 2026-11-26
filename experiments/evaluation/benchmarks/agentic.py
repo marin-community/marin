@@ -22,6 +22,7 @@ from experiments.evaluation.benchmarks.harbor import (
     IMAGE_LOCKS,
     PI_MAX_OUTPUT_TOKENS,
     HarborDataset,
+    PackageCopy,
     PackageEdit,
     github_packages,
     harbor_source,
@@ -41,6 +42,8 @@ VERSION = "2026.11.17.2"
 # The version of the datasets whose rule renders a judge spec into each task. Their recipe identity
 # does not cover the rendered judge, so a change to it bumps this version.
 JUDGED_VERSION = "2026.11.23"
+# SWE-bench Multilingual's version, bumped when its agent went offline and its tests moved to a separate verifier.
+SWEBENCH_MULTILINGUAL_VERSION = "2026.11.26"
 # Terminal-Bench's build-pov-ray allows its agent and its verifier 12,000 seconds each.
 TERMINAL_BENCH_ATTEMPT_TIMEOUT = 8 * 60 * 60
 
@@ -310,6 +313,49 @@ SWEBENCH_VERIFIED_MINI_SWE = HarborDataset(
     count=500,
     images=SWEBENCH_VERIFIED.recipe,
 )
+SWEBENCH_WORKSPACE_TREE = "/opt/marin/workspace-tree"
+"""The git tree of the image's workspace, untracked files included, that the agent's changes are diffed against."""
+SWEBENCH_PATCH = "/logs/artifacts/model.patch"
+SWEBENCH_ENVIRONMENT = "[environment]\nbuild_timeout_sec = 1800.0\ncpus = 4\nmemory = '8G'\nstorage = '10G'\n"
+SWEBENCH_COLLECT = (
+    "set -e; cd /testbed; git -c safe.directory=/testbed add -A; mkdir -p /logs/artifacts; "
+    f'git -c safe.directory=/testbed diff --cached --binary "$(cat {SWEBENCH_WORKSPACE_TREE})" > {SWEBENCH_PATCH}'
+)
+SWEBENCH_APPLY = (
+    f"if [ -s {SWEBENCH_PATCH} ] && ! git -c safe.directory=/testbed -C /testbed apply --binary {SWEBENCH_PATCH}; then\n"
+    "    echo \"The agent's changes do not apply to the task's workspace\"\n"
+    "    mkdir -p /logs/verifier\n"
+    "    echo 0 > /logs/verifier/reward.txt\n"
+    "    exit 1\n"
+    "fi\n"
+)
+# The agent works offline, so it cannot fetch the upstream fix. Its tests run in Harbor's separate verifier: a fresh
+# machine from the same image, with the network they need to install their log parser, which receives the agent's
+# changes as a patch in /logs/artifacts. The patch is taken against the image's whole workspace, so files the image
+# leaves untracked apply to the verifier's identical copy of them.
+SWEBENCH_MULTILINGUAL_EDITS = (
+    PackageCopy("environment/Dockerfile", "tests/Dockerfile"),
+    PackageEdit(
+        "environment/Dockerfile",
+        "RUN mkdir -p /logs\n",
+        "RUN mkdir -p /logs\n"
+        f"RUN mkdir -p /opt/marin && cd /testbed && git -c safe.directory=/testbed add -A"
+        f" && git -c safe.directory=/testbed write-tree > {SWEBENCH_WORKSPACE_TREE}"
+        " && git -c safe.directory=/testbed reset -q\n",
+    ),
+    PackageEdit(
+        "task.toml",
+        SWEBENCH_ENVIRONMENT,
+        SWEBENCH_ENVIRONMENT.replace("[environment]", "[verifier.environment]")
+        + "allow_internet = true\n\n"
+        + f"[[verifier.collect]]\ncommand = '{SWEBENCH_COLLECT}'\ntimeout_sec = 600\n\n"
+        + SWEBENCH_ENVIRONMENT
+        + "allow_internet = false\n",
+    ),
+    PackageEdit(
+        "tests/test.sh", 'exec > >(tee "$LOG_FILE") 2>&1\n', f'exec > >(tee "$LOG_FILE") 2>&1\n\n{SWEBENCH_APPLY}'
+    ),
+)
 SWEBENCH_MULTILINGUAL = HarborDataset(
     recipe="swebench-multilingual",
     benchmark="swebench-multilingual",
@@ -322,8 +368,9 @@ SWEBENCH_MULTILINGUAL = HarborDataset(
         "acf34269d8d282fc2fba779f973ef4cd0cf80c9745076294cbfc128601574325",
         root="datasets/swebench_multilingual",
     ),
-    version=VERSION,
+    version=SWEBENCH_MULTILINGUAL_VERSION,
     count=300,
+    edits=SWEBENCH_MULTILINGUAL_EDITS,
 )
 SWEBENCH_MULTILINGUAL_100_PACKAGES = frozenset(
     {
