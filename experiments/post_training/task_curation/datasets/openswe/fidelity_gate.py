@@ -65,7 +65,7 @@ CREATE_BACKOFF_SECONDS = (15.0, 45.0)
 EVIDENCE_OUTPUT_TAIL = 3000
 
 STAGED_FILES = ("tests/test.sh", "tests/eval_script.sh", "solution/gold.patch", "solution/solve.sh")
-UPSTREAM_BINDINGS_FILENAME = "upstream-base-bindings.json"
+UPSTREAM_BINDINGS_FILENAME = "upstream-fidelity-bindings.json"
 
 
 class FidelityExclusion(Exception):
@@ -601,6 +601,9 @@ def main() -> None:
     api_key = os.environ.get("DAYTONA_API_KEY")
     if not api_key:
         raise SystemExit("the gate runs on Daytona: set DAYTONA_API_KEY (the eval account) before launching")
+    from rigging.filesystem.s3_compat import configure_coreweave_s3  # noqa: PLC0415
+
+    configure_coreweave_s3()
     condensed_bases = bases.load_condensed_bases(args.condensed_bindings)
     upstream_bases = bases.load_bindings(args.upstream_bindings, UPSTREAM_BINDINGS_FILENAME)
     rows = keep_release_rows(args.keep_release_dir)

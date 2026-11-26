@@ -22,8 +22,8 @@ RAW_SCRIPT = (
     "/experiments/post_training/task_curation/run_fidelity_gate.sh"
 )
 EVAL_KEY_SPEC = "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest"
-CONDENSED_BINDINGS_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/openswe/base-build/condensed-base-bindings.json"
-UPSTREAM_BINDINGS_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/openswe/base-build/upstream-fidelity-bindings.json"
+CONDENSED_BINDINGS_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/openswe/base-build"
+UPSTREAM_BINDINGS_URI = "s3://marin-us-east-02a/marin/rl-data/inputs/openswe/base-build"
 REPORT_ROOT = "s3://marin-us-east-02a/marin/rl-data/inputs/openswe/fidelity-gate"
 
 

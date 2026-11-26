@@ -128,6 +128,15 @@ def main() -> None:
         converter_revision=args.converter_revision,
         output_root=root,
     )
+    from marin.execution.artifact import ArtifactRecord, result_type_name, write_record  # noqa: PLC0415
+
+    write_record(
+        ArtifactRecord(
+            output_path=root,
+            result_type=result_type_name(SourceTextPopulation),
+            result=population.result_payload(),
+        )
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(population.model_dump(mode="json"), sort_keys=True) + "\n")
     print(f"population record: {args.output} at {root}")
