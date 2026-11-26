@@ -9,7 +9,9 @@ import subprocess
 import sys
 import textwrap
 from contextlib import nullcontext
+from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import click
@@ -119,6 +121,84 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
             Path("/workspace/marin"),
             {},
         )
+
+
+@pytest.mark.parametrize("allow_submission", [False, True])
+def test_prelaunch_check_finishes_before_coordinator_submission(tmp_path, monkeypatch, allow_submission):
+    receipt = tmp_path / "prelaunch.txt"
+    client = MagicMock(spec=IrisClient)
+    submitted = []
+
+    def submit(**kwargs):
+        assert receipt.read_text() == "complete"
+        submitted.append(kwargs)
+        return SimpleNamespace(job_id="/tests/prelaunch-coordinator")
+
+    client.submit.side_effect = submit
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+
+    def prelaunch(_handles):
+        if not allow_submission:
+            raise RuntimeError("Live snapshot references unavailable")
+        receipt.write_text("complete")
+
+    @click.command()
+    @partial(rl_build_options, before_submit=prelaunch)
+    def main():
+        return _step(_execution())
+
+    dry = CliRunner().invoke(main, ["--version", "2026.11.26"])
+    assert dry.exit_code == 0, dry.output
+    assert not receipt.exists()
+    client.submit.assert_not_called()
+
+    result = CliRunner().invoke(main, ["--version", "2026.11.26", "--run"])
+    if allow_submission:
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert receipt.read_text() == "complete"
+        assert len(submitted) == 1
+    else:
+        assert isinstance(result.exception, RuntimeError)
+        assert not receipt.exists()
+        client.submit.assert_not_called()
+
+
+@pytest.mark.parametrize("coordinator_reentry", [False, True])
+def test_in_job_check_runs_for_manual_launch_but_not_submitted_coordinator(tmp_path, monkeypatch, coordinator_reentry):
+    receipt = tmp_path / "checked.txt"
+
+    def native(output):
+        Path(output).mkdir(parents=True, exist_ok=True)
+        Path(output, "completed.txt").write_text("complete")
+        return Artifact(path=output)
+
+    step = apply("tests/prelaunch-in-job", native, version="2026.11.26", output=OUT)
+    step = dataclasses.replace(step, runtime_args={"skyrl_execution": _execution()})
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    monkeypatch.delenv("MARIN_RL_COORDINATOR_GRAPH", raising=False)
+    if coordinator_reentry:
+        _, request = _coordinator_request([step], "test_cli", (), tmp_path, {})
+        monkeypatch.setenv("MARIN_RL_COORDINATOR_GRAPH", request.environment.env_vars["MARIN_RL_COORDINATOR_GRAPH"])
+
+    def prelaunch(_handles):
+        receipt.write_text("checked")
+
+    @click.command()
+    @partial(rl_build_options, before_submit=prelaunch)
+    def main():
+        return step
+
+    info = JobInfo(task_id=JobName.from_wire("/test-user/prelaunch/0"))
+    set_job_info(info)
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(info)):
+            result = CliRunner().invoke(main, ["--version", "2026.11.26", "--run"])
+        assert result.exit_code == 0, (result.output, result.exception)
+        assert Path(step.path(str(tmp_path)), "completed.txt").read_text() == "complete"
+        assert receipt.exists() is not coordinator_reentry
+    finally:
+        set_job_info(None)
 
 
 def test_rl_launch_resolves_explicit_credentials_before_remote_submission(tmp_path, monkeypatch) -> None:

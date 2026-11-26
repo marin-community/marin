@@ -81,3 +81,35 @@ An OOM in any pool or training worker halts new submissions and refills until
 the coordinator explicitly authorizes resumption. Record the stage, rank, memory
 and sequence evidence; other active runs continue. The reset authorizes cancellation
 of .529 only. Other running jobs require separate explicit permission.
+
+Every `--run` first reclaims stale Daytona snapshots in the RL and eval
+accounts through the maintained Shellbox purge. Pass
+`--snapshot-reference-registry <URI>` (repeatable) and `--daytona-target <region>`
+or set `DAYTONA_TARGET`. `--daytona-api-url` uses the same `DAYTONA_API_URL`
+binding as task workers. Dry runs and submitted-coordinator reentry do not purge.
+Manual launches from an Iris task still run the prelaunch check.
+
+Each protection-registry JSON document must contain a timezone-aware `observed_at`
+timestamp no more than five minutes old, `live_registry_coverage_complete: true`,
+and `rl` and `eval` objects. Each account object supplies `names` (snapshot
+names reserved by running or queued jobs), `reference_sources` (a mapping from
+job-root identifiers to source-registry URIs), and
+`queued_reference_inventory_complete: true`. Obtain these inventories
+from the current campaign, loop-guards, Exp7 and other live-lane registries;
+an empty provider sandbox inventory does not prove that jobs have no references.
+Missing, incomplete, future-dated or expired evidence stops submission before
+snapshot deletion. Unknown registry fields are rejected.
+
+The purge also protects provider sandbox references and revalidates last use.
+Only account snapshots unused for more than one hour are eligible; general or
+unclassified snapshots remain. `<validation-output>/snapshot-purge.json` records
+protection hashes, deleted names/counts, quota limits, usage and free slots
+for each account. Deletion IDs are saved before quota lookup, and an incomplete
+attempt stops further submission. Inspect the receipt and the maintained
+snapshot `inventory` and usage commands before retrying. For recorded pending
+removals, confirm that every listed name is absent and re-read quota; retain the
+old receipt under a unique audit filename before a fresh `--run`, which repeats
+the full prelaunch check. If failure prevented a complete deletion report, keep
+the attempt blocked and ask the coordinator to reconcile provider state.
+Add `deleted_count` and `snapshot_free` from this receipt to the
+run's issue91 note; do not infer free slots from deletion counts.

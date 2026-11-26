@@ -7,6 +7,7 @@ import copy
 import dataclasses
 import json
 import os
+from functools import partial
 from pathlib import Path
 
 import click
@@ -21,9 +22,15 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import require_secret
 from rigging.timing import Duration
+from shellbox.backends.daytona.connection import DEFAULT_DAYTONA_API_URL
 
 from experiments.evaluation.micro210 import ServingProfileName, micro210_artifact_step, registered_serving_profile
 from experiments.post_training.long_loop.campaign_data import CampaignMix, load_mix, prepare_pools
+from experiments.post_training.long_loop.campaign_daytona import (
+    PURGE_RUNTIME_ARG,
+    CampaignSnapshotPurge,
+    purge_before_campaign_submission,
+)
 from experiments.post_training.long_loop.campaign_storage import retain_campaign_checkpoints
 from experiments.post_training.long_loop.execution_policy import RlStopping, rl_training_callbacks
 from experiments.post_training.long_loop.launch_validation import validate_before_allocation, validate_launch
@@ -234,8 +241,18 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
 @click.option("--mix-id", required=True)
 @click.option("--max-steps", type=int, default=50, show_default=True)
 @click.option("--validation-output", type=click.Path(path_type=Path), required=True)
-@rl_build_options
-def main(mix_id: str, max_steps: int, validation_output: Path) -> ArtifactStep:
+@click.option("--snapshot-reference-registry", multiple=True, help="Current complete live-job protection registry URI.")
+@click.option("--daytona-target", envvar="DAYTONA_TARGET", help="Daytona target used by this campaign.")
+@click.option("--daytona-api-url", envvar="DAYTONA_API_URL", default=DEFAULT_DAYTONA_API_URL, show_default=True)
+@partial(rl_build_options, before_submit=purge_before_campaign_submission)
+def main(
+    mix_id: str,
+    max_steps: int,
+    validation_output: Path,
+    snapshot_reference_registry: tuple[str, ...],
+    daytona_target: str | None,
+    daytona_api_url: str,
+) -> ArtifactStep:
     """Build the campaign graph; --run is reserved for the coordinator's rated queue."""
     configure_coreweave_s3()
     mix = load_mix(mix_id)
@@ -265,7 +282,18 @@ def main(mix_id: str, max_steps: int, validation_output: Path) -> ArtifactStep:
         "controls on existing .131 pools; candidate data/agent gate is a dependency before GPU allocation"
     )
     (validation_output / "plan.json").write_text(json.dumps(plan, indent=2))
-    return terminal
+    return dataclasses.replace(
+        terminal,
+        runtime_args={
+            **terminal.runtime_args,
+            PURGE_RUNTIME_ARG: CampaignSnapshotPurge(
+                registry_uris=snapshot_reference_registry,
+                target=daytona_target,
+                api_url=daytona_api_url,
+                receipt_path=str(validation_output / "snapshot-purge.json"),
+            ),
+        },
+    )
 
 
 if __name__ == "__main__":

@@ -234,12 +234,18 @@ def submit_or_run(
     return JobName.from_wire(handle.job_id)
 
 
-def rl_build_options(fn: Callable[..., BuildResult]) -> Callable[..., None]:
+def rl_build_options(
+    fn: Callable[..., BuildResult],
+    *,
+    before_submit: Callable[[list[ArtifactStep]], None] | None = None,
+) -> Callable[..., None]:
     """Build and validate an RL graph, then run it in or submit it to Iris."""
 
     def runner(handles: list[ArtifactStep], max_concurrent: int) -> None:
         # Spawn workers import the main module before registering its module spec.
         module_name = _module_name(sys.modules[fn.__module__])
+        if before_submit is not None and (get_job_info() is None or _COORDINATOR_GRAPH_ENV not in os.environ):
+            before_submit(handles)
         submit_or_run(module_name, handles, max_concurrent, os.environ, argv=tuple(sys.argv[1:]))
 
     return build_options_with_runner(fn, runner)

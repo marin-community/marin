@@ -1813,6 +1813,23 @@ def test_purge_preserves_a_stale_snapshot_that_a_live_sandbox_references() -> No
     assert set(account.snapshots) == {"referenced"}
 
 
+def test_purge_preserves_live_job_reservations_without_current_sandboxes() -> None:
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    account = SnapshotAccount(
+        [
+            _account_snapshot(name, last_used_at=now - timedelta(hours=2))
+            for name in ("between-trials", "active-sandbox", "unused")
+        ]
+    )
+    client = SimpleNamespace(snapshot=account, list=SandboxLister(snapshot_names=["active-sandbox"]))
+
+    report = asyncio.run(purge_stale_snapshots(client, now=now, protected_snapshots={"between-trials"}))
+
+    assert report.referenced == ("between-trials", "active-sandbox")
+    assert report.deleted == ("unused",)
+    assert set(account.snapshots) == {"between-trials", "active-sandbox"}
+
+
 def test_purge_fails_closed_when_sandbox_references_cannot_be_enumerated() -> None:
     now = datetime(2026, 1, 1, 12, tzinfo=UTC)
     account = SnapshotAccount([_account_snapshot("stale", last_used_at=now - timedelta(hours=2))])

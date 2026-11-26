@@ -13,7 +13,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -264,6 +264,7 @@ async def purge_stale_snapshots(
     *,
     now: datetime | None = None,
     minimum_idle: timedelta = SNAPSHOT_STALE_AFTER,
+    protected_snapshots: Collection[str] = (),
 ) -> SnapshotPurgeReport:
     """Delete every stale snapshot in the account after revalidating its last use.
 
@@ -272,7 +273,9 @@ async def purge_stale_snapshots(
     Sandbox references are enumerated before any deletion, so reference evidence
     that cannot be obtained aborts the purge entirely, and a stale snapshot that
     an existing sandbox still references is preserved and reported as
-    ``referenced``. Revalidating each target preserves a snapshot that was used
+    ``referenced``. Callers also supply snapshot names reserved by live jobs via
+    ``protected_snapshots``; these remain protected when the job temporarily has
+    no sandbox. Revalidating each target preserves a snapshot that was used
     after the inventory was taken, and a target whose last-use evidence
     disappears between the inventory and the revalidation is recorded as
     unclassified without blocking the remaining deletions. Removal is
@@ -281,6 +284,7 @@ async def purge_stale_snapshots(
     """
     observed_at = now or datetime.now(UTC)
     referenced = await referenced_snapshots(client)
+    referenced.update(protected_snapshots)
     inventory_classes = classify_inventory(await list_snapshots(client), now=observed_at, minimum_idle=minimum_idle)
     stale = [
         name for name, classification in inventory_classes.items() if classification is SnapshotClassification.STALE
