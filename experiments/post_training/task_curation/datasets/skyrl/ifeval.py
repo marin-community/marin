@@ -201,7 +201,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.JSONL,
                 ),
                 convert=convert_nemotron_if,
-                version="2",
+                # L1 keeps the sealed version string so the receipt bindings hold;
+                # the admission landing bumps it to "2" with the re-cut receipts.
+                version="1",
                 intended_use=IntendedUse.TRAIN,
                 rubric=NEMOTRON_RUBRIC,
                 controls=CONTROLS,
@@ -231,7 +233,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.PARQUET,
                 ),
                 convert=convert_rlvr_ifeval,
-                version="3",
+                # L1 keeps the sealed version string so the receipt bindings hold;
+                # the admission landing bumps it to "3" with the re-cut receipts.
+                version="1",
                 intended_use=IntendedUse.TRAIN,
                 rubric=RUBRIC,
                 controls=CONTROLS,
