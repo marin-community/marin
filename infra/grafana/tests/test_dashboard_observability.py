@@ -14,6 +14,7 @@ from conftest import bridge_config
 from dashboard_dataset import DashboardDataset
 from dashboard_stitch import stitch_all
 from jobs_observability import jobs_overview_dataset
+from node_jobs_observability import node_jobs_dataset
 from node_observability import node_overview_dataset
 from rl_execution_observability import rl_execution_dataset
 from rl_observability import recent_rl_runs_dataset, rl_gpu_dataset, rl_overview_dataset
@@ -213,6 +214,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
     start_ms, end_ms = 0, 60_000
     sections = {
         "node": frozenset(node_overview_dataset(("cw-a",), ("node-a",), start_ms, end_ms, 15_000).views),
+        "node_jobs": frozenset(node_jobs_dataset(("cw-us-east-02a",), "node-a", start_ms, end_ms, 15_000).views),
         "zephyr": frozenset(zephyr_overview_dataset("execution", "stage", start_ms, end_ms).views),
         "training": frozenset(training_overview_dataset("run", start_ms, end_ms, 15_000).views),
         "runs": frozenset(runs_overview_dataset(("cw-a",), ("run",), start_ms, end_ms, 15_000).views),
@@ -226,7 +228,7 @@ def test_priority_dashboards_use_only_bounded_panel_endpoints() -> None:
         ),
     }
     expected = {
-        "nodes.json": {"/v1/node/overview": (9, sections["node"])},
+        "nodes.json": {"/v1/node/overview": (9, sections["node"]), "/v1/node/jobs": (4, sections["node_jobs"])},
         "zephyr.json": {"/v1/zephyr/overview": (4, sections["zephyr"])},
         "training.json": {"/v1/training/overview": (16, sections["training"])},
         "runs.json": {"/v1/runs/overview": (8, sections["runs"])},

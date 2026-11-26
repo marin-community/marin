@@ -1392,3 +1392,16 @@ def test_node_details_links_to_utilization_for_the_nodes_jobs_on_its_own_range()
     assert len(links) == 1
     assert links[0]["includeVars"] is True
     assert links[0]["keepTime"] is False
+
+
+def test_node_details_job_row_queries_only_when_opened():
+    """Node details refreshes every minute on a 3-hour default range. Grafana sends no request for a
+    collapsed row, so the job row's dataset (the node's attempts and their usage) costs nothing
+    until someone opens it."""
+    nodes = json.loads((DASHBOARDS / "nodes.json").read_text())
+    rows = [panel for panel in nodes["panels"] if panel.get("title") == "Jobs on this node"]
+
+    assert len(rows) == 1
+    assert rows[0]["type"] == "row" and rows[0]["collapsed"] is True
+    urls = {target["url"] for panel in rows[0]["panels"] for target in panel["targets"]}
+    assert urls == {"/v1/node/jobs"}
