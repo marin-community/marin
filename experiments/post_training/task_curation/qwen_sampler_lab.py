@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish the fixed arithmetic, string and list pool for the Qwen sampler experiment."""
+"""Publish the fixed arithmetic, string and list pools for the Qwen sampler experiments."""
+
+from __future__ import annotations
 
 import hashlib
 import json
@@ -47,15 +49,11 @@ from experiments.post_training.task_curation.selection import (
 
 NAME = "qwen-sampler-lab"
 VERSION = "2026.11.25.1"
-ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data/task-selection" / NAME / VERSION)
-SOURCE_EVAL_NAME = "qwen-sampler-source-eval"
-SOURCE_EVAL_VERSION = "2026.11.25.1"
-SOURCE_EVAL_ROOT = str(
-    StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data/task-selection" / SOURCE_EVAL_NAME / SOURCE_EVAL_VERSION
-)
+SELECTION_ROOT = StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data/task-selection"
+ROOT = str(SELECTION_ROOT / NAME / VERSION)
 TRAIN_SEED, EVAL_SEED = 20261125, 20261126
 TRAIN_PER_CELL, FULL_DEV_PER_CELL, FAST_DEV_PER_CELL = 512, 16, 4
-SOURCE_EVAL_SEED, SOURCE_EVAL_PER_CELL = 20261127, 32
+EVAL_PER_CELL = 32
 _PLACEMENT = GraderMachine(
     environment=EnvironmentRequirements(command_semantics=CommandSemantics.SHELL_SIMULATOR, package_spec=PackageSpec())
 )
@@ -68,6 +66,27 @@ class Difficulty(StrEnum):
     EASY = "easy"
     INTERMEDIATE = "intermediate"
     HARD = "hard"
+
+
+@dataclass(frozen=True)
+class EvalPanel:
+    name: str
+    version: str
+    seed: int
+    prior_panels: tuple[EvalPanel, ...] = ()
+
+    @property
+    def reference(self) -> str:
+        return f"{self.name}@{self.version}"
+
+    @property
+    def root(self) -> str:
+        return str(SELECTION_ROOT / self.name / self.version)
+
+
+SOURCE_EVAL = EvalPanel("qwen-sampler-source-eval", "2026.11.25.1", 20261127)
+PASS_EVAL = EvalPanel("qwen-sampler-pass-eval", "2026.11.25.1", 20261128, prior_panels=(SOURCE_EVAL,))
+EVAL_PANELS = {"source": SOURCE_EVAL, "pass": PASS_EVAL}
 
 
 def arithmetic(rng: random.Random, difficulty: Difficulty) -> tuple[str, str]:
@@ -169,13 +188,13 @@ def lab_examples() -> list[Example]:
     return rows
 
 
-def source_eval_examples() -> list[Example]:
-    """Draw the independent panel after excluding every v1 public prompt digest."""
+def eval_panel_examples(panel: EvalPanel) -> list[Example]:
+    """Draw an independent panel after excluding all earlier public prompt digests."""
     seen = {example.task.source.row for example in lab_examples()}
-    rows = _examples(
-        SOURCE_EVAL_NAME, SOURCE_EVAL_VERSION, SOURCE_EVAL_SEED, SOURCE_EVAL_PER_CELL, "dev", SOURCE_EVAL_PER_CELL, seen
-    )
-    random.Random(SOURCE_EVAL_SEED).shuffle(rows)
+    for prior in panel.prior_panels:
+        _examples(prior.name, prior.version, prior.seed, EVAL_PER_CELL, "dev", EVAL_PER_CELL, seen)
+    rows = _examples(panel.name, panel.version, panel.seed, EVAL_PER_CELL, "dev", EVAL_PER_CELL, seen)
+    random.Random(panel.seed).shuffle(rows)
     return rows
 
 
@@ -246,42 +265,49 @@ def publish(output: str) -> str:
     return _publish_selection(output, files, manifests, summary)
 
 
-def publish_source_eval(output: str) -> str:
-    """Publish a validation-only artifact for the prospective source-policy test."""
-    if str(StoragePath(output)) == ROOT:
-        raise ValueError("The source evaluation panel requires a separate artifact from Qwen sampler lab v1")
-    files, manifests = selection_rows(source_eval_examples())
+def publish_eval_panel(panel: EvalPanel, output: str) -> str:
+    """Publish a validation-only panel with its public prompt exclusions recorded."""
+    other_roots = {ROOT, *(other.root for other in EVAL_PANELS.values() if other != panel)}
+    if str(StoragePath(output)) in other_roots:
+        raise ValueError("An evaluation panel requires its own artifact path")
+    files, manifests = selection_rows(eval_panel_examples(panel))
     rows = files[VALIDATION_FILENAME]
     family_counts = dict(Counter(row["family"] for row in rows))
+    sampling = "seeded equal family and difficulty quotas, excluding all lab v1 prompt digests"
+    if panel.prior_panels:
+        sampling += " and earlier evaluation panel prompt digests"
     definition = SelectionDefinition(
-        name=SOURCE_EVAL_NAME,
-        version=SOURCE_EVAL_VERSION,
-        sampling="seeded equal family and difficulty quotas, excluding all lab v1 prompt digests",
+        name=panel.name,
+        version=panel.version,
+        sampling=sampling,
         task_files=(VALIDATION_FILENAME,),
         active_files=(VALIDATION_FILENAME,),
         family_quotas=family_counts,
     )
     summary = {
         "selection_strata": definition.model_dump(mode="json"),
-        "eval_seed": SOURCE_EVAL_SEED,
+        "eval_seed": panel.seed,
         "excluded_selection": f"{NAME}@{VERSION}",
         "validation_rows": len(rows),
         "validation_family_counts": family_counts,
         "grader_kind_counts": {"validation": {"package": len(rows)}},
     }
+    if panel.prior_panels:
+        summary["excluded_evaluation_panels"] = [prior.reference for prior in panel.prior_panels]
     return _publish_selection(output, {VALIDATION_FILENAME: rows}, manifests, summary)
 
 
 @click.command(help=__doc__)
 @click.option("--output", help="Override the selected panel's canonical output path.")
-@click.option("--source-eval", is_flag=True, help="Select the independent 288-task validation panel.")
+@click.option("--source-eval", "panel_name", flag_value="source", help="Select the source-policy evaluation panel.")
+@click.option("--pass-eval", "panel_name", flag_value="pass", help="Select the source-pass evaluation panel.")
 @click.option("--run", is_flag=True, help="Publish or verify identical existing bytes.")
-def main(output: str | None, source_eval: bool, run: bool) -> None:
-    output = output or (SOURCE_EVAL_ROOT if source_eval else ROOT)
+def main(output: str | None, panel_name: str | None, run: bool) -> None:
+    panel = EVAL_PANELS.get(panel_name) if panel_name is not None else None
+    output = output or (panel.root if panel is not None else ROOT)
     if run:
         configure_coreweave_s3()
-        publisher = publish_source_eval if source_eval else publish
-        click.echo(publisher(output), nl=False)
+        click.echo(publish_eval_panel(panel, output) if panel is not None else publish(output), nl=False)
     else:
         click.echo(output)
 

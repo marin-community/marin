@@ -150,6 +150,39 @@ def test_resume_restores_pending_window_and_feedback_bookkeeping(prompts):
     assert [restored.next_index() for _ in range(36)] == [original.next_index() for _ in range(36)]
 
 
+def test_source_passes_cover_skewed_pools_and_replay_at_rollover(prompts):
+    prompts = [replace(p, source="rare" if i < 5 else "common") for i, p in enumerate(prompts)]
+    kind = PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE
+    weights = {"rare": 1, "common": 3}
+    ranked = _order(prompts, kind, reference=weights, epsilon=0.05)
+    uniform = _order(prompts, kind, reference=weights, epsilon=1.0)
+    baseline = _order(prompts, PromptAcquisition.WITHIN_SOURCE_COST_AWARE, reference=weights)
+    observations = [_feedback(i, 1, useful=i < 40, tokens=20 if i < 40 else 200) for i in range(80)]
+    ranked.finish_step(1, observations)
+    visits = [[], []]
+    for _ in range(24):
+        a, b, c = ([policy.next_index() for _ in range(12)] for policy in (ranked, uniform, baseline))
+        assert len(set(a)) == len(set(b)) == 12
+        assert [prompts[i].source for i in a] == [prompts[i].source for i in b] == [prompts[i].source for i in c]
+        assert sum(i < 5 for i in a) == 3
+        visits[0].extend(a)
+        visits[1].extend(b)
+    assert visits[0] != visits[1]
+    for sequence in visits:
+        for rows in (set(range(5)), set(range(5, 80))):
+            within_source = [i for i in sequence if i in rows]
+            for start in range(0, len(within_source), len(rows)):
+                one_pass = within_source[start:start + len(rows)]
+                assert len(set(one_pass)) == len(one_pass)
+    for _ in range(5):
+        ranked.next_index()
+    restored = _order(prompts, kind, reference=weights, epsilon=0.05)
+    restored.load_state_dict(json.loads(json.dumps(ranked.state_dict())))
+    assert [ranked.next_index() for _ in range(96)] == [restored.next_index() for _ in range(96)]
+    with pytest.raises(ValueError, match="another training catalog or policy"):
+        baseline.load_state_dict(ranked.state_dict())
+
+
 @pytest.mark.parametrize("reference", [{}, {"rare": 3, "common": 1}])
 def test_family_windows_condition_the_reference_and_resume(prompts, reference):
     quotas = {"sorting": 8, "division": 12}

@@ -142,9 +142,10 @@ PROMPT_ARMS = (
     ("contextual", "prompt-thompson-contextual"),
     ("cost-aware", "prompt-thompson-cost-aware"),
 )
+THOMPSON_ARM = ("thompson", "adaptive-source-thompson", LOW_EXPLORATION)
 ARMS = (
     ("fixed", "adaptive-source", 1.0),
-    ("thompson", "adaptive-source-thompson", LOW_EXPLORATION),
+    THOMPSON_ARM,
     *((arm, kind, PROMPT_EXPLORATION) for arm, kind in PROMPT_ARMS),
 )
 RNO_PAIR_PILOT_ARMS = (
@@ -154,12 +155,20 @@ RNO_PAIR_PILOT_ARMS = (
 FULL_VALIDATION = replace(EVAL, name="qwen_lab_full", file="full_validation", at_start=False)
 CONFIRMATION_ARMS = ("fixed", "thompson", "cost-aware-eps05")
 WITHIN_SOURCE = "prompt-thompson-within-source-cost-aware"
+WITHIN_SOURCE_ARM = ("within-source", WITHIN_SOURCE, LOW_EXPLORATION)
 SOURCE_ARMS = (
-    ("within-source", WITHIN_SOURCE, LOW_EXPLORATION),
+    WITHIN_SOURCE_ARM,
     ("within-source-random", WITHIN_SOURCE, 1.0),
 )
-SOURCE_EVAL_TASKS = f"{qwen_sampler_lab.SOURCE_EVAL_NAME}@{qwen_sampler_lab.SOURCE_EVAL_VERSION}"
 SOURCE_EVAL = replace(EVAL, name="qwen_source_eval")
+WITHIN_SOURCE_PASS = "prompt-thompson-within-source-pass-cost-aware"
+SOURCE_PASS_ARMS = (
+    ("within-source-pass", WITHIN_SOURCE_PASS, LOW_EXPLORATION),
+    ("within-source-pass-random", WITHIN_SOURCE_PASS, 1.0),
+)
+PASS_EVAL = replace(EVAL, name="qwen_pass_eval")
+BUDGET_CONFIRM_TOKENS = 5_242_880
+BUDGET_CONFIRM_UPDATES = 220
 
 
 def with_rollout_token_budget(preset: Preset, tokens: int) -> Preset:
@@ -287,14 +296,42 @@ QWEN_SAMPLER = ModelPresets(
                 epsilon,
                 seed,
                 revision="2026.11.25.11",
-                max_updates=220,
-                tokens=5_242_880,
+                max_updates=BUDGET_CONFIRM_UPDATES,
+                tokens=BUDGET_CONFIRM_TOKENS,
                 evaluation=SOURCE_EVAL,
-                held_out_tasks=SOURCE_EVAL_TASKS,
+                held_out_tasks=qwen_sampler_lab.SOURCE_EVAL.reference,
             )
             for arm, kind, epsilon in (*RNO_PAIR_PILOT_ARMS, *SOURCE_ARMS)
             if arm in {"thompson", "cost-aware-eps05", "within-source", "within-source-random"}
             for seed in (67, 79)
+        ),
+        *(
+            sampler_preset(
+                f"rno-pair-source-pass-smoke-{arm}",
+                4,
+                kind,
+                epsilon,
+                83,
+                layout=RNO_PAIR_LAYOUT,
+                revision="2026.11.25.12",
+                evaluation_interval=4,
+            )
+            for arm, kind, epsilon in SOURCE_PASS_ARMS
+        ),
+        *(
+            budget_preset(
+                f"rno-pair-source-pass-confirm-{arm}-seed{seed}",
+                kind,
+                epsilon,
+                seed,
+                revision="2026.11.25.13",
+                max_updates=BUDGET_CONFIRM_UPDATES,
+                tokens=BUDGET_CONFIRM_TOKENS,
+                evaluation=PASS_EVAL,
+                held_out_tasks=qwen_sampler_lab.PASS_EVAL.reference,
+            )
+            for arm, kind, epsilon in (*SOURCE_PASS_ARMS, WITHIN_SOURCE_ARM, THOMPSON_ARM)
+            for seed in (83, 97)
         ),
         *(
             token_budget_smoke(arm, kind, epsilon)

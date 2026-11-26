@@ -232,6 +232,20 @@ uv run python -m experiments.post_training.task_curation.qwen_sampler_lab \
     --source-eval --run
 ```
 
+The `rno-pair-source-pass-smoke-*` presets run four updates with the 36-task fast panel.
+They pair ranked and uniform picks at seed 83. Both use the same source schedule and restrict
+selection to the least-visited eligible prompts within the assigned source.
+The `rno-pair-source-pass-confirm-*` presets use seeds 83 and 97 and include both pass policies,
+the existing within-source ranking, and source Thompson sampling. The confirmation runs stop
+at the first update reaching 5,242,880 gross training response tokens, with a cap of 220 updates.
+They evaluate before training and at the stop on a separate 288-task panel that excludes all
+prior training and evaluation prompts. Publish the panel with the following command.
+
+```bash
+uv run python -m experiments.post_training.task_curation.qwen_sampler_lab \
+    --pass-eval --run
+```
+
 The model and tokenizer come from the regional Qwen artifact at revision `c1899de`. SkyRL caches
 the lowered and tokenized training rows across sampler policies with the same immutable data,
 tokenizer, task settings and preparation code. Compare elapsed time from submission, worker start

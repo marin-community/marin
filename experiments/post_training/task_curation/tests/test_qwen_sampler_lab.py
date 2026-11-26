@@ -14,11 +14,12 @@ from taskcompendium.models import TaskSpec, TextMessage
 
 from experiments.post_training.task_curation.qwen_sampler_lab import (
     FAMILIES,
-    SOURCE_EVAL_NAME,
-    SOURCE_EVAL_VERSION,
+    PASS_EVAL,
+    SOURCE_EVAL,
     Difficulty,
+    eval_panel_examples,
     lab_examples,
-    publish_source_eval,
+    publish_eval_panel,
 )
 
 
@@ -35,11 +36,13 @@ def test_qwen_sampler_pool_has_distinct_prompts_and_balanced_cells(examples):
     assert set(Counter((r.strata.family, r.strata.difficulty) for r in examples if r.split == "dev").values()) == {16}
 
 
-def test_source_eval_release_is_balanced_and_disjoint_from_all_lab_examples(examples, tmp_path):
-    publish_source_eval(str(tmp_path))
+@pytest.mark.parametrize("panel", [SOURCE_EVAL, PASS_EVAL], ids=["source-eval", "pass-eval"])
+def test_eval_release_is_balanced_and_disjoint_from_prior_releases(examples, panel, tmp_path):
+    previous = examples + [row for prior in panel.prior_panels for row in eval_panel_examples(prior)]
+    publish_eval_panel(panel, str(tmp_path))
     manifest = read_selection_manifest(str(tmp_path))
     assert manifest is not None
-    assert (manifest.definition.name, manifest.definition.version) == (SOURCE_EVAL_NAME, SOURCE_EVAL_VERSION)
+    assert (manifest.definition.name, manifest.definition.version) == (panel.name, panel.version)
     assert manifest.definition.task_files == manifest.definition.active_files == ("validation.parquet",)
     assert {path.name for path in tmp_path.iterdir()} == {"validation.parquet", "task_manifest.parquet", "summary.json"}
     validation = pq.read_table(tmp_path / "validation.parquet").to_pylist()
@@ -48,10 +51,10 @@ def test_source_eval_release_is_balanced_and_disjoint_from_all_lab_examples(exam
     }
     tasks = [TaskSpec.model_validate_json(row["task_spec"]) for row in validation]
     assert len({task.id for task in tasks}) == len({task.source.row for task in tasks}) == 288
-    assert {task.id for task in tasks}.isdisjoint(example.task.id for example in examples)
-    assert {task.source.row for task in tasks}.isdisjoint(example.task.source.row for example in examples)
+    assert {task.id for task in tasks}.isdisjoint(example.task.id for example in previous)
+    assert {task.source.row for task in tasks}.isdisjoint(example.task.source.row for example in previous)
     assert {task.context.events[0].content for task in tasks}.isdisjoint(
-        example.task.context.events[0].content for example in examples
+        example.task.context.events[0].content for example in previous
     )
 
 

@@ -43,6 +43,8 @@ def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
                 f"expected train_batch_size={batch_size}"
             )
         kind = cfg.data.sampling.kind
+        if kind == PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE:
+            raise ValueError(f"{GROUPS_PER_FAMILY_KEY} cannot partition a per-source prompt pass")
         if kind is not None and kind not in PromptAcquisition:
             raise ValueError(f"{GROUPS_PER_FAMILY_KEY} requires data.sampling.kind to be null or a prompt-Thompson kind")
     return dict(groups_per_family)

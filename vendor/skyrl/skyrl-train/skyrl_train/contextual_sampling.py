@@ -4,7 +4,7 @@
 """Thompson sampling over public training prompts with delayed optimizer feedback."""
 
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
@@ -191,10 +191,18 @@ class PromptThompsonOrder:
         self._rng = np.random.default_rng(seed)
         self._exploration_rng = np.random.default_rng(np.random.SeedSequence([seed, 1]))
         self._source_boundaries: NDArray[np.float64] | None = None
-        if acquisition is PromptAcquisition.WITHIN_SOURCE_COST_AWARE:
+        if self.uses_source_passes:
+            if groups_per_family:
+                raise ValueError("groups_per_family cannot partition a per-source prompt pass")
+            self._visits = np.zeros(len(prompts), dtype=np.int64)
+            self._pass_used: set[int] = set()
+            self._pass_sources: list[int] = []
+            self._pass_priority = np.empty(0)
+        if acquisition.within_source:
             self._source_ids = np.searchsorted(self._sources, self._row_sources)
+            self._source_shares = np.array([shares[source] for source in self._sources], dtype=float)
             self._source_boundaries = _source_quota_boundaries(
-                np.array([shares[source] for source in self._sources], dtype=float),
+                self._source_shares,
                 np.array([counts[source] for source in self._sources]),
                 window_size,
             )
@@ -235,11 +243,59 @@ class PromptThompsonOrder:
         signature_bytes = json.dumps(signature, separators=(",", ":")).encode()
         self._signature = hashlib.sha256(signature_bytes + self._features.astype("<f8").tobytes()).hexdigest()
 
+    @property
+    def uses_source_passes(self) -> bool:
+        return self._acquisition is PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE
+
     def next_index(self) -> int:
+        if self.uses_source_passes:
+            row = self.next_pass_index(())
+            assert row is not None
+            return row
         if not self._window:
             available = np.ones(len(self._features), dtype=bool)
             self._window = self._draw_window(available, self._window_size, self._source_boundaries)
         return self._window.pop()
+
+    def next_pass_index(self, excluded: Collection[str]) -> int | None:
+        """Choose a least-visited eligible row of the requested source, counting actual offers."""
+        available = np.ones(len(self._rows), dtype=bool)
+        available[[self._rows[uid] for uid in excluded]] = False
+        if not available.any():
+            return None
+        # A pass spans source windows. Within a window, even a source that wraps
+        # to its next pass cannot offer the same row twice.
+        if self._pass_sources:
+            unused = available.copy()
+            unused[list(self._pass_used)] = False
+            if unused.any():
+                available = unused
+            else:
+                self._pass_sources.clear()
+        capacities = np.bincount(self._source_ids[available], minlength=len(self._sources))
+        if not self._pass_sources:
+            size = min(self._window_size, int(capacities.sum()))
+            boundaries = _source_quota_boundaries(self._source_shares, capacities, size)
+            self._pass_sources = self._source_window(boundaries, size).tolist()[::-1]
+            self._pass_priority = self._priorities()
+            self._pass_used.clear()
+        # A newly unavailable source can defer its slot. If all remaining
+        # sources are blocked, redistribute just those slots over free rows.
+        position = next(
+            (i for i in reversed(range(len(self._pass_sources))) if capacities[self._pass_sources[i]]), None
+        )
+        if position is None:
+            size = min(len(self._pass_sources), int(capacities.sum()))
+            boundaries = _source_quota_boundaries(self._source_shares, capacities, size)
+            self._pass_sources = self._source_window(boundaries, size).tolist()[::-1]
+            position = -1
+        source = self._pass_sources.pop(position)
+        eligible = available & (self._source_ids == source)
+        eligible &= self._visits == self._visits[eligible].min()
+        row = self._choose(eligible, self._pass_priority)
+        self._pass_used.add(row)
+        self._visits[row] += 1
+        return row
 
     def next_family_index(self, family: str, rows: Sequence[int], eligible: Callable[[int], bool]) -> int | None:
         """Draw from the eligible rows of a leased family."""
@@ -268,35 +324,42 @@ class PromptThompsonOrder:
         self._assigned[source] += 1
         return source
 
+    def _priorities(self) -> NDArray[np.float64]:
+        coefficients = np.linalg.solve(self._precision, self._info)
+        draw = np.linalg.solve(np.linalg.cholesky(self._precision).T, self._rng.standard_normal(len(coefficients)))
+        priority = self._probabilities(self._features @ (coefficients + draw))
+        if self._acquisition is PromptAcquisition.COST_AWARE or self._acquisition.within_source:
+            log_relative_cost = self._features @ np.linalg.solve(self._cost_precision, self._cost_info)
+            priority *= np.exp(
+                np.clip(-_COST_EXPONENT * log_relative_cost, np.log(_MIN_COST_WEIGHT), np.log(_MAX_COST_WEIGHT))
+            )
+        return priority
+
+    def _source_window(self, boundaries: NDArray[np.float64], size: int) -> NDArray:
+        # A shifted unit lattice gives every source the floor or ceiling of its expected count.
+        sources = np.searchsorted(boundaries, np.arange(size) + self._source_rng.random(), side="right")
+        self._source_rng.shuffle(sources)
+        return sources
+
+    def _choose(self, eligible: NDArray[np.bool_], priority: NDArray[np.float64]) -> int:
+        if self._exploration_rng.random() < self._epsilon:
+            weights = self._weights * eligible
+            return int(self._exploration_rng.choice(len(priority), p=weights / weights.sum()))
+        peak = priority[eligible].max()
+        return int(self._rng.choice(np.flatnonzero(eligible & (priority == peak))))
+
     def _draw_window(
         self,
         available: NDArray[np.bool_],
         window_size: int,
         source_boundaries: NDArray[np.float64] | None,
     ) -> list[int]:
-        coefficients = np.linalg.solve(self._precision, self._info)
-        draw = np.linalg.solve(np.linalg.cholesky(self._precision).T, self._rng.standard_normal(len(coefficients)))
-        priority = self._probabilities(self._features @ (coefficients + draw))
-        if self._acquisition in (PromptAcquisition.COST_AWARE, PromptAcquisition.WITHIN_SOURCE_COST_AWARE):
-            log_relative_cost = self._features @ np.linalg.solve(self._cost_precision, self._cost_info)
-            priority *= np.exp(
-                np.clip(-_COST_EXPONENT * log_relative_cost, np.log(_MIN_COST_WEIGHT), np.log(_MAX_COST_WEIGHT))
-            )
-        sources = None
-        if source_boundaries is not None:
-            # A shifted unit lattice gives every source the floor or ceiling of its expected count.
-            positions = np.arange(window_size) + self._source_rng.random()
-            sources = np.searchsorted(source_boundaries, positions, side="right")
-            self._source_rng.shuffle(sources)
+        priority = self._priorities()
+        sources = self._source_window(source_boundaries, window_size) if source_boundaries is not None else None
         window: list[int] = []
         for slot in range(window_size):
             eligible = available if sources is None else available & (self._source_ids == sources[slot])
-            if self._exploration_rng.random() < self._epsilon:
-                weights = self._weights * eligible
-                row = int(self._exploration_rng.choice(len(priority), p=weights / weights.sum()))
-            else:
-                peak = priority[eligible].max()
-                row = int(self._rng.choice(np.flatnonzero(eligible & (priority == peak))))
+            row = self._choose(eligible, priority)
             available[row] = False
             window.append(row)
         return window[::-1]
@@ -375,8 +438,15 @@ class PromptThompsonOrder:
             "cost_precision": self._cost_precision.tolist(),
             "cost_info": self._cost_info.tolist(),
         }
-        if self._acquisition is PromptAcquisition.WITHIN_SOURCE_COST_AWARE:
+        if self._acquisition.within_source:
             state["source_rng"] = deepcopy(self._source_rng.bit_generator.state)
+        if self.uses_source_passes:
+            state["pass"] = {
+                "visits": self._visits.tolist(),
+                "used": sorted(self._pass_used),
+                "sources": list(self._pass_sources),
+                "priority": self._pass_priority.tolist(),
+            }
         if self._groups_per_family:
             state["family_windows"] = {family: list(window) for family, window in self._family_windows.items()}
         return state
@@ -384,8 +454,14 @@ class PromptThompsonOrder:
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state.get("signature") != self._signature:
             raise ValueError("Thompson checkpoint belongs to another training catalog or policy")
-        if self._acquisition is PromptAcquisition.WITHIN_SOURCE_COST_AWARE:
+        if self._acquisition.within_source:
             self._source_rng.bit_generator.state = state["source_rng"]
+        if self.uses_source_passes:
+            saved = state["pass"]
+            self._visits = np.asarray(saved["visits"], dtype=np.int64)
+            self._pass_used = set(saved["used"])
+            self._pass_sources = list(saved["sources"])
+            self._pass_priority = np.asarray(saved["priority"], dtype=float)
         if self._groups_per_family:
             self._family_windows = {family: list(window) for family, window in state["family_windows"].items()}
         self._rng.bit_generator.state = state["rng"]

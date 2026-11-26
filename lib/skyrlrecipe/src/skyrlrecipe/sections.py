@@ -24,6 +24,7 @@ class Sampling(Section):
             "prompt-thompson-contextual",
             "prompt-thompson-cost-aware",
             "prompt-thompson-within-source-cost-aware",
+            "prompt-thompson-within-source-pass-cost-aware",
             "naive",
             "thompson",
             "learnability",
@@ -41,8 +42,9 @@ class Sampling(Section):
     decay: int | float = field(0.95)
     "per-step multiplicative decay of observations"
     epsilon: int | float = field(0.05)
-    """adaptive-source and prompt-thompson reserve this fraction for reference shares. prompt-thompson-within-source-
-    cost-aware preserves source shares and explores within each source. adaptive-source-thompson, thompson,
+    """adaptive-source and prompt-thompson reserve this fraction for reference shares. Within-source cost-aware
+    policies explore within the scheduled source. The pass variant explores its least-visited eligible prompts.
+    adaptive-source-thompson, thompson,
     learnability and grade-prior floor each bin at epsilon / bin count before renormalization."""
     reversion_mass: int | float = field(0.0)
     "bin curriculum pseudo-evidence per step toward the weight-curve peak"

@@ -11,6 +11,7 @@ import torch
 from loguru import logger
 
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN
+from skyrl_train.contextual_sampling import PromptThompsonOrder
 from skyrl_train.group_admission import AdmissionRejection
 
 STALE_RETRIES_EXHAUSTED_METRIC = "async/stale_retries_exhausted"
@@ -178,6 +179,7 @@ class PromptLoader:
         self._families = dict(families or {})
         self._family_minimums = dict(family_minimums or {})
         self._order = order
+        self._pass_order = order if isinstance(order, PromptThompsonOrder) and order.uses_source_passes else None
         self._observe_judged = observe_judged
         self._family_rows: dict[str, list[int]] = collections.defaultdict(list)
         for uid in sorted(self._families, key=self._uid_rows.__getitem__):
@@ -211,6 +213,9 @@ class PromptLoader:
         def eligible(uid: str) -> bool:
             return self._available(uid, live) and (family is None or self._families.get(uid) == family)
 
+        if self._pass_order is not None:
+            row = self._pass_order.next_pass_index(self._quarantined.keys() | live)
+            return self._offer(row) if row is not None else None
         for position, prompt in enumerate(self._retries):
             if eligible(prompt["uid"]):
                 del self._retries[position]
@@ -255,6 +260,9 @@ class PromptLoader:
 
     def retry(self, prompt: dict) -> None:
         """Queue a prompt whose group missed the staleness window, unless it used up its regenerations."""
+        if self._pass_order is not None:
+            # The stale dispatch already visited this prompt. It becomes eligible again through the pass.
+            return
         uid = prompt["uid"]
         count = self._stale_retries.pop(uid, 0)
         if count >= self._max_stale_retries:
@@ -328,7 +336,7 @@ class PromptLoader:
         if self._family_orders:
             order["family_orders"] = {family: passes.state_dict() for family, passes in self._family_orders.items()}
         eligibility = None
-        if self._family_sampler is not None:
+        if self._family_sampler is not None or self._pass_order is not None:
             eligibility = PromptEligibilityState(
                 self._step,
                 self._quarantined.copy(),
@@ -344,7 +352,9 @@ class PromptLoader:
         for family, order in self._family_orders.items():
             if family in saved_families:
                 order.load_state_dict(saved_families[family])
-        self._retries = collections.deque(state.retries)
+        # A context checkpoint includes interrupted, already offered dispatches. The pass order
+        # will revisit them after the rest of their source instead of immediately duplicating them.
+        self._retries = collections.deque(() if self._pass_order is not None else state.retries)
         if state.eligibility is not None:
             self._step = state.eligibility.step
             self._quarantined = state.eligibility.quarantined.copy()

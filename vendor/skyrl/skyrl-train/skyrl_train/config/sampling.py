@@ -13,6 +13,11 @@ class PromptAcquisition(StrEnum):
     CONTEXTUAL = "prompt-thompson-contextual"
     COST_AWARE = "prompt-thompson-cost-aware"
     WITHIN_SOURCE_COST_AWARE = "prompt-thompson-within-source-cost-aware"
+    WITHIN_SOURCE_PASS_COST_AWARE = "prompt-thompson-within-source-pass-cost-aware"
+
+    @property
+    def within_source(self) -> bool:
+        return self in (self.WITHIN_SOURCE_COST_AWARE, self.WITHIN_SOURCE_PASS_COST_AWARE)
 
 
 class SamplingKind(StrEnum):
@@ -23,6 +28,7 @@ class SamplingKind(StrEnum):
     PROMPT_THOMPSON_CONTEXTUAL = PromptAcquisition.CONTEXTUAL.value
     PROMPT_THOMPSON_COST_AWARE = PromptAcquisition.COST_AWARE.value
     PROMPT_THOMPSON_WITHIN_SOURCE_COST_AWARE = PromptAcquisition.WITHIN_SOURCE_COST_AWARE.value
+    PROMPT_THOMPSON_WITHIN_SOURCE_PASS_COST_AWARE = PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE.value
     NAIVE = "naive"
     THOMPSON = "thompson"
     LEARNABILITY = "learnability"

@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import Counter
+from dataclasses import replace
 
 import pytest
 import torch
@@ -126,11 +127,56 @@ def test_family_thompson_resumes_retries_quarantine_and_exhaustion(tmp_path):
     ]
 
 
+def test_source_pass_loader_defers_stale_retries_and_restores_quarantine(tmp_path):
+    prompts = [PublicPrompt(str(i), "math", f"Count from {i}.") for i in range(16)]
+
+    def make_loader():
+        order = PromptThompsonOrder(
+            prompts, set(), {}, acquisition=PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE,
+            seed=19, window_size=4, decay=0.95, epsilon=0.05, reference_tokens=100,
+        )
+        return PromptLoader(Prompts(16), order, batch_size=4, max_stale_retries=2, max_unusable_groups=1)
+
+    loader = make_loader()
+    first = loader.next_prompt(())
+    loader.retry(first)
+    second = loader.next_prompt(())
+    assert first != second
+    loader.record_disposition(second["uid"], UNUSABLE)
+    live = {first["uid"]}
+    path = tmp_path / "source-pass.pt"
+    # The context checkpoint includes a previously dispatched, interrupted request for regeneration.
+    torch.save(replace(loader.state_dict(), retries=[first]), path)
+    restored = make_loader()
+    restored.load_state_dict(torch.load(path, weights_only=False))
+    assert restored.state_dict().retries == []
+    for current in (loader, restored):
+        assert current.next_prompt({p.uid for p in prompts}) is None
+    seen = {first["uid"], second["uid"]}
+    for _ in range(14):
+        prompt = loader.next_prompt(live)
+        assert prompt == restored.next_prompt(live) and prompt["uid"] not in seen
+        seen.add(prompt["uid"])
+    assert seen == {p.uid for p in prompts}
+    # After one full pass, a leased and a quarantined row remain unavailable.
+    for _ in range(14):
+        prompt = loader.next_prompt(live)
+        assert prompt == restored.next_prompt(live) and prompt["uid"] not in {first["uid"], second["uid"]}
+    for current in (loader, restored):
+        for _ in range(QUARANTINE_STEPS):
+            current.observe([])
+        assert {current.next_prompt(())["uid"] for _ in range(2)} == {first["uid"], second["uid"]}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("acquisition", list(PromptAcquisition))
 async def test_family_thompson_fills_exact_quotas_across_open_batches_and_resume(tmp_path, acquisition):
     quotas = {"short": 11, "long": 21}
     families = {str(row): "short" if row < 24 else "long" for row in range(70)}
+    if acquisition is PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE:
+        with pytest.raises(ValueError, match="cannot partition a per-source prompt pass"):
+            _family_thompson_loader(families, quotas, staleness=1, acquisition=acquisition)
+        return
     config = RolloutBufferConfig(
         batch_size=32,
         max_in_flight=32,

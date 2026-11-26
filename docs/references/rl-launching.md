@@ -302,6 +302,14 @@ within-source variant allocates each family's draw window using the reference ro
 family, capped by available rows per source. Checkpoints retain each family's draw position.
 Omit the family counts to use other prompt orders, including curriculum sampling.
 
+`prompt-thompson-within-source-pass-cost-aware` draws from the least-visited eligible
+prompts in the scheduled source. A visit counts when the loader offers the prompt, so
+stale or discarded work consumes a visit. A quarantined or live prompt catches up when
+it becomes eligible again. Each source window keeps its selected prompts distinct.
+Set `data.sampling.epsilon=1` for uniform draws within the same pass and source window.
+This order uses a flat catalog and checkpoints visit counts, the pending source window,
+its Thompson draw, and the loader's quarantine.
+
 The Qwen3-0.6B sampler experiment provides `smoke-{source-only,contextual,cost-aware}`
 and `pilot-{source-only,contextual,cost-aware}` presets in `experiments.post_training.qwen_sampler`.
 The `-seed29` pilot variants provide a second paired seed. All three adaptive arms share
