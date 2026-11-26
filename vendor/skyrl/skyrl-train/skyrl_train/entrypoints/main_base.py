@@ -644,7 +644,8 @@ class BasePPOExp:
             if distillation_runtime is not None:
                 trainer.configure_distillation(distillation_runtime)
         except BaseException:
-            asyncio.run(trainer.shutdown())
+            with trainer.teardown_deadline():
+                asyncio.run(trainer.shutdown())
             raise
         return trainer
 
@@ -681,11 +682,11 @@ class BasePPOExp:
         trainer = None
         try:
             with self.get_tracker() as tracker:
-                try:
-                    trainer = self._setup_trainer(tracker)
-                    asyncio.run(trainer.train())
-                finally:
-                    if trainer is not None:
+                trainer = self._setup_trainer(tracker)
+                with trainer.teardown_deadline():
+                    try:
+                        asyncio.run(trainer.train())
+                    finally:
                         try:
                             asyncio.run(trainer.shutdown())
                         except Exception as error:

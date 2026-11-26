@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import Mapping
-from contextlib import asynccontextmanager, nullcontext
+from collections.abc import Iterator, Mapping
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import replace
 import io as stdlib_io
 import json
@@ -592,9 +592,20 @@ class RayPPOTrainer:
                 await self._teardown()
                 self._shutdown_complete = True
 
-    @staticmethod
-    def _start_exit_watchdog(timeout: int = 120) -> None:
+    @contextmanager
+    def teardown_deadline(self) -> Iterator[None]:
+        """Keep the watchdog armed through event-loop shutdown."""
+        try:
+            yield
+        finally:
+            if watchdog := getattr(self, "_teardown_watchdog", None):
+                watchdog.cancel()
+                self._teardown_watchdog = None
+
+    def _start_exit_watchdog(self, timeout: int = 120) -> None:
         """Start a daemon thread that force-exits the process after *timeout* seconds."""
+        if getattr(self, "_teardown_watchdog", None) is not None:
+            return
 
         def _force_exit():
             logger.error(
@@ -602,9 +613,10 @@ class RayPPOTrainer:
             )
             os._exit(1)
 
-        t = threading.Timer(timeout, _force_exit)
-        t.daemon = True
-        t.start()
+        watchdog = threading.Timer(timeout, _force_exit)
+        self._teardown_watchdog = watchdog
+        watchdog.daemon = True
+        watchdog.start()
 
     async def train(self):
         """Run the rollout-buffer training loop, then release every resource it started."""

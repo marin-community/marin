@@ -202,7 +202,7 @@ jobs:
   rl-controls:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.controls)
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
@@ -254,7 +254,7 @@ jobs:
           set -eo pipefail
           uv run --frozen --all-packages --extra cpu --no-default-groups \
             python -m experiments.post_training.rl_nightly_controls --batch "$CONTROL_BATCH" \
-            --presets="$CONTROL_PRESETS" \
+            --presets="$CONTROL_PRESETS" --state-dir gs://marin-us-central1/ci/rl-controls/pending \
             2>&1 | tee rl-controls.log
       - uses: actions/upload-artifact@v7
         if: always()

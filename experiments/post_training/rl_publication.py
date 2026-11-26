@@ -63,6 +63,16 @@ from experiments.post_training.rl_measurements import (
 logger = logging.getLogger(__name__)
 
 
+CONTROL_SUBMISSION_ENV = "MARIN_RL_CONTROL_SUBMISSION"
+
+
+class ControlSubmission(BaseModel, frozen=True):
+    """Pending control outputs saved by the main workflow before Iris submission."""
+
+    job: str
+    outputs: tuple[str, ...]
+
+
 class PublicationOutcome(BaseModel):
     served_records: list[tuple[str, str]] = Field(default_factory=list)
     unserved_records: list[tuple[str, str] | str] = Field(default_factory=list)
@@ -348,19 +358,22 @@ def publish_running(
     coordinator: str,
     service_url: str | None,
     published: set[tuple[str, str]],
-) -> None:
-    """Upsert the prepared attempt for this coordinator while native work runs."""
+) -> bool:
+    """Upsert prepared attempts and report whether this output has a visible receipt."""
     try:
         _, stored = read_stored_skyrl_attempts(path)
-        for attempt in _coordinator_attempts(stored, coordinator).values():
+        attempts = _coordinator_attempts(stored, coordinator)
+        for attempt in attempts.values():
             key = (attempt.index_run_id, attempt.attempt_id)
             if key in published or attempt.native.result.state.is_terminal or attempt.interruption is not None:
                 continue
             url = publish_result(build_record(path, preset, table=table, attempt=attempt), service_url)
             published.add(key)
             click.echo(f"RL progress {url}")
+        return bool(attempts)
     except Exception as error:
         logger.warning("Running row publication will retry for %s (%s)", path, type(error).__name__)
+        return False
 
 
 @dataclass(frozen=True)
@@ -421,6 +434,7 @@ def publish_runs(
     cached_attempts: Mapping[str, str] | None = None,
     interrupted: bool = False,
     submitted_gate: gate.GateAddress | None = None,
+    allow_unprepared: bool = False,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     if coordinator is None and issue is not None and (len(outputs) != 1 or attempt_id is None):
@@ -463,6 +477,9 @@ def publish_runs(
         if current_id in attempts:
             result.attempts[path] = attempts[current_id]
         if attempt_id is None and current_id not in attempts:
+            if allow_unprepared and interrupted and not attempts:
+                result.errors.append(f"Coordinator ended before preparing a native attempt at {path}")
+                continue
             result.unserved_records.append(path)
             result.errors.append(f"No stored native receipt at {path} for current attempt {current_id}")
         selected = (

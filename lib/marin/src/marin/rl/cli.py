@@ -18,7 +18,7 @@ import click
 from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
-from iris.cluster.client.job_info import get_job_info
+from iris.cluster.client.job_info import get_job_info, resolve_job_user
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
@@ -188,6 +188,7 @@ def submit_or_run(
     coordinator_env: Mapping[str, str],
     *,
     argv: tuple[str, ...],
+    before_submit: Callable[[JobName], None] | None = None,
 ) -> JobName | None:
     """Run the graph in-job, or submit it and return the coordinator's ID."""
     if get_job_info() is not None:
@@ -205,6 +206,8 @@ def submit_or_run(
         coordinator_env,
     )
     with open_iris_client(config_file=Path(cluster_config), workspace=workspace) as iris_client:
+        if before_submit is not None:
+            before_submit(JobName.root(resolve_job_user(), request.name))
         handle = FrayIrisClient.from_iris_client(iris_client).submit(request, adopt_existing=False)
     click.echo(f"submitted RL coordinator {handle.job_id} ({request.name}) via {cluster_config}")
     return JobName.from_wire(handle.job_id)

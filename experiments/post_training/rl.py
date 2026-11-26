@@ -827,7 +827,23 @@ def _submit_from_launcher(
         environment["GIT_COMMIT"] = revision
     if preset.output_ttl_days is not None:
         environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
-    job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
+    submission_path = os.environ.get(rl_publication.CONTROL_SUBMISSION_ENV)
+
+    def record_control_submission(job: JobName) -> None:
+        submission = rl_publication.ControlSubmission(job=str(job), outputs=tuple(native_ids))
+        assert submission_path is not None
+        StoragePath(submission_path).write_text(submission.model_dump_json())
+
+    if submission_path and (not index.is_control or context.params["wait"]):
+        raise click.UsageError("the nightly control submission path requires a detached control run")
+    job = submit_or_run(
+        module,
+        handles,
+        max_concurrent,
+        environment,
+        argv=argv,
+        before_submit=record_control_submission if submission_path else None,
+    )
     submitted = [
         {
             "name": step.name,
@@ -846,7 +862,7 @@ def _submit_from_launcher(
         "runs": submitted,
     }
     _print_status(result)
-    if not context.params["wait"]:
+    if not context.params["wait"] and not submission_path:
         try:
             watch = _publication_watch(
                 job, rl_handles, preset, context.params["url"], context.params["issue"], cached_attempts

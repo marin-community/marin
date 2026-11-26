@@ -1,7 +1,7 @@
 """Tracker cleanup preserves the workload result when final uploads time out."""
 
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -16,6 +16,7 @@ from omegaconf import OmegaConf
 os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
 
 import ray
+from skyrl_train import trainer as trainer_module
 from skyrl_train.entrypoints import main_base
 from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.utils.tracking import Tracking
@@ -141,27 +142,65 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     assert len(warnings) == int(slow_role is not None)
 
 
-def test_failed_training_keeps_attempt_timing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("training_fails", [False, True])
+def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, training_fails):
     times = iter((100.0, 125.0))
     monkeypatch.setattr(main_base, "time", SimpleNamespace(monotonic=lambda: next(times)))
     failure = RuntimeError("training failed")
+    timers, exits = [], []
+
+    class Timer:
+        def __init__(self, timeout, callback):
+            self.callback = callback
+            self.armed = False
+            timers.append(self)
+
+        def start(self):
+            self.armed = True
+
+        def cancel(self):
+            self.armed = False
+
+        def expire(self):
+            if self.armed:
+                self.callback()
+
+    monkeypatch.setattr(trainer_module, "threading", SimpleNamespace(Timer=Timer))
+    monkeypatch.setattr(trainer_module, "os", SimpleNamespace(_exit=exits.append))
+
+    trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
+    trainer.evaluation_wall_time = 7.0
 
     async def train():
-        raise failure
+        trainer._start_exit_watchdog()
+        if training_fails:
+            raise failure
 
     async def shutdown():
-        pass
+        assert timers[0].armed
 
-    trainer = SimpleNamespace(train=train, shutdown=shutdown, evaluation_wall_time=7.0)
+    @contextmanager
+    def tracker():
+        try:
+            yield
+        finally:
+            timers[0].expire()
+
+    trainer.train = train
+    trainer.shutdown = shutdown
     config = OmegaConf.create(
         {
             "trainer": {"export_path": str(tmp_path)},
             "runtime": {"run_id": "native-run", "attempt_id": "native-attempt"},
         }
     )
-    experiment = SimpleNamespace(cfg=config, get_tracker=nullcontext, _setup_trainer=lambda tracker: trainer)
-    with pytest.raises(RuntimeError) as raised:
+    experiment = SimpleNamespace(cfg=config, get_tracker=tracker, _setup_trainer=lambda tracker: trainer)
+    if training_fails:
+        with pytest.raises(RuntimeError) as raised:
+            BasePPOExp._run(experiment)
+        assert raised.value is failure
+    else:
         BasePPOExp._run(experiment)
-    assert raised.value is failure
+    assert exits == []
     assert (attempt := read_attempt(str(tmp_path), "native-attempt")) is not None
     assert attempt.elapsed_excluding_eval_seconds == 18.0

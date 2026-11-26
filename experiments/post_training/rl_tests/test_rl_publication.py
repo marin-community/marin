@@ -4,6 +4,7 @@
 import copy
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -32,6 +33,7 @@ from finestore.rl.run_records import (
 )
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
+from iris.resources.state import JobState
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
@@ -353,18 +355,18 @@ def test_concurrent_issue_claims_keep_one_lineage_issue(tmp_path, monkeypatch):
     assert {attempt.issue for attempt in read_attempts(export_root).values()} == {winner}
 
 
-def test_nightly_fills_current_main_cohorts_and_waits_for_each_child(monkeypatch):
-    monkeypatch.setattr(nightly, "configure_coreweave_s3", lambda: None)
-    monkeypatch.setattr(gate, "compose_preset", lambda preset: preset.name)
-    monkeypatch.setattr(gate, "config_version", lambda config: "current")
-    monkeypatch.setattr("sys.argv", ["rl_nightly_controls", "--batch", "123-1"])
+def test_nightly_resumes_publication_and_refills_only_the_control_deficit(recorded_runs, monkeypatch, tmp_path):
+    monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
+    sources = ("accepted", "preempted", "unprepared")
+    preset = nightly.SNOWBALL.by_name["speed-medium"]
+    version = gate.config_version(gate.compose_preset(preset))
     base = AttemptSummary.model_validate_json(
         json.dumps(
             progress_record()
             | {
                 "model": "snowball",
-                "series": "learning-medium",
-                "preset_version": "current",
+                "series": preset.name,
+                "preset_version": version,
                 "is_control": True,
                 "dirty": False,
                 "branch": "main",
@@ -374,7 +376,7 @@ def test_nightly_fills_current_main_cohorts_and_waits_for_each_child(monkeypatch
         )
     )
     first = base.model_copy(update={"native_run_id": "control-0", "attempt_id": "first"})
-    records = [
+    previous = [
         first,
         first.model_copy(update={"attempt_id": "retry"}),
         base.model_copy(update={"native_run_id": "control-1"}),
@@ -382,25 +384,81 @@ def test_nightly_fills_current_main_cohorts_and_waits_for_each_child(monkeypatch
         base.model_copy(update={"native_run_id": "old-control", "preset_version": "old"}),
         base.model_copy(update={"native_run_id": "failed-control", "status": "failed"}),
     ]
-    monkeypatch.setattr(nightly.rl_index, "list_attempts", lambda: records)
-    requests, waited = {}, []
+    rows, requests, states = {}, {}, {}
+    monkeypatch.setattr(rl_index, "list_attempts", lambda: [*previous, *rows.values()])
+    monkeypatch.setattr(
+        nightly, "open_iris_client", lambda **_: nullcontext(SimpleNamespace(job_state=lambda job: states[str(job)]))
+    )
+    unavailable = True
 
-    def submit(command):
-        identity = command[2], command[command.index("--preset") + 1]
-        requests[identity] = command[command.index("--replicates") + 1]
+    def publish(record, _url):
+        nonlocal unavailable
+        if record.attempt_id == "preempted" and unavailable:
+            unavailable = False
+            raise RuntimeError("Marina temporarily unavailable")
+        rows[record.attempt_id] = record
+        return "https://progress.test"
 
-        def wait():
-            waited.append(identity)
-            return int(identity[1] == "speed-short")
+    monkeypatch.setattr(publication, "publish_result", publish)
+    state_dir = StoragePath(str(tmp_path))
+    coordinator = "/runner/coordinator-123-1"
 
-        return SimpleNamespace(wait=wait)
+    def submit(command, *, env):
+        batch = command[command.index("--control") + 1]
+        requests[batch] = int(command[command.index("--replicates") + 1])
+        submit_job = f"/runner/coordinator-{batch}"
+        states[submit_job] = JobState.RUNNING
+        submission = publication.ControlSubmission(
+            job=submit_job, outputs=tuple(str(tmp_path / name / recipe.RUN_ARTIFACT_VERSION) for name in sources)
+        )
+        StoragePath(env[publication.CONTROL_SUBMISSION_ENV]).write_text(submission.model_dump_json())
+        assert "--wait" not in command
+        return SimpleNamespace(wait=lambda: 0)
 
-    monkeypatch.setattr(nightly.subprocess, "Popen", submit)
-    assert nightly.main() == 1
-    assert list(requests) == waited and len(requests) == 7
-    assert requests["experiments.post_training.snowball_rl", "learning-medium"] == "3"
-    assert all(count == "5" for (_, name), count in requests.items() if name != "learning-medium")
-    assert all(name != "data-medium" for _, name in requests)
+    monkeypatch.setattr(nightly, "subprocess", SimpleNamespace(Popen=submit))
+    monkeypatch.setenv("IRIS_USER", "runner")
+    legacy_job = "/runner/previous-coordinator"
+    states[legacy_job] = JobState.RUNNING
+    rows["legacy"] = base.model_copy(
+        update={
+            "series": "learning-medium",
+            "status": "running",
+            "iris_job_id": legacy_job,
+            "artifact_uri": str(tmp_path / "legacy"),
+        }
+    )
+
+    def tick(batch):
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "rl_nightly_controls",
+                "--batch",
+                batch,
+                "--presets",
+                "snowball/speed-medium snowball/learning-medium",
+                "--state-dir",
+                str(state_dir),
+            ],
+        )
+        return nightly.main()
+
+    assert tick("123-1") == tick("124-1") == 0
+    assert requests == {"123-1": 3}
+    for attempt_id in sources[:2]:
+        output = recorded_runs(preset.name, attempt_id, control=True, attempt_id=attempt_id)
+        with edit_receipt(output) as receipt:
+            receipt["config"]["run"]["coordinator_iris_job_id"] = coordinator
+            if attempt_id == "preempted":
+                receipt["result"]["state"] = "failed"
+    states[coordinator] = JobState.FAILED
+    assert tick("125-1") == 1
+    assert requests == {"123-1": 3}
+    assert rows["accepted"].status == "succeeded"
+    assert tick("126-1") == 0
+    assert requests == {"123-1": 3, "126-1": 2}
+    assert rows["accepted"].status == "succeeded" and rows["accepted"].preset_version == version
+    assert rows["preempted"].status == "failed" and "native_attempt" in rows["preempted"].failed_facts
 
 
 def test_control_presets_select_multiple_models_without_duplicates():
