@@ -70,13 +70,6 @@ campaign layout splits a 102,400-token request into 20,480 packed token position
 `train-medium-tools` runs Linux tasks and image graders on Daytona sandboxes in the RL organization, so set
 `DAYTONA_RL_API_KEY`.
 
-Image graders run on `environment.task_sessions.task_spec.image_verifier`, which defaults to 2 CPUs, 4 GiB of
-memory and 10 GiB of disk, within the session's 300-second `verifier_timeout`. That timeout bounds the whole grade,
-sandbox start included, and caps the grader's own timeout. A selection with the Lean proof sources
-(ProofNet-Verified, NuminaMath-LEAN) needs more: set `image_verifier` to `memory_mb: 8192` and `storage_mb: 20480`,
-because the kernel grader loads Mathlib and its image unpacks to about 15 GB, and set
-`task_spec.session.verifier_timeout` to at least 600, above the grader's 390 seconds.
-
 ### Task selection and native resume
 
 Pass `--tasks snowball-100k-agentic@2026.11.19.2` for a mixed preset. The versioned
