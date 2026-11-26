@@ -385,6 +385,8 @@ Selections with AI-judged tasks are refused before submission.
 `--init s3://BUCKET/PATH` or `--init gs://BUCKET/PATH` reads the weights and tokenizer from a portable
 Hugging Face export directory with an embedded tokenizer. Mochi's `--init mochi-v5`
 selects the declared v5 export and its pinned Hub tokenizer.
+The storage export must stay immutable during the run. The coordinator rebuilds
+the graph and verifies the run identity before launching the workers.
 Training recovery uses the run's native checkpoint lineage. By default, Snowball's `learning-medium`,
 `data-medium`, and `train-long` export the checkpoint with the best eligible evaluation score. If step zero wins,
 the terminal receipt points to the initializer's HF checkpoint. A trained winner is converted to
@@ -396,9 +398,9 @@ invariants. See
 Use `--checkpoints latest --checkpoint-every 0 --export latest` to save and export the final
 weights. Set a positive cadence to also save periodic checkpoints.
 `--checkpoints best` and `--checkpoints best_and_final` require a checkpoint cadence and evaluation.
-With `--export best_and_final`, SkyRL retains the final native checkpoint alongside any selected best
-checkpoint. If no evaluation window qualifies, it exports the final policy and records
-`used_final_fallback` in the terminal model receipt. Presets choose their checkpoint storage
+With `--checkpoints best_and_final --export best_and_final`, SkyRL retains the final native checkpoint
+alongside any selected best native checkpoint. If no evaluation window qualifies, it exports the final
+policy and records `used_final_fallback` in the terminal model receipt. Presets choose their checkpoint storage
 through `retention.checkpoints_in_run_output`.
 A preset can set `minimum_task_coverage` to change the primary evaluation's 99% eligibility threshold.
 

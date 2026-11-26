@@ -372,6 +372,7 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
         ("best", {"step": 0, "model_format": "hf"}, False, None, ValueError),
         ("best", {"step": 15, "model_format": "native"}, False, 15, None),
         ("best_and_final", None, True, 20, None),
+        ("best_and_final", {"step": 15, "model_format": "native"}, True, 15, None),
         ("best_and_final", {"step": 15, "model_format": "native"}, False, None, OSError),
     ],
 )
