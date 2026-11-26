@@ -65,7 +65,6 @@ def _short_preset(racks: int) -> SFTPreset[MochiSFT]:
             MOCHI_SFT,
             run_id=f"mochi-sft-{racks}-rack",
             dp_racks=racks,
-            # Smoke-test the launcher's default transport.
             capacity_factor=launch_hero_sft.SFT_CAPACITY_FACTOR,
             shadow_experts=launch_hero_sft.SFT_SHADOW_EXPERTS,
             stop_after_steps=3,
