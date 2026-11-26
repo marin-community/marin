@@ -92,6 +92,16 @@ negative-cached; pass `context --refresh-source` to retry one deliberately.
 `probe` runs one selected YAML rule against that context with an agent-selected
 model and reasoning effort.
 Probe output is experimental evidence, not a human label or a recall estimate.
+
+For changes to whole-PR review, replay the complete PR at the commit the
+human reviewed. Run the old and proposed review instructions in fresh sessions
+with the same model, effort, requested behavior and immutable base/head pair.
+Allow read-only inspection of those trees. Keep discussion, review comments
+and later fixes out of both sessions. Compare the reports against distinct
+human concerns by the consequence and remedy each identifies. Record useful
+unmatched findings and unsupported claims too. Include a separate PR outside
+the examples that prompted the change, and report the sample size.
+
 `rule-activity` reports which historical catalog identities have stored
 snapshots. The current checkout is snapshotted on every successful sync;
 catalog identities without a stored snapshot remain explicitly unknown.
