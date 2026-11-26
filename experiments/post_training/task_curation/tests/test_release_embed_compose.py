@@ -476,6 +476,9 @@ def test_fresh_corpus_expectation_counts_the_shipped_targets():
                 "inventory": {"retained_tasks": 0},
             },
             {"source_id": "Marin:not-a-target", "inventory": {"retained_tasks": 99}},
+            # A non-target zero-admission source carries no census inventory at all;
+            # curriculum compose reads the same expectation (R40 refused on this row).
+            {"source_id": "Marin:empty-non-target", "oracle_empty": {"original_count": 3}, "inventory": None},
         ]
     }
     expectation = _fresh_corpus_expectation(plan, census_proof)

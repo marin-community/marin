@@ -1406,18 +1406,16 @@ def _curriculum_compose_step(
     )
 
     def build_inputs(ctx: StepContext) -> dict:
-        census_proof = _resolved_proof(ctx, census)
-        per_source = {row["source_id"]: row["inventory"]["retained_tasks"] for row in census_proof["results"]}
-        missing = sorted(set(plan.targets) - set(per_source))
-        if missing:
-            raise ValueError(f"census results carry no tasks for targets: {missing[:5]}")
+        # The same shipped fresh set the embed stage expects (an oracle-empty source
+        # carries no census inventory).
+        fresh = _fresh_corpus_expectation(plan, _resolved_proof(ctx, census))
         inputs_doc = ctx.resolved(compose_manifest)
         return {
             "release_id": plan.release_id,
             "source_revision": plan.source_revision,
             "inputs": {"uri": inputs_doc.uri, "sha256": inputs_doc.sha256},
             "output_root": stage_output_root(plan, "compose"),
-            "expected_fresh_task_count": sum(per_source[source_id] for source_id in plan.targets),
+            "expected_fresh_task_count": fresh["expected_task_count"],
             "removed_sources": plan.removed_sources,
         }
 

@@ -315,7 +315,7 @@ def test_curriculum_compose_fresh_total_comes_from_the_census_receipt(tmp_path):
     inputs = _materialized_inputs(built.stages["curriculum_compose"], prefix)
     assert inputs["expected_fresh_task_count"] == 12
     assert inputs["inputs"] == manifest
-    with pytest.raises(ValueError, match="carry no tasks for targets"):
+    with pytest.raises(ValueError, match="carry no rows for targets"):
         missing = [row for row in census_results if row["source_id"] != "Marin:fixture"]
         census_receipt_missing = _receipt_ref(
             tmp_path, "census-missing.json", {"kind": "census", "tasks": 5, "results": missing}
