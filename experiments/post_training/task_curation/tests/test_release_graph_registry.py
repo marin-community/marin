@@ -22,6 +22,7 @@ from rigging.filesystem.storage_path import StoragePath
 from experiments.post_training.task_curation.release_stages import census as census_stage
 from experiments.post_training.task_curation.release_stages import graph as release_graph_module
 from experiments.post_training.task_curation.release_stages.graph import (
+    _STAGE_SPECS,
     GRAPH_RECEIPT_KIND,
     REPO_ROOT,
     ComposeManifestDocument,
@@ -29,6 +30,7 @@ from experiments.post_training.task_curation.release_stages.graph import (
     _execute_stage_node,
     _plan_document_data,
     _seal_document,
+    _stage_receipt,
     graph_nodes,
     load_plan,
     release_graph,
@@ -741,3 +743,11 @@ def test_in_flight_r40_plan_reseals_its_recorded_plan_document():
     assert release_graph(plan).plan_handle.fingerprint() == "c0088866"
     without = plan.model_copy(update={"pins": plan.pins.model_copy(update={"oracle_inventory": None})})
     assert "oracle_inventory" not in _plan_document_data(without)["pins"]
+
+
+def test_curriculum_compose_receipt_is_its_sealed_handoff():
+    """R40: compose sealed its handoff, then the graph refused a proof without a 'receipt' key."""
+    handoff = {"uri": "s3://bucket/compose/composed/attempt-1/handoff.json", "sha256": "a" * 64}
+    proof = {"release_id": "r40", "handoff": handoff, "task_count": 3, "source_count": 1}
+    receipt = _stage_receipt("curriculum_compose", proof, _STAGE_SPECS["curriculum_compose"].receipt_key)
+    assert receipt.receipt.model_dump(mode="json") == handoff

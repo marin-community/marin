@@ -950,8 +950,14 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "corpus_assembly", "corpus_assembly", corpus_assembly_stage.__name__, ("census",), True
     ),
     "embed": StageSpec("embed", "embed", embed_stage.__name__, ("corpus_assembly",), True),
+    # The compose stage seals its handoff document; there is no separate receipt.
     "curriculum_compose": StageSpec(
-        "curriculum_compose", "curriculum_compose", curriculum_compose_stage.__name__, ("compose_manifest",), True
+        "curriculum_compose",
+        "curriculum_compose",
+        curriculum_compose_stage.__name__,
+        ("compose_manifest",),
+        True,
+        receipt_key="handoff",
     ),
     "identity_backend_compose": StageSpec(
         "identity_backend_compose",
