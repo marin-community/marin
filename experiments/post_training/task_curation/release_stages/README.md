@@ -336,9 +336,9 @@ Each rebind proves every current public input against its archived population.
 Stable IDs must preserve their public inputs. Changed IDs require unique public
 content or verified immutable upstream rows. A smaller current population may
 retain an injective subset; all omitted archived IDs are recorded in the identity
-mapping with null new IDs. Mixed-readiness subsets require fresh alignment, since
-the source-level counts alone cannot establish the retained readiness split.
-Changed or ambiguous public content cannot reuse scores.
+mapping with null new IDs. The entire archived source must have uniform readiness; otherwise the subset
+requires fresh alignment, since source-level counts cannot establish the retained split.
+Changed public inputs or ambiguous archived matches cannot reuse scores.
 
 Composition applies these proofs while reading the archive once, removes obsolete
 assignments, and adds fresh alignment for changed public inputs. It rebuilds

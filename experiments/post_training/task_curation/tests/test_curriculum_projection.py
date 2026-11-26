@@ -655,9 +655,21 @@ def test_release_compose_replaces_archived_assignments_with_fresh_alignment(tmp_
             tmp_path / "retained-subset", rebound, task_id=retained_task_id, task_hash="current-retained-hash"
         )
     changed = declaration("Marin:rebound", "2")
-    source, _ = public_source(tmp_path / "replacement", changed, task_hash="new-hash", task_id="new-id")
+    source, fresh_public = public_source(
+        tmp_path / "replacement", changed, public="changed public instructions", task_hash="new-hash", task_id="new-id"
+    )
     fresh_rows = [
-        {**row, "source_key": source.source_key, "task_hash": "new-hash", "task_id": "new-id"}
+        {
+            **row,
+            "source_key": source.source_key,
+            "task_hash": "new-hash",
+            "task_id": "new-id",
+            "content_hash": fresh_public.content_hash,
+            "matches": {
+                **row["matches"],
+                "subjects": [{**row["matches"]["subjects"][0], "membership_similarity": 0.5}],
+            },
+        }
         for row in old_rows
         if row["source_id"] == changed.id
     ]
@@ -761,6 +773,18 @@ def test_release_compose_replaces_archived_assignments_with_fresh_alignment(tmp_
         )
         assert kept["matches"] == old_rows[2]["matches"]
         assert [row["task_id"] for row in rows if row["source_id"] == rebound.id] == [retained_task_id]
+        coverage = CurriculumCoverage.model_validate_json(Path(proof["coverage"]["uri"]).read_text())
+        statistics = [row for path in coverage.paths for row in load_parquet(path)]
+        assert (
+            next(
+                row["instances"]
+                for row in statistics
+                if row["source_id"] == rebound.id and row["metric"] == "denominator"
+            )
+            == 1
+        )
+        samples = [row for path in coverage.sample_paths for row in load_parquet(path)]
+        assert {row["task_id"] for row in samples if row["source_id"] == rebound.id} == {retained_task_id}
         identity = proof["public_input_rebindings"][0]
         mapping = pq.read_table(identity["task_identity_mapping"]["uri"]).to_pylist()
         assert [(row["old_task_id"], row["new_task_id"]) for row in mapping] == [

@@ -1172,7 +1172,7 @@ task-producing inputs. Changed pins require a complete public-input comparison.
 Stable task IDs must match exactly. Changed IDs require a unique injective match
 of every current public input, with matching content hashes, source, population
 and Use. A reduced population records the omitted archived task IDs explicitly;
-its archived source must have uniform readiness, otherwise fresh alignment is
+its entire archived source must have uniform readiness, otherwise fresh alignment is
 required. Equal-size populations still require a complete bijection.
 Repeated public inputs also require unique pinned upstream dataset/revision/row
 identities, verified against both complete frozen TaskSpec streams. Remaining
