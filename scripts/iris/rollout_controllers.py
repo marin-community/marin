@@ -39,9 +39,8 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.state import JobState
 from iris.rpc import controller_pb2, job_pb2
 from rigging.config_discovery import list_cluster_configs, resolve_cluster_config
-from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.provenance import Provenance
-from rigging.secrets import ENV_SCHEME, GCP_SECRET_SCHEME, as_secret_spec, resolve_secret_spec, secret_path
+from rigging.secrets import ENV_SCHEME, GCP_SECRET_SCHEME, as_secret_spec, resolve_secret_spec
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +110,6 @@ class Need(StrEnum):
     COMMAND_RUNS = "command-runs"
     SECRET = "secret"
     STORAGE_SECRET = "storage-secret"
-    NAMED_SECRET = "named-secret"
     KUBE_CONTEXT = "kube-context"
 
 
@@ -127,7 +125,7 @@ class Requirement:
     source: str = ""
 
     def __str__(self) -> str:
-        return f"{self.kind.value}:{self.target}"
+        return f"{self.kind.value}:{self.target}" if self.target else self.kind.value
 
 
 @dataclass(frozen=True)
@@ -357,24 +355,8 @@ def read_tree_state(*, upstream: str = DEFAULT_UPSTREAM, fetch: bool = True) -> 
     )
 
 
-def _s3_credential_env() -> tuple[str, str]:
-    store = store_config(StoreType.COREWEAVE)
-    return store.key_id_env, store.key_secret_env
-
-
-def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = None) -> tuple[Requirement, ...]:
-    """The operator-side inputs a restart of ``config`` reads from this session.
-
-    Derived from the config so it cannot drift from what the deploy actually
-    resolves: the S3 credentials a Kubernetes controller stores in
-    ``iris-storage-secrets``, and the
-    signing-key references a Kubernetes deploy resolves in the operator shell.
-
-    Args:
-        config: The cluster config a restart would deploy.
-        s3_env: Override for the CoreWeave key env var names. Defaults to the
-            names the marin store config declares.
-    """
+def requirements(config: IrisClusterConfig) -> tuple[Requirement, ...]:
+    """List the operator-side prerequisites for a controller restart."""
     needs = [
         # `docker` on PATH is not enough: the deploy runs `docker buildx build --push`,
         # which fails without a reachable daemon or without the buildx plugin — and it
@@ -399,13 +381,7 @@ def requirements(config: IrisClusterConfig, *, s3_env: Sequence[str] | None = No
         if needs_controller_storage_credentials(config):
             assert config.controller.coreweave is not None
             reference = config.controller.coreweave.storage_credentials_ref
-            if reference is not None:
-                needs.append(Requirement(Need.STORAGE_SECRET, reference, "controller and node-agent S3 key pair"))
-            else:
-                for name in s3_env if s3_env is not None else _s3_credential_env():
-                    needs.append(
-                        Requirement(Need.NAMED_SECRET, name, "S3 credentials projected into iris-storage-secrets")
-                    )
+            needs.append(Requirement(Need.STORAGE_SECRET, reference or "", "controller and node-agent S3 key pair"))
         # A Kubernetes controller pod holds no cloud credentials, so the deploy resolves
         # the signing key in the operator's shell and projects it into the Secret. It
         # resolves sources in their configured order; projected file references are
@@ -488,10 +464,6 @@ def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -
     if requirement.kind is Need.ENV:
         value = environ.get(target, "")
         return CheckResult(requirement, bool(value), "set" if value else "unset")
-    if requirement.kind is Need.NAMED_SECRET:
-        path = secret_path(target)
-        value = resolve_secret_spec(f"file:{path}").value if path.is_file() else environ.get(target)
-        return CheckResult(requirement, bool(value), "set" if value else "unset")
     if requirement.kind is Need.COMMAND:
         path = shutil.which(target)
         return CheckResult(requirement, path is not None, path or "not on PATH")
@@ -500,7 +472,7 @@ def check_requirement(requirement: Requirement, *, environ: Mapping[str, str]) -
     if requirement.kind is Need.KUBE_CONTEXT:
         return check_kube_context(requirement, environ=environ)
     if requirement.kind is Need.STORAGE_SECRET:
-        resolve_controller_storage_credentials(target)
+        resolve_controller_storage_credentials(target or None)
         return CheckResult(requirement, True, "resolved controller S3 key pair")
     resolved = resolve_secret_spec((target,))
     hint = "" if not target.startswith(GCP_SECRET_SCHEME) else " (needs GCP credentials)"

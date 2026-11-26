@@ -73,7 +73,7 @@ class RolloutRecordStore:
         return prefix_join(self.remote_state_dir, ROLLOUT_RECORD_FILENAME)
 
     def _open(self, mode: str):
-        if self.storage_credentials is not None and self.remote_state_dir.startswith("s3://"):
+        if self.storage_credentials is not None:
             key, secret = self.storage_credentials
             return open_url(self.url, mode, key=key, secret=secret, token=None)
         return open_url(self.url, mode)
