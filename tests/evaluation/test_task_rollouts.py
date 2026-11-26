@@ -260,7 +260,6 @@ async def test_malformed_model_tool_arguments_score_zero_without_cancelling_othe
 
     reader = ReadView(output)
     finished = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
-    assert len(finished) == 4
     assert Counter(row["outcome"] for row in finished) == {"submission_failure": 1, "graded": 3}
     failed = next(row for row in finished if row["outcome"] == "submission_failure")
     assert failed["retry"] == 0
