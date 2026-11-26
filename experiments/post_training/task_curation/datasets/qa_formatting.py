@@ -53,6 +53,17 @@ SOURCES = {
 }
 NATIVE_MODULE_PATH = "experiments/post_training/task_curation/datasets"
 FORMAT_MODULE = "nemotron_ultra/scorers/skyrl_gym/envs/nemotron_ultra/format_verification.py"
+SCORER_PACKAGE_PATHS = (
+    "experiments",
+    "experiments/post_training",
+    "experiments/post_training/task_curation",
+    NATIVE_MODULE_PATH,
+    f"{NATIVE_MODULE_PATH}/nemotron_ultra",
+    f"{NATIVE_MODULE_PATH}/nemotron_ultra/scorers",
+    f"{NATIVE_MODULE_PATH}/nemotron_ultra/scorers/skyrl_gym",
+    f"{NATIVE_MODULE_PATH}/nemotron_ultra/scorers/skyrl_gym/envs",
+    f"{NATIVE_MODULE_PATH}/nemotron_ultra/scorers/skyrl_gym/envs/nemotron_ultra",
+)
 
 
 def convert_native(row: RawRow, context: ConversionContext) -> TaskSpec | ImportRejection:
@@ -106,6 +117,8 @@ def convert_native(row: RawRow, context: ConversionContext) -> TaskSpec | Import
         empty_output=EmptyOutputPolicy.GRADE,
     )
     resources = (
+        # Explicit packages keep an installed experiments package from shadowing this bundle.
+        *(inline_resource(f"{path}/__init__.py", b"") for path in SCORER_PACKAGE_PATHS),
         inline_resource("grade.py", (HERE / "qa_formatting_grade.py").read_bytes()),
         inline_resource(
             f"{NATIVE_MODULE_PATH}/qa_abstention_native.py", (HERE / "qa_abstention_native.py").read_bytes()

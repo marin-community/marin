@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -80,3 +82,39 @@ def test_formatter_counts_lines_once_and_rejects_spurious_citations():
     verifier = {"type": "string_match", "patterns": [r"\[ref:\d+\]"], "expected_markers": ["[ref:2]"]}
     assert format_verification.grade_format("[ref:2]", verifier)[0] == 1
     assert format_verification.grade_format("[ref:2] [ref:3]", verifier)[0] == 0
+
+
+def test_scorer_bundle_runs_without_the_checkout_or_an_installed_source_module(tmp_path):
+    source = qa_formatting.source("abstention")
+    row = RawRow(
+        id="relocated-native-row",
+        source=Source(
+            dataset=source.dataset.name, revision=source.dataset.revision, row="fixture", importer_revision="test"
+        ),
+        data=ROWS["qa-abstention"][0],
+    )
+    task = qa_formatting.convert_native(
+        row,
+        ConversionContext(
+            {},
+            EnvironmentRequirements(
+                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=qa_formatting.GRADER_IMAGE
+            ),
+        ),
+    )
+    assert isinstance(task, TaskSpec)
+    for resource in task.resources.verifier:
+        path = tmp_path / resource.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(resource_bytes(resource))
+    program = r"""
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+import grade
+from experiments.post_training.task_curation.datasets import qa_abstention_native
+assert Path(qa_abstention_native.__file__).is_relative_to(root)
+assert grade.score_abstention('Q', 'Target', r'\boxed{[IDK]}', lambda _: None)[0] == 0.5
+"""
+    subprocess.run([sys.executable, "-I", "-c", program, str(tmp_path)], cwd=tmp_path, check=True, timeout=30)
