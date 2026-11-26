@@ -3,9 +3,12 @@
 
 """The native source conversion pins FROM bases and refuses static blockers."""
 
+import json
+import tempfile
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from finestore.rl.licenses import LicenseDecision, LicenseDecisionKind, LicenseEvidence
@@ -338,3 +341,32 @@ def test_a_missing_base_image_is_a_typed_per_task_exclusion(monkeypatch):
     assert counts["exclusions"][0]["reason"] == "base_image_missing"
     assert counts["exclusions"][0]["input_task_sha256"] == canonical_sha256(task.model_dump(mode="json"))
     assert counts["converted_rows"] + counts["excluded_rows"] == counts["input_rows"]
+
+
+def test_original_upstream_descends_through_the_task_trove_aggregate(monkeypatch):
+    """The aggregate's release card carries the whole catalog's multi-license list; the
+    intake's per-config provenance records the cohort's actual upstream (repackager
+    rule). The release receipt resolves that upstream, not the aggregate."""
+    provenance = {"repository": "SWE-Gym/SWE-Gym", "revision": "bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb"}
+
+    def fake_download(repo_id, filename, repo_type=None, revision=None):
+        assert repo_id == "open-athena/task-trove"
+        assert filename == "provenance/SWE-Gym__SWE-Gym/source.json"
+        return provenance_path
+
+    with tempfile.TemporaryDirectory() as td:
+        provenance_path = Path(td) / "source.json"
+        provenance_path.write_text(json.dumps(provenance))
+        monkeypatch.setattr(native_source_conversion, "hf_hub_download", fake_download)
+        dataset, revision = native_source_conversion.original_upstream(
+            {
+                "id": "TaskTrove:SWE-Gym__SWE-Gym",
+                "name": "SWE-Gym__SWE-Gym",
+                "dataset_id": "open-athena/task-trove",
+                "dataset_revision": "e" * 40,
+            }
+        )
+    assert (dataset, revision) == ("SWE-Gym/SWE-Gym", "bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb")
+    assert native_source_conversion.original_upstream(
+        {"id": "TaskTrove:x", "name": "x", "dataset_id": "open-thoughts/TaskTrove", "dataset_revision": "e" * 40}
+    ) == ("open-thoughts/TaskTrove", "e" * 40)

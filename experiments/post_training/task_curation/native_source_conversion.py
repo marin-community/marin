@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 import urllib.parse
@@ -122,6 +123,7 @@ class NativeConversionSource:
     release_repo: str
     release_revision: str
     task_specs_sha256: str
+    inventory_entry: dict
 
 
 @dataclass(frozen=True)
@@ -132,6 +134,31 @@ class NativeRowConversion:
     input_task_sha256: str
     output_task_sha256: str
     base_pins: tuple[BasePin, ...]
+
+
+def original_upstream(entry: dict) -> tuple[str, str]:
+    """The source's true original upstream, descending through the TaskTrove aggregate.
+
+    The retired natives' declared dataset is the ``open-athena/task-trove`` aggregate
+    whose release card carries the whole catalog's multi-license list — the exact-pin
+    check escalates on it (E2) without describing any cohort. The intake's per-config
+    provenance records the cohort's actual upstream repository and revision (the
+    repackager rule: the card follows the original upstream); any other declared
+    dataset IS the original upstream.
+    """
+    dataset_id, revision = entry["dataset_id"], entry["dataset_revision"]
+    if dataset_id != "open-athena/task-trove":
+        return dataset_id, revision
+    name = entry.get("name") or entry["id"].partition(":")[2]
+    provenance = json.loads(
+        Path(
+            hf_hub_download(dataset_id, f"provenance/{name}/source.json", repo_type="dataset", revision=revision)
+        ).read_bytes()
+    )
+    repository, upstream_revision = provenance["repository"], provenance["revision"]
+    if not repository or not upstream_revision:
+        raise CohortConversionRejected(f"{entry['id']}: the intake provenance records no upstream pin for {name}")
+    return repository, upstream_revision
 
 
 def release_receipt(
@@ -150,18 +177,18 @@ def release_receipt(
     receipt = source.info.license_receipt
     if receipt is None:
         raise CohortConversionRejected(f"{source.info.id}: the release publication requires a license receipt")
-    dataset = source.dataset
+    upstream_dataset, upstream_revision = original_upstream(source.inventory_entry)
     upstream = resolve_license(
         LicenseTarget(
-            dataset.name,
-            dataset.name,
-            dataset.revision,
-            f"https://huggingface.co/datasets/{dataset.name}/tree/{dataset.revision}",
+            upstream_dataset,
+            upstream_dataset,
+            upstream_revision,
+            f"https://huggingface.co/datasets/{upstream_dataset}/tree/{upstream_revision}",
         )
     )
     if upstream.resolved_source is not None:
         raise CohortConversionRejected(
-            f"{source.info.id}: the declared upstream {dataset.name}@{dataset.revision[:12]} declares "
+            f"{source.info.id}: the original upstream {upstream_dataset}@{upstream_revision[:12]} declares "
             f"another wrapper source ({upstream.resolved_source.dataset_id}); resolve that pin instead"
         )
     primary_card = next(item for item in upstream.evidence if item.kind == "dataset_card")
@@ -199,9 +226,9 @@ def release_receipt(
         model_generated_outputs=upstream.model_generated_outputs,
         decisions=carried,
         resolved_source=LicenseSourcePin(
-            dataset_id=dataset.name,
-            revision=dataset.revision,
-            url=f"https://huggingface.co/datasets/{dataset.name}/tree/{dataset.revision}",
+            dataset_id=upstream_dataset,
+            revision=upstream_revision,
+            url=f"https://huggingface.co/datasets/{upstream_dataset}/tree/{upstream_revision}",
             declaration=primary_card,
         ),
         wrapper_chain=[],
@@ -286,6 +313,7 @@ def conversion_source(entry: dict, receipt: LicenseReceipt | None) -> NativeConv
         release_repo=release["repo"],
         release_revision=release["revision"],
         task_specs_sha256=release["file_hashes"]["tasks.parquet"],
+        inventory_entry=entry,
     )
 
 
@@ -540,6 +568,8 @@ def convert_population(source: NativeConversionSource, *, limit: int | None) -> 
     converted: list[dict] = []
     receipts: list[dict] = []
     exclusions: list[dict] = []
+    digest_cache = os.environ.get("NATIVE_CONVERSION_DIGEST_CACHE")
+    resolutions_at_last_save = 0
     for row in rows:
         task = TaskSpec.model_validate_json(row["task_spec"])
         try:
@@ -554,6 +584,9 @@ def convert_population(source: NativeConversionSource, *, limit: int | None) -> 
                 }
             )
             continue
+        if digest_cache and len(_DIGEST_CACHE) - resolutions_at_last_save >= 250:
+            save_digest_cache(digest_cache)
+            resolutions_at_last_save = len(_DIGEST_CACHE)
         serialized = outcome.task.model_dump_json()
         converted.append(
             {
@@ -648,6 +681,7 @@ def main() -> None:
     if args.digest_cache:
         seeded = load_digest_cache(args.digest_cache)
         LOGGER.info("digest cache seeded with %d resolutions from %s", seeded, args.digest_cache)
+        os.environ["NATIVE_CONVERSION_DIGEST_CACHE"] = args.digest_cache
 
     entry = load_inventory_entry(args.source_id)
     receipts = read_license_receipts(LICENSE_RECEIPT_INDEX)
