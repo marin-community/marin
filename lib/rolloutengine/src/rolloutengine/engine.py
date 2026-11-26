@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, replace
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory, MachineSpec
 from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE, GradeResult, GradingFailure, Outcome
-from taskcompendium.models import CONVERSATION_ANSWERS, NoGrader
+from taskcompendium.models import CONVERSATION_ANSWERS, AnswerType, NoGrader
 from taskcompendium.runtime.output_capture import captured_output_files
 from taskcompendium.submission import conversation_messages
 
@@ -27,6 +27,7 @@ from rolloutengine.models import (
     SETUP_SECONDS_METRIC,
     AttemptEnded,
     AttemptStarted,
+    ContextWindowExceeded,
     Graded,
     GradedRollout,
     GradedRolloutInterrupted,
@@ -220,9 +221,17 @@ class RolloutEngine:
         await stopped.aclose()
         if failure is None and not recorder.has_response and task.answer_type in CONVERSATION_ANSWERS:
             attempt.grade = GradeResult(Outcome.UNAVAILABLE, None, recorder.no_response_reason)
-        # A model failure leaves the completed turns intact, so the engine grades them. An attempt that ended
-        # before the first response, at a limit or with an agent that gave up, leaves its answer on the machine.
-        elif failure is None or (failure[0] == RolloutOperation.MODEL and recorder.has_response):
+        # Completed turns survive model failures. Context overflow and agent timeout also leave a workspace
+        # that the verifier can score; other harness failures remain unavailable.
+        elif (
+            failure is None
+            or (failure[0] == RolloutOperation.MODEL and recorder.has_response)
+            or (
+                task.answer_type == AnswerType.WORKSPACE_STATE
+                and failure[0] == RolloutOperation.ADVANCE
+                and isinstance(failure[1], (TimeoutError, ContextWindowExceeded))
+            )
+        ):
             try:
                 await self._grade(attempt, machine, resources)
             except _Interrupted as interrupted:

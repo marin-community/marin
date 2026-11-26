@@ -8,6 +8,7 @@ import json
 import pickle
 import tarfile
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -3514,10 +3515,21 @@ async def test_a_judge_task_without_a_connection_uses_the_environment(judge_serv
         pytest.param("", None, id="ambient-connection"),
     ],
 )
-async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monkeypatch, source_model, connection):
+@pytest.mark.parametrize("placement", ["grader", "agent"])
+@pytest.mark.parametrize("backend", [Backend.DOCKER, Backend.DAYTONA])
+async def test_script_judge_runs_with_runtime_connection(monkeypatch, source_model, connection, placement, backend):
     monkeypatch.setenv(BASE_URL_ENV, "http://judge.invalid/v1")
     monkeypatch.setenv(API_KEY_ENV, "runtime-private-key")
     monkeypatch.setenv(MODEL_ENV, "ambient-must-not-win" if source_model else "fixture-judge")
+
+    @asynccontextmanager
+    async def transport(_machine, **_kwargs):
+        yield
+
+    # Real HTTP forwarding is covered in TaskCompendium; this checks the selected factory's guest environment.
+    monkeypatch.setattr(grading_runtime, "forward_http_posts", transport)
+    expected_key = "machine-local-judge-relay" if backend is Backend.DAYTONA else "runtime-private-key"
+    expected_url = "http://127.0.0.1:8790/v1" if backend is Backend.DAYTONA else "http://judge.invalid/v1"
     source_task = judge_task()
     judge = JudgeSpec(
         references=("12",),
@@ -3527,18 +3539,23 @@ async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monk
         model=source_model,
     )
     script = (
-        b'test "$VERIFYIT_JUDGE_API_KEY" = runtime-private-key || exit 1\n'
-        b'test "$VERIFYIT_JUDGE_MODEL" = fixture-judge || exit 1\n'
-        b'test "$VERIFYIT_JUDGE_BASE_URL" = http://judge.invalid/v1 || exit 1\n'
-        b"test -f /tests/judge.toml || exit 1\n"
+        f'test "$VERIFYIT_JUDGE_API_KEY" = {expected_key} || exit 1\n'.encode()
+        + b'test "$VERIFYIT_JUDGE_MODEL" = fixture-judge || exit 1\n'
+        + f'test "$VERIFYIT_JUDGE_BASE_URL" = {expected_url} || exit 1\n'.encode()
+        + b"test -f /tests/judge.toml || exit 1\n"
         b'printf \'{"status":"scored","reward":1,"detail":{"model":"fixture-judge"}}\' > /logs/verifier/verdict.json\n'
     )
     task = source_task.model_copy(
         update={
+            "answer_type": AnswerType.WORKSPACE_STATE if placement == "agent" else source_task.answer_type,
+            "environment_requirements": (
+                GRADER_ENVIRONMENT if placement == "agent" else source_task.environment_requirements
+            ),
             "grader": ScriptGrader(
                 argv=("sh", "/tests/grade.sh"),
-                placement=GraderMachine(environment=GRADER_ENVIRONMENT),
+                placement=AgentMachine() if placement == "agent" else GraderMachine(environment=GRADER_ENVIRONMENT),
                 judge=judge,
+                answer_path=None if placement == "agent" else "/app/answer.txt",
                 reward=FileReward(
                     files=(RewardFile(path="/logs/verifier/verdict.json", format=RewardFileFormat.VERDICT_JSON),)
                 ),
@@ -3546,13 +3563,16 @@ async def test_script_judge_runs_in_its_own_machine_with_runtime_connection(monk
             "resources": ResourceGroups(verifier=(inline_resource("grade.sh", script),)),
         }
     )
-    factory = RecordingShellSimFactory()
+    factory = RecordingShellSimFactory(backend=backend)
     spec = rollout_spec(
         task,
-        verifier_machine=machine_runtime(),
+        machine=machine_runtime(backend="evaluation-machine") if placement == "agent" else None,
+        verifier_machine=machine_runtime(backend="evaluation-machine") if placement == "grader" else None,
         judge_connection=connection,
     )
-    record = await engine(ReplayModel([{"role": "assistant", "content": "twelve"}]), {"local": factory}).run_task(spec)
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "twelve"}]), {"evaluation-machine": factory}
+    ).run_task(spec)
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0), record.grade
     assert len(factory.machines) == 1
     assert "runtime-private-key" not in spec.model_dump_json()
@@ -4457,3 +4477,28 @@ async def test_supplied_verifier_remains_caller_owned(fails):
     finally:
         for machine in borrowed:
             await machine.close()
+
+
+@pytest.mark.parametrize("error", [TimeoutError, ContextWindowExceeded, ConnectionError])
+@pytest.mark.parametrize("sampled", [False, True])
+async def test_workspace_agent_timeout_runs_verifier_and_transport_failure_stays_unavailable(error, sampled):
+    async def agent(context, complete):
+        await context.machine.run(Command(("sh", "-c", "echo 12 > /workspace/answer")))
+        if sampled:
+            await complete(Prompt(({"role": "user", "content": "Working"},), {}))
+        raise error("Agent stopped")
+
+    task = file_task(answer_type=AnswerType.WORKSPACE_STATE)
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await engine(
+            ReplayModel([{"role": "assistant", "content": "Working"}]),
+            {"local": FixtureImageFactory()},
+            harnesses={"agent": AgentHarness(agent)},
+        ).run_task(rollout_spec(task, machine=machine_runtime(), verifier_machine=machine_runtime(), harness="agent"))
+    result = caught.value
+    assert result.operation == (RolloutOperation.ADVANCE if sampled else RolloutOperation.PREPARE)
+    assert (result.grade.status, result.grade.reward) == (
+        (Outcome.GRADED, 1.0)
+        if sampled and error in (TimeoutError, ContextWindowExceeded)
+        else (Outcome.UNAVAILABLE, None)
+    )
