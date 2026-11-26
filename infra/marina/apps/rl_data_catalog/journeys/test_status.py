@@ -233,7 +233,7 @@ def test_status_table_keeps_human_columns_and_rows(journey: Journey, seeded_extr
     table = page.evaluate("() => Math.round(document.getElementById('status-table').getBoundingClientRect().width)")
     first_row = page.evaluate("() => Math.round(document.querySelector('#rows tr').getBoundingClientRect().height)")
     assert widths[0] >= 200, f"Source column too narrow: {widths}"
-    assert widths[7] >= 80, f"Last-change column too narrow: {widths}"
+    assert widths[6] >= 80, f"Last-change column too narrow: {widths}"
     assert table <= 1500, f"status table is {table}px wide at a 1440px viewport"
     assert first_row <= 320, f"first status row is {first_row}px tall"
 
@@ -255,8 +255,8 @@ def test_status_page_lists_every_status_with_clickable_reasons(journey: Journey,
     }"""
     )
     assert layout["widths"][0] >= 260, f"Source column starved: {layout}"
-    assert layout["widths"][5] <= 560, f"Reasons column unclamped: {layout}"
-    assert layout["widths"][7] >= 60, f"Last-change column starved: {layout}"
+    assert layout["widths"][4] <= 560, f"Reasons column unclamped: {layout}"
+    assert layout["widths"][6] >= 60, f"Last-change column starved: {layout}"
     assert layout["height"] <= 200, f"First row too tall: {layout}"
 
     counts = page.locator("#status-counts")
@@ -296,11 +296,12 @@ def test_status_page_lists_every_status_with_clickable_reasons(journey: Journey,
 
 
 def test_status_page_renders_typed_columns_and_chip_filters(journey: Journey, seeded_extras: dict) -> None:
-    """The Use, Method, Format and stage columns render from the canonical enums.
+    """The Use, Method and stage columns render from the canonical enums.
 
     Every label comes from the served taxonomy: the queued fixture row shows
-    its typed Use, Method and Format chips, the stage chip opens its canonical
-    explanation, and each chip filter row filters the table.
+    its typed Use and Method chips, the stage chip opens its canonical
+    explanation, and each chip filter row filters the table. The served Format
+    column was dropped with the TaskSpec-only ruling (2026-11-24).
     """
     page = journey.page
     page.set_viewport_size({"width": 1440, "height": 1000})
@@ -310,17 +311,15 @@ def test_status_page_renders_typed_columns_and_chip_filters(journey: Journey, se
     expect(page.locator("#rows tr").first).to_be_visible()
     expect(page.locator("#message")).to_have_text("")
     headers = page.locator("#status-table th").all_text_contents()
-    assert headers == ["Source", "Status", "Use", "Method", "Format", "Reasons", "Evidence", "Last change"]
+    assert headers == ["Source", "Status", "Use", "Method", "Reasons", "Evidence", "Last change"]
 
     queued = page.locator('tr[data-source-id="Fixture:queued-source"]')
     expect(queued.locator("td").nth(2)).to_have_text("Training")
     expect(queued.locator("td").nth(3)).to_have_text("RL")
-    expect(queued.locator("td").nth(4)).to_have_text("Harbor")
     # A row without a typed column renders an explicit absence, never free text.
     excluded = page.locator('tr[data-source-id="Fixture:metadata-excluded"]')
     expect(excluded.locator("td").nth(2)).to_have_text("—")
     expect(excluded.locator("td").nth(3)).to_have_text("—")
-    expect(excluded.locator("td").nth(4)).to_have_text("TaskSpec")
 
     stage_chip = queued.locator(".status-chips summary")
     stage_chip.click()
@@ -332,14 +331,10 @@ def test_status_page_renders_typed_columns_and_chip_filters(journey: Journey, se
     # Each chip filter row filters the table; the pressed chip is marked, and a
     # combination that matches nothing shows the empty state.
     expect(page.locator("#stage-filters button", has_text="Intake queued")).to_contain_text("1")
-    page.locator("#format-filters button", has_text="Harbor").click()
+    page.locator("#use-filters button", has_text="Training").click()
     expect(page.locator('tr[data-source-id="Fixture:queued-source"]')).to_have_count(1)
     expect(page.locator('tr[data-source-id="Fixture:metadata-excluded"]')).to_have_count(0)
-    assert page.locator("#format-filters button", has_text="Harbor").get_attribute("aria-pressed") == "true"
-    page.locator("#format-filters button", has_text="TaskSpec").click()
-    page.locator("#stage-filters button", has_text="Intake queued").click()
-    expect(page.locator("#rows tr")).to_have_count(0)
-    expect(page.locator("#empty")).to_be_visible()
+    assert page.locator("#use-filters button", has_text="Training").get_attribute("aria-pressed") == "true"
     page.locator("#clear-filters").click()
     expect(page.locator('tr[data-source-id="Fixture:metadata-excluded"]')).to_have_count(1)
     page.screenshot(path=str(journey.shots / "status-typed-columns.png"), full_page=True)

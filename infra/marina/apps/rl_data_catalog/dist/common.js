@@ -323,7 +323,8 @@ function gradingChips(source) {
 function backendDetails(source) {
   const wrap = node('div', undefined, 'table-wrap'); wrap.tabIndex = 0; wrap.setAttribute('aria-label', 'Backend fit by execution role');
   const table = node('table', undefined, 'backend-table'), head = node('thead'), headings = node('tr');
-  for (const title of ['Backend', 'Overall', 'Agent', 'Grader', 'Reasons', 'Affected tasks by role', 'Blockers', 'Validation errors']) headings.append(node('th', title));
+  // Header order matches the cells: the reason chips sit beside the overall verdict.
+  for (const title of ['Backend', 'Overall', 'Reasons', 'Agent', 'Grader', 'Affected tasks by role', 'Blockers', 'Validation errors']) headings.append(node('th', title));
   head.append(headings); table.append(head); const body = node('tbody');
   for (const {key, fit, reasons} of backendLabels(source)) {
     const row = node('tr'); row.append(node('td', AtlasTaxonomy.backend[key].label));
