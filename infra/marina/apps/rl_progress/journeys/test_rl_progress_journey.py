@@ -188,7 +188,39 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     early_only = attempt("early-only", 6, 0.2, final=False)
     unpushed_main = attempt("unpushed-main", 7, 0.65) | {"base_commit": controls[0]["base_commit"]}
     main_without_control = attempt("main-without-control", 8, 0.68) | {"is_control": False}
-    for record in (*controls, branch, superseded, early_only, unpushed_main, main_without_control):
+    speed_controls = [
+        attempt(f"speed-control-{i}", 5, 0)
+        | {
+            "series": "speed-medium",
+            "branch": "control-proof",
+            "evaluations": [],
+            "optimizer_steps": 10,
+            "elapsed_excluding_eval_seconds": elapsed,
+            "timing_scope": "checkpoint_lineage_native_jobs",
+            "completed_at": "2026-11-05T01:00:00Z",
+        }
+        for i, elapsed in enumerate((930, 960))
+    ]
+    speed_branch = speed_controls[0] | {
+        "run_id": "speed-candidate",
+        "attempt_id": "speed-candidate",
+        "label": "speed-candidate",
+        "artifact_uri": "s3://example/runs/speed-candidate",
+        "branch": "experiment",
+        "is_control": False,
+        "elapsed_excluding_eval_seconds": 905,
+        "completed_at": "2026-11-05T01:04:00Z",
+    }
+    for record in (
+        *controls,
+        branch,
+        superseded,
+        early_only,
+        unpushed_main,
+        main_without_control,
+        *speed_controls,
+        speed_branch,
+    ):
         response = journey.page.request.post(api, data=record)
         assert response.ok, response.text()
 
@@ -209,6 +241,9 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     journey.shoot("preset-main-controls")
     chart.get_by_role("link", name="control-0 · 50.0%").click()
     expect(journey.page.get_by_role("dialog")).to_contain_text("control-0")
+    expect(journey.page.get_by_role("link", name="Source commit")).to_have_attribute(
+        "href", f"https://github.com/marin-community/marin/commit/{controls[0]['commit']}"
+    )
     journey.page.keyboard.press("Escape")
 
     toggle = journey.page.get_by_role("checkbox", name="Show branch runs")
@@ -220,9 +255,26 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     dialog = journey.page.get_by_role("dialog")
     expect(dialog).to_contain_text(branch["base_preset_version"])
     expect(dialog).to_contain_text(branch["commit"])
+    expect(dialog.get_by_role("link", name="Source commit")).to_have_count(0)
     expect(dialog).to_contain_text("trainer.max_steps=25")
     expect(dialog.get_by_role("link", name="W&B run")).to_have_attribute("href", branch["wandb_url"])
     expect(dialog.get_by_role("link", name="Grafana")).to_have_attribute("href", branch["grafana_url"])
     dialog.get_by_text("Composed launch configuration", exact=True).click()
     expect(dialog.locator("pre")).to_contain_text('"max_steps": 25')
     journey.shoot("branch-run-detail")
+    journey.page.keyboard.press("Escape")
+
+    toggle.uncheck()
+    journey.page.get_by_role("combobox", name="Preset", exact=True).select_option(label="snowball · speed-medium")
+    control_branch = journey.page.get_by_role("combobox", name="Control branch")
+    expect(control_branch).to_have_value("main")
+    timing = journey.page.get_by_role("group", name="Trainer seconds per optimizer update", exact=True)
+    expect(timing).to_have_count(0)
+    control_branch.select_option("control-proof")
+    expect(timing.get_by_role("link", name="speed-control-0 · 93.0 s", exact=True)).to_be_visible()
+    expect(timing.get_by_role("link", name="speed-control-1 · 96.0 s", exact=True)).to_be_visible()
+    expect(timing.locator("line.history-chain")).to_have_count(1)
+    expect(timing.get_by_role("link")).to_have_count(2)
+    toggle.check()
+    expect(timing.get_by_role("link", name="speed-candidate · 90.5 s", exact=True)).to_be_visible()
+    expect(timing.get_by_role("link")).to_have_count(3)
