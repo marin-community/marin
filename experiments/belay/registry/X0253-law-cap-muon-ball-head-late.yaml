@@ -11,7 +11,7 @@ intake:
   author: WhenWen
   approved_by: WhenWen (trusted)
 code_commits:
-- 65c2cacdf17406522ce29c4746e31ba600413c65
+- 6bceafd91f81e5bb674d60ad536d40fd6452b515
 trials:
 - id: t001
   variant: law-cap Frobenius ball, s(t)^2 head, late matrix anneal

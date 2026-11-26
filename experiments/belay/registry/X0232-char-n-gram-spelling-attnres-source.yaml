@@ -11,7 +11,7 @@ intake:
   author: armorfaye
   approved_by: ClassicLarry
 code_commits:
-- e7d3e8285dbda40ee06d0cfeb7b04632df0dd0d0
+- 1d4675fc0163413d67eb5938f9aafe2bbfea0358
 trials:
 - id: t001
   variant: char 1-4-gram spelling as own AttnRes source

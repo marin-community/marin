@@ -11,7 +11,7 @@ intake:
   author: armorfaye
   approved_by: armorfaye (trusted)
 code_commits:
-- e07a23462367d74c509c6338a600d42964b89866
+- 44817b8d2b661a96b8f560828cc27f4331f14af7
 trials:
 - id: t001
   variant: MuonC 12.5 + AdamC on head, router and embed

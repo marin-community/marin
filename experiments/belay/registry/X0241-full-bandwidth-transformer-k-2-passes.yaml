@@ -11,7 +11,7 @@ intake:
   author: xTimeCrystal
   approved_by: ClassicLarry
 code_commits:
-- f3624da1475d34eb9578b29758141baa5633191d
+- 3e0310b3f622134667ce35c5dc69e01ca9b2e338
 potential:
   score: 5
   rationale: 'No result yet: re-queued staged equal-wall-clock FBT protocol escalated (no per-run steps, no t2 probe, custom

@@ -11,7 +11,7 @@ intake:
   author: armorfaye
   approved_by: armorfaye (trusted)
 code_commits:
-- 6dd569ae3d46bcd9af7dd1d6434e830f12406d1c
+- 2f0920f719345126e420bde096bda89d4ebebdd2
 trials:
 - id: t001
   variant: token_embed in its own Adam group at 4x adam_lr

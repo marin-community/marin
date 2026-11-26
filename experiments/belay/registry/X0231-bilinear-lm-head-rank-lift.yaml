@@ -11,7 +11,7 @@ intake:
   author: armorfaye
   approved_by: ClassicLarry
 code_commits:
-- 39655ca2d00fc6322ba395ca87d1ff0003acbd28
+- 5143d29b9c1588eca8165b41f6b1e258826d717f
 trials:
 - id: t001
   variant: lm_head reads [h, g*rms_norm(hA*hB)], widened by d/4

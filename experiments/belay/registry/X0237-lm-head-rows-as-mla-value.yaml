@@ -11,7 +11,7 @@ intake:
   author: armorfaye
   approved_by: armorfaye (trusted)
 code_commits:
-- a0aee21ff60e70b9704c74e5a1ad1bf707fc20f9
+- b0f946a5d9a0a7ef8b7aae5f98b7c7358c59fc87
 trials:
 - id: t001
   variant: lm_head rows as gated value embeds in MLA

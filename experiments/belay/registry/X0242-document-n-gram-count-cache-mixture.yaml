@@ -11,7 +11,7 @@ intake:
   author: armorfaye
   approved_by: armorfaye (trusted)
 code_commits:
-- f0bf6035601c8afb215081475741d65a2a8e0cb9
+- bcc1261eaec3d0f28f822d235ca96a0ba4da7755
 trials:
 - id: t001
   variant: document n-gram count cache mixed into output

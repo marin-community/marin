@@ -11,7 +11,7 @@ intake:
   author: armorfaye
   approved_by: armorfaye (trusted)
 code_commits:
-- 98482e0b709c7ceb35a1822ad41b26abe30d1f6e
+- 06dcfea04c136b3ddc9a0ab97a5cc2f6efc841a1
 trials:
 - id: t001
   variant: X0247 at lambda 0.15 + AdamC head, router/embed decay 0.3
