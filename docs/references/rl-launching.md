@@ -367,8 +367,9 @@ records may remain unuploaded. Other cleanup can still exhaust the existing
 120-second teardown watchdog.
 
 Each Ray node writes to its own Iris task's stdout and stderr. Use the job
-logs to see output across the gang. Set `IrisSkyRLExecution.job_timeout_seconds`
-to bound the total runtime in Iris.
+logs to see output across the gang. Ray's C++ and Python services default to
+warning-level logs. Set `IrisSkyRLExecution.job_timeout_seconds` to bound the
+total runtime in Iris.
 
 SkyRL writes crash receipts and NCCL flight recorder dumps to
 `$IRIS_OUTPUT_DIR/skyrl-debug/` for the

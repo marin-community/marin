@@ -1783,6 +1783,7 @@ def main() -> None:
     os.environ["RAY_LOG_TO_STDERR"] = "1"
     os.environ["PYTHONUNBUFFERED"] = "1"
     os.environ.setdefault("RAY_BACKEND_LOG_LEVEL", "warning")
+    os.environ.setdefault("RAY_LOGGER_LEVEL", "warning")
     resolve_ray_ports()
     rank = _rank()
     if rank == 0:
