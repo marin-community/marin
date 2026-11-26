@@ -1,0 +1,12 @@
+id: X0257
+slug: x0250-ladder-with-adam-decays-on
+name: X0250 ladder with Adam decays on lr*N rule
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: competitive-d512
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7121723382
+  author: armorfaye
+  approved_by: armorfaye (trusted)
