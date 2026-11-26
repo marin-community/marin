@@ -31,7 +31,6 @@ from experiments.post_training.task_curation.selection import (
     TASK_MANIFEST_FILENAME,
     TASK_MANIFEST_SCHEMA,
     TASK_SCHEMA,
-    TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
     GraderKind,
     _selection_row,
@@ -43,6 +42,7 @@ from experiments.post_training.task_curation.swesmith_training import (
     lower_swesmith_task,
     native_swesmith_selection,
 )
+from experiments.post_training.task_curation.task_store import TASK_SPEC_COLUMN
 
 VERSION = "2026.11.19.2"
 BOOTSTRAP = "touch /testbed/setup"

@@ -90,6 +90,16 @@ class ReleasedFile(BaseModel):
 SourceEntry = Annotated[CuratedSource | ReleasedFile, Field(discriminator="kind")]
 
 
+@dataclass(frozen=True)
+class _TaskFile:
+    source_id: str
+    entry: CuratedSource | ReleasedFile
+    path: str
+
+    def rows(self) -> Iterator[TaskRow]:
+        return self.entry.rows(self.source_id, self.path)
+
+
 class TaskStore(Artifact):
     """A versioned set of sources whose tasks read as one dataset."""
 
@@ -107,8 +117,10 @@ class TaskStore(Artifact):
 
         Curated manifests are checked here, released files when a worker reads them.
         """
-        files = [(source_id, entry, path) for source_id, entry in self.sources.items() for path in entry.task_files()]
-        return Dataset.from_list(files).flat_map(lambda item: item[1].rows(item[0], item[2]))
+        files = [
+            _TaskFile(source_id, entry, path) for source_id, entry in self.sources.items() for path in entry.task_files()
+        ]
+        return Dataset.from_list(files).flat_map(_TaskFile.rows)
 
 
 @dataclass(frozen=True)

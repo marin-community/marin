@@ -72,10 +72,10 @@ from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
     SUMMARY_FILENAME,
     TASK_MANIFEST_FILENAME,
-    TASK_SPEC_COLUMN,
     GraderKind,
 )
 from experiments.post_training.task_curation.swesmith_training import SWESMITH_DATASET, native_swesmith_selection
+from experiments.post_training.task_curation.task_store import TASK_SPEC_COLUMN
 
 REPO_ROOT = find_project_root(Path(__file__))
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
