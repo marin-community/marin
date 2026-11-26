@@ -13,6 +13,7 @@ from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from threading import Event
 from types import ModuleType
@@ -476,6 +477,37 @@ def test_status_inventory_matches_source_statuses_without_loading_task_evidence(
     assert compact["sources"] == [{key: source.get(key) for key in fields} for source in complete["sources"]]
     assert compact["snapshot_id"] == complete["snapshot_id"]
     assert compact["synced_at"] == complete["synced_at"]
+
+
+def _served_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def test_synced_at_reports_the_later_of_created_at_and_loaded_at(catalog_database, catalog_query, tmp_path):
+    """A resumed load refreshes created_at but not loaded_at; the page date must not go backwards."""
+    root = str(tmp_path / "synced-at")
+    publish_sample(root, "synced-at")
+    load_catalog(CurationCatalog(root), catalog_query)
+    with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
+        live = client.get("/sources", params={"projection": "table"}).json()
+        # Simulate the resumed-load state: the snapshot was re-cut (created_at moved
+        # forward) after the load row was first registered, so loaded_at predates it.
+        catalog_query(
+            "UPDATE atlas_loads SET loaded_at = created_at - interval '1 day'"
+            " WHERE load_id = (SELECT load_id FROM atlas_current WHERE name='latest')",
+            {},
+        )
+        resumed = client.get("/sources", params={"projection": "table"}).json()
+        statuses = client.get("/source-statuses").json()
+    row = catalog_query(
+        "SELECT created_at, loaded_at FROM atlas_loads"
+        " WHERE load_id = (SELECT load_id FROM atlas_current WHERE name='latest')",
+        {},
+    )["rows"][0]
+    assert _served_timestamp(live["synced_at"]) >= _served_timestamp(live["created_at"])
+    assert row["loaded_at"] < row["created_at"]
+    assert _served_timestamp(resumed["synced_at"]) == _served_timestamp(resumed["created_at"])
+    assert statuses["synced_at"] == resumed["synced_at"]
 
 
 @pytest.mark.parametrize("obsolete_summary", [False, True])
