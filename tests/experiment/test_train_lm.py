@@ -171,7 +171,7 @@ def test_lowers_to_a_runnable_graph():
     assert any(dep.name == "corpus" for dep in spec.deps)
 
 
-def test_train_only_mixture_builds_validation_caches_without_raising(tmp_path):
+def test_train_only_mixture_skips_the_missing_validation_split(tmp_path):
     """A train-only cache in a mixture keeps Levanter's skip-a-missing-split behavior:
     ``as_component()`` emits an empty-URL source, so ``build_caches("validation")`` skips
     the missing split instead of raising (the path every default ``tokenized(...)``

@@ -130,7 +130,9 @@ class TokenizedCache(Artifact):
 
     @property
     def pack(self) -> bool | int | None:
-        """The recorded packing for this cache's documents, if any."""
+        """The recorded packing: ``True`` packs up to 64 documents per example, an integer
+        caps documents per example at that value; ``None`` falls back to the format's packing.
+        """
         return self._config.get("pack")
 
     @property

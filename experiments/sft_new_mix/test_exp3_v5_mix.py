@@ -19,7 +19,6 @@ from marin.execution.artifact import ArtifactRecord, write_record
 from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem.s3_compat import configure_coreweave_s3
-from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.sft_new_mix import exp3_v5_mix as mix
 
@@ -141,8 +140,8 @@ def test_resolved_mixture_settings_match_the_release(tmp_path):
 
 def test_seal_check_rejects_a_drifted_catalog(tmp_path, monkeypatch):
     """The seal check validates digests, counts, loss modes, and totals."""
-    swept: list[tuple[str, int]] = []
-    monkeypatch.setattr(mix, "_verify_shard_paths", lambda cache_dir, shards: swept.append((cache_dir, len(shards))))
+    swept: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(mix, "_verify_shard_paths", lambda cache_dir, shards: swept.append((cache_dir, list(shards))))
     check = mix.exp3_v5_seal_check()
     config = materialized_config(check, str(tmp_path))
     entries = {}
@@ -175,7 +174,8 @@ def test_seal_check_rejects_a_drifted_catalog(tmp_path, monkeypatch):
         config, cache_catalog={"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()}, expected_sources=expected
     )
     check.run(good)
-    assert swept == [(mix._CACHE_ROOT, mix._MANIFEST["totals"]["shards"])]
+    expected_shards = [shard for entry in entries.values() for shard in entry["ledger"]["finished_shards"]]
+    assert swept == [(mix._CACHE_ROOT, expected_shards)]
 
     bad_sha = dict(good, cache_catalog={"uri": str(path), "sha256": "0" * 64})
     with pytest.raises(ValueError, match="digest differs"):
@@ -200,24 +200,11 @@ def test_seal_check_rejects_a_drifted_catalog(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not _HAS_S3_CREDENTIALS, reason="CoreWeave S3 credentials unavailable")
-def test_sealed_catalog_matches_the_manifest_online():
-    """The committed manifest still matches the live sealed catalog, and shards exist."""
+def test_sealed_release_passes_the_seal_check_online(tmp_path):
+    """The production seal check passes against the live sealed release."""
     configure_coreweave_s3()
-    raw = StoragePath(mix._CATALOG_URI).read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == mix._CATALOG_SHA256
-    catalog = json.loads(raw)["splits"]["train"]
-    assert set(catalog) == set(mix._SEALS)
-    for name, seal in mix._SEALS.items():
-        entry = catalog[name]
-        ledger = entry["ledger"]
-        assert ledger["total_num_rows"] == seal["rows"]
-        assert len(ledger["finished_shards"]) == seal["shards"]
-        assert mix._entry_digest(entry) == seal["entry_sha256"]
-    # A spot check that the content-addressed shard caches are still in place.
-    shards = catalog["pretrain/source/c00q0-train/gt_64k"]["ledger"]["finished_shards"]
-    shards += catalog["sft/source/nemotron_sft_v3/math_v3/train"]["ledger"]["finished_shards"][:2]
-    for shard in shards:
-        assert StoragePath(prefix_join(mix._CACHE_ROOT, shard)).exists()
+    config = materialized_config(mix.exp3_v5_seal_check(), str(tmp_path))
+    mix.exp3_v5_seal_check().run(config)
 
 
 def test_data_config_is_fingerprint_safe():

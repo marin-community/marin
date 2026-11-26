@@ -209,6 +209,35 @@ def _exp3_v5_sources() -> dict[str, ArtifactStep[TokenizedCache]]:
     }
 
 
+def _verified_catalog(config: dict) -> dict:
+    """The catalog's train split, after its digest and source set match the seal config."""
+    raw = StoragePath(config["cache_catalog"]["uri"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != config["cache_catalog"]["sha256"]:
+        raise ValueError(f"cache catalog digest differs from the release pin {config['cache_catalog']['sha256']}")
+    catalog = json.loads(raw)["splits"]["train"]
+    if set(catalog) != set(config["expected_sources"]):
+        raise ValueError("cache catalog sources differ from the seal manifest")
+    return catalog
+
+
+def _check_source_ledger(name: str, entry: dict, want: dict) -> list[str]:
+    """Check one source's ledger against its seal record; return its finished shards."""
+    ledger = entry["ledger"]
+    if not ledger.get("is_finished"):
+        raise ValueError(f"{name}: cache ledger is not finished")
+    if ledger["total_num_rows"] != want["rows"]:
+        raise ValueError(f"{name}: {ledger['total_num_rows']} rows, manifest pins {want['rows']}")
+    if len(ledger["finished_shards"]) != want["shards"]:
+        raise ValueError(f"{name}: {len(ledger['finished_shards'])} shards, manifest pins {want['shards']}")
+    if _entry_digest(entry) != want["entry_sha256"]:
+        raise ValueError(f"{name}: catalog entry digest differs from the manifest pin")
+    loss_mode = ledger.get("metadata", {}).get("preprocessor_metadata", {}).get("loss_mode")
+    if loss_mode != want["loss_mode"]:
+        raise ValueError(f"{name}: loss mode {loss_mode!r}, manifest pins {want['loss_mode']!r}")
+    return ledger["finished_shards"]
+
+
+@cache
 def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
     """Verify the sealed release: catalog SHA-256, per-source entry digests, row/shard
     counts, loss modes, and shard existence. Declare it among a consumer's dependencies
@@ -226,8 +255,6 @@ def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
     totals = {
         "sources": len(_SEALS),
         "rows": sum(s["rows"] for s in _SEALS.values()),
-        "input_ids_tokens": sum(s["input_ids_tokens"] for s in _SEALS.values()),
-        "loss_weights_tokens": sum(s["loss_weights_tokens"] for s in _SEALS.values()),
         "shards": sum(s["shards"] for s in _SEALS.values()),
     }
 
@@ -241,28 +268,10 @@ def exp3_v5_seal_check() -> ArtifactStep[Artifact]:
         }
 
     def check(config: dict) -> None:
-        raw = StoragePath(config["cache_catalog"]["uri"]).read_bytes()
-        if hashlib.sha256(raw).hexdigest() != config["cache_catalog"]["sha256"]:
-            raise ValueError(f"cache catalog digest differs from the release pin {config['cache_catalog']['sha256']}")
-        catalog = json.loads(raw)["splits"]["train"]
-        if set(catalog) != set(config["expected_sources"]):
-            raise ValueError("cache catalog sources differ from the seal manifest")
+        catalog = _verified_catalog(config)
         shards: list[str] = []
         for name, entry in catalog.items():
-            ledger = entry["ledger"]
-            want = config["expected_sources"][name]
-            if not ledger.get("is_finished"):
-                raise ValueError(f"{name}: cache ledger is not finished")
-            if ledger["total_num_rows"] != want["rows"]:
-                raise ValueError(f"{name}: {ledger['total_num_rows']} rows, manifest pins {want['rows']}")
-            if len(ledger["finished_shards"]) != want["shards"]:
-                raise ValueError(f"{name}: {len(ledger['finished_shards'])} shards, manifest pins {want['shards']}")
-            if _entry_digest(entry) != want["entry_sha256"]:
-                raise ValueError(f"{name}: catalog entry digest differs from the manifest pin")
-            loss_mode = ledger.get("metadata", {}).get("preprocessor_metadata", {}).get("loss_mode")
-            if loss_mode != want["loss_mode"]:
-                raise ValueError(f"{name}: loss mode {loss_mode!r}, manifest pins {want['loss_mode']!r}")
-            shards.extend(ledger["finished_shards"])
+            shards.extend(_check_source_ledger(name, entry, config["expected_sources"][name]))
         observed = {
             "sources": len(catalog),
             "rows": sum(entry["ledger"]["total_num_rows"] for entry in catalog.values()),
@@ -289,22 +298,26 @@ def exp3_v5_mix_deps() -> tuple[ArtifactStep, ...]:
 
 
 def exp3_v5_data_config(ctx: StepContext) -> LmDataConfig:
-    """The ``LmDataConfig`` the Exp3 SFT run consumed, assembled through ``mixture``.
+    """The ``LmDataConfig`` the Exp3 SFT run consumed.
 
     Call this inside a consumer's ``build_config`` whose ``deps`` include
-    :func:`exp3_v5_mix_deps`.
+    :func:`exp3_v5_mix_deps`, so the seal is verified before the mix resolves.
     """
+    # Fails fast unless the consumer declared the seal check; exp3_v5_mix_deps() does.
+    ctx.artifact_path(exp3_v5_seal_check())
     phase_weights = _SCHEDULE[0][1]
     train = {handle: phase_weights[handle.name] for handle in _exp3_v5_sources().values()}
     cfg = mixture(ctx, train, shuffle=_DATA["shuffle"])
     return replace(
         cfg,
-        train_weights=[(phase, weights) for phase, weights in _SCHEDULE],
+        train_weights=[(phase, dict(weights)) for phase, weights in _SCHEDULE],
         cache_catalog=ctx.artifact_path(exp3_v5_cache_catalog),
         num_validation_sequences=dict(_NUM_VALIDATION_SEQUENCES),
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
         enforce_eos=_ENFORCE_EOS,
         auto_build_caches=_AUTO_BUILD_CACHES,
+        block_cross_document_attention=_DATA["block_cross_document_attention"],
+        shuffle_before_trainval_split=_DATA["shuffle_before_trainval_split"],
         cache_options=CacheOptions(batch_size=_CACHE_BATCH_SIZE),
         stop_strategy=_STOP_STRATEGY,
     )
