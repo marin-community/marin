@@ -10,6 +10,7 @@ import logging
 import os
 import pathlib
 import queue
+import re
 import resource
 import sys
 import threading
@@ -51,6 +52,7 @@ from levanter.utils.types import FilterSpec
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_METADATA_FILENAME = "metadata.json"
+_PENDING_DELETE_SUFFIX = ".pending-delete"
 _OBJECT_STORE_SCHEMES = frozenset({"s3", "s3a", "gs", "gcs"})
 
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
@@ -500,6 +502,8 @@ class Checkpointer:
         self._last_save_time = self._dt_now_injection()
         self._last_save_step: int | None = None
         self._last_save_permanent = False
+        self._last_committed_step: int | None = None
+        self._longest_save_duration = 0.0
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self.write_config = write_config or TensorStoreWriteConfig()
@@ -530,7 +534,8 @@ class Checkpointer:
                 target=self._async_checkpoint_remover, daemon=True
             )
             self._async_checkpoint_remover_thread.start()
-            self._checkpoint_being_removed = None
+            for root in self._checkpoint_roots():
+                self._resume_pending_deletes(root)
 
         if jax.process_index() == 0 and delete_old_temp_checkpoints:
             self._temporary_checkpoints = self._discover_temporary_checkpoints()
@@ -590,7 +595,12 @@ class Checkpointer:
             # The final hook must still surface a failed pending save before later hooks run.
             self._manager.wait_until_finished()
             return
-        if force and step == self._last_save_step and self.temporary_base_path is None:
+        if (
+            force
+            and step == self._last_save_step
+            and self.temporary_base_path is None
+            and self.keep_last_temporary_checkpoints > 0
+        ):
             # Promote the committed temporary save without rewriting its arrays or manifest.
             self._manager.wait_until_finished()
             # Match save_checkpoint's path so the temporary retention entry can be removed.
@@ -629,31 +639,70 @@ class Checkpointer:
                 logger.info(f"Saving temporary checkpoint at step {step}.")
 
         if should_save:
-            destination = f"step-{step}"
-
             # Route temporary checkpoints to temporary_base_path when configured
             if not save_permanent_ckpt and self.temporary_base_path is not None:
                 save_base_path = self.temporary_base_path
             else:
                 save_base_path = self.base_path
 
-            checkpoint_path = os.path.join(save_base_path, destination)
+            self._save_step(tree=tree, step=step, base_path=save_base_path, is_temporary=not save_permanent_ckpt)
 
-            def callback():
-                if jax.process_index() == 0:
-                    if not save_permanent_ckpt:
-                        self._record_temporary_checkpoint(checkpoint_path)
-                        self._prune_temporary_checkpoints(self.keep_last_temporary_checkpoints)
-                    else:
-                        self._prune_temporary_checkpoints(0)
+    def _save_step(self, *, tree: PyTree, step: int, base_path: str, is_temporary: bool) -> None:
+        destination = f"step-{step}"
+        checkpoint_path = os.path.join(base_path, destination)
 
-            self.save_checkpoint(
-                tree=tree,
-                step=step,
-                destination=destination,
-                commit_callback=callback,
-                is_temporary=not save_permanent_ckpt,
-                base_path_override=save_base_path,
+        def update_retention():
+            if is_temporary:
+                self._record_temporary_checkpoint(checkpoint_path)
+                self._prune_temporary_checkpoints(self.keep_last_temporary_checkpoints)
+            else:
+                self._prune_temporary_checkpoints(0)
+
+        self.save_checkpoint(
+            tree=tree,
+            step=step,
+            destination=destination,
+            commit_callback=update_retention,
+            is_temporary=is_temporary,
+            base_path_override=base_path,
+        )
+
+    def save_preemption_checkpoint(self, *, tree: PyTree, step: int, deadline: float) -> None:
+        """Save recovery state to the configured rolling root if the shutdown budget permits.
+
+        The caller must supply a lifecycle-managed temporary root that its retry searches.
+        Use the slowest committed save in this attempt, with headroom for varying write speeds.
+        A pending save, an existing checkpoint at this step, or an unknown save time skips a new write.
+        """
+        if (
+            self.temporary_base_path is None
+            or StoragePath(self.temporary_base_path) == StoragePath(self.base_path)
+            or self.keep_last_temporary_checkpoints == 0
+        ):
+            return
+
+        should_save = False
+        if jax.process_index() == 0 and (
+            self._last_save_step == self._last_committed_step
+            and self._last_committed_step != step
+            and 0 < 2 * self._longest_save_duration < deadline - time.monotonic()
+        ):
+            # A retry may already have committed this step in either root.
+            destination = f"step-{step}"
+            fs, plain_path = _get_fs_and_plain_path(prefix_join(self.temporary_base_path, destination))
+            should_save = (
+                not fs.exists(plain_path + _PENDING_DELETE_SUFFIX)
+                and not any(
+                    _is_committed_checkpoint(prefix_join(root, destination)) for root in self._checkpoint_roots()
+                )
+                and 2 * self._longest_save_duration < deadline - time.monotonic()
+            )
+        if broadcast_one_to_all(jnp.array(should_save)):
+            self._save_step(tree=tree, step=step, base_path=self.temporary_base_path, is_temporary=True)
+            self._manager.wait_until_finished()
+        else:
+            logger.info(
+                "Skipping a new preemption save at step %d. Retry will discover the latest committed step.", step
             )
 
     def request_checkpoint(self, retention: CheckpointRetention) -> None:
@@ -672,16 +721,19 @@ class Checkpointer:
             self._requested_retention = None
         return requested
 
-    def _discover_temporary_checkpoints(self) -> list["_TemporaryCheckpointRecord"]:
-        search_paths = [self.base_path]
-        if self.temporary_base_path is not None:
-            search_paths.append(self.temporary_base_path)
+    def _checkpoint_roots(self) -> tuple[str, ...]:
+        if self.temporary_base_path is not None and StoragePath(self.temporary_base_path) != StoragePath(
+            self.base_path
+        ):
+            return (self.base_path, self.temporary_base_path)
+        return (self.base_path,)
 
+    def _discover_temporary_checkpoints(self) -> list["_TemporaryCheckpointRecord"]:
         records_by_path: dict[str, _TemporaryCheckpointRecord] = {}
-        for search_path in search_paths:
+        for search_path in self._checkpoint_roots():
             for checkpoint_path in _discover_checkpoint_paths_single(search_path):
                 record = _temporary_checkpoint_record(checkpoint_path)
-                if record is not None:
+                if record is not None and StoragePath(record.path) != StoragePath(search_path):
                     records_by_path[record.path] = record
 
         return sorted(records_by_path.values(), key=_temporary_checkpoint_sort_key)
@@ -707,6 +759,9 @@ class Checkpointer:
             to_delete = self._temporary_checkpoints[:-keep]
 
         for record in to_delete:
+            if re.fullmatch(r"step-[0-9]+", StoragePath(record.path).name) is None:
+                retained.append(record)
+                continue
             try:
                 metadata = load_checkpoint_metadata(record.path)
             except FileNotFoundError:
@@ -715,7 +770,15 @@ class Checkpointer:
 
             if metadata.get("is_temporary", False):
                 logger.info("Deleting old temporary checkpoint %s after saving new checkpoint.", record.path)
-                self._rm_checkpoint(record.path)
+                # Publish the intent before the remover can unpublish the checkpoint.
+                fs, plain_path = _get_fs_and_plain_path(record.path)
+                try:
+                    fs.touch(plain_path + _PENDING_DELETE_SUFFIX)
+                except OSError:
+                    logger.exception("Could not record deletion intent for %s", record.path)
+                    retained.append(record)
+                    continue
+                self._async_checkpoint_remover_queue.put(record.path)
             else:
                 logger.info("Not deleting checkpoint %s because it is no longer temporary.", record.path)
                 retained.append(record)
@@ -733,8 +796,7 @@ class Checkpointer:
     def wait_until_finished(self):
         self._manager.wait_until_finished()
         if jax.process_index() == 0:
-            while self._checkpoint_being_removed is not None or not self._async_checkpoint_remover_queue.empty():
-                time.sleep(0.2)
+            self._async_checkpoint_remover_queue.join()
 
     def save_final_checkpoint(self, *, tree: PyTree, step: int) -> None:
         """Commit the final completed step without waiting for background pruning."""
@@ -743,12 +805,19 @@ class Checkpointer:
             self.on_step(tree=tree, step=step, force=True)
             self._manager.wait_until_finished()
 
-    def _rm_checkpoint(self, checkpoint):
-        if jax.process_index() == 0:
-            logger.info(f"Removing checkpoint {checkpoint}")
-            self._async_checkpoint_remover_queue.put(checkpoint)
+    def _resume_pending_deletes(self, root: str) -> None:
+        fs, plain_root = _get_fs_and_plain_path(root)
+        try:
+            entries = fs.ls(plain_root, detail=True)
+        except FileNotFoundError:
+            return
+        for entry in entries:
+            name = os.path.basename(entry["name"])
+            destination = name.removesuffix(_PENDING_DELETE_SUFFIX)
+            if entry["type"] == "file" and name != destination and re.fullmatch(r"step-[0-9]+", destination):
+                self._async_checkpoint_remover_queue.put(prefix_join(root, destination))
 
-    def _do_rm_checkpoint(self, cp_path):
+    def _do_rm_checkpoint(self, cp_path: str) -> bool:
         cp_url = str(cp_path)
         # have to strip protocol from path because fsspec filesystems don't like them
         fs, plain_path = _get_fs_and_plain_path(cp_path)
@@ -779,8 +848,10 @@ class Checkpointer:
                     pass
             time_out = time.time()
             logger.info(f"Deleted old checkpoint from {cp_path} in {time_out - time_in:.2f} seconds")
+            return True
         except Exception:  # pylint: disable=broad-except
             logger.exception(f"Failed to delete checkpoint {cp_path}")
+            return False
 
     def save_checkpoint(
         self,
@@ -794,14 +865,31 @@ class Checkpointer:
     ):
         base = base_path_override if base_path_override is not None else self.base_path
         path = os.path.join(base, destination)
+        pending_delete = False
+        if jax.process_index() == 0:
+            fs, plain_path = _get_fs_and_plain_path(path)
+            marker = plain_path + _PENDING_DELETE_SUFFIX
+            if fs.exists(marker):
+                self._async_checkpoint_remover_queue.join()
+                pending_delete = fs.exists(marker)
+        if broadcast_one_to_all(jnp.array(pending_delete)):
+            raise RuntimeError(f"Cannot overwrite checkpoint while its previous deletion is pending: {path}")
+
         logger.info(f"Saving checkpoint at step {step} to {path}")
+        started = time.monotonic()
+
+        def on_commit():
+            self._longest_save_duration = max(self._longest_save_duration, time.monotonic() - started)
+            if commit_callback is not None:
+                commit_callback()
+            self._last_committed_step = step
 
         save_checkpoint(
             tree,
             step=step,
             checkpoint_path=path,
             manager=self._manager,
-            commit_callback=commit_callback,
+            commit_callback=on_commit,
             is_temporary=is_temporary,
             debug=self.debug,
             write_config=self.write_config,
@@ -814,9 +902,22 @@ class Checkpointer:
     def _async_checkpoint_remover(self):
         while True:
             checkpoint = self._async_checkpoint_remover_queue.get(block=True)
-            self._checkpoint_being_removed = checkpoint
-            self._do_rm_checkpoint(checkpoint)
-            self._checkpoint_being_removed = None
+            try:
+                fs, plain_path = _get_fs_and_plain_path(checkpoint)
+                marker = plain_path + _PENDING_DELETE_SUFFIX
+                try:
+                    metadata = load_checkpoint_metadata(plain_path, fs=fs)
+                except FileNotFoundError:
+                    metadata = None
+                # A permanent checkpoint must survive even if an older intent still exists.
+                if (metadata is not None and not metadata.get("is_temporary", False)) or self._do_rm_checkpoint(
+                    checkpoint
+                ):
+                    fs.rm(marker)
+            except Exception:
+                logger.exception("Failed to finish pending checkpoint deletion for %s", checkpoint)
+            finally:
+                self._async_checkpoint_remover_queue.task_done()
 
 
 def save_checkpoint(
@@ -1240,6 +1341,13 @@ def _discover_checkpoint_candidates_single(
     return sorted(candidates, key=_checkpoint_candidate_sort_key)
 
 
+def _is_committed_checkpoint(path: str, fs: AbstractFileSystem | None = None) -> bool:
+    fs, plain_path = _get_fs_and_plain_path(path, fs=fs)
+    return fs.exists(os.path.join(plain_path, CHECKPOINT_METADATA_FILENAME)) and not fs.exists(
+        plain_path.rstrip("/") + _PENDING_DELETE_SUFFIX
+    )
+
+
 def _discover_checkpoint_paths_single(checkpoint_path: str, fs: AbstractFileSystem | None = None) -> list[str]:
     """Discover valid checkpoint directories in a single root path.
 
@@ -1249,9 +1357,6 @@ def _discover_checkpoint_paths_single(checkpoint_path: str, fs: AbstractFileSyst
     """
     fs, _ = _get_fs_and_plain_path(checkpoint_path, fs=fs)
     base_path_protocol = urllib.parse.urlparse(str(checkpoint_path)).scheme
-
-    def is_checkpoint_dir(path: str):
-        return fs.exists(os.path.join(path, CHECKPOINT_METADATA_FILENAME))
 
     def maybe_unstrip_protocol(path: str):
         if base_path_protocol != "" and urllib.parse.urlparse(path).scheme == "":
@@ -1265,7 +1370,7 @@ def _discover_checkpoint_paths_single(checkpoint_path: str, fs: AbstractFileSyst
 
     ckpt_dirs = [maybe_unstrip_protocol(e["name"]) for e in entries if e["type"] == "directory"]
     ckpt_dirs.append(checkpoint_path)
-    return sorted(d for d in ckpt_dirs if is_checkpoint_dir(d))
+    return sorted(d for d in ckpt_dirs if _is_committed_checkpoint(d, fs=fs))
 
 
 def _get_fs_and_plain_path(path, fs=None):
@@ -1368,9 +1473,7 @@ def is_checkpoint_path(path: str) -> bool:
             return False
         # Sometimes we have incomplete checkpoints due to preemption or other issues.
         # try to find a metadata file in the path
-        fs, plain_path = _get_fs_and_plain_path(path)
-        metadata_path = os.path.join(plain_path, CHECKPOINT_METADATA_FILENAME)
-        if fs.exists(metadata_path):
+        if _is_committed_checkpoint(path):
             return True
         # if we don't find a metadata file, we can check if the path has any checkpoint subdirectories
         if _discover_checkpoint_paths_single(path):
