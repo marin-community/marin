@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from marinskyrl.runtime_options import BatchBuilder
 from omegaconf import OmegaConf
-from skyrl_train.callbacks.base import CallbackHandler, TrainerControl
+from skyrl_train.callbacks.base import CallbackHandler, TrainerCallback, TrainerControl
 from skyrl_train.callbacks.builtin import EvaluationCallback
 from skyrl_train.timing_observability import STEP_WALL_PHASES, StepWallTime
 from skyrl_train.trainer import RayPPOTrainer
@@ -32,6 +32,15 @@ class DispatchProbe:
     def pause(self):
         assert asyncio.get_running_loop() is self.loop
         self.paused = True
+
+    def resume(self):
+        assert asyncio.get_running_loop() is self.loop
+        self.paused = False
+
+
+class CancelEvaluation(TrainerCallback):
+    def on_step_end(self, state, control, **kwargs):
+        return TrainerControl(should_log=False)
 
 
 class BatchAssemblyReached(Exception):
@@ -66,7 +75,7 @@ async def test_evaluation_step_pauses_dispatch_after_the_training_batch(
     trainer.total_training_steps = trainer.num_steps_per_epoch = 4
     trainer.eval_dataset = object() if has_eval_data else None
     trainer._control = TrainerControl()
-    trainer.callback_handler = CallbackHandler([EvaluationCallback(eval_steps=2)])
+    trainer.callback_handler = CallbackHandler([EvaluationCallback(eval_steps=2), CancelEvaluation()])
 
     def assemble_batch(*args, **kwargs):
         raise BatchAssemblyReached
@@ -76,3 +85,5 @@ async def test_evaluation_step_pauses_dispatch_after_the_training_batch(
     with pytest.raises(BatchAssemblyReached):
         await trainer._train_step(0, StepWallTime(dict.fromkeys(STEP_WALL_PHASES, 0.0)))
     assert trainer.context.paused is pauses
+    await trainer._run_step_end_callbacks(trainer._create_trainer_state(0))
+    assert not trainer.context.paused

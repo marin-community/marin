@@ -787,6 +787,7 @@ class RayPPOTrainer:
 
     async def _run_step_end_callbacks(self, state: TrainerState, *, step_wall: StepWallTime | None = None) -> None:
         """Run callback-requested work that belongs to the current training step."""
+        dispatch_paused_for_eval = self._step_evaluation_due()
         self._control = await self.callback_handler.call_event_async("on_step_end", state, self._control, trainer=self)
 
         if self._control.should_save:
@@ -800,6 +801,8 @@ class RayPPOTrainer:
                 step_wall.start("evaluation")
             await self._evaluate_and_log(state, Timer(EVALUATION_TIMER_KEY, self.all_timings), commit=False)
             self._control.should_evaluate = False
+        elif dispatch_paused_for_eval:
+            self.context.resume()
 
         if self._control.should_save_hf_model:
             if step_wall is not None:
