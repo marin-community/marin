@@ -17,6 +17,22 @@ See [task selection](../../../docs/references/task-curation.md#final-task-select
 resume commands, and [train on a Snowball selection](../../../docs/references/task-curation.md#train-on-a-snowball-selection)
 for the handoff to [Snowball RL experiments](../../../docs/recipes/rl-experiments.md).
 
+## Task store
+
+[`task_store_step`](task_store.py) binds curated source artifacts and released
+task files into a versioned `TaskStore`. The store records where each source's
+tasks live and the SHA-256 that pins them: the canonical `manifest.json` of a
+curation artifact, or the bytes of a released Parquet file. It copies no task
+data. `to_dataset()` returns a Zephyr dataset of `TaskRow(source_id, task_id,
+task_spec)` over each curated source's admitted `final/` rows and each released
+file's `task_spec` rows. It fails on a source that changed after the store
+pinned it. `select_sources(...)` restricts the store to the named sources.
+
+```python
+store = resolve(task_store_step("snowball", "2026.11.26.1", curated=curated, released={uri: sha256}))
+rows = store.select_sources("MarinSkyRL:openscience").to_dataset()
+```
+
 ## EvalLite
 
 `--corpus <converted-corpus.json> --eval-lite
