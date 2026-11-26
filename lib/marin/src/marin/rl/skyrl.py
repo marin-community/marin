@@ -913,6 +913,14 @@ def _launcher_command(config_path: str) -> list[str]:
     return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
+def skyrl_cpu_environment(env_vars: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Remove Python path and virtualenv overrides for SkyRL CPU processes."""
+    environment = {**os.environ, **(env_vars or {})}
+    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        environment.pop(key, None)
+    return environment
+
+
 def run_skyrl_cpu(
     command: list[str],
     *,
@@ -921,9 +929,7 @@ def run_skyrl_cpu(
     stream_stderr: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run a SkyRL CPU process in its own group and preserve diagnostic output."""
-    environment = {**os.environ, **(env_vars or {})}
-    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
-        environment.pop(key, None)
+    environment = skyrl_cpu_environment(env_vars)
     deadline = None if timeout is None else monotonic() + timeout
     with (
         tempfile.TemporaryFile() as stdout,
