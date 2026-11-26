@@ -73,6 +73,7 @@ from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import run_native_test, selection_summary
 from experiments.post_training.snowball_sft import OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 pytestmark = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 
@@ -988,7 +989,8 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         path = Path(binding.path()) / "summary.json"
         if not path.is_file():
             _json(path, selection_summary(100))
-        monkeypatch.setattr(snowball, "check_cache", lambda path: True)
+        marker = StoragePath(preset.model.step.path()) / MODEL_MANIFEST_FILENAME
+        fake_s3(monkeypatch, str(marker).removeprefix("s3://"))
     else:
         table = snowball_model.SNOWBALL
         preset = replace(
