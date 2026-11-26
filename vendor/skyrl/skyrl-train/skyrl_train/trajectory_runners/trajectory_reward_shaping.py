@@ -320,7 +320,7 @@ def reward_shaping_metrics(
     row_reasoning_span_penalties: Sequence[float],
     row_reasoning_span_violations: Sequence[int],
 ) -> dict[str, float]:
-    """Aggregate shaping scalars and per-token charges by trajectory."""
+    """Report trajectory shaping metrics and the pooled mean of charged tokens."""
     penalties = [sum(values.values()) for values in trajectory_components]
     reasoning_span_penalties = [
         values.get("reasoning_span", 0.0) + sum(row_reasoning_span_penalties[index] for index in group)
