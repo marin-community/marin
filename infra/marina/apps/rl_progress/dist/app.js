@@ -1,4 +1,4 @@
-import { controlBranches, hasProgress, isCleanMain, showProgress } from './progress.js';
+import { controlHistory, hasProgress, isCleanMain, showProgress } from './progress.js';
 
 const $ = (id) => document.getElementById(id);
 let runs = [];
@@ -138,14 +138,14 @@ function render() {
   if (choices.has(previous)) preset.value = previous;
   $('progress-panel').hidden = !choices.size;
   const history = matching.filter((run) => JSON.stringify([run.model, run.series]) === preset.value);
+  const controls = controlHistory(history);
   const branch = $('control-branch'), selectedBranch = branch.value;
-  const availableBranches = ['main', ...controlBranches(history)];
+  const availableBranches = ['main', ...[...controls.keys()].filter((name) => name !== 'main').sort()];
   branch.replaceChildren(...availableBranches.map((value) => element('option', value, { value })));
   if (availableBranches.includes(selectedBranch)) branch.value = selectedBranch;
   $('control-branch-label').hidden = availableBranches.length === 1;
-  const hasControls = showProgress($('progress-charts'), history, {
-    controlBranch: branch.value, showBranches: $('show-branches').checked,
-  }, route);
+  const hasControls = showProgress($('progress-charts'), history, controls.get(branch.value) ?? [],
+    $('show-branches').checked, route);
   const empty = $('progress-empty');
   empty.hidden = hasControls;
   empty.textContent = `No completed controls with measurements for ${branch.value} on this preset.`;

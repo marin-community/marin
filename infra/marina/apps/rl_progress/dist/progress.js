@@ -1,6 +1,5 @@
 const SVG = 'http://www.w3.org/2000/svg';
 const score = (value) => `${(100 * value).toFixed(1)}%`;
-const seconds = (value) => `${value.toFixed(1)} s`;
 const trainerTime = 'Trainer seconds per optimizer update';
 const time = (run) => Date.parse(run.completed_at ?? run.started_at ?? run.run_date);
 export const isCleanMain = (run) => run.branch === 'main' && run.dirty === false
@@ -8,9 +7,17 @@ export const isCleanMain = (run) => run.branch === 'main' && run.dirty === false
 const isControl = (run) => run.is_control === true && run.dirty === false
   && run.status === 'succeeded' && Number.isFinite(time(run));
 
-export function controlBranches(runs) {
-  return [...new Set(runs.filter((run) => isControl(run) && run.branch && run.branch !== 'main')
-    .map((run) => run.branch))].sort();
+export function controlHistory(runs) {
+  const branches = new Map();
+  for (const run of runs.filter(isControl).sort((a, b) => time(b) - time(a))) {
+    if (!run.branch || run.branch === 'main' && !isCleanMain(run)) continue;
+    if (!branches.has(run.branch)) branches.set(run.branch, new Map());
+    const outputs = branches.get(run.branch);
+    if (!outputs.has(run.artifact_uri)) outputs.set(run.artifact_uri, run);
+  }
+  return new Map([...branches].map(([branch, outputs]) => [
+    branch, [...outputs.values()].reverse().filter(hasProgress),
+  ]).filter(([, controls]) => controls.length));
 }
 
 function scores(run) {
@@ -51,11 +58,12 @@ function svg(tag, attributes, label) {
 
 function plot(metric, controls, branches, route) {
   const isTiming = metric === trainerTime;
-  const format = isTiming ? seconds : score;
   const chart = svg('svg', { viewBox: '0 0 680 200', role: 'group', 'aria-label': metric, class: 'progress-chart' });
   const points = [...controls, ...branches].sort((a, b) => a.time - b.time);
   const values = points.map((row) => row.value);
   const low = Math.min(...values), high = Math.max(...values), padding = Math.max(.025, (high - low) * .12);
+  const timingDigits = high === low ? 1 : Math.max(1, Math.min(4, 1 - Math.floor(Math.log10(high - low))));
+  const format = isTiming ? (value) => `${value.toFixed(timingDigits)} s` : score;
   const y = (value) => 160 - 130 * (value - low + padding) / (high - low + 2 * padding);
   const positions = new Map(points.map((point, index) => [point, index]));
   const x = (point) => points.length === 1 ? 346 : 68 + 555 * positions.get(point) / (points.length - 1);
@@ -104,23 +112,18 @@ function plot(metric, controls, branches, route) {
   for (const [label, columns] of labels) {
     chart.append(svg('text', { x: (columns[0] + columns.at(-1)) / 2, y: 181, 'text-anchor': 'middle' }, label));
   }
-  chart.append(svg('text', { x: 346, y: 198, 'text-anchor': 'middle' }, 'Recorded time (UTC)'));
+  chart.append(svg('text', { x: 346, y: 198, 'text-anchor': 'middle' }, 'Attempts by recorded time (UTC)'));
   return chart;
 }
 
-export function showProgress(container, runs, { controlBranch, showBranches }, route) {
-  const latestByOutput = new Map();
-  const onControlBranch = (run) => run.branch === controlBranch && (controlBranch !== 'main' || isCleanMain(run));
-  for (const run of runs.filter((run) => isControl(run) && onControlBranch(run)).sort((a, b) => time(b) - time(a))) {
-    if (!latestByOutput.has(run.artifact_uri)) latestByOutput.set(run.artifact_uri, run);
-  }
-  const controls = [...latestByOutput.values()].reverse();
+export function showProgress(container, runs, controls, showBranches, route) {
   const branches = showBranches
     ? runs.filter((run) => run.branch && run.branch !== 'main' && run.is_control !== true && Number.isFinite(time(run))) : [];
-  const evaluations = new Map(runs.map((run) => [run, scores(run)]));
-  const hasScores = [...evaluations.values()].some((metrics) => metrics.size > 0);
-  const selected = hasScores
-    ? [...new Set([...controls, ...branches].flatMap((run) => [...evaluations.get(run).keys()]))] : [trainerTime];
+  const rows = [...controls, ...branches];
+  const evaluations = new Map(rows.map((run) => [run, scores(run)]));
+  const selected = [...new Set(rows.flatMap((run) => [...evaluations.get(run).keys()]))]
+    .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
+  if (rows.some((run) => !evaluations.get(run).size && timing(run) != null)) selected.push(trainerTime);
   const points = (rows, metric) => rows.flatMap((run) => {
     const measurement = metric === trainerTime ? timing(run) : evaluations.get(run).get(metric);
     return measurement ? [{ run, time: time(run), ...measurement }] : [];
@@ -129,7 +132,7 @@ export function showProgress(container, runs, { controlBranch, showBranches }, r
     && runs.every((run) => run.planned_updates == null || run.planned_updates === 0);
   container.replaceChildren();
   let hasControls = false;
-  for (const metric of selected.sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))) {
+  for (const metric of selected) {
     const controlPoints = points(controls, metric), branchPoints = points(branches, metric);
     if (!controlPoints.length && !branchPoints.length) continue;
     hasControls ||= controlPoints.length > 0;

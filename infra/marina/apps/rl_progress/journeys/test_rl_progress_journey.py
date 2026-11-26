@@ -199,7 +199,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
             "timing_scope": "checkpoint_lineage_native_jobs",
             "completed_at": "2026-11-05T01:00:00Z",
         }
-        for i, elapsed in enumerate((930, 960))
+        for i, elapsed in enumerate((930, 960, None))
     ]
     speed_branch = speed_controls[0] | {
         "run_id": "speed-candidate",
@@ -211,6 +211,10 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
         "elapsed_excluding_eval_seconds": 905,
         "completed_at": "2026-11-05T01:04:00Z",
     }
+    other_control = attempt("scored-control", 4, 0.4) | {
+        "series": "speed-medium",
+        "branch": "scored-proof",
+    }
     for record in (
         *controls,
         branch,
@@ -220,6 +224,7 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
         main_without_control,
         *speed_controls,
         speed_branch,
+        other_control,
     ):
         response = journey.page.request.post(api, data=record)
         assert response.ok, response.text()
@@ -271,10 +276,16 @@ def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Jour
     timing = journey.page.get_by_role("group", name="Trainer seconds per optimizer update", exact=True)
     expect(timing).to_have_count(0)
     control_branch.select_option("control-proof")
-    expect(timing.get_by_role("link", name="speed-control-0 · 93.0 s", exact=True)).to_be_visible()
-    expect(timing.get_by_role("link", name="speed-control-1 · 96.0 s", exact=True)).to_be_visible()
+    first = timing.get_by_role("link", name="speed-control-0 · 93.0 s", exact=True)
+    second = timing.get_by_role("link", name="speed-control-1 · 96.0 s", exact=True)
+    expect(first).to_have_attribute("href", "#run=speed-control-0&attempt=speed-control-0")
+    expect(second).to_have_attribute("href", "#run=speed-control-1&attempt=speed-control-1")
+    assert first.locator("circle").get_attribute("cx") != second.locator("circle").get_attribute("cx")
     expect(timing.locator("line.history-chain")).to_have_count(1)
     expect(timing.get_by_role("link")).to_have_count(2)
     toggle.check()
     expect(timing.get_by_role("link", name="speed-candidate · 90.5 s", exact=True)).to_be_visible()
     expect(timing.get_by_role("link")).to_have_count(3)
+    control_branch.select_option("scored-proof")
+    expect(chart.get_by_role("link", name="scored-control · 40.0%", exact=True)).to_be_visible()
+    expect(timing.get_by_role("link", name="speed-candidate · 90.5 s", exact=True)).to_be_visible()
