@@ -158,10 +158,10 @@ GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
-GET  /models/{model}    one model configuration's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
+GET  /models/{model}?cohort=   one model configuration's aggregated detail (identity, version cohorts, per-eval history, all runs; 404 if absent)
 GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
-GET  /history?model=&task=   every run's headline score for one cell, over time
+GET  /history?model=&task=&cohort=   every admitted run's headline score for one cell, over time
 GET  /meta              distinct models / evals / suites / families / users / statuses / versions + filter facets + archived_models + current_user
 GET  /status            store info + per-prefix ingest probes (last probe/success/error)
 POST /refresh           queue the EvalDash Cloud Run rescan; returns 202 + operation + /status
@@ -221,6 +221,11 @@ their columns remain populated alongside native results.
 The scored `/panel` and `/compare` APIs default to `cohort=all`, the newest admissible run per
 benchmark across cohorts. Results from that default may mix evaluation settings; callers that need
 a verified cohort pass it explicitly, for example `cohort=eval-policy-2026-09-24-verified`.
+Policy violations exclude runs and appear in `policy_rejections` only when a named cohort is selected;
+the all-cohorts view can show their scores.
+Model detail and score history use the same policy admission rule. Model detail retains each run's
+`policy_violations` and shows a violating run without a headline when a named cohort is selected.
+Their timelines span cohorts so earlier scores remain visible; `cohort` controls policy admission.
 The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
 and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
 belong to the selected cohort. Compare offers only models with at least one admitted non-zero score

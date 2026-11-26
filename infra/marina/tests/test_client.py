@@ -2,8 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
+import time
 from collections.abc import Iterator
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import google.auth.impersonated_credentials
 import pytest
 import requests
 from marina.client import MarinaRequestError, applet_query, marina_request
@@ -78,6 +83,39 @@ def test_local_request_does_not_send_shared_credentials(monkeypatch):
     assert "Authorization" not in observed[0].headers
     assert observed[0].headers["Content-Type"] == "application/gzip"
     assert observed[0].body == b"package"
+
+
+def test_marina_uses_its_workload_identity_without_replacing_ambient_adc(monkeypatch, tmp_path):
+    iris_file = str(tmp_path / "iris.json")
+    marina_file = str(tmp_path / "marina.json")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", iris_file)
+    monkeypatch.setenv("MARINA_GOOGLE_APPLICATION_CREDENTIALS", marina_file)
+    credentials = MagicMock(spec=google.auth.impersonated_credentials.Credentials)
+
+    def load(filename, **kwargs):
+        assert filename == marina_file
+        assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == iris_file
+        return credentials, "project"
+
+    def mint(identity, *, target_audience, include_email):
+        assert identity is credentials
+        assert target_audience and include_email
+        return SimpleNamespace(token="marina-id-token", refresh=lambda _request: None)
+
+    def send(_session, request, **_kwargs):
+        assert request.headers["Authorization"] == "Bearer marina-id-token"
+        response = requests.Response()
+        response.status_code = 204
+        return response
+
+    monkeypatch.setattr("google.auth.load_credentials_from_file", load)
+    monkeypatch.setattr("google.auth.impersonated_credentials.IDTokenCredentials", mint)
+    monkeypatch.setattr("google.auth.jwt.decode", lambda *_args, **_kwargs: {"exp": time.time() + 3600})
+    monkeypatch.setattr("google.oauth2.id_token.fetch_id_token", lambda *_: "ambient-id-token")
+    monkeypatch.setattr(requests.Session, "send", send)
+
+    assert marina_request("https://marina.example", "GET", "/overview") is None
+    assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == iris_file
 
 
 @pytest.mark.parametrize(

@@ -117,8 +117,11 @@ def step_is_built(step: StepSpec) -> bool:
     same condition the launcher uses to skip a step, evaluated here at scheduling
     time so an already-built node's dependencies are pruned from the schedule
     instead of rebuilt; the launcher re-checks authoritatively before serving the
-    node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
+    node. A mutable (``dev``) artifact always rebuilds. A read-only input always
+    checks that its source exists. Both are excluded from cache pruning.
     """
+    if step.read_only:
+        return False
     if is_mutable_step(step):
         return False
     return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
@@ -355,21 +358,22 @@ class StepRunner:
             logger.info(f"[DRY RUN] Would run {step_name}")
             return None
 
-        # Quick read-only status check to avoid submitting unnecessary jobs
-        status = StatusFile(output_path, worker_id="check").status
-        mutable = is_mutable_step(step)
-        if status == STATUS_SUCCESS and not mutable:
-            check_drift(step)
-            logger.info(f"Skip {step_name}: already succeeded")
-            return None
+        if not step.read_only:
+            # Quick status check to avoid submitting unnecessary jobs.
+            status = StatusFile(output_path, worker_id="check").status
+            mutable = is_mutable_step(step)
+            if status == STATUS_SUCCESS and not mutable:
+                check_drift(step)
+                logger.info(f"Skip {step_name}: already succeeded")
+                return None
 
-        if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
-            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
+            if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
+                raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
 
-        _write_executor_info(step)
+            _write_executor_info(step)
 
-        if step.fn is None:
-            raise ValueError(f"Step {step_name} has no callable fn")
+            if step.fn is None:
+                raise ValueError(f"Step {step_name} has no callable fn")
 
         captured_client = fray_client
 
@@ -415,7 +419,7 @@ def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
 
 
 def run_step(step: StepSpec) -> None:
-    """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
+    """Check a read-only input or execute a step with caching, locking, and artifact saving.
 
     An inline step that does not write its own record (``writes_record=False``) has its
     return saved via :func:`~marin.execution.artifact.write_step_record` (identity + lineage +
@@ -425,6 +429,11 @@ def run_step(step: StepSpec) -> None:
     """
     output_path = step.output_path
     step_label = step.name_with_hash
+
+    if step.read_only:
+        if not StoragePath(output_path).exists():
+            raise FileNotFoundError(f"{step_label}: no artifact at {output_path}")
+        return
 
     # 1. Cache check
     mutable = is_mutable_step(step)

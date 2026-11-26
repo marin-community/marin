@@ -56,6 +56,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
                         "source": ["declared-source"],
                         "topic": ["algebra"],
                         "difficulty": ["hard"],
+                        "agentic": pa.array([None], type=pa.bool_()),
                     }
                 ),
                 path,
@@ -113,6 +114,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
         ("named", "named", "declared-source", "general", "algebra", "hard"),
     ]
     assert all(item.data_source != "declared-source" for item in identities)
+    assert all(item.subset_id == "declared-source" for item in identities)
     assert all(item.evaluation_identity.strata.agentic for item in identities)
     assert all(item.evaluation_identity.task_digest == digest for item in identities)
     assert OmegaConf.to_container(config, resolve=True) == original_config
@@ -136,9 +138,8 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
     pq.write_table(pa.table({"task_spec": [changed.model_dump_json()]}), primary)
     with pytest.raises(ValueError, match="task content differs from selection manifest"):
         experiment.get_eval_dataset([str(primary)])
-    mismatched = original.set_column(
-        original.schema.get_field_index("family"), "family", pa.array(["wrong-family"])
-    )
+    mismatched = original.set_column(original.schema.get_field_index("family"), "family", pa.array(["wrong-family"]))
+    false_label = original.set_column(original.schema.get_field_index("agentic"), "agentic", pa.array([False]))
     membership_path = primary.parent / "validation.parquet"
     membership = pq.read_table(membership_path)
     changed_task = json.loads(membership["task_spec"][0].as_py())
@@ -146,6 +147,7 @@ def test_final_profiles_build_primary_and_additional_datasets_without_periodic_e
     faults.extend(
         [
             (primary, mismatched, "row strata differ from selection manifest"),
+            (primary, false_label, "row strata differ from selection manifest"),
             (membership_path, pa.table({"task_spec": [json.dumps(changed_task)]}), "manifest population differs"),
         ]
     )
