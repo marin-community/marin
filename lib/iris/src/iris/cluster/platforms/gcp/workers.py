@@ -661,7 +661,7 @@ class GcpWorkerProvider:
             metadata=_gcp_instance_metadata(),
             service_account=gcp.service_account or None,
             disk_size_gb=boot_disk_size,
-            boot_disk_type=gcp.boot_disk_type,
+            boot_disk_type=gcp.boot_disk_type or VmCreateRequest.boot_disk_type,
             image_family="debian-12",
             image_project="debian-cloud",
             startup_script=startup_script,
