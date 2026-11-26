@@ -1380,3 +1380,15 @@ def test_home_opens_the_utilization_dashboard_on_its_own_short_range():
     assert len(links) == 1
     assert links[0]["keepTime"] is False
     assert links[0]["includeVars"] is False
+
+
+def test_node_details_links_to_utilization_for_the_nodes_jobs_on_its_own_range():
+    """Node details carries the hardware panels and Utilization the node's jobs. Its link passes the
+    cluster and node across but not Node details' 3-hour range, which Utilization's job queries are
+    not sized for."""
+    nodes = json.loads((DASHBOARDS / "nodes.json").read_text())
+    links = [link for link in nodes["links"] if link.get("url") == "/d/marin-utilization"]
+
+    assert len(links) == 1
+    assert links[0]["includeVars"] is True
+    assert links[0]["keepTime"] is False
