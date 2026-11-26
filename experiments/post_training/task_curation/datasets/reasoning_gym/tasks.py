@@ -379,7 +379,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
                 ),
                 convert=convert_generated,
-                version="4",
+                # Held at the sealed version: this source's receipts are re-cut by
+                # its own re-seal, whose admission landing bumps it to "4" with
+                # them (#11951 → 2, #11987 → 3, #12238 → 4 en route). Bumping it
+                # earlier would fail the within-source dedup binding, which
+                # refuses any pin mismatch.
+                version="1",
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,
@@ -406,7 +411,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 name="tasktrove-reasoning-gym",
                 source=tasktrove_source(TASKTROVE_CONFIG),
                 convert=TaskTroveConverter(TASKTROVE_CONFIG, convert_tasktrove),
-                version="5",
+                # Held at the declared version: the repaired-scorer grader rides
+                # with this landing, and this source's own seal or re-seal
+                # advances it to "5" with its receipts.
+                version="4",
                 intended_use=IntendedUse.TRAIN,
                 rubric=TASKTROVE_RUBRIC,
                 controls=TASKTROVE_CONTROLS,
