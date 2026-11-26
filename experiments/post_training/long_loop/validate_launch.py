@@ -25,7 +25,6 @@ from omegaconf import OmegaConf
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
-from rigging.secrets import get_secret
 from rolloutengine.models import TaskRolloutSpec
 from skyrl_train import objective  # noqa: F401 - populate the runtime policy-loss registry
 from skyrl_train.config.driver_validation import validate_cfg, validate_generator_cfg
@@ -151,16 +150,9 @@ def validate_source_tasks(launch, worker) -> list[dict]:
 
 def configure_worker_environment(launch) -> None:
     """Project the native launch environment after restoring named credentials from secret files."""
-    sessions = launch.skyrl.environment.task_sessions
-    for settings in (
-        sessions.get("remote_judge") or {},
-        sessions.get("daytona") or {},
-        launch.skyrl.terminal_bench_config.get("harbor", {}),
-    ):
-        for key, name in settings.items():
-            if key.endswith("api_key_env") and name is not None and (value := get_secret(name)) is not None:
-                os.environ[name] = value
-    os.environ.update(config_task_environment(launch))
+    projected = config_task_environment(launch)
+    # Keep the real worker's file-only credential boundary; mirror only authored settings.
+    os.environ.update({name: projected[name] for name in launch.runtime.task_env if name in projected})
 
 
 async def validate_rollout_worker(launch, *, check_task_inputs: bool = False) -> dict:

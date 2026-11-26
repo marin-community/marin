@@ -3,6 +3,7 @@
 import pytest
 from omegaconf import OmegaConf
 from rigging.secrets import SecretResolutionError
+from marinskyrl.task_machine_factories import task_machine_factories
 
 import cloud.iris.iris_backend as launcher
 
@@ -120,4 +121,39 @@ def test_mounted_credentials_override_environment_and_leave_launch_document_unch
     assert launcher.config_task_environment(config) == {"CAMPAIGN_BACKEND_KEY": "mounted-credential"}
     monkeypatch.delenv("CAMPAIGN_BACKEND_KEY")
     assert launcher.config_task_environment(config) == {"CAMPAIGN_BACKEND_KEY": "mounted-credential"}
+    assert OmegaConf.to_yaml(config) == original
+
+
+@pytest.mark.parametrize("phase,selected", [("train", "RL_TEST_KEY"), ("eval", "EVAL_TEST_KEY")])
+def test_real_worker_factory_reads_the_selected_org_from_mounted_files(tmp_path, monkeypatch, phase, selected):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    for name in ("RL_TEST_KEY", "EVAL_TEST_KEY"):
+        monkeypatch.delenv(name, raising=False)
+        (tmp_path / name).write_text("mounted-" + name)
+    sessions = OmegaConf.create({"daytona": {
+        "api_key_env": "RL_TEST_KEY", "eval_api_key_env": "EVAL_TEST_KEY", "ttl_minutes": 90,
+    }})
+    original = OmegaConf.to_yaml(sessions)
+    factory = task_machine_factories(sessions, phase=phase)["daytona"]
+    assert factory.client_factory.args[0].api_key == "mounted-" + selected
+    assert OmegaConf.to_yaml(sessions) == original
+    (tmp_path / selected).unlink()
+    with pytest.raises(SecretResolutionError, match=selected):
+        task_machine_factories(sessions, phase=phase)
+
+
+def test_submission_forwards_both_declared_daytona_org_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    expected = {"RL_TEST_KEY": "mounted-rl", "EVAL_TEST_KEY": "mounted-eval"}
+    for name, value in expected.items():
+        (tmp_path / name).write_text(value)
+        monkeypatch.setenv(name, "stale-env")
+    config = OmegaConf.create({
+        "runtime": {"entrypoint": "train", "task_env": {}},
+        "skyrl": {"environment": {"task_sessions": {"daytona": {
+            "api_key_env": "RL_TEST_KEY", "eval_api_key_env": "EVAL_TEST_KEY",
+        }}}},
+    })
+    original = OmegaConf.to_yaml(config)
+    assert launcher.config_task_environment(config) == expected
     assert OmegaConf.to_yaml(config) == original

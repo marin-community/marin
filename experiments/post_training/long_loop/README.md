@@ -1417,6 +1417,13 @@ configured route. CPU worker construction applies the same resolved task
 environment as the GPU launcher, including the declared judge model; it does
 not select another judge. The receipt records the model and environment names.
 
+Named backend credentials resolve file-first through Rigging in the launcher,
+remote judge, installed-agent connections and both task-machine phases. The CPU
+gate validates every configured train/eval credential and records only its name.
+Campaigns also require their declared storage, Hugging Face and W&B secrets.
+Worker construction keeps those secrets in their read-only files and projects
+only authored runtime settings into the environment, matching Ray workers.
+
 The full-index OpenResearcher admission pin runs on LOCAL/Iris. Daytona RL uses
 `open-athena/openresearcher-openresearcher-dataset-service-20261121-v1` at
 `0c4f39584d7f0121e97f6ad4f4761749add56fef`. This private variant requires the

@@ -24,7 +24,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import StoreType
 from rigging.filesystem.s3_compat import s3_credentials
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import SecretBehavior, get_secret
+from rigging.secrets import SecretBehavior, get_secret, require_secret
 from rigging.timing import Duration
 
 from experiments.post_training.long_loop.serving import serving_release
@@ -77,8 +77,29 @@ def validate_launch(
     return receipt
 
 
+def launch_secret_names(launch: dict) -> tuple[str, ...]:
+    """Name the long-loop storage, tracking and configured train/eval credentials."""
+    names = set()
+    sessions = launch["skyrl"]["environment"]["task_sessions"]
+    for settings in (
+        sessions.get("remote_judge") or {},
+        sessions.get("daytona") or {},
+        launch["skyrl"]["terminal_bench"].get("harbor", {}),
+    ):
+        names.update(value for key, value in settings.items() if key.endswith("api_key_env") and value is not None)
+    for callback in launch["skyrl"]["trainer"].get("callbacks", []):
+        if callback["type"] == "harbor_evaluation":
+            names.add(callback["daytona_api_key_env"])
+    return tuple(sorted(names))
+
+
 def regional_preflight(
-    document: str, readable_uris: tuple[str, ...], check_task_inputs: bool = False, check_vocabulary: bool = False
+    document: str,
+    readable_uris: tuple[str, ...],
+    check_task_inputs: bool = False,
+    check_vocabulary: bool = False,
+    *,
+    required_secret_names: tuple[str, ...],
 ) -> None:
     """Read evaluation dependencies and construct its worker in an isolated CPU task."""
     launch = yaml.safe_load(document)
@@ -92,6 +113,9 @@ def regional_preflight(
     ):
         with StoragePath(uri).open("rb") as stream:
             stream.read(1)
+    resolved_names = tuple(sorted(set(launch_secret_names(launch)) | set(required_secret_names)))
+    for name in resolved_names:
+        require_secret(name)
     with tempfile.TemporaryDirectory(prefix="long-loop-regional-preflight-") as directory:
         receipt = validate_launch(
             document,
@@ -100,6 +124,7 @@ def regional_preflight(
             check_task_inputs=check_task_inputs,
             check_vocabulary=check_vocabulary,
         )
+    receipt["resolved_secret_names"] = list(resolved_names)
     logger.info("Regional evaluation CPU preflight passed: %s", json.dumps(receipt, sort_keys=True))
 
 
@@ -115,21 +140,22 @@ def validate_before_allocation(
     with tempfile.TemporaryDirectory(prefix="long-loop-validation-") as directory:
         validation = validate_launch(document, Path(directory))
     launch = yaml.safe_load(document)
-    sessions = launch["skyrl"]["environment"]["task_sessions"]
-    names = {"CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "WANDB_API_KEY"}
-    for settings in (
-        sessions.get("remote_judge") or {},
-        sessions.get("daytona") or {},
-        launch["skyrl"]["terminal_bench"].get("harbor", {}),
-    ):
-        names.update(value for key, value in settings.items() if key.endswith("api_key_env") and value is not None)
-    secrets = {**{name: value for name in names if (value := get_secret(name)) is not None}, **(secrets or {})}
+    supplied = secrets or {}
+    names = tuple(sorted(set(launch_secret_names(launch)) | set(supplied)))
+    optional = {
+        name: value
+        for name in ("CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "WANDB_API_KEY")
+        if (value := get_secret(name)) is not None
+    }
+    secrets = {**optional, **supplied, **{name: supplied.get(name) or require_secret(name) for name in names}}
     iris = launch["iris"]
     nested = get_job_info() is not None
     request = JobRequest(
         name=f"long-loop-eval-preflight-{uuid4().hex[:8]}",
         entrypoint=Entrypoint.from_callable(
-            regional_preflight, args=(document, readable_uris, check_task_inputs, check_vocabulary)
+            regional_preflight,
+            args=(document, readable_uris, check_task_inputs, check_vocabulary),
+            kwargs={"required_secret_names": names},
         ),
         resources=ResourceConfig.with_cpu(
             cpu=4,
@@ -162,6 +188,7 @@ def validate_before_allocation(
         handle = client.submit(request)
         logger.info("Waiting for regional evaluation CPU preflight %s", handle.job_id)
         handle.wait(raise_on_failure=True)
+    validation["resolved_secret_names"] = list(names)
     validation["regional_preflight_job_id"] = handle.job_id
     return validation
 

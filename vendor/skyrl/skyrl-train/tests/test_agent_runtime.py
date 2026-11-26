@@ -115,9 +115,10 @@ async def test_original_trial_keeps_turn_limit_below_trajectory_budget(tmp_path,
 
 @pytest.mark.asyncio
 async def test_worker_spec_builds_installed_agent_with_separate_judge_and_phase_credentials(tmp_path, monkeypatch):
-    monkeypatch.setenv("TEST_JUDGE_KEY", "judge-key")
-    monkeypatch.setenv("TEST_RL_KEY", "training-key")
-    monkeypatch.setenv("TEST_EVAL_KEY", "evaluation-key")
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    for name, value in {"TEST_JUDGE_KEY": "judge-key", "TEST_RL_KEY": "training-key", "TEST_EVAL_KEY": "evaluation-key"}.items():
+        monkeypatch.delenv(name, raising=False)
+        (tmp_path / name).write_text(value)
     config = OmegaConf.merge(
         get_default_config(),
         {
@@ -126,6 +127,7 @@ async def test_worker_spec_builds_installed_agent_with_separate_judge_and_phase_
                 "task_sessions": {
                     "max_verifier_workers": 0,
                     "remote_judge": {"base_url": "https://judge.invalid", "api_key_env": "TEST_JUDGE_KEY"},
+                    "daytona": {"api_key_env": "TEST_RL_KEY", "eval_api_key_env": "TEST_EVAL_KEY", "ttl_minutes": 90},
                 }
             },
         },
@@ -153,6 +155,7 @@ async def test_worker_spec_builds_installed_agent_with_separate_judge_and_phase_
     )
     try:
         assert worker.judge_connection.base_url == "https://judge.invalid"
+        assert worker.judge_connection.api_key == "judge-key"
         assert worker.installed_agents.daytona_connection.api_key == "training-key"
         assert worker.installed_agents.eval_daytona_connection.api_key == "evaluation-key"
     finally:

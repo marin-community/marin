@@ -17,6 +17,7 @@ import pytest
 import yaml
 from iris.client.client import IrisClient
 from marin.execution.lazy import StepContext
+from rigging.secrets import SecretResolutionError
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
 from experiments.evaluation.micro210 import micro210_step
@@ -147,7 +148,7 @@ def test_regional_preflight_rejects_unreadable_prepared_inputs(tmp_path):
         {"inputs": {"validation_data": [{"uri": str(tmp_path / "unreadable"), "relative_path": "rollouts.parquet"}]}}
     )
     with pytest.raises(FileNotFoundError):
-        launch_validation.regional_preflight(document, (str(policy),))
+        launch_validation.regional_preflight(document, (str(policy),), required_secret_names=())
 
 
 @pytest.mark.timeout(120)
@@ -180,3 +181,45 @@ def test_judged_evaluation_forwards_configured_key_without_ambient_credentials(t
     assert environment.env_vars["DAYTONA_TARGET"] == "us"
     assert "DAYTONA_TARGET" not in environment.secrets
     assert "JUDGE_API_KEY" not in environment.env_vars
+
+
+def test_regional_cpu_gate_requires_every_phase_secret_before_worker_subprocess(tmp_path, monkeypatch):
+    launch = {
+        "inputs": {"validation_data": []},
+        "skyrl": {
+            "environment": {
+                "task_sessions": {
+                    "remote_judge": {"api_key_env": "JUDGE_TEST_KEY"},
+                    "daytona": {"api_key_env": "TRAIN_TEST_KEY", "eval_api_key_env": "EVAL_TEST_KEY"},
+                }
+            },
+            "terminal_bench": {
+                "harbor": {"daytona_api_key_env": "TRAIN_TEST_KEY", "eval_daytona_api_key_env": "EVAL_TEST_KEY"}
+            },
+            "trainer": {"callbacks": [{"type": "harbor_evaluation", "daytona_api_key_env": "CALLBACK_TEST_KEY"}]},
+        },
+    }
+    names = {
+        "CW_KEY_ID",
+        "CW_KEY_SECRET",
+        "HF_TOKEN",
+        "WANDB_API_KEY",
+        "JUDGE_TEST_KEY",
+        "TRAIN_TEST_KEY",
+        "EVAL_TEST_KEY",
+        "CALLBACK_TEST_KEY",
+    }
+    storage_names = {"CW_KEY_ID", "CW_KEY_SECRET", "HF_TOKEN", "WANDB_API_KEY"}
+    assert set(launch_validation.launch_secret_names(launch)) == names - storage_names
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+        if name != "EVAL_TEST_KEY":
+            (tmp_path / name).write_text("fixture-" + name)
+
+    def forbidden_subprocess(*args, **kwargs):
+        raise AssertionError("Worker subprocess started without the evaluation-org credential")
+
+    monkeypatch.setattr(launch_validation.subprocess, "run", forbidden_subprocess)
+    with pytest.raises(SecretResolutionError, match="EVAL_TEST_KEY"):
+        launch_validation.regional_preflight(yaml.safe_dump(launch), (), required_secret_names=tuple(storage_names))

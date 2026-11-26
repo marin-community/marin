@@ -18,6 +18,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.inference_clock import InferenceClock, current_inference_clock
 from rigging.redaction import redact_string
+from rigging.secrets import get_secret, require_secret
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, NoGrader, ReasoningMarkupPolicy
@@ -359,7 +360,7 @@ class RemoteJudgeSettings:
 
     def connection(self) -> JudgeConnection:
         """Resolve the judge credential on the rollout worker, outside task data."""
-        return JudgeConnection(self.base_url, os.environ[self.api_key_env])
+        return JudgeConnection(self.base_url, require_secret(self.api_key_env))
 
 
 class HarborSlots:
@@ -845,7 +846,11 @@ class TaskRolloutWorkerSpec:
             assert harbor is not None
             daytona_options = harbor.environment.kwargs
             daytona_connection = DaytonaConnection(
-                api_key=os.environ.get(daytona_options.get("api_key_env") or "DAYTONA_API_KEY"),
+                api_key=(
+                    require_secret(daytona_options["api_key_env"])
+                    if daytona_options.get("api_key_env")
+                    else get_secret("DAYTONA_API_KEY")
+                ),
                 api_url=os.environ.get("DAYTONA_API_URL", DEFAULT_DAYTONA_API_URL),
                 target=os.environ.get("DAYTONA_TARGET"),
             )
@@ -860,7 +865,7 @@ class TaskRolloutWorkerSpec:
                     daytona_connection,
                     # Inherit the training credential when eval has no separate binding.
                     api_key=(
-                        os.environ.get(daytona_options["eval_api_key_env"])
+                        require_secret(daytona_options["eval_api_key_env"])
                         if daytona_options.get("eval_api_key_env")
                         else daytona_connection.api_key
                     ),

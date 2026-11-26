@@ -19,6 +19,7 @@ from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import SkyRLCheckpointStorage, SkyRLPolicyModel, SkyRLRolePlan, SkyRLRunConfig, run_skyrl
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.secrets import require_secret
 from rigging.timing import Duration
 
 from experiments.evaluation.micro210 import ServingProfileName, micro210_artifact_step, registered_serving_profile
@@ -94,7 +95,12 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
 
 def run_validated(config: SkyRLRunConfig):
     """Use the existing real-agent CPU gate before the native GPU allocation."""
-    receipt = validate_before_allocation(config.launch_config_yaml, check_task_inputs=True, check_vocabulary=True)
+    receipt = validate_before_allocation(
+        config.launch_config_yaml,
+        secrets={name: require_secret(name) for name in CAMPAIGN_SECRET_NAMES},
+        check_task_inputs=True,
+        check_vocabulary=True,
+    )
     (StoragePath(config.output.resolved_config_uri).parent / "campaign-preflight.json").write_text(
         json.dumps(receipt, indent=2)
     )

@@ -691,9 +691,10 @@ def config_task_environment(config: DictConfig) -> dict[str, str]:
         out[str(k)] = str(v)
     if config.runtime.entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT:
         for backend in ("remote_judge", "daytona"):
-            key_env = OmegaConf.select(config, f"skyrl.environment.task_sessions.{backend}.api_key_env")
-            if key_env is not None:
-                out[key_env] = require_secret(key_env)
+            settings = OmegaConf.select(config, f"skyrl.environment.task_sessions.{backend}", default={}) or {}
+            for field in ("api_key_env", "eval_api_key_env"):
+                if (key_env := settings.get(field)) is not None:
+                    out[key_env] = require_secret(key_env)
         for callback in OmegaConf.select(config, "skyrl.trainer.callbacks", default=[]) or []:
             if callback.get("type") == "harbor_evaluation":
                 key_env = callback["daytona_api_key_env"]
