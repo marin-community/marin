@@ -42,10 +42,10 @@ class Sampling(Section):
     decay: int | float = field(0.95)
     "per-step multiplicative decay of observations"
     epsilon: int | float = field(0.05)
-    """adaptive-source and prompt-thompson reserve this fraction for reference shares. Within-source cost-aware
-    policies explore within the scheduled source. The pass variant explores its least-visited eligible prompts.
-    adaptive-source-thompson, thompson,
-    learnability and grade-prior floor each bin at epsilon / bin count before renormalization."""
+    """adaptive-source and unconstrained prompt-thompson use reference shares for this fraction of their draws.
+    Within-source cost-aware policies explore within the scheduled source. The pass variant explores among that
+    source's least-visited eligible prompts. adaptive-source-thompson, thompson, learnability and grade-prior
+    floor each bin at epsilon / bin count before renormalization."""
     reversion_mass: int | float = field(0.0)
     "bin curriculum pseudo-evidence per step toward the weight-curve peak"
     instance_decay: int | float = field(0.7)
