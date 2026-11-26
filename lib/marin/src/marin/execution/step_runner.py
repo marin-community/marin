@@ -32,12 +32,11 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
-    FINGERPRINT_KEY,
+    EXECUTOR_INFO_FILENAME,
     STEP_RUNNER_EXECUTOR_VERSION,
-    VERSION_KEY,
     StepRecordIdentity,
     check_drift,
-    is_mutable_version,
+    is_mutable_step,
     write_step_record,
 )
 from marin.execution.remote import RemoteCallable, sanitize_job_name
@@ -88,7 +87,7 @@ def _write_executor_info(step: StepSpec) -> None:
     ``STEP_RUNNER_EXECUTOR_VERSION`` so ``read_record`` ignores it as a record source and never
     mistakes the stub for a completed cache (#6836).
     """
-    info_path = os.path.join(step.output_path, ".executor_info")
+    info_path = os.path.join(step.output_path, EXECUTOR_INFO_FILENAME)
     fs = url_to_fs(info_path, use_listings_cache=False)[0]
     if fs.exists(info_path):
         return
@@ -112,6 +111,13 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _cached_step_is_ready(step: StepSpec, status: str | None) -> bool:
+    if step.read_only or status != STATUS_SUCCESS or is_mutable_step(step):
+        return False
+    check_drift(step)
+    return True
+
+
 def step_is_built(step: StepSpec) -> bool:
     """True when the runner will serve ``step`` from cache rather than rebuild it.
 
@@ -122,11 +128,8 @@ def step_is_built(step: StepSpec) -> bool:
     node. A mutable (``dev``) artifact always rebuilds. A read-only input always
     checks that its source exists. Both are excluded from cache pruning.
     """
-    if step.read_only:
-        return False
-    if step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")):
-        return False
-    return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
+    status = StatusFile(step.output_path, worker_id="cache-check").status
+    return _cached_step_is_ready(step, status)
 
 
 def _expand_unseen(
@@ -301,9 +304,8 @@ class StepRunner:
             cascades to dependents) so a rerun rebuilds it and its now-unpruned inputs.
             """
             path = step.output_path
-            mutable = check_drift(step)
             status = StatusFile(path, worker_id="check").status
-            if status == STATUS_SUCCESS and not mutable:
+            if _cached_step_is_ready(step, status):
                 logger.info(f"Skip {step.name_with_hash}: already succeeded (pruned subtree)")
                 completed.add(path)
             else:
@@ -361,11 +363,8 @@ class StepRunner:
             return None
 
         if not step.read_only:
-            # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
-            mutable = check_drift(step)
-
             status = StatusFile(output_path, worker_id="check").status
-            if status == STATUS_SUCCESS and not mutable:
+            if _cached_step_is_ready(step, status):
                 logger.info(f"Skip {step_name}: already succeeded")
                 return None
 
@@ -437,11 +436,10 @@ def run_step(step: StepSpec) -> None:
             raise FileNotFoundError(f"{step_label}: no artifact at {output_path}")
         return
 
-    # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
-    mutable = check_drift(step)
-
     # 1. Cache check
+    mutable = is_mutable_step(step)
     if not mutable and check_cache(output_path):
+        check_drift(step)
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
@@ -469,6 +467,8 @@ def run_step(step: StepSpec) -> None:
                 status_file.write_status(STATUS_FAILED)
                 raise
     except StepAlreadyDone:
+        if not mutable:
+            check_drift(step)
         logger.info(f"Step {step_label} completed by another worker")
 
 
