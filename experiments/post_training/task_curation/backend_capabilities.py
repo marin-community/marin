@@ -52,6 +52,7 @@ from taskcompendium.models import EnvironmentRequirements
 from taskcompendium.runtime.resources import resource_bytes
 
 from experiments.post_training.task_curation.catalog_identity import canonical_backend_survey, canonical_snapshot_source
+from experiments.post_training.task_curation.toolchain_binding import resolved_toolchain_image
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 SUPPORT_ORDER = (Support.SUPPORTED, Support.VERIFY, Support.PARTIAL, Support.UNSUPPORTED)
@@ -314,6 +315,24 @@ def source_map(
                     if value is not None:
                         low, high = ranges[role].get(name, (value, value))
                         ranges[role][name] = (min(low, value), max(high, value))
+        # A lock-only role binds its composed toolchain image exactly as the serving wave
+        # does (lock_satisfied_by_image, 047bc68189): the stored HostImage source is the
+        # freeze-time fallback, and the binding makes image backends (Daytona) candidates
+        # while the role's disk quota rides the machine spec's own storage sizing. The
+        # task bytes, requirements and grader semantics never change; only the machine
+        # source the role runs from does. The reported demands stay the declaration's.
+        bound_images: dict[str, str] = {}
+        for role in demands:
+            declared = task.get("environment_requirements") if role == "agent" else task["grader"]["environment"]
+            requirements = EnvironmentRequirements.model_validate(declared)
+            if (
+                requirements.packages_lock is not None
+                and requirements.docker_image is None
+                and requirements.docker_build is None
+            ):
+                image = resolved_toolchain_image(requirements.packages_lock)
+                if image is not None:
+                    bound_images[role] = image
         for backend, check in checkers.items():
             outcomes: list[FitSupport] = []
             for role in ("agent", "grader"):
@@ -363,6 +382,18 @@ def source_map(
                     errors[backend][f"{role}: {error}"] += 1
                     outcomes.append(FitSupport.UNSUPPORTED)
                     continue
+                bound = bound_images.get(role)
+                if bound is not None and isinstance(spec.source, HostImage):
+                    # The binding replaces the freeze-time host fallback with the composed
+                    # digest-pinned toolchain image; the machine-source demands become the
+                    # registry image the role now runs from — the image bakes the lock, so
+                    # both the host-image and packages-lock demands resolve into it.
+                    spec = replace(spec, source=RegistryImage(bound), lock_satisfied_by_image=True)
+                role_needs = demands[role]
+                if bound is not None:
+                    role_needs = {Requirement.DOCKER_IMAGE} | (
+                        set(role_needs) - {Requirement.HOST_IMAGE, Requirement.PACKAGES_LOCK}
+                    )
                 kind = environment_kind(spec.source)
                 if cells[backend, kind].support == Support.UNSUPPORTED:
                     role_counts[backend][role][FitSupport.NOT_APPLICABLE] += 1
@@ -374,8 +405,8 @@ def source_map(
                     continue
                 if backend == "local":
                     spec = replace(spec, memory_mb=None)
-                status = combined_support(cells[backend, need].support for need in demands[role])
-                for need in demands[role]:
+                status = combined_support(cells[backend, need].support for need in role_needs)
+                for need in role_needs:
                     # VERIFY demands are pending live evidence, not failures; the
                     # role's fit carries the VERIFY verdict and admission gates
                     # wait on the live qualification instead of blocking here.
