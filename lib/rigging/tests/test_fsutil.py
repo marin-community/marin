@@ -286,8 +286,7 @@ def test_verified_copy_promotes_gcs_objects_whose_copy_changes_the_etag(tmp_path
     assert (destination / "weights.bin").read_bytes() == b"abcdefghij"
     manifest = json.loads((destination / COMPLETION_MANIFEST).read_text())
     assert manifest["files"][0]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
-    staging = destination / f"{STAGING_SUFFIX}"
-    assert not staging.exists()
+    assert not (Path(f"{destination}{STAGING_SUFFIX}") / "weights.bin").exists()
 
 
 @pytest.mark.parametrize("reverse", [False, True])
