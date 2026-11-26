@@ -1,0 +1,31 @@
+schema_version: 1
+code: ml-rl-loop-vocabulary
+lane: prose
+title: RL loop name conflicts with the current glossary
+minimum_confidence: 0.7
+prompt: |-
+  **Why it's bad:** The RL loop uses closely related concepts such as task entry,
+  rollout group job, attempt, rollout, training sample, lease, and training batch.
+  A name that means something else in the current RL Loop Glossary makes code and
+  pull request descriptions harder to review and can hide an incorrect boundary.
+
+  Use the **Current RL Loop Glossary** supplied in this lane's prompt as the
+  source of truth, including its proposed strikethrough replacements. Check new
+  or changed identifiers, metrics, comments, documentation, and the supplied PR
+  title and description. Confirm the underlying concept from the change before
+  emitting a finding. State the glossary term and the conflicting term in the
+  message. The prose lane receives the current doc text at review time, so
+  do not infer a replacement from a memorized or older copy.
+
+  **When allowed:** Generic terms in unrelated code; a physical table or tensor
+  `row`; a `prompt` that really is the input to one inference request; a quoted
+  old name in a migration explanation or example; unchanged legacy names outside
+  the diff. The glossary's proposed names are advisory, so do not flag a choice
+  merely because it differs from a proposal when the change explains a distinct
+  concept or an explicit naming decision.
+
+  **Bad examples:** A new `RolloutTask` carrying one lease and all repetitions of
+  one task entry calls a rollout group job a task. A new `wait=slot` metric for
+  waiting on the rollout buffer's lease uses the old telemetry name. A PR
+  description says "four inference requests" when its example has four attempts
+  and five inference requests.

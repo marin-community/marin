@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from infra import linter
+from infra.lint.rl_glossary import GlossarySource, glossary_from_document
 
 
 @pytest.fixture
@@ -98,3 +99,84 @@ def test_review_uses_callers_agent_with_readonly_permissions(
 def test_review_reports_failure_when_agent_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     assert linter.run_lint_review(linter.LintReviewAgent.CODEX) == 1
+
+
+def test_review_includes_current_glossary_and_draft_pr_text_in_prose_lane(
+    review_workspace: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+):
+    agents, _ = review_workspace
+    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("RL Loop Glossary", "rev-1", "~~Old~~ New"))
+    workspace = agents.parent
+    body_file = workspace / "pr-body.md"
+    body_file.write_text("First line\nSecond line\n")
+
+    assert (
+        linter.run_lint_review(
+            linter.LintReviewAgent.CODEX,
+            lane_names=["prose"],
+            agent_executable=agents / "codex",
+            pr_title="Draft title",
+            pr_body_file=body_file,
+        )
+        == 0
+    )
+    prompts = list((workspace / "logs").glob("*/**/prose/prompt.md"))
+    assert len(prompts) == 1
+    prompt = prompts[0].read_text()
+    assert '"title": "Draft title"' in prompt
+    assert '"body": "First line\\nSecond line\\n"' in prompt
+    assert "PR_TITLE:1" in prompt
+    assert "PR_BODY:<line>" in prompt
+    assert "Content SHA: rev-1" in prompt
+    assert "~~Old~~ New" in prompt
+
+
+def test_review_includes_published_pr_text_in_prose_lane(
+    review_workspace: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+):
+    agents, _ = review_workspace
+    workspace = agents.parent
+    gh = workspace / "bin" / "gh"
+    gh.write_text('#!/bin/sh\nprintf \'%s\\n\' \'{"title":"Published title","body":"Published description"}\'\n')
+    gh.chmod(0o755)
+    monkeypatch.setenv("MARIN_REVIEW_PR_NUMBER", "123")
+    monkeypatch.setattr(linter, "fetch_glossary", lambda: GlossarySource("RL Loop Glossary", "rev-1", "terms"))
+
+    assert (
+        linter.run_lint_review(
+            linter.LintReviewAgent.CODEX,
+            lane_names=["prose"],
+            agent_executable=agents / "codex",
+        )
+        == 0
+    )
+    prompt = next((workspace / "logs").glob("*/**/prose/prompt.md")).read_text()
+    assert '"title": "Published title"' in prompt
+    assert '"body": "Published description"' in prompt
+
+
+def test_glossary_preserves_proposed_renames_from_google_doc():
+    document = {
+        "title": "RL Loop Glossary",
+        "tabs": [
+            {
+                "documentTab": {
+                    "body": {
+                        "content": [
+                            {
+                                "paragraph": {
+                                    "elements": [
+                                        {"textRun": {"content": "RolloutTask", "textStyle": {"strikethrough": True}}},
+                                        {"textRun": {"content": " RolloutGroupJob\n"}},
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        ],
+    }
+
+    glossary = glossary_from_document(document)
+    assert glossary.text == "~~RolloutTask~~ RolloutGroupJob"

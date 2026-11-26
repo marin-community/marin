@@ -6,7 +6,9 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "click",
+#     "google-auth",
 #     "pyyaml",
+#     "requests",
 # ]
 # ///
 """
@@ -1020,6 +1022,12 @@ def _get_check_name(check) -> str:
     type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=pathlib.Path),
     help="With --review, use this agent installation instead of looking on PATH. Review flags remain runner-controlled.",
 )
+@click.option("--pr-title", help="With --review, draft PR title to inspect before publication.")
+@click.option(
+    "--pr-body-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
+    help="With --review, draft PR description to inspect before publication.",
+)
 @click.option(
     "--lint-lane",
     "lint_lanes",
@@ -1045,6 +1053,8 @@ def main(
     review: bool,
     calling_agent: LintReviewAgent | None,
     agent_executable: pathlib.Path | None,
+    pr_title: str | None,
+    pr_body_file: pathlib.Path | None,
     lint_lanes: tuple[str, ...],
     lint_compose: bool,
     files_opt: tuple[str, ...],
@@ -1061,6 +1071,8 @@ def main(
                 lane_names=list(lint_lanes) or None,
                 compose=lint_compose,
                 agent_executable=agent_executable,
+                pr_title=pr_title,
+                pr_body_file=pr_body_file,
             )
         )
 
