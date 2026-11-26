@@ -17,6 +17,7 @@ from experiments.post_training.task_curation.datasets import (
     facet_terminal,
     hierarchy_intake,
     native_releases,
+    nemo_mcqa,
     nemo_structured,
     repair_releases,
     structure_closure,
@@ -207,6 +208,7 @@ R41_PENDING_SOURCE_IDS = (
         "Nvidia:Nemotron-RL-agent-workplace_assistant",
         # The instruction-hierarchy admission (c42f355d09) also landed after the freeze.
         "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
+        "Nemotron:Nemotron-RL-knowledge-mcqa",
     }
 )
 
@@ -224,6 +226,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *endless.cohort_source(),
     *pymethods2test.sources(),
     *workplace.sources(),
+    *nemo_mcqa.sources(),
     *hierarchy_intake.sources(),
     *(
         source
@@ -307,6 +310,7 @@ def configured_sources() -> list[RlDataSource]:
         *nemo_structured.sources(),
         *hierarchy_intake.sources(),
         *workplace.sources(),
+        *nemo_mcqa.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
         *ifbench.sources(),
         *openresearcher.sources(),

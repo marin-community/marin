@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "755c22b9db87349536d2798137ead5fbae54bd56",
-  "path": "experiments/post_training/task_curation/datasets/sample_qc_receipts_facet_hold_20261125_v1/part-002.json",
-  "sha256": "dab31a28cf435c8881b5871355758d2714fcd5614da49784b99073ff5be6deab"
+  "revision": "604da05f5a280743b5652403760d52484c710865",
+  "path": "experiments/post_training/task_curation/datasets/sample_qc_receipts_mcqa_20261125_b_v1/part-002.json",
+  "sha256": "1b958afa2bbbdc347d80268130a07b86f04a8e4e20d93329fa9124bf2648a616"
 }
