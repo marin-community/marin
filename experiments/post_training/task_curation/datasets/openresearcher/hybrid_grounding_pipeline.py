@@ -171,6 +171,7 @@ async def hybrid_grounded_rows(
     output: StoragePath,
 ) -> list[dict]:
     work = Path(config.workdir)
+    server_log = open(work / "search-server.log", "wb")  # noqa: SIM115 - lives as long as the subprocess
     process = await asyncio.create_subprocess_exec(
         config.runtime_python,
         "-m",
@@ -191,6 +192,7 @@ async def hybrid_grounded_rows(
         "5",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
+        stderr=server_log,
         limit=16 * 1024 * 1024,
     )
     lock = asyncio.Lock()
@@ -208,6 +210,8 @@ async def hybrid_grounded_rows(
     try:
         return await screen_population(rows, connection, tokenizer, retrieve, output, config.concurrency)
     finally:
+        server_log.close()
+        (output / "search-server.log").write_text((work / "search-server.log").read_text(errors="replace")[-20000:])
         process.stdin.close()
         try:
             await asyncio.wait_for(process.wait(), timeout=30)
@@ -215,7 +219,8 @@ async def hybrid_grounded_rows(
             process.kill()
             await process.wait()
         if process.returncode != 0:
-            raise RuntimeError(f"Grounding retrieval process failed: exit={process.returncode}")
+            tail = (work / "search-server.log").read_text(errors="replace")[-2000:]
+            raise RuntimeError(f"Grounding retrieval process failed: exit={process.returncode}; tail: {tail}")
 
 
 def load_questions(config: HybridGroundingConfig, index: HybridIndex) -> list[dict]:
