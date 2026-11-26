@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-import select
+import selectors
 import signal
 import subprocess
 import sys
@@ -934,25 +934,37 @@ def run_skyrl_cpu(
     deadline = None if timeout is None else monotonic() + timeout
     with (
         tempfile.TemporaryFile() as stdout,
+        selectors.DefaultSelector() as diagnostics,
         subprocess.Popen(
             command, stdout=stdout, stderr=subprocess.PIPE, env=environment, start_new_session=True
         ) as process,
     ):
         pipe = process.stderr
+        assert pipe is not None
+        diagnostics.register(pipe, selectors.EVENT_READ)
         tail = b""
 
-        def read_diagnostics(wait: float) -> None:
-            nonlocal pipe, tail
-            if pipe is None:
+        def read_diagnostics(wait: float) -> bool:
+            nonlocal tail
+            if not diagnostics.get_map():
                 sleep(wait)
-            elif select.select([pipe], [], [], wait)[0]:
-                data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
-                if data:
-                    tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
-                    if stream_stderr:
-                        sys.stderr.write(data.decode(errors="replace"))
-                else:
-                    pipe = None
+                return False
+            if not diagnostics.select(wait):
+                return False
+            data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
+            if not data:
+                diagnostics.unregister(pipe)
+                return False
+            tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
+            if stream_stderr:
+                sys.stderr.write(data.decode(errors="replace"))
+            return True
+
+        def drain_diagnostics() -> None:
+            # A descendant may still hold the pipe open after the launcher exits.
+            drain_until = monotonic() + 0.25
+            while monotonic() < drain_until and read_diagnostics(0):
+                pass
 
         try:
             while process.poll() is None:
@@ -975,14 +987,14 @@ def run_skyrl_cpu(
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
             if isinstance(error, subprocess.TimeoutExpired):
-                read_diagnostics(0)
+                drain_diagnostics()
                 error.stderr = tail
             raise
         returncode = process.wait()
         if returncode:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-        read_diagnostics(0)
+        drain_diagnostics()
         stdout.seek(0)
         return subprocess.CompletedProcess(
             command, returncode, stdout.read().decode(errors="replace"), tail.decode(errors="replace")

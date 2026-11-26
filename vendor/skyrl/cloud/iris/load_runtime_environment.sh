@@ -31,7 +31,7 @@ load_runtime_environment() {
         return 1
         ;;
     esac
-    export "$name=$value"
+    export "$name=$value" || return
   done < "$1" || return
   if [[ -n "$record" ]]; then
     echo "Unterminated SkyRL runtime assignment" >&2
