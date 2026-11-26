@@ -921,7 +921,10 @@ def test_megatron_worker_batches_match_driver_update(tmp_path, pp, cp):
     with safe_open(model_path / "model.safetensors", framework="pt", device="cpu") as checkpoint:
         parameter_names = list(checkpoint.keys())
     cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=1)
-    cfg.trainer.policy.megatron_config.context_parallel_size = cp
+    megatron = cfg.trainer.policy.megatron_config
+    megatron.context_parallel_size = cp
+    if cp > 1:
+        megatron.transformer_config_kwargs = {"cp_comm_type": "all_gather"}
     cfg.trainer.policy.megatron_config.moe_router_replay = True
     with open_dict(cfg.generator.engine_init_kwargs):
         cfg.generator.engine_init_kwargs.enable_return_routed_experts = True
