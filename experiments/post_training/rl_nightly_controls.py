@@ -110,6 +110,15 @@ def _read_submission(path: StoragePath) -> rl_publication.ControlSubmission | No
     return submission
 
 
+def _job_state(client: IrisClient, job: JobName) -> JobState | None:
+    try:
+        return client.job_state(job)
+    except ConnectError as error:
+        if error.code != Code.NOT_FOUND:
+            raise
+        return None
+
+
 def _job_was_interrupted(client: IrisClient, job: JobName) -> bool:
     try:
         status = client.job_status(job)
@@ -136,14 +145,19 @@ def _control_was_interrupted(
     client: IrisClient, coordinator: JobName, receipt: AttemptRecord, coordinator_interrupted: bool
 ) -> bool:
     result = receipt.native.result
-    if not result.state.is_terminal:
-        # Iris can kill a child when its coordinator fails. Use the coordinator's cause.
-        return receipt.interruption is not None and coordinator_interrupted
     job_id = result.iris_job_id or receipt.iris_job_id
-    if result.state == LaunchState.FAILED and job_id is not None:
-        job = JobName.from_wire(job_id)
-        return job.root_job == coordinator and _job_was_interrupted(client, job)
-    return False
+    job = JobName.from_wire(job_id) if job_id else coordinator
+    if job.root_job != coordinator:
+        return False
+    if result.state.is_terminal:
+        return result.state == LaunchState.FAILED and job != coordinator and _job_was_interrupted(client, job)
+    # A parent failure can kill its children. An already failed child retains its failure state.
+    if receipt.interruption is None or not coordinator_interrupted:
+        return False
+    state = _job_state(client, job) if job != coordinator else None
+    if state == JobState.WORKER_FAILED:
+        return _job_was_interrupted(client, job)
+    return state not in {JobState.FAILED, JobState.UNSCHEDULABLE}
 
 
 def _publish_submission(
@@ -168,26 +182,19 @@ def _publish_submission(
         or any(run.parent != prefix.parent or not run.name.startswith(prefix.name) for run in runs)
     ):
         raise ValueError(f"Control submission for {model}/{preset.name} has a foreign job or output")
-    missing = False
-    try:
-        state = client.job_state(job)
-    except ConnectError as error:
-        if error.code != Code.NOT_FOUND:
-            raise
+    state = _job_state(client, job)
+    if state is None and submission.recorded_at is not None:
         # A submit RPC can outlast its caller. Keep its handoff until the grace expires.
-        if submission.recorded_at is not None:
-            grace_end = submission.recorded_at.astimezone(UTC) + _SUBMISSION_GRACE
-            if datetime.now(UTC) < grace_end:
-                print(
-                    f"Pending record {pending_file}: Iris job {job} not found yet. "
-                    f"Grace ends at {grace_end.isoformat()}.",
-                    flush=True,
-                )
-                return _Observation.WAITING
-        missing = True
-        state = JobState.FAILED
+        grace_end = submission.recorded_at.astimezone(UTC) + _SUBMISSION_GRACE
+        if datetime.now(UTC) < grace_end:
+            print(
+                f"Pending record {pending_file}: Iris job {job} not found yet. "
+                f"Grace ends at {grace_end.isoformat()}.",
+                flush=True,
+            )
+            return _Observation.WAITING
 
-    if not is_job_finished(state):
+    if state is not None and not is_job_finished(state):
         visible = [
             rl_publication.publish_running(output, preset, table, submission.job, None, published)
             for output in submission.outputs
@@ -212,7 +219,7 @@ def _publish_submission(
         not _control_was_interrupted(client, job, receipt, coordinator_interrupted)
         for receipt in outcome.ineligible_controls
     )
-    if not outcome.attempts and not missing:
+    if not outcome.attempts and state is not None:
         failed = not coordinator_interrupted
     if pending_file is not None:
         pending_file.rm()

@@ -531,6 +531,7 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         ("durable-nonterminal", 1),
         ("failed-coordinator-nonterminal", 1),
         ("evicted-coordinator-nonterminal", 0),
+        ("evicted-coordinator-failed-child-nonterminal", 1),
     ],
 )
 def test_nightly_recovers_pending_controls(
@@ -558,11 +559,7 @@ def test_nightly_recovers_pending_controls(
         return states[str(job)]
 
     def job_status(job):
-        if str(job) == previous:
-            return SimpleNamespace(state=states[previous], task_state_counts={}, error_message="Evicted")
-        assert str(job) == f"{previous}/training"
-        state = JobState.KILLED if scenario == "failed-coordinator-nonterminal" else JobState.SUCCEEDED
-        return SimpleNamespace(state=state, task_state_counts={}, error_message="")
+        return SimpleNamespace(state=states[str(job)], task_state_counts={}, error_message="Evicted")
 
     def submit(command, *, env):
         key = (command[command.index("--preset") + 1], command[command.index("--control") + 1])
@@ -587,6 +584,11 @@ def test_nightly_recovers_pending_controls(
         states[previous] = {
             "failed-coordinator-nonterminal": JobState.FAILED,
             "evicted-coordinator-nonterminal": JobState.WORKER_FAILED,
+            "evicted-coordinator-failed-child-nonterminal": JobState.WORKER_FAILED,
+        }.get(scenario, JobState.SUCCEEDED)
+        states[f"{previous}/training"] = {
+            "failed-coordinator-nonterminal": JobState.KILLED,
+            "evicted-coordinator-failed-child-nonterminal": JobState.FAILED,
         }.get(scenario, JobState.SUCCEEDED)
     if scenario == "failed-before-preparation":
         states[previous] = JobState.FAILED
@@ -636,7 +638,7 @@ def test_nightly_recovers_pending_controls(
         assert rows["partial"].failed_facts == ["missing_terminal_receipt"]
         assert tick("later") == 0
         assert "missing_terminal_receipt" not in capsys.readouterr().out
-    if "coordinator-nonterminal" in scenario:
+    if scenario.endswith("nonterminal") and scenario != "legacy-nonterminal":
         assert rows["partial"].status == "failed"
         assert rows["partial"].failed_facts == ["coordinator_interrupted"]
 
