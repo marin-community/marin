@@ -21,6 +21,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
+from experiments.post_training.task_curation import native_source_conversion
 from experiments.post_training.task_curation.calibration_inventory import task_blockers
 from experiments.post_training.task_curation.harbor_cohort_conversion import CohortConversionRejected
 from experiments.post_training.task_curation.native_source_conversion import (
@@ -142,3 +143,24 @@ def test_convert_native_source_row_refuses_when_blockers_remain():
     stripped = task.model_copy(update={"resources": task.resources.model_copy(update={"oracle": ()})})
     with pytest.raises(CohortConversionRejected):
         convert_native_source_row(stripped, input_task_sha256=task_spec_sha256(task), resolve=_resolve)
+
+
+def test_resolve_base_digest_caches_per_process():
+    """A cohort's tasks share bases; one registry resolution serves every row."""
+    native_source_conversion._DIGEST_CACHE.clear()
+    calls = []
+
+    def counting_resolve(reference: str) -> str:
+        calls.append(reference)
+        return PINS[reference]
+
+    original = native_source_conversion._resolve_base_digest
+    native_source_conversion._resolve_base_digest = counting_resolve
+    try:
+        assert native_source_conversion.resolve_base_digest("python:3.9-bookworm") == PINS["python:3.9-bookworm"]
+        assert native_source_conversion.resolve_base_digest("python:3.9-bookworm") == PINS["python:3.9-bookworm"]
+        assert native_source_conversion.resolve_base_digest("ubuntu:22.04") == PINS["ubuntu:22.04"]
+    finally:
+        native_source_conversion._resolve_base_digest = original
+        native_source_conversion._DIGEST_CACHE.clear()
+    assert calls == ["python:3.9-bookworm", "ubuntu:22.04"]

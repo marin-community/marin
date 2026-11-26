@@ -165,15 +165,27 @@ def _docker_hub_repo(name: str) -> str:
     return name if "/" in name else f"library/{name}"
 
 
+_DIGEST_CACHE: dict[str, str] = {}
+
+
 def resolve_base_digest(reference: str) -> str:
     """Resolve one base image reference to its digest-pinned form via the registry.
 
     ``registry-1.docker.io`` serves Docker Hub (official images under ``library/``);
     any other host is its own registry with the same v2 API. An already
-    digest-pinned reference passes through unchanged.
+    digest-pinned reference passes through unchanged. Resolutions cache per
+    process: a cohort's tasks share bases, and the shared registries rate-limit.
     """
     if re.fullmatch(DOCKER_IMAGE_PATTERN, reference):
         return reference
+    if reference in _DIGEST_CACHE:
+        return _DIGEST_CACHE[reference]
+    pinned = _resolve_base_digest(reference)
+    _DIGEST_CACHE[reference] = pinned
+    return pinned
+
+
+def _resolve_base_digest(reference: str) -> str:
     registry_host = DOCKER_HUB_REGISTRY
     name = reference
     if "://" in reference or reference.startswith(("docker.io/", "registry-1.docker.io/")):
