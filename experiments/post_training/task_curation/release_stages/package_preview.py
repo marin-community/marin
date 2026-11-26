@@ -29,6 +29,7 @@ from infra.marina.apps.rl_data_catalog.prepare_preview import prepare_preview
 
 PACKAGE_DIR_NAME = "preview-package"
 PACKAGE_RECEIPT_NAME = "preview-package-receipt.json"
+STAGED_INPUTS_DIR_NAME = "staged-inputs"
 PROVENANCE_MEMBERS = ("dist", "bundled-model-provenance.json")
 REMOTE_SCHEMES = ("gs://", "s3://", "mirror://", "memory://")
 
@@ -114,13 +115,20 @@ def planned_package_root(output_root: str, repo_root: Path) -> Path:
     return root
 
 
-def staged_path(ref: ArtifactRef | None, name: str) -> Path | None:
-    """Resolve a sealed input to its readable local file for ``prepare_preview``."""
+def staged_input(ref: ArtifactRef | None, name: str, staging_dir: Path) -> Path | None:
+    """Copy one sealed input's digest-verified bytes to a local file for ``prepare_preview``.
+
+    Plans pin these inputs at object-store URIs while ``prepare_preview`` reads local
+    files, so every input is staged beside the package, never read in place.
+    """
     if ref is None:
         return None
-    path = Path(ref.uri)
-    if not path.is_file():
-        raise ValueError(f"{name} must be a readable local file for packaging: {ref.uri}")
+    raw = StoragePath(ref.uri).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != ref.sha256:
+        raise ValueError(f"sealed reference digest mismatch: {ref.uri}")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    path = staging_dir / f"{name}.json"
+    path.write_bytes(raw)
     return path
 
 
@@ -173,11 +181,12 @@ def run_package_preview(
                 inputs.release_id, "package_preview", {"mode": mode, "package": str(package_root)}, alert_feeds
             )
             return proof
+        staging_dir = Path(inputs.output_root) / STAGED_INPUTS_DIR_NAME
         prepare_preview(
             checkout=repo_root,
             output=package_root,
-            oracle_inventory=staged_path(inputs.oracle_inventory, "oracle inventory"),
-            source_counts=staged_path(inputs.source_counts, "source counts"),
+            oracle_inventory=staged_input(inputs.oracle_inventory, "oracle-inventory", staging_dir),
+            source_counts=staged_input(inputs.source_counts, "source-counts", staging_dir),
         )
         provenance = _packaged_provenance(package_root)
         if provenance is not None and provenance.get("source_revision") != inputs.source_revision:

@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, source_display_name, source_identifier
+from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import Backend, NetworkPolicy, UnsupportedMachineSpec
@@ -412,14 +413,31 @@ def _package_inputs(tmp_path: Path, revision: str, **overrides) -> package_previ
     return package_preview.PackagePreviewInputs(**defaults)
 
 
+def _seal_object_store_json(name: str, document: Any) -> ArtifactRef:
+    raw = json.dumps(document).encode()
+    uri = f"memory://package-inputs/{name}"
+    StoragePath(uri).write_bytes(raw, auto_mkdir=True)
+    return ArtifactRef(uri=uri, sha256=hashlib.sha256(raw).hexdigest())
+
+
 def test_package_preview_write_stages_package_and_seals_receipt(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     revision = _init_repo(repo)
-    inputs = _package_inputs(tmp_path, revision)
+    # Plans pin the inputs at object-store URIs; prepare_preview reads local files.
+    oracle_document = {"schema_version": 2, "rows": []}
+    counts_document = {"sources": []}
+    inputs = _package_inputs(
+        tmp_path,
+        revision,
+        oracle_inventory=_seal_object_store_json("oracle-inventory.json", oracle_document),
+        source_counts=_seal_object_store_json("source-counts.json", counts_document),
+    )
     staged: list[tuple[Path, Path, Path | None, Path | None]] = []
 
     def fake_prepare(checkout, output, oracle_inventory=None, source_counts=None):
         staged.append((checkout, Path(output), oracle_inventory, source_counts))
+        assert json.loads(oracle_inventory.read_bytes()) == oracle_document
+        assert json.loads(source_counts.read_bytes()) == counts_document
         dist = Path(output) / "dist"
         dist.mkdir(parents=True)
         (dist / "bundled-model-provenance.json").write_text(
@@ -429,7 +447,8 @@ def test_package_preview_write_stages_package_and_seals_receipt(tmp_path, monkey
     monkeypatch.setattr(package_preview, "prepare_preview", fake_prepare)
     proof = package_preview.run_package_preview(inputs, dry_run=False, repo_root=repo, feeds=_feeds(tmp_path))
     planned = tmp_path / "release" / "package" / "preview-package"
-    assert staged == [(repo, planned, Path(inputs.oracle_inventory.uri), Path(inputs.source_counts.uri))]
+    staged_inputs = tmp_path / "release" / "package" / package_preview.STAGED_INPUTS_DIR_NAME
+    assert staged == [(repo, planned, staged_inputs / "oracle-inventory.json", staged_inputs / "source-counts.json")]
     receipt = json.loads((tmp_path / "release" / "package" / "preview-package-receipt.json").read_text())
     assert receipt["kind"] == package_preview.receipt_kind(RELEASE_ID)
     assert receipt["package"]["uri"] == str(planned)
