@@ -70,8 +70,8 @@ from experiments.post_training.task_curation.task_store import (
     TASK_JSON_COLUMN,
     TASK_SPEC_COLUMN,
     ReleasedFile,
+    admitted_task_files,
     curated_rows,
-    curated_task_files,
 )
 
 SELECTION_PREFIX = "rl-data/task-selection"
@@ -447,7 +447,7 @@ def _admitted_records(source: SelectionInput) -> Iterator[tuple[TaskSpec, str]]:
         raise ValueError(f"Selection requires SAMPLE/FULL curation: {source.source_id}")
     if manifest["intended_use"] != IntendedUse.TRAIN:
         raise ValueError(f"Selection source is not a training population: {source.source_id}")
-    for path in curated_task_files(source.root):
+    for path in admitted_task_files(source.root, manifest):
         for _, task_json in curated_rows(path):
             yield TaskSpec.model_validate_json(task_json), task_json
 

@@ -47,7 +47,13 @@ def curated_source(root: Path, *shards: list[str]) -> ArtifactStep:
     """A curation artifact whose final/ shards hold the given task IDs; normalize/ holds an unadmitted task."""
     (root / "final").mkdir(parents=True)
     (root / "normalize").mkdir()
-    (root / "manifest.json").write_text(json.dumps({"intended_use": "train", "mode": "full"}))
+    manifest = {
+        "intended_use": "train",
+        "mode": "full",
+        "datasets": {"final": str(root / "final")},
+        "admission_counts": {"admitted": sum(map(len, shards))},
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest))
     for index, identifiers in enumerate(shards):
         rows = [{"task_id": identifier, "task_json": task(identifier).model_dump_json()} for identifier in identifiers]
         pq.write_table(pa.Table.from_pylist(rows), root / f"final/part-{index:05d}.parquet")
@@ -118,3 +124,19 @@ def test_store_refuses_sources_whose_pins_changed(tmp_path):
     (tmp_path / "math/manifest.json").write_text(json.dumps({"intended_use": "train", "mode": "sample"}))
     with pytest.raises(ValueError, match="Curated source manifest changed after the task store pinned it"):
         store.select_sources("fixture:math").to_dataset()
+
+
+def test_store_reads_the_admitted_files_its_manifest_records_and_refuses_missing_ones(tmp_path):
+    source = curated_source(tmp_path / "math", ["m1", "m2"])
+    moved = tmp_path / "expiring/final"
+    moved.parent.mkdir()
+    (tmp_path / "math/final").rename(moved)
+    manifest = json.loads((tmp_path / "math/manifest.json").read_text())
+    (tmp_path / "math/manifest.json").write_text(json.dumps({**manifest, "datasets": {"final": str(moved)}}))
+    store = resolve(task_store_step("fixture", "2026.11.26.1", curated={"fixture:math": source}, released={}))
+
+    assert [row.task_id for row in read(store, tmp_path)] == ["m1", "m2"]
+    for path in moved.iterdir():
+        path.unlink()
+    with pytest.raises(ValueError, match="admitted 2 tasks"):
+        store.to_dataset()

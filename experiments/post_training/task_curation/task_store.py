@@ -13,7 +13,7 @@ import io
 import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import pyarrow.parquet as pq
 from marin.execution.artifact import Artifact, read_record
@@ -59,9 +59,10 @@ class CuratedSource(BaseModel):
     """SHA-256 of the artifact's canonical ``manifest.json``. The ``final/`` files are not hashed."""
 
     def task_files(self) -> tuple[str, ...]:
-        if manifest_sha256(self.root) != self.manifest_sha256:
+        manifest = read_manifest(self.root)
+        if canonical_sha256(manifest) != self.manifest_sha256:
             raise ValueError(f"Curated source manifest changed after the task store pinned it: {self.root}")
-        return curated_task_files(self.root)
+        return admitted_task_files(self.root, manifest)
 
     def rows(self, source_id: str, path: str) -> Iterator[TaskRow]:
         for task_id, task_json in curated_rows(path):
@@ -181,13 +182,30 @@ def task_store_path(name: str, version: str) -> str:
     return prefix_join(marin_prefix(), f"{TASK_STORE_PREFIX}/{name}/{version}")
 
 
+def read_manifest(root: str) -> dict[str, Any]:
+    return json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text())
+
+
 def manifest_sha256(root: str) -> str:
-    return canonical_sha256(json.loads((StoragePath(root) / MANIFEST_FILENAME).read_text()))
+    return canonical_sha256(read_manifest(root))
 
 
-def curated_task_files(root: str) -> tuple[str, ...]:
-    """The admitted task files of a curation artifact, in name order."""
-    return tuple(str(path) for path in sorted((StoragePath(root) / "final" / "*.parquet").glob(), key=str))
+def admitted_task_files(root: str, manifest: Mapping[str, Any]) -> tuple[str, ...]:
+    """The admitted task files that a curation artifact's manifest records, in name order.
+
+    Recipe curation records its views under ``datasets`` and its counts under
+    ``admission_counts``; a prebuilt import keeps ``final/`` under its root and counts
+    ``admitted_rows``. Raises when the manifest counts admitted tasks but their files are
+    gone, as happens when the prefix that held them expired.
+    """
+    datasets = manifest.get("datasets")
+    final = datasets["final"] if datasets is not None else str(StoragePath(root) / "final")
+    files = tuple(str(path) for path in sorted((StoragePath(final) / "*.parquet").glob(), key=str))
+    counts = manifest.get("admission_counts")
+    admitted = counts.get("admitted", 0) if counts is not None else manifest["admitted_rows"]
+    if admitted and not files:
+        raise ValueError(f"{root} admitted {admitted} tasks, but {final} holds no task files")
+    return files
 
 
 def curated_rows(path: str) -> Iterator[tuple[str, str]]:

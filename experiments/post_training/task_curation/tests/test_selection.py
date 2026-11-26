@@ -176,7 +176,13 @@ def recipe(tmp_path: Path) -> SelectionRecipe:
 def admitted_source(root: Path, tasks: list[TaskSpec], intended_use: str = "train", mode: str = "full") -> ArtifactStep:
     (root / "final").mkdir(parents=True)
     (root / "normalize").mkdir()
-    (root / "manifest.json").write_text(json.dumps({"intended_use": intended_use, "mode": mode}))
+    manifest = {
+        "intended_use": intended_use,
+        "mode": mode,
+        "datasets": {"final": str(root / "final")},
+        "admission_counts": {"admitted": len(tasks)},
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest))
     pq.write_table(
         pa.Table.from_pylist([{"task_id": task.id, "task_json": task.model_dump_json()} for task in tasks]),
         root / "final/part-00000.parquet",
