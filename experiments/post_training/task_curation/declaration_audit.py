@@ -20,6 +20,8 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from finestore.rl.status_taxonomy import SourceStatus
+
 from experiments.post_training.task_curation.ensure_current_projections import (
     PROJECTION_WAIVER_CONFIG,
     DeclarationPin,
@@ -469,6 +471,20 @@ def audit_replacement_links() -> list[str]:
     return findings
 
 
+def exempt_unmeasured_sources(sources: dict) -> frozenset[str]:
+    """The sources the projection audit raises no census demand for (ruling 2026-11-26).
+
+    Exactly the sources that are Excluded with an empty retained population: they have no
+    derived-contract or curriculum projection to bind. Every other unmeasured source —
+    Available, Pending, Deprecated, or any source with tasks — still reports.
+    """
+    return frozenset(
+        source.info.id
+        for source in sources.values()
+        if source.status is SourceStatus.EXCLUDED and (source.info.count or 0) == 0
+    )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -522,12 +538,17 @@ def main() -> None:
         )
         for source_id, source in sources.items()
     ]
+    # Ruling 2026-11-26: a source that is Excluded with an empty retained population has
+    # no derived-contract or curriculum projection to bind, so the audit raises no actor
+    # census demand for it; every other unmeasured source (Available, Pending, or any
+    # source with tasks) still reports and the audit keeps failing closed on real gaps.
     selection = atlas_catalog_selection()
     projection_findings, projection_notes = projection_gaps(
         projection_pins,
         atlas_contract_receipts(),
         atlas_curriculum_rows(),
         served_pins=served_pin_map(served_declaration_pins(selection)),
+        exempt_unmeasured=exempt_unmeasured_sources(sources),
     )
     if atlas_catalog_selection() != selection:
         raise ValueError("Catalog selection changed during declaration audit; retry")

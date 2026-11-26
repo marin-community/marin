@@ -111,6 +111,29 @@ def test_an_unmeasured_source_is_reported_not_failed():
     assert len(notes) == 2
 
 
+def test_an_excluded_source_with_an_empty_population_is_exempt_from_the_census_demand():
+    """Ruling 2026-11-26: an Excluded source whose retained population is empty has no
+    derived-contract or curriculum projection to bind, so the audit raises no demand."""
+    gaps, notes = projection_gaps(
+        [declaration(measured=False)],
+        {},
+        {},
+        exempt_unmeasured=frozenset({"Test:source"}),
+    )
+    assert gaps == []
+    assert notes == []
+
+
+def test_an_unmeasured_source_outside_the_exemption_still_reports():
+    """The exemption covers exactly Excluded-with-empty-population sources: an unmeasured
+    source that is Available/Pending or carries tasks keeps its census demand."""
+    other = declaration(source_id="Test:nonempty", measured=False)
+    gaps, notes = projection_gaps([other], {}, {}, exempt_unmeasured=frozenset({"Test:source"}))
+    assert gaps == []
+    assert len(notes) == 2
+    assert all("Test:nonempty" in note for note in notes)
+
+
 def test_a_stale_served_catalog_is_its_own_gap():
     source = declaration()
     served = DeclarationPin(

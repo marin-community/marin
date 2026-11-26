@@ -8,6 +8,7 @@ import sys
 from dataclasses import replace
 
 import pytest
+from finestore.rl.status_taxonomy import SourceStatus
 
 from experiments.post_training.task_curation import declaration_audit, ensure_current_projections
 from experiments.post_training.task_curation import sources as sources_module
@@ -295,10 +296,8 @@ def waived_audit_cli(monkeypatch, tmp_path):
     monkeypatch.setattr(
         declaration_audit,
         "atlas_catalog_selection",
-        lambda: (
-            ensure_current_projections.CatalogSelection(
-                "https://marina.example", "preview", "lagging", refresh_sealed=False
-            )
+        lambda: ensure_current_projections.CatalogSelection(
+            "https://marina.example", "preview", "lagging", refresh_sealed=False
         ),
     )
     monkeypatch.setattr(declaration_audit, "atlas_contract_receipts", lambda: {})
@@ -459,3 +458,30 @@ def test_only_a_passing_strict_finalizer_records_the_refresh_seal(waived_audit_c
     assert receipt["refresh_sealed"] is True
     assert receipt["waived_projection_count"] == 0
     assert receipt["waiver_scope"] is None
+
+
+def test_the_census_demand_exemption_names_exactly_excluded_empty_sources():
+    """Ruling 2026-11-26: the projection audit exempts exactly Excluded sources whose
+    retained population is empty; any other status or a nonempty population stays
+    inside the census demand."""
+
+    class Source:
+        def __init__(self, source_id, status, count):
+            self.info = type("Info", (), {"id": source_id, "count": count})()
+            self._status = status
+
+        @property
+        def status(self):
+            return self._status
+
+    sources = {
+        "Test:zero-excluded": Source("Test:zero-excluded", SourceStatus.EXCLUDED, 0),
+        "Test:none-excluded": Source("Test:none-excluded", SourceStatus.EXCLUDED, None),
+        "Test:excluded-with-tasks": Source("Test:excluded-with-tasks", SourceStatus.EXCLUDED, 2574),
+        "Test:pending-empty": Source("Test:pending-empty", SourceStatus.PENDING, 0),
+        "Test:available-empty": Source("Test:available-empty", SourceStatus.AVAILABLE, 0),
+        "Test:deprecated-empty": Source("Test:deprecated-empty", SourceStatus.DEPRECATED, 0),
+    }
+    assert declaration_audit.exempt_unmeasured_sources(sources) == frozenset(
+        {"Test:zero-excluded", "Test:none-excluded"}
+    )
