@@ -14,6 +14,8 @@ from omegaconf import OmegaConf
 from skyrl_train.dataset.tasks import canonical_task_spec
 from taskcompendium.models import NoGrader, TaskSpec
 
+POOL_BATCH_SIZE = 64
+
 
 def bind_runtime(row: dict, environment: dict) -> dict:
     """Lower the unchanged task through the native adapter, retaining published sizing."""
@@ -45,6 +47,19 @@ def bind_runtime(row: dict, environment: dict) -> dict:
     return {**row, "task_rollout_spec": lowered.model_dump_json()}
 
 
+def lower_parquet(source: Path, output: Path, environment: dict) -> None:
+    """Lower bounded batches without retaining a second copy of the whole cohort."""
+    parquet = pq.ParquetFile(source)
+    schema = parquet.schema_arrow
+    index = schema.get_field_index("task_rollout_spec")
+    field = pa.field("task_rollout_spec", pa.string())
+    schema = schema.set(index, field) if index >= 0 else schema.append(field)
+    with pq.ParquetWriter(output, schema, compression="zstd") as writer:
+        for batch in parquet.iter_batches(batch_size=POOL_BATCH_SIZE):
+            rows = [bind_runtime(row, environment) for row in batch.to_pylist()]
+            writer.write_table(pa.Table.from_pylist(rows, schema=schema))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
@@ -54,9 +69,4 @@ if __name__ == "__main__":
     environment = OmegaConf.to_container(
         load_launch_config(arguments.environment).skyrl.environment.task_sessions.task_spec, resolve=True
     )
-    rows = pq.read_table(arguments.source).to_pylist()
-    pq.write_table(
-        pa.Table.from_pylist([bind_runtime(row, environment) for row in rows]),
-        arguments.output,
-        compression="zstd",
-    )
+    lower_parquet(arguments.source, arguments.output, environment)

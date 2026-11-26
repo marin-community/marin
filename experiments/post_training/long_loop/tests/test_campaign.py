@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import json
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import yaml
@@ -23,10 +24,11 @@ from experiments.post_training.long_loop.campaign_data import (
     CampaignMix,
     load_mix,
     partition_mix,
+    partition_parquets,
     retained_task,
     write_parquet,
 )
-from experiments.post_training.long_loop.campaign_runtime import bind_runtime
+from experiments.post_training.long_loop.campaign_runtime import bind_runtime, lower_parquet
 from experiments.post_training.long_loop.execution_policy import RlStopping, rl_training_callbacks
 from experiments.post_training.long_loop.round_runner import adopted_round_rl, load_round
 from experiments.post_training.task_curation.curriculum_manifest import curriculum_from_manifest
@@ -98,6 +100,63 @@ def test_cross_source_holdout_leakage_is_rejected():
     rows = [{"task_spec": json.dumps({"id": f"shared-{i}"})} for i in range(180)]
     with pytest.raises(ValueError, match="Cross-source holdout leakage"):
         partition_mix(mix, {"first": rows, "second": rows}, "2026.11.26.501")
+
+
+def test_batched_pool_preparation_preserves_the_original_split_and_literal_rows(tmp_path):
+    pins = {
+        label: {
+            "catalog_status": "Available",
+            "name": label,
+            "version": "3",
+            "repo": f"tests/{label}",
+            "revision": "a" * 40,
+            "url": "https://example.org/pin",
+            "recipe": "atlas:fixture/retained@3",
+            "route": "nonagentic",
+        }
+        for label in ("first", "second")
+    }
+    mix = CampaignMix("v2-fixture", pins, "b" * 64, "c" * 64)
+    defaults = REFERENCE.parents[4] / "vendor/skyrl/skyrl-train/skyrl_train/config/task_session_config/default.yaml"
+    environment = yaml.safe_load(defaults.read_text())["task_spec"]
+    paths, rows = {}, {}
+    for label in pins:
+        rows[label] = []
+        for index in range(180):
+            task = arithmetic_task().model_copy(update={"id": f"{label}-{index}"})
+            encoded = task.model_dump_json()
+            rows[label].append(
+                {
+                    "task_spec": encoded,
+                    "task_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+                    "runtime": "{}",
+                    f"{label}_metadata": None if index < 64 else f"kept-{index}",
+                }
+            )
+        original = tmp_path / f"{label}.parquet"
+        pq.write_table(pa.Table.from_pylist(rows[label]), original)
+        paths[label] = tmp_path / f"{label}-lowered.parquet"
+        lower_parquet(original, paths[label], environment)
+        expected = [bind_runtime(row, environment) for row in rows[label]]
+        assert pq.read_table(paths[label]).to_pylist() == expected
+        rows[label] = expected
+    reference = partition_mix(mix, rows, "2026.11.26.532")
+    destination = tmp_path / "published"
+    destination.mkdir()
+    manifest = partition_parquets(mix, paths, "2026.11.26.532", StoragePath(str(destination)))
+    assert manifest["curriculum"] == reference.curriculum.identity
+    assert manifest["validation"] == validation_payload(reference.curriculum.validation)
+    for label, name in manifest["training_files"].items():
+        assert pq.read_table(destination / name).to_pylist() == reference.training[label]
+    expected_held = {row["task_sha256"]: row for row in reference.validation}
+    held = pq.read_table(destination / "validation.parquet").to_pylist()
+    assert len(held) == 200
+    for row in held:
+        assert {key: value for key, value in row.items() if value is not None} == {
+            key: value for key, value in expected_held[row["task_sha256"]].items() if value is not None
+        }
+    for name, digest in manifest["files"].items():
+        assert hashlib.sha256((destination / name).read_bytes()).hexdigest() == digest
 
 
 def test_retained_checksum_uses_published_json_bytes_without_reserializing():
