@@ -42,6 +42,7 @@ from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from skyrlrecipe import RecipePatch, declared, sections
 from skyrlrecipe.documents import merge_mappings, set_path
 from taskcompendium.models import (
     AnswerType,
@@ -451,6 +452,64 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     summary.write_text(json.dumps(content))
     with pytest.raises(click.BadParameter, match="AI-judge"):
         snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
+
+
+def test_authored_learning_budget_survives_composition_and_stops_after_optimizer_start(selection, tmp_path):
+    table = snowball_model.SNOWBALL
+    preset = table.by_name["train-long"]
+    callback = declared.WallTimeBudgetCallback(type="wall_time_budget", seconds=100, drain_margin=20, groups_per_step=64)
+    preset = replace(
+        preset,
+        recipe=replace(
+            preset.recipe,
+            config=preset.recipe.config.merge(RecipePatch(trainer=sections.Trainer(callbacks=(callback,)))),
+        ),
+    )
+    spec = recipe.run_spec(preset, name="learning-budget", model_name=table.model)
+    path = tmp_path / "budget.yaml"
+    path.write_text(spec.config_yaml)
+    result = native_json()(
+        """
+import asyncio, json, sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+from omegaconf import OmegaConf
+from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import create_callback_from_config
+
+path = Path(sys.argv[1])
+config = OmegaConf.load(path)
+config.trainer.export_path = str(path.parent)
+handler = CallbackHandler([create_callback_from_config(row) for row in config.trainer.callbacks])
+trainer = SimpleNamespace(cfg=config, first_optimizer_step_time=None)
+control = TrainerControl()
+async def event(name, step, **kwargs):
+    await handler.call_event_async(name, TrainerState(step, 0, 100, 100), control, trainer=trainer, **kwargs)
+asyncio.run(event("on_train_begin", 7))
+with patch("skyrl_train.callbacks.builtin.time.monotonic", return_value=100000):
+    asyncio.run(event("on_log", 7, logs={}))
+startup = control.should_training_stop
+assert not (path.parent / "training-budget.json").exists()
+trainer.first_optimizer_step_time = 1000.0
+with patch("skyrl_train.callbacks.builtin.time.monotonic", return_value=1099):
+    asyncio.run(event("on_log", 8, logs={}))
+before = control.should_training_stop
+with patch("skyrl_train.callbacks.builtin.time.monotonic", return_value=1105):
+    asyncio.run(event("on_log", 9, logs={}))
+print(json.dumps({"startup_stop": startup, "before_stop": before,
+                  "expired_stop": control.should_training_stop,
+                  "receipt": json.loads((path.parent / "training-budget.json").read_text())}))
+""",
+        [str(path)],
+    )
+    assert not result["startup_stop"]
+    assert not result["before_stop"]
+    assert result["expired_stop"]
+    assert result["receipt"]["elapsed_seconds"] == 105
+    assert result["receipt"]["completed_steps"] == 2
+    assert result["receipt"]["additional_updates_at_observed_rate"] == 0
+    assert result["receipt"]["consumed_groups_per_hour"] == pytest.approx(128 * 3600 / 105)
 
 
 @pytest.mark.parametrize("retry_budget", [None, 0, 3], ids=["default-retry", "disabled-retry", "custom-retry"])

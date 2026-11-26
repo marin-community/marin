@@ -96,6 +96,16 @@ retention period recorded by its run.
 Use the run's resolved launch document to export its best committed native
 checkpoint, including after an early stop.
 
+An RL preset may supply an explicit `trainer.callbacks` list; the shared runner
+preserves that list instead of generating checkpoint and evaluation callbacks.
+Include every required checkpoint, evaluation, selection, and export callback
+in an explicit list. A `wall_time_budget` callback stops at a completed update
+after `seconds` have elapsed since the first optimizer completion. Startup is
+excluded; later validation and checkpoint work count toward the budget. The
+callback records `drain_margin` and throughput in `training-budget.json`; it
+does not impose a separate finalization deadline. Use the outer Iris job
+timeout to bound startup and finalization.
+
 ```bash
 uv run --isolated --frozen --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
   --launch-config ./training-launch.yaml --recover-best

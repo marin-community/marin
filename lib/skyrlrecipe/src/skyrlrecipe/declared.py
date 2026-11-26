@@ -120,6 +120,13 @@ class DistillationTokenBudgetCallback(Section):
     token_budget: PositiveInt
 
 
+class WallTimeBudgetCallback(Section):
+    type: Literal["wall_time_budget"]
+    seconds: PositiveInt
+    drain_margin: NonNegativeInt
+    groups_per_step: PositiveInt
+
+
 class EvaluationCoverage(Section):
     expected_tasks: PositiveInt
     minimum_scored_tasks: NonNegativeInt
@@ -213,6 +220,7 @@ Callback = Annotated[
     CheckpointCallback
     | BestCheckpointCallback
     | DistillationTokenBudgetCallback
+    | WallTimeBudgetCallback
     | EvaluationCallback
     | ReferenceLikelihoodCallback
     | HFModelSaveCallback

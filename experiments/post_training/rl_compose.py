@@ -109,7 +109,6 @@ _DERIVED_RECIPE_KEYS = frozenset(
         "trainer.resume_mode",
         "trainer.dump_eval_results",
         "trainer.placement",
-        "trainer.callbacks",
         "trainer.ckpt_interval",
         "trainer.checkpoint_retention",
         "trainer.checkpoint_keep_every",
@@ -124,7 +123,11 @@ _DERIVED_RECIPE_KEYS = frozenset(
         "generator.inference_engine_expert_parallel_size",
     }
 )
-RUNNER_KEYS = _DERIVED_RECIPE_KEYS | {"generator.trajectory_retention", "generator.run_engines_locally"}
+RUNNER_KEYS = _DERIVED_RECIPE_KEYS | {
+    "trainer.callbacks",
+    "generator.trajectory_retention",
+    "generator.run_engines_locally",
+}
 _GATED_KEYS = frozenset(
     {
         "trainer.max_steps",
@@ -647,12 +650,16 @@ def run_spec(
     config = config.merge(
         RecipePatch(
             trainer=sections.Trainer(
-                callbacks=workload.callbacks(
-                    preset,
-                    chosen[0] if chosen else None,
-                    profiles,
-                    expected_tasks,
-                    initial_model_uri,
+                callbacks=(
+                    config.trainer.callbacks
+                    if "callbacks" in authored.get("trainer", {})
+                    else workload.callbacks(
+                        preset,
+                        chosen[0] if chosen else None,
+                        profiles,
+                        expected_tasks,
+                        initial_model_uri,
+                    )
                 ),
             )
         )
