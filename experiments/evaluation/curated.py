@@ -14,6 +14,7 @@ from evalrecords.records import (
     CuratedRef,
     CuratedSettings,
     EvalRef,
+    EvaluationOverrides,
     EvaluationSelection,
     PromptFormat,
     ResolvedEvaluationSelection,
@@ -134,6 +135,18 @@ def declared_task_evidence(selection: ResolvedEvaluationSelection) -> TaskEviden
     return TaskEvidence.EMBEDDED
 
 
+def selection_run(selection: EvaluationSelection, protocol: ResolvedEvaluationSelection) -> EvaluationOverrides:
+    defaults = tuple(source.config.run_defaults for source in selected_sources(protocol) if source.config is not None)
+    if not defaults or all(value is None for value in defaults):
+        return selection.run
+    first = defaults[0]
+    if first is None or any(value != first for value in defaults):
+        raise ValueError(f"{selection.benchmark} corpora declare different run defaults")
+    return EvaluationOverrides.model_validate(
+        {**first.model_dump(exclude_unset=True), **selection.run.model_dump(exclude_unset=True)}
+    )
+
+
 def runs_agent(selection: ResolvedEvaluationSelection) -> bool:
     return any(
         source.config is not None and source.config.protocol.operation == OperationKind.AGENT_EPISODE
@@ -233,6 +246,7 @@ def settings_for(
     concurrency_bounds = [bound for bound in (model.evaluation_num_concurrent, run.concurrency) if bound is not None]
     return CuratedSettings(
         concurrency=min(concurrency_bounds, default=DEFAULT_EVALUATION_CONCURRENCY),
+        max_attempts=run.max_attempts,
         max_tokens=run.max_tokens,
         source_limit=limit if limit is not None else run.limit,
         seed=explicit_seed if explicit_seed is not None else default_seed,

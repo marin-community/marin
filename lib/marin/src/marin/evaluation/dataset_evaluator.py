@@ -186,7 +186,9 @@ class DatasetEvaluator:
         if Backend.DAYTONA in machine_backends(config):
             secrets[DAYTONA_API_KEY] = env_vars[DAYTONA_API_KEY]
         job = iris_ctx().client.submit(
-            entrypoint=Entrypoint.from_callable(run_worker, self.datasets, output_dir, config, DEFAULT_MAX_ATTEMPTS),
+            entrypoint=Entrypoint.from_callable(
+                run_worker, self.datasets, output_dir, config, self.settings.max_attempts or DEFAULT_MAX_ATTEMPTS
+            ),
             name=f"curated-eval-{uuid.uuid4().hex[:8]}",
             resources=ResourceSpec(cpu=8, memory="12g", disk="64g"),
             environment=EnvironmentSpec(

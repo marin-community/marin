@@ -28,6 +28,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import prefix_join
 from rigging.secrets import COREWEAVE_SECRET_NAMES, get_secret
 
+from experiments.evaluation.benchmarks.micro210 import print_pooled_score
 from experiments.evaluation.curated import load_evaluations
 from experiments.evaluation.evals import EvaluationDefinition, HarborDefinition, resolve_evaluations
 from experiments.evaluation.launch import (
@@ -397,7 +398,7 @@ def launch(
             click.echo(f"  {evaluation.run_id}  ({group.model_name} / {evaluation.eval_name})")
         if no_wait:
             return
-        if not wait_and_report([group]):
+        if not wait_and_report([group], report_group=print_pooled_score):
             raise click.ClickException("one or more evaluations failed or wrote no record")
 
 
@@ -410,8 +411,10 @@ def scores(runs: tuple[str, ...]) -> None:
     ``gs://marin-eval-metadata/evals/<run_id>``.
     """
     configure_coreweave_s3()
-    for run in runs:
-        print_record(read_record(run if run.endswith(RECORD_FILE) else prefix_join(run, RECORD_FILE)))
+    records = [
+        print_record(read_record(run if run.endswith(RECORD_FILE) else prefix_join(run, RECORD_FILE))) for run in runs
+    ]
+    print_pooled_score(records)
 
 
 def main() -> None:

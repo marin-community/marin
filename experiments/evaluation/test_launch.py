@@ -19,6 +19,7 @@ from evalrecords.records import (
     CuratedAgentRef,
     EvaluationSelection,
     RunStatus,
+    TaskCoverage,
     TaskEvidence,
     TaskMachineBackend,
     TaskMachineSettings,
@@ -27,6 +28,7 @@ from iris.client.client import IrisClient
 from iris.cluster.client import remote_client
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation.hardware import Platform
+from marin.evaluation.model_config import AgentConfig
 from marin.evaluation.runner import (
     EvaluationBatch,
     EvaluationError,
@@ -42,6 +44,7 @@ from taskcompendium.evaluation.spec import PiAgent
 import experiments.evaluation.launch as launch_module
 import experiments.evaluation.policy_finalization as policy_module
 from experiments.evaluation.benchmark import fixed_benchmarks
+from experiments.evaluation.benchmarks import micro210
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.cli import cli
 from experiments.evaluation.curated import load_evaluations
@@ -49,6 +52,7 @@ from experiments.evaluation.evals import DAYTONA_SECRET_ENV, HarborDefinition, r
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_steps, prepare_evaluation_batch
 from experiments.evaluation.models import models
 from experiments.post_training.task_curation.harbor_hub import REGISTRY_HOST
+from tests.rl.micro210_fixture import policy_fixture_reference
 
 
 @pytest.fixture
@@ -740,6 +744,36 @@ def _agent_model():
         serve=replace(model.serve, max_model_len=32768),
         generation=replace(model.generation, max_gen_toks=8192),
     )
+
+
+@pytest.mark.parametrize(("pi_scored", "reward"), [(94, "reward 0.3917"), (50, "(requires 90%)")])
+def test_micro210_scores_pool_rows_after_coverage_floor(tmp_path, monkeypatch, pi_scored, reward):
+    monkeypatch.setattr(micro210, "POLICY_REFERENCE", policy_fixture_reference())
+    model = replace(_agent_model(), agent=AgentConfig(agent_kwargs={"thinking_format": "chat-template"}))
+    spec = replace(_pipeline_spec(tmp_path), model=model, evals=resolve_evaluations("micro210"))
+    batch = prepare_evaluation_batch(spec)
+    paths = []
+    for evaluation, (population, scored, mean) in zip(
+        batch.evaluations, ((340, 340, 0.5), (94, pi_scored, 0.0)), strict=True
+    ):
+        name = evaluation.identity.eval_ref.name
+        paths.append(
+            _record(
+                batch,
+                evaluation.identity,
+                RunStatus.SUCCEEDED,
+                None,
+                {name: {"reward": mean}},
+                {},
+                {},
+                coverage={name: TaskCoverage(n_benchmark=population, n_attempted=population, n_scored=scored)},
+            )
+        )
+    result = CliRunner().invoke(cli, ["scores", *paths])
+    assert result.exit_code == 0, result.output
+    summary = next(line for line in result.output.splitlines() if line.startswith(f"{batch.group_id}  micro210 "))
+    assert f"scored {340 + pi_scored}/434" in summary
+    assert reward in summary
 
 
 @pytest.fixture

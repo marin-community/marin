@@ -21,6 +21,7 @@ from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelCo
 from marin.evaluation.task_worker import (
     DAYTONA_API_KEY,
     DAYTONA_EGRESS,
+    DEFAULT_MAX_ATTEMPTS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
     DaytonaConnection,
@@ -92,11 +93,19 @@ def submitted(monkeypatch) -> dict:
     return request
 
 
-@pytest.mark.parametrize("track", ["frontierscience-olympiad", "frontierscience-research"])
-def test_frontierscience_worker_receives_named_judge(track, tmp_path, created, submitted):
+@pytest.mark.parametrize(
+    ("track", "attempts", "worker_attempts"),
+    [("frontierscience-olympiad", None, DEFAULT_MAX_ATTEMPTS), ("frontierscience-research", 1, 1)],
+)
+def test_frontierscience_worker_receives_named_judge_and_retry_budget(
+    track, attempts, worker_attempts, tmp_path, created, submitted
+):
+    (selected,) = resolve_evaluations(track)
+    if attempts is not None:
+        selected = selected.model_copy(update={"run": selected.run.model_copy(update={"max_attempts": attempts})})
     spec = LaunchSpec(
         model=MODEL,
-        evals=resolve_evaluations(track),
+        evals=(selected,),
         platform=Platform.GPU,
         accelerator="H100x1",
         limit=1,
@@ -110,8 +119,9 @@ def test_frontierscience_worker_receives_named_judge(track, tmp_path, created, s
         SESSION, str(tmp_path), {JUDGE_API_KEY: "fixture-key"}, backend_state=lambda: InferenceBackendState.READY
     )
 
-    _, (datasets, _, config, _), _ = submitted["entrypoint"].resolve()
+    _, (datasets, _, config, max_attempts), _ = submitted["entrypoint"].resolve()
     assert len(datasets) == 1
+    assert max_attempts == worker_attempts
     assert evaluation.identity.eval_ref.name == track
     assert submitted["environment"].secrets[JUDGE_API_KEY] == "fixture-key"
     assert submitted["environment"].secrets[JUDGE_ENDPOINT] == "https://api.together.xyz/v1"

@@ -92,6 +92,7 @@ from experiments.evaluation.curated import (
     resolve_selection,
     runs_agent,
     selected_sources,
+    selection_run,
     settings_for,
 )
 from experiments.evaluation.evals import (
@@ -313,6 +314,7 @@ def _resolve_definitions(
             protocol = resolve_selection(
                 definition, PromptFormat.CHAT if model.apply_chat_template else PromptFormat.COMPLETION
             )
+            definition = definition.model_copy(update={"run": selection_run(definition, protocol)})
             settings = settings_for(
                 definition, protocol, model, limit, seed, default_seed, task_machine_backend, task_evidence
             )

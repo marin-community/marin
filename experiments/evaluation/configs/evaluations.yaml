@@ -11,6 +11,17 @@ judges:
     - env:TOGETHER_API_KEY
     - gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
 evaluations:
+  # The sealed Micro210 protocol supplies judge and task-machine settings.
+  micro210-chat:
+    benchmark: micro210-chat
+  micro210-pi:
+    benchmark: micro210-pi
+  micro210-chat-smoke:
+    benchmark: micro210-chat
+    protocol: smoke
+  micro210-pi-smoke:
+    benchmark: micro210-pi
+    protocol: smoke
   aime24-smoke:
     benchmark: aime24
     run:
@@ -271,6 +282,12 @@ evaluations:
     benchmark: aime-agent
     protocol: terminus-2
 suites:
+  micro210:
+  - micro210-chat
+  - micro210-pi
+  micro210-smoke:
+  - micro210-chat-smoke
+  - micro210-pi-smoke
   smoke:
   - mmlu-smoke
   - gsm8k-smoke

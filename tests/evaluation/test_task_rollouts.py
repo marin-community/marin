@@ -1308,7 +1308,7 @@ def publish_episodes(tmp_path, questions, agent, convert=convert_episode_row):
         benchmark="episodes",
         version="1",
         operation="agent_episode",
-        sampling=Sampling(temperature=0.7, top_p=None, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}),
+        sampling=Sampling(temperature=0.7, top_p=0.95, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}),
         trials=TrialPolicy(count=1, seed=3),
         metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
         primary_metric="accuracy",
@@ -1475,11 +1475,14 @@ async def test_task_machines_read_only_host_variables_the_run_supplies(tmp_path,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agent", [PiAgent(), MiniSweAgent()], ids=lambda agent: agent.kind)
-async def test_agents_that_send_their_own_request_options_reach_the_model_without_the_protocols(
-    tmp_path, run_config, agent
-):
+async def test_agent_requests_keep_explicit_sampling_and_fill_missing_values(tmp_path, run_config, agent):
     corpus = publish_episodes(tmp_path, ("episode/solve",), agent)
     requests = []
+    messages = ({"role": "user", "content": "Solve."},)
+
+    async def run_agent(_context, complete):
+        await complete(Prompt(messages, {"temperature": None, "top_p": 0.8, "max_tokens": 7}))
+        await complete(Prompt(messages, {"temperature": 0.0, "max_tokens": 6}))
 
     async def model(request):
         requests.append(request)
@@ -1494,12 +1497,13 @@ async def test_agents_that_send_their_own_request_options_reach_the_model_withou
         config,
         model,
         machine_factories={"shellsim": ShellSimMachineFactory()},
-        # The shell harness stands in for the agent: its requests carry only its tools.
-        harnesses={agent.kind: lambda _agent, _budget: ShellHarness(command_timeout=None)},
+        harnesses={agent.kind: lambda _agent, _budget: AgentHarness(run_agent)},
     )
 
-    [request] = requests
-    assert set(request.options) == {"tools"}
+    assert [request.options for request in requests] == [
+        {"temperature": 0.7, "top_p": 0.8, "max_tokens": 7},
+        {"temperature": 0.0, "top_p": 0.95, "max_tokens": 6},
+    ]
 
 
 @pytest.mark.asyncio
