@@ -1417,6 +1417,23 @@
       "reasons": []
     },
     {
+      "id": "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
+      "display_name": "AllenAI \u00b7 Dolci-Think-SFT-Clean-v2/precise-if",
+      "status": "Pending",
+      "origin": "AllenAI",
+      "upstream_dataset": "Dolci-Think-SFT-Clean-v2",
+      "upstream_url": null,
+      "notes": "TRAIN Precise IF subset only. New declared prompt-only MEDIUM checklist judge (MiniMax-M3); the SFT export has no original scorer, native oracle or executable constraint metadata. Generated SFT assistant answers remain private provenance, never judge gold. Source user prompts and all retained TaskSpec/runtime bytes are preserved. Standard lexical retention removed eight of 132,159 input rows; no within-source duplicates. Canonical static retention covers all 132,151 current-pin tasks under the no-oracle policy, with executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 99/100, found 14 issues and one unavailable; Result some_issues. Contradictory prompts, ambiguous counting/format requirements and all individual findings remain verbatim in the SAMPLE receipt. The content survey classifies all ten measured neighbors distinct. The nearest IFBench pair has directional near-neighbor rates 0.415039%/0.952148% and exact fractions 0.031782%/0.038802%; these remain measured reuse evidence. Quality never vetoes admission. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/132151; global schema rejections 132151/132151, paths {'integrity_contract': 132151, 'grader.verifyit': 132151}. This records loader and launch binding, not a live MiniMax API response or executable-grader qualification. Explicit source model and judge settings remain unchanged. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/dolci-precise-if/2026.11.25.1/final-pin-sample-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/dolci-precise-if/2026.11.25.1/admission-evidence-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/dolci-precise-if/2026.11.25.1/consumer-binding-v1/result.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
       "id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
       "display_name": "TaskTrove \u00b7 tasktrove-competitive-coding-rebuilt-v1",
       "status": "Pending",

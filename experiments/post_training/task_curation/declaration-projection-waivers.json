@@ -5,6 +5,7 @@
   "reason": "source declared after the sealed refresh; served-catalog projection pending; ruling 2026-11-20",
   "rule": "post-seal-declaration-missing-served-projection",
   "source_ids": [
+    "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
     "FACET-Terminal:FACET-Terminal/FACET-Terminal-Tasks-6k",
     "FWeindel:validated-tasks/endless",
     "FWeindel:validated-tasks/facet_v2",

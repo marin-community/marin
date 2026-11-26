@@ -14,6 +14,7 @@ from experiments.post_training.task_curation.datasets import (
     backfill_releases,
     campaign_releases,
     crosscode_python_repair,
+    dolci_precise_if_admitted,
     facet_terminal,
     hierarchy_intake,
     native_releases,
@@ -208,6 +209,7 @@ R41_PENDING_SOURCE_IDS = (
         "Nvidia:Nemotron-RL-agent-workplace_assistant",
         # The instruction-hierarchy admission (c42f355d09) also landed after the freeze.
         "Nvidia:Nemotron-System-User-Instruction-Hierarchy-v1",
+        "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
         # The native TaskTrove structured-output cohort qualified after the R40 freeze.
         "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
@@ -230,6 +232,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *workplace.sources(),
     *nemo_mcqa.sources(),
     *hierarchy_intake.sources(),
+    *dolci_precise_if_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -312,6 +315,7 @@ def configured_sources() -> list[RlDataSource]:
         *nemotron_ultra.sources(),
         *nemo_structured.sources(),
         *hierarchy_intake.sources(),
+        *dolci_precise_if_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),
         *(source for source in cascade.sources() if source.info.subset in CASCADE_RETAINED_SUBSETS),
