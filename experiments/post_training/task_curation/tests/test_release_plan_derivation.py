@@ -24,6 +24,11 @@ from marin.execution.artifact import ArtifactRecord, result_type_name, write_rec
 from taskcompendium.backend_requirements import backend_schema_sha256
 
 from experiments.post_training.task_curation import atlas_deployment
+from experiments.post_training.task_curation.grader_drift import (
+    GraderDriftReference,
+    MainRecipeReference,
+    SealedRecipeReference,
+)
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
 from experiments.post_training.task_curation.release_stages import plan_derivation
@@ -273,6 +278,13 @@ def _derive(
         repo_root=REPO_ROOT,
         query=_applet_query(PRIOR_LOAD_ID, PRIOR_CURRICULUM_LOAD_ID, panels, available),
         sources_fn=lambda: layer,
+        drift_reference_fn=lambda root, revision, declared: GraderDriftReference(
+            main=MainRecipeReference(revision="e" * 40, merge_base=revision),
+            sources={
+                source_id: SealedRecipeReference(source_id=source_id, converter_revision=revision)
+                for source_id in declared
+            },
+        ),
         prior_catalog_reader=lambda root, q: read_prior_catalog_state(
             root,
             q,

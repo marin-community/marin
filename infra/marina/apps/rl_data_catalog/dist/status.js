@@ -268,6 +268,26 @@ function needsRuling(rows) {
   }
 }
 
+// The advisory re-seal queue (ruling 2026-11-26): train publications whose
+// stored graders predate main's recipe fixes, with the main commits and PRs
+// that touch the changed files. Never gates anything; the queue drives re-seal.
+function graderDrift(extras) {
+  const rows = extras.grader_drift || [];
+  if (!rows.length) return;
+  const section = $('grader-drift');
+  section.hidden = false;
+  const list = $('grader-drift-list');
+  for (const item of rows) {
+    const entry = node('li');
+    const fixes = (item.fix_commits || [])
+      .map(commit => commit.pr ? `#${commit.pr}` : commit.sha.slice(0, 7))
+      .join(', ');
+    entry.append(node('strong', item.display_name || item.id), node('span', ` — ${item.id}`));
+    if (fixes) entry.append(node('span', ` · main fixes: ${fixes}`));
+    list.append(entry);
+  }
+}
+
 async function load() {
   const [catalog, extras, taxonomy] = await Promise.all([
     json('api/source-statuses'),
@@ -324,6 +344,7 @@ async function load() {
   counts();
   render();
   needsRuling(state.rows);
+  graderDrift(extras);
   $('message').textContent = '';
 }
 window.addEventListener('DOMContentLoaded', () => {

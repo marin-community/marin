@@ -35,6 +35,22 @@ def fixture_plan(**overrides) -> ReleasePlan:
         kind=PLAN_KIND,
         release_id="testrelease",
         source_revision="a" * 40,
+        grader_drift_reference={
+            "main": {
+                "revision": "e" * 40,
+                "merge_base": "a" * 40,
+                "files": {},
+                "commits": {},
+            },
+            "sources": {
+                "Marin:fixture": {
+                    "source_id": "Marin:fixture",
+                    "converter_revision": "a" * 40,
+                    "converter_version": "2026.11.24.0",
+                    "files": {},
+                }
+            },
+        },
         release_root=RELEASE_ROOT,
         catalog_root="s3://bucket/catalog/production",
         artifact_version="2026.11.24",

@@ -72,6 +72,7 @@ from marin.execution.remote import remote
 from pydantic import BaseModel
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.grader_drift import GraderDriftReference
 from experiments.post_training.task_curation.release_stages import (
     admission_check as admission_check_stage,
 )
@@ -116,6 +117,9 @@ from experiments.post_training.task_curation.release_stages import (
 )
 from experiments.post_training.task_curation.release_stages import (
     identity_backend_compose as identity_backend_compose_stage,
+)
+from experiments.post_training.task_curation.release_stages import (
+    main_grader_drift as main_grader_drift_stage,
 )
 from experiments.post_training.task_curation.release_stages import (
     main_sources as main_source_sync_stage,
@@ -267,6 +271,10 @@ class ReleasePlan(BaseModel):
     main_source_sync: main_source_sync_stage.MainSourceSyncPlan | None = None
     strict_audit_local: bool = False
     slice_output_root: str = ""
+    grader_drift_reference: GraderDriftReference | None = None
+    """The derivation-measured main-recipe comparison basis; a plan predating it
+    reseals byte-identically (the field is absent from the document when unset).
+    The drift stage it feeds is advisory and runs only when the reference exists."""
     validation_grading_environments: dict[str, dict]
     validation_integrity_contracts: dict[str, dict]
     validation_runtime_defaults: dict[str, dict]
@@ -332,6 +340,8 @@ def _plan_document_data(plan: ReleasePlan) -> dict:
     data = plan.model_dump(mode="json")
     if plan.main_source_sync is None:
         data.pop("main_source_sync", None)
+    if plan.grader_drift_reference is None:
+        data.pop("grader_drift_reference", None)
     if plan.pins.oracle_inventory is None:
         data["pins"].pop("oracle_inventory", None)
     return data
@@ -664,6 +674,11 @@ def _execute_main_source_sync(config: dict) -> dict:
     return main_source_sync_stage.run_main_source_sync(inputs, dry_run=False)
 
 
+def _execute_main_grader_drift(config: dict) -> dict:
+    inputs = typed_inputs(main_grader_drift_stage.GraderDriftInputs, config)
+    return main_grader_drift_stage.run_main_grader_drift(inputs, dry_run=False)
+
+
 _STAGE_EXECUTORS: dict[str, Callable[[dict], dict]] = {
     "census_inputs": _execute_census_inputs,
     "compose_manifest": _execute_compose_manifest,
@@ -692,6 +707,7 @@ _STAGE_EXECUTORS: dict[str, Callable[[dict], dict]] = {
     "hosted_check": _execute_hosted_check,
     "exposure_probe": _execute_exposure_probe,
     "main_source_sync": _execute_main_source_sync,
+    "main_grader_drift": _execute_main_grader_drift,
 }
 
 
@@ -1090,6 +1106,16 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         False,
         receipt_key="report",
     ),
+    # The grader-drift leaf shares the main-source-sync shape: every plan carries
+    # the node, only a plan whose derivation pinned a grader_drift_reference can
+    # run it, nothing depends on it, and it is advisory — its findings never gate.
+    "main_grader_drift": StageSpec(
+        "main_grader_drift",
+        "main_grader_drift",
+        main_grader_drift_stage.__name__,
+        ("declarations",),
+        False,
+    ),
 }
 
 
@@ -1241,6 +1267,43 @@ def _main_source_sync_step(plan: ReleasePlan, declarations: ArtifactStep) -> Art
         build_inputs=build_inputs,
         identity=identity,
         inputs_type=main_source_sync_stage.MainSourceSyncInputs,
+    )
+
+
+def _main_grader_drift_step(plan: ReleasePlan, declarations: ArtifactStep) -> ArtifactStep[StageReceipt]:
+    """The plan-gated grader-drift leaf: the advisory stale-grader queue.
+
+    Every plan carries the node so the graph shape is stable, but only a plan
+    whose derivation pinned a ``grader_drift_reference`` can execute it. It
+    depends on nothing but the sealed declarations and nothing depends on it, so
+    opting in or out never moves another stage's fingerprint, and the release
+    tail never waits on an advisory instrument.
+    """
+    spec = _STAGE_SPECS["main_grader_drift"]
+    identity = _identity_fields(plan, "release_id", "source_revision", "grader_drift_reference")
+
+    def build_inputs(ctx: StepContext) -> dict:
+        if plan.grader_drift_reference is None:
+            raise ValueError(
+                "plan pins no grader_drift_reference; the main-grader-drift stage cannot run"
+                " (re-derive the plan at a freeze whose checkout reaches origin/main)"
+            )
+        return {
+            "release_id": plan.release_id,
+            "source_revision": plan.source_revision,
+            "declarations": _resolved_receipt(ctx, declarations),
+            "reference": plan.grader_drift_reference,
+            "output_root": stage_output_root(plan, "grader-drift"),
+        }
+
+    return _stage_step(
+        plan,
+        "main_grader_drift",
+        spec,
+        (declarations,),
+        build_inputs=build_inputs,
+        identity=identity,
+        inputs_type=main_grader_drift_stage.GraderDriftInputs,
     )
 
 
@@ -2285,6 +2348,7 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
 
     declarations = _declarations_step(plan, plan_handle)
     main_sync = _main_source_sync_step(plan, declarations)
+    drift = _main_grader_drift_step(plan, declarations)
     census_inputs = _census_inputs_step(plan, declarations)
     backend_validation = _backend_validation_step(plan, census_inputs)
     identity_backend = _identity_backend_compose_step(plan, backend_validation)
@@ -2320,6 +2384,7 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     stages: dict[str, ArtifactStep] = {
         "declarations": declarations,
         "main_source_sync": main_sync,
+        "main_grader_drift": drift,
         "admission_check": admission_check,
         "census_inputs": census_inputs,
         "census": census,
@@ -2394,4 +2459,7 @@ def graph_nodes(graph: ReleaseGraph) -> list[dict]:
     sync = graph.stages.get("main_source_sync")
     if sync is not None:
         visit(sync)
+    drift = graph.stages.get("main_grader_drift")
+    if drift is not None:
+        visit(drift)
     return nodes

@@ -396,6 +396,19 @@ class DerivedRelease:
         return self.plan_document["release_id"]
 
 
+def _measure_grader_drift_reference(repo_root: Path, source_revision: str, declared: dict[str, dict]) -> Any:
+    """Measure main's recipe side and every declared source's sealed recipe side.
+
+    The drift stage is advisory (grader fixes must not block training), but its
+    measurement is not optional: the derivation fetches origin/main fail-fast, so
+    deriving a release whose checkout cannot see main refuses instead of sealing
+    a drift reference against a stale main.
+    """
+    from experiments.post_training.task_curation import grader_drift  # noqa: PLC0415 — beside its only use
+
+    return grader_drift.measure_grader_drift_reference(repo_root, source_revision=source_revision, declared=declared)
+
+
 def derive_release_plan(
     config: ReleaseConfig,
     *,
@@ -403,6 +416,7 @@ def derive_release_plan(
     query: Query,
     sources_fn: Any = all_sources,
     prior_catalog_reader: Any = read_prior_catalog_state,
+    drift_reference_fn: Any | None = None,
     service: AtlasService | None = None,
 ) -> DerivedRelease:
     """Derive the release plan from the config and authoritative state.
@@ -410,7 +424,9 @@ def derive_release_plan(
     All measurements happen at the freeze revision's declarations layer; the
     caller supplies the applet query client (read-only SQL). The returned plan
     document validates as :class:`ReleasePlan` and the receipt records every
-    measured input.
+    measured input. ``drift_reference_fn`` overrides the main-recipe drift
+    measurement (tests inject a fixture reference; the real derivation measures
+    origin/main fail-fast).
     """
     config.validate_shape()
     deployment = region_deployment(config.cluster)
@@ -486,6 +502,9 @@ def derive_release_plan(
     registry_index = _read_registry_index(targets)
     measured = _measured_dependency(repo_root, config.freeze_source_revision)
     expected_contract_count, expected_contract_tasks = _measure_contract_counts(targets)
+    grader_drift_reference = (drift_reference_fn or _measure_grader_drift_reference)(
+        repo_root, config.freeze_source_revision, declared
+    )
 
     plan_identity = {
         "release_id": config.release_id,
@@ -563,6 +582,7 @@ def derive_release_plan(
         removed_sources=tuple(sorted(removed_ids)),
         main_source_sync=config.main_source_sync,
         strict_audit_local=config.strict_audit_local,
+        grader_drift_reference=grader_drift_reference,
         validation_grading_environments={},
         validation_integrity_contracts={
             source_id: record

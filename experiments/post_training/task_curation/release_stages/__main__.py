@@ -319,10 +319,13 @@ def mode_run(args) -> int:
         # An unrestricted run builds the terminal stage, which transitively
         # builds every node; the plan document is its first dependency.
         handles.append(graph.terminal)
-        # The main-source sync is a plan-gated leaf outside the terminal's edges:
-        # a plan that opts in runs it on every build; other plans never touch it.
+        # The main-source sync and grader-drift are plan-gated leaves outside the
+        # terminal's edges: a plan that opts in runs them on every build; other
+        # plans never touch them.
         if plan.main_source_sync is not None:
             handles.append(graph.stages["main_source_sync"])
+        if plan.grader_drift_reference is not None:
+            handles.append(graph.stages["main_grader_drift"])
     run_handles(*handles, force_run_failed=True, max_concurrent=args.max_concurrent)
     print(f"RUN {plan.release_id}: {len(handles) - 1} terminal handle(s) built")
     return 0

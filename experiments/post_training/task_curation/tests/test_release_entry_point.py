@@ -20,7 +20,7 @@ from experiments.post_training.task_curation.release_stages.graph import write_p
 from experiments.post_training.task_curation.release_stages.plan_derivation import DerivedRelease
 from experiments.post_training.task_curation.tests.release_graph_fixtures import fixture_plan
 
-EXPECTED_NODE_COUNT = 31
+EXPECTED_NODE_COUNT = 32
 
 
 @pytest.fixture
@@ -123,8 +123,11 @@ def test_run_mode_builds_the_terminal_for_an_unrestricted_run(tmp_path, plan_doc
     # The terminal handle is the exposure probe: the graph's last stage. The
     # entry point constructs its own graph, so compare identity by node key.
     built = release_graph_module.release_graph(entry_point.load_plan(plan_document))
-    assert handles[-1].name == built.terminal.name
-    assert handles[-1].version == built.terminal.version
+    assert handles[-2].name == built.terminal.name
+    assert handles[-2].version == built.terminal.version
+    # The fixture plan opts into the grader-drift leaf: it runs beside the
+    # terminal, outside the terminal's edges, the way the main-source sync does.
+    assert handles[-1].name.endswith("main_grader_drift")
 
 
 def test_run_mode_gates_on_the_submission_guard(tmp_path, plan_document, monkeypatch, capsys):
@@ -260,7 +263,7 @@ def test_status_mode_reports_missing_state(tmp_path, plan_document, capsys):
     document = json.loads(output)
     assert document["release_id"] == "testrelease"
     nodes = {row["node"]: row for row in document["nodes"]}
-    assert len(nodes) == 30
+    assert len(nodes) == 31
     assert nodes["main_source_sync"]["preflight"] == "missing"
     assert nodes["census"]["preflight"] == "missing"
     assert nodes["census"]["artifact"] in ("absent", "unknown-prefix")

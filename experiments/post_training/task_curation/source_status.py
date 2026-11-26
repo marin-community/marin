@@ -296,8 +296,54 @@ def status_extras() -> dict[str, Any]:
         },
         "remediation_queue": remediation,
         "metadata_exclusions": metadata,
+        "grader_drift": grader_drift_rows(),
         "reason_explanations": reason_explanations(),
     }
+
+
+def grader_drift_rows(reference=None, *, repo_root=None) -> list[dict[str, Any]]:
+    """The advisory re-seal queue: train publications whose stored graders predate main's fixes.
+
+    Measured live against origin/main (ruling 2026-11-26 6:45 AM EST): the
+    publication's sealed recipe files at their converter revision against main's
+    current blobs, with the main fix commits and PRs that touch the changed
+    files. ``reference`` overrides the measured main side and ``repo_root`` the
+    checkout for tests. A source with no sealed census binding has no stored
+    grader to compare and never queues.
+    """
+    from experiments.post_training.task_curation import grader_drift  # noqa: PLC0415 — beside its only use
+
+    sources = all_sources()
+    if not sources:
+        return []
+    repo_root = repo_root or Path(__file__).resolve().parents[3]
+    paths = sorted({recipe_file for source in sources.values() for recipe_file in source.files})
+    if reference is None:
+        reference = grader_drift.measure_main_recipe_reference(
+            repo_root, source_revision=grader_drift.head_revision(repo_root), paths=paths
+        )
+    rows = []
+    for source_id, source in sorted(sources.items()):
+        declaration = source.declaration.model_dump(mode="json")
+        if not grader_drift.is_drift_population(declaration):
+            continue
+        sealed = grader_drift.measure_sealed_recipe(source_id, declaration, repo_root)
+        finding = grader_drift.compare_recipe(source_id, sealed, reference)
+        if finding is None:
+            continue
+        rows.append(
+            {
+                "id": source_id,
+                "display_name": source_display_name(source_id),
+                "finding": finding.finding,
+                "converter_revision": finding.converter_revision,
+                "converter_version": finding.converter_version,
+                "changed_files": [file.model_dump(mode="json") for file in finding.changed_files],
+                "fix_commits": [commit.model_dump(mode="json") for commit in finding.fix_commits],
+                "main_revision": reference.revision,
+            }
+        )
+    return rows
 
 
 def main() -> None:

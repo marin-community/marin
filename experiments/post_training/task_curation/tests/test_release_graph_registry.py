@@ -45,6 +45,7 @@ from infra.marina.apps.rl_data_catalog.server.publication_scope import PUBLICATI
 EXPECTED_NODES = (
     "declarations",
     "main_source_sync",
+    "main_grader_drift",
     "admission_check",
     "census_inputs",
     "census",
@@ -805,3 +806,18 @@ def test_typed_inputs_keep_defaults_for_inputs_a_phase_omits(tmp_path):
     inputs = typed_inputs(release_check.ReleaseCheckInputs, config)
     assert inputs.preflight_receipt is None and inputs.published_revision is None
     inputs.validate()
+
+
+def test_grader_drift_leaf_runs_only_when_the_plan_opt_in(tmp_path):
+    """The drift leaf exists for every plan but refuses without the derivation-pinned reference."""
+    plan = fixture_plan()
+    built = release_graph(plan)
+    prefix = str(tmp_path / "prefix")
+    _declarations_dep(built, prefix, plan, {"uri": "s3://bucket/declarations.json", "sha256": "9" * 64})
+    inputs = _materialized_inputs(built.stages["main_grader_drift"], prefix)
+    assert inputs["reference"].main.revision == "e" * 40
+    refused = fixture_plan(grader_drift_reference=None)
+    unbound = release_graph(refused)
+    _declarations_dep(unbound, prefix, refused, {"uri": "s3://bucket/declarations.json", "sha256": "9" * 64})
+    with pytest.raises(ValueError, match="pins no grader_drift_reference"):
+        _materialized_inputs(unbound.stages["main_grader_drift"], prefix)
