@@ -211,14 +211,12 @@ _AGENTIC_LIMITS = agentic_limits(
 
 _TRAIN_LONG = Preset(
     name="train-long",
-    revision="2026.11.25",
     recipe=Recipe(layout=ONE_RACK, fixed_reply_tokens=None, config=_ONE_TURN),
     updates=10_000,
     measured=range(1, 10_001),
     tasks_input="optional",
     accepts_settings=True,
     accepts_init=True,
-    publishes=False,
     control_preset=None,
     checkpoints="none",
     data_settings=frozenset({"shuffle"}),
@@ -245,7 +243,6 @@ _TRAIN_MEDIUM = replace(
     name="train-medium",
     evaluations=(),
 )
-_TRAIN_LONG_AGENTIC = agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS)
 
 MOCHI = ModelPresets(
     model="mochi",
@@ -254,7 +251,7 @@ MOCHI = ModelPresets(
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
         agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
-        _TRAIN_LONG_AGENTIC,
+        agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS),
         agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
     ),
     namespace="mochi-rl",
@@ -263,12 +260,15 @@ MOCHI = ModelPresets(
 )
 
 
-if __name__ == "__main__":
-
+def main() -> int:
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
         from experiments.post_training.mochi_sft import MOCHI_SFT_PRESETS  # noqa: PLC0415
 
         return MOCHI_SFT_PRESETS
 
-    raise SystemExit(rl.main(MOCHI, sft_presets=sft_presets))
+    return rl.main(MOCHI, sft_presets=sft_presets)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

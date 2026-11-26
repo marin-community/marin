@@ -22,7 +22,11 @@ _UPSERT = text(
     f"""INSERT INTO rl_runs (run_id, attempt_id, record)
     VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
     ON CONFLICT (run_id, attempt_id) DO UPDATE
-      SET record = EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+      SET record = CASE
+        WHEN EXCLUDED.record ->> 'status' = 'running'
+          AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
+        ELSE EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+      END
     RETURNING record"""
 )
 
@@ -51,7 +55,7 @@ def create_api(services):
     def publish(record: dict[str, Any]) -> dict:
         try:
             encoded = json.dumps(record, allow_nan=False)
-            summary = AttemptSummary.model_validate_json(encoded, strict=True)
+            summary = AttemptSummary.model_validate_json(encoded, extra="forbid")
         except ValidationError as error:
             raise HTTPException(
                 422, detail=error.errors(include_input=False, include_context=False, include_url=False)
@@ -93,6 +97,8 @@ def create_api(services):
                             "record": summary.model_dump_json(),
                         },
                     )
+                if "evaldash_run_ids" in record and "preset_version" not in record:
+                    return {key: normalized[key] for key in record}
                 return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]
@@ -107,11 +113,11 @@ def create_api(services):
         with engine.connect() as connection:
             rows = connection.execute(
                 text(
-                    "SELECT run_id, attempt_id, CASE WHEN jsonb_typeof(record) != 'object' "
-                    "OR record -> 'grader_report' = 'null'::jsonb "
-                    "THEN record ELSE record - 'grader_report' END AS record, "
-                    "record -> 'grader_report' IS NOT NULL AND record -> 'grader_report' != 'null'::jsonb "
-                    "AS has_grader_report FROM rl_runs ORDER BY run_id, attempt_id"
+                    """SELECT run_id, attempt_id,
+                    CASE WHEN jsonb_typeof(record) = 'object' THEN record - 'grader_report'
+                         ELSE record END AS record,
+                    COALESCE(record -> 'grader_report' <> 'null'::jsonb, false) AS has_grader_report
+                    FROM rl_runs ORDER BY run_id, attempt_id"""
                 )
             ).mappings()
             for row in rows:
@@ -134,8 +140,7 @@ def create_api(services):
                     )
                     skipped.append({"run_id": row["run_id"], "attempt_id": row["attempt_id"], "error": reason})
                     continue
-                if row["has_grader_report"]:
-                    record["has_grader_report"] = True
+                record["has_grader_report"] = row["has_grader_report"]
                 records.append(record)
         return {"runs": records, "skipped_records": skipped}
 

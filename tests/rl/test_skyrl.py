@@ -8,7 +8,6 @@ import json
 import os
 import platform
 import resource
-import shlex
 import shutil
 import subprocess
 import sys
@@ -77,6 +76,8 @@ from rigging.filesystem import cluster_config
 from rigging.filesystem.step_status import STATUS_SUCCESS
 from skyrlrecipe.locality import RoleTopologyMode
 
+_PROCESS_FIXTURE = str(Path(__file__).with_name("skyrl_process_fixture.py"))
+
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
     return ArtifactStep.adopt(
@@ -91,7 +92,7 @@ def test_launcher_credentials_are_scoped_to_its_subprocess(monkeypatch):
     key = "MICRO210_TEST_JUDGE_KEY"
     monkeypatch.setenv(key, "parent")
     completed = run_launcher_for_test(
-        [sys.executable, "-c", "import os,sys; print(os.environ[sys.argv[1]])", key],
+        [sys.executable, _PROCESS_FIXTURE, "environment-value", key],
         env_vars={key: "per-evaluation"},
     )
     assert completed.returncode == 0
@@ -190,37 +191,16 @@ def test_nested_launcher_does_not_inherit_parent_python_environment(
     binaries = tmp_path / "bin"
     binaries.mkdir()
     dispatcher = binaries / "uv"
-    dispatcher.write_text(
-        "#!/bin/sh\nset -eu\n"
-        "python_preference=managed\n"
-        'while [ "$#" -gt 0 ]; do\n'
-        '  case "$1" in\n'
-        '    --python-preference) python_preference="$2"; shift 2 ;;\n'
-        f'    --python) {shlex.quote(real_uv)} python find "$2" '
-        '--python-preference "$python_preference" --no-python-downloads >/dev/null; shift 2 ;;\n'
-        f'    uv) shift; exec {shlex.quote(real_uv)} "$@" ;;\n'
-        "    *) shift ;;\n"
-        "  esac\n"
-        "done\n"
-    )
+    shutil.copyfile(Path(__file__).with_name("skyrl_uv_dispatch.sh"), dispatcher)
     dispatcher.chmod(0o755)
+    monkeypatch.setenv("MARIN_TEST_UV_EXECUTABLE", real_uv)
     monkeypatch.setenv("PATH", os.pathsep.join((str(binaries), str(image_python / "bin"), os.environ["PATH"])))
     monkeypatch.setattr("marin.rl.skyrl.__file__", str(workspace / "lib/marin/src/marin/rl/skyrl.py"))
     monkeypatch.setattr(sys, "executable", str(tmp_path / "incompatible-parent-python"))
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         monkeypatch.setenv(key, "/parent/environment")
     monkeypatch.chdir(workspace)
-    result = run_launcher_for_test(
-        skyrl_cpu_command(
-            "python",
-            "-c",
-            "import json, os, sys; from pathlib import Path; "
-            "print(json.dumps({'python': list(sys.version_info[:2]), 'base_prefix': sys.base_prefix, "
-            "'cwd': str(Path.cwd()), "
-            "'environment': {key: os.environ.get(key) for key in "
-            "['PYTHONPATH', 'PYTHONHOME', 'UV_PROJECT_ENVIRONMENT', 'VIRTUAL_ENV']}}))",
-        )
-    )
+    result = run_launcher_for_test(skyrl_cpu_command("python", _PROCESS_FIXTURE, "environment"))
     assert result.returncode == 0
     assert json.loads(result.stdout) == {
         "python": python_version,
@@ -934,6 +914,20 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
     }
     launch["iris"]["wandb_entity"] = "tests-team"
     launch["skyrl"]["trainer"].update(project_name="tests-project", logger=["records", "wandb"])
+    launch["run"].update(
+        coordinator_iris_job_id="/local/coordinator",
+        index={
+            "run_id": "indexed-native-writers",
+            "model": "snowball",
+            "preset": "train-short",
+            "preset_version": "fixture",
+            "user": "test",
+            "branch": "main",
+            "source_revision": "test-commit",
+            "dirty": False,
+            "wandb_project": "tests-project",
+        },
+    )
     launch_path = tmp_path / "launch.yaml"
     launch_path.write_text(yaml.safe_dump(launch))
     (tmp_path / "resolved-launch.yaml").write_text(yaml.safe_dump({"config": launch}))
@@ -941,148 +935,8 @@ def test_native_writers_round_trip_through_stored_readers(tmp_path, monkeypatch)
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV", "IRIS_TASK_ID"):
         environment.pop(key, None)
-    script = r"""
-import json
-import sys
-from pathlib import Path
-from types import SimpleNamespace
-from omegaconf import OmegaConf, open_dict
-from unittest.mock import patch
-from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
-from cloud.iris.launch import LaunchOutcome, execute_launch
-from cloud.iris.launch_config import load_launch_config
-from cloud.iris.skyrl_entrypoint import run_config
-from marinskyrl.checkpoint_paths import policy_export_path
-from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
-from skyrl_train.hf_export_schema import HFExportRequest
-from skyrl_train.utils.tracking import Tracking
-from finestore.rl.run_records import (
-    AttemptRecord, CheckpointReference, LaunchResult, LaunchState,
-    read_attempt, read_attempt_metrics, run_records_root, update_attempt,
-)
-from finestore.store import DataStore
-
-path = Path(sys.argv[1])
-root = path.parent
-invalid = OmegaConf.load(path)
-invalid.iris.max_retries = 1
-invalid_path = root / "retry-enabled.yaml"
-invalid_path.write_text(OmegaConf.to_yaml(invalid))
-try:
-    load_launch_config(invalid_path)
-except ValueError as error:
-    assert "records backend requires iris.max_retries=0" in str(error), error
-else:
-    raise AssertionError("retry-enabled records launch was accepted")
-import cloud.iris.launch, skyrl_train, taskcompendium, finestore.rl.run_records
-for module in (cloud.iris.launch, skyrl_train, taskcompendium, finestore.rl.run_records):
-    assert Path(module.__file__).resolve().is_relative_to(Path.cwd()), module.__file__
-
-def history_config(attempt_id, export_root):
-    return OmegaConf.create({"trainer": {"export_path": str(export_root)},
-        "runtime": {"run_id": "history", "attempt_id": attempt_id}})
-
-ancestor_root = root / "ancestor-exports"
-with Tracking("tests-project", "history", ("records",), history_config("original", ancestor_root)) as original:
-    original.start(resumed_step=None)
-    original.log({"loss": 0.3}, step=3)
-parent = CheckpointReference(export_root=str(ancestor_root), attempt_id="original", step=3)
-with Tracking("tests-project", "history", ("records",), history_config("middle", root / "exports")) as middle:
-    middle.start(resumed_step=3, checkpoint=parent)
-    middle.log({"loss": 0.5, "eval/all/avg_score": 0.4}, step=5)
-try:
-    with Tracking("tests-project", "history", ("records",), history_config("failed-direct", root / "exports")) as failed:
-        failed.start(resumed_step=None)
-        failed.log({"loss": 0.9}, step=1)
-        raise RuntimeError("fixture workload failed")
-except RuntimeError as error:
-    assert str(error) == "fixture workload failed", error
-
-class LocalBackend:
-    def launch(self, config_path):
-        config = load_launch_config(config_path)
-        resolved = Path(config.artifacts.resolved_config_uri)
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(OmegaConf.to_yaml(config))
-        if config.run.mode == "checkpoint_export":
-            policy = Path(policy_export_path(str(config.artifacts.export_root), 8))
-            policy.mkdir(parents=True, exist_ok=True)
-            for name in ("config.json", "model.safetensors", "tokenizer.json"):
-                (policy / name).write_text("{}")
-        elif config.run.attempt_id != "earlier-failed-attempt":
-            with open_dict(config.skyrl):
-                config.skyrl.runtime = {"run_id": config.run.id, "attempt_id": config.run.attempt_id,
-                    "iris_job_id": "/local/training", "coordinator_iris_job_id": None}
-            with patch("cloud.iris.skyrl_entrypoint.version", return_value="fixture-vllm"):
-                interrupted = OmegaConf.create(OmegaConf.to_container(config, resolve=True))
-                interrupted.run.attempt_id = "interrupted-attempt"
-                interrupted.run.coordinator_iris_job_id = "/local/interrupted-coordinator"
-                for launch_config, job_id in [(config, "/local/training"), (interrupted, "/local/interrupted")]:
-                    startup_path = root / f"startup-{launch_config.run.attempt_id}.yaml"
-                    startup_path.write_text(OmegaConf.to_yaml(launch_config))
-                    main = SimpleNamespace(run=lambda _: None)
-                    with (
-                        patch("cloud.iris.skyrl_entrypoint.get_job_info", return_value=SimpleNamespace(job_id=job_id)),
-                        patch.dict(sys.modules, {"skyrl_train.entrypoints.main_base": main}),
-                    ):
-                        run_config(startup_path)
-                foreign = OmegaConf.to_container(interrupted, resolve=True)
-                foreign["run"]["id"] = "unrelated-native-run"
-                foreign["run"]["attempt_id"] = "foreign-native"
-                with DataStore.open(run_records_root(str(config.artifacts.export_root))) as store:
-                    update_attempt(store, AttemptRecord(run_id="unrelated-native-run", attempt_id="foreign-native",
-                        config=foreign, started_at="2026-11-11T01:00:00+00:00"))
-            startup = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
-            assert startup is not None and startup.vllm_version == "fixture-vllm"
-            (root / "startup-observation.json").write_text(startup.model_dump_json())
-            with Tracking("tests-project", "record-boundary", ("records",), config.skyrl) as tracker:
-                tracker.start(resumed_step=5,
-                    checkpoint=CheckpointReference(export_root=str(root / "exports"), attempt_id="middle", step=5))
-                immediate = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
-                assert immediate.metrics_started_at is not None and immediate.parent.attempt_id == "middle"
-                tracker.log({"startup/resume": 0.05, "eval/all/avg_score": 0.6}, step=5)
-                tracker.log({"loss": 1.25}, step=6)
-                tracker.log({"loss": 0.25, "entropy": 0.75}, step=6)
-            checkpoints = Path(config.artifacts.checkpoint_root)
-            checkpoints.mkdir(parents=True, exist_ok=True)
-            (checkpoints / CHECKPOINT_MARKER_FILENAME).write_text("8\n")
-        failed = config.run.attempt_id == "earlier-failed-attempt"
-        return LaunchOutcome("/local/training", "failed" if failed else "succeeded", int(failed))
-
-    def export_terminal_policy(self, config_path):
-        config = load_launch_config(config_path)
-        request = HFExportRequest(step=8, checkpoint_base_path=str(config.artifacts.checkpoint_root),
-            checkpoint_path=str(Path(config.artifacts.checkpoint_root) / "global_step_8"),
-            export_path=str(config.artifacts.export_root), model_path=str(config.skyrl.trainer.policy.model.path),
-            model_source_uri=str(config.inputs.model.uri), model_source_identity=str(config.inputs.model.identity),
-            num_nodes=1, gpus_per_node=4)
-        spec = ExportJobSpec(request=request, cluster="local", priority="batch", gpu_variant="H100",
-            job_name=None, timeout=60, no_wait=False)
-        export = checkpoint_export_launch_config(config, request, spec)
-        export_path = root / "export.yaml"
-        export_path.write_text(OmegaConf.to_yaml(export))
-        result = execute_launch(export_path, backend=self)
-        assert result.state == "succeeded", result
-
-    def validate(self, config_path):
-        raise AssertionError("the test exercises wait-mode execution")
-
-config = OmegaConf.load(path)
-current = config.run.attempt_id
-config.run.attempt_id = "earlier-failed-attempt"
-config.run.export_hf = False
-path.write_text(OmegaConf.to_yaml(config))
-assert execute_launch(path, backend=LocalBackend()).state == "failed"
-config.run.attempt_id = current
-config.run.export_hf = True
-path.write_text(OmegaConf.to_yaml(config))
-result = execute_launch(path, backend=LocalBackend())
-assert result.state == "succeeded", result
-receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
-(root / "resolved-launch.yaml").write_text(OmegaConf.to_yaml({"config": receipt["config"]}))
-"""
     result = subprocess.run(
-        skyrl_cpu_command("python", "-c", script, str(launch_path)),
+        skyrl_cpu_command("python", "-I", "-m", "cloud.iris.tests.native_writer_roundtrip", str(launch_path)),
         env=environment,
         capture_output=True,
         text=True,
@@ -1189,9 +1043,19 @@ receipt = json.loads(Path(config.artifacts.terminal_manifest_uri).read_text())
     )
     (tmp_path / "terminal.json").write_text(receipt.native.model_dump_json())
     assert read_stored_skyrl_attempt(str(tmp_path)) == attempts["earlier-failed-attempt"]
+    earlier = attempts["earlier-failed-attempt"]
+    (tmp_path / "terminal.json").write_text(earlier.native.model_dump_json())
+    with monkeypatch.context() as missing_attempt:
+        missing_attempt.setattr("marin.rl.skyrl_records.read_attempt", lambda *_args: None)
+        recovered = read_stored_skyrl_attempt(str(tmp_path))
+    assert recovered is not None and recovered.native == earlier.native
+    assert recovered.index_run_id == earlier.index_run_id == "indexed-native-writers"
     (tmp_path / "resolved-launch.yaml").unlink()
     (tmp_path / "terminal.json").unlink()
-    assert read_stored_skyrl_attempts(str(tmp_path)) == (None, {})
+    assert read_stored_skyrl_attempts(str(tmp_path)) == (
+        None,
+        {"earlier-failed-attempt": attempts["earlier-failed-attempt"]},
+    )
     assert read_skyrl_attempt(str(tmp_path)) is None
 
 
@@ -1331,19 +1195,9 @@ def test_launcher_logs_reach_stderr_while_the_run_is_live(tmp_path, monkeypatch:
 
     # The child reports whether the parent had already forwarded its line while it was still
     # running, so an implementation that replays stderr after exit fails here.
-    child = (
-        "import pathlib, sys, time\n"
-        "marker = pathlib.Path(sys.argv[1])\n"
-        "sys.stderr.write('launcher line\\n')\n"
-        "sys.stderr.flush()\n"
-        "deadline = time.monotonic() + 5\n"
-        "while time.monotonic() < deadline and not marker.exists():\n"
-        "    time.sleep(0.01)\n"
-        "sys.stdout.write('saw' if marker.exists() else 'missed')\n"
-    )
     monkeypatch.setattr(sys, "stderr", MarkFirstWrite())
 
-    completed = run_launcher_for_test([sys.executable, "-c", child, str(observed)])
+    completed = run_launcher_for_test([sys.executable, _PROCESS_FIXTURE, "stream", str(observed)])
 
     assert completed.stdout == "saw"
     assert "launcher line" in completed.stderr
@@ -1351,9 +1205,7 @@ def test_launcher_logs_reach_stderr_while_the_run_is_live(tmp_path, monkeypatch:
 
 def test_launcher_survives_undecodable_bytes_on_stderr() -> None:
     """Native CUDA and NCCL layers emit non-UTF-8 bytes; strict decoding would wedge the run."""
-    completed = run_launcher_for_test(
-        [sys.executable, "-c", "import sys; sys.stderr.buffer.write(b'\\xff bad\\n'); sys.exit(4)"]
-    )
+    completed = run_launcher_for_test([sys.executable, _PROCESS_FIXTURE, "invalid-stderr"])
 
     assert completed.returncode == 4
     assert "bad" in completed.stderr

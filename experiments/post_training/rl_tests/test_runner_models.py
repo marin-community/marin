@@ -45,7 +45,7 @@ def table(request):
 
 def plan(table, name, *options, version=None, sft_presets=None):
     preset = table.by_name[name]
-    args = ("--preset", name, "--version", version or preset.revision, "--plan")
+    args = ("--preset", name, "--version", version or rl_compose.RUN_ARTIFACT_VERSION, "--plan")
     if preset.tasks_input == "required":
         args += ("--tasks", SELECTION_IDENTITY)
     args += options
@@ -254,9 +254,11 @@ def test_resume_inherits_the_source_runs_initializer(
     tokenizer = {"tokenizer_uri": "gs://fixture-models/tokenizer", "tokenizer_revision": "tokenizer-pin"}
     start_args = ()
     if explicit_init:
-        write_published_artifact(tmp_path, model_name, preset.revision, Artifact, source=model_uri, config=tokenizer)
+        write_published_artifact(
+            tmp_path, model_name, rl_compose.RUN_ARTIFACT_VERSION, Artifact, source=model_uri, config=tokenizer
+        )
         monkeypatch.setattr("marin.rl.skyrl.discover_hf_checkpoints", lambda path: [f"{path}/hf"])
-        start_args = ("--init", f"{model_name}@{preset.revision}")
+        start_args = ("--init", f"{model_name}@{rl_compose.RUN_ARTIFACT_VERSION}")
     runs = []
 
     def after_rl(run) -> Artifact:
@@ -277,7 +279,9 @@ def test_resume_inherits_the_source_runs_initializer(
     if explicit_init:
         assert source_model["uri"] == f"{model_uri}/hf"
     else:
-        changed = ArtifactStep.adopt("models/changed-default", preset.revision, "gs://fixture-models/changed-default")
+        changed = ArtifactStep.adopt(
+            "models/changed-default", rl_compose.RUN_ARTIFACT_VERSION, "gs://fixture-models/changed-default"
+        )
         table = replace(table, presets=(replace(preset, model=replace(preset.model, step=changed)),))
     root = Path(source_config.output.resolved_config_uri).parent
     checkpoint = write_native_checkpoint(root, source_launch)
@@ -309,10 +313,10 @@ def test_resume_inherits_the_source_runs_initializer(
         runtime = worker_document["skyrl"].setdefault("runtime", {})
         runtime["model_source_identity"] = inputs["model"]["identity"]
         runtime["starting_checkpoint_identity"] = inputs["starting_checkpoint"]["identity"]
-        assert rl_gate.comparison_config(worker_document) == rl_gate.comparison_config(plan_document)
+        assert rl_gate.config_version(worker_document) == rl_gate.config_version(plan_document)
         runtime["starting_checkpoint_identity"] = "different-checkpoint"
         with pytest.raises(rl_gate.InvalidComparison, match="starting_checkpoint_identity"):
-            rl_gate.comparison_config(worker_document)
+            rl_gate.config_version(worker_document)
         return
     assert all(dep.name != model_name for dep in resumed.lower().deps)
     monkeypatch.setattr(rl, "run_skyrl", lambda _config, **_kwargs: None)
@@ -402,6 +406,15 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     monkeypatch.setattr(sys, "argv", [module, *argv])
     monkeypatch.delitem(sys.modules, module)
     submitted = []
+    watch_deadlines = []
+
+    def follow_detached(entry_module, watch):
+        assert entry_module == module
+        assert watch.job == "/fixture/sft-then-rl"
+        watch_deadlines.append(watch.timeout_seconds)
+        return str(Path("/tmp") / "fixture-publication.log")
+
+    monkeypatch.setattr(rl, "_follow_detached", follow_detached)
 
     def submit(entry_module, handles, _max_concurrent, env, *, argv):
         assert entry_module == module
@@ -464,6 +477,8 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
             runpy.run_module(module, run_name="__main__", alter_sys=True)
         assert exit_.value.code == 0
     assert submitted == [(submitted[0][0], argv)] * 2
+    declared = (MOCHI if model == "mochi" else SNOWBALL).by_name["train-long"].recipe.layout
+    assert watch_deadlines == [(declared.coordinator_timeout_hours + (20 if model == "snowball" else 0)) * 3600] * 2
 
 
 @pytest.mark.parametrize(

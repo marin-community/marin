@@ -17,6 +17,7 @@ from finestore.rl.run_records import (
     ExportedPolicy,
     LaunchReceipt,
     LaunchResult,
+    RunIndexIdentity,
     LaunchState,
     read_attempt,
     write_attempt,
@@ -270,6 +271,26 @@ def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchRe
     return receipt
 
 
+def _record_prepared_attempt(config: DictConfig) -> None:
+    """Store a publishable attempt and its coordinator ownership in one update."""
+    export_root = str(config.artifacts.export_root)
+    attempt_id = str(config.run.attempt_id)
+    record = read_attempt(export_root, attempt_id)
+    if record is not None and record.config is not None:
+        return
+    raw_index = config.run.get("index")
+    index = RunIndexIdentity.model_validate(OmegaConf.to_container(raw_index)) if raw_index is not None else None
+    write_attempt(
+        export_root,
+        AttemptRecord(
+            run_id=str(config.run.id),
+            attempt_id=attempt_id,
+            config=OmegaConf.to_container(config, resolve=True),
+            **({"index": index} if index is not None else {}),
+        ),
+    )
+
+
 def execute_launch(
     config_path: Path, *, backend: LaunchBackend | None = None, forward_env: tuple[str, ...] = ()
 ) -> LaunchResult:
@@ -299,18 +320,9 @@ def execute_launch(
         if config.run.submission == SubmissionMode.PREPARE:
             active_backend.validate(resolved_path)
             return _result(config, LaunchState.PREPARED)
+        _record_prepared_attempt(config)
         _prepare_model_caches(config)
         OmegaConf.save(config, resolved_file.name, resolve=False)
-        record = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
-        if record is None or record.config is None:
-            write_attempt(
-                str(config.artifacts.export_root),
-                AttemptRecord(
-                    run_id=str(config.run.id),
-                    attempt_id=str(config.run.attempt_id),
-                    config=OmegaConf.to_container(config, resolve=True),
-                ),
-            )
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:
