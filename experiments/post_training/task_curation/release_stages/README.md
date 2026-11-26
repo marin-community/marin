@@ -207,6 +207,16 @@ from silent defaults:
   copy thread, the shared retry budget halting peers on a failure), with the worker
   count from `qc_browse_sizing(...).workers`; panels are disjoint (one pipeline key
   each) and the results collect in the plan's declared order.
+- **catalog_load QC replay** — the fresh-panel replay computes its record total
+  before it starts (every panel's tables at their pins, from the loader's own row
+  groups) and logs `PROGRESS replay done/total (percent, records/s, eta)` at a
+  fixed cadence. The replay itself splits every panel's tables into page-range
+  segments (at most `_REPLAY_SEGMENT_ROWS` each) and fans the segments of all
+  panels over paced workers sized by `catalog_replay_sizing(...).workers`, so the
+  five largest panels cannot bound the makespan. Each panel's validation and its
+  cohort summaries plus pointer publish stay ordered around its segments, and the
+  shared retry budget halts the peers on a failure. The parallel path stores
+  exactly what the serial path stores (pinned byte-identical by test).
 - **history_staging** — already parallel (see `history_staging_sizing`).
 
 Per-stage receipts are byte-identical between a serial and a parallel run modulo

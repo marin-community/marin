@@ -189,3 +189,30 @@ def curriculum_compose_sizing(composed_tasks: int) -> StageResources:
         worker_cpu=_WORKER_CPU,
         worker_memory_gb=_WORKER_MEMORY_GB,
     )
+
+
+# Measured on the R40 cut-v22 staged QC panels and the catalog-load replay they feed
+# (2026-11-25, job remote_job-74886a67): 211 fresh panels totalling 1,389,220 records
+# (472,382 raw reviews, 472,382 items, 427,820 batch links, 15,717 batches), where
+# ~205 panels hold ~100 records and five monsters hold ~80% of the raw reviews. The
+# replay fans page-range segments out over paced SQL clients; workers scale with the
+# record count to hold the anchor wall clock, capped by the app's statement latency.
+_CATALOG_REPLAY_ANCHOR_RECORDS = 1_389_220
+_CATALOG_REPLAY_ANCHOR_WORKERS = 8
+_CATALOG_REPLAY_MIN_WORKERS = 2
+_CATALOG_REPLAY_MAX_WORKERS = 16
+
+
+def catalog_replay_sizing(total_records: int) -> StageResources:
+    """Scale the catalog-load QC replay's segment workers with the record count."""
+    if total_records <= 0:
+        raise ValueError(f"catalog replay sizing needs a positive record count, got {total_records}")
+    scaled = round(_CATALOG_REPLAY_ANCHOR_WORKERS * total_records / _CATALOG_REPLAY_ANCHOR_RECORDS)
+    workers = max(_CATALOG_REPLAY_MIN_WORKERS, min(_CATALOG_REPLAY_MAX_WORKERS, scaled))
+    return StageResources(
+        cpu=4,
+        memory_gb=16,
+        disk_gb=64,
+        timeout_s=14_400,
+        workers=workers,
+    )

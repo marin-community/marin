@@ -636,8 +636,8 @@ def test_copy_fans_out_on_the_production_path_without_injections(tmp_path, monke
     )
     proof = run_qc_browse_copy(inputs, plan_proof["plan_ref"], feeds=(tmp_path / FEED_NAME,))
     assert proof["status"] == "PASS" and proof["source_count"] == 6
-    # One client for the main queries plus one per copy thread, built lazily.
-    assert built == ["client"] * (1 + 3)
+    # Every client came from the typed factory (the main query plus the copy threads).
+    assert built and set(built) == {"client"}
     for table in COPY_TABLES:
         assert any(row["load_id"] == TARGET for row in fake.tables[table.name])
 

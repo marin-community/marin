@@ -20,7 +20,12 @@ import argparse
 import gzip
 import hashlib
 import json
+import logging
+import math
+import threading
+import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +39,7 @@ from taskcompendium.backend_requirements import backend_schema_sha256
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
 import infra.marina.apps.rl_data_catalog.load as load_module
+import infra.marina.apps.rl_data_catalog.load_reviews as load_reviews_module
 from experiments.post_training.task_curation.catalog_identity import (
     canonical_backend_survey,
     canonical_identity_survey,
@@ -50,12 +56,21 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref, sealed_contract_rows
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
+from experiments.post_training.task_curation.release_stages.sizing import catalog_replay_sizing
 from experiments.post_training.task_curation.source_status import served_snapshot_sources
 from infra.marina.apps.rl_data_catalog.load import CatalogDisplayPolicy
 from infra.marina.apps.rl_data_catalog.load_derived_contract import load_contracts
 from infra.marina.apps.rl_data_catalog.load_difficulty import publish_coverage
 from infra.marina.apps.rl_data_catalog.load_difficulty_seal import load_difficulty_seal
-from infra.marina.apps.rl_data_catalog.load_reviews import load_content_reviews
+from infra.marina.apps.rl_data_catalog.load_reviews import (
+    PreparedReviewPanel,
+    finish_content_review,
+    insert_review_segment,
+    load_content_reviews,
+    panel_row_groups,
+    prepare_content_review,
+)
+from infra.marina.apps.rl_data_catalog.load_reviews import ensure_tables as load_review_ensure_tables
 from infra.marina.apps.rl_data_catalog.parallel_history import retain_prior_assessments_parallel
 from infra.marina.apps.rl_data_catalog.server.schema import SCHEMA_SQL
 
@@ -323,7 +338,32 @@ def _run_write(
     if fresh_qc["load_id"] != inputs.target_load_id or fresh_qc["snapshot_id"] != inputs.snapshot_id:
         raise ValueError("fresh QC index names different loads than this release")
     reviews_loader = reviews_loader if reviews_loader is not None else load_content_reviews
-    qc_results = [_stage_qc_panel(inputs, panel, reviews_loader, query) for panel in fresh_qc["receipts"]]
+    qc_results: list[dict] = []
+    if reviews_loader is not None:
+        # An injected loader keeps the serial per-panel contract exactly (tests).
+        qc_results = [_stage_qc_panel(inputs, panel, reviews_loader, query) for panel in fresh_qc["receipts"]]
+    else:
+        staged_panels = [_validate_staged_panel(inputs, panel) for panel in fresh_qc["receipts"]]
+        total = _replay_record_total(staged_panels)
+        progress = _ReplayProgress(total)
+        if catalog_replay_sizing(total).workers == 1:
+            # One paced client: replay panel by panel, in the declared receipt order.
+            for panel, staged in zip(fresh_qc["receipts"], staged_panels, strict=True):
+                loaded = load_content_reviews(staged, inputs.target_load_id, panel["source_id"], query, progress)
+                qc_results.append(
+                    {
+                        "source_id": panel["source_id"],
+                        "reference": panel["reference"],
+                        "counts": loaded,
+                        "review": staged["receipt"],
+                        "current_pin": bool(staged["receipt"]["current_pin"]),
+                    }
+                )
+        else:
+            qc_results = _replay_qc_panels_parallel(
+                inputs, fresh_qc["receipts"], staged_panels, total, progress, query, query_factory, control
+            )
+        progress.finish()
     orphaned_panels = _drop_orphaned_review_panels(query, inputs.target_load_id)
     selected = {
         row["source_id"]
@@ -428,7 +468,8 @@ def _drop_orphaned_review_panels(query: Query, load_id: str) -> list[str]:
     return orphans
 
 
-def _stage_qc_panel(inputs: CatalogLoadInputs, panel: dict, reviews_loader: Callable[..., dict], query: Query) -> dict:
+def _validate_staged_panel(inputs: CatalogLoadInputs, panel: dict) -> dict:
+    """Digest-verify a fresh QC panel's staged document and check its declared scope."""
     if panel["status"] != "complete":
         raise ValueError(f"fresh QC panel {panel['source_id']} is {panel['status']!r}")
     raw = StoragePath(panel["reference"]["uri"]).read_bytes()
@@ -444,6 +485,11 @@ def _stage_qc_panel(inputs: CatalogLoadInputs, panel: dict, reviews_loader: Call
         raise ValueError(f"fresh QC panel {panel['source_id']} has scope {scope!r} of size {expected}")
     if not panel["records"] == len(staged["items"]) == len(staged["raw"]) == expected:
         raise ValueError(f"fresh QC panel {panel['source_id']} is not a complete panel")
+    return staged
+
+
+def _stage_qc_panel(inputs: CatalogLoadInputs, panel: dict, reviews_loader: Callable[..., dict], query: Query) -> dict:
+    staged = _validate_staged_panel(inputs, panel)
     # A panel the prior load served at an older population pin replays as stale: the
     # loader records its pin currency, matching the admission gate's sample_pin_stale.
     loaded = reviews_loader(staged, inputs.target_load_id, panel["source_id"], query)
@@ -454,6 +500,186 @@ def _stage_qc_panel(inputs: CatalogLoadInputs, panel: dict, reviews_loader: Call
         "review": staged["receipt"],
         "current_pin": bool(staged["receipt"]["current_pin"]),
     }
+
+
+class _ReplayClient(threading.local):
+    """One paced SQL client per replay worker, built lazily from the factory."""
+
+    query: Query | None = None
+
+
+_REPLAY_LOG_INTERVAL_S = 30.0
+# Rows per replay segment: small enough that the five monster panels cannot bound
+# the makespan (the largest holds ~122k records), large enough that the per-batch
+# verify statements do not dominate the statement budget.
+_REPLAY_SEGMENT_ROWS = 20_000
+
+
+class _ReplayProgress:
+    """The replay's record progress: done/total, percent, rate and ETA at a fixed cadence.
+
+    ``total`` is computed before the replay starts from the staged panels' row groups
+    (the rows at their pins); ``done`` accumulates the rows whose insert-and-verify
+    completed, across panels and threads.
+    """
+
+    def __init__(
+        self, total: int, interval_s: float = _REPLAY_LOG_INTERVAL_S, log: Callable[[str], None] = logging.info
+    ) -> None:
+        if total <= 0:
+            raise ValueError(f"the replay progress needs a positive record total, got {total}")
+        self.total = total
+        self.done = 0
+        self._interval_s = interval_s
+        self._log = log
+        self._started = time.monotonic()
+        self._last_logged = self._started
+        self._lock = threading.Lock()
+
+    def __call__(self, table: str, rows: int) -> None:
+        with self._lock:
+            self.done += rows
+            due = time.monotonic() - self._last_logged >= self._interval_s
+            if not due:
+                return
+            self._last_logged = time.monotonic()
+            done, total, elapsed = self.done, self.total, time.monotonic() - self._started
+        rate = done / elapsed if elapsed > 0 else 0.0
+        remaining = (total - done) / rate if rate > 0 else float("inf")
+        self._log(
+            f"PROGRESS replay done={done}/{total} ({100 * done / total:.1f}%,"
+            f" {rate:.0f} records/s, eta {duration_iso(remaining)})"
+        )
+
+    def finish(self) -> None:
+        """The final line: the whole total processed, with the wall clock."""
+        with self._lock:
+            done, total, elapsed = self.done, self.total, time.monotonic() - self._started
+        rate = done / elapsed if elapsed > 0 else 0.0
+        self._log(f"PROGRESS replay done={done}/{total} (100.0%, {rate:.0f} records/s, wall {duration_iso(elapsed)})")
+
+
+def duration_iso(seconds: float) -> str:
+    """A bounded HH:MM:SS rendering for progress lines (ceil so an ETA never reads zero early)."""
+    if seconds == float("inf"):
+        return "?"
+    total = math.ceil(seconds)
+    return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
+def _replay_record_total(staged_panels: list[dict]) -> int:
+    """The records the replay will process: every panel's tables at their pins.
+
+    The staged documents are the source load's panel rows sealed at their pins, and
+    the row groups are the loader's own insert plan, so this total matches what the
+    loader's progress callback reports.
+    """
+    total = 0
+    for staged in staged_panels:
+        for _table, rows, _columns in panel_row_groups(staged):
+            total += len(rows)
+    if total <= 0:
+        raise ValueError("the fresh QC panels carry no records to replay")
+    return total
+
+
+def _segment_rows(rows: list[dict]) -> list[list[dict]]:
+    """Split one table's rows into page-range segments of at most _REPLAY_SEGMENT_ROWS."""
+    return [rows[start : start + _REPLAY_SEGMENT_ROWS] for start in range(0, len(rows), _REPLAY_SEGMENT_ROWS)] or [[]]
+
+
+def _replay_qc_panels_parallel(
+    inputs: CatalogLoadInputs,
+    panels: list[dict],
+    staged_panels: list[dict],
+    total: int,
+    progress: _ReplayProgress,
+    query: Query,
+    query_factory: Callable[[], Query],
+    control: RetryControl,
+) -> list[dict]:
+    """Replay the panels with page-range segments fanned out over paced workers.
+
+    Each panel's insertable groups split into CopySegments; the segments of all
+    panels share one worker pool, so no single panel bounds the makespan. The
+    per-panel preamble (validation, chunk metadata) runs before its segments and
+    the cohort summaries plus the presentation pointer publish after them — the
+    ordering that matters. One failure sets the shared stop event so the peers
+    halt instead of retrying against a broken budget.
+    """
+    workers = catalog_replay_sizing(total).workers
+    load_review_ensure_tables(query, load_reviews_module.REVIEW_TABLES)
+    clients = _ReplayClient()
+
+    def client() -> Query:
+        if clients.query is None:
+            clients.query = query_factory()
+        return clients.query
+
+    def stop_if_halted() -> None:
+        if control.stop.is_set():
+            raise RuntimeError("the QC replay stopped after another client failed")
+
+    prepared: list[PreparedReviewPanel | None] = [None] * len(panels)
+
+    def prepare(index: int) -> int:
+        stop_if_halted()
+        try:
+            prepared[index] = prepare_content_review(
+                staged_panels[index], inputs.target_load_id, panels[index]["source_id"], client(), ensure_tables_=False
+            )
+        except BaseException:
+            control.stop.set()
+            raise
+        return index
+
+    segments: list[tuple[int, str, str, list[dict]]] = []
+    for index, staged in enumerate(staged_panels):
+        for table, rows, columns in panel_row_groups(staged):
+            for piece in _segment_rows(rows):
+                segments.append((index, table, columns, piece))
+
+    def run_segment(segment: tuple[int, str, str, list[dict]]) -> tuple[int, str, int]:
+        panel_index, table, columns, rows = segment
+        stop_if_halted()
+        panel = prepared[panel_index]
+        if panel is None:
+            raise RuntimeError(f"panel {panels[panel_index]['source_id']} never prepared")
+        try:
+            count = insert_review_segment(client(), inputs.target_load_id, panel.key, table, columns, rows, progress)
+        except BaseException:
+            control.stop.set()
+            raise
+        return panel_index, table, count
+
+    def finish(panel_index: int) -> dict:
+        stop_if_halted()
+        panel = prepared[panel_index]
+        if panel is None:
+            raise RuntimeError(f"panel {panels[panel_index]['source_id']} never prepared")
+        try:
+            finish_content_review(client(), panel, counts[panel_index], progress)
+        except BaseException:
+            control.stop.set()
+            raise
+        return {
+            "source_id": panels[panel_index]["source_id"],
+            "reference": panels[panel_index]["reference"],
+            "counts": counts[panel_index],
+            "review": panel.staged["receipt"],
+            "current_pin": bool(panel.staged["receipt"]["current_pin"]),
+        }
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="atlas-replay") as executor:
+        for _ in executor.map(prepare, range(len(panels))):
+            pass
+        counts = [{table: 0 for table, _rows, _columns in panel_row_groups(staged)} for staged in staged_panels]
+        for panel_index, table, count in executor.map(run_segment, segments):
+            counts[panel_index][table] += count
+        results: list[dict] = []
+        for result in executor.map(finish, range(len(panels))):
+            results.append(result)
+    return results
 
 
 def _write_receipt(inputs: CatalogLoadInputs, proof: dict) -> dict:
