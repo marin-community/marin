@@ -330,9 +330,14 @@ class DevelopmentProbeMixCallback(TrainerCallback):
             gross_tokens=total, development_tokens=int(paid_probe),
         )
         if decision is not None:
+            # Finelog event fields are scalar. Keep vectors and matrices as JSON.
+            fields = {
+                key: json.dumps(value, separators=(",", ":"), allow_nan=False) if isinstance(value, tuple) else value
+                for key, value in asdict(decision).items()
+            }
             record_event(
                 "development_probe_mix_decision",
-                {**asdict(decision), "policy": self.policy, "panel_sha256": self.panel_sha256, "scored_tasks": self.expected_tasks},
+                {**fields, "policy": self.policy, "panel_sha256": self.panel_sha256, "scored_tasks": self.expected_tasks},
             )
         return control
 

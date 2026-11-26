@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import torch
 from datasets import Dataset
+from rigging.telemetry.serialization import EventBody, event_fields
 from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
 from skyrlrecipe.declared import PromptAcquisition
 
@@ -305,7 +306,12 @@ async def emit_probe(trainer, state, accuracy, *, scored=4):
 async def test_development_probe_replays_boundary_before_next_publish(budget_trainer, monkeypatch):
     total, milestones = 4_194_304, (1_048_576, 2_097_152, 3_145_728)
     events = []
-    monkeypatch.setattr("skyrl_train.callbacks.builtin.record_event", lambda name, data: events.append((name, data)))
+
+    def capture_decision(name, body: EventBody, **_kwargs):
+        if name == "development_probe_mix_decision":
+            events.append((name, event_fields(body, budget=4096)))
+
+    monkeypatch.setattr("skyrl_train.telemetry.telemetry.event", capture_decision)
     original = budget_trainer(budget=total, milestones=milestones)
     prompts = configure_development_probe(original)
     original_order = original.context.loader.order
@@ -328,8 +334,8 @@ async def test_development_probe_replays_boundary_before_next_publish(budget_tra
     uninterrupted_rows = [original_order.next_index() for _ in range(16)]
     assert sum(prompts[index].source == "easy" for index in uninterrupted_rows) == 10
     assert not set(first_rows).intersection(uninterrupted_rows)
-    assert events[0][1]["action_probabilities"] == INITIAL_PROBABILITIES
-    assert events[1][1]["action_probabilities"] == pytest.approx((0.214, 0.572, 0.214), abs=0.001)
+    assert json.loads(events[0][1]["action_probabilities"]) == list(INITIAL_PROBABILITIES)
+    assert json.loads(events[1][1]["action_probabilities"]) == pytest.approx((0.214, 0.572, 0.214), abs=0.001)
 
     retry = budget_trainer(budget=total, milestones=milestones)
     configure_development_probe(retry)
