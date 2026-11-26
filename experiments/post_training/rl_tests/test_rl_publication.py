@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier, local
 from types import SimpleNamespace
@@ -18,6 +18,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from finestore.rl.rl_progress import AttemptSummary, Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
@@ -361,6 +363,7 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
     monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
     sources = ("accepted", "preempted", "unprepared")
     preset = nightly.SNOWBALL.by_name["speed-medium"]
+    control_base = "checkpoints/snowball-rl/controls/speed-medium-"
     version = gate.config_version(gate.compose_preset(preset))
     base = AttemptSummary.model_validate_json(
         json.dumps(
@@ -388,9 +391,13 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
     ]
     rows, requests, states = {}, {}, {}
     monkeypatch.setattr(rl_index, "list_attempts", lambda: [*previous, *rows.values()])
-    monkeypatch.setattr(
-        nightly, "open_iris_client", lambda **_: nullcontext(SimpleNamespace(job_state=lambda job: states[str(job)]))
-    )
+
+    def job_state(job):
+        if str(job) not in states:
+            raise ConnectError(Code.NOT_FOUND, f"Job {job} not found")
+        return states[str(job)]
+
+    monkeypatch.setattr(nightly, "open_iris_client", lambda **_: nullcontext(SimpleNamespace(job_state=job_state)))
     unavailable = True
 
     def publish(record, _url):
@@ -409,46 +416,56 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         batch = command[command.index("--control") + 1]
         requests[batch] = int(command[command.index("--replicates") + 1])
         submit_job = f"/runner/coordinator-{batch}"
-        states[submit_job] = JobState.RUNNING
         submission = publication.ControlSubmission(
-            job=submit_job, outputs=tuple(str(tmp_path / name / recipe.RUN_ARTIFACT_VERSION) for name in sources)
+            job=submit_job,
+            outputs=tuple(str(tmp_path / (control_base + name) / recipe.RUN_ARTIFACT_VERSION) for name in sources),
+            recorded_at=datetime.now(UTC),
         )
         StoragePath(env[publication.CONTROL_SUBMISSION_ENV]).write_text(submission.model_dump_json())
         assert "--wait" not in command
-        return SimpleNamespace(wait=lambda: 0)
+        return SimpleNamespace(poll=lambda: 0)
 
     monkeypatch.setattr(nightly, "subprocess", SimpleNamespace(Popen=submit))
     monkeypatch.setenv("IRIS_USER", "runner")
     legacy_job = "/runner/previous-coordinator"
-    states[legacy_job] = JobState.RUNNING
-    rows["legacy"] = base.model_copy(
+    mochi_job = "/runner/mochi-coordinator"
+    states[mochi_job] = JobState.RUNNING
+    rows["mochi"] = base.model_copy(
         update={
+            "model": "mochi",
             "series": "learning-medium",
             "status": "running",
-            "iris_job_id": legacy_job,
-            "artifact_uri": str(tmp_path / "legacy"),
+            "iris_job_id": mochi_job,
+            "artifact_uri": str(tmp_path / "checkpoints/mochi-rl/controls/learning-medium-legacy/version"),
         }
     )
+    argv = [
+        "rl_nightly_controls",
+        "--batch",
+        "",
+        "--presets",
+        "snowball/speed-medium mochi/learning-medium",
+        "--state-dir",
+        str(state_dir),
+    ]
 
     def tick(batch):
-        monkeypatch.setattr(
-            "sys.argv",
-            [
-                "rl_nightly_controls",
-                "--batch",
-                batch,
-                "--presets",
-                "snowball/speed-medium snowball/learning-medium",
-                "--state-dir",
-                str(state_dir),
-            ],
-        )
+        argv[2] = batch
+        monkeypatch.setattr("sys.argv", argv)
         return nightly.main()
 
     assert tick("123-1") == tick("124-1") == 0
     assert requests == {"123-1": 3}
+    states[legacy_job] = JobState.RUNNING
+    legacy_path = recorded_runs(preset.name, control_base + "legacy", control=True, attempt_id="legacy")
+    with edit_receipt(legacy_path) as receipt:
+        receipt["config"]["run"]["coordinator_iris_job_id"] = legacy_job
+        receipt["result"]["state"] = "succeeded"
+    rows["legacy"] = base.model_copy(
+        update={"status": "running", "iris_job_id": legacy_job, "artifact_uri": str(legacy_path)}
+    )
     for attempt_id in sources[:2]:
-        output = recorded_runs(preset.name, attempt_id, control=True, attempt_id=attempt_id)
+        output = recorded_runs(preset.name, control_base + attempt_id, control=True, attempt_id=attempt_id)
         with edit_receipt(output) as receipt:
             receipt["config"]["run"]["coordinator_iris_job_id"] = coordinator
             if attempt_id == "preempted":
@@ -458,7 +475,12 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
     assert requests == {"123-1": 3}
     assert "accepted" not in rows and rows["preempted"].status == "failed"
     assert tick("126-1") == 0
-    assert requests == {"123-1": 3, "126-1": 2}
+    assert requests == {"123-1": 3}
+    states[legacy_job] = JobState.SUCCEEDED
+    assert tick("127-1") == 0
+    assert requests == {"123-1": 3, "127-1": 1}
+    assert rows["legacy"].status == "succeeded"
+
     assert rows["accepted"].status == "succeeded" and rows["accepted"].preset_version == version
     assert rows["preempted"].status == "failed" and "native_attempt" in rows["preempted"].failed_facts
 

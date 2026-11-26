@@ -174,7 +174,8 @@ def _run_name(
     if control:
         if replicate is None:
             raise ValueError("a control output requires a replicate")
-        return f"checkpoints/{table.namespace}/controls/{preset.name}-{provenance.tree_hash}-{control}-r{replicate}"
+        prefix = recipe.control_run_name_prefix(table.namespace, preset.name)
+        return f"{prefix}{provenance.tree_hash}-{control}-r{replicate}"
     name = f"checkpoints/{table.namespace}/{preset.name}-{provenance.tree_hash}-in-{inputs_hash}"
     if resume_step is not None:
         name += f"-resume-step-{resume_step}"
@@ -836,7 +837,9 @@ def _submit_from_launcher(
         path = StoragePath(submission_path)
 
         def record_control_submission(job: JobName) -> None:
-            submission = rl_publication.ControlSubmission(job=str(job), outputs=tuple(native_ids))
+            submission = rl_publication.ControlSubmission(
+                job=str(job), outputs=tuple(native_ids), recorded_at=datetime.now(UTC)
+            )
             path.write_text(submission.model_dump_json())
 
         job = submit(before_submit=record_control_submission)

@@ -1,6 +1,8 @@
 """Tracker cleanup preserves the workload result when final uploads time out."""
 
+import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -147,7 +149,7 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
     times = iter((100.0, 125.0))
     monkeypatch.setattr(main_base, "time", SimpleNamespace(monotonic=lambda: next(times)))
     failure = RuntimeError("training failed")
-    timers, exits = [], []
+    timers, exits, executor_shutdown = [], [], []
 
     class Timer:
         def __init__(self, timeout, callback):
@@ -161,6 +163,9 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
         def cancel(self):
             self.armed = False
 
+        def join(self):
+            pass
+
         def expire(self):
             if self.armed:
                 self.callback()
@@ -171,13 +176,19 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
     trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
     trainer.evaluation_wall_time = 7.0
 
+    class RecordingExecutor(ThreadPoolExecutor):
+        def shutdown(self, *args, **kwargs):
+            executor_shutdown.append(timers[0].armed)
+            super().shutdown(*args, **kwargs)
+
     async def train():
         trainer._start_exit_watchdog()
+        asyncio.get_running_loop().set_default_executor(RecordingExecutor())
         if training_fails:
             raise failure
 
     async def shutdown():
-        assert timers[0].armed
+        pass
 
     @contextmanager
     def tracker():
@@ -201,6 +212,7 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
         assert raised.value is failure
     else:
         BasePPOExp._run(experiment)
+    assert executor_shutdown and all(executor_shutdown)
     assert exits == []
     assert (attempt := read_attempt(str(tmp_path), "native-attempt")) is not None
     assert attempt.elapsed_excluding_eval_seconds == 18.0

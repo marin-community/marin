@@ -600,6 +600,7 @@ class RayPPOTrainer:
         finally:
             if watchdog := getattr(self, "_teardown_watchdog", None):
                 watchdog.cancel()
+                watchdog.join()
                 self._teardown_watchdog = None
 
     def _start_exit_watchdog(self, timeout: int = 120) -> None:

@@ -40,7 +40,7 @@ from marin.rl.skyrl_records import (
     read_stored_skyrl_attempts,
     recorded_launch,
 )
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AwareDatetime, BaseModel, Field, ValidationError
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.redaction import redact_value
@@ -70,7 +70,8 @@ class ControlSubmission(BaseModel, frozen=True):
     """Pending control outputs saved by the main workflow before Iris submission."""
 
     job: str
-    outputs: tuple[str, ...]
+    outputs: tuple[str, ...] = Field(min_length=1)
+    recorded_at: AwareDatetime | None = None
 
 
 class PublicationOutcome(BaseModel):
@@ -370,7 +371,7 @@ def publish_running(
             url = publish_result(build_record(path, preset, table=table, attempt=attempt), service_url)
             published.add(key)
             click.echo(f"RL progress {url}")
-        return bool(attempts)
+        return any((attempt.index_run_id, attempt.attempt_id) in published for attempt in attempts.values())
     except Exception as error:
         logger.warning("Running row publication will retry for %s (%s)", path, type(error).__name__)
         return False

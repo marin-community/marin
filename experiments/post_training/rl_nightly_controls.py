@@ -11,7 +11,8 @@ import sys
 import time
 from collections import defaultdict
 from collections.abc import Callable, Sequence
-from functools import partial
+from datetime import UTC, datetime, timedelta
+from enum import Enum, auto
 from html import escape
 from pathlib import Path
 
@@ -34,6 +35,14 @@ from experiments.post_training.snowball_rl import SNOWBALL
 _TABLES = {table.model: table for table in (SNOWBALL, MOCHI)}
 _OBSERVATION_SECONDS = 600
 _POLL_SECONDS = 30
+_SUBMISSION_GRACE = timedelta(minutes=15)
+
+
+class _Observation(Enum):
+    WAITING = auto()
+    VISIBLE = auto()
+    FINISHED = auto()
+    FAILED_BEFORE_PREPARATION = auto()
 
 
 def select_presets(selection: str) -> list[tuple[str, Preset]]:
@@ -88,6 +97,13 @@ def dispatch_comment(event_path: Path) -> None:
     subprocess.check_output([*api, f"{repository}/issues/{number}/comments", "-f", f"body={reply}"])
 
 
+def _read_submission(path: StoragePath) -> rl_publication.ControlSubmission | None:
+    try:
+        return rl_publication.ControlSubmission.model_validate_json(path.read_text())
+    except FileNotFoundError:
+        return None
+
+
 def _publish_submission(
     submission: rl_publication.ControlSubmission,
     model: str,
@@ -95,26 +111,36 @@ def _publish_submission(
     job_state: Callable[[JobName], JobState],
     published: set[tuple[str, str]],
     *,
-    new: bool = False,
-) -> tuple[bool, bool]:
-    """Publish a snapshot and report whether the batch ended and its outputs are visible."""
+    pending_file: StoragePath | None = None,
+) -> _Observation:
+    table = _TABLES[model]
+    job = JobName.from_wire(submission.job)
+    prefix = str(
+        StoragePath(rl_compose.run_prefix(preset)) / rl_compose.control_run_name_prefix(table.namespace, preset.name)
+    )
+    if (
+        not job.is_root
+        or job.user != resolve_job_user()
+        or any(not str(StoragePath(output).parent).startswith(prefix) for output in submission.outputs)
+    ):
+        raise ValueError(f"Control submission for {model}/{preset.name} has a foreign job or output")
     try:
-        state = job_state(JobName.from_wire(submission.job))
+        state = job_state(job)
     except ConnectError as error:
         if error.code != Code.NOT_FOUND:
             raise
-        if new:
-            return False, False
-        # A previous runner can stop between recording the handoff and submitting.
+        # The hub also accepted the original submission. Give a lost RPC time to finish before
+        # treating a missing root as abandoned. Rows recovered from the index have already run.
+        if submission.recorded_at is not None and datetime.now(UTC) - submission.recorded_at < _SUBMISSION_GRACE:
+            return _Observation.WAITING
         state = JobState.FAILED
 
-    table = _TABLES[model]
     if not is_job_finished(state):
         visible = [
             rl_publication.publish_running(output, preset, table, submission.job, None, published)
             for output in submission.outputs
         ]
-        return False, all(visible)
+        return _Observation.VISIBLE if all(visible) else _Observation.WAITING
     outcome = rl_publication.publish_runs(
         submission.outputs,
         preset,
@@ -123,26 +149,12 @@ def _publish_submission(
         interrupted=state != JobState.SUCCEEDED,
         allow_unprepared=True,
     )
-    print(outcome.model_dump_json(exclude={"attempts"}), flush=True)
+    print(outcome.model_dump_json(), flush=True)
     if outcome.unserved_records:
         raise RuntimeError(f"Terminal publication remains pending for {submission.job}")
-    return True, True
-
-
-def _publish_pending(
-    path: StoragePath,
-    model: str,
-    preset: Preset,
-    job_state: Callable[[JobName], JobState],
-    published: set[tuple[str, str]],
-    *,
-    new: bool = False,
-) -> bool:
-    submission = rl_publication.ControlSubmission.model_validate_json(path.read_text())
-    finished, visible = _publish_submission(submission, model, preset, job_state, published, new=new)
-    if finished:
-        path.rm()
-    return visible
+    if pending_file is not None:
+        pending_file.rm()
+    return _Observation.FINISHED if outcome.attempts else _Observation.FAILED_BEFORE_PREPARATION
 
 
 def _running_submissions(
@@ -167,7 +179,47 @@ def _running_submissions(
     return [rl_publication.ControlSubmission(job=job, outputs=tuple(sorted(outputs))) for job, outputs in jobs.items()]
 
 
-def _run_controls(batch: str, selection: str, state_dir: StoragePath) -> int:
+def _observe_startup(
+    started: dict[tuple[str, str], tuple[Preset, StoragePath, subprocess.Popen]],
+    job_state: Callable[[JobName], JobState],
+    published: set[tuple[str, str]],
+) -> bool:
+    failed = False
+    errors = {}
+    deadline = time.monotonic() + _OBSERVATION_SECONDS
+    while started:
+        for target, (preset, path, child) in list(started.items()):
+            exit_code = child.poll()
+            failed |= exit_code not in (None, 0)
+            try:
+                submission = _read_submission(path)
+                observation = (
+                    _publish_submission(submission, target[0], preset, job_state, published, pending_file=path)
+                    if submission is not None
+                    else _Observation.WAITING
+                )
+            except (ConnectError, OSError, RuntimeError, ValueError) as error:
+                errors[target] = error
+                continue
+            errors.pop(target, None)
+            failed |= observation is _Observation.FAILED_BEFORE_PREPARATION
+            if exit_code is not None and (observation is not _Observation.WAITING or submission is None):
+                del started[target]
+        if not started or time.monotonic() >= deadline:
+            break
+        time.sleep(_POLL_SECONDS)
+    for target, (_, _, child) in started.items():
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+            print(f"{'/'.join(target)}: launcher exceeded the startup window", file=sys.stderr)
+            failed = True
+    for target, error in errors.items():
+        print(f"{'/'.join(target)}: {error}", file=sys.stderr)
+    return failed or bool(errors)
+
+
+def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir: StoragePath) -> int:
     # The nightly workflow's concurrency group serializes writes to each pending file.
     configure_coreweave_s3()
     started = {}
@@ -180,22 +232,26 @@ def _run_controls(batch: str, selection: str, state_dir: StoragePath) -> int:
             target = (model, preset.name)
             path = state_dir / f"{model}-{preset.name}.json"
             try:
-                if path.exists():
-                    _publish_pending(path, model, preset, client.job_state, published)
-                else:
-                    for submission in _running_submissions(records, *target):
-                        finished, _ = _publish_submission(submission, model, preset, client.job_state, published)
-                        if not finished:
-                            blocked.add(target)
+                stored = _read_submission(path)
+                if stored is not None:
+                    status = _publish_submission(stored, model, preset, client.job_state, published, pending_file=path)
+                    if status in {_Observation.WAITING, _Observation.VISIBLE}:
+                        blocked.add(target)
+                for submission in _running_submissions(records, *target):
+                    if stored is not None and submission.job == stored.job:
+                        continue
+                    status = _publish_submission(submission, model, preset, client.job_state, published)
+                    if status in {_Observation.WAITING, _Observation.VISIBLE}:
+                        blocked.add(target)
             except (ConnectError, OSError, RuntimeError, ValueError) as error:
                 print(f"{model}/{preset.name}: {error}", file=sys.stderr)
                 blocked.add(target)
                 failed = True
         records = rl_index.list_attempts()
-        for model, preset in select_presets(selection):
+        for model, preset in selected:
             path = state_dir / f"{model}-{preset.name}.json"
             try:
-                if (model, preset.name) in blocked or path.exists():
+                if (model, preset.name) in blocked:
                     print(f"{model}/{preset.name}: waiting for the pending control batch", flush=True)
                     continue
                 version = rl_gate.config_version(rl_gate.compose_preset(preset))
@@ -222,33 +278,11 @@ def _run_controls(batch: str, selection: str, state_dir: StoragePath) -> int:
                     ],
                     env={**os.environ, rl_publication.CONTROL_SUBMISSION_ENV: str(path)},
                 )
-                started[model, preset.name] = (
-                    child,
-                    partial(_publish_pending, path, model, preset, client.job_state, published, new=True),
-                )
+                started[model, preset.name] = (preset, path, child)
             except (ValueError, OSError, RuntimeError) as error:
                 print(f"{model}/{preset.name}: {error}", file=sys.stderr)
                 failed = True
-        pending = {}
-        for target, (child, publish) in started.items():
-            if child.wait() == 0:
-                pending[target] = publish
-            else:
-                failed = True
-
-        deadline = time.monotonic() + _OBSERVATION_SECONDS
-        while pending:
-            for target, publish in list(pending.items()):
-                try:
-                    if publish():
-                        del pending[target]
-                except (ConnectError, OSError, RuntimeError, ValueError) as error:
-                    print(f"{'/'.join(target)}: {error}", file=sys.stderr)
-                    failed = True
-                    del pending[target]
-            if not pending or time.monotonic() >= deadline:
-                break
-            time.sleep(_POLL_SECONDS)
+        failed |= _observe_startup(started, client.job_state, published)
     return int(failed)
 
 
@@ -268,12 +302,12 @@ def main() -> int:
         if args.check_presets is not None:
             select_presets(args.check_presets)
             return 0
-        select_presets(args.presets)
+        selected = select_presets(args.presets)
     except ValueError as error:
         parser.error(str(error))
     if not args.state_dir:
         parser.error("--batch requires --state-dir")
-    return _run_controls(args.batch, args.presets, StoragePath(args.state_dir))
+    return _run_controls(args.batch, selected, StoragePath(args.state_dir))
 
 
 if __name__ == "__main__":
