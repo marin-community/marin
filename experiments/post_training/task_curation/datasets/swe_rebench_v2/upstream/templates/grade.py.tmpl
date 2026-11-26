@@ -25,6 +25,7 @@ class TestStatus(str, Enum):
 
 def parse_test_log(test_log):
     test_log = ansi_escape(test_log).replace("\r", "\n")
+    test_log = repair_interleaved_harness_echo(test_log)
     parsed = @@PARSER@@(test_log)
     for name in _names_failed_on_any_line(test_log, @@PARSER@@) & parsed.keys():
         if parsed[name] == TestStatus.PASSED:
@@ -46,23 +47,47 @@ def grade(config, test_log):
     # UNSCORABLE, not a pass: the verdict is not resolved, so the reward stays 0.
     unscorable = not fail_to_pass and not pass_to_pass and not any(results.values())
     actual_passed = _actual_passed_aliases(_normalized_passed_names(results["PASSED"]))
+    # A parsed pass whose capture line was cut by the interleaved harness echo carries
+    # TRUNCATED_TEST_NAME_MARK. The configured id it refers to is recoverable only when
+    # exactly one configured id is consistent with the surviving prefix — the same id for
+    # this verdict — and no other configured id shares the prefix. Fail-closed: any
+    # ambiguity keeps the id unsatisfied.
+    truncated_prefixes = _normalized_passed_names(_truncated_actual_prefixes(results["PASSED"]))
+    expected_ids = _normalized_passed_names(expected["PASSED"])
+
+    def _truncation_recoverable(normalized_name):
+        consistent = [p for p in truncated_prefixes if normalized_name == p or normalized_name.startswith(p)]
+        if len(consistent) != 1:
+            return False
+        prefix = consistent[0]
+        extending = [i for i in expected_ids if i == prefix or i.startswith(prefix)]
+        return extending == [normalized_name]
 
     def status(names):
-        return {
-            name: all(
-                _expected_name_satisfied(actual_passed, normalized)
-                for normalized in _normalized_passed_names({name})
+        verdicts = {}
+        for name in names:
+            normalized_options = _normalized_passed_names({name})
+            satisfied = all(
+                _expected_name_satisfied(actual_passed, normalized) for normalized in normalized_options
             )
-            for name in names
-        }
+            if not satisfied:
+                satisfied = any(_truncation_recoverable(normalized) for normalized in normalized_options)
+            verdicts[name] = satisfied
+        return verdicts
+
+    fail_to_pass_status = status(fail_to_pass)
+    pass_to_pass_status = status(pass_to_pass)
+    resolved = bool(expected["PASSED"]) and not unscorable and all(fail_to_pass_status.values()) and all(
+        pass_to_pass_status.values()
+    )
 
     return {
         "log_parser": LOG_PARSER,
         "unscorable": unscorable,
-        "resolved": normalized_passed_subset(results, expected) and not unscorable,
+        "resolved": resolved,
         "parsed_counts": {key: len(value) for key, value in results.items()},
-        "fail_to_pass": status(fail_to_pass),
-        "pass_to_pass": status(pass_to_pass),
+        "fail_to_pass": fail_to_pass_status,
+        "pass_to_pass": pass_to_pass_status,
         "test_results": {key: sorted(value) for key, value in results.items()},
     }
 
