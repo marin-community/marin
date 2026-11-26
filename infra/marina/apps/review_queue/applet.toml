@@ -2,4 +2,4 @@ applet_id = "e7b980b8-4e26-4729-a2ca-0e21ed3b8544"
 title = "Review queue"
 description = "Open Marin pull requests grouped by requested reviewer."
 build_command = "uv run --no-project python build.py"
-connect_src = ["https://api.github.com"]
+python_entrypoint = "app:create_api"

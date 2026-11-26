@@ -1,8 +1,7 @@
-const API = "https://api.github.com/repos/marin-community/marin/pulls";
-const PAGE_SIZE = 100;
 const FAVORITES_KEY = "marin.review-queue.favorites.v1";
 const GITHUB_HANDLE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38})$/;
 const $ = (id) => document.getElementById(id);
+const numberFormat = new Intl.NumberFormat();
 
 function link(url, label, className = "") {
   const element = document.createElement("a");
@@ -25,7 +24,8 @@ function prRow(pr) {
   const meta = document.createElement("span");
   meta.className = "pr-meta";
   const age = ageDays(pr);
-  meta.textContent = `${pr.draft ? "DRAFT · " : ""}${age === 0 ? "opened today" : `opened ${age}d ago`}`;
+  const size = pr.lines == null ? "" : ` · ${numberFormat.format(pr.lines)} lines`;
+  meta.textContent = `${pr.draft ? "Draft · " : ""}${age === 0 ? "opened today" : `opened ${age}d ago`}${size}`;
   row.append(meta);
   return row;
 }
@@ -64,7 +64,17 @@ function loadFavorites() {
   return new Set(names.filter((name) => typeof name === "string" && GITHUB_HANDLE.test(name)).map((name) => name.toLowerCase()));
 }
 
-function reviewerEntry(name, requests, favorites, expanded, toggleFavorite) {
+function metric(label, value, className = "") {
+  const cell = document.createElement("span");
+  cell.className = `metric ${className}`;
+  const name = document.createElement("span");
+  name.className = "metric-label";
+  name.textContent = label;
+  cell.append(name, value);
+  return cell;
+}
+
+function reviewerEntry(name, requests, stats, favorites, expanded, toggleFavorite) {
   const key = name.toLowerCase();
   const entry = document.createElement("div");
   entry.className = "reviewer-entry";
@@ -82,15 +92,14 @@ function reviewerEntry(name, requests, favorites, expanded, toggleFavorite) {
   star.addEventListener("click", () => toggleFavorite(name));
   identity.append(star, link(`https://github.com/${encodeURIComponent(name)}`, name, "reviewer-name"));
 
-  const pending = document.createElement("strong");
-  pending.className = "pending";
-  pending.textContent = String(requests.length);
-  const oldest = document.createElement("span");
-  oldest.className = "age-cell";
-  oldest.textContent = requests.length ? `${Math.max(...requests.map(ageDays))}d` : "—";
-  const average = document.createElement("span");
-  average.className = "age-cell";
-  average.textContent = requests.length ? `${Math.round(requests.reduce((sum, pr) => sum + ageDays(pr), 0) / requests.length)}d` : "—";
+  const sizes = requests.flatMap((pr) => pr.lines == null ? [] : [pr.lines]);
+  const subtotal = numberFormat.format(sizes.reduce((sum, lines) => sum + lines, 0));
+  const lines = requests.length && sizes.length === 0 ? "—" : subtotal + (sizes.length < requests.length ? "+" : "");
+  const response = stats?.avg_response_hours;
+  const duration = response == null ? "—" : response < 1 ? `${Math.round(response * 60)}m` : `${Math.round(response)}h`;
+  const average = metric("Avg response", duration);
+  if (stats?.response_count) average.title = `Based on ${stats.response_count} matched reviews`;
+  const weekly = stats ? numberFormat.format(Math.round(stats.lines / 2)) : "—";
 
   const action = document.createElement("button");
   action.type = "button";
@@ -110,7 +119,7 @@ function reviewerEntry(name, requests, favorites, expanded, toggleFavorite) {
     action.textContent = "No requests";
     action.disabled = true;
   }
-  line.append(identity, pending, oldest, average, action);
+  line.append(identity, metric("Pending PRs", String(requests.length), "pending"), metric("Pending lines", lines), average, metric("Lines / week", weekly), action);
   entry.append(line);
 
   const requestsList = document.createElement("div");
@@ -121,7 +130,7 @@ function reviewerEntry(name, requests, favorites, expanded, toggleFavorite) {
   return entry;
 }
 
-function renderReviewers(prs, favorites, expanded, toggleFavorite) {
+function renderReviewers(prs, stats, favorites, expanded, toggleFavorite) {
   const groups = groupBy(prs, "requested_reviewers", "login");
   const known = new Set(groups.map(([name]) => name.toLowerCase()));
   for (const name of favorites) if (!known.has(name)) groups.push([name, []]);
@@ -132,7 +141,11 @@ function renderReviewers(prs, favorites, expanded, toggleFavorite) {
   list.replaceChildren();
   const visible = groups.filter(([name]) => name.toLowerCase().includes(query));
   if (!visible.length) emptyMessage(list, query ? "No matching reviewer in the queue." : "No review requests are pending.");
-  for (const [name, requests] of visible) list.append(reviewerEntry(name, requests, favorites, expanded, toggleFavorite));
+  for (const [name, requests] of visible) {
+    const handle = name.toLowerCase();
+    const history = Object.hasOwn(stats, handle) ? stats[handle] : undefined;
+    list.append(reviewerEntry(name, requests, history, favorites, expanded, toggleFavorite));
+  }
 
   const suggestion = $("favorite-suggestion");
   suggestion.replaceChildren();
@@ -170,46 +183,52 @@ function renderOtherQueues(prs) {
   for (const pr of withoutRequest) unassigned.append(prRow(pr));
 }
 
-async function fetchOpenPrs() {
-  const prs = [];
-  for (let page = 1; ; page += 1) {
-    const response = await fetch(`${API}?state=open&per_page=${PAGE_SIZE}&page=${page}`, {
-      headers: { Accept: "application/vnd.github+json" },
-    });
-    if (!response.ok) {
-      if (response.status === 403 || response.status === 429) throw new Error("GitHub rate limit reached. Try refreshing later.");
-      throw new Error(`GitHub returned HTTP ${response.status}.`);
-    }
-    const batch = await response.json();
-    if (!Array.isArray(batch)) throw new Error("GitHub returned an unexpected response.");
-    prs.push(...batch);
-    if (batch.length < PAGE_SIZE) return prs;
-  }
+async function api(path, options) {
+  const response = await fetch(`./api/${path}`, { cache: "no-store", ...options });
+  if (!response.ok) throw new Error(`Marina returned HTTP ${response.status}.`);
+  return response.json();
 }
 
 function startReviewQueue() {
-  let current = [];
-  let hasLoaded = false;
+  let current = { prs: [], stats: {}, refreshed_at: null };
+  let timer;
   const favorites = loadFavorites();
   const expanded = new Set();
+
+  function render() {
+    renderReviewers(current.prs, current.stats, favorites, expanded, toggleFavorite);
+  }
 
   function toggleFavorite(name) {
     const key = name.toLowerCase();
     if (favorites.has(key)) favorites.delete(key);
     else favorites.add(key);
     localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites]));
-    renderReviewers(current, favorites, expanded, toggleFavorite);
+    render();
+  }
+
+  async function loadQueue() {
+    current = await api("queue");
+    if (current.refreshed_at) {
+      render();
+      renderOtherQueues(current.prs);
+      $("updated").textContent = `GitHub snapshot · ${new Date(current.refreshed_at).toLocaleString()}`;
+    } else {
+      $("updated").textContent = "Getting the first GitHub snapshot…";
+    }
   }
 
   async function refresh() {
+    clearTimeout(timer);
     $("refresh").disabled = true;
-    $("updated").textContent = "Loading open pull requests…";
-    let prs;
     try {
-      prs = await fetchOpenPrs();
+      await loadQueue();
+      const { retry_in } = await api("sync", { method: "POST", headers: { "X-Review-Queue": "sync" } });
+      await loadQueue();
+      timer = setTimeout(refresh, retry_in * 1000);
     } catch (error) {
-      $("updated").textContent = `${error.message}${hasLoaded ? " Showing the last loaded queue." : ""}`;
-      if (!hasLoaded) {
+      $("updated").textContent = `${error.message}${current.refreshed_at ? " Showing the last loaded queue." : ""}`;
+      if (!current.refreshed_at) {
         $("reviewers").replaceChildren();
         emptyMessage($("reviewers"), "Queue unavailable.");
       }
@@ -217,15 +236,10 @@ function startReviewQueue() {
     } finally {
       $("refresh").disabled = false;
     }
-    current = prs;
-    hasLoaded = true;
-    renderReviewers(prs, favorites, expanded, toggleFavorite);
-    renderOtherQueues(prs);
-    $("updated").textContent = `Updated ${new Date().toLocaleString()}`;
   }
 
   $("refresh").addEventListener("click", refresh);
-  $("search").addEventListener("input", () => renderReviewers(current, favorites, expanded, toggleFavorite));
+  $("search").addEventListener("input", render);
   refresh();
 }
 

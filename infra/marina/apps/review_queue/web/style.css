@@ -53,11 +53,13 @@ h2 { margin: 0; font-size: 25px; letter-spacing: -.04em; font-weight: 600; }
 
 .column-headings, .reviewer-line {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) 80px 105px 105px 100px;
+  grid-template-columns: minmax(135px, 1fr) repeat(4, minmax(84px, 110px)) 80px;
   align-items: center;
   gap: 12px;
 }
-.column-headings { padding: 0 16px 10px; color: var(--muted); font: 500 10px ui-monospace, monospace; letter-spacing: .06em; }
+.column-headings { padding: 0 17px 10px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.metric { color: #405b4c; font: 12px ui-monospace, monospace; }
+.metric-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .reviewers { border: 1px solid var(--line); border-radius: 5px; background: var(--white); }
 .reviewer-entry + .reviewer-entry { border-top: 1px solid var(--line); }
 .reviewer-line { min-height: 60px; padding: 8px 16px; }
@@ -67,7 +69,6 @@ h2 { margin: 0; font-size: 25px; letter-spacing: -.04em; font-weight: 600; }
 .star:focus-visible, .expand:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .reviewer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; font-size: 13px; font-weight: 700; }
 .pending { font: 600 17px ui-monospace, monospace; }
-.age-cell { color: #405b4c; font: 12px ui-monospace, monospace; }
 .expand { justify-self: end; border: 0; background: transparent; color: var(--accent); padding: 7px 0; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .expand:hover { text-decoration: underline; }
 .expand:disabled { color: var(--muted); cursor: default; font-weight: 400; }
@@ -99,15 +100,11 @@ footer { padding: 23px 0 32px; color: var(--muted); font-size: 11px; line-height
   .section-heading { align-items: stretch; flex-direction: column; gap: 14px; }
   .search-label input { width: 100%; }
   .column-headings { display: none; }
-  .reviewer-line { grid-template-columns: minmax(0, 1fr) 32px 83px; gap: 4px 9px; min-height: 71px; padding: 9px 11px; }
-  .reviewer-identity { grid-column: 1; grid-row: 1; gap: 7px; }
-  .pending { grid-column: 2; grid-row: 1; text-align: right; font-size: 15px; }
-  .expand { grid-column: 3; grid-row: 1; font-size: 11px; }
-  .age-cell { grid-row: 2; font-size: 10px; }
-  .age-cell:nth-child(3) { grid-column: 1; padding-left: 36px; }
-  .age-cell:nth-child(3)::before { content: "Oldest PR "; color: var(--muted); }
-  .age-cell:nth-child(4) { grid-column: 2 / 4; text-align: right; }
-  .age-cell:nth-child(4)::before { content: "Avg age "; color: var(--muted); }
+  .reviewer-line { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 8px; min-height: 71px; padding: 9px 12px; }
+  .reviewer-identity { grid-column: 1 / 4; grid-row: 1; gap: 7px; }
+  .expand { grid-column: 4; grid-row: 1; font-size: 11px; }
+  .metric { display: grid; gap: 2px; font-size: 12px; }
+  .metric-label { position: static; width: auto; height: auto; clip-path: none; white-space: normal; color: var(--muted); font: 10px system-ui, sans-serif; }
   .request-list { padding: 2px 12px 12px; }
   .pr-row { align-items: start; flex-direction: column; gap: 2px; }
   .other-list { padding: 0 8px 15px; }

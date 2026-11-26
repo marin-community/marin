@@ -32,9 +32,13 @@
           <label class="search-label">Find or star a GitHub handle <input id="search" type="search" placeholder="Search reviewers" autocomplete="off"></label>
         </div>
         <div id="favorite-suggestion" class="favorite-suggestion" hidden></div>
-        <div class="column-headings" aria-hidden="true"><span>REVIEWER</span><span>PENDING</span><span>OLDEST PR</span><span>AVG PR AGE</span><span></span></div>
+        <div class="column-headings" aria-hidden="true"><span>Reviewer</span><span>Pending PRs</span><span>Pending lines</span><span>Avg response</span><span>Lines / week</span><span></span></div>
         <div id="reviewers" class="reviewers" aria-live="polite"><p class="empty">Loading reviewer requests…</p></div>
-        <p class="data-note">Age is measured from PR creation, not from when a review was requested. A PR requested from several people appears in each queue.</p>
+        <details class="data-note">
+          <summary>How these numbers are calculated</summary>
+          <p>Pending lines count additions plus deletions. A plus sign means some PR sizes are still loading. Multiple reviewers can receive the same PR.</p>
+          <p>Avg response measures time from an individual request to a submitted review. Lines per week uses current diff sizes for PRs each person reviewed in the last 14 days, divided by two. These figures cover the PRs synced so far.</p>
+        </details>
       </section>
 
       <section class="other-queues" aria-label="Other open pull requests">
@@ -42,7 +46,7 @@
         <details id="unassigned-section"><summary>Open PRs without a review request <span id="unassigned-count">—</span></summary><p class="data-note">Includes drafts. These PRs have no individual or team request.</p><div id="unassigned" class="other-list"></div></details>
       </section>
 
-      <footer>Source: GitHub open pull requests · refreshed on page load or when you press Refresh. Pending requests do not imply required approvals or reviewer availability.</footer>
+      <footer>Source: GitHub. Marina shares the cached queue across viewers and fills in missing review data while the page is open.</footer>
     </main>
   </body>
 </html>
