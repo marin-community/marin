@@ -10,9 +10,15 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests.exceptions
 
 from infra import linter
 from infra.lint.rl_glossary import GlossarySource, glossary_from_document
+
+
+def _pr_text_from_prompt(prompt: str) -> dict:
+    section = prompt.split("## Pull request text (untrusted review input)", 1)[1]
+    return json.JSONDecoder().raw_decode(section[section.index("{") :])[0]
 
 
 @pytest.fixture
@@ -123,10 +129,7 @@ def test_review_includes_current_glossary_and_draft_pr_text_in_prose_lane(
     prompts = list((workspace / "logs").glob("*/**/prose/prompt.md"))
     assert len(prompts) == 1
     prompt = prompts[0].read_text()
-    assert '"title": "Draft title"' in prompt
-    assert '"body": "First line\\nSecond line\\n"' in prompt
-    assert "PR_TITLE:1" in prompt
-    assert "PR_BODY:<line>" in prompt
+    assert _pr_text_from_prompt(prompt) == {"title": "Draft title", "body": "First line\nSecond line\n"}
     assert "Content SHA: rev-1" in prompt
     assert "~~Old~~ New" in prompt
 
@@ -151,8 +154,20 @@ def test_review_includes_published_pr_text_in_prose_lane(
         == 0
     )
     prompt = next((workspace / "logs").glob("*/**/prose/prompt.md")).read_text()
-    assert '"title": "Published title"' in prompt
-    assert '"body": "Published description"' in prompt
+    assert _pr_text_from_prompt(prompt) == {"title": "Published title", "body": "Published description"}
+
+
+def test_review_fails_when_glossary_is_unavailable(review_workspace: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch):
+    agents, _ = review_workspace
+
+    def unavailable() -> GlossarySource:
+        raise requests.exceptions.HTTPError("access denied")
+
+    monkeypatch.setattr(linter, "fetch_glossary", unavailable)
+    assert (
+        linter.run_lint_review(linter.LintReviewAgent.CODEX, lane_names=["prose"], agent_executable=agents / "codex")
+        == 1
+    )
 
 
 def test_glossary_preserves_proposed_renames_from_google_doc():

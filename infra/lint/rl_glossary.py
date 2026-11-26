@@ -48,7 +48,7 @@ def glossary_from_document(document: dict) -> GlossarySource:
 
 
 def fetch_glossary() -> GlossarySource:
-    """Read the current doc through ADC, impersonating the GCE account for a Docs scope."""
+    """Return the current glossary text for review."""
     credentials, _ = google.auth.default(scopes=[DOCS_SCOPE])
     if isinstance(credentials, compute_engine.Credentials):
         request = Request()

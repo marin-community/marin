@@ -27,8 +27,6 @@ Draft the PR title and description before advisory review. Pass the exact draft
 title with `--pr-title` and the description file with `--pr-body-file` to the
 review command so the prose lane checks PR vocabulary alongside the branch.
 If either changes after review, rerun the prose lane against the final draft.
-If the review reports that the RL Loop Glossary was unavailable, do not add the
-`agentic-lint` label; the CI review must check the current glossary.
 
 ## 1. Clean up your own diff
 
