@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import select
 import signal
 import subprocess
 import sys
@@ -19,7 +18,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path, PurePosixPath
-from time import monotonic
+from time import monotonic, sleep
 from typing import Literal, cast
 
 import fsspec
@@ -914,14 +913,6 @@ def _launcher_command(config_path: str) -> list[str]:
     return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
-def skyrl_cpu_environment(env_vars: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Remove Python path and virtualenv overrides for SkyRL CPU processes."""
-    environment = {**os.environ, **(env_vars or {})}
-    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
-        environment.pop(key, None)
-    return environment
-
-
 def run_skyrl_cpu(
     command: list[str],
     *,
@@ -930,61 +921,51 @@ def run_skyrl_cpu(
     stream_stderr: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run a SkyRL CPU process in its own group and preserve diagnostic output."""
-    environment = skyrl_cpu_environment(env_vars)
-    tail = b""
+    environment = {**os.environ, **(env_vars or {})}
+    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        environment.pop(key, None)
     deadline = None if timeout is None else monotonic() + timeout
     with (
         tempfile.TemporaryFile() as stdout,
         tempfile.TemporaryFile() as stderr,
-        subprocess.Popen(
-            command,
-            stdout=stdout,
-            stderr=subprocess.PIPE if stream_stderr else stderr,
-            env=environment,
-            start_new_session=True,
-        ) as process,
+        subprocess.Popen(command, stdout=stdout, stderr=stderr, env=environment, start_new_session=True) as process,
     ):
-        pipe = process.stderr
+        forwarded = 0
 
-        def stream_diagnostics(wait: float) -> None:
-            nonlocal tail, pipe
-            if pipe is None:
-                select.select([], [], [], wait)
-            elif select.select([pipe], [], [], wait)[0]:
-                data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
-                if data:
+        def forward() -> None:
+            nonlocal forwarded
+            if stream_stderr:
+                size = os.fstat(stderr.fileno()).st_size
+                while forwarded < size:
+                    data = os.pread(stderr.fileno(), min(size - forwarded, _CPU_DIAGNOSTIC_BYTES), forwarded)
                     sys.stderr.write(data.decode(errors="replace"))
-                    tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
-                else:
-                    pipe = None
+                    forwarded += len(data)
 
         def diagnostics() -> bytes:
-            if not stream_stderr:
-                stderr.seek(max(0, os.fstat(stderr.fileno()).st_size - _CPU_DIAGNOSTIC_BYTES))
-                return stderr.read()
-            stream_diagnostics(0)
-            return tail
+            forward()
+            offset = max(0, os.fstat(stderr.fileno()).st_size - _CPU_DIAGNOSTIC_BYTES)
+            return os.pread(stderr.fileno(), _CPU_DIAGNOSTIC_BYTES, offset)
 
         try:
-            if stream_stderr:
-                while process.poll() is None:
-                    remaining = 0.25 if deadline is None else min(0.25, deadline - monotonic())
-                    if remaining <= 0:
-                        raise subprocess.TimeoutExpired(command, timeout)
-                    stream_diagnostics(remaining)
-            else:
-                process.wait(timeout=timeout)
+            while process.poll() is None:
+                forward()
+                remaining = 0.25 if deadline is None else min(0.25, deadline - monotonic())
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                with suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=remaining)
         except BaseException as error:
             try:
                 if stream_stderr and isinstance(error, KeyboardInterrupt):
-                    # Let the native launcher interrupt its Iris wait and cancel the job.
+                    # Give the launcher time to cancel its Iris wait.
                     with suppress(ProcessLookupError):
                         os.killpg(process.pid, signal.SIGINT)
                         cleanup = monotonic() + _LAUNCHER_CANCEL_GRACE_SECONDS
                         while monotonic() < cleanup:
                             process.poll()
                             os.killpg(process.pid, 0)
-                            stream_diagnostics(0.1)
+                            forward()
+                            sleep(0.1)
             finally:
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
@@ -995,9 +976,10 @@ def run_skyrl_cpu(
         if returncode:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-        output = diagnostics().decode(errors="replace")
         stdout.seek(0)
-        return subprocess.CompletedProcess(command, returncode, stdout.read().decode(errors="replace"), output)
+        return subprocess.CompletedProcess(
+            command, returncode, stdout.read().decode(errors="replace"), diagnostics().decode(errors="replace")
+        )
 
 
 def prepare_skyrl_cpu_python(timeout: float, *, project_root: Path | None = None) -> Path:

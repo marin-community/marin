@@ -781,17 +781,8 @@ def _native_config(operation: str, *args: str):
     logger.info("%s took %.2f s", preparation, monotonic() - started)
     with tempfile.TemporaryDirectory(prefix="skyrl-config-") as directory:
         progress = Path(directory) / "stage"
-        command = [
-            str(interpreter),
-            "-I",
-            "-m",
-            _NATIVE_CONFIG_MODULE,
-            "--checkout",
-            str(checkout),
-            "--progress-file",
-            str(progress),
-            *args,
-        ]
+        command = [str(interpreter), "-I", "-m", _NATIVE_CONFIG_MODULE]
+        command += ["--checkout", str(checkout), "--progress-file", str(progress), *args]
         started = monotonic()
         try:
             result = run_skyrl_cpu(command, timeout=120)
@@ -802,11 +793,8 @@ def _native_config(operation: str, *args: str):
                 f"{_native_diagnostic(error, progress)}"
             ) from error
         logger.info("%s took %.2f s", operation, monotonic() - started)
-        output = result.stdout.strip()
-        if not output:
-            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
         try:
-            return json.loads(output)
+            return json.loads(result.stdout)
         except ValueError as error:
             raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 

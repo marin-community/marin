@@ -278,29 +278,23 @@ class RetentionCase:
     inventory_error: bool = False
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
-        pytest.param(RetentionCase((1,), export_hf=True, expected_marker="1"), id="best-after-export"),
-        pytest.param(RetentionCase((1, 2), keep_every=2, expected_marker="2"), id="periodic-newer-than-best"),
-        pytest.param(RetentionCase((1, 3), keep_every=1, missing_rollout_step=2), id="missing-rollout"),
-        pytest.param(RetentionCase((2,), keep_every=2, best_format="hf", expected_marker="2"), id="hf-with-periodic"),
-        pytest.param(RetentionCase((3,), best_format=None), id="no-winner"),
-        pytest.param(RetentionCase((2, 3), retention="latest", keep_every=2, best_format=None), id="latest"),
-        pytest.param(RetentionCase((1, 2, 3, 4), retention=None), id="legacy-config"),
-        pytest.param(RetentionCase((1, 2, 3, 4), job_state="failed"), id="failed"),
-        pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker=None, expected_marker=None), id="no-marker"),
-        pytest.param(
-            RetentionCase((1, 2, 3, 4), best_format=None, marker="invalid", expected_marker="invalid"),
-            id="unreadable-marker",
-        ),
-        pytest.param(RetentionCase((1, 2, 4), pending_exports=(2, 4), expected_marker="2"), id="pending-exports"),
-        pytest.param(
-            RetentionCase((1, 2, 3, 4), keep_every=2, best_format="hf", inventory_error=True),
-            id="checkpoint-storage-error",
-        ),
-    ],
-)
+@pytest.mark.parametrize("case", [
+    pytest.param(RetentionCase((1,), export_hf=True, expected_marker="1"), id="best-after-export"),
+    pytest.param(RetentionCase((1, 2), keep_every=2, expected_marker="2"), id="periodic-newer-than-best"),
+    pytest.param(RetentionCase((1, 3), keep_every=1, missing_rollout_step=2), id="missing-rollout"),
+    pytest.param(RetentionCase((2,), keep_every=2, best_format="hf", expected_marker="2"), id="hf-with-periodic"),
+    pytest.param(RetentionCase((3,), best_format=None), id="no-winner"),
+    pytest.param(RetentionCase((2, 3), retention="latest", keep_every=2, best_format=None), id="latest"),
+    pytest.param(RetentionCase((1, 2, 3, 4), retention=None), id="legacy-config"),
+    pytest.param(RetentionCase((1, 2, 3, 4), job_state="failed"), id="failed"),
+    pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker=None, expected_marker=None), id="no-marker"),
+    pytest.param(RetentionCase((1, 2, 3, 4), best_format=None, marker="invalid", expected_marker="invalid"), id="unreadable-marker"),
+    pytest.param(RetentionCase((1, 2, 4), pending_exports=(2, 4), expected_marker="2"), id="pending-exports"),
+    pytest.param(
+        RetentionCase((1, 2, 3, 4), keep_every=2, best_format="hf", inventory_error=True),
+        id="checkpoint-storage-error",
+    ),
+])
 def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_checkpoints, case, monkeypatch):
     path, root = completed_run_checkpoints
     config = yaml.safe_load(path.read_text())
@@ -323,14 +317,9 @@ def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_chec
     if case.pending_exports:
         training = load_launch_config(path)
         for step in case.pending_exports:
-            write_hf_export_request(
-                HFExportRequest.from_trainer(
-                    training.skyrl.trainer,
-                    step=step,
-                    checkpoint_root=str(root),
-                    export_root=training.artifacts.export_root,
-                )
-            )
+            write_hf_export_request(HFExportRequest.from_trainer(
+                training.skyrl.trainer, step=step, checkpoint_root=str(root), export_root=training.artifacts.export_root
+            ))
     if case.inventory_error:
         listing = launch.checkpoint_io.list_dir
 
@@ -367,12 +356,7 @@ def test_checkpoint_export_launch_preserves_training_checkpoints(completed_run_c
         training.skyrl.trainer, step=1, checkpoint_root=str(root), export_root=training.artifacts.export_root
     )
     spec = export_hf_checkpoint.ExportJobSpec(
-        request=request,
-        cluster="cw-rno2a",
-        priority="batch",
-        gpu_variant="H100",
-        job_name="export",
-        timeout=7200,
+        request=request, cluster="cw-rno2a", priority="batch", gpu_variant="H100", job_name="export", timeout=7200,
         no_wait=False,
     )
     export_path = tmp_path / "export.yaml"

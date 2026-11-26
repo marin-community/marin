@@ -35,19 +35,21 @@ if [[ "$system_python_version" != "Python $required_python_minor".* ]]; then
   exit 1
 fi
 
-profile_settings="$("$system_python" -I "$project_root/cloud/iris/runtime_environment.py" "$profile")"
-mapfile -t settings <<< "$profile_settings"
-device="${settings[0]}"
-read -r -a extras <<< "${settings[1]}"
-read -r -a checks <<< "${settings[2]}"
 runtime_link_mode=symlink
-if [[ "$device" == cpu ]]; then
-  runtime_link_mode="${UV_LINK_MODE:-copy}"
-fi
-runtime_extras=()
-for extra in "${extras[@]}"; do
-  runtime_extras+=(--extra "$extra")
-done
+device=cuda
+case "$profile" in
+  megatron) runtime_extras=(--extra megatron --extra vllm --extra telemetry) ;;
+  megatron-export) runtime_extras=(--extra megatron) ;;
+  hub-publish)
+    runtime_extras=(--extra cpu)
+    runtime_link_mode="${UV_LINK_MODE:-copy}"
+    device=cpu
+    ;;
+  *)
+    echo "unsupported runtime profile: $profile" >&2
+    exit 2
+    ;;
+esac
 
 uv_version="$(cat "$project_root/.uv-version")"
 UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
@@ -64,9 +66,7 @@ python="$environment/bin/python"
 check_script="$project_root/cloud/iris/runtime_checks.py"
 "$python" -I "$project_root/marinskyrl/environment_contract.py" write-task-runtime "$runtime_file" "$device" "$project_root"
 if [[ "$device" == cpu ]]; then
-  for check in "${checks[@]}"; do
-    "$python" -I "$check_script" "$check"
-  done
+  "$python" -I "$check_script" hub-publish
   exit 0
 fi
 source "$project_root/cloud/iris/load_runtime_environment.sh"
@@ -92,9 +92,14 @@ run_check() {
   check_logs+=("$workdir/check-$name.log")
 }
 
-for check in "${checks[@]}"; do
-  run_check "$check" "$python" -I "$check_script" "$check"
-done
+run_check flash-attention "$python" -I "$check_script" flash-attention
+run_check megatron "$python" -I "$check_script" megatron
+if [[ "$profile" == megatron-export ]]; then
+  run_check export "$python" -I "$check_script" export
+else
+  run_check agents "$python" -I "$check_script" agents
+  run_check vllm "$python" -I "$check_script" vllm
+fi
 
 check_status=0
 for index in "${!check_pids[@]}"; do

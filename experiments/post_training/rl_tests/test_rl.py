@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -122,15 +121,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
             assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
-    coordinator = tmp_path / "coordinator-env"
-    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(coordinator)], check=True, timeout=20)
-    before = {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")}
-    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(coordinator))
-    monkeypatch.setenv("VIRTUAL_ENV", str(coordinator))
-    monkeypatch.setenv("PATH", str(coordinator / "bin"), prepend=os.pathsep)
-
     composed = gate.compose_configs(list(launch_paths.values()), validate_driver=True)
-    assert {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")} == before
     configs = dict(zip(launch_paths, composed, strict=True))
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"

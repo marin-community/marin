@@ -652,7 +652,7 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
         f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
         launch_config.task_path,
         f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate",
-        *(["--pynccl-init"] if args.runtime_profile.includes_vllm else []),
+        *(["--pynccl-init"] if not _is_checkpoint_export(args) else []),
         *(["--gate-single-nvlink-domain"] if single_domain else []),
     ]
 

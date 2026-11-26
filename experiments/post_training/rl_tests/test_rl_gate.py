@@ -634,6 +634,46 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
     assert monotonic() < deadline, "native failure waited for the build child to finish"
 
 
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (subprocess.TimeoutExpired("compose", 120, stderr="sk\x1b-fixture-abcdefghijklmnopqrstuvwxyz"), "[REDACTED]"),
+        (subprocess.TimeoutExpired("compose", 120), "timed out after 120 s"),
+        (subprocess.CompletedProcess([], 0, "", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 0, "{", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 1, "", ""), "exited with status 1"),
+        (FileNotFoundError("native composer executable missing"), "native composer executable missing"),
+    ],
+    ids=["redacted-timeout", "timeout", "empty", "invalid-json", "nonzero", "missing-executable"],
+)
+def test_native_composition_reports_failure(monkeypatch, outcome, expected):
+    monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", lambda *args, **kwargs: sys.executable)
+
+    def compose(command, *, timeout):
+        Path(command[command.index("--progress-file") + 1]).write_text("Compose document 1/1")
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(gate, "run_skyrl_cpu", compose)
+    with pytest.raises(gate.InvalidComparison) as failure:
+        gate.compose_configs(["launch.yaml"])
+    message = str(failure.value)
+    assert expected in message and "native configuration cannot be composed" in message
+    if isinstance(outcome, Exception) or outcome.returncode:
+        assert "Compose document 1/1" in message
+    assert "fixture-abcdefghijklmnopqrstuvwxyz" not in message
+
+
+def test_native_composition_reports_environment_preparation_timeout(monkeypatch):
+    def prepare(timeout, **kwargs):
+        raise subprocess.TimeoutExpired("prepare", timeout)
+
+    monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", prepare)
+    with pytest.raises(gate.InvalidComparison, match=r"Prepare SkyRL CPU environment.*timed out after 300 s"):
+        gate.compose_configs(["launch.yaml"])
+
+
 @pytest.mark.timeout(15)
 def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
     marker = tmp_path / "cancellation"

@@ -19,12 +19,7 @@ def verify_checkout(checkout: Path, *modules: ModuleType) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--checkout",
-        type=Path,
-        required=True,
-        help="checkout that supplies native modules",
-    )
+    parser.add_argument("--checkout", type=Path, required=True, help="checkout that supplies native modules")
     parser.add_argument("--progress-file", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     compose = commands.add_parser("compose", help="compose native launch documents")

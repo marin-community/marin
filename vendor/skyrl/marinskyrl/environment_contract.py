@@ -60,7 +60,6 @@ class EnvVarSpec:
     source: EnvVarSource
     scopes: frozenset[EnvVarScope]
     writers: frozenset[EnvVarWriter] = frozenset({EnvVarWriter.MANAGER})
-    prepend: bool = False
 
 
 ALL_RUNTIME_SCOPES = frozenset(EnvVarScope)
@@ -177,13 +176,12 @@ ENV_VAR_SPECS = (
     EnvVarSpec("TORCH_NCCL_TRACE_CPP_STACK", "trainer.debug_mode", EnvVarSource.DERIVED, ALL_RUNTIME_SCOPES),
     EnvVarSpec("TORCH_SHOW_CPP_STACKTRACES", "trainer.debug_mode", EnvVarSource.DERIVED, ALL_RUNTIME_SCOPES),
     EnvVarSpec("TORCH_SYMBOLIZE_MODE", "trainer.debug_mode", EnvVarSource.DERIVED, ALL_RUNTIME_SCOPES),
-    EnvVarSpec(PATH_ENV, "runtime.bootstrap", EnvVarSource.EXTERNAL, frozenset({EnvVarScope.TASK_RUNTIME}), prepend=True),
+    EnvVarSpec(PATH_ENV, "runtime.bootstrap", EnvVarSource.EXTERNAL, frozenset({EnvVarScope.TASK_RUNTIME})),
     EnvVarSpec(
         PYTHONPATH_ENV,
         "runtime.bootstrap",
         EnvVarSource.EXTERNAL,
         frozenset({EnvVarScope.DRIVER, EnvVarScope.TASK_RUNTIME}),
-        prepend=True,
     ),
     EnvVarSpec(VLLM_USE_V1_ENV, "ci.marin_nightly.grug", EnvVarSource.EXTERNAL, frozenset({EnvVarScope.DRIVER})),
     EnvVarSpec(
@@ -244,7 +242,6 @@ ENV_VAR_SPECS = (
         "runtime.bootstrap",
         EnvVarSource.EXTERNAL,
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.TASK_RUNTIME}),
-        prepend=True,
     ),
     EnvVarSpec(
         NVRTC_HOME_ENV,
@@ -263,7 +260,6 @@ ENV_VAR_SPECS = (
         "runtime.bootstrap",
         EnvVarSource.EXTERNAL,
         frozenset({EnvVarScope.RAY_WORKER, EnvVarScope.TASK_RUNTIME}),
-        prepend=True,
     ),
     EnvVarSpec(
         MAX_JOBS_ENV,
@@ -757,6 +753,9 @@ def wandb_launch_environment(*, entity: str | None, environ: Mapping[str, str] |
     return {WANDB_ENTITY_ENV: entity or ambient.get(WANDB_ENTITY_ENV, "dogml")}
 
 
+_PREPENDED_RUNTIME_ENV = frozenset({PATH_ENV, PYTHONPATH_ENV, LD_LIBRARY_PATH_ENV, LIBRARY_PATH_ENV})
+
+
 def write_task_runtime(path: Path, *, cuda: bool, project: Path) -> None:
     """Write the frozen task environment as NUL-terminated data records."""
     values = {PATH_ENV: str(Path(sys.executable).parent)}
@@ -770,10 +769,8 @@ def write_task_runtime(path: Path, *, cuda: bool, project: Path) -> None:
         )
     with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete_on_close=False) as stream:
         for name, value in values.items():
-            spec = _SPECS_BY_NAME.get(name)
-            mode = "prepend" if spec is not None and spec.prepend else "replace"
+            mode = "prepend" if name in _PREPENDED_RUNTIME_ENV else "replace"
             stream.write(os.fsencode(f"{mode}:{name}={value}") + b"\0")
-        stream.write(b"complete\0")
         stream.flush()
         Path(stream.name).replace(path)
 
