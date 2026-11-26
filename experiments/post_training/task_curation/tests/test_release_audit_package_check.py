@@ -190,6 +190,22 @@ def test_strict_audit_pass_seals_receipt(tmp_path):
     assert _last_alert_kind(tmp_path) == strict_audit.alerts.KIND_FINISH
 
 
+def test_strict_audit_compares_survey_rows_as_sealed(tmp_path):
+    """Regression (R40 #53): a survey sealed before ``BackendFit.blocker_reasons`` existed
+    is served without it; the audit must not compare the model's default against it."""
+    survey = backend_survey().model_dump(mode="json")
+    for row in survey["sources"]:
+        for fit in row["backends"].values():
+            del fit["blocker_reasons"]
+    fixture = _audit_fixture(tmp_path)
+    rows = {row["source_id"]: row for row in survey["sources"]}
+    for served in fixture.served["sources"]:
+        served["backend_capabilities"] = rows[served["id"]]
+    inputs = dataclasses.replace(fixture.inputs, backend=_seal_json(tmp_path, "backend-presealed.json", survey))
+    proof = strict_audit.run_strict_audit(inputs, dry_run=True, feeds=_feeds(tmp_path), reader_factory=fixture.factory)
+    assert proof["mismatches"] == {}
+
+
 def test_strict_audit_reports_all_mismatches_at_once(tmp_path):
     fixture = _audit_fixture(tmp_path)
     fixture.served["sources"][0]["dataset_revision"] = "999"

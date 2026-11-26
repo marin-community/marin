@@ -117,7 +117,11 @@ def _merge_mismatches(target: dict[str, list[str]], extra: dict[str, list[str]])
 
 
 def _survey_rows(survey: BackendSurvey) -> dict[str, dict]:
-    return {canonical_source_id(row.source_id): row.model_dump(mode="json") for row in survey.sources}
+    """The sealed survey rows as sealed: a field the model gained after the seal
+    (R40: ``BackendFit.blocker_reasons``) must not appear as its default."""
+    return {
+        canonical_source_id(row.source_id): row.model_dump(mode="json", exclude_unset=True) for row in survey.sources
+    }
 
 
 def _survey_groups(survey: SourceIdentitySurvey) -> dict[str, dict]:
