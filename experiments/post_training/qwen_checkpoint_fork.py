@@ -23,6 +23,11 @@ FORKS: tuple[tuple[str, Literal[6, 10]], ...] = (("easy10", 10), ("easy06", 6))
 FORK_SEEDS = (SEED, 163, 167)
 EXTENSION_SEEDS = (173, 179)
 EXTENSION_REVISION = "2026.11.26.7"
+DEEP_REVISION = "2026.11.26.8"
+DEEP_SEEDS = (181, 191, 193)
+DEEP_ENDPOINT = "qwen-string-deep384@2026.11.26.1"
+DEEP_BUDGET = 3_703_021
+NO_SAVE_REVISIONS = (EXTENSION_REVISION, DEEP_REVISION)
 
 
 def warmup_preset():
@@ -64,23 +69,24 @@ class ForkTraining(Training):
         initial_model_uri: str | None,
     ) -> tuple[Callback, ...]:
         callbacks = super().callbacks(preset, evaluation, profiles, expected_tasks, initial_model_uri)
-        if preset.revision == EXTENSION_REVISION:
+        if preset.revision in NO_SAVE_REVISIONS:
             # The fork restores the shared donor and publishes terminal evaluations only.
             callbacks = tuple(callback for callback in callbacks if callback.type != "checkpoint")
         return (*callbacks, ForkSourceQuotaCallback(type="fork_source_quota", easy_quota=self.easy_quota))
 
 
 def fork_preset(name: str, easy_quota: Literal[6, 10], seed: int, *, revision: str = FORK_REVISION) -> Preset:
-    """Continue the same source pass to a shared absolute two Mi-token cap."""
+    """Continue the same source pass to the release's absolute gross token cap."""
     source = warmup_preset()
     layout = source.recipe.layout
     assert isinstance(layout.workload, Training)
-    if revision == EXTENSION_REVISION:
+    if revision in NO_SAVE_REVISIONS:
         layout = replace(layout, host_memory="128GiB")
+    endpoint, gross_budget = (DEEP_ENDPOINT, DEEP_BUDGET) if revision == DEEP_REVISION else (ENDPOINT, 2 * BLOCK_TOKENS)
     config = source.recipe.config.merge(
         RecipePatch(
             data=sections.Data(sampling=sections.Sampling(seed=SEED)),
-            trainer=sections.Trainer(rollout_token_budget=2 * BLOCK_TOKENS),
+            trainer=sections.Trainer(rollout_token_budget=gross_budget),
         )
     )
     return replace(
@@ -90,7 +96,7 @@ def fork_preset(name: str, easy_quota: Literal[6, 10], seed: int, *, revision: s
         seed=seed,
         evaluations=(
             replace(EVAL, name="development", at_start=False),
-            replace(EVAL, name="confirmation", at_start=False, selection=ENDPOINT),
+            replace(EVAL, name="confirmation", at_start=False, selection=endpoint),
         ),
         recipe=replace(
             source.recipe,
@@ -111,6 +117,7 @@ QWEN_FORK = ModelPresets(
             for seed in EXTENSION_SEEDS
             for name, quota in FORKS
         ),
+        *(fork_preset(name, quota, seed, revision=DEEP_REVISION) for seed in DEEP_SEEDS for name, quota in FORKS),
     ),
     control_pins={},
 )
