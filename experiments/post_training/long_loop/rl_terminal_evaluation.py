@@ -12,11 +12,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import yaml
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, artifact_identity
 from marin.rl.skyrl import ResolvedModelLocator, SkyRLRun, skyrl_cpu_command
-from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
+from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, read_skyrl_launch_config
 from rigging.filesystem.storage_path import StoragePath
 from rigging.fsutil.verified_copy import verified_copy_prefix
 
@@ -134,8 +133,7 @@ def preserve_evaluation(config: EvaluationPreservation) -> SkyRLRun:
         return result
     if result.attempt_id is None:
         raise ValueError("Completed Micro210 has no attempt identity")
-    launch_bytes = (StoragePath(config.evaluation_output) / RESOLVED_LAUNCH_FILENAME).read_bytes()
-    launch_document = yaml.safe_load(launch_bytes)
+    launch_document = read_skyrl_launch_config(config.evaluation_output)
     temporary = str(StoragePath(launch_document["artifacts"]["attempts_root"]).parent)
     permanent = str(StoragePath(config.evaluation_output) / "trial-archives")
     if not temporary.startswith("s3://marin-us-east-08a/tmp/") or not permanent.startswith(
