@@ -150,10 +150,12 @@ async def wait_execution(task: asyncio.Task, seconds: float | None) -> tuple[set
 
 
 def remote_execution_watchdog(seconds: float | None) -> float | None:
-    """Allow queue time in a detached command's hard safety watchdog."""
+    """Bound setup, cumulative queue wait and active remote execution."""
     clock = _current.get()
     if seconds is None or clock is None:
         return seconds
     if clock.queue_remaining is None:
         raise ValueError("A detached agent needs a bounded inference queue allowance")
-    return 2 * seconds + clock.queue_remaining
+    # Before admission the local phase timer bounds setup; admission grants its full active budget.
+    setup_allowance = active_budget = seconds
+    return setup_allowance + clock.queue_remaining + active_budget
