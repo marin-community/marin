@@ -33,6 +33,7 @@ from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
 from rigging.provenance import Provenance
+from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
@@ -269,8 +270,8 @@ def test_budget_stop_uses_the_actual_final_evaluation(recorded_runs, preset_tabl
         {
             step: {
                 "attempt_id": "recorded-attempt",
-                "rollout/gross_response_tokens": gross,
-                "rollout/gross_response_tokens_total": total,
+                GROSS_ROLLOUT_TOKENS_METRIC: gross,
+                CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC: total,
             }
             for step, gross, total in ((1, 100, 100), (2, 200, 300))
         },

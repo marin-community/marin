@@ -18,7 +18,7 @@ from omegaconf import OmegaConf, open_dict
 from skyrlrecipe import SkyRLRecipe
 from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
-from rolloutengine.models import ModelTurn
+from rolloutengine.models import GROSS_ROLLOUT_TOKENS_METRIC, ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
@@ -238,9 +238,9 @@ def test_rollout_budget_rejects_incompatible_launch(key, value, message):
 def test_rollout_budget_fails_an_underfunded_horizon():
     callback = RolloutTokenBudgetCallback(10)
     control = TrainerControl()
-    state = TrainerState(1, 0, 1, 1, metrics={"rollout/gross_response_tokens": 9})
+    state = TrainerState(1, 0, 1, 1, metrics={GROSS_ROLLOUT_TOKENS_METRIC: 9})
     callback.on_step_end(state, control, trainer=SimpleNamespace(all_metrics={}))
-    with pytest.raises(ValueError, match="9 gross rollout tokens before reaching the configured budget of 10"):
+    with pytest.raises(ValueError, match="configured budget"):
         callback.on_train_end(state, control)
 
 

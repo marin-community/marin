@@ -378,7 +378,7 @@ def evaluation_status(
 def measured_training(
     preset: presets.Preset, metrics: Mapping[int, Mapping[str, float]], rollout_token_budget: int | None
 ) -> tuple[presets.Preset, tuple[Invariant, ...]]:
-    """Resolve a token-stopped run's final evaluation step from its recorded optimizer and spending history."""
+    """Return the measured training horizon and its checks, including the first gross-token budget crossing."""
     workload = preset.recipe.layout.workload
     if rollout_token_budget is None:
         return preset, workload.invariants(preset.updates, metrics)

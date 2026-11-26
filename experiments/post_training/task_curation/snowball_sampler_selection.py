@@ -54,7 +54,7 @@ PILOT = SelectionRecipe(
 
 
 def pilot_selection_step() -> ArtifactStep:
-    """Bind the original source roots published in the parent selection's receipt."""
+    """Build the four-source Snowball selection from the parent release's pinned inputs."""
     sources = {}
     for row in selection_summary(PARENT)["sources"]:
         key = canonical_source_id(row["source_id"])
