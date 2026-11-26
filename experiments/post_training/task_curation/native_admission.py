@@ -174,7 +174,6 @@ def stage_sources(
             "s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/"
             f"{population_key(source_id)}/{population_version}"
         )
-        release = entry["disposition_release"]
         new_repo, new_revision = census["dataset_id"], census["dataset_revision"]
         measurement = measurements.get(source_id)
         if measurement is None:
