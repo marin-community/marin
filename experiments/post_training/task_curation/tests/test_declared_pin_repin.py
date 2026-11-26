@@ -347,6 +347,4 @@ def test_taskspec_lexical_evidence_requires_a_clean_measurement():
         {**receipt.model_dump(mode="json"), "measurement": flagged.model_dump(mode="json")}
     )
     with pytest.raises(ValueError, match="not clean"):
-        native_releases.taskspec_lexical_evidence(
-            {"repo": RELEASE_REPO, "revision": RELEASE_REVISION}, flagged_receipt
-        )
+        native_releases.taskspec_lexical_evidence({"repo": RELEASE_REPO, "revision": RELEASE_REVISION}, flagged_receipt)

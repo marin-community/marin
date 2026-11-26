@@ -490,7 +490,16 @@ def test_pending_extras_row_without_stage_fails_the_build():
         )
     with pytest.raises(ValueError, match="carries no ExclusionReason"):
         source_status.require_typed_rows(
-            [{"id": "Fixture:y", "display_name": "Fixture · y", "status": "Excluded", "stage": None, "reasons": []}]
+            [
+                {
+                    "id": "Fixture:y",
+                    "display_name": "Fixture · y",
+                    "status": "Excluded",
+                    "stage": None,
+                    "reasons": [],
+                    "owner": "fixture-owner",
+                }
+            ]
         )
     source_status.require_typed_rows(
         [
@@ -500,6 +509,7 @@ def test_pending_extras_row_without_stage_fails_the_build():
                 "status": "Pending",
                 "stage": "Intake queued",
                 "reasons": [],
+                "owner": "fixture-owner",
             },
             {
                 "id": "Fixture:excluded",
@@ -507,6 +517,7 @@ def test_pending_extras_row_without_stage_fails_the_build():
                 "status": "Excluded",
                 "stage": None,
                 "reasons": [{"reason": "license-ban"}],
+                "owner": "fixture-owner",
             },
         ]
     )
