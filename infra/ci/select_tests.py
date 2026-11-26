@@ -92,16 +92,22 @@ CI_BROAD_TRIGGERS: frozenset[str] = frozenset({"infra/ci/select_tests.py", ".git
 BROAD_TRIGGERS = LOCAL_BROAD_TRIGGERS | CI_BROAD_TRIGGERS
 
 _NATIVE_CONFIG = ("vendor/skyrl/cloud/iris/", "vendor/skyrl/skyrl-train/skyrl_train/config/")
+_SKYRL_SOURCES = ("vendor/skyrl/", "lib/skyrlrecipe/")
 MARIN_NATIVE_CONFIG_TESTS = {
-    "tests/rl/test_rl_launch_documents.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "tests/rl/test_rl_launch_documents.py": _SKYRL_SOURCES,
     "experiments/post_training/curriculum_rl/test_launch.py": _NATIVE_CONFIG,
     "tests/rl/test_skyrl.py": (
         *_NATIVE_CONFIG,
         "vendor/skyrl/marinskyrl/checkpoint_paths.py",
         "vendor/skyrl/skyrl-train/skyrl_train/utils/tracking.py",
     ),
-    "experiments/post_training/rl_tests/test_rl.py": ("vendor/skyrl/", "lib/skyrlrecipe/"),
+    "experiments/post_training/rl_tests/test_rl.py": _SKYRL_SOURCES,
+    "experiments/post_training/rl_tests/test_rl_presets.py": _SKYRL_SOURCES,
+    "experiments/post_training/rl_tests/test_rl_submission.py": _SKYRL_SOURCES,
+    "experiments/post_training/rl_tests/test_rl_train_long.py": _SKYRL_SOURCES,
     "experiments/post_training/rl_tests/test_rl_gate.py": _NATIVE_CONFIG,
+    "experiments/post_training/rl_tests/test_rl_gate_configuration.py": _NATIVE_CONFIG,
+    "experiments/post_training/rl_tests/test_rl_gate_report.py": _NATIVE_CONFIG,
     "experiments/post_training/rl_tests/test_rl_publication.py": _NATIVE_CONFIG,
 }
 

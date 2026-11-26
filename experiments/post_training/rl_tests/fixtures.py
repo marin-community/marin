@@ -16,7 +16,9 @@ from urllib.parse import urlencode
 import marin.rl.skyrl as adapter
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 import yaml
+from click.testing import CliRunner
 from finestore.reader import ReadView
 from finestore.rl.run_records import (
     EVALUATIONS_TABLE,
@@ -52,6 +54,7 @@ from iris.rpc import controller_pb2
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord, result_type_name
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import SkyRLRun
+from marin.rl.skyrl_records import read_skyrl_metrics
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from taskcompendium.convert.answers import answer_task
@@ -67,6 +70,7 @@ from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training import snowball_rl as snowball_model
+from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs
 from experiments.post_training.skyrl_test_support import (
     selection_summary,
@@ -76,6 +80,7 @@ from experiments.post_training.skyrl_test_support import (
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, TASK_MANIFEST_FILENAME
 
 SELECTION_IDENTITY = "fixture-selection@2026.11.10"
+RL_TEST_MARKS = [pytest.mark.usefixtures("source_provenance"), pytest.mark.timeout(180)]
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
 
 
@@ -627,3 +632,28 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         return root
 
     return write
+
+
+KL = "policy/mismatch/staleness0/kl_k3"
+
+
+def compare(preset, *args):
+    result = CliRunner().invoke(gate.command(snowball_model.SNOWBALL), ["--preset", preset, *args])
+    assert result.exception is None or isinstance(result.exception, SystemExit), (result.output, result.exception)
+    payload = json.loads(result.stdout.splitlines()[-1])
+    assert result.exit_code == EXIT_CODES[payload["verdict"]], (
+        result.output,
+        result.exception,
+    )
+    return payload
+
+
+def comparisons(report):
+    return {row["metric"]: row for row in report["comparisons"]}
+
+
+def edit_metrics(root, edit):
+    metrics = read_skyrl_metrics(str(root))
+    for values in metrics.values():
+        edit(values)
+    write_metrics(root, metrics)
