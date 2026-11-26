@@ -31,6 +31,13 @@ def main() -> None:
     parser.add_argument("--cpu", default="16")
     parser.add_argument("--memory", default="64GB")
     parser.add_argument("--disk", default="300GB")
+    parser.add_argument(
+        "--max-retries",
+        default="3",
+        help="The driver task's retries: a Kueue preemption of the judge serving kills the "
+        "in-flight attempt, and the retry resumes from the review cache instead of re-reviewing "
+        "(the v3 campaign died on a preemption with max-retries 0).",
+    )
     parser.add_argument("--timeout", default="259200", help="Job timeout in seconds (default: three days).")
     args = parser.parse_args()
 
@@ -75,7 +82,7 @@ def main() -> None:
         "--timeout",
         args.timeout,
         "--max-retries",
-        "0",
+        args.max_retries,
         "--job-name",
         args.job_name,
         "--",
