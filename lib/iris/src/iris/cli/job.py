@@ -23,6 +23,7 @@ import yaml
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
+from rigging.redaction import redact_env_argv
 from rigging.secrets import SecretBehavior, resolve_secret_spec
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
@@ -47,7 +48,6 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.egress import parse_egress_rules
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
-from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -1134,7 +1134,7 @@ def run(
     if not command:
         raise click.UsageError("No command provided after --")
 
-    submit_argv = redact_submit_argv(list(sys.argv))
+    submit_argv = redact_env_argv(sys.argv)
 
     # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
     # instead of --reserve) into cmd. Catch any flags that leaked through

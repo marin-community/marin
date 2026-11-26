@@ -11,8 +11,9 @@ from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
-from daytona import DaytonaNotFoundError, SessionExecuteRequest
+from daytona import DaytonaError, DaytonaNotFoundError, SessionExecuteRequest
 from daytona._async.process import AsyncProcess
+from rigging.redaction import redact_string
 
 from shellbox import process_framing
 from shellbox.backends.daytona import bridge
@@ -112,7 +113,9 @@ class DaytonaProcessSession(StreamProcessSession):
             self._stdout_frames.finish()
             self._stderr_lines.finish()
             if self._code is None:
-                raise RuntimeError("Daytona process stream ended without a complete exit frame")
+                diagnostic = redact_string(self.stderr.decode("utf-8", errors="replace"))
+                tail = diagnostic.encode()[-4096:].decode(errors="ignore")
+                raise RuntimeError(f"Daytona process stream ended without a complete exit frame; stderr: {tail}")
         except asyncio.CancelledError:
             if self._closing is None:
                 self._error = MachineTerminated("Daytona process stream was interrupted")
@@ -168,11 +171,17 @@ class DaytonaProcessSession(StreamProcessSession):
         self._release(self)
         await self._output.finish()
         try:
+            deletion_error = None
             async with asyncio.timeout(INTERRUPT_TIMEOUT):
                 try:
                     await self._process.delete_session(self.name, request_timeout=INTERRUPT_TIMEOUT)
                 except DaytonaNotFoundError:
                     pass
+                except DaytonaError as error:
+                    status = f" (HTTP {error.status_code})" if error.status_code is not None else ""
+                    deletion_error = f"Daytona delete_session failed for session {self.name}{status}"
+            if deletion_error is not None:
+                raise RuntimeError(deletion_error)
         except BaseException:
             await self._failed_cleanup()
             raise

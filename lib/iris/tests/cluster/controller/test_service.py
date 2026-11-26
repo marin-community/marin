@@ -35,7 +35,7 @@ from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKin
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.platforms.k8s.types import K8sResource
-from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
+from iris.cluster.redaction import redact_request_env_vars
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
@@ -48,6 +48,7 @@ from iris.testing.controller import (
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations, commit_dispatch_updates
+from rigging.redaction import REDACTED_VALUE
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func

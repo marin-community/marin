@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from rigging.redaction import redact_env_argv
+
 logger = logging.getLogger(__name__)
 
 LAUNCH_PROVENANCE_ENV = "MARIN_PROVENANCE"
@@ -134,7 +136,7 @@ class Provenance:
             built_by=_getuser(),
             git_remote=g("remote", "get-url", "origin") or None,
             created_at=datetime.now().isoformat(),
-            command_line=tuple(sys.argv),
+            command_line=tuple(redact_env_argv(sys.argv)),
         )
 
     @classmethod

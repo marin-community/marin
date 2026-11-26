@@ -154,6 +154,29 @@ def test_capture_is_best_effort_outside_a_repo(tmp_path):
     assert p.created_at  # timestamp, captured regardless of git
 
 
+@pytest.mark.parametrize(
+    ("argv", "credential_index", "masked"),
+    [
+        (["iris", "job", "run", "-e", "HF_TOKEN", "fixture-key", "--", "python", "job.py"], 5, "[REDACTED]"),
+        (
+            ["dev_tpu.py", "execute", "-e", "WANDB_API_KEY=fixture-key", "--", "python", "job.py"],
+            3,
+            "WANDB_API_KEY=[REDACTED]",
+        ),
+    ],
+    ids=["iris-pair", "launcher-assignment"],
+)
+def test_capture_redacts_credential_values_in_recorded_environment_flags(
+    tmp_path, monkeypatch, argv, credential_index, masked
+):
+    monkeypatch.delenv("MARIN_PROVENANCE", raising=False)
+    monkeypatch.setattr("sys.argv", argv)
+    record = Provenance.capture(tmp_path)
+
+    assert record.command_line == (*argv[:credential_index], masked, *argv[credential_index + 1 :])
+    assert "fixture-key" not in record.to_json()
+
+
 def test_capture_tolerates_missing_git_binary(tmp_path, monkeypatch):
     # A bundle image may lack git entirely: subprocess raises FileNotFoundError instead of
     # returning a nonzero exit. capture degrades like being outside a checkout.

@@ -30,12 +30,12 @@ from iris.client.client import IrisClient, JobAlreadyExists
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import IrisClusterConfig, load_config
 from iris.cluster.constraints import zone_constraint
-from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import Entrypoint, JobName, ResourceSpec, tpu_device
 from iris.resources.state import TERMINAL_JOB_STATES, JobState, TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.cluster import gcp
+from rigging.redaction import redact_env_argv
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -771,7 +771,7 @@ def allocate(
                 resources=resources,
                 constraints=constraints or None,
                 priority_band=priority_band,
-                submit_argv=redact_submit_argv(list(sys.argv)),
+                submit_argv=redact_env_argv(sys.argv),
             )
         except JobAlreadyExists as exc:
             raise click.ClickException(f"Job already exists for session '{session_name}': {exc}") from exc
