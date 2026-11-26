@@ -262,6 +262,7 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: 
     def cache_row(row_index: int) -> tuple[int, float]:
         """Cache a row and return the prompt token count and upload duration in seconds."""
         ids = dataset[row_index]["input_ids"]
+        # Rank zero writes the activation file on the prefill leader.
         response = requests.post(
             f"{url}/completions",
             headers={"X-data-parallel-rank": "0"},
@@ -292,7 +293,6 @@ def _cache_rows(url: str, dataset: Dataset, hidden_states: StoragePath, recipe: 
         lock_path.unlink()
         return len(ids), upload_seconds
 
-    # Pin requests to a local rank so the extracted tensors stay on the trainer's worker.
     started = monotonic()
     cached_tokens = 0
     total_upload_seconds = 0.0

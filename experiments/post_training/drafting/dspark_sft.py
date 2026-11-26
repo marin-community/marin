@@ -286,6 +286,21 @@ def _validate_training_locations(recipe: OfflineDSpark, prefix: str) -> None:
             raise click.UsageError(f"Iris training requires regional inputs and output, got {location}")
 
 
+def _prefill(recipe: OfflineDSpark, teacher: ArtifactStep, prepared: ArtifactStep, prefix: str) -> None:
+    if recipe.teacher.family is not TeacherFamily.MOCHI:
+        raise click.UsageError("The prefill stage is available only for Mochi")
+    cache = mochi.prefill_mochi(
+        teacher=str(StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path),
+        teacher_identity=artifact_identity(teacher),
+        prepared=prepared,
+        recipe=mochi.cached_recipe(recipe.training_recipe(), recipe.mochi_sample),
+        prefix=prefix,
+        sample=recipe.mochi_sample,
+    )
+    if cache is not None:
+        click.echo(str(cache))
+
+
 @click.command()
 @click.option("--config", help="Path or object storage URI of the DSpark JSON recipe.")
 @click.option("--preset", type=click.Choice((_MOCHI_AGENTIC_PRESET, _MOCHI_SCALE_PRESET)))
@@ -322,18 +337,7 @@ def main(
         click.echo(json.dumps(_preflight(recipe, teacher, prefix), indent=2))
         return
     if stage == "prefill":
-        if recipe.teacher.family is not TeacherFamily.MOCHI:
-            raise click.UsageError("The prefill stage is available only for Mochi")
-        cache = mochi.prefill_mochi(
-            teacher=str(StoragePath(teacher.path(prefix)) / recipe.teacher.relative_path),
-            teacher_identity=artifact_identity(teacher),
-            prepared=prepared,
-            recipe=mochi.cached_recipe(recipe.training_recipe(), recipe.mochi_sample),
-            prefix=prefix,
-            sample=recipe.mochi_sample,
-        )
-        if cache is not None:
-            click.echo(str(cache))
+        _prefill(recipe, teacher, prepared, prefix)
         return
     if stage == "train":
         result = resolve(draft)

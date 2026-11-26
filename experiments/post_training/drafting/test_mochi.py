@@ -7,13 +7,14 @@ from dataclasses import asdict, replace
 
 import numpy as np
 from datasets import Dataset
+from levanter.compat.hf_checkpoints import SAFE_TENSORS_MODEL
 from marin.execution.lazy import ArtifactStep, artifact_identity, resolve
 from marin.training.drafting.activation_store import activation_path, get_or_build_activation_cache
 from marin.training.drafting.dspark_data import ARROW_DATASET_DIR, PREPARED_DIR, SPLITS_FILE, PreparedSplits
 from marin.training.drafting.dspark_distillation import DSparkExport, TrainedDraft
 from rigging.filesystem.storage_path import StoragePath
-from rigging.timing import Duration
 from safetensors.numpy import save_file
+from transformers.utils import CONFIG_NAME
 
 from experiments.post_training.drafting import dspark_sft, mochi
 from vendor.skyrl.marinskyrl.model_manifest import HF_WEIGHT_INDEX_FILENAME, MODEL_MANIFEST_FILENAME, ModelManifest
@@ -46,16 +47,16 @@ def test_mochi_publishes_both_draft_sizes_from_one_activation_cache(tmp_path, mo
         )
         checkpoint = scratch / "checkpoints" / "0"
         checkpoint.mkdir(parents=True)
-        (checkpoint / "config.json").write_text("{}")
+        (checkpoint / CONFIG_NAME).write_text("{}")
         (checkpoint / "training_state.json").write_text("{}")
-        save_file({"weight": np.ones(1)}, str(checkpoint / "model.safetensors"))
-        return TrainedDraft(checkpoint, ("config.json", "model.safetensors"), result)
+        save_file({"weight": np.ones(1)}, str(checkpoint / SAFE_TENSORS_MODEL))
+        return TrainedDraft(checkpoint, (CONFIG_NAME, SAFE_TENSORS_MODEL), result)
 
     monkeypatch.setattr(mochi, "train_cached_draft", fit)
 
     get_or_build_activation_cache(
         root,
-        reusable_for=Duration.from_hours(48),
+        reusable_for=mochi._ACTIVATION_REUSE_WINDOW,
         populate=lambda path: activation_path(path, 0).write_bytes(b"row 0"),
     )
     for version, size in (("2026.11.24", mochi.DraftSize.ONE_LAYER), ("2026.11.25", mochi.DraftSize.TWO_LAYERS)):
@@ -66,13 +67,10 @@ def test_mochi_publishes_both_draft_sizes_from_one_activation_cache(tmp_path, mo
         manifest = ModelManifest.model_validate_json((export / MODEL_MANIFEST_FILENAME).read_text())
         assert result.source_identity == manifest.identity
         assert manifest.tokenizer_mode == "policy"
-        assert {entry.path for entry in manifest.files} == {
-            "config.json",
-            "model.safetensors",
-            HF_WEIGHT_INDEX_FILENAME,
-        }
-        assert not (export / "training_state.json").exists()
+        model_files = {CONFIG_NAME, SAFE_TENSORS_MODEL, HF_WEIGHT_INDEX_FILENAME}
+        assert {entry.path for entry in manifest.files} == model_files
+        assert {path.name for path in export.ls()} == model_files | {MODEL_MANIFEST_FILENAME}
         index = json.loads((export / HF_WEIGHT_INDEX_FILENAME).read_text())
-        assert index["weight_map"] == {"weight": "model.safetensors"}
+        assert index["weight_map"] == {"weight": SAFE_TENSORS_MODEL}
         for entry in manifest.files:
             assert hashlib.sha256((export / entry.path).read_bytes()).hexdigest() == entry.sha256
