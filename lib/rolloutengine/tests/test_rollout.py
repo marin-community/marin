@@ -3144,6 +3144,35 @@ async def test_an_attempt_that_ends_before_the_first_response_grades_the_work_on
     assert all(conversation.steps == () for conversation in record.rollout.conversations)
 
 
+@pytest.mark.parametrize("operation", [RolloutOperation.MODEL, RolloutOperation.ADVANCE])
+async def test_agent_timeout_grades_completed_machine_work(operation):
+    async def agent(context, complete):
+        await context.machine.run(Command(("sh", "-c", "echo 12 > /workspace/answer")))
+        await complete(Prompt(({"role": "user", "content": "Return 12."},), {}))
+        await asyncio.Future()
+
+    spec = rollout_spec(
+        file_task(),
+        machine=machine_runtime(),
+        verifier_machine=machine_runtime(),
+        harness="agent",
+        model_turn_timeout=0.05,
+        tool_turn_timeout=0.05,
+    )
+    model = (
+        unanswered
+        if operation == RolloutOperation.MODEL
+        else ReplayModel([{"role": "assistant", "content": "12"}]).complete
+    )
+    with pytest.raises(GradedRolloutInterrupted) as caught:
+        await RolloutEngine({"local": RecordingShellSimFactory()}, {"agent": AgentHarness(agent)}).run_task(spec, model)
+
+    assert (caught.value.operation, type(caught.value.__cause__)) == (operation, TimeoutError)
+    assert (caught.value.grade.status, caught.value.grade.reward) == (Outcome.GRADED, 1.0)
+    if operation == RolloutOperation.MODEL:
+        assert all(conversation.steps == () for conversation in caught.value.rollout.conversations)
+
+
 async def test_a_reply_answer_rejected_for_its_context_before_any_response_has_no_grade():
     async def agent(_context, complete):
         try:

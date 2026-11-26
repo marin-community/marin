@@ -219,11 +219,16 @@ class RolloutEngine:
         # Stop the agent before it can race output capture or grading. Services it left on the task machine
         # stay available to the grader until the machine is released.
         await stopped.aclose()
+        agent_timeout = (
+            failure is not None
+            and failure[0] in {RolloutOperation.MODEL, RolloutOperation.ADVANCE}
+            and isinstance(failure[1], TimeoutError)
+        )
         if failure is None and not recorder.has_response and task.answer_type in CONVERSATION_ANSWERS:
             attempt.grade = GradeResult(Outcome.UNAVAILABLE, None, recorder.no_response_reason)
-        # A model failure leaves the completed turns intact, so the engine grades them. An attempt that ended
-        # before the first response, at a limit or with an agent that gave up, leaves its answer on the machine.
-        elif failure is None or (failure[0] == RolloutOperation.MODEL and recorder.has_response):
+        # Agent timeouts still grade the work on the machine, including before the first model response.
+        # Other model failures can be graded when completed turns remain available.
+        elif failure is None or agent_timeout or (failure[0] == RolloutOperation.MODEL and recorder.has_response):
             try:
                 await self._grade(attempt, machine, resources)
             except _Interrupted as interrupted:
