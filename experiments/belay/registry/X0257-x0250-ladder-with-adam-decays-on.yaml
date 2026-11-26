@@ -31,3 +31,20 @@ trials:
   commit: 21ea54c96b
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t002
+  variant: X0250 ladder + Adam decays held at adam_lr*N of d512
+  rung: competitive-d768
+  protocol: equal_steps
+  batch: X0257
+  date: '2026-11-26'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0257
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_anneal_decay_lr_steps: '145.16257629560624'
+    muonc_anneal_adam_decay_lr_steps: '33.49905606821683'
+  commit: 868482f299
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
