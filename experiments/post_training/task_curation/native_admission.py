@@ -18,23 +18,18 @@ repo's Git side goes through atlas-push after SAMPLE.
 """
 
 import argparse
-import hashlib
 import json
 import logging
 from pathlib import Path
 
 from finestore.rl.curation import (
     DaytonaMeasurement,
-    DeconReceiptStatus,
-    DecontaminatedRelease,
-    LexicalReceipt,
     LexicalUse,
 )
 from huggingface_hub import hf_hub_download
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import file_sha256
 
-from experiments.post_training.task_curation.native_source_conversion import load_inventory_entry
 from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.retirement import RETIREMENTS_PATH
 
@@ -42,7 +37,13 @@ LOGGER = logging.getLogger(__name__)
 
 CONVERSION_VERSION = "harbor-cohort-taskspec-v1"
 GRADING_REASON = "Repository or workspace-state grading reads state the agent can mutate"
-RELEASE_FILES = ("README.md", "manifest.json", "tasks.parquet", "conversion-receipts.jsonl", "conversion-exclusions.jsonl")
+RELEASE_FILES = (
+    "README.md",
+    "manifest.json",
+    "tasks.parquet",
+    "conversion-receipts.jsonl",
+    "conversion-exclusions.jsonl",
+)
 
 
 def census_documents(census_root: str, slug: str) -> tuple[dict, dict]:
@@ -61,7 +62,10 @@ def census_documents(census_root: str, slug: str) -> tuple[dict, dict]:
 
 def _lexical_receipt(source_id: str, receipt_input: dict, measurement: dict) -> dict:
     from finestore.rl.curation import ActorCensusInput, LexicalContaminationEvidence  # noqa: PLC0415
-    from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt as Receipt  # noqa: PLC0415
+
+    from experiments.post_training.task_curation.lexical_binding import (
+        LexicalMeasurementReceipt as Receipt,
+    )
 
     # The registered measurement stays raw: a training-use receipt cannot certify
     # a release. The declaration's taskspec lexical evidence builds the CLEAN
@@ -75,13 +79,12 @@ def _lexical_receipt(source_id: str, receipt_input: dict, measurement: dict) -> 
     return receipt.model_dump(mode="json")
 
 
-
 def _release_file_hashes(release: dict) -> dict[str, str]:
     hashes = {}
     for name in RELEASE_FILES:
         try:
             downloaded = hf_hub_download(release["repo"], name, repo_type="dataset", revision=release["revision"])
-        except Exception:  # noqa: BLE001 - a release file the conversion did not write
+        except Exception:
             continue
         hashes[name] = file_sha256(StoragePath(str(Path(downloaded))))
     return hashes
@@ -112,18 +115,20 @@ def update_ledger_entry(
                 "task_count": measured,
                 "task_specs_sha256": census["task_specs_sha256"],
             },
-            "daytona_measurement": DaytonaMeasurement(
-                dataset_id=release_repo,
-                dataset_revision=release_revision,
-                daytona_snapshot_count=census["daytona_snapshot_count"],
-                daytona_machine_slots=census["daytona_machine_slots"],
-                daytona_execution_failures=census["daytona_execution_failures"],
-                daytona_count_basis=census["daytona_count_basis"],
-                daytona_unsafe_reasons=tuple(census["daytona_unsafe_reasons"]),
-                daytona_unsafe_details=census["daytona_unsafe_details"],
-                daytona_unsafe_counts=census["daytona_unsafe_counts"],
-                daytona_roles=census["daytona_roles"],
-            ).model_dump(mode="json"),
+            "daytona_measurement": (
+                DaytonaMeasurement(
+                    dataset_id=release_repo,
+                    dataset_revision=release_revision,
+                    daytona_snapshot_count=census["daytona_snapshot_count"],
+                    daytona_machine_slots=census["daytona_machine_slots"],
+                    daytona_execution_failures=census["daytona_execution_failures"],
+                    daytona_count_basis=census["daytona_count_basis"],
+                    daytona_unsafe_reasons=tuple(census["daytona_unsafe_reasons"]),
+                    daytona_unsafe_details=census["daytona_unsafe_details"],
+                    daytona_unsafe_counts=census["daytona_unsafe_counts"],
+                    daytona_roles=census["daytona_roles"],
+                ).model_dump(mode="json")
+            ),
             "grading_environment": {
                 "assessed_tasks": measured,
                 "required_counts": {"shared": measured},
@@ -224,7 +229,9 @@ def stage_sources(
         if len(remaining) != len(document):
             LOGGER.info("consolidating %d superseded rows out of %s", len(document) - len(remaining), previous.name)
         (lexical_dir / previous.name).write_text(json.dumps(remaining, indent=2, sort_keys=True) + "\n")
-    (lexical_dir / f"part-{next_part:03d}.json").write_text(json.dumps(lexical_receipts, indent=2, sort_keys=True) + "\n")
+    (lexical_dir / f"part-{next_part:03d}.json").write_text(
+        json.dumps(lexical_receipts, indent=2, sort_keys=True) + "\n"
+    )
 
     stage_shard_family(
         staged_root,
@@ -254,7 +261,9 @@ def stage_sources(
     return {"sources": list(source_ids), "ledger": str(ledger_path)}
 
 
-def stage_shard_family(staged_root: Path, family: str, new_rows: dict[str, dict], *, remove_ids: frozenset[str] = frozenset()) -> Path:
+def stage_shard_family(
+    staged_root: Path, family: str, new_rows: dict[str, dict], *, remove_ids: frozenset[str] = frozenset()
+) -> Path:
     """Stage a receipt shard family: the new rows in the next part, the existing
     documents re-staged verbatim with the staged identities' stale rows removed.
 
@@ -270,7 +279,9 @@ def stage_shard_family(staged_root: Path, family: str, new_rows: dict[str, dict]
         document = read_registry_json(previous)
         remaining = {key: row for key, row in document.items() if key not in new_rows and key not in remove_ids}
         if len(remaining) != len(document):
-            LOGGER.info("consolidating %d superseded rows out of %s/%s", len(document) - len(remaining), family, previous.name)
+            LOGGER.info(
+                "consolidating %d superseded rows out of %s/%s", len(document) - len(remaining), family, previous.name
+            )
         (family_dir / previous.name).write_text(json.dumps(remaining, indent=2, sort_keys=True) + "\n")
     staged = None
     if new_rows:
