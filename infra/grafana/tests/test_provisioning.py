@@ -1326,10 +1326,9 @@ def test_training_moe_health_queries_show_routing_signals():
 
 
 UTILIZATION = DASHBOARDS / "utilization.json"
-# Two fleet queries (GPUs by node, TPU VMs) and two node queries (the node's attempts, their usage).
-# The bridge's cache only shares byte-identical SQL, so a later edit to one copy of a shared query
-# would add a hub scan per load.
-UTILIZATION_MAX_DISTINCT_SQL = 4
+# Two fleet queries: GPUs by node and TPU VMs. The bridge's cache only shares byte-identical SQL,
+# so a later edit to one copy of a shared query would add a hub scan per load.
+UTILIZATION_MAX_DISTINCT_SQL = 2
 
 
 def _finelog_sql(panel: dict) -> list[str]:
@@ -1351,8 +1350,7 @@ def _finelog_sql(panel: dict) -> list[str]:
 
 def test_the_utilization_dashboard_bounds_its_load_on_the_hub():
     """Every signed-in viewer's load reaches the hub, and local/compose.yaml loads the same file
-    against it live: no auto-refresh, a short default range, every query bounded by the range,
-    and a node query that reads nothing while no node is selected."""
+    against it live: no auto-refresh, a short default range, and every query bounded by the range."""
     dashboard = json.loads(UTILIZATION.read_text())
 
     assert dashboard.get("refresh", "") == ""
@@ -1366,9 +1364,6 @@ def test_the_utilization_dashboard_bounds_its_load_on_the_hub():
         assert "{{from}}" in sql and "{{to}}" in sql, sql
         # A quoted '${var}' breaks or rewrites the query on a value with a quote; use ${var:sqlstring}.
         assert "'${" not in sql, sql
-        # The node section stays open, so a node query must read nothing while no node is selected.
-        if "${node" in sql:
-            assert "${node:sqlstring} <> ''" in sql, sql
 
 
 def test_home_opens_the_utilization_dashboard_on_its_own_short_range():
@@ -1380,18 +1375,6 @@ def test_home_opens_the_utilization_dashboard_on_its_own_short_range():
     assert len(links) == 1
     assert links[0]["keepTime"] is False
     assert links[0]["includeVars"] is False
-
-
-def test_node_details_links_to_utilization_for_the_nodes_jobs_on_its_own_range():
-    """Node details carries the hardware panels and Utilization the node's jobs. Its link passes the
-    cluster and node across but not Node details' 3-hour range, which Utilization's job queries are
-    not sized for."""
-    nodes = json.loads((DASHBOARDS / "nodes.json").read_text())
-    links = [link for link in nodes["links"] if link.get("url") == "/d/marin-utilization"]
-
-    assert len(links) == 1
-    assert links[0]["includeVars"] is True
-    assert links[0]["keepTime"] is False
 
 
 def test_node_details_job_row_queries_only_when_opened():

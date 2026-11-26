@@ -881,14 +881,13 @@ Every panel query reaches the production hub, so the local setup holds the load 
 Keep a dashboard under development on a short default range with auto-refresh
 off, and bound every query by the dashboard range.
 
-`utilization.json` is also a production dashboard: which node to look at, and the
-selected node's jobs. Each node links to its hardware in Node details on the same
-range, and Node details links back for the node's jobs. In production every signed-in
-viewer's load reaches the hub, and what bounds it is the bridge's 20 s cache (shared
-per query and time window), the 20 s query deadline, auto-refresh off, the
-15-minute default range, and node queries that read nothing until a node is
-selected; a test requires the last three and caps the dashboard at four distinct
-queries. The deployed bridge has no per-source concurrency bound on `/query`.
+`utilization.json` is also a production dashboard: which node to look at, with each node
+linking to Node details on the same range. Node details shows the node's hardware and, in a
+collapsed row served by `/v1/node/jobs`, its jobs. In production every signed-in viewer's
+load reaches the hub, and what bounds it is the bridge's 20 s cache (shared per query and
+time window), the 20 s query deadline, auto-refresh off and the 15-minute default range; a
+test requires the last two and caps the dashboard at two distinct queries. The deployed
+bridge has no per-source concurrency bound on `/query`.
 
 ## Deploy
 
