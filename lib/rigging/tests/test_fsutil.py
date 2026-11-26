@@ -4,6 +4,7 @@
 """Tests for fsutil's copy semantics and file rendering, over local paths — which
 ``filesystem_for`` routes exactly as it routes an object store."""
 
+import base64
 import bz2
 import gzip
 import hashlib
@@ -222,10 +223,12 @@ class _GcsRewriteDestination:
 
     protocol = "gcs"
 
-    def __init__(self, filesystem):
+    def __init__(self, filesystem, md5_hash):
         self.filesystem = filesystem
+        self.md5_hash = md5_hash
         self.etags: dict[str, str] = {}
         self.generations = 0
+        self.reads = 0
 
     def __getattr__(self, name):
         return getattr(self.filesystem, name)
@@ -243,9 +246,19 @@ class _GcsRewriteDestination:
         self.filesystem.cp_file(source_path, destination_path, **kwargs)
         self._new_etag(destination_path)
 
+    def open(self, path, mode, **kwargs):
+        if mode == "rb" and path.endswith("weights.bin"):
+            self.reads += 1
+        return self.filesystem.open(path, mode, **kwargs)
+
+    def _metadata(self, info):
+        info["md5Hash"] = self.md5_hash
+        return info
+
     def info(self, path):
         info = self.filesystem.info(path)
         if info.get("type") != "directory":
+            self._metadata(info)
             info["etag"] = self._etag_for(path)
         return info
 
@@ -254,6 +267,7 @@ class _GcsRewriteDestination:
         if detail:
             for name, info in found.items():
                 if info.get("type") != "directory":
+                    self._metadata(info)
                     info["etag"] = self._etag_for(name)
         return found
 
@@ -266,7 +280,8 @@ def test_verified_copy_promotes_gcs_objects_whose_copy_changes_the_etag(tmp_path
 
     destination_filesystem, destination_path = verified_copy_module.filesystem_for(str(destination))
     original_filesystem_for = verified_copy_module.filesystem_for
-    rewrite_destination = _GcsRewriteDestination(destination_filesystem)
+    md5_hash = base64.b64encode(hashlib.md5(b"abcdefghij", usedforsecurity=False).digest()).decode()
+    rewrite_destination = _GcsRewriteDestination(destination_filesystem, md5_hash)
 
     def routed_filesystem(url, *, s3_upload_policy=S3UploadPolicy.STANDARD):
         if url == str(destination):
@@ -282,6 +297,9 @@ def test_verified_copy_promotes_gcs_objects_whose_copy_changes_the_etag(tmp_path
     manifest = json.loads((destination / COMPLETION_MANIFEST).read_text())
     assert manifest["files"][0]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
     assert not (Path(f"{destination}{STAGING_SUFFIX}") / "weights.bin").exists()
+    # The staged object is read back once for its copy-time sha256; the rewrite
+    # preserves md5Hash, so promotion must not download the object again.
+    assert rewrite_destination.reads == 1
 
 
 @pytest.mark.parametrize("reverse", [False, True])
