@@ -8,7 +8,12 @@ import json
 import tomllib
 
 import httpx
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
+from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.models import TaskRolloutSpec
+from rolloutengine.test_support import rollout_spec
 from taskcompendium.models import (
     AnswerType,
     ConversationInput,
@@ -23,7 +28,8 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210_inputs import task_with_judge
+from experiments.evaluation.micro210_inputs import native_inputs, task_with_judge
+from tests.rl.micro210_fixture import policy_fixture_reference
 
 
 @pytest.fixture
@@ -132,3 +138,69 @@ def complete():
         "max_tokens": 1024,
     }
     assert request.extensions["timeout"]["read"] == 600.0
+
+
+def test_native_table_preserves_repeated_membership_and_package_provisioning(tmp_path, task):
+    package = {
+        "instruction.md": b"What is 2+2?",
+        "task.toml": (
+            b"""[agent]
+timeout_sec = 900
+[verifier]
+timeout_sec = 600
+[verifier.env]
+OPENAI_API_KEY = "${OPENAI_API_KEY}"
+OPENAI_BASE_URL = "https://api.together.ai/v1"
+MODEL_NAME = "zai-org/GLM-5.3-Flash"
+[environment]
+cpus = 2
+memory_mb = 8192
+storage_mb = 10240
+allow_internet = true
+"""
+        ),
+        "environment/Dockerfile": b"FROM fixture:sealed\nWORKDIR /workspace\n",
+        "tests/test.sh": b"echo 0.5 > /logs/verifier/reward.txt\n",
+    }
+    frozen_task = task.model_copy(
+        update={
+            "id": "bixbench-pi/fixture",
+            "answer_type": AnswerType.WORKSPACE_STATE,
+            "grader": NoGrader(reason="Harbor grades the completed trial"),
+            "resources": ResourceGroups(verifier=tuple(inline_resource(path, data) for path, data in package.items())),
+        }
+    )
+    frozen_rollout = rollout_spec(frozen_task, harness="harbor_trial")
+    original = pa.table(
+        {
+            "task_id": [frozen_task.id, frozen_task.id],
+            "repetition_index": [0, 1],
+            "task_spec": [frozen_task.model_dump_json()] * 2,
+            "task_rollout_spec": [frozen_rollout.model_dump_json()] * 2,
+        }
+    )
+    source, destination = tmp_path / "frozen.parquet", tmp_path / "native.parquet"
+    pq.write_table(original, source)
+    policy = json.loads(StoragePath(policy_fixture_reference().uri).read_text())
+    native_inputs(str(source), str(destination), policy, {"fixture:sealed": "sha256:" + "a" * 64})
+    converted = pq.read_table(destination)
+    assert converted.select(["task_id", "repetition_index"]) == original.select(["task_id", "repetition_index"])
+    for row in converted.to_pylist():
+        native = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+        assert native.task.id == frozen_task.id
+        assert native.task.context == frozen_task.context
+        assert native.task.source == frozen_task.source
+        assert (native.task_machine.cpus, native.task_machine.memory_mb, native.task_machine.storage_mb) == (
+            2,
+            8192,
+            10240,
+        )
+        assert native.task_machine.network == "allow"
+        assert native.harness == "pi"
+        assert native.limits.total_turn_timeout == 1800
+        assert native.limits.verifier_timeout == native.task.grader.timeout == 600
+        assert {r.path: resource_bytes(r) for r in native.task.resources.verifier} == {
+            "test.sh": package["tests/test.sh"]
+        }
+        assert native.task.grader.judge.model == MICRO210_JUDGE.model
+        assert "${OPENAI_API_KEY}" not in native.task.model_dump_json()

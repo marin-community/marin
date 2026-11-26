@@ -6,9 +6,11 @@
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.agents.pi.agent import PI_HARNESS
 
 MODEL_IDENTITY_PREFIX = "sha256:"
 LEGACY_POLICY_DIGEST = "e0faa32c68994e8bf01d0ab7177893aa9c29f8c4309b9183de5c3dfcb6fa67aa"
@@ -16,10 +18,10 @@ LEGACY_POLICY_REVISION = "2026.11.18"
 LEGACY_POLICY_COMMIT = "6ae1211cf3aa80beb0ca364b171f149a9506c05a"
 
 POLICY_REPO = "open-athena/micro210-policy"
-POLICY_DIGEST = "8f7ef8170fbef2880214cbf03f70d80cffa3114276e024389617777bf07f53e5"
-POLICY_VERSION = "2026.11.20"
+POLICY_DIGEST = "9d850b9f05c13c7a56df4c0bd9db23e7c805c505018cd330b175519ddca2057e"
+POLICY_VERSION = "2026.11.23"
 POLICY_REVISION = f"{POLICY_VERSION}-together"
-POLICY_COMMIT = "fa38e3eacc25137c9febe898119f08d65cc5ce88"
+POLICY_COMMIT = "7ab57cf5e33cacc98440bfcc2dfd452b94c44344"
 
 
 @dataclass(frozen=True)
@@ -43,14 +45,14 @@ POLICY_REFERENCE = Micro210PolicyReference(
     uri=f"hf://datasets/{POLICY_REPO}@{POLICY_COMMIT}/policy.json",
     revision=POLICY_REVISION,
     sha256=POLICY_DIGEST,
-    byte_size=121292,
+    byte_size=131430,
 )
 
 
 # The prepared table re-hosts benchmark items that must not be public, so it lives in a
 # private repository that CoreWeave tasks read with the standard HF_TOKEN.
 PREPARED_REPO = "open-athena/micro210-prepared-tasks"
-PREPARED_COMMIT = "d8fa0e259ae63b1978388b20a17f72036642dd05"
+PREPARED_COMMIT = "2d33d7be129e6a93bb4279af8a4998a6915771a9"
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,9 @@ class Micro210Record:
     run_id: str
     output_uri: str
     policy_reference: Micro210PolicyReference
+    native_sha256: str
+    native_inputs_uri: str
+    smoke_rows: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -87,13 +92,27 @@ class Micro210Evaluation:
     model: Micro210Model
     run_id: str
     output_uri: str
+    smoke_rows: tuple[int, ...] = ()
+    native_sha256: str | None = None
+    native_inputs_uri: str | None = None
 
     def policy(self) -> dict:
         return read_micro210_policy(POLICY_REFERENCE)
 
     def record(self) -> Micro210Record:
         self.policy()
-        return Micro210Record(POLICY_REFERENCE.sha256, self.model, self.run_id, self.output_uri, POLICY_REFERENCE)
+        if self.native_sha256 is None or self.native_inputs_uri is None:
+            raise ValueError("Micro210 native inputs must be verified before recording")
+        return Micro210Record(
+            POLICY_REFERENCE.sha256,
+            self.model,
+            self.run_id,
+            self.output_uri,
+            POLICY_REFERENCE,
+            self.native_sha256,
+            self.native_inputs_uri,
+            self.smoke_rows,
+        )
 
 
 def micro210_evaluation(model: Micro210Model, *, run_id: str, output_uri: str) -> Micro210Evaluation:
@@ -109,3 +128,34 @@ def read_micro210_policy(reference: Micro210PolicyReference) -> dict:
     if len(raw) != reference.byte_size or hashlib.sha256(raw).hexdigest() != reference.sha256:
         raise ValueError("Canonical Micro210 specification hash mismatch")
     return json.loads(raw)
+
+
+def runtime_policy_config(policy: dict) -> dict:
+    """Bind the frozen Harbor protocol to the native evaluation runtime."""
+    config = deepcopy(policy["evaluation"]["config"])
+    config.pop("entrypoint")
+    config.pop("config_groups")
+    retired = config.pop("terminal_bench")
+    harbor, installed = retired["harbor"], retired["installed_agent"]
+    agent = installed["agent"]
+    if agent["name"] != "pi":
+        raise ValueError("Micro210 requires the frozen Pi agent")
+    config["trainer"]["placement"]["colocate_all"] = False
+    sessions = config["environment"]["task_sessions"]
+    sessions["daytona"] = {
+        "api_key_env": harbor["daytona_api_key_env"],
+        "ttl_minutes": 180,
+        "image_build": harbor["daytona_provisioning"],
+    }
+    sessions["agent_max_retries"] = harbor["max_retries"]
+    sessions["max_concurrent_agents"] = harbor["n_concurrent_trials"]
+    sessions["agent_harnesses"] = {
+        PI_HARNESS: {key: agent["kwargs"][key] for key in ("version", "thinking", "thinking_format")}
+    }
+    sessions["agent_harnesses"][PI_HARNESS]["setup_timeout"] = installed["setup_timeout"]
+    config["generator"]["error_handling"] = {
+        "enable_error_classification": True,
+        "default_error_treatment": "mask",
+        "passthrough_exceptions": ["ContextLengthExceededError", "AgentTimeoutError"],
+    }
+    return config

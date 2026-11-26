@@ -582,16 +582,39 @@ def _grading_env(
     return env
 
 
-def _relay_script_judge(
-    machine: Machine, connection: JudgeConnection, request_timeout: float
-) -> AbstractAsyncContextManager[None]:
+@dataclass(frozen=True)
+class _ScriptJudgeRoute:
+    guest: JudgeConnection | None
+    relay: JudgeConnection | None
+    timeout: float | None
+
+
+def _script_judge_route(
+    grader: ScriptGrader | VerifyitGrader, connection: JudgeConnection | None, backend: Backend
+) -> _ScriptJudgeRoute:
+    if (
+        connection is None
+        or backend is not Backend.DAYTONA
+        or not isinstance(grader, ScriptGrader)
+        or grader.judge is None
+    ):
+        return _ScriptJudgeRoute(connection, None, None)
+    guest = replace(connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
+    return _ScriptJudgeRoute(guest, connection, grader.judge.request_timeout)
+
+
+def _relay_script_judge(machine: Machine, route: _ScriptJudgeRoute) -> AbstractAsyncContextManager[None]:
+    connection = route.relay
+    if connection is None:
+        return nullcontext()
+    assert route.timeout is not None
     return forward_http_posts(
         machine,
         port=JUDGE_RELAY_PORT,
         upstream=connection.base_url,
         routes=JUDGE_RELAY_ROUTES,
         headers={"Authorization": f"Bearer {connection.api_key}", "Content-Type": "application/json"},
-        timeout=request_timeout,
+        timeout=route.timeout,
     )
 
 
@@ -602,6 +625,7 @@ async def grade_in_agent_machine(
     *,
     timeout: float | None = None,
     judge_connection: JudgeConnection | None = None,
+    backend: Backend,
 ) -> GradeResult:
     """Grade with an ``AgentMachine`` placement in the agent's machine, after its harness has returned.
 
@@ -617,7 +641,8 @@ async def grade_in_agent_machine(
     answers = _answer_files(task, attempt, grading)
     if isinstance(answers, GradeResult):
         return answers
-    env = _grading_env(grading, attempt, judge_connection)
+    route = _script_judge_route(grading.grader, judge_connection, backend)
+    env = _grading_env(grading, attempt, route.guest)
     try:
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             archive_path = Path(directory) / "grading.tar"
@@ -640,7 +665,8 @@ async def grade_in_agent_machine(
             )
             await _install_grading_archive(task_machine, archive_path, grading.limit, ROOT)
         await _prepare_reward_files(task_machine, grading, grading.limit)
-        return await _staged_reward(task_machine, grading, env)
+        async with _relay_script_judge(task_machine, route):
+            return await _staged_reward(task_machine, grading, env)
     except _StepFailed as failure:
         return failure.result
 
@@ -691,13 +717,6 @@ async def _grade_staged(
     assert isinstance(placement, GraderMachine)
     environment = placement.environment
     files = _grading_files(task, attempt, grading, submissions)
-    judge = grading.grader.judge if isinstance(grading.grader, ScriptGrader) else None
-    relay_connection = judge_connection if judge is not None and factory.backend is Backend.DAYTONA else None
-    guest_connection = (
-        replace(relay_connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
-        if relay_connection is not None
-        else judge_connection
-    )
     try:
         for command in placement.collect:
             assert task_machine is not None
@@ -725,6 +744,7 @@ async def _grade_staged(
             write_archive(archive_path, files, [])
             submission_archive = root / "submission.tar"
             write_archive(submission_archive, submissions, downloaded)
+            route = _script_judge_route(grading.grader, judge_connection, factory.backend)
             setup_started = time.monotonic()
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(
@@ -739,14 +759,10 @@ async def _grade_staged(
                 # A grader without a workspace starts where its environment does.
                 if environment.working_directory is None and grading.workspace is not None:
                     prepared = replace(prepared, workdir=grading.workspace)
-                prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, guest_connection)})
+                prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, route.guest)})
                 machine = await factory.create(prepared)
             try:
-                async with (
-                    _relay_script_judge(machine, relay_connection, judge.request_timeout)
-                    if relay_connection is not None and judge is not None
-                    else nullcontext()
-                ):
+                async with _relay_script_judge(machine, route):
                     setup_seconds = time.monotonic() - setup_started
                     result = await _grade_on(
                         machine,

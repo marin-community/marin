@@ -5,19 +5,156 @@
 
 import json
 import tomllib
-from dataclasses import asdict
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tomli_w
-from rolloutengine.models import TaskRolloutSpec
-from taskcompendium.models import TaskResource, TaskSpec
+from rolloutengine.agents.pi.agent import PI_HARNESS
+from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
+from taskcompendium.importers.harbor.config import HarborTaskConfig, read_task_config
+from taskcompendium.importers.harbor.package import HarborTask, JobSettings, PackageTests, lower_package
+from taskcompendium.models import ScriptGrader, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from verifyit.spec import JudgeSpec
 
 from experiments.evaluation.judge_config import JudgeConfig
 
 RESOURCE_DIRECTORY = Path(__file__).parent
+
+JUDGE_COMMAND = (
+    "sh",
+    "-c",
+    'export JUDGE_BASE_URL="$VERIFYIT_JUDGE_BASE_URL" JUDGE_API_KEY="$VERIFYIT_JUDGE_API_KEY" '
+    'OPENAI_BASE_URL="$VERIFYIT_JUDGE_BASE_URL" OPENAI_API_KEY="$VERIFYIT_JUDGE_API_KEY" '
+    'MODEL_NAME="$VERIFYIT_JUDGE_MODEL"; exec "$@"',
+    "micro210-judge",
+)
+
+
+TASK_OWNED_JUDGE_REFERENCE = "task-owned rubric"
+
+
+def bind_script_judge(grader: ScriptGrader, model: str, request_timeout: float) -> ScriptGrader:
+    """Declare the judge transport while the frozen script retains its rubric."""
+    return grader.model_copy(
+        update={
+            "argv": (*JUDGE_COMMAND, *grader.argv),
+            "judge": JudgeSpec(model=model, references=(TASK_OWNED_JUDGE_REFERENCE,), request_timeout=request_timeout),
+        }
+    )
+
+
+@dataclass(frozen=True)
+class NativePackage:
+    lowered: HarborTask
+    settings: HarborTaskConfig
+    judge_required: bool
+
+
+def lower_frozen_package(task: TaskSpec, agent_timeout: float, image_digests: Mapping[str, str]) -> NativePackage:
+    """Stage the archived package and replace its host credential references with a runtime judge binding."""
+    with TemporaryDirectory(prefix="micro210-native-") as directory:
+        package = Path(directory)
+        for resource in task.resources.verifier:
+            path = package / resource.path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(resource_bytes(resource))
+            if resource.mode is not None:
+                path.chmod(int(resource.mode, 8))
+        config_path = package / "task.toml"
+        settings = read_task_config(package)
+        config = tomllib.loads(config_path.read_text())
+        judge_env = config["verifier"].get("env", {})
+        needs_judge = "OPENAI_API_KEY" in judge_env
+        if needs_judge:
+            config["verifier"]["env"] = {
+                key: value
+                for key, value in judge_env.items()
+                if key not in {"OPENAI_API_KEY", "OPENAI_BASE_URL", "MODEL_NAME"}
+            }
+            config_path.write_text(tomli_w.dumps(config))
+        lowered = lower_package(
+            package,
+            task_id=task.id,
+            source=task.source,
+            rule=PackageTests(),
+            image_digests=image_digests,
+            job=JobSettings(agent_timeout=agent_timeout),
+        )
+    return NativePackage(lowered, settings, needs_judge)
+
+
+def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mapping[str, str]) -> TaskRolloutSpec:
+    """Lower a frozen package without selecting new tasks or changing its verifier."""
+    task = rollout.task
+    if rollout.harness != "harbor_trial":
+        grader = task.grader
+        assert isinstance(grader, ScriptGrader)
+        # Only equivalence-judged rows need a provider connection. The task's script retains its rubric.
+        if any(resource.path == "config.json" for resource in task.resources.verifier):
+            grader = bind_script_judge(
+                grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["request_timeout"]
+            )
+            task = task.model_copy(update={"grader": grader})
+        return rollout.model_copy(update={"task": task})
+
+    harbor = policy["evaluation"]["config"]["terminal_bench"]["harbor"]
+    package = lower_frozen_package(task, harbor["override_timeout_sec"], image_digests)
+    lowered, settings = package.lowered, package.settings
+    native, episode = lowered.task, lowered.episode
+    grader = native.grader
+    assert isinstance(grader, ScriptGrader)
+    if package.judge_required:
+        grader = bind_script_judge(
+            grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["bixbench_request_timeout"]
+        )
+    native = native.model_copy(update={"tags": task.tags, "labels": task.labels, "grader": grader})
+    machine = MachineRuntimeSpec(
+        backend="daytona",
+        network=episode.network,
+        cpus=episode.cpus,
+        memory_mb=episode.memory_mb,
+        storage_mb=episode.storage_mb,
+        gpus=episode.gpus,
+        user=None if settings.agent.user is None else str(settings.agent.user),
+        startup_timeout=settings.environment.build_timeout_sec,
+        cleanup_timeout=60,
+    )
+    limits = rollout.limits.model_copy(
+        update={
+            "total_turn_timeout": episode.agent_timeout,
+            "attempt_timeout": harbor["trial_attempt_timeout_sec"],
+            "verifier_timeout": episode.verifier_timeout,
+        }
+    )
+    return rollout.model_copy(
+        update={
+            "task": native,
+            "harness": PI_HARNESS,
+            "task_machine": machine,
+            "limits": limits,
+        }
+    )
+
+
+def native_inputs(
+    source: str, destination: str, policy: dict, image_digests: dict[str, str], *, rows: tuple[int, ...] = ()
+) -> None:
+    """Write the native binding of the sealed table in its original row order."""
+    table = pq.read_table(source)
+    if rows:
+        table = table.take(pa.array(rows))
+    native_rows = []
+    for row in table.to_pylist():
+        rollout = native_rollout(TaskRolloutSpec.model_validate_json(row["task_rollout_spec"]), policy, image_digests)
+        native_rows.append(
+            {**row, "task_spec": rollout.task.model_dump_json(), "task_rollout_spec": rollout.model_dump_json()}
+        )
+    pq.write_table(pa.Table.from_pylist(native_rows, schema=table.schema), destination)
 
 
 def evalchemy_judge_resources(files: dict[str, TaskResource], judge: JudgeConfig) -> dict[str, bytes]:

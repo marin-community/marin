@@ -46,6 +46,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.importers.evalchemy.code import convert_python
 from taskcompendium.importers.nemo_predicted_action import import_row
 from taskcompendium.models import (
+    AgentMachine,
     AnswerType,
     AssistantToolCalls,
     CommandSemantics,
@@ -74,7 +75,13 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.inputs import ConversionContext
 from taskcompendium.pipeline.models import CheckStatus, RawRow
 from taskcompendium.pipeline.verification import verify_task
-from taskcompendium.runtime.grading import SPEC_PATH, STAGING_ARCHIVE, grade_empty_in_sandbox, grade_in_sandbox
+from taskcompendium.runtime.grading import (
+    SPEC_PATH,
+    STAGING_ARCHIVE,
+    grade_empty_in_sandbox,
+    grade_in_agent_machine,
+    grade_in_sandbox,
+)
 from taskcompendium.runtime.models import RuntimeEvidence, grading_attempt
 from taskcompendium.runtime.resources import inline_resource
 from taskcompendium.runtime.shell import (
@@ -560,7 +567,10 @@ def test_script_judge_receives_explicit_connection_without_serializing_credentia
 
 
 @pytest.mark.asyncio
-async def test_daytona_script_judge_uses_a_host_credential(tmp_path, script_grading_task, judge_server, monkeypatch):
+@pytest.mark.parametrize("placement", ["grader", "agent"])
+async def test_daytona_script_judge_uses_a_host_credential(
+    tmp_path, script_grading_task, judge_server, placement, monkeypatch
+):
     class DaytonaGradingMachines(LocalGradingMachines):
         backend = Backend.DAYTONA
 
@@ -590,7 +600,8 @@ with urllib.request.urlopen(request) as response:
         update={
             "grader": ScriptGrader(
                 argv=("python3", "/tests/grade.py"),
-                placement=GraderMachine(environment=GRADER_ENVIRONMENT),
+                cwd="/",
+                placement=GraderMachine(environment=GRADER_ENVIRONMENT) if placement == "grader" else AgentMachine(),
                 answer_path=None,
                 judge=JudgeSpec(references=("PASS",), request_timeout=240),
             ),
@@ -601,9 +612,18 @@ with urllib.request.urlopen(request) as response:
     connection = JudgeConnection(
         f"http://127.0.0.1:{judge_server.server_port}/v1", "host-only-key", default_model="pinned-judge"
     )
-    result = await grade_in_sandbox(
-        task, GradingAttempt(finished(task)), machines, GRADER_MACHINE, judge_connection=connection
-    )
+    if placement == "grader":
+        result = await grade_in_sandbox(
+            task, GradingAttempt(finished(task)), machines, GRADER_MACHINE, judge_connection=connection
+        )
+    else:
+        machine = await machines.create(GRADER_MACHINE)
+        try:
+            result = await grade_in_agent_machine(
+                task, GradingAttempt(finished(task)), machine, judge_connection=connection, backend=Backend.DAYTONA
+            )
+        finally:
+            await machine.close()
 
     assert (result.status, result.reward) == (Outcome.GRADED, 1.0), result
     assert judge_server.requests == [{"model": "pinned-judge", "top_k": 20}]
