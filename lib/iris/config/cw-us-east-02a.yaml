@@ -125,12 +125,11 @@ auth:
 
 kubernetes_provider:
   namespace: iris
-  # CoreWeave's gvisor RuntimeClass (deprecated by CoreWeave,
-  # https://docs.coreweave.com/products/cks/container-runtimes/reference).
-  # Sandboxes do not start under it on this cluster's nodes, so task-curation runs
-  # pass --image-backend daytona here. https://github.com/marin-community/marin/issues/11343
-  # tracks the replacement runtime.
-  sandbox_runtime_class: gvisor
+  # CoreWeave's Kata QEMU RuntimeClass replaces its deprecated gvisor class
+  # (https://docs.coreweave.com/products/cks/container-runtimes/reference). The class's
+  # nodeSelector limits sandbox pods to nodes labelled for it, which here are only the
+  # cpu-genoa nodes, and it adds 2 GiB of pod overhead.
+  sandbox_runtime_class: cw-kata-qemu
   node_health:
     storage:
       scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-02a

@@ -135,6 +135,11 @@ auth:
 
 kubernetes_provider:
   namespace: iris
+  # CoreWeave's Kata QEMU RuntimeClass replaces its deprecated gvisor class
+  # (https://docs.coreweave.com/products/cks/container-runtimes/reference). The class's
+  # nodeSelector limits sandbox pods to nodes labelled for it, which here are only the
+  # cpu-erapids nodes, and it adds 2 GiB of pod overhead.
+  sandbox_runtime_class: cw-kata-qemu
   node_health:
     storage:
       scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-08a

@@ -632,9 +632,13 @@ guide](../../../infra/pulumi/README.md) for infrastructure, and
 ### Sandbox runtime
 
 SANDBOX pods use the RuntimeClass named by `kubernetes_provider.sandbox_runtime_class`;
-CoreWeave owns these classes and their handlers. Every CoreWeave cluster uses the
-`gvisor` class, which CoreWeave has deprecated;
-[#11343](https://github.com/marin-community/marin/issues/11343) tracks its replacement.
+CoreWeave owns these classes and their handlers. `cw-us-east-02a` and
+`cw-us-east-08a` use `cw-kata-qemu`, whose nodeSelector admits only the nodes
+CoreWeave labels for it (their CPU pools) and which adds 2 GiB of pod memory
+overhead. `cw-rno2a` and `cw-us-west-04a` have no Kata-labelled CPU node and stay
+on the default `gvisor` class, which CoreWeave has deprecated;
+[#11343](https://github.com/marin-community/marin/issues/11343) tracks the
+replacement.
 
 ## Source map
 
