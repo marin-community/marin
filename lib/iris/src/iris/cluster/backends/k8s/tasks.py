@@ -164,13 +164,11 @@ COREWEAVE_ACCESS_KEYS_URL = "https://console.coreweave.com/object-storage/access
 _ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
 
 # The NVIDIA plugin supplies IDs as a comma-separated list or as mount names.
-# Translate both forms to PCI-ordered CUDA ordinals. Some Ray workloads expect
-# numeric accelerator IDs, even when the plugin allocates by UUID.
+# Keep numeric accelerator IDs for existing launchers that consume ordinals.
 _PRIVILEGED_GPU_SETUP = r"""iris_set_cuda_devices() {
     local allocation=${NVIDIA_VISIBLE_DEVICES:-void}
     local path id inventory pci index uuid ordinal=0
     local -a assigned=() visible=()
-    local -A requested=()
 
     case "$allocation" in
         all|none|void) allocation=/var/run/nvidia-container-devices ;;
@@ -183,10 +181,6 @@ _PRIVILEGED_GPU_SETUP = r"""iris_set_cuda_devices() {
         IFS=, read -r -a assigned <<< "$allocation"
     fi
     [[ ${#assigned[@]} -eq $1 ]] || return 1
-    for id in "${assigned[@]}"; do
-        [[ -n $id ]] || return 1
-        requested["$id"]=1
-    done
 
     inventory=$(
         set -o pipefail
@@ -194,9 +188,11 @@ _PRIVILEGED_GPU_SETUP = r"""iris_set_cuda_devices() {
     ) || return 1
     while IFS=', ' read -r pci index uuid; do
         [[ -n $pci && -n $index && -n $uuid ]] || return 1
-        if [[ ${requested[$index]:-} || ${requested[$uuid]:-} ]]; then
+        for id in "${assigned[@]}"; do
+            [[ $id == "$index" || $id == "$uuid" ]] || continue
             visible+=("$ordinal")
-        fi
+            break
+        done
         ordinal=$((ordinal + 1))
     done <<< "$inventory"
     [[ ${#visible[@]} -eq $1 ]] || return 1
