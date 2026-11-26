@@ -1,57 +1,60 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import json
-from dataclasses import replace
-from pathlib import Path
+"""Policy runs are found by their inputs at every commit and attempt, checked for compliance, and never replaced."""
 
-import click
-import draccus
+import json
+import subprocess
+from dataclasses import replace
+
 import pytest
-from evalrecords.records import PromptFormat, RunStatus, TaskCoverage, read_record, record_path
+from evalrecords.records import PromptFormat, RunStatus, TaskCoverage, read_record
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from marin.evaluation.runner import _record
+from marin.execution.step_status import StatusFile
 from marin.inference import vllm_backend
+from rigging.filesystem.step_status import STATUS_SUCCESS
+from rigging.filesystem.storage_path import prefix_join
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, SelectionStatus
 
-from experiments.evaluation import launch as evaluation_launch
 from experiments.evaluation.curated import selection_dataset
-from experiments.evaluation.launch import evaluation_group_step
 from experiments.evaluation.policy import cli
-from experiments.evaluation.policy.launch import model_candidate
-from experiments.evaluation.policy.resolve import exclusions_for
+from experiments.evaluation.policy.launch import model_evaluations, source_state
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
+    RunCheck,
     RunEvidence,
     RunState,
     expected_runs,
-    record_candidate,
+    found_runs,
+    record_model,
     run_evidence,
     run_problems,
+    run_suffix,
     run_warnings,
-    succeeded_runs,
+    split_run_id,
 )
-from experiments.evaluation.policy.schema import PolicyCandidate, PolicyEvaluation
 from experiments.evaluation.policy.versions import POLICIES
-from experiments.post_training.task_curation.campaign import CampaignRuntime
 
 POLICY = POLICIES["marin-2026-11-20-trial"]
-QWEN = next(candidate for candidate in POLICY.candidates if candidate.name == "qwen3.6-35b-a3b")
-EVALUATIONS = {"aime24", "mrcr-32k"}
+QWEN_NAME = "qwen3.6-35b-a3b"
+HEAD = "0123456789ab"
+OLD = "ba9876543210"
 
 
-def _expected(limit: int | None) -> dict[str, ExpectedRun]:
-    return {run.name: run for run in expected_runs(POLICY, QWEN, limit=limit, evaluations=EVALUATIONS)}
+def _runs(model, names, *, limit=None, state=HEAD, attempt=1, policy=POLICY) -> dict[str, ExpectedRun]:
+    plan = model_evaluations(policy, model, names)
+    suffixes = {evaluation.name: run_suffix(state, attempt) for evaluation in plan.evaluations}
+    return {run.name: run for run in expected_runs(policy, plan, limit=limit, run_suffixes=suffixes)}
 
 
-def _write(tmp_path, run: ExpectedRun, status: RunStatus = RunStatus.SUCCEEDED, git_sha: str | None = None):
-    batch = replace(run.batch, records_prefix=str(tmp_path))
-    if git_sha is not None:
-        batch = replace(batch, provenance=replace(batch.provenance, git_sha=git_sha))
-    _record(batch, run.evaluation.identity, status, None if status is RunStatus.SUCCEEDED else "boom", {}, {}, {})
-    return read_record(record_path(str(tmp_path), run.evaluation.identity.run_id))
+def _write(run: ExpectedRun, status: RunStatus = RunStatus.SUCCEEDED, *, step: bool = True):
+    _record(run.batch, run.evaluation.identity, status, None if status is RunStatus.SUCCEEDED else "boom", {}, {}, {})
+    if step and status is RunStatus.SUCCEEDED:
+        StatusFile(prefix_join(run.batch.records_prefix, run.run_id), "test").write_status(STATUS_SUCCESS)
+    return read_record(run.record_path)
 
 
 def _evidence(
@@ -76,216 +79,62 @@ def _evidence(
     )
 
 
-def test_a_relaunch_finds_each_run_at_the_same_path_and_smoke_runs_elsewhere():
-    first, second, smoke = _expected(None), _expected(None), _expected(20)
-    assert {name: run.record_path for name, run in first.items()} == {
-        name: run.record_path for name, run in second.items()
-    }
-    assert not {run.record_path for run in first.values()} & {run.record_path for run in smoke.values()}
+def test_a_run_id_names_its_inputs_commit_and_attempt(qwen, records):
+    full, again, smoke = _runs(qwen, {"aime24"}), _runs(qwen, {"aime24"}), _runs(qwen, {"aime24"}, limit=20)
+    old, rerun = _runs(qwen, {"aime24"}, state=OLD), _runs(qwen, {"aime24"}, attempt=2)
+    assert full["aime24"].run_id == again["aime24"].run_id
+    assert full["aime24"].base == old["aime24"].base == rerun["aime24"].base != smoke["aime24"].base
+    assert len({run["aime24"].run_id for run in (full, old, rerun)}) == 3
+    assert split_run_id(rerun["aime24"].run_id) == (full["aime24"].base, HEAD, 2)
 
 
-def test_a_launch_finds_succeeded_runs_and_the_rest_keep_their_ids(tmp_path):
-    runs = _expected(None)
-    _write(tmp_path, runs["aime24"])
-    _write(tmp_path, runs["mrcr-32k"], RunStatus.INFRA_FAILED)
-    at_tmp = [replace(run, batch=replace(run.batch, records_prefix=str(tmp_path))) for run in runs.values()]
-    assert set(succeeded_runs(at_tmp)) == {"aime24"}
-    # A relaunch leaves the succeeded run out; the failed one keeps its path, so it resumes there.
-    (rerun,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"mrcr-32k"})
-    assert rerun.record_path == runs["mrcr-32k"].record_path
+def test_runs_of_the_same_inputs_are_found_at_every_commit_and_attempt(qwen, records):
+    for state, attempt in ((OLD, 1), (HEAD, 1), (HEAD, 2)):
+        _write(_runs(qwen, {"aime24"}, state=state, attempt=attempt)["aime24"])
+    _write(_runs(qwen, {"aime24"}, limit=20)["aime24"])
+    found = found_runs(_runs(qwen, {"aime24"})["aime24"])
+    assert [(run.state, run.attempt) for run in found] == [(HEAD, 1), (HEAD, 2), (OLD, 1)]
+    assert all(run.step_succeeded for run in found)
 
 
-def _checkpoint(tmp_path, *, name: str = "qwen-step-100", window: int = 32_768, weights: bytes = b"weights"):
-    """A supplied Qwen checkpoint in a local directory, served at ``window``."""
-    directory = tmp_path / name
-    directory.mkdir(exist_ok=True)
-    (directory / "model.safetensors").write_bytes(weights)
-    return replace(
-        QWEN.model,
-        name=name,
-        location=f"file://{directory}",
-        revision=None,
-        tokenizer=QWEN.model.location,
-        tokenizer_revision=QWEN.model.revision,
-        serve=replace(QWEN.model.serve, auto_overrides=False, max_model_len=window),
-    )
-
-
-def test_a_run_of_a_model_outside_the_policy_is_checked_against_its_recorded_model(tmp_path):
-    # Served at 32,768, the checkpoint cannot run MRCR's 73,728-token window, so it leaves MRCR out.
-    policy = replace(POLICY, in_distribution=(PolicyEvaluation("aime24"), PolicyEvaluation("mrcr")))
-    candidate = model_candidate(_checkpoint(tmp_path))
-    assert [exclusion.evaluation.name for exclusion in exclusions_for(policy, candidate)] == ["mrcr"]
-    (run,) = expected_runs(policy, candidate, limit=None)
-    record = _write(tmp_path / "records", run)
-    (expected,) = expected_runs(policy, record_candidate(policy, record), limit=None, evaluations={"aime24"})
-    assert expected.evaluation.identity.run_id == run.evaluation.identity.run_id
-    assert run_problems(record, _evidence(expected), expected) == (RunState.VALID, ())
-
-
-def test_rewriting_a_checkpoint_gives_its_runs_new_identities(tmp_path):
-    checkpoint = _checkpoint(tmp_path)
-
-    def path() -> str:
-        (run,) = expected_runs(
-            POLICY, PolicyCandidate(model=checkpoint, max_context=32_768), limit=None, evaluations={"aime24"}
-        )
-        return run.record_path
-
-    before = path()
-    _checkpoint(tmp_path, weights=b"retrained weights")
-    assert path() != before
-
-
-def test_a_supplied_model_at_a_candidates_location_is_checked_against_its_own_config(tmp_path):
-    variant = model_candidate(
-        replace(QWEN.model, name="qwen-variant", serve=replace(QWEN.model.serve, reasoning_parser=None))
-    )
-    (run,) = expected_runs(POLICY, variant, limit=None, evaluations={"aime24"})
-    record = _write(tmp_path, run)
-    assert record_candidate(POLICY, record).name == "qwen-variant"
-
-
-def _paths(policy) -> dict[str, str]:
-    names = {"aime24", "swebench-verified"}
-    return {run.name: run.record_path for run in expected_runs(policy, QWEN, limit=None, evaluations=names)}
-
-
-def test_a_new_inference_build_moves_every_run(monkeypatch):
-    before = _paths(POLICY)
-    release = replace(vllm_backend.VLLM_GPU_RELEASE, release_tag="marin-vllm-gpu-next")
-    monkeypatch.setattr(vllm_backend, "VLLM_GPU_RELEASE", release)
-    after = _paths(POLICY)
-    assert all(before[name] != after[name] for name in before)
-
-
-def test_a_new_agent_concurrency_moves_only_that_agents_run_and_verify_names_it(tmp_path):
-    before = _paths(POLICY)
-    agent = next(evaluation for evaluation in POLICY.in_distribution if evaluation.name == "swebench-verified")
-    faster = replace(
-        POLICY, in_distribution=tuple(replace(e, concurrency=32) if e is agent else e for e in POLICY.in_distribution)
-    )
-    after = _paths(faster)
-    assert before["aime24"] == after["aime24"]
-    assert before["swebench-verified"] != after["swebench-verified"]
-
-    (old,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"swebench-verified"})
-    (new,) = expected_runs(faster, QWEN, limit=None, evaluations={"swebench-verified"})
-    state, problems = run_problems(_write(tmp_path, old), _evidence(new), new)
-    assert state is RunState.INVALID
-    assert any(problem.startswith("run_id:") for problem in problems)
-
-
-def test_a_rerun_replaces_an_invalid_run_and_the_job_marker_that_would_skip_it(tmp_path, monkeypatch):
-    monkeypatch.setattr(evaluation_launch, "records_prefix_for", lambda _accelerator, _spec: str(tmp_path))
-    (run,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"})
-    run_id = run.evaluation.identity.run_id
-    # A succeeded record with no archive is invalid; an earlier job with the same runs left its success marker.
-    _write(tmp_path, run)
-    marker = Path(evaluation_group_step(run.batch, CampaignRuntime()).output_path)
-    marker.mkdir(parents=True)
-    (marker / ".executor_status").write_text("SUCCESS")
-
-    plan = cli._launch_plan(POLICY, QWEN, {"aime24"}, {run_id}, limit=None, release_commit=None)
-    assert [rerun.name for rerun in plan.reruns] == ["aime24"]
-    assert not plan.succeeded
-    cli._discard(plan)
-    assert not Path(record_path(str(tmp_path), run_id)).exists()
-    assert not marker.exists()
-
-
-def test_a_rerun_refuses_a_run_that_has_not_finished(tmp_path, monkeypatch):
-    monkeypatch.setattr(evaluation_launch, "records_prefix_for", lambda _accelerator, _spec: str(tmp_path))
-    (run,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"})
-    with pytest.raises(click.ClickException):
-        cli._launch_plan(POLICY, QWEN, {"aime24"}, {run.evaluation.identity.run_id}, limit=None, release_commit=None)
-
-
-def test_a_supplied_model_may_not_reuse_a_candidates_name_with_other_settings(tmp_path):
-    changed = tmp_path / "qwen.yaml"
-    changed.write_text(
-        json.dumps(draccus.encode(replace(QWEN.model, serve=replace(QWEN.model.serve, reasoning_parser=None))))
-    )
-    with pytest.raises(click.UsageError):
-        cli._targets(POLICY, (), False, None, changed)
-    same = tmp_path / "same.yaml"
-    same.write_text(json.dumps(draccus.encode(QWEN.model)))
-    assert cli._targets(POLICY, (), False, None, same) == (QWEN,)
-
-
-def test_a_run_of_the_policy_is_valid(tmp_path):
-    run = _expected(None)["aime24"]
-    assert run_problems(_write(tmp_path, run), _evidence(run), run) == (RunState.VALID, ())
+def test_a_compliant_run_has_no_problems(qwen, records):
+    run = _runs(qwen, {"aime24"})["aime24"]
+    assert run_problems(_write(run), _evidence(run), run, step_succeeded=True) == ()
 
 
 @pytest.mark.parametrize(
-    ("status", "evidence"),
+    ("status", "evidence", "step", "problem"),
     [
-        pytest.param(RunStatus.INFRA_FAILED, None, id="failed"),
-        pytest.param(RunStatus.SUCCEEDED, {"window": 32768}, id="another-server-window"),
-        pytest.param(RunStatus.SUCCEEDED, {"undecided": 1}, id="full-run-left-items-undecided"),
+        pytest.param(RunStatus.INFRA_FAILED, None, True, "infra_failed", id="failed"),
+        pytest.param(RunStatus.SUCCEEDED, {"window": 32768}, True, "server window", id="another-server-window"),
+        pytest.param(RunStatus.SUCCEEDED, {"undecided": 1}, True, "undecided", id="full-run-left-items-undecided"),
+        pytest.param(RunStatus.SUCCEEDED, None, True, RUN_OBJECT, id="no-archive"),
+        pytest.param(RunStatus.SUCCEEDED, {}, False, "step did not finish", id="step-failed-after-its-record"),
     ],
 )
-def test_a_run_whose_outcome_falls_short_is_invalid(tmp_path, status, evidence):
-    run = _expected(None)["aime24"]
-    record = _write(tmp_path, run, status)
-    state, problems = run_problems(record, None if evidence is None else _evidence(run, **evidence), run)
-    assert state is RunState.INVALID
-    # A succeeded record keeps its step marked done, so the problem says a relaunch will not rerun it.
-    assert any("relaunch skips" in problem for problem in problems) is (status is RunStatus.SUCCEEDED)
+def test_a_run_that_falls_short_has_problems(qwen, records, status, evidence, step, problem):
+    run = _runs(qwen, {"aime24"})["aime24"]
+    record = _write(run, status, step=step)
+    problems = run_problems(record, None if evidence is None else _evidence(run, **evidence), run, step_succeeded=step)
+    assert any(problem in found for found in problems)
 
 
-def test_a_succeeded_run_without_an_archive_is_invalid(tmp_path):
-    run = _expected(None)["aime24"]
-    state, problems = run_problems(_write(tmp_path, run), None, run)
-    assert state is RunState.INVALID
-    assert any(RUN_OBJECT in problem for problem in problems)
+def test_a_run_from_uncommitted_changes_never_complies(qwen, records):
+    run = _runs(qwen, {"aime24"}, state=f"{HEAD}-dirty0badf00d")["aime24"]
+    problems = run_problems(_write(run), _evidence(run), run, step_succeeded=True)
+    assert problems == ("launched from a checkout with uncommitted changes",)
 
 
-def test_a_full_run_need_not_attempt_items_its_protocol_excludes(tmp_path):
+def test_a_full_run_need_not_attempt_items_its_protocol_excludes(qwen, records):
     # MRCR's selection drops conversations that do not fit its window; the run still covers the benchmark.
-    run = _expected(None)["mrcr-32k"]
-    assert run_problems(_write(tmp_path, run), _evidence(run, attempted=6), run) == (RunState.VALID, ())
+    run = _runs(qwen, {"mrcr-32k"})["mrcr-32k"]
+    assert run_problems(_write(run), _evidence(run, attempted=6), run, step_succeeded=True) == ()
 
 
-def test_a_smoke_run_need_not_attempt_every_item(tmp_path):
-    run = _expected(20)["aime24"]
-    assert run_problems(_write(tmp_path, run), _evidence(run, attempted=20), run) == (RunState.VALID, ())
-
-
-def test_different_inputs_name_the_fields_and_are_stale_only_from_another_commit(tmp_path):
-    full, smoke = _expected(None)["mrcr-32k"], _expected(20)["mrcr-32k"]
-    here = _write(tmp_path, smoke)
-    state, problems = run_problems(here, _evidence(full), full)
-    assert state is RunState.INVALID
+def test_a_smoke_runs_inputs_differ_from_a_full_runs(qwen, records):
+    full, smoke = _runs(qwen, {"mrcr-32k"})["mrcr-32k"], _runs(qwen, {"mrcr-32k"}, limit=20)["mrcr-32k"]
+    problems = run_problems(_write(smoke), _evidence(full), full, step_succeeded=True)
     assert any(problem.startswith("eval.curated.settings.source_limit:") for problem in problems)
-
-    elsewhere = _write(tmp_path / "old", smoke, git_sha="0" * 40)
-    state, problems = run_problems(elsewhere, _evidence(full), full)
-    assert state is RunState.STALE
-    assert any(problem.startswith("eval.curated.settings.source_limit:") for problem in problems)
-
-
-def test_a_release_runs_at_its_own_paths_not_the_unreleased_versions():
-    # Runs made before the tag share the version; they must not occupy, or be skipped in place of, the release's.
-    (before,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"})
-    (released,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"}, release_commit="a" * 40)
-    (again,) = expected_runs(POLICY, QWEN, limit=None, evaluations={"aime24"}, release_commit="a" * 40)
-    assert released.record_path == again.record_path != before.record_path
-
-
-def test_a_released_policys_runs_must_come_from_its_tagged_commit(tmp_path):
-    run = _expected(None)["aime24"]
-    record = _write(tmp_path, run)
-    release = record.provenance.git_sha
-    assert run_problems(record, _evidence(run), run, release_commit=release) == (RunState.VALID, ())
-
-    # The same inputs at another commit are valid for a trial policy but not for a release.
-    elsewhere = _write(tmp_path / "old", run, git_sha="0" * 40)
-    assert run_problems(elsewhere, _evidence(run), run)[0] is RunState.VALID
-    state, problems = run_problems(elsewhere, _evidence(run), run, release_commit=release)
-    assert state is RunState.INVALID
-    assert any("relaunch skips" in problem for problem in problems)
 
 
 @pytest.mark.parametrize(
@@ -297,11 +146,112 @@ def test_a_released_policys_runs_must_come_from_its_tagged_commit(tmp_path):
         pytest.param({"scored": 28}, True, id="too-few-scored"),
     ],
 )
-def test_runs_far_outside_expectations_are_flagged_but_stay_valid(tmp_path, evidence, flagged):
-    run = _expected(None)["aime24"]
+def test_runs_far_outside_expectations_are_flagged_but_comply(qwen, records, evidence, flagged):
+    run = _runs(qwen, {"aime24"})["aime24"]
     evidence = _evidence(run, **evidence)
-    assert run_problems(_write(tmp_path, run), evidence, run) == (RunState.VALID, ())
+    assert run_problems(_write(run), evidence, run, step_succeeded=True) == ()
     assert bool(run_warnings(evidence)) is flagged
+
+
+def test_a_new_inference_build_or_agent_concurrency_moves_only_the_runs_it_changes(qwen, records, monkeypatch):
+    names = {"aime24", "swebench-verified"}
+    before = {name: run.base for name, run in _runs(qwen, names).items()}
+    agent = next(evaluation for evaluation in POLICY.evaluations if evaluation.name == "swebench-verified")
+    faster = agent.model_copy(update={"run": agent.run.model_copy(update={"concurrency": 32})})
+    policy = replace(POLICY, evaluations=tuple(faster if e is agent else e for e in POLICY.evaluations))
+    after = {name: run.base for name, run in _runs(qwen, names, policy=policy).items()}
+    assert before["aime24"] == after["aime24"] and before["swebench-verified"] != after["swebench-verified"]
+
+    monkeypatch.setattr(vllm_backend, "VLLM_GPU_RELEASE", replace(vllm_backend.VLLM_GPU_RELEASE, release_tag="next"))
+    rebuilt = {name: run.base for name, run in _runs(qwen, names).items()}
+    assert all(rebuilt[name] != before[name] for name in names)
+
+
+def test_a_record_of_a_policy_models_name_at_another_location_is_rejected(qwen, records):
+    run = _runs(qwen, {"aime24"})["aime24"]
+    record = _write(run)
+    moved = record.model_copy(update={"model": record.model.model_copy(update={"location": "s3://elsewhere/qwen"})})
+    with pytest.raises(ValueError, match="declares at"):
+        record_model(POLICY, moved)
+
+
+def test_uncommitted_changes_give_a_launch_its_own_state(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "a.py").write_text("one\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"], check=True
+    )
+    clean = source_state(tmp_path)
+    (tmp_path / "a.py").write_text("two\n")
+    edited = source_state(tmp_path)
+    (tmp_path / "a.py").write_text("three\n")
+    assert len(clean) == 12 and edited.startswith(f"{clean}-dirty") and source_state(tmp_path) != edited
+
+
+def _found(state: str, attempt: int, status: RunStatus | None) -> "cli.FoundRun":
+    record = None if status is None else _FakeRecord(status)
+    return cli.FoundRun(
+        run_id=f"base-{state}-a{attempt}", state=state, attempt=attempt, record=record, step_succeeded=True
+    )
+
+
+class _FakeRecord:
+    def __init__(self, status: RunStatus):
+        self.status = status
+
+
+@pytest.fixture
+def verdicts(monkeypatch):
+    """Stand in for archive checks: each found run's verdict by run ID."""
+    table: dict[str, tuple[RunState, tuple[str, ...]]] = {}
+
+    def check(run, _expected):
+        if run.record is None:
+            return None
+        state, warnings = table[run.run_id]
+        return RunCheck(record=run.record, state=state, problems=(), warnings=warnings)
+
+    def compliant(runs, expected):
+        valid = [run for run in runs if run.record is not None and table[run.run_id][0] is RunState.VALID]
+        return (valid[-1], check(valid[-1], expected)) if valid else None
+
+    monkeypatch.setattr(cli, "check_found", check)
+    monkeypatch.setattr(cli, "compliant_run", compliant)
+    return table
+
+
+def test_a_compliant_run_at_an_older_commit_leaves_the_evaluation_out(verdicts):
+    old = _found(OLD, 1, RunStatus.SUCCEEDED)
+    verdicts[old.run_id] = (RunState.VALID, ())
+    assert cli._decide((old,), None, HEAD, ()) == cli._Decision(attempt=None, run=old, compliant=True)
+
+
+def test_a_finished_run_here_that_doesnt_comply_waits_for_rerun_and_a_failed_one_resumes(verdicts):
+    invalid, failed = _found(HEAD, 1, RunStatus.SUCCEEDED), _found(HEAD, 1, RunStatus.INFRA_FAILED)
+    verdicts[invalid.run_id] = (RunState.INVALID, ())
+    assert cli._decide((invalid,), None, HEAD, ()) == cli._Decision(attempt=None, run=invalid)
+    verdicts[failed.run_id] = (RunState.INVALID, ())
+    assert cli._decide((failed,), None, HEAD, ()) == cli._Decision(attempt=1)
+    assert cli._decide((), None, HEAD, ()) == cli._Decision(attempt=1)
+
+
+def test_rerun_writes_the_next_attempt_for_an_invalid_or_flagged_run_only(verdicts):
+    invalid = _found(HEAD, 1, RunStatus.SUCCEEDED)
+    verdicts[invalid.run_id] = (RunState.INVALID, ())
+    assert cli._decide((invalid,), None, HEAD, {invalid.run_id}) == cli._Decision(attempt=2, replaces=invalid.run_id)
+
+    flagged = _found(OLD, 1, RunStatus.SUCCEEDED)
+    verdicts[flagged.run_id] = (RunState.VALID, ("4/30 replies hit their output cap",))
+    assert cli._decide((flagged,), None, HEAD, {flagged.run_id}).attempt == 1
+
+    valid = _found(OLD, 1, RunStatus.SUCCEEDED)
+    verdicts[valid.run_id] = (RunState.VALID, ())
+    with pytest.raises(ValueError, match="valid"):
+        cli._decide((valid,), None, HEAD, {valid.run_id})
+    running = _found(HEAD, 1, None)
+    with pytest.raises(ValueError, match="not finished"):
+        cli._decide((running,), None, HEAD, {running.run_id})
 
 
 def _selection(index: int, status: SelectionStatus, reason: str | None, max_tokens: int | None) -> dict:
@@ -324,9 +274,8 @@ def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0,
 
     ``excluded`` more items are excluded by the protocol, and the dataset has ``rows`` items in all.
     """
-    protocol = selection_dataset(
-        _expected(None)["aime24"].evaluation.identity.eval_ref.curated.selection, PromptFormat.CHAT
-    ).protocol
+    aime24 = next(evaluation for evaluation in POLICY.evaluations if evaluation.name == "aime24")
+    protocol = selection_dataset(aime24, PromptFormat.CHAT).protocol
     with DataStore.open(str(path)) as store:
         store.table(
             ATTEMPTS_TABLE,
@@ -371,16 +320,16 @@ def _archive(path, caps_and_tokens: list[tuple[int, int]], *, excluded: int = 0,
             transaction.write_object(RUN_OBJECT, json.dumps(run).encode())
 
 
-def test_a_reply_counts_as_capped_against_its_own_items_cap(tmp_path):
+def test_a_reply_counts_as_capped_against_its_own_items_cap(qwen, records, tmp_path):
     # The evaluator shrinks a long prompt's cap, so 300 tokens fills the second item's cap but not the first's.
     _archive(tmp_path / "results", [(1000, 300), (300, 300), (1000, 999)])
-    record = _write(tmp_path, _expected(None)["aime24"])
+    record = _write(_runs(qwen, {"aime24"})["aime24"])
     evidence = run_evidence(record.model_copy(update={"results_path": str(tmp_path / "results")}), {})
     assert (evidence.replies, evidence.capped) == (3, 1)
 
 
-def test_items_the_protocol_excludes_are_decided_and_missing_ones_are_not(tmp_path):
-    record = _write(tmp_path, _expected(None)["aime24"])
+def test_items_the_protocol_excludes_are_decided_and_missing_ones_are_not(qwen, records, tmp_path):
+    record = _write(_runs(qwen, {"aime24"})["aime24"])
     _archive(tmp_path / "excluded", [(1000, 10)], excluded=2)
     _archive(tmp_path / "missing", [(1000, 10)], excluded=2, rows=5)
     evidence = {
@@ -390,6 +339,6 @@ def test_items_the_protocol_excludes_are_decided_and_missing_ones_are_not(tmp_pa
     assert (evidence["excluded"].undecided, evidence["missing"].undecided) == ({}, {"d": 2})
 
 
-def test_an_archive_without_its_run_object_gives_no_evidence(tmp_path):
-    record = _write(tmp_path, _expected(None)["aime24"])
+def test_an_archive_without_its_run_object_gives_no_evidence(qwen, records, tmp_path):
+    record = _write(_runs(qwen, {"aime24"})["aime24"])
     assert run_evidence(record.model_copy(update={"results_path": str(tmp_path / "missing")}), {}) is None

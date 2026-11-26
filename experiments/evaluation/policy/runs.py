@@ -1,11 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check eval records against the runs a policy launch from the current checkout would make."""
+"""Find a policy's runs and check them.
+
+A policy run's ID is ``<base>-<commit>[-dirty<digest>]-a<attempt>``: the base digests its inputs, so listing the
+base finds the runs of the same inputs at every commit and attempt.
+"""
 
 import json
+import re
 from collections import Counter
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -17,6 +22,9 @@ from finestore.reader import ReadView
 from iris.rpc import job_pb2
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import Evaluation, EvaluationBatch
+from marin.execution.step_runner import check_cache
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import prefix_join
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, SelectionStatus
 from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 
@@ -27,23 +35,27 @@ from experiments.evaluation.launch import (
     model_identity,
     prepare_evaluation_batch,
 )
-from experiments.evaluation.policy.launch import launch_specs, model_candidate
-from experiments.evaluation.policy.schema import EvalPolicy, PolicyCandidate
+from experiments.evaluation.policy.launch import ModelEvaluations, PolicyModel, launch_specs, policy_model
+from experiments.evaluation.policy.schema import Policy
 
 _MAX_VALUE_CHARS = 60
 _SINGLE_TURN = frozenset({OperationKind.CHAT_GENERATION, OperationKind.TEXT_GENERATION})
+_SUFFIX = re.compile(r"(?P<state>[0-9a-f]{12}(?:-dirty[0-9a-f]{8})?)-a(?P<attempt>[1-9][0-9]*)")
+_RUN_ID = re.compile(rf"(?P<base>.+-[0-9a-f]{{32}})-{_SUFFIX.pattern}")
 CAPPED_WARNING = 0.10
 """Share of single-turn replies stopped by their output cap above which a run is flagged."""
 SCORED_WARNING = 0.95
 """Share of a task's attempts scored below which the run is flagged."""
 
 
-class RunState(StrEnum):
-    """A run's standing against the policy; ``STALE`` runs had other inputs and ran at another commit."""
+def run_suffix(state: str, attempt: int) -> str:
+    """The run-ID part naming the checkout a run was launched from and its attempt there."""
+    return f"{state}-a{attempt}"
 
+
+class RunState(StrEnum):
     VALID = "valid"
     INVALID = "invalid"
-    STALE = "differs from this checkout"
 
 
 @dataclass(frozen=True)
@@ -52,14 +64,37 @@ class ExpectedRun:
 
     batch: EvaluationBatch
     evaluation: Evaluation
+    base: str
+    """The run ID without its commit and attempt, shared by every run of the same inputs."""
 
     @property
     def name(self) -> str:
         return self.evaluation.identity.eval_ref.name
 
     @property
+    def run_id(self) -> str:
+        return self.evaluation.identity.run_id
+
+    @property
     def record_path(self) -> str:
-        return record_path(self.batch.records_prefix, self.evaluation.identity.run_id)
+        return record_path(self.batch.records_prefix, self.run_id)
+
+
+@dataclass(frozen=True)
+class FoundRun:
+    """A run of an expected run's inputs, at some commit and attempt."""
+
+    run_id: str
+    state: str
+    """The commit it was launched from, with a digest of uncommitted changes if any."""
+    attempt: int
+    record: EvalRunRecord | None
+    """None until the run finishes."""
+    step_succeeded: bool
+
+    @property
+    def dirty(self) -> bool:
+        return "-dirty" in self.state
 
 
 @dataclass(frozen=True)
@@ -73,33 +108,59 @@ class RunCheck:
 
 
 def expected_runs(
-    policy: EvalPolicy,
-    candidate: PolicyCandidate,
+    policy: Policy,
+    plan: ModelEvaluations,
     *,
     limit: int | None,
-    evaluations: Collection[str] | None = None,
+    run_suffixes: Mapping[str, str],
     priority_band: int = job_pb2.PRIORITY_BAND_BATCH,
     federated_cluster: str | None = None,
-    release_commit: str | None = None,
 ) -> tuple[ExpectedRun, ...]:
-    """Every run ``policy launch`` would submit for ``candidate`` at ``limit``, resolved as a dry run does.
+    """Every run ``policy launch`` would submit for one model at ``limit``, resolved as a dry run does.
 
     Priority and cluster place the servers but do not change any run's path.
     """
     specs = launch_specs(
         policy,
-        candidate,
-        evaluations=evaluations,
+        plan,
         limit=limit,
         priority_band=priority_band,
+        run_suffixes=run_suffixes,
         federated_cluster=federated_cluster,
-        release_commit=release_commit,
     )
     return tuple(
-        ExpectedRun(batch=batch, evaluation=evaluation)
+        ExpectedRun(
+            batch=batch,
+            evaluation=evaluation,
+            base=evaluation.identity.run_id.removesuffix(f"-{run_suffixes[evaluation.identity.eval_ref.name]}"),
+        )
         for batch in (prepare_evaluation_batch(spec) for spec in specs)
         for evaluation in batch.evaluations
     )
+
+
+def found_runs(expected: ExpectedRun) -> tuple[FoundRun, ...]:
+    """Every run of the expected run's inputs, at every commit and attempt, oldest attempt first."""
+    fs, root = url_to_fs(expected.batch.records_prefix)
+    runs = []
+    for path in fs.glob(f"{root}/{expected.base}-*"):
+        run_id = path.rsplit("/", 1)[-1]
+        if (match := _SUFFIX.fullmatch(run_id.removeprefix(f"{expected.base}-"))) is None:
+            continue
+        try:
+            record = read_record(record_path(expected.batch.records_prefix, run_id))
+        except FileNotFoundError:
+            record = None
+        runs.append(
+            FoundRun(
+                run_id=run_id,
+                state=match["state"],
+                attempt=int(match["attempt"]),
+                record=record,
+                step_succeeded=check_cache(prefix_join(expected.batch.records_prefix, run_id)),
+            )
+        )
+    return tuple(sorted(runs, key=lambda run: (run.state, run.attempt)))
 
 
 def differences(expected: object, actual: object, path: str) -> list[str]:
@@ -189,101 +250,113 @@ def run_warnings(evidence: RunEvidence) -> tuple[str, ...]:
 
 
 def run_problems(
-    record: EvalRunRecord, evidence: RunEvidence | None, expected: ExpectedRun, *, release_commit: str | None = None
-) -> tuple[RunState, tuple[str, ...]]:
-    """Compare an unscored record and its archive's evidence with the run this checkout would launch.
+    record: EvalRunRecord, evidence: RunEvidence | None, expected: ExpectedRun, *, step_succeeded: bool
+) -> tuple[str, ...]:
+    """Every way a record and its archive's evidence fall short of the run the policy expects.
 
-    Input differences on a record from another commit make it stale rather than invalid: any later
-    change to a model config, corpus or harness changes a run's inputs. A released policy's runs must
-    come from ``release_commit``, its tag's commit.
+    The record must be of the same inputs (its run ID extends the expected base, and its model, evaluation and
+    runtime match), from a clean checkout, finished with its step's success marker, and its archive must show
+    the served window and full coverage. Items the protocol excludes, such as ones too long for its window,
+    are not missing from a full run.
     """
     batch, evaluation = expected.batch, expected.evaluation
-    drift = [
+    problems = [
         *differences(model_identity(batch_model_ref(batch)), model_identity(record.model), "model"),
         *differences(evaluation_identity(evaluation.identity.eval_ref), evaluation_identity(record.evaluation), "eval"),
         *differences(evaluation.identity.eval_runtime, record.provenance.eval_runtime, "eval_runtime"),
     ]
-    # The run ID also covers what no recorded field shows: the inference build, agent concurrency and release.
-    if not drift and record.run_id != evaluation.identity.run_id:
-        drift.append(f"run_id: ran {record.run_id}, policy gives {evaluation.identity.run_id}")
-    faults = []
+    # The base also covers what no recorded field shows: the inference build, accelerator and agent concurrency.
+    if (match := _SUFFIX.fullmatch(record.run_id.removeprefix(f"{expected.base}-"))) is None:
+        problems.append(f"run_id: ran {record.run_id}, not a run of {expected.base}")
+    elif "-dirty" in match["state"]:
+        problems.append("launched from a checkout with uncommitted changes")
     if record.version != batch.version:
-        faults.append(f"version {record.version!r}, not {batch.version!r}")
-    if release_commit is not None and record.provenance.git_sha != release_commit:
-        faults.append(f"ran at commit {record.provenance.git_sha[:10]}, not the release's {release_commit[:10]}")
+        problems.append(f"version {record.version!r}, not {batch.version!r}")
     if record.status is not RunStatus.SUCCEEDED:
-        faults.append(f"{record.status.value}: {record.error}")
+        problems.append(f"{record.status.value}: {record.error}")
+    elif not step_succeeded:
+        problems.append("its record succeeded but its step did not finish successfully")
     elif evidence is None:
-        faults.append(f"its archive has no {RUN_OBJECT}")
+        problems.append(f"its archive has no {RUN_OBJECT}")
     if evidence is not None:
         if evidence.window != batch.model.serve.max_model_len:
-            faults.append(f"server window {evidence.window}, policy gives {batch.model.serve.max_model_len}")
+            problems.append(f"server window {evidence.window}, policy gives {batch.model.serve.max_model_len}")
         if not evidence.coverage:
-            faults.append("no coverage in the run's archive")
+            problems.append("no coverage in the run's archive")
         curated = evaluation.identity.eval_ref.curated
         assert curated is not None, "policy evaluations are curated selections"
-        # Items the protocol excludes, such as ones too long for its window, are not missing from a full run.
         if curated.settings.source_limit is None:
-            faults.extend(
+            problems.extend(
                 f"{dataset}: the selection left {missing} items undecided"
                 for dataset, missing in sorted(evidence.undecided.items())
             )
-    if faults and not drift and record.status is RunStatus.SUCCEEDED and record.version == batch.version:
-        faults.append("a relaunch skips this run, since its record succeeded")
-    if faults or (drift and record.provenance.git_sha == batch.provenance.git_sha):
-        return RunState.INVALID, (*faults, *drift)
-    return (RunState.STALE if drift else RunState.VALID), tuple(drift)
+    return tuple(problems)
 
 
-def check_run(record: EvalRunRecord, expected: ExpectedRun, *, release_commit: str | None = None) -> RunCheck:
-    """Score a record from its archive and compare it with the run this checkout would launch."""
+def check_run(record: EvalRunRecord, expected: ExpectedRun, *, step_succeeded: bool) -> RunCheck:
+    """Score a record from its archive and compare it with the run the policy expects."""
     if record.status is not RunStatus.SUCCEEDED:
-        state, problems = run_problems(record, None, expected, release_commit=release_commit)
-        return RunCheck(record=record, state=state, problems=problems, warnings=())
+        problems = run_problems(record, None, expected, step_succeeded=step_succeeded)
+        return RunCheck(record=record, state=RunState.INVALID, problems=problems, warnings=())
     scored = score_curated_record(record)
     evidence = run_evidence(record, scored.coverage)
-    state, problems = run_problems(record, evidence, expected, release_commit=release_commit)
+    problems = run_problems(record, evidence, expected, step_succeeded=step_succeeded)
     warnings = () if evidence is None else run_warnings(evidence)
+    state = RunState.INVALID if problems else RunState.VALID
     return RunCheck(record=scored, state=state, problems=problems, warnings=warnings)
 
 
-def record_candidate(policy: EvalPolicy, record: EvalRunRecord) -> PolicyCandidate:
-    """The candidate a record ran: the policy's candidate of the same name and location, else its model as recorded.
+def check_found(run: FoundRun, expected: ExpectedRun) -> RunCheck | None:
+    """Check a found run, or None if it has not finished."""
+    if run.record is None:
+        return None
+    return check_run(run.record, expected, step_succeeded=run.step_succeeded)
 
-    A supplied model can share a declared candidate's location with other settings, so the location alone
-    does not decide.
+
+def compliant_run(runs: Collection[FoundRun], expected: ExpectedRun) -> tuple[FoundRun, RunCheck] | None:
+    """The newest run, at any commit, that complies, with its check; the newest attempt at each commit counts."""
+    newest: dict[str, FoundRun] = {}
+    for run in runs:
+        if run.record is not None and not run.dirty:
+            newest[run.state] = run
+    for run in sorted(newest.values(), key=lambda run: run.record.created_at, reverse=True):
+        check = check_found(run, expected)
+        if check is not None and check.state is RunState.VALID:
+            return run, check
+    return None
+
+
+def record_model(policy: Policy, record: EvalRunRecord) -> PolicyModel:
+    """The model a record ran: the policy's own model of that name, else the supplied model it records.
+
+    A supplied model may not take the name of one of the policy's models.
     """
-    for candidate in policy.candidates:
-        if candidate.name == record.model.name and candidate.model.location == record.model.location:
-            return candidate
+    if record.model.name in policy.models:
+        declared = policy.model(record.model.name)
+        if declared.location != record.model.location:
+            raise ValueError(
+                f"{record.run_id} ran {record.model.location} as {record.model.name}, which {policy.version} "
+                f"declares at {declared.location}"
+            )
+        return policy_model(policy, declared, declared=True)
     config = record.model.source_config or record.model.config
     if config is None:
         raise ValueError(f"{record.run_id}: its record names no model config to check it against")
-    return model_candidate(draccus.decode(ModelConfig, config.model_dump(mode="json")))
+    return policy_model(policy, draccus.decode(ModelConfig, config.model_dump(mode="json")), declared=False)
 
 
-def find_record(run_id: str) -> EvalRunRecord:
-    """Read a run's record from whichever policy record root holds it."""
+def find_record(run_id: str) -> tuple[EvalRunRecord, str]:
+    """Read a run's record, and the policy record root that holds it."""
     for prefix in POLICY_RECORDS_PREFIXES:
         try:
-            return read_record(record_path(prefix, run_id))
+            return read_record(record_path(prefix, run_id)), prefix
         except FileNotFoundError:
             continue
     raise FileNotFoundError(f"no record for {run_id} under {POLICY_RECORDS_PREFIXES}")
 
 
-def succeeded_runs(runs: Iterable[ExpectedRun]) -> dict[str, EvalRunRecord]:
-    """The records of ``runs`` that succeeded, by evaluation name; a launch would skip these."""
-    return {
-        run.name: record
-        for run in runs
-        if (record := expected_record(run)) is not None and record.status is RunStatus.SUCCEEDED
-    }
-
-
-def expected_record(expected: ExpectedRun) -> EvalRunRecord | None:
-    """The record at the run's expected path, or None if it has not finished."""
-    try:
-        return read_record(expected.record_path)
-    except FileNotFoundError:
-        return None
+def split_run_id(run_id: str) -> tuple[str, str, int]:
+    """A policy run ID's base, the checkout state it was launched from, and its attempt there."""
+    if (match := _RUN_ID.fullmatch(run_id)) is None:
+        raise ValueError(f"{run_id} is not a policy run ID")
+    return match["base"], match["state"], int(match["attempt"])

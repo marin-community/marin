@@ -6,12 +6,13 @@ that `main` can run. October ran from Marin commit `75a5690b` (2026-10-16) throu
 benchmarks on vendored Evalchemy, agentic ones on an external Harbor fork. This policy runs
 both as TaskSpec entries of the [benchmark catalog](../../../catalog.py); the agentic ones are the
 campaign's curated protocols in [`benchmarks/agentic.py`](../../../benchmarks/agentic.py), which pin
-the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares it; the
+the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares it and
+[`evaluations.yaml`](evaluations.yaml) names its evaluations, taken from October's; the
 [policy README](../../README.md) explains the schema and the `policy` command.
 
-## Candidates
+## Models
 
-| Candidate | Revision | Served window | Native window |
+| Model | Revision | Served window | Native window |
 | --- | --- | --- | --- |
 | Muse Glimmer 30B | `cec94fc` | 73,728 | 131,072 |
 | Nemotron 3.5 Super VL 120B-A12B | `fb0ee0b` | 73,728 | 1,048,576 |
@@ -22,7 +23,7 @@ reasoning and `qwen3_coder` tool parsers.
 
 ## Evaluations
 
-Every candidate runs every evaluation. `show` prints each one's context, seed, protocol, trials,
+Every model runs every evaluation. `show` prints each one's context, seed, protocol, trials,
 output cap, judge and metric.
 
 | Kind | Evaluations |
@@ -41,7 +42,7 @@ Not run:
 | Benchmark | Reason |
 | --- | --- |
 | τ³-bench, SOTOPIA-hard | [#11080](https://github.com/marin-community/marin/pull/11080) removed their Harbor agents (ACP relay, SOTOPIA agent). |
-| BixBench (Pi) | Its package grader asks a MiniMax-M3 judge served beside the candidate, which this policy does not declare yet. |
+| BixBench (Pi) | Its package grader asks a MiniMax-M3 judge served beside the model, which this policy does not declare yet. |
 
 Run, with a known difference:
 

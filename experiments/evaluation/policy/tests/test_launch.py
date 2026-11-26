@@ -1,85 +1,100 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A policy launch puts each candidate on one server, split only by judge key."""
+"""A policy launch puts each model on one server at the policy's window, and leaves out what a model can't run."""
 
 from dataclasses import replace
+from types import MappingProxyType
 
 import pytest
+from evalrecords.records import EvaluationOverrides
 from iris.rpc import job_pb2
+from marin.evaluation.hardware import Platform
 
-from experiments.evaluation.evals import JUDGES
-from experiments.evaluation.policy.launch import EVALUATIONS_PER_SERVER, launch_specs, server_groups
-from experiments.evaluation.policy.resolve import resolve
-from experiments.evaluation.policy.schema import PolicyExclusion
+from experiments.evaluation.policy.launch import (
+    EVALUATIONS_PER_SERVER,
+    evaluation_context,
+    launch_specs,
+    model_evaluations,
+    policy_model,
+    run_key,
+    server_groups,
+)
 from experiments.evaluation.policy.versions import POLICIES
 
 POLICY = POLICIES["marin-2026-11-20-trial"]
-QWEN = next(candidate for candidate in POLICY.candidates if candidate.name == "qwen3.6-35b-a3b")
-RESOLVED = {item.evaluation.name: item for item in resolve(POLICY, QWEN)}
-SERVED = QWEN.model.serve.max_model_len
+QWEN_NAME = "qwen3.6-35b-a3b"
+EVALUATIONS = {evaluation.name: evaluation for evaluation in POLICY.evaluations}
 
 
-@pytest.fixture
-def checkpoint_window(monkeypatch):
-    """Set the window the checkpoint clamps the candidate's served window to."""
-
-    def clamp(window: int) -> None:
-        monkeypatch.setattr(
-            "experiments.evaluation.policy.launch.resolved_serve_config",
-            lambda model: replace(model.serve, max_model_len=min(window, model.serve.max_model_len)),
-        )
-
-    clamp(SERVED)
-    return clamp
+def _with_run(evaluation, **settings):
+    run = EvaluationOverrides.model_validate({**evaluation.run.model_dump(), **settings})
+    return evaluation.model_copy(update={"run": run})
 
 
-def test_a_candidate_runs_on_one_server_at_its_serving_window(checkpoint_window):
-    (spec,) = launch_specs(POLICY, QWEN, evaluations=None, limit=20, priority_band=job_pb2.PRIORITY_BAND_BATCH)
-    assert len(spec.evals) == len(POLICY.in_distribution)
-    assert spec.model.serve.max_model_len == SERVED
+def test_a_model_runs_every_evaluation_on_one_server_at_the_policys_window(qwen):
+    plan = model_evaluations(POLICY, qwen)
+    suffixes = {evaluation.name: "0123456789ab-a1" for evaluation in plan.evaluations}
+    (spec,) = launch_specs(POLICY, plan, limit=20, priority_band=job_pb2.PRIORITY_BAND_BATCH, run_suffixes=suffixes)
+    assert len(spec.evals) == len(POLICY.evaluations)
+    assert spec.model.serve.max_model_len == POLICY.serving_window
     assert spec.max_concurrent == EVALUATIONS_PER_SERVER
 
 
-def test_judges_with_different_keys_get_separate_servers(monkeypatch):
+def test_judges_with_different_keys_get_separate_servers():
     # A launch hands its judges one key; evaluations without a judge join the first server.
-    other_key = JUDGES["together"].model_copy(update={"judge_api_key": ("env:OTHER",)})
-    monkeypatch.setitem(JUDGES, "other", other_key)
-    olympiad = RESOLVED["olympiadbench"]
-    olympiad = replace(olympiad, evaluation=replace(olympiad.evaluation, judge="other"))
+    other_key = _with_run(EVALUATIONS["olympiadbench"], judge_api_key=("env:OTHER",))
     groups = {
-        tuple(item.evaluation.name for item in group)
-        for group in server_groups([RESOLVED["gsm8k-0shot"], RESOLVED["financebench"], olympiad])
+        tuple(evaluation.name for evaluation in group)
+        for group in server_groups([EVALUATIONS["gsm8k-0shot"], EVALUATIONS["financebench"], other_key])
     }
     assert groups == {("gsm8k-0shot", "financebench"), ("olympiadbench",)}
 
 
-def test_a_launch_covers_only_the_named_evaluations(checkpoint_window):
-    specs = launch_specs(
-        POLICY,
-        QWEN,
-        evaluations={"aime24", "swebench-verified"},
-        limit=20,
-        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+def test_a_protocol_window_is_used_exactly_and_an_agent_gets_the_smaller_of_its_limit_and_the_window(qwen):
+    assert evaluation_context(qwen, EVALUATIONS["mrcr-32k"]) == 32_704
+    assert evaluation_context(qwen, EVALUATIONS["swebench-verified"]) == 32_768
+    assert evaluation_context(qwen, EVALUATIONS["aime24"]) == POLICY.serving_window
+
+
+def test_a_declared_model_served_below_a_protocol_window_must_exclude_it(served):
+    # At 65,536 tokens, MRCR's 73,728-token protocol and NUPA's longest window don't fit.
+    served(65_536)
+    model = policy_model(POLICY, POLICY.model(QWEN_NAME), declared=True)
+    with pytest.raises(ValueError, match="exclude it"):
+        model_evaluations(POLICY, model)
+    reasons = {(QWEN_NAME, "mrcr"): "too long", (QWEN_NAME, "nupa"): "too long"}
+    plan = model_evaluations(replace(POLICY, exclusions=MappingProxyType(reasons)), model)
+    assert plan.excluded == {"mrcr": "too long", "nupa": "too long"}
+
+
+def test_a_supplied_model_leaves_out_what_it_cant_run(served):
+    served(32_768)
+    checkpoint = policy_model(POLICY, replace(POLICY.model(QWEN_NAME), name="qwen-step-100"), declared=False)
+    plan = model_evaluations(POLICY, checkpoint)
+    assert set(plan.excluded) == {"mmlu-pro", "mrcr", "mrcr-65k", "nupa"}
+    assert "mrcr-32k" in {evaluation.name for evaluation in plan.evaluations}
+
+
+def test_an_output_limit_must_fit_the_context(qwen):
+    aime = EVALUATIONS["aime24"]
+    capped = _with_run(aime, max_tokens=80_000)
+    policy = replace(
+        POLICY, evaluations=tuple(capped if evaluation is aime else evaluation for evaluation in POLICY.evaluations)
     )
-    assert sorted(selection.name for spec in specs for selection in spec.evals) == ["aime24", "swebench-verified"]
+    with pytest.raises(ValueError, match="aime24"):
+        model_evaluations(policy, qwen)
 
 
-def test_unknown_evaluations_are_rejected(checkpoint_window):
-    with pytest.raises(ValueError, match="bixbench"):
-        launch_specs(POLICY, QWEN, evaluations={"bixbench"}, limit=None, priority_band=job_pb2.PRIORITY_BAND_BATCH)
-
-
-def test_a_candidate_excluded_from_the_named_evaluations_has_nothing_to_launch(checkpoint_window):
-    aime24 = next(evaluation for evaluation in POLICY.in_distribution if evaluation.name == "aime24")
-    excluded = replace(POLICY, exclusions=(PolicyExclusion(candidate=QWEN, evaluation=aime24, reason="test"),))
-    specs = launch_specs(excluded, QWEN, evaluations={"aime24"}, limit=None, priority_band=job_pb2.PRIORITY_BAND_BATCH)
-    assert specs == ()
-
-
-def test_a_checkpoint_that_serves_less_than_the_catalog_window_is_rejected(checkpoint_window):
-    checkpoint_window(16384)
-    with pytest.raises(ValueError, match="swebench-verified"):
-        launch_specs(
-            POLICY, QWEN, evaluations={"swebench-verified"}, limit=None, priority_band=job_pb2.PRIORITY_BAND_BATCH
-        )
+def test_rewriting_an_object_store_checkpoint_changes_its_run_key(served, tmp_path):
+    weights = tmp_path / "checkpoint" / "shards" / "model.safetensors"
+    weights.parent.mkdir(parents=True)
+    weights.write_bytes(b"weights")
+    # Training checkpoints carry a producer identity, and shards can sit in a subdirectory; the digest covers both.
+    checkpoint = replace(
+        POLICY.model(QWEN_NAME), name="qwen-step-100", location=f"file://{tmp_path / 'checkpoint'}", identity="producer"
+    )
+    before = policy_model(POLICY, checkpoint, declared=False)
+    weights.write_bytes(b"retrained weights")
+    after = policy_model(POLICY, checkpoint, declared=False)
+    assert run_key(before, Platform.GPU) != run_key(after, Platform.GPU)

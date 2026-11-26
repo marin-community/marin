@@ -15,7 +15,7 @@ import subprocess
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
 from urllib.parse import urlsplit
@@ -196,6 +196,8 @@ class LaunchSpec:
     resume_results_path: str | None = None
     cache_key: str | None = None
     """Reuse evaluation records for this key and the same resolved configuration."""
+    run_suffixes: Mapping[str, str] = field(default_factory=dict)
+    """Appended to the run IDs of the named evaluations, as ``<run ID>-<suffix>``; with ``cache_key`` only."""
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
     rl_attempt: RLAttemptRef | None = None
@@ -416,6 +418,8 @@ def build_evaluation_batch(
             raise ValueError("--run-id must contain only letters, digits, dots, underscores, and hyphens")
         if spec.cache_key is not None:
             raise ValueError("--run-id and pipeline cache_key cannot be combined")
+    if spec.run_suffixes and spec.cache_key is None:
+        raise ValueError("run suffixes extend pipeline run IDs, which need a cache_key")
     if spec.max_concurrent < 1:
         raise ValueError("max_concurrent must be at least 1")
     if spec.instances < 1:
@@ -573,6 +577,8 @@ def build_evaluation_batch(
             sort_keys=True,
         )
         run_id = _run_id(model.name, eval_key, cache_key, group_id if spec.cache_key is None else None)
+        if (suffix := spec.run_suffixes.get(eval_key)) is not None:
+            run_id = f"{run_id}-{suffix}"
         output_dir = spec.resume_results_path or prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
             Evaluation(

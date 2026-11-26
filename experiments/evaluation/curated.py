@@ -61,8 +61,19 @@ def pinned_model(model: ModelConfig) -> ModelConfig:
     return replace(model, revision=revision, tokenizer=tokenizer, tokenizer_revision=tokenizer_revision)
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """A safe loader that rejects a mapping with a repeated key, which ``yaml.safe_load`` silently overwrites."""
+
+    def construct_mapping(self, node, deep=False):
+        keys = [self.construct_object(key, deep=deep) for key, _ in node.value]
+        if repeated := sorted({str(key) for key in keys if keys.count(key) > 1}):
+            raise ValueError(f"{node.start_mark}: repeated keys {repeated}")
+        return super().construct_mapping(node, deep=deep)
+
+
 def load_evaluations(path: Path) -> tuple[EvaluationSelection, ...]:
-    document = yaml.safe_load(path.read_text())
+    """The named evaluations of an evaluations file, each labelled with its name."""
+    document = yaml.load(path.read_text(), Loader=_UniqueKeyLoader)
     entries = document["evaluations"]
     return tuple(EvaluationSelection.model_validate({"label": name, **entry}) for name, entry in entries.items())
 
