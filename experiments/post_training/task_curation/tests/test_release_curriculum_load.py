@@ -172,3 +172,13 @@ def test_verify_handoff_separates_aligned_and_catalog_sources(tmp_path):
         cul.verify_handoff(_inputs(tmp_path, expected_aligned_sources=3), handoff)
     with pytest.raises(ValueError, match="handoff inventories 3 sources"):
         cul.verify_handoff(_inputs(tmp_path, expected_source_count=4), handoff)
+
+
+def test_resume_cursor_starts_fresh_while_the_prior_curriculum_is_selected():
+    """R40: the stage passed the selected prior load as a resume cursor and the loader refused."""
+    assert cul.resume_cursor([], PRIOR_CURRICULUM) is None
+    assert cul.resume_cursor([{"load_id": PRIOR_CURRICULUM, "previous_load_id": "e" * 32}], PRIOR_CURRICULUM) is None
+    earlier_attempt = {"load_id": "f" * 32, "previous_load_id": PRIOR_CURRICULUM}
+    assert cul.resume_cursor([earlier_attempt], PRIOR_CURRICULUM) == "f" * 32
+    with pytest.raises(ValueError, match="unrelated load"):
+        cul.resume_cursor([{"load_id": "f" * 32, "previous_load_id": "e" * 32}], PRIOR_CURRICULUM)

@@ -181,6 +181,19 @@ def run_curriculum_load(
         raise
 
 
+def resume_cursor(curriculum_current: list[dict], prior_load_id: str) -> str | None:
+    """The load to resume: none while the prior curriculum is still selected.
+
+    A selected load chained from the prior one is this release's earlier attempt and
+    resumes; any other selection is a foreign load and refuses.
+    """
+    if not curriculum_current or curriculum_current[0]["load_id"] == prior_load_id:
+        return None
+    if curriculum_current[0]["previous_load_id"] != prior_load_id:
+        raise ValueError(f"curriculum selection moved to an unrelated load: {curriculum_current[0]!r}")
+    return curriculum_current[0]["load_id"]
+
+
 def _run_write(inputs, handoff, coverage, scan_ref, query, query_factory, loader, alert_feeds):
     control = RetryControl()
     query = query if query is not None else open_paced_query(inputs.service_url, inputs.applet_id, control)
@@ -195,8 +208,8 @@ def _run_write(inputs, handoff, coverage, scan_ref, query, query_factory, loader
     if catalog_selection not in allowed:
         raise ValueError(f"another catalog load was selected: {catalog_selection!r}")
     curriculum_current = query("SELECT load_id,previous_load_id FROM curriculum_current WHERE name='latest'", {})["rows"]
-    resume = curriculum_current[0]["load_id"] if curriculum_current else None
-    if resume is not None and resume != inputs.prior_curriculum_load_id:
+    resume = resume_cursor(curriculum_current, inputs.prior_curriculum_load_id)
+    if resume is not None:
         cursor = query("SELECT load_id FROM curriculum_loads WHERE load_id=:load", {"load": resume})["rows"]
         if len(cursor) > 1:
             raise ValueError("ambiguous curriculum resume cursor")
