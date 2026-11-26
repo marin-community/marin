@@ -107,7 +107,7 @@ def test_unhealthy_node_fabric_is_rejected(overrides):
 
 
 def test_fabric_probe_reads_versioned_nvml_output(monkeypatch):
-    def write_fabric_info(handle, output):
+    def write_fabric_info(_handle, output):
         info = cast(output, POINTER(pynvml.c_nvmlGpuFabricInfoV_t)).contents
         assert info.version in (pynvml.nvmlGpuFabricInfo_v2, pynvml.nvmlGpuFabricInfo_v3)
         info.clusterUuid[:] = CLUSTER_UUID.bytes
