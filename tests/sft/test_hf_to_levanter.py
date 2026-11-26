@@ -241,6 +241,18 @@ def test_sft_model_resolves_to_the_final_update_export(tmp_path):
     assert (locator.uri, locator.tokenizer_uri) == (str(export_path / "step-2"), None)
 
 
+def test_epoch_sft_model_leaves_the_export_path_to_runtime():
+    # RL substitutes the run's terminal export only when the model has no fixed export path (rl_gate.py).
+    spec = dataclasses.replace(
+        _spec(ConvertedCheckpointModel(conversion=_fake_conversion())),
+        version="2026.07.18-dev",
+        num_train_steps=None,
+        num_train_epochs=1,
+    )
+    model = SFTPreset("converted-epochs", spec, ResourceConfig.with_cpu()).model()
+    assert model.relative_path is None
+
+
 def test_sft_artifacts_with_the_same_version_do_not_share_tracker_history():
     spec = _spec(ConvertedCheckpointModel(conversion=_fake_conversion()))
     names = [spec.name, "checkpoints/another-sft", "checkpoints/test/sft", "checkpoints/nested/test-sft"]
