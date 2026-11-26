@@ -1,0 +1,22 @@
+experiment: X0257d512
+track: competitive-d512
+runs:
+  seed0:
+    seed: 0
+    variant: X0250 ladder + Adam decays held at adam_lr*N of d512
+    flags:
+    - --opt-set
+    - muonc_anneal_decay=0.2
+    - --opt-set
+    - muonc_anneal_adamc=12.5
+    - --opt-set
+    - adamc_adam_decay=0.3
+    - --opt-set
+    - muonc_anneal_decay_lr_steps=145.16257629560624
+    - --opt-set
+    - muonc_anneal_adam_decay_lr_steps=33.49905606821683
+  control:
+    seed: 0
+    variant: competitive-d512 control
+    control: true
+    shared: s7n-d512
