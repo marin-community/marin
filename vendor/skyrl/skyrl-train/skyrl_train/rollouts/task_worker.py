@@ -520,13 +520,18 @@ class TaskRolloutWorker:
             attempt_id = session_id
             external_agent = lowered.harness in agents
             identity = request.rows[index].metadata.evaluation_identity
+            row_sampling = sampling
+            if request.request_seeds is not None:
+                if external_agent or lowered.limits.max_turns != 1:
+                    raise ValueError("Paired request seeds require one-turn native tasks")
+                row_sampling = {**sampling, "seed": request.request_seeds[index]}
 
             async def model(request):
                 try:
                     return await _model_turn(
                         self.model_client,
                         request,
-                        sampling_params=sampling,
+                        sampling_params=row_sampling,
                         max_context_length=max_context_length,
                         max_prompt_length=None if external_agent else max_input_length,
                         chat_template_kwargs=self.chat_template_kwargs,

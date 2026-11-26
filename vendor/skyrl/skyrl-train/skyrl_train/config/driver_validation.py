@@ -6,6 +6,7 @@ import os
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.secrets import require_secret
+from skyrlrecipe.declared import PromptAcquisition
 
 from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
@@ -559,6 +560,21 @@ def _validate_dcp_cfg(cfg: DictConfig, *, local_files_only: bool):
     )
 
 
+def _validate_paired_rollout_seed(cfg: DictConfig, operation: EntrypointOperation) -> None:
+    seed = OmegaConf.select(cfg, "data.sampling.paired_rollout_seed")
+    if seed is not None and (
+        type(seed) is not int
+        or seed < 0
+        or operation is not EntrypointOperation.TRAIN
+        or cfg.trainer.rollout_buffer.max_staleness_steps != 0
+        or cfg.data.sampling.kind != PromptAcquisition.WITHIN_SOURCE_PASS_COST_AWARE
+        or cfg.generator.max_turns != 1
+    ):
+        raise ValueError(
+            "data.sampling.paired_rollout_seed requires a nonnegative integer and synchronous one-turn source passes"
+        )
+
+
 def validate_driver_config(
     cfg: DictConfig, operation: EntrypointOperation, *, check_runtime_resources: bool = True
 ) -> None:
@@ -567,6 +583,7 @@ def validate_driver_config(
         from skyrl_train import objective  # noqa: F401 - register the native training losses
 
     normalize_logging_backends(cfg)
+    _validate_paired_rollout_seed(cfg, operation)
     validate_rollout_launch(cfg, operation)
     if operation is EntrypointOperation.TRAIN:
         validate_sampling_reversion(cfg.data.sampling)
@@ -582,4 +599,5 @@ def validate_driver_config(
 def validate_generation_driver_config(cfg: DictConfig, *, check_runtime_resources: bool = True) -> None:
     """Apply the evaluation-only driver's pre-start configuration checks."""
     normalize_logging_backends(cfg)
+    _validate_paired_rollout_seed(cfg, EntrypointOperation.GENERATE)
     validate_generator_cfg(cfg, check_runtime_resources=check_runtime_resources)

@@ -32,6 +32,7 @@ data:
     adaptive_min_informative: 0.1 # informative-group fraction below which the level is exhausted
     weighting: pass-variance # learnability/grade-prior weight curve: pass-variance|group-informative
     seed: null # falls back to trainer.seed
+    paired_rollout_seed: null # optional per-task, per-visit seed base for synchronous one-turn source-pass research
 
 checkpoint_export:
   step: null

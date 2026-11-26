@@ -47,6 +47,11 @@ class TaskRequestBatch:
     sampling_params: dict[str, Any] | None = None
     trajectory_ids: tuple[TrajectoryID, ...] | None = None
     batch_metadata: BatchMetadata | None = None
+    request_seeds: tuple[int, ...] | None = None
+
+    def __post_init__(self):
+        if self.request_seeds is not None and len(self.request_seeds) != len(self.rows):
+            raise ValueError("request_seeds must align with task requests")
 
     @property
     def metadata(self) -> tuple[TrajectoryMetadata, ...]:

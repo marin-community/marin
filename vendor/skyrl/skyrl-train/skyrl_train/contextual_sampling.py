@@ -313,6 +313,10 @@ class PromptThompsonOrder(PromptOrder):
         self._visits[row] += 1
         return row
 
+    def source_pass_visit(self, uid: str) -> int:
+        """Return the current one-based offer number for a source-pass prompt."""
+        return int(self._visits[self._rows[uid]])
+
     def next_family_index(self, family: str, rows: Sequence[int], eligible: Callable[[int], bool]) -> int | None:
         """Draw from the eligible rows of a leased family."""
         window = self._family_windows.get(family, [])

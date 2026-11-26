@@ -154,6 +154,7 @@ TYPES = MappingProxyType(
         "data.sampling.domain_weights": "NumberMap",
         "data.sampling.source_column": 'Literal["data_source", "teacher_route", "family"]',
         "data.sampling.seed": "NonNegativeInt | None",
+        "data.sampling.paired_rollout_seed": "NonNegativeInt | None",
         "trainer.collective_phase_diagnostics": "bool | None",
         "generator.error_handling.passthrough_exceptions": "tuple[str, ...]",
         "generator.error_handling.mask_exceptions": "tuple[str, ...]",

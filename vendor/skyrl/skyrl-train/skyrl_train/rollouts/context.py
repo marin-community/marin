@@ -17,7 +17,7 @@ from uuid import uuid4
 import numpy as np
 import ray
 from loguru import logger
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from taskcompendium.chat import ChatFunction, message_text
@@ -60,6 +60,7 @@ from skyrl_train.grader_reporting import write_grader_report
 from rolloutengine.models import GROSS_ROLLOUT_TOKENS_METRIC
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
+from skyrl_train.mismatch_probe.protocol import request_seed
 from skyrl_train.rollouts.buffer import (
     CONSUMED,
     SAMPLING_SOURCE,
@@ -85,11 +86,13 @@ from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_cal
 from skyrl_train.rollouts.workers import RolloutWorkers
 from skyrl_train.telemetry import record_event, record_generated_work, record_rollout_buffer
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
-from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
+from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import rollout_logprobs_required
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 
 _T = TypeVar("_T")
+# vLLM accepts signed 64-bit seeds. Reserve the low bits for distinct visits and samples of one task.
+_PAIRED_SAMPLE_SLOT_BITS = 15
 
 
 @dataclass(frozen=True)
@@ -98,19 +101,31 @@ class RolloutRequestSpec:
 
     samples_per_prompt: int
     sampling_params: dict
+    paired_seed: int | None = None
 
     @classmethod
     def from_config(cls, config: DictConfig) -> RolloutRequestSpec:
         return cls(
             samples_per_prompt=config.generator.n_samples_per_prompt,
             sampling_params=get_sampling_params_for_backend(config.generator.backend, config.generator.sampling_params),
+            paired_seed=OmegaConf.select(config, "data.sampling.paired_rollout_seed"),
         )
 
-    def request(self, prompt: dict, policy_step: int) -> TrajectoryRequestBatch:
+    def request(self, prompt: dict, policy_step: int, *, source_visit: int | None = None) -> TrajectoryRequestBatch:
         request, _ = prepare_trajectory_request(
             [prompt], self.samples_per_prompt, self.sampling_params, "train", policy_step
         )
-        return request
+        if self.paired_seed is None:
+            return request
+        if not isinstance(request, TaskRequestBatch) or source_visit is None or source_visit < 1:
+            raise ValueError("Paired rollout seeds require task requests from a counted source pass")
+        first = (source_visit - 1) * self.samples_per_prompt
+        stop = first + self.samples_per_prompt
+        if stop > 1 << _PAIRED_SAMPLE_SLOT_BITS:
+            raise ValueError("Paired rollout seed slots exhausted for this task")
+        task_id = request.rows[0].spec.task.id
+        base = request_seed(self.paired_seed, f"train:{task_id}", 0, byte_count=6) << _PAIRED_SAMPLE_SLOT_BITS
+        return dataclasses.replace(request, request_seeds=tuple(base + slot for slot in range(first, stop)))
 
 
 @dataclass(frozen=True)
@@ -679,8 +694,12 @@ class TrainingContext:
                 # A lease or prompt wait may span an evaluation boundary. Keep the
                 # single acquired lease, but do not submit its generation yet.
                 await self._submission_allowed.wait()
-                request = self._request_spec.request(prompt, lease.policy_step)
-                if (source := self.loader.order.assign(prompt["uid"])) is not None:
+                order = self.loader.order
+                visit = None
+                if self._request_spec.paired_seed is not None and isinstance(order, PromptThompsonOrder):
+                    visit = order.source_pass_visit(prompt["uid"])
+                request = self._request_spec.request(prompt, lease.policy_step, source_visit=visit)
+                if (source := order.assign(prompt["uid"])) is not None:
                     prompt = {**prompt, SAMPLING_SOURCE: source}
                     metadata = prompt["input"].metadata
                     identity = metadata.evaluation_identity
@@ -696,6 +715,11 @@ class TrainingContext:
                             "task_digest": identity.task_digest if identity is not None else None,
                             "source": prompt[SAMPLING_SOURCE],
                             "family": lease.family or (identity.strata.family if identity is not None else None),
+                            **(
+                                {"source_visit": visit, "request_seeds": request.request_seeds}
+                                if isinstance(request, TaskRequestBatch) and request.request_seeds is not None
+                                else {}
+                            ),
                         },
                     )
                 task = RolloutTask(lease, prompt, request)

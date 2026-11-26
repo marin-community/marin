@@ -69,6 +69,8 @@ class Sampling(Section):
     "learnability/grade-prior weight curve: pass-variance|group-informative"
     seed: NonNegativeInt | None = field(None)
     "falls back to trainer.seed"
+    paired_rollout_seed: NonNegativeInt | None = field(None)
+    "optional per-task, per-visit seed base for synchronous one-turn source-pass research"
 
 
 class Data(Section):

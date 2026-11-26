@@ -17,10 +17,10 @@ class ProbeSample:
     loss_mask: tuple[bool, ...]
 
 
-def request_seed(master_seed: int, prompt_id: str, repetition: int) -> int:
+def request_seed(master_seed: int, prompt_id: str, repetition: int, *, byte_count: int = 4) -> int:
     """Derive a stable per-answer vLLM seed independent of Python hash salt."""
     payload = f"{master_seed}:{len(prompt_id)}:{prompt_id}:{repetition}".encode()
-    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:byte_count], "big")
 
 
 def probe_hash(records: Iterable[ProbeSample]) -> str:
