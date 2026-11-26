@@ -1,4 +1,4 @@
-import { showProgress } from './progress.js';
+import { controlHistory, hasProgress, isCleanMain, showProgress } from './progress.js';
 
 const $ = (id) => document.getElementById(id);
 let runs = [];
@@ -78,7 +78,7 @@ function showDetails(run) {
   const grafana = grafanaLink(run);
   if (grafana) links.append(grafana);
   if (typeof run.issue === 'number') links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
-  if (/^[0-9a-f]{7,40}$/.test(run.commit ?? '')) links.append(element('a', 'Source commit ↗', { href: `https://github.com/marin-community/marin/commit/${run.commit}`, target: '_blank', rel: 'noopener noreferrer' }));
+  if (isCleanMain(run)) links.append(element('a', 'Source commit ↗', { href: `https://github.com/marin-community/marin/commit/${run.commit}`, target: '_blank', rel: 'noopener noreferrer' }));
   if (run.has_grader_report) links.append(element('a', 'Grader stats', { href: './graders.html?' + route(run).slice(1) }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
@@ -131,16 +131,24 @@ function render() {
   const matching = model ? runs.filter((run) => run.model === model) : runs;
   const groups = groupedRuns(matching), selected = visibleRuns(groups);
   const preset = $('progress-preset'), previous = preset.value;
-  const choices = new Map(matching.filter((run) => run.model && run.series && run.evaluations?.length)
+  const choices = new Map(matching.filter((run) => run.model && run.series && hasProgress(run))
     .map((run) => [JSON.stringify([run.model, run.series]), `${run.model} · ${run.series}`]));
   preset.replaceChildren(...[...choices].sort((a, b) => a[1].localeCompare(b[1]))
     .map(([value, label]) => element('option', label, { value })));
   if (choices.has(previous)) preset.value = previous;
   $('progress-panel').hidden = !choices.size;
   const history = matching.filter((run) => JSON.stringify([run.model, run.series]) === preset.value);
-  const charts = $('progress-charts');
-  showProgress(charts, history, $('show-branches').checked, route);
-  $('progress-empty').hidden = charts.childElementCount > 0;
+  const controls = controlHistory(history);
+  const branch = $('control-branch'), selectedBranch = branch.value;
+  const availableBranches = ['main', ...[...controls.keys()].filter((name) => name !== 'main').sort()];
+  branch.replaceChildren(...availableBranches.map((value) => element('option', value, { value })));
+  if (availableBranches.includes(selectedBranch)) branch.value = selectedBranch;
+  $('control-branch-label').hidden = availableBranches.length === 1;
+  const hasControls = showProgress($('progress-charts'), history, controls.get(branch.value) ?? [],
+    $('show-branches').checked, route);
+  const empty = $('progress-empty');
+  empty.hidden = hasControls;
+  empty.textContent = `No completed controls with measurements for ${branch.value} on this preset.`;
   $('count').textContent = `${selected.length} runs · ${matching.length} recorded attempts`;
   $('attempts').replaceChildren(...[...selected].sort((a, b) => attemptTime(b) - attemptTime(a)).map((run) => {
     const tr = element('tr');
@@ -195,6 +203,7 @@ async function refresh() {
 $('refresh').onclick = refresh;
 $('model-filter').onchange = render;
 $('progress-preset').onchange = render;
+$('control-branch').onchange = render;
 $('show-branches').onchange = render;
 function closeDetails() {
   if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search);

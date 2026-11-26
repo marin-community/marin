@@ -14,9 +14,9 @@
     <div id="warnings" class="warning" role="status" hidden></div>
     <div class="toolbar"><label>Model <select id="model-filter"><option value="">All models</option></select></label><span id="count"></span></div>
     <section class="panel" id="progress-panel" hidden>
-      <div class="panel-heading"><h2>Preset progress</h2><label>Preset <select id="progress-preset"></select></label><label><input id="show-branches" type="checkbox"> Show branch runs</label></div>
-      <div class="progress-legend"><span class="history-chain">Comparable main controls</span><span class="history-global">Global score</span><span class="history-branch">Branch run</span></div>
-      <p id="progress-empty" class="note" hidden>No scored main controls are available for this preset.</p>
+      <div class="panel-heading"><h2>Preset progress</h2><label>Preset <select id="progress-preset"></select></label><label id="control-branch-label" hidden>Control branch <select id="control-branch"></select></label><label><input id="show-branches" type="checkbox"> Show branch runs</label></div>
+      <div class="progress-legend"><span class="history-chain">Comparable controls</span><span class="history-global">Global line</span><span class="history-branch">Branch run</span></div>
+      <p id="progress-empty" class="note" hidden></p>
       <div id="progress-charts"></div>
     </section>
     <section class="panel"><div class="panel-heading"><h2>Recorded runs</h2><span class="note">Select an attempt; latest first. Native timestamps use UTC.</span></div><div class="table-scroll"><table><thead><tr><th>Run / attempt</th><th>Model</th><th>Objectives · control → run</th><th>Guards</th><th>Verdict</th></tr></thead><tbody id="attempts"></tbody></table></div></section>

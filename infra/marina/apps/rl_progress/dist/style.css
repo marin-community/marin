@@ -2,6 +2,8 @@
 
 #attempts select{display:block;max-width:26rem;margin:.5rem 0}#warnings{white-space:pre-line;margin:1rem 0}
 
+#attempts td:first-child > a { margin-inline-start: .5rem; }
+#progress-panel .panel-heading { flex-wrap: wrap; }
 .progress-legend {
   color: var(--muted);
   display: flex;
