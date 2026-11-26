@@ -2,7 +2,7 @@
   "kind": "atlas-release-config",
   "release_id": "r41",
   "cluster": "cw-us-east-02a",
-  "freeze_source_revision": "65a0a026c524bc49305059cf5c9e558480e8fe06",
+  "freeze_source_revision": "b2bd37a79604829eff3f669fe854b19c7869b414",
   "prior_release": {
     "release_id": "r40",
     "declarations": {
@@ -35,64 +35,7 @@
     }
   },
   "removed_sources": [],
-  "qc_exclusions": [
-    {
-      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_lean",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-code-contests-built-image",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-competitive-coding-rebuilt-v1",
-      "reason": "frozen rebuild: its prior panel is stale"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-nl2bash-rebuilt-v1",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-pymethods2test-large-rebuilt-v1",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-pymethods2test-rebuilt-v1",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-taco-built-image",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-unitsyn-python-large-rebuilt-v1",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "TaskTrove:tasktrove-unitsyn-python-rebuilt-v1",
-      "reason": "removed source: no panel copy"
-    },
-    {
-      "source_id": "di-zhang-fdu:aime_1983_2024",
-      "reason": "prior panel excluded by the prior release's QC ruling"
-    }
-  ],
+  "qc_exclusions": [],
   "production_version": 76,
   "preview_base_version": 32,
   "prior_snapshot_id": "assembly-r40-cut-v1"
