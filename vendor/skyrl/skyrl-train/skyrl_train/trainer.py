@@ -799,7 +799,7 @@ class RayPPOTrainer:
             # marker publication before asking the exporter to consume it.
             # Best selection is resolved only at train end: before an eligible
             # evaluation, metadata can be absent or still point at the initializer.
-            if self.cfg.trainer.hf_export_checkpoint != "best" and await self._drain_checkpoint_upload():
+            if self.cfg.trainer.hf_export_checkpoint == "latest" and await self._drain_checkpoint_upload():
                 await asyncio.to_thread(self.handle_hf_export)
             self._control.should_save_hf_model = False
 

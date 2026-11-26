@@ -204,11 +204,13 @@ def _retain_terminal_checkpoints(config: DictConfig) -> None:
     if not marker.exists():
         return
     latest = terminal_checkpoint_step(root)
-    best = best_checkpoint_step(root) if selection == "best" else None
+    best = best_checkpoint_step(root) if selection in ("best", "best_and_final") else None
     selected = latest if best is None else best
     kept = periodic_checkpoint_steps(root, trainer.get("checkpoint_keep_every"), latest, strict=True)
     if selected > 0:
         kept.add(selected)
+    if selection == "best_and_final":
+        kept.add(latest)
     protected = protected_hf_export_steps(root, strict=True)
     if protected:
         kept.update(committed_checkpoint_steps(root, latest, strict=True) & protected)

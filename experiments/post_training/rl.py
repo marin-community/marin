@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
 from types import MappingProxyType
-from typing import Protocol
+from typing import Protocol, get_args
 
 import click
 import yaml
@@ -156,6 +156,7 @@ class RLExperiment:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
     gate: ArtifactStep[rl_gate.GateReport] | None = None
     inputs: RunInputs | None = None
+    plan_document: dict | None = None
 
 
 def _provenance(*, control: bool) -> Provenance:
@@ -218,6 +219,7 @@ def _with_run_options(
     checkpoint_every: int | None,
     export: presets.CheckpointPolicy | None,
     priority: str | None,
+    excluded_nvlink_domains: tuple[str, ...],
 ) -> presets.Preset:
     if preset.gated and any(value is not None for value in (checkpoints, checkpoint_every, export)):
         raise click.BadParameter("gated presets do not accept --checkpoints, --checkpoint-every, or --export")
@@ -231,7 +233,14 @@ def _with_run_options(
             checkpoints=retention,
             checkpoint_every=cadence,
             export=export_policy,
-            recipe=replace(preset.recipe, layout=replace(layout, priority=priority or layout.priority)),
+            recipe=replace(
+                preset.recipe,
+                layout=replace(
+                    layout,
+                    priority=priority or layout.priority,
+                    excluded_nvlink_domains=tuple(sorted(set(excluded_nvlink_domains))),
+                ),
+            ),
         )
     except ValueError as error:
         raise click.BadParameter(str(error)) from error
@@ -311,7 +320,7 @@ def build_experiment(
         changes["sft_preset"] = sft_preset
     options = RunOptions.from_preset(preset)
     if options != RunOptions.from_preset(table.by_name[preset.name]):
-        changes["run_options"] = options.model_dump(mode="json")
+        changes["run_options"] = options.model_dump(mode="json", exclude_defaults=True)
     rl_gate.validate_requirements(preset, requirements, table=table, control=control)
     provenance = _provenance(control=control)
     inputs_hash = fingerprint_hash(json.dumps(changes, sort_keys=True, default=str))
@@ -348,9 +357,8 @@ def build_experiment(
         if preset.gated and not control
         else None
     )
-    if validate_plan:
-        rl_gate.validate_plan(preset, replace(spec, name=runs[0].name), runs[0])
-    return RLExperiment(tuple(runs), gate, inputs)
+    plan_document = rl_gate.validate_plan(preset, replace(spec, name=runs[0].name), runs[0]) if validate_plan else None
+    return RLExperiment(tuple(runs), gate, inputs, plan_document)
 
 
 def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
@@ -420,10 +428,11 @@ def _status(
         best = {}
         if receipt is not None and launch is not None:
             native = receipt.native.config
-            exports_best = (
-                native["run"].get("export_hf") and native["skyrl"]["trainer"].get("hf_export_checkpoint") == "best"
+            exports_best = native["run"].get("export_hf") and native["skyrl"]["trainer"].get("hf_export_checkpoint") in (
+                "best",
+                "best_and_final",
             )
-            if preset.checkpoints == "best" or exports_best:
+            if preset.checkpoints in ("best", "best_and_final") or exports_best:
                 best_path = StoragePath(launch.export_root) / "best_checkpoint.json"
                 best["best_checkpoint_step"] = (
                     json.loads(best_path.read_text())["step"] if best_path.exists() else "none eligible"
@@ -670,6 +679,7 @@ def command(
     @partial(_run_command, table, argv, entry_module)
     @click.option("--issue", type=click.IntRange(min=1), help="GitHub experiment issue for this launch.")
     @click.option("--plan", is_flag=True, help="Print the plan without submission (the default).")
+    @click.option("--show-config", is_flag=True, help="Print the composed SkyRL launch config as YAML and exit.")
     @click.option(
         "--through",
         type=click.Choice(("sft", "rl")),
@@ -678,14 +688,25 @@ def command(
         help="Build only the SFT export or continue through RL.",
     )
     @click.option(
-        "--checkpoints", type=click.Choice(("none", "latest", "best")), help="Select native checkpoint retention."
+        "--checkpoints",
+        type=click.Choice(get_args(presets.CheckpointPolicy)),
+        help="Select native checkpoint retention.",
     )
     @click.option(
         "--checkpoint-every", type=click.IntRange(min=0), help="Save every N updates. Use 0 for no periodic saves."
     )
-    @click.option("--export", type=click.Choice(("none", "latest", "best")), help="Select the model export at the end.")
+    @click.option(
+        "--export", type=click.Choice(get_args(presets.CheckpointPolicy)), help="Select the model export at the end."
+    )
     @click.option(
         "--priority", type=click.Choice(("batch", "interactive", "production")), help="Request an Iris priority band."
+    )
+    @click.option(
+        "--exclude-rack",
+        "excluded_nvlink_domains",
+        multiple=True,
+        metavar="NVLINK_DOMAIN",
+        help="Exclude a rack by its exact Iris NVLink domain label. Repeatable.",
     )
     @click.option("--marina-url", "url", help="Marina origin for run publication (defaults to the Marina service).")
     @click.option(
@@ -733,8 +754,8 @@ def command(
     @click.option(
         "--init",
         "init_name",
-        metavar="NAME@VERSION",
-        help="Initial weights: a published model artifact. "
+        metavar="NAME[@VERSION]|URI",
+        help="Initial weights from a named initializer, published model artifact, or storage export. "
         "Only presets that accept initial weights. The initial weights are evaluated too, so the report shows "
         "the gain.",
     )
@@ -771,11 +792,13 @@ def command(
         requirements: tuple[str, ...],
         issue: int | None,
         plan: bool,
+        show_config: bool,
         through: str,
         checkpoints: presets.CheckpointPolicy | None,
         checkpoint_every: int | None,
         export: presets.CheckpointPolicy | None,
         priority: str | None,
+        excluded_nvlink_domains: tuple[str, ...],
         sft_name: str | None = None,
         sft_data_mix: str | None = None,
         sft_data_uri: str | None = None,
@@ -790,12 +813,19 @@ def command(
         do_run = click.get_current_context().params["do_run"]
         if plan and do_run:
             raise click.UsageError("Choose either --plan or --run")
+        if show_config and do_run:
+            raise click.UsageError("Choose either --show-config or --run")
         if through == "sft":
+            if show_config:
+                raise click.UsageError("--show-config requires --through rl")
             if sft_name is None:
                 raise click.UsageError("--through sft requires --sft")
             if click.get_current_context().params["wait"]:
                 raise click.UsageError("--wait reports RL results; inspect the SFT coordinator without --wait")
-        if control and any(value is not None for value in (checkpoints, checkpoint_every, export, priority)):
+        if control and (
+            excluded_nvlink_domains
+            or any(value is not None for value in (checkpoints, checkpoint_every, export, priority))
+        ):
             raise click.BadParameter("controls use only the preset's pinned run options")
         preset = _with_run_options(
             table.by_name[preset_name],
@@ -803,6 +833,7 @@ def command(
             checkpoint_every=checkpoint_every,
             export=export,
             priority=priority,
+            excluded_nvlink_domains=excluded_nvlink_domains,
         )
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
@@ -927,14 +958,18 @@ def command(
             forward_env=forward_env,
             settings=settings,
             tasks=recipe.selection_artifact(tasks_name) if tasks_name else None,
-            init=recipe.published_model(init_name, preset=preset) if init_name else initializer,
+            init=(
+                recipe.published_model(init_name, preset=preset, initializers=table.initializers)
+                if init_name
+                else initializer
+            ),
             sft_preset=sft_name,
             resume=recipe.recovery_checkpoint(resume_name, preset=preset) if resume_name is not None else None,
             replicates=replicates,
             control=control,
             requirements=requirements,
             issue=issue,
-            validate_plan=from_launcher,
+            validate_plan=from_launcher or show_config,
         )
         assert run.inputs is not None
         if do_run and from_launcher:
@@ -945,6 +980,9 @@ def command(
                 table=table,
             )
             click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
+        if show_config:
+            click.echo(yaml.safe_dump(run.plan_document, sort_keys=False), nl=False)
+            raise click.exceptions.Exit(0)
         model = preset.model
         if (
             table.needs_completed_default_export

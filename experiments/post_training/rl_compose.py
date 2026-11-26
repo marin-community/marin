@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, fields, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -28,6 +28,7 @@ from marin.execution.artifact import (
     result_type_name,
     validate_path_segment,
 )
+from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
 from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity
 from marin.rl.skyrl import (
@@ -77,6 +78,8 @@ from experiments.post_training.task_curation.selection import (
     curriculum_holdout_step,
 )
 from experiments.post_training.task_curation.swesmith_training import SWESMITH_DATASET, native_swesmith_selection
+from vendor.skyrl.marinskyrl.model_files import hugging_face_export_digest
+from vendor.skyrl.marinskyrl.resource_locator import is_cloud_uri
 
 REPO_ROOT = find_project_root(Path(__file__))
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
@@ -281,11 +284,26 @@ def selection_artifact(value: str) -> ArtifactStep:
     return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{name}", version, str(StoragePath(SELECTION_ROOT) / name / version))
 
 
-def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:
-    """Resolve a completed model artifact and its recorded tokenizer reference."""
+def published_model(
+    value: str, *, preset: Preset, initializers: Mapping[str, ArtifactHfModel] | None = None
+) -> SkyRLModelSource:
+    """Resolve a declared model, completed artifact, or portable storage export."""
+    if initializers is not None and value in initializers:
+        return initializers[value]
+    if is_cloud_uri(value):
+        if "#" in value:
+            raise click.BadParameter("storage initializers use the export's embedded tokenizer", param_hint="--init")
+        export = str(StoragePath(value))
+        try:
+            digest = hugging_face_export_digest(export)
+        except (FileNotFoundError, ValueError) as error:
+            raise click.BadParameter(str(error), param_hint="--init") from error
+        name = f"models/storage-init/{digest}"
+        step = ArtifactStep.adopt(name, resolve_version(name, None), export)
+        return ArtifactHfModel(step, relative_path="")
     name, separator, version = value.rpartition("@")
     if not separator or is_mutable_version(version):
-        raise click.BadParameter("use NAME@VERSION with an immutable model version")
+        raise click.BadParameter("use an HF export storage URI or NAME@VERSION with an immutable model version")
     root = _source_run_path(preset, name, version, RESOLVED_LAUNCH_FILENAME, RECORD_FILENAME)
     record = read_record(root)
     if (StoragePath(root) / RESOLVED_LAUNCH_FILENAME).exists() or (
@@ -460,8 +478,8 @@ def _training_config(
         trainer = trainer.replace(checkpoint_retention=preset.checkpoints)
     if preset.keep_every is not None:
         trainer = trainer.replace(checkpoint_keep_every=preset.keep_every)
-    if preset.export == "best":
-        trainer = trainer.replace(hf_export_checkpoint="best")
+    if preset.export in ("best", "best_and_final"):
+        trainer = trainer.replace(hf_export_checkpoint=preset.export)
     if recipe.training_plan is not None:
         training_geometry = {}
         for key, value in recipe.training_plan.config_values().items():
@@ -584,7 +602,7 @@ def run_spec(
         )
     preset = preset.with_updates(config.trainer.max_steps)
     initial_model_uri = None
-    if preset.checkpoints == "best":
+    if preset.checkpoints in ("best", "best_and_final"):
         prefix = run_prefix(preset)
         initial_model_uri = model.uri if isinstance(model, ResolvedModelLocator) else model.step.path(prefix)
     validation_data = ()
@@ -709,10 +727,10 @@ def run_execution(
     preset: presets.Preset, *, wandb_entity: str | None = None, forward_env: tuple[str, ...] = ()
 ) -> IrisSkyRLExecution:
     """Return the preset's Iris placement, limits and required environment names."""
-    layout = preset.recipe.layout
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
+    layout = preset.recipe.layout
     return IrisSkyRLExecution(
         cluster=layout.cluster,
         cluster_config=cluster_config_path(layout.cluster),
@@ -725,10 +743,11 @@ def run_execution(
         parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
         coordinator_timeout_hours=layout.coordinator_timeout_hours,
         job_timeout_seconds=layout.job_timeout_seconds,
-        wandb_entity=wandb_entity or preset.wandb_entity,
-        required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         role_topology=layout.role_topology,
+        excluded_nvlink_domains=layout.excluded_nvlink_domains,
+        wandb_entity=wandb_entity or preset.wandb_entity,
+        required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
     )
 
 

@@ -28,12 +28,12 @@ def selected_export_checkpoint(checkpoint_root: str, selection: str, latest_step
     """Resolve the checkpoint selected for HF export, if one is eligible."""
     if selection == "latest":
         return ExportCheckpoint(latest_step)
-    if selection != "best":
+    if selection not in ("best", "best_and_final"):
         raise ValueError(f"Unknown HF checkpoint selection: {selection}")
     try:
         evidence = (StoragePath(checkpoint_root) / BEST_CHECKPOINT_FILENAME).read_text()
     except FileNotFoundError:
-        return None
+        return ExportCheckpoint(latest_step) if selection == "best_and_final" else None
     best = json.loads(evidence)
     step = int(best["step"])
     if best["model_format"] == "native":

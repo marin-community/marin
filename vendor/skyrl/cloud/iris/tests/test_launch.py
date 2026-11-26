@@ -258,7 +258,7 @@ class RetentionCase:
     retention: str | None = "best"
     keep_every: int | None = None
     best_format: str | None = "native"
-    export_hf: bool = False
+    export_step: int | None = None
     job_state: str = "succeeded"
     missing_rollout_step: int | None = None
     marker: str | None = "3"
@@ -268,7 +268,11 @@ class RetentionCase:
 
 
 @pytest.mark.parametrize("case", [
-    pytest.param(RetentionCase((1,), export_hf=True, expected_marker="1"), id="best-after-export"),
+    pytest.param(RetentionCase((1,), export_step=1, expected_marker="1"), id="best-after-export"),
+    pytest.param(RetentionCase((1, 3), retention="best_and_final", export_step=1), id="best-and-final"),
+    pytest.param(
+        RetentionCase((3,), retention="best_and_final", best_format=None, export_step=3), id="final-fallback"
+    ),
     pytest.param(RetentionCase((1, 2), keep_every=2, expected_marker="2"), id="periodic-newer-than-best"),
     pytest.param(RetentionCase((1, 3), keep_every=1, missing_rollout_step=2), id="missing-rollout"),
     pytest.param(RetentionCase((2,), keep_every=2, best_format="hf", expected_marker="2"), id="hf-with-periodic"),
@@ -287,14 +291,14 @@ class RetentionCase:
 def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_checkpoints, case, monkeypatch):
     path, root = completed_run_checkpoints
     config = yaml.safe_load(path.read_text())
-    config["run"]["export_hf"] = case.export_hf
+    config["run"]["export_hf"] = case.export_step is not None
     trainer = config["skyrl"]["trainer"]
     if case.retention is None:
         trainer.pop("checkpoint_retention")
     else:
         trainer.update(checkpoint_retention=case.retention, checkpoint_keep_every=case.keep_every)
-    if case.export_hf:
-        trainer["hf_export_checkpoint"] = "best"
+    if case.export_step is not None:
+        trainer["hf_export_checkpoint"] = case.retention
     path.write_text(yaml.safe_dump(config))
 
     if case.missing_rollout_step is not None:
@@ -322,7 +326,7 @@ def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_chec
 
     backend = LocalLaunchBackend(
         outcome=LaunchOutcome("/user/training", case.job_state, int(case.job_state == "failed")),
-        export_step=1,
+        export_step=case.export_step,
         checkpoint_marker=case.marker,
     )
     result = execute_launch(path, backend=backend)
@@ -334,8 +338,8 @@ def test_launch_prunes_checkpoints_after_the_terminal_receipt(completed_run_chec
         assert json.loads(terminal.read_text())["result"]["state"] == "succeeded"
     marker = root / CHECKPOINT_MARKER_FILENAME
     assert (marker.read_text().strip() if marker.exists() else None) == case.expected_marker
-    if case.export_hf:
-        assert result.model is not None and result.model.global_step == 1
+    if case.export_step is not None:
+        assert result.model is not None and result.model.global_step == case.export_step
 
 
 def test_checkpoint_export_launch_preserves_training_checkpoints(completed_run_checkpoints, tmp_path):

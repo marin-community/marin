@@ -169,6 +169,19 @@ def test_plan_print_rejects_invalid_native_config(table, name, settings, version
         assert error in issue["reason"]
 
 
+def test_rack_exclusion_changes_the_run_identity_and_rejects_non_nvlink_hosts(selection):
+    rack = "DH1-136-US-EAST-08A"
+    flag = ("--exclude-rack", rack)
+    plain = plan(MOCHI, "train-long", "--show-config")
+    restricted = plan(MOCHI, "train-long", "--show-config", *flag, *flag)
+    assert plain.exit_code == restricted.exit_code == 0, (plain.output, restricted.output, restricted.exception)
+    launch = yaml.safe_load(restricted.stdout)
+    assert launch["iris"]["excluded_nvlink_domains"] == [rack]
+    assert launch["run"]["id"] != yaml.safe_load(plain.stdout)["run"]["id"]
+    unsupported = plan(SNOWBALL, "train-long", "--show-config", *flag)
+    assert unsupported.exit_code != 0 and "requires an NVL72 GPU variant" in unsupported.output
+
+
 @pytest.mark.parametrize(
     ("dataset", "settings", "error"),
     [
@@ -484,6 +497,13 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
             "snowball",
             "learning-medium",
             ("--control", "--priority", "production"),
+            "controls use only the preset's pinned run options",
+            None,
+        ),
+        (
+            "snowball",
+            "learning-medium",
+            ("--control", "--exclude-rack", "DH1-136-US-EAST-08A"),
             "controls use only the preset's pinned run options",
             None,
         ),

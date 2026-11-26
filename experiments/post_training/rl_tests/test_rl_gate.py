@@ -394,14 +394,35 @@ def test_training_evaluation_checks_held_out_grading_with_either_checkpoint_poli
     evaluation = replace(preset.evaluations[0], every=2)
     for retention in ("latest", "best"):
         candidate = replace(
-            preset.with_updates(2), checkpoints=retention, export="none", checkpoint_every=2, evaluations=(evaluation,)
+            preset.with_updates(2),
+            checkpoints=retention,
+            export="none",
+            checkpoint_every=2,
+            evaluations=(evaluation,),
+            minimum_task_coverage=0.90,
         )
         preset_table(candidate)
         root = recorded_runs(candidate.name, f"users/test/checkpoint-grading-{retention}")
-        facts = {fact.name for fact in measurements.read_measurements(str(root), candidate).invariants}
+        export = str(root / "exports")
+        tasks = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
+        task_ids = sorted({task.task_id for task in tasks})
+        ungraded = set(task_ids[: len(task_ids) // 20])
+        write_evaluations(
+            export,
+            [
+                task.model_copy(
+                    update={"answers": [a.model_copy(update={"verifier_score": None}) for a in task.answers]}
+                )
+                for task in tasks
+                if task.task_id in ungraded
+            ],
+        )
+        facts = {fact.name: fact for fact in measurements.read_measurements(str(root), candidate).invariants}
         assert {
             f"{evaluation.name}/{check}" for check in ("answers_complete", "task_coverage", "grader_error_fraction")
-        } <= facts
+        } <= facts.keys()
+        coverage = facts[f"{evaluation.name}/task_coverage"]
+        assert coverage.limit == 0.90 and 0.90 <= coverage.value < 0.99 and coverage.holds
 
 
 def test_additional_evaluation_protocol_uses_its_recorded_request(recorded_runs):
