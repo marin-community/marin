@@ -24,6 +24,7 @@ from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
+    UPGRADABLE_SCHEMA_VERSION,
     AnswerType,
     Boxed,
     CommandSemantics,
@@ -171,12 +172,26 @@ def recipe(tmp_path: Path) -> SelectionRecipe:
     )
 
 
-def admitted_source(root: Path, tasks: list[TaskSpec], intended_use: str = "train", mode: str = "full") -> ArtifactStep:
+def schema_030_json(task: TaskSpec) -> str:
+    """``task`` as an admitted schema 0.30 row, whose script grader names its machine's environment directly."""
+    document = {**task.model_dump(mode="json"), "schema_version": UPGRADABLE_SCHEMA_VERSION}
+    placement = document["grader"].pop("placement")
+    document["grader"].update({key: placement[key] for key in ("environment", "collect", "artifacts")})
+    return json.dumps(document)
+
+
+def admitted_source(
+    root: Path,
+    tasks: list[TaskSpec],
+    intended_use: str = "train",
+    mode: str = "full",
+    task_json: Callable[[TaskSpec], str] = TaskSpec.model_dump_json,
+) -> ArtifactStep:
     (root / "final").mkdir(parents=True)
     (root / "normalize").mkdir()
     (root / "manifest.json").write_text(json.dumps({"intended_use": intended_use, "mode": mode}))
     pq.write_table(
-        pa.Table.from_pylist([{"task_json": task.model_dump_json()} for task in tasks]),
+        pa.Table.from_pylist([{"task_json": task_json(task)} for task in tasks]),
         root / "final/part-00000.parquet",
     )
     pq.write_table(
@@ -229,8 +244,13 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     }
     original = training["training-a"]
     duplicate = original.model_copy(update={"id": "alias"})
-    first = admitted_source(tmp_path / "first", [original, training["training-b"], *leaked], mode=mode)
-    second = admitted_source(tmp_path / "second", [duplicate, training["training-c"]], mode=mode)
+    # Admitted rows keep the schema they were converted under; reading them upgrades the TaskSpec.
+    first = admitted_source(
+        tmp_path / "first", [original, training["training-b"], *leaked], mode=mode, task_json=schema_030_json
+    )
+    second = admitted_source(
+        tmp_path / "second", [duplicate, training["training-c"]], mode=mode, task_json=schema_030_json
+    )
     curated = {"fixture:first": first, "fixture:second": second}
     selection_step = task_selection_step(curated, settings)
     artifact = run(selection_step)[0]
@@ -243,6 +263,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     panel = read_selection_manifest(str(output))
     assert panel is not None
     carried = pq.read_table(output / TRAIN_FILENAME).to_pylist()
+    assert {row["task_spec"] for row in carried} <= {schema_030_json(task) for task in training.values()}
     assert {row["family"] for row in carried} == {"calendar"}
     assert {row["aai_category"] for row in carried} == {AAII_CATEGORIES["calendar"]}
     assert all(row["agentic"] is True for row in carried)

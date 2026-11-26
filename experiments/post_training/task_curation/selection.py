@@ -424,10 +424,11 @@ def task_records(tasks: Iterator[TaskSpec], strata: Mapping[str, TaskStrata]) ->
         yield {TASK_SPEC_COLUMN: task.model_dump_json(), **tags.model_dump()}
 
 
-def _selection_row(task: TaskSpec, strata: TaskStrata, *, state: MembershipState) -> SelectionTaskRow:
+def _selection_row(task: TaskSpec, task_json: str, strata: TaskStrata, *, state: MembershipState) -> SelectionTaskRow:
+    """The manifest row of ``task``, whose digest identifies ``task_json``, the text its task file stores."""
     return SelectionTaskRow(
         task_id=task.id,
-        task_digest=canonical_sha256(task.model_dump(mode="json")),
+        task_digest=canonical_sha256(json.loads(task_json)),
         **strata.model_copy(update={"agentic": "agentic" in task.tags}).model_dump(),
         grader_kind=_grader_kind(task),
         raw_source=task.source.model_dump_json(),
@@ -575,6 +576,7 @@ def _manifest_records(tasks: tuple[TaskSpec, ...], active: set[str]) -> Iterator
         contract = {} if structural else _grader_contract(task)
         row = _selection_row(
             task,
+            task.model_dump_json(),
             TaskStrata(
                 family=family,
                 aai_category=AAII_CATEGORIES[family],
@@ -730,7 +732,7 @@ def prepare(config: SelectionConfig) -> None:
                 for value in batch.to_pylist():
                     task = TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN])
                     tags = TaskStrata.model_validate({key: value[key] for key in TaskStrata.model_fields})
-                    row = _selection_row(task, tags, state=MembershipState.ACTIVE)
+                    row = _selection_row(task, value[TASK_SPEC_COLUMN], tags, state=MembershipState.ACTIVE)
                     if row.grader_kind == GraderKind.HARNESS:
                         harness_datasets.add(task.source.dataset)
                     yield row.model_dump(mode="json")
@@ -1006,8 +1008,10 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
         else EvalLiteSelection((), {})
     )
     for task, part in selection.tasks:
+        task_json = task.model_dump_json()
         row = _selection_row(
             task,
+            task_json,
             TaskStrata(family=part.family, aai_category=part.aaii_category, source=part.source_id, topic=part.topic),
             state=MembershipState.CANDIDATE,
         ).model_copy(update={"license": part.license})
@@ -1015,7 +1019,7 @@ def prepare_eval_lite(config: EvalLiteConfig) -> None:
             if rows[task.id].task_digest != row.task_digest:
                 raise ValueError(f"EvalLite task content changed across versions: {task.id}")
             continue
-        raw_tasks[task.id], rows[task.id] = task.model_dump_json(), row
+        raw_tasks[task.id], rows[task.id] = task_json, row
     if recipe.pass_rates is not None:
         reference_revisions.add(recipe.pass_rates.model_revision)
     for task_id, row in rows.items():
