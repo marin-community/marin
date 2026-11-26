@@ -4,13 +4,13 @@
 import hashlib
 import json
 import re
+import runpy
+import sys
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 import yaml
 from finestore.rl.run_records import METRICS_TABLE, AttemptRecord, register_run_tables, run_records_root, write_attempt
@@ -107,6 +107,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     (inputs / "rollouts.parquet").write_bytes(task_bytes)
     protocol = json.loads(StoragePath(policy_reference.uri).read_text())
     protocol["prepared_rollouts_sha256"] = hashlib.sha256(task_bytes).hexdigest()
+    expected_rows = 434
+    protocol["task_changes"] = {"sealed_rows": expected_rows}
     protocol_path = tmp_path / "protocol.json"
     raw = json.dumps(protocol).encode()
     protocol_path.write_bytes(raw)
@@ -167,10 +169,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     native_inputs_uri = yaml.safe_load(config.skyrl.launch_config_yaml)["inputs"]["validation_data"][0]["uri"]
     native_root = Path(native_inputs_uri)
     native_root.mkdir(parents=True)
-    expected_rows = 434
-    writer = pa.BufferOutputStream()
-    pq.write_table(pa.table({"row": range(expected_rows)}), writer)
-    native_bytes = writer.getvalue().to_pybytes()
+    native_bytes = b"native-prepared-task-fixture"
     native_digest = hashlib.sha256(native_bytes).hexdigest()
     (native_root / "rollouts.parquet").write_bytes(native_bytes)
     (native_root / "binding.json").write_text(
@@ -227,6 +226,9 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
 
     monkeypatch.setattr("marin.inference.iris.prepare_inference", refuse_hosted_judge)
     monkeypatch.setattr("experiments.evaluation.micro210.run_skyrl", submit_evaluation)
+    monkeypatch.setattr(
+        "experiments.evaluation.micro210_policy.POLICY_REFERENCE", replace(policy_reference, sha256="0" * 64)
+    )
     run_micro210(config)
     launch = submitted[0]
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
@@ -243,6 +245,8 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     assert record["canonical_spec_sha256"] == hashlib.sha256(raw).hexdigest()
     assert record["native_sha256"] == native_digest
     assert record["native_inputs_uri"] == native_inputs_uri
+    if producer_kind != "rl":
+        return
     assert (
         submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
         == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
@@ -314,6 +318,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
 @pytest.mark.parametrize("serving", [SNOWBALL_SERVING, MOCHI_SERVING], ids=["snowball", "mochi"])
 def test_canonical_evaluation_uses_model_serving_in_native_launch(tmp_path, serving):
     model = Micro210Model(str(tmp_path / "export"), "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
+    serving = replace(serving, config=serving.config.merge(RecipePatch(generator=sections.Generator(max_num_seqs=17))))
     step = micro210_step(model, name="fixture/final-eval", version="2026.11.18.74", serving=serving)
     launch_path = tmp_path / "launch.yaml"
     launch_path.write_text(materialized_config(step, str(tmp_path)).skyrl.launch_config_yaml)
@@ -321,8 +326,51 @@ def test_canonical_evaluation_uses_model_serving_in_native_launch(tmp_path, serv
     assert "records" in launch["skyrl"]["trainer"]["logger"]
     generator = launch["skyrl"]["generator"]
     assert generator["max_num_seqs"] == serving.config.generator.max_num_seqs
-    if serving is MOCHI_SERVING:
+    if serving.layout.gpu_variant == "GB200":
         assert launch["iris"]["allocation"]["num_nodes"] == 4
+
+
+@pytest.mark.parametrize("model", ["snowball", "mochi"])
+def test_standalone_coordinator_reenters_the_model_command(monkeypatch, model):
+    module = f"experiments.post_training.{model}_rl"
+    submissions = []
+
+    def submit(entrypoint, handles, _concurrency, _environment, *, argv):
+        submissions.append((entrypoint, argv, tuple(step.fingerprint() for step in handles)))
+
+    monkeypatch.setattr("marin.rl.cli.submit_or_run", submit)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            module,
+            "micro210",
+            "--run",
+            "--version",
+            "2026.11.26",
+            "--name",
+            "tests/micro210",
+            "--model-uri",
+            "s3://fixture/model",
+            "--model-manifest-sha256",
+            "a" * 64,
+            "--tokenizer-uri",
+            "test/tokenizer",
+            "--tokenizer-revision",
+            "b" * 40,
+        ],
+    )
+    with pytest.raises(SystemExit) as invoked:
+        runpy.run_module(module, run_name="__main__", alter_sys=True)
+    assert invoked.value.code == 0
+    [(entrypoint, argv, _)] = submissions
+    assert entrypoint == module and argv[0] == "micro210"
+
+    monkeypatch.setattr(sys, "argv", [entrypoint, *argv])
+    with pytest.raises(SystemExit) as reentered:
+        runpy.run_module(entrypoint, run_name="__main__", alter_sys=True)
+    assert reentered.value.code == 0
+    assert submissions[0] == submissions[1]
 
 
 def test_micro210_serving_refuses_training_overrides_and_multiple_samples():

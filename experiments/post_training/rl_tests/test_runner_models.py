@@ -17,7 +17,7 @@ from fray.types import ANY_REGION
 from iris.cluster.types import JobName
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materialized_config
-from marin.rl.skyrl import IrisSkyRLExecution, skyrl_execution
+from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch
@@ -229,6 +229,17 @@ def test_named_micro210_uses_the_rl_export_and_its_placement(selection, table, t
     assert materialized_config(run, str(tmp_path)).output.checkpoint_root == str(
         Path(run.path(str(tmp_path))) / "checkpoints"
     )
+
+
+def test_micro210_graph_accepts_an_sft_export_that_has_yet_to_run(selection, tmp_path):
+    sft = ArtifactStep.adopt("tests/pending-sft", "2026.11.26", str(tmp_path / "pending-sft"))
+    preset = SNOWBALL.by_name["train-long-agentic-micro210"]
+    [run] = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, init=ArtifactHfModel(sft)).runs
+    assert preset.then is not None
+    following = preset.then(run)
+    assert isinstance(following, tuple)
+    _health, evaluation = following
+    assert sft in run.deps and run in evaluation.deps
 
 
 @pytest.mark.parametrize(

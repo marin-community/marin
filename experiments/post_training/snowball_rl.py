@@ -561,7 +561,7 @@ SNOWBALL = ModelPresets(
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["micro210"]:
-        micro210_command(MICRO210_RECIPE).main(args=sys.argv[2:])
+        micro210_command(MICRO210_RECIPE, entry_module="experiments.post_training.snowball_rl").main(args=sys.argv[2:])
 
     def sft_presets():
         # Load the SFT training dependencies only for --sft.

@@ -8,13 +8,12 @@ import json
 import math
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import click
 import draccus
-import pyarrow as pa
-import pyarrow.parquet as pq
 import yaml
 from finestore.rl.run_records import read_attempt_metrics
 from levanter.compat.hf_checkpoints import load_tokenizer
@@ -90,6 +89,7 @@ class Micro210Run:
     output_uri: str
     smoke_rows: tuple[int, ...]
     expected_manifest_sha256: str | None
+    policy_reference: Micro210PolicyReference
 
 
 @dataclass(frozen=True)
@@ -210,8 +210,8 @@ def export_identity(model: ResolvedModelLocator, expected: str | None) -> Export
     return ProducerIdentity(model.identity)
 
 
-def verified_native_inputs(inputs: str, protocol: dict, smoke_rows: tuple[int, ...]) -> tuple[str, int]:
-    """Return the verified digest and row count of the launched native table."""
+def verified_native_inputs(inputs: str, protocol: dict, smoke_rows: tuple[int, ...]) -> str:
+    """Return the verified digest of the launched native table."""
     root = StoragePath(inputs)
     receipt = json.loads((root / "binding.json").read_text())
     if receipt["source_sha256"] != protocol["prepared_rollouts_sha256"]:
@@ -222,24 +222,24 @@ def verified_native_inputs(inputs: str, protocol: dict, smoke_rows: tuple[int, .
         raise ValueError("Micro210 native binding has a different converter")
     if receipt["image_digests"] != json.loads(Path(__file__).with_name("micro210_images.json").read_text()):
         raise ValueError("Micro210 native binding has different image pins")
-    raw = (root / "rollouts.parquet").read_bytes()
-    digest = hashlib.sha256(raw).hexdigest()
+    digest = file_sha256(root / "rollouts.parquet")
     if digest != receipt["native_sha256"]:
         raise ValueError("Canonical Micro210 native task bytes changed")
-    return digest, pq.read_metadata(pa.BufferReader(raw)).num_rows
+    return digest
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
-    reference = micro210_policy.POLICY_REFERENCE
+    reference = config.policy_reference
     policy = micro210_policy.read_micro210_policy(reference)
     model = config.skyrl.model
     identity = export_identity(model, config.expected_manifest_sha256)
     validate_inputs(policy, model, PREPARED_INPUTS)
     document = yaml.safe_load(config.skyrl.launch_config_yaml)
     native_inputs_uri = document["inputs"]["validation_data"][0]["uri"]
-    native_sha256, expected = verified_native_inputs(native_inputs_uri, policy, config.smoke_rows)
+    native_sha256 = verified_native_inputs(native_inputs_uri, policy, config.smoke_rows)
+    expected = len(config.smoke_rows) or policy["task_changes"]["sealed_rows"]
     judge = draccus.decode(JudgeConfig, policy["evaluation"]["judge"])
     api_key = resolve_secret_spec(("env:TOGETHER_API_KEY", judge.credential)).value
     run = run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
@@ -284,7 +284,8 @@ def micro210_step(
         source = model
     run_id = f"{name}@{version}"
     smoke_rows = () if smoke is None else smoke.rows
-    frozen = micro210_policy.read_micro210_policy(micro210_policy.POLICY_REFERENCE)
+    reference = micro210_policy.POLICY_REFERENCE
+    frozen = micro210_policy.read_micro210_policy(reference)
     evaluation_policy = frozen["evaluation"]
     frozen_inputs = ArtifactStep.adopt(
         "evaluation/micro210/prepared",
@@ -369,6 +370,7 @@ def micro210_step(
             context.output_path,
             smoke_rows,
             pinned.identity.removeprefix(MODEL_IDENTITY_PREFIX) if pinned else None,
+            reference,
         )
 
     configured = replace(step, run=run_micro210, build_config=build, expected_fingerprint=None)
@@ -394,7 +396,7 @@ def micro210_after_rl(run: ArtifactStep[SkyRLRun], *, serving: Recipe) -> Artifa
     )
 
 
-def micro210_command(serving: Recipe) -> click.Command:
+def micro210_command(serving: Recipe, *, entry_module: str) -> click.Command:
     """Build a standalone command owned by the supplied model recipe."""
 
     @click.command(help=__doc__)
@@ -407,7 +409,7 @@ def micro210_command(serving: Recipe) -> click.Command:
         "--smoke-row", multiple=True, type=click.IntRange(min=0), help="Prepared row index for a diagnostic smoke."
     )
     @click.option("--smoke-engines", type=click.IntRange(min=1))
-    @rl_build_options
+    @partial(rl_build_options, entry_module=entry_module)
     def main(
         model_uri: str,
         model_manifest_sha256: str,
