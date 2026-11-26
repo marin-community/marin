@@ -318,16 +318,23 @@ SWEBENCH_WORKSPACE_TREE = "/opt/marin/workspace-tree"
 """The git tree of the image's workspace, untracked files included, that the agent's changes are diffed against."""
 SWEBENCH_PATCH = "/logs/artifacts/model.patch"
 SWEBENCH_ENVIRONMENT = "[environment]\nbuild_timeout_sec = 1800.0\ncpus = 4\nmemory = '8G'\nstorage = '10G'\n"
+SWEBENCH_LARGE_FILE_BYTES = 1024 * 1024
+"""New files above this size, such as core dumps and build output, stay out of the agent's patch."""
 SWEBENCH_COLLECT = (
-    "set -e; cd /testbed; git -c safe.directory=/testbed add -A; mkdir -p /logs/artifacts; "
-    f'git -c safe.directory=/testbed diff --cached --binary "$(cat {SWEBENCH_WORKSPACE_TREE})" > {SWEBENCH_PATCH}'
+    'set -e; cd /testbed; git="git -c safe.directory=/testbed -c core.quotePath=false"; '
+    f"tree=$(cat {SWEBENCH_WORKSPACE_TREE}); $git add -A; "
+    '$git diff --cached --name-only --diff-filter=A "$tree" | while IFS= read -r file; do '
+    f'if [ -f "$file" ] && [ "$(wc -c < "$file")" -gt {SWEBENCH_LARGE_FILE_BYTES} ]; then '
+    '$git rm -q --cached -- "$file"; fi; '
+    "done; "
+    f'mkdir -p /logs/artifacts; $git diff --cached --binary "$tree" > {SWEBENCH_PATCH}'
 )
+# A patch taken against the verifier's own starting tree fails to apply only when grading itself fails, so the
+# script then exits without a reward, which records an infrastructure error rather than a zero.
 SWEBENCH_APPLY = (
-    f"if [ -s {SWEBENCH_PATCH} ] && ! git -c safe.directory=/testbed -C /testbed apply --binary {SWEBENCH_PATCH}; then\n"
-    "    echo \"The agent's changes do not apply to the task's workspace\"\n"
-    "    mkdir -p /logs/verifier\n"
-    "    echo 0 > /logs/verifier/reward.txt\n"
-    "    exit 1\n"
+    f"if [ -s {SWEBENCH_PATCH} ]; then\n"
+    f'    echo "Applying the agent\'s patch, $(wc -c < {SWEBENCH_PATCH}) bytes"\n'
+    f"    git -c safe.directory=/testbed -C /testbed apply --binary {SWEBENCH_PATCH} || exit 1\n"
     "fi\n"
 )
 # The agent works offline, so it cannot fetch the upstream fix. Its tests run in Harbor's separate verifier: a fresh
