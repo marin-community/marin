@@ -156,13 +156,27 @@ def test_capture_is_best_effort_outside_a_repo(tmp_path):
 
 def test_capture_redacts_credential_values_in_recorded_environment_flags(tmp_path, monkeypatch):
     monkeypatch.delenv("MARIN_PROVENANCE", raising=False)
-    args = ["iris", "job", "run", "-e", "HF_TOKEN", "fixture-credential", "--env-vars", "MODE", "debug"]
+    args = [
+        "iris",
+        "job",
+        "run",
+        "-e",
+        "HF_TOKEN",
+        "fixture-credential",
+        "-e",
+        "WANDB_API_KEY=fixture-wandb",
+        "--env-vars",
+        "MODE",
+        "debug",
+    ]
     monkeypatch.setattr("sys.argv", args)
     record = Provenance.capture(tmp_path)
 
     assert record.command_line[:5] == tuple(args[:5])
+    assert record.command_line[7] == "WANDB_API_KEY=[REDACTED]"
     assert record.command_line[-3:] == ("--env-vars", "MODE", "debug")
     assert "fixture-credential" not in record.to_json()
+    assert "fixture-wandb" not in record.to_json()
 
 
 def test_capture_tolerates_missing_git_binary(tmp_path, monkeypatch):

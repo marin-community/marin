@@ -17,8 +17,8 @@ from iris.cli.job import validate_system_reason
 from iris.client.client import JobAlreadyExists
 from iris.cluster.config import load_config
 from iris.cluster.platforms.k8s.coreweave_topology import NVL72_GPUS_PER_NODE, gpu_gang_coscheduling_level
-from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.types import CoschedulingConfig, Entrypoint, JobName, ResourceSpec, gpu_device
+from rigging.redaction import redact_env_argv
 
 from scripts.iris.coreweave_dev_pod import (
     HOLDER_COMMAND,
@@ -265,7 +265,7 @@ def allocate(
                 name=f"dev-gpu-{session_name}",
                 resources=resources,
                 priority_band=PRIORITY_BANDS[resolved_priority],
-                submit_argv=redact_submit_argv(list(sys.argv)),
+                submit_argv=redact_env_argv(sys.argv),
                 replicas=node_count,
                 coscheduling=coscheduling,
                 task_image=task_image,

@@ -1,15 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Iris-specific redaction wrappers around :mod:`rigging.redaction`.
+"""Redact credentials in Iris job requests."""
 
-The actual secret-pattern matching lives in ``rigging``; this module only
-adapts iris-specific shapes (the ``LaunchJobRequest`` proto and Click argv
-for ``iris job run``) into a form the shared redactor can consume.
-"""
-
-from rigging.redaction import REDACTED_VALUE, redact_env_argv, redact_value
-from rigging.redaction import redact_string as redact_string
+from rigging.redaction import REDACTED_VALUE, redact_value
 
 from iris.rpc import controller_pb2
 
@@ -29,6 +23,3 @@ def redact_request_env_vars(
     env_vars.update(redacted_env)
     redacted.environment.secrets.update(dict.fromkeys(request.environment.secrets, REDACTED_VALUE))
     return redacted
-
-
-redact_submit_argv = redact_env_argv

@@ -474,7 +474,8 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
     launch_args = [a for a in sys.argv[1:] if a != "--submit"]
     if "--run" not in launch_args:
         launch_args.append("--run")
-    if not os.environ.get("WANDB_API_KEY"):
+    wandb_key = os.environ.get("WANDB_API_KEY")
+    if not wandb_key:
         raise click.ClickException("WANDB_API_KEY must be set in the environment to submit a cluster run.")
     placement_args = ["--target-cluster", target_cluster] if target_cluster else ["--reserve", "H100"]
     cmd = [
@@ -492,9 +493,9 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
         priority,
         "--job-name",
         f"{run_id}-coord",
-        "--secret",
+        "-e",
         "WANDB_API_KEY",
-        "env:WANDB_API_KEY",
+        wandb_key,
         "-e",
         "WANDB_PROJECT",
         _WANDB_PROJECT,
@@ -504,7 +505,8 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str) -
         "experiments.grug.fast_track.launch",
         *launch_args,
     ]
-    click.echo(f"submitting: {shlex.join(cmd)}", err=True)
+    printable = " ".join(shlex.quote("$WANDB_API_KEY" if c == wandb_key else c) for c in cmd)
+    click.echo(f"submitting: {printable}", err=True)
     os.execvp(cmd[0], cmd)
 
 

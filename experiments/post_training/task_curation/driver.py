@@ -4,6 +4,7 @@
 """Plan RL curation, then run source pipelines locally or on Iris."""
 
 import json
+import os
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from functools import partial
@@ -22,7 +23,6 @@ from marin.processing.embeddings.harrier import HARRIER_DIM, HARRIER_REPO, HARRI
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
-from rigging.secrets import get_secret
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.identity import canonical_sha256
@@ -741,7 +741,7 @@ def main(
         review=review,
         review_cache=review_cache or (str(cache_dir / "review-cache") if cache_dir else None),
         base_url=base_url,
-        api_key=get_secret(GLM_BULK_TOKEN_ENV),
+        api_key=os.environ.get(GLM_BULK_TOKEN_ENV),
         relay_job=relay_job,
         review_concurrency=review_concurrency,
         normalized_shards=(

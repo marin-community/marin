@@ -20,7 +20,7 @@ from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import EvalExecutor
 from marin.evaluation.task_worker import DAYTONA_API_KEY, DAYTONA_EGRESS
-from rigging.secrets import SecretSpec, secret_path
+from rigging.secrets import SecretSpec
 
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.evaluation.curated import requires_judge
@@ -67,8 +67,7 @@ class HarborDefinition:
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
         secret_env = dict(DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
         for key in config.verifier_env_keys:
-            references = _VERIFIER_SECRET_ENV.get(key, (f"env:{key}",))
-            secret_env.setdefault(key, (f"file:{secret_path(key)}", *references))
+            secret_env.setdefault(key, _VERIFIER_SECRET_ENV.get(key, (f"env:{key}",)))
         return MappingProxyType(secret_env)
 
     def record_ref_for(self, config: ValidatedHarborConfig, runtime_task_limit: int | None) -> EvalRef:

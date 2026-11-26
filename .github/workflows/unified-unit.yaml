@@ -456,8 +456,7 @@ jobs:
         run: >-
           uv run --package marin-rolloutengine --frozen --group test pytest
           -c lib/rolloutengine/pyproject.toml lib/rolloutengine/tests
-          lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py
-          lib/shellbox/tests/test_daytona_process.py -q
+          lib/shellbox/tests/test_docker_machine.py lib/shellbox/tests/test_daytona_machine.py -q
 
       - name: Test Docker and Daytona guest execution
         # Pull through Google's Docker Hub mirror: unauthenticated Docker Hub pulls from

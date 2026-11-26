@@ -92,7 +92,7 @@ jobs:
             --include tests/cluster/vllm/test_snowball_backend_parity.py \
             --cpu 2 --memory 8G --disk 32G --enable-extra-resources --extra cpu \
             -e JAX_PLATFORMS cpu \
-            --secret CW_KEY_ID env:CW_KEY_ID --secret CW_KEY_SECRET env:CW_KEY_SECRET --secret HF_TOKEN env:HF_TOKEN \
+            -e CW_KEY_ID "$CW_KEY_ID" -e CW_KEY_SECRET "$CW_KEY_SECRET" -e HF_TOKEN "$HF_TOKEN" \
             -- uv run --package marin-core --group test --extra cpu pytest \
             tests/cluster/vllm/test_snowball_backend_parity.py \
             -m cluster -o addopts= --import-mode=importlib -x -k "$SELECTOR")

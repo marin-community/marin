@@ -29,8 +29,8 @@ Print the plan by running `python -m experiments.post_training.snowball_sft --pr
 uv run iris --cluster=marin job run --job-name snowball-sft-coord \
   --region us-east5 --cpu 1 --memory 2G --extra cpu \
   --priority interactive --no-wait \
-  -e MARIN_PREFIX "$MARIN_PREFIX" --secret HF_TOKEN env:HF_TOKEN \
-  --secret WANDB_API_KEY env:WANDB_API_KEY \
+  -e MARIN_PREFIX "$MARIN_PREFIX" -e HF_TOKEN "$HF_TOKEN" \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.post_training.snowball_sft --preset openthoughts-32k-4node --run
 ```
 

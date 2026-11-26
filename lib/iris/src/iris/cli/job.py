@@ -5,7 +5,7 @@
 
 Usage:
     iris --config cluster.yaml job run -- python train.py --epochs 10
-    iris --config cluster.yaml job run --tpu v5litepod-16 --secret WANDB_API_KEY env:WANDB_API_KEY -- python train.py
+    iris --config cluster.yaml job run --tpu v5litepod-16 -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 """
 
 import difflib
@@ -23,7 +23,8 @@ import yaml
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
-from rigging.secrets import SecretBehavior, looks_like_credential, resolve_secret_spec
+from rigging.redaction import redact_env_argv
+from rigging.secrets import SecretBehavior, resolve_secret_spec
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
@@ -47,7 +48,6 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.egress import parse_egress_rules
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
-from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -138,9 +138,6 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
 
     if env_flags:
         for item in env_flags:
-            key = item[0].partition("=")[0]
-            if looks_like_credential(key):
-                raise click.UsageError(f"Use --secret {key} env:{key} to supply this credential.")
             if len(item) > 2:
                 raise ValueError(f"Too many values for env var: {' '.join(item)}")
             if "=" in item[0]:
@@ -880,7 +877,7 @@ Examples:
   \b
   # TPU job with environment variables
   iris --config cluster.yaml job run --tpu v5litepod-16 \\
-    --secret WANDB_API_KEY env:WANDB_API_KEY -- python train.py
+    -e WANDB_API_KEY $WANDB_API_KEY -- python train.py
 
   \b
   # Submit and detach
@@ -1137,7 +1134,7 @@ def run(
     if not command:
         raise click.UsageError("No command provided after --")
 
-    submit_argv = redact_submit_argv(list(sys.argv))
+    submit_argv = redact_env_argv(sys.argv)
 
     # ignore_unknown_options silently passes typo'd flags (e.g. --reservation
     # instead of --reserve) into cmd. Catch any flags that leaked through

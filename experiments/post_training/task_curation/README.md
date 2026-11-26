@@ -376,7 +376,7 @@ uv run iris --cluster=marin job run --target-cluster YOUR-CW-REGION \
 ```
 
 For optional rewrites, pass the credential to the Iris job with
-`--secret GLM_BULK_TOKEN env:GLM_BULK_TOKEN` before `--`.
+`-e GLM_BULK_TOKEN VALUE` before `--`.
 The driver prints the final artifact `root` and `paths`; the Atlas manifest is
 `<root>/release.json` after publication. It checks source-manifest hashes before
 processing. The default `--representation direct` skips model rewrites. For rewrite

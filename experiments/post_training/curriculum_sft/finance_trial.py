@@ -16,7 +16,7 @@ generation is a small CPU step, so the distill stage builds it in the same graph
       --stage distill --version <version> --run
 
 FinanceBench grades answers with an external judge. CoreWeave workers have no GCP credentials to
-read its secret, so pass ``--secret TOGETHER_API_KEY env:TOGETHER_API_KEY`` to the baseline, after, and full
+read its secret, so pass ``-e TOGETHER_API_KEY "$TOGETHER_API_KEY"`` to the baseline, after, and full
 stages.
 """
 

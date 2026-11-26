@@ -17,7 +17,7 @@ RID="moe-hero-fsdp-test-2rack"
 iris --cluster=marin job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
-  --secret WANDB_API_KEY env:WANDB_API_KEY \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.grug.moe_hero_fsdp.launch \
     --run-id "$RID" --dp-racks 2 --num-steps 200 --version dev --run
 ```

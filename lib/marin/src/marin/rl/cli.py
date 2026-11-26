@@ -24,7 +24,7 @@ from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from rigging.config_discovery import find_project_root
-from rigging.secrets import SecretResolutionError, resolve_secret_spec
+from rigging.secrets import get_secret
 from rigging.timing import Duration
 
 from marin.execution.lazy import ArtifactStep, run
@@ -148,36 +148,17 @@ def _coordinator_request(
     executions = _skyrl_executions(handles)
     graph = _coordinator_graph(handles)
     required = {name for execution in executions for name in execution.required_env_vars}
-    sources: dict[str, str] = {}
-    for execution in executions:
-        for name, source in execution.coordinator_secret_sources:
-            if sources.setdefault(name, source) != source:
-                raise ValueError(f"RL coordinator has conflicting sources for secret {name!r}")
-
     forwarded = {name for run in graph for name in run.forward_env}
-    conflicting = sorted(sources.keys() & forwarded)
-    if conflicting:
-        raise ValueError("RL coordinator secrets require file-aware consumers: " + ", ".join(conflicting))
-
-    unavailable = {name for name in required - sources.keys() if not env_vars.get(name, "").strip()}
-    secrets = {}
-    for name, source in sources.items():
-        try:
-            value = resolve_secret_spec(source, environ=env_vars).value
-        except SecretResolutionError:
-            unavailable.add(name)
-            continue
-        if value.strip():
-            secrets[name] = value
-        else:
-            unavailable.add(name)
+    # Iris inherits the W&B key as a secret unless a step requests plain environment forwarding.
+    inherited = {"WANDB_API_KEY"} - forwarded
+    unavailable = sorted(
+        name for name in required if not (get_secret(name) if name in inherited else env_vars.get(name, "").strip())
+    )
     if unavailable:
-        raise ValueError("Missing, empty, or unreadable RL coordinator variables: " + ", ".join(sorted(unavailable)))
+        raise ValueError("Missing or empty RL coordinator variables: " + ", ".join(unavailable))
 
     selected_env = {
-        name: env_vars[name]
-        for name in sorted(required.union(_COORDINATOR_ENV_VARS) - secrets.keys())
-        if name in env_vars
+        name: env_vars[name] for name in sorted(required.union(_COORDINATOR_ENV_VARS) - inherited) if name in env_vars
     }
     selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(graph).decode()
     route = _submission_route(executions)
@@ -198,7 +179,7 @@ def _coordinator_request(
                 job_pb2.ContainerProfile.Name(route.container_profile) if route.container_profile is not None else None
             ),
         ),
-        environment=create_environment(workspace=str(workspace), env_vars=selected_env, secrets=secrets, extras=["cpu"]),
+        environment=create_environment(workspace=str(workspace), env_vars=selected_env, extras=["cpu"]),
         priority=priority_band_value(route.priority),
         timeout=Duration.from_hours(route.timeout_hours),
     )

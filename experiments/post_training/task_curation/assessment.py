@@ -3,6 +3,7 @@
 
 """Bind shared assessment work downstream of a source's curation artifact."""
 
+import os
 from dataclasses import dataclass, replace
 from functools import partial
 
@@ -10,7 +11,6 @@ from finestore.rl.curation import AssessmentPaths
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
-from rigging.secrets import require_secret
 from taskcompendium.pipeline.assessment import AssessmentSampling, prepare_assessment
 from taskcompendium.pipeline.assessment_review import AssessmentModel, grade_assessment
 from taskcompendium.pipeline.chat_requests import chat_output
@@ -76,7 +76,7 @@ def _judge(
 ) -> CampaignArtifact:
     assert recipe_settings.review is not None and recipe_settings.review_cache is not None
     base_url = recipe_settings.base_url or resolve_glm_base_url(recipe_settings.relay_job)
-    token = require_secret(GLM_BULK_TOKEN_ENV)
+    token = os.environ[GLM_BULK_TOKEN_ENV]
     if recipe_settings.review.mode == ReviewMode.CHAT:
         submit = partial(
             chat_output,

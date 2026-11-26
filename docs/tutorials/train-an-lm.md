@@ -173,7 +173,7 @@ TPU training sub-job via Fray:
 ```bash
 uv run iris --cluster=marin job run \
   --cpu=1 --memory=2G --extra=cpu \
-  --secret WANDB_API_KEY env:WANDB_API_KEY \
+  -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.tutorials.exp1078_reproduce_dclm_7b1x
 ```
 

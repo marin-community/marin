@@ -33,9 +33,10 @@ short (sliding-window) layers stay bounded by ``sliding_window=2048``.
 
 Submit (us-central2, system, --no-preemptible)::
 
+    WANDB_KEY=$(python3 -c "import os; print(os.environ['WANDB_API_KEY'])") && \\
     .venv/bin/iris --cluster=marin job run --no-wait --region us-central2 \\
         --priority system --system-reason="hero 67B cooldown" --no-preemptible \\
-        --secret WANDB_API_KEY env:WANDB_API_KEY \\
+        -e WANDB_API_KEY "$WANDB_KEY" \\
         -- python -m experiments.june_tpu_67b_a2b.moe.moe_67b_a2b_d2560_cooldown_step39k_seq64k_bs1024_rep8_muon_10T \\
            --version 2026.07.16 --run
 

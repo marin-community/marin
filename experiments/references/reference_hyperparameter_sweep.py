@@ -20,7 +20,7 @@ materializes them in dependency order.
 
 Run:
     uv run iris --cluster=marin job run --no-wait --cpu=1 --memory=2G --extra=cpu \\
-      --secret WANDB_API_KEY env:WANDB_API_KEY \\
+      -e WANDB_API_KEY "$WANDB_API_KEY" \\
       -- python -m experiments.references.reference_hyperparameter_sweep
 """
 

@@ -215,7 +215,8 @@ def redact_env_argv(argv: Sequence[str]) -> list[str]:
       * ``--env-vars=KEY VALUE`` — attached long form
       * ``-eKEY VALUE`` — attached short form
 
-    When KEY matches the shared sensitive-key regex, VALUE is replaced with
+    Also accepts the ``-e KEY=VALUE`` assignment form used by launch scripts.
+    When KEY matches the shared sensitive-key rule, VALUE is replaced with
     REDACTED_VALUE. Values under benign keys still pass through the shared
     string redactor so prefixed or high-entropy tokens do not leak.
     """
@@ -234,6 +235,14 @@ def redact_env_argv(argv: Sequence[str]) -> list[str]:
         # VALUE is the one after; for attached forms KEY is embedded and
         # VALUE is the next token.
         attached = tok != _ENV_VAR_LONG_FLAG and tok != _ENV_VAR_SHORT_FLAG
+        name, separator, inline_value = key.partition("=")
+        if separator:
+            key_idx = i if attached else i + 1
+            replacement = REDACTED_VALUE if is_sensitive_key_name(name) else redact_string(inline_value)
+            out[key_idx] = out[key_idx].removesuffix(key) + name + separator + replacement
+            i = key_idx + 1
+            continue
+
         val_idx = i + 1 if attached else i + 2
         if val_idx >= n:
             # Malformed (no VALUE token present); leave argv alone.

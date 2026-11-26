@@ -53,14 +53,12 @@ def _execution() -> IrisSkyRLExecution:
 
 
 def test_coordinator_request_replays_the_experiment_main(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("WANDB_API_KEY", "ambient-wandb-fixture")
-    execution = dataclasses.replace(_execution(), coordinator_secret_sources=(("WANDB_API_KEY", "env:WANDB_API_KEY"),))
     cluster_config, request = _coordinator_request(
-        [_step(execution)],
+        [_step(_execution())],
         "experiments.test_rl",
         ("--version", "2026.09.21", "--run", "--max-concurrent", "3"),
         Path("/workspace/marin"),
-        {"DAYTONA_API_KEY": "secret", "WANDB_API_KEY": "selected-wandb-fixture"},
+        {"DAYTONA_API_KEY": "secret"},
     )
 
     assert cluster_config == "lib/iris/config/marin.yaml"
@@ -69,8 +67,6 @@ def test_coordinator_request_replays_the_experiment_main(tmp_path, monkeypatch) 
     assert request.resources.ram == "16GB"
     assert request.environment is not None
     assert request.environment.env_vars["DAYTONA_API_KEY"] == "secret"
-    assert request.environment.secrets["WANDB_API_KEY"] == "selected-wandb-fixture"
-    assert "WANDB_API_KEY" not in request.environment.env_vars
     assert request.timeout == Duration.from_hours(18)
     assert request.entrypoint.binary_entrypoint is not None
     assert request.entrypoint.binary_entrypoint.command == "python"
@@ -145,20 +141,15 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(tmp_path,
     if "JUDGE_KEY" in unavailable:
         monkeypatch.delenv("JUDGE_KEY")
         monkeypatch.setenv("EVAL_KEY", "  ")
-    source = tmp_path / "wandb-key"
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    source = tmp_path / "WANDB_API_KEY"
     source.write_text("  " if "WANDB_API_KEY" in unavailable else "fixture-mounted-wandb-key")
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
 
     @click.command()
     @rl_build_options
     def main() -> list[ArtifactStep[Artifact]]:
-        train = _step(
-            dataclasses.replace(
-                _execution(),
-                required_env_vars=("JUDGE_KEY", "WANDB_API_KEY"),
-                coordinator_secret_sources=(("WANDB_API_KEY", f"file:{source}"),),
-            )
-        )
+        train = _step(dataclasses.replace(_execution(), required_env_vars=("JUDGE_KEY", "WANDB_API_KEY")))
         evaluate = dataclasses.replace(
             _step(dataclasses.replace(_execution(), required_env_vars=("EVAL_KEY",))),
             name="checkpoints/test-eval",
@@ -176,7 +167,7 @@ def test_rl_launch_requires_and_forwards_credentials_before_submission(tmp_path,
 
     assert result.exit_code == 0, result.output
     environment = client.submit.call_args.kwargs["environment"]
-    assert environment.secrets["WANDB_API_KEY"] == "fixture-mounted-wandb-key"
+    assert environment.secret_behavior == "inherit"
     assert expected_env.items() <= environment.env_vars.items()
     assert {"HF_TOKEN", "WANDB_API_KEY", "UNRELATED_SECRET"}.isdisjoint(environment.env_vars)
 

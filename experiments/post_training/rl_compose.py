@@ -688,7 +688,7 @@ def run_step(
     """Bind an RL specification to its declared execution resources."""
     layout = preset.recipe.layout
     config = yaml.safe_load(spec.config_yaml)
-    required_env = ("WANDB_ENTITY",) if wandb_entity else ()
+    required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
     required_env += tuple(_recipe_env(config))
@@ -708,9 +708,6 @@ def run_step(
             job_timeout_seconds=layout.job_timeout_seconds,
             wandb_entity=wandb_entity or preset.wandb_entity,
             required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
-            coordinator_secret_sources=(
-                () if "WANDB_API_KEY" in forward_env else (("WANDB_API_KEY", "env:WANDB_API_KEY"),)
-            ),
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             role_topology=layout.role_topology,
         ),
