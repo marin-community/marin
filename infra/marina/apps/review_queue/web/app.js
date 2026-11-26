@@ -128,9 +128,6 @@ function render(prs) {
   const people = groupBy(prs, "requested_reviewers", "login");
   const teams = groupBy(prs, "requested_teams", "slug");
   const noReviewRequest = prs.filter((pr) => !(pr.requested_reviewers || []).length && !(pr.requested_teams || []).length);
-  $("open-count").textContent = String(prs.length);
-  $("request-count").textContent = String(people.reduce((sum, [, items]) => sum + items.length, 0));
-  $("reviewer-count").textContent = String(people.length);
   $("team-count").textContent = String(teams.length);
   $("unassigned-count").textContent = String(noReviewRequest.length);
   renderReviewers(people);
