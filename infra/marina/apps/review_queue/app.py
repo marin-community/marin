@@ -26,6 +26,7 @@ DISCOVERY_INTERVAL = timedelta(minutes=15)
 HISTORY_WINDOW = timedelta(days=14)
 RETRY_SECONDS = 60
 REVIEW_STATES = frozenset({"approved", "changes_requested", "commented", "dismissed"})
+READ_SNAPSHOT = text("SELECT * FROM queue_snapshot")
 logger = logging.getLogger(__name__)
 
 
@@ -61,13 +62,38 @@ class ReviewedPull(TypedDict):
     submitted_at: str
 
 
+class ReviewerSummary(TypedDict):
+    reviewed: int
+    lines_per_week: int
+    avg_response_hours: float | None
+    response_count: int
+    pulls: list[ReviewedPull]
+
+
+class SyncProgress(TypedDict):
+    completed: int
+    total: int
+
+
+class OpenPull(PullSummary):
+    lines: int | None
+    reviewed_reviewers: list[dict[str, str]]
+
+
+class QueuePayload(TypedDict):
+    refreshed_at: datetime | None
+    prs: list[OpenPull]
+    stats: dict[str, ReviewerSummary]
+    sync: SyncProgress
+
+
 @dataclass
 class ReviewerHistory:
     lines: int = 0
     responses: list[float] = field(default_factory=list)
     pulls: list[ReviewedPull] = field(default_factory=list)
 
-    def summary(self) -> dict:
+    def summary(self) -> ReviewerSummary:
         return {
             "reviewed": len(self.pulls),
             "lines_per_week": round(self.lines / (HISTORY_WINDOW / timedelta(weeks=1))),
@@ -192,9 +218,9 @@ async def pr_metadata(client: httpx.AsyncClient, number: int) -> PullMetadata:
 
 
 def pending_metadata(snapshot: Row, versions: dict[int, str]) -> list[int]:
-    """Return missing or stale metadata IDs in sync order."""
+    """Return PR numbers with missing or stale metadata in sync order."""
     pending = [pr for pr in snapshot.open_prs if pr["requested_reviewers"] or pr["requested_teams"]]
-    # Interleave requests and recent reviews before checking older open PRs.
+    # Interleave requests and recently updated PRs before checking older open PRs.
     prioritized = (pr for pair in zip_longest(pending, snapshot.recent_prs) for pr in pair if pr is not None)
     numbers = dict.fromkeys(
         pr["number"] for pr in (*prioritized, *snapshot.open_prs) if versions.get(pr["number"], "") < pr["updated_at"]
@@ -205,8 +231,9 @@ def pending_metadata(snapshot: Row, versions: dict[int, str]) -> list[int]:
 def retry_seconds(error: httpx.HTTPStatusError) -> int:
     headers = error.response.headers
     if error.response.status_code in {403, 429}:
-        if headers.get("retry-after", "").isdigit():
-            return max(RETRY_SECONDS, int(headers["retry-after"]))
+        retry_after = headers.get("retry-after", "")
+        if retry_after.isdigit():
+            return max(RETRY_SECONDS, int(retry_after))
         if headers.get("x-ratelimit-remaining") == "0":
             reset = headers.get("x-ratelimit-reset", "")
             if reset.isdigit():
@@ -246,7 +273,7 @@ def save_metadata(connection: Connection, record: PullMetadata) -> None:
 
 async def sync_batch(connection: Connection) -> int:
     """Save a bounded batch and return the retry delay in seconds."""
-    snapshot = connection.execute(text("SELECT * FROM queue_snapshot")).one()
+    snapshot = connection.execute(READ_SNAPSHOT).one()
     retry_in = (snapshot.retry_at - datetime.now(UTC)).total_seconds()
     if retry_in > 0:
         return int(retry_in) + 1
@@ -282,16 +309,22 @@ async def sync_batch(connection: Connection) -> int:
     return delay
 
 
-def queue_payload(connection: Connection) -> dict:
-    snapshot = connection.execute(text("SELECT * FROM queue_snapshot")).one()
-    records = connection.execute(text("SELECT number, updated_at, lines, reviews FROM review_metadata")).all()
-    metadata = {row.number: row for row in records}
-    for pr in snapshot.open_prs:
+def enriched_open_prs(prs: list[PullSummary], metadata: dict[int, Row]) -> list[OpenPull]:
+    opened: list[OpenPull] = []
+    for pr in prs:
         cached = metadata.get(pr["number"])
-        pr["lines"] = cached.lines if cached and cached.updated_at >= pr["updated_at"] else None
-        pr["reviewed_reviewers"] = [{"login": review["login"]} for review in cached.reviews] if cached else []
+        opened.append(
+            {
+                **pr,
+                "lines": cached.lines if cached and cached.updated_at >= pr["updated_at"] else None,
+                "reviewed_reviewers": [{"login": review["login"]} for review in cached.reviews] if cached else [],
+            }
+        )
+    return opened
+
+
+def reviewer_history(records: list[Row], titles: dict[int, str]) -> dict[str, ReviewerSummary]:
     cutoff = datetime.now(UTC) - HISTORY_WINDOW
-    titles = {pr["number"]: pr["title"] for pr in snapshot.open_prs + snapshot.recent_prs}
     stats: dict[str, ReviewerHistory] = {}
     for row in records:
         reviews: list[ReviewFact] = row.reviews
@@ -312,12 +345,20 @@ def queue_payload(connection: Connection) -> dict:
             response_at, hours = review["response_at"], review["response_hours"]
             if response_at and hours is not None and datetime.fromisoformat(response_at) >= cutoff:
                 item.responses.append(hours)
-    versions = {row.number: row.updated_at for row in records}
+    return {login: history.summary() for login, history in stats.items()}
+
+
+def queue_payload(connection: Connection) -> QueuePayload:
+    snapshot = connection.execute(READ_SNAPSHOT).one()
+    records = list(connection.execute(text("SELECT number, updated_at, lines, reviews FROM review_metadata")).all())
+    metadata = {row.number: row for row in records}
+    titles = {pr["number"]: pr["title"] for pr in snapshot.open_prs + snapshot.recent_prs}
+    versions = {number: row.updated_at for number, row in metadata.items()}
     total = len(pending_metadata(snapshot, {}))
     return {
         "refreshed_at": snapshot.refreshed_at,
-        "prs": snapshot.open_prs,
-        "stats": {login: history.summary() for login, history in stats.items()},
+        "prs": enriched_open_prs(snapshot.open_prs, metadata),
+        "stats": reviewer_history(records, titles),
         "sync": {"completed": total - len(pending_metadata(snapshot, versions)), "total": total},
     }
 
@@ -327,7 +368,7 @@ def create_api(services: AppletServices) -> FastAPI:
     engine = services.engine()
 
     @api.get("/queue")
-    def queue() -> dict:
+    def queue() -> QueuePayload:
         with engine.connect() as connection:
             return queue_payload(connection)
 

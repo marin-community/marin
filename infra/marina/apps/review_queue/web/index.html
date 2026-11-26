@@ -39,13 +39,7 @@
           <div class="filters">
             <label class="filter-label">Find or star a handle <input id="search" type="search" placeholder="Search reviewers" autocomplete="off"></label>
             <label class="filter-label mobile-sort">Sort by
-              <select id="sort">
-                <option value="name">Name</option>
-                <option value="pending">Pending PRs</option>
-                <option value="lines">Pending lines</option>
-                <option value="response">Avg response</option>
-                <option value="load">Lines / week</option>
-              </select>
+              <select id="sort"></select>
             </label>
             <button class="mobile-sort" id="sort-direction" type="button" aria-label="Reverse sort order">↑</button>
           </div>
@@ -53,19 +47,13 @@
         <h2 class="sr-only" id="queue-title">Reviewer queue and load</h2>
         <p class="load-note" id="load-note" hidden>Compare <span class="pending-key">pending diff size</span> and <span class="weekly-key">weekly reviewed lines</span>. Bar lengths compare reviewers within each column.</p>
         <div id="favorite-suggestion" class="favorite-suggestion" hidden></div>
-        <div class="column-headings" role="group" aria-label="Sort reviewer rows">
-          <button type="button" data-sort="name" data-direction="ascending" aria-label="Reviewer, ascending" aria-pressed="true">Reviewer</button>
-          <button type="button" data-sort="pending" aria-pressed="false">Pending PRs</button>
-          <button type="button" data-sort="lines" aria-pressed="false">Pending lines</button>
-          <button type="button" data-sort="response" aria-pressed="false">Avg response</button>
-          <button type="button" data-sort="load" aria-pressed="false">Lines / week</button>
-        </div>
+        <div id="sort-headings" class="column-headings" role="group" aria-label="Sort reviewer rows"></div>
         <div id="reviewers" class="reviewers" aria-live="polite"><p class="empty">Loading reviewer requests…</p></div>
         <details class="data-note">
           <summary>How these numbers are calculated</summary>
           <p>Pending lines count additions plus deletions. A plus sign means some PR sizes are still loading. Multiple reviewers can receive the same PR.</p>
-          <p>Open PRs stay with their reviewers after a review is submitted. Avg response measures time from request to submission. Lines per week uses the diff sizes of synced PRs reviewed in the last 14 days, divided by two.</p>
-          <p>Sync progress covers open PRs and the 100 most recently updated PRs. Reviewer assignments, diff sizes, and review history fill in as PR details are synced.</p>
+          <p>Open PRs stay with their reviewers after a review is submitted. Avg response measures time from request to submission. Lines per week uses the diff sizes from recent reviews, normalized to one week.</p>
+          <p>Sync covers all open PRs and a sample of recently updated PRs. Reviewer assignments, diff sizes, and review history fill in as PR details are synced.</p>
         </details>
       </section>
 

@@ -1,8 +1,16 @@
 const FAVORITES_KEY = "marin.review-queue.favorites.v1";
 const PR_URL = "https://github.com/marin-community/marin/pull/";
+const PENDING = "pending";
 const GITHUB_HANDLE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38})$/;
 const $ = (id) => document.getElementById(id);
 const numberFormat = new Intl.NumberFormat();
+const sortColumns = {
+  name: { label: "Reviewer", direction: 1 },
+  pending: { label: "Pending PRs", direction: -1, value: (row) => row.pendingCount },
+  lines: { label: "Pending lines", direction: -1, value: (row) => row.volume.lines },
+  response: { label: "Avg response", direction: 1, value: (row) => row.stats?.avg_response_hours },
+  load: { label: "Lines / week", direction: -1, value: (row) => row.stats?.lines_per_week },
+};
 
 function link(url, label, className = "") {
   const element = document.createElement("a");
@@ -27,7 +35,7 @@ function prRow(pr) {
   if (pr.reviewStatus) {
     const status = document.createElement("span");
     status.className = `status-pill ${pr.reviewStatus}`;
-    status.textContent = pr.reviewStatus === "pending" ? "Pending" : "Reviewed";
+    status.textContent = pr.reviewStatus === PENDING ? "Pending" : "Reviewed";
     subject.append(status);
   }
   row.append(subject);
@@ -52,14 +60,12 @@ function reviewedRow(pr) {
   return row;
 }
 
-function groupBy(prs, key, name) {
+function requestedTeams(prs) {
   const groups = new Map();
   for (const pr of prs) {
-    for (const reviewer of pr[key] || []) {
-      const id = reviewer[name];
-      if (!id) continue;
-      if (!groups.has(id)) groups.set(id, []);
-      groups.get(id).push(pr);
+    for (const { slug } of pr.requested_teams) {
+      if (!groups.has(slug)) groups.set(slug, []);
+      groups.get(slug).push(pr);
     }
   }
   return [...groups];
@@ -160,11 +166,11 @@ function prDisclosure(line, handle, openPulls, history, expanded) {
     requestsList.append(heading);
   }
   for (const pr of openPulls.toSorted((a, b) => (
-    Number(b.reviewStatus === "pending") - Number(a.reviewStatus === "pending") || a.created_at.localeCompare(b.created_at)
+    Number(b.reviewStatus === PENDING) - Number(a.reviewStatus === PENDING) || a.created_at.localeCompare(b.created_at)
   ))) requestsList.append(prRow(pr));
   if (history.length) {
     const heading = document.createElement("h3");
-    heading.textContent = "Reviewed in the last 14 days";
+    heading.textContent = "Recent reviews";
     requestsList.append(heading, ...history.map(reviewedRow));
   }
   function renderDisclosure() {
@@ -208,14 +214,14 @@ function reviewerGroups(prs, stats, favorites, view) {
   for (const pr of prs) {
     const reviewers = new Map();
     for (const { login } of pr.reviewed_reviewers ?? []) reviewers.set(login.toLowerCase(), { login, status: "reviewed" });
-    for (const { login } of pr.requested_reviewers) reviewers.set(login.toLowerCase(), { login, status: "pending" });
+    for (const { login } of pr.requested_reviewers) reviewers.set(login.toLowerCase(), { login, status: PENDING });
     for (const [handle, { login, status }] of reviewers) {
       if (!groups.has(handle)) groups.set(handle, { name: login, openPulls: [] });
       groups.get(handle).openPulls.push({ ...pr, reviewStatus: status });
     }
   }
   return [...groups].map(([handle, group]) => {
-    const pending = group.openPulls.filter((pr) => pr.reviewStatus === "pending");
+    const pending = group.openPulls.filter((pr) => pr.reviewStatus === PENDING);
     return {
       ...group,
       pendingCount: pending.length,
@@ -231,12 +237,9 @@ function sortedReviewers(groups, favorites, order) {
     if (pinned) return pinned;
     const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     if (order.column === "name") return byName * order.direction;
-    const [left, right] = [a, b].map((reviewer) => {
-      if (order.column === "pending") return reviewer.pendingCount;
-      if (order.column === "lines") return reviewer.volume.lines;
-      if (order.column === "response") return reviewer.stats?.avg_response_hours;
-      return reviewer.stats?.lines_per_week;
-    });
+    const { value } = sortColumns[order.column];
+    const left = value(a);
+    const right = value(b);
     if (left == null) return right == null ? byName : 1;
     if (right == null) return -1;
     return (left - right) * order.direction || byName;
@@ -257,7 +260,10 @@ function renderReviewers(prs, stats, favorites, expanded, toggleFavorite, view, 
   if (!visible.length) emptyMessage(list, query ? "No matching reviewer in the queue." : "No open reviews.");
   for (const item of visible) list.append(reviewerEntry(item, scale, favorites, expanded, toggleFavorite));
   if (focused) list.querySelector(`[data-focus="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  renderFavoriteSuggestion(query, groups, toggleFavorite);
+}
 
+function renderFavoriteSuggestion(query, groups, toggleFavorite) {
   const suggestion = $("favorite-suggestion");
   suggestion.replaceChildren();
   suggestion.hidden = !query || !GITHUB_HANDLE.test(query) || groups.some(({name}) => name.toLowerCase() === query);
@@ -271,7 +277,7 @@ function renderReviewers(prs, stats, favorites, expanded, toggleFavorite, view, 
 }
 
 function renderOtherQueues(prs) {
-  const teams = groupBy(prs, "requested_teams", "slug");
+  const teams = requestedTeams(prs);
   $("team-section").hidden = teams.length === 0;
   $("team-count").textContent = String(teams.length);
   const teamList = $("teams");
@@ -286,12 +292,12 @@ function renderOtherQueues(prs) {
     teamList.append(group);
   }
 
-  const withoutRequest = prs.filter((pr) => !pr.requested_reviewers.length && !pr.requested_teams.length && !pr.reviewed_reviewers?.length);
-  $("unassigned-count").textContent = String(withoutRequest.length);
+  const withoutReviewer = prs.filter((pr) => !pr.requested_reviewers.length && !pr.requested_teams.length && !pr.reviewed_reviewers?.length);
+  $("unassigned-count").textContent = String(withoutReviewer.length);
   const unassigned = $("unassigned");
   unassigned.replaceChildren();
-  if (!withoutRequest.length) emptyMessage(unassigned, "None right now.");
-  for (const pr of withoutRequest) unassigned.append(prRow(pr));
+  if (!withoutReviewer.length) emptyMessage(unassigned, "None right now.");
+  for (const pr of withoutReviewer) unassigned.append(prRow(pr));
 }
 
 async function api(path, options) {
@@ -323,7 +329,7 @@ function startReviewQueue() {
       button.dataset.direction = active ? (direction === 1 ? "ascending" : "descending") : "";
       button.setAttribute("aria-label", active ? `${button.textContent}, ${button.dataset.direction}` : button.textContent);
     }
-    render();
+    if (current.refreshed_at) render();
   }
 
   function changeView(next) {
@@ -396,15 +402,24 @@ function startReviewQueue() {
   $("search").addEventListener("input", render);
   $("queue-view").addEventListener("click", () => changeView("queue"));
   $("load-view").addEventListener("click", () => changeView("load"));
-  const defaultDirection = (column) => column === "name" || column === "response" ? 1 : -1;
-  for (const button of document.querySelectorAll("[data-sort]")) {
+  for (const [column, { label, direction }] of Object.entries(sortColumns)) {
+    const option = new Option(column === "name" ? "Name" : label, column);
+    $("sort").append(option);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.sort = column;
+    button.textContent = label;
     button.addEventListener("click", () => {
-      const column = button.dataset.sort;
-      changeSort(column, column === order.column ? -order.direction : defaultDirection(column));
+      changeSort(column, column === order.column ? -order.direction : direction);
     });
+    $("sort-headings").append(button);
   }
-  $("sort").addEventListener("change", (event) => changeSort(event.target.value, defaultDirection(event.target.value)));
+  $("sort").addEventListener("change", (event) => {
+    const column = event.target.value;
+    changeSort(column, sortColumns[column].direction);
+  });
   $("sort-direction").addEventListener("click", () => changeSort(order.column, -order.direction));
+  changeSort(order.column, order.direction);
   refresh();
 }
 
