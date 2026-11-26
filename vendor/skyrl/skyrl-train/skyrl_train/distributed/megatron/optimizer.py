@@ -17,6 +17,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
 from collections.abc import Mapping
 
 import torch
@@ -69,14 +70,17 @@ def _register_load_state_dict_hooks(self: HybridDeviceOptimizer) -> None:
         return state_dict
 
     def post_load(optimizer):
-        optimizer.state = {
-            optimizer.inner_param_to_orig_param[param]: state for param, state in optimizer.state.items()
-        }
+        # Adam initializes moments only when a shard receives gradients. MCore reads all
+        # shards during synchronization, even when a restored snapshot has partial state.
+        optimizer.state = defaultdict(
+            dict, {optimizer.inner_param_to_orig_param[param]: state for param, state in optimizer.state.items()}
+        )
         for group in optimizer.param_groups:
             group["params"] = [optimizer.inner_param_to_orig_param[param] for param in group["params"]]
         optimizer._init_sub_optimizers()
         optimizer._sync_hdo_param_groups_to_sub_optimizers()
-        optimizer._sync_hdo_state_to_sub_optimizers()
+        if optimizer.state:
+            optimizer._sync_hdo_state_to_sub_optimizers()
 
     self.register_load_state_dict_pre_hook(pre_load)
     self.register_load_state_dict_post_hook(post_load)
