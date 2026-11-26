@@ -20,7 +20,8 @@ trials:
   batch: X0257
   date: '2026-11-26'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0257
-  wandb: []
+  wandb:
+  - belay-X0257d512-seed0
   settings:
     muonc_anneal_decay: '0.2'
     muonc_anneal_adamc: '12.5'
