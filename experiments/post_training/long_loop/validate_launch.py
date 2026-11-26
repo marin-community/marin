@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import os
+import subprocess
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -17,7 +18,7 @@ from cloud.iris.iris_backend import config_task_environment
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.rl_config_translation import RL_ENTRYPOINTS, RLEntrypoint
 from cloud.iris.role_plan import ModelRoleKind, RoleExecution, derive_role_plan
-from cloud.iris.runtime_environment import IRIS_TASK_IMAGE
+from cloud.iris.runtime_environment import IRIS_TASK_IMAGE, local_disk_setup_script
 from cloud.iris.task_runtime import bind_policy_tokenizer_metadata, prepare_policy_model, prepare_policy_tokenizer
 from marinskyrl.resource_locator import RolloutModelLoading
 from omegaconf import OmegaConf
@@ -172,6 +173,8 @@ async def validate_rollout_worker(launch, *, check_task_inputs: bool = False) ->
         config,
         {"trainer": {"policy": {"model": {"tokenizer_path": prepared.local_path, "tokenizer_revision": None}}}},
     )
+    if disk_root := OmegaConf.select(config, "environment.task_sessions.local.disk_root"):
+        subprocess.run(["bash", "-c", local_disk_setup_script(str(disk_root))], check=True, stdout=sys.stderr)
     configure_worker_environment(launch)
     worker = TaskRolloutWorkerSpec.from_config(config, [], harbor_config=config.terminal_bench_config).build(
         tokenizer_from_config(tokenizer_config), WorkerShard(0, 1)

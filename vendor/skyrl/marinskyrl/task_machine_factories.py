@@ -3,11 +3,13 @@
 import os
 import shutil
 from functools import partial
+from pathlib import Path
 
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.docker.machine import DockerMachineFactory
+from shellbox.backends.local.disk import LocalDiskPool
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory
@@ -17,7 +19,10 @@ def task_machine_factories(task_sessions: DictConfig, *, phase: str = "train") -
     """Build the configured task backends, probing host capabilities immediately."""
     factories: dict[str, MachineFactory] = {"shellsim": ShellSimMachineFactory()}
     if task_sessions.get("local") is not None:
-        factories[Backend.LOCAL] = LocalMachineFactory()
+        root = task_sessions.local.get("disk_root")
+        factories[Backend.LOCAL] = LocalMachineFactory(
+            disk_pool=None if root is None else LocalDiskPool(Path(root))
+        )
     daytona = task_sessions.get("daytona")
     if daytona is not None:
         factories[Backend.DAYTONA] = DaytonaMachineFactory(

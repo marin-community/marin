@@ -72,6 +72,7 @@ from cloud.iris.runtime_environment import (
     MARINSKYRL_ACTIVATION_FILE,
     MARINSKYRL_TASK_ROOT,
     RuntimeProfile,
+    local_disk_setup_script,
     task_setup_script,
 )
 
@@ -737,6 +738,11 @@ def _build_task_shell(
     spill_preflight = resolve_ray_spill_target(
         args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir
     ).shell_preflight()
+    disk_root = OmegaConf.select(args.config, "skyrl.environment.task_sessions.local.disk_root")
+    local_disk_setup = (
+        shlex.join(["bash", "-c", local_disk_setup_script(str(disk_root))]) + "; "
+        if disk_root is not None and not _is_checkpoint_export(args) else ""
+    )
     gate_report_prefix = f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate"
     # The frozen export runtime uses PyTorch NCCL and has no vLLM.
     pynccl_check = "" if _is_checkpoint_export(args) else " --pynccl-init"
@@ -751,6 +757,7 @@ def _build_task_shell(
         f"source {shlex.quote(MARINSKYRL_ACTIVATION_FILE)}; "
         f"export PYTHONPATH={shlex.quote(pythonpath)}:${{PYTHONPATH:-}}; "
         f"export VLLM_USE_V1=1; "
+        f"{local_disk_setup}"
         f"{transport_gate}"
         f"exec {ctrl}"
     )

@@ -60,3 +60,15 @@ bash {shlex.quote(bootstrap_script)} \
   production
 source {shlex.quote(activation_file)}
 """
+
+
+def local_disk_setup_script(disk_root: str) -> str:
+    """Provision ext4 tools and a private root in the task's run container."""
+    return f"""set -euo pipefail
+[ "$(id -u)" -eq 0 ] || {{ echo 'LOCAL disk quotas require a privileged root worker' >&2; exit 1; }}
+if ! command -v mkfs.ext4 >/dev/null; then
+  apt-get update
+  apt-get install -y --no-install-recommends e2fsprogs
+fi
+mkdir -p -m 0700 -- {shlex.quote(disk_root)}
+"""
