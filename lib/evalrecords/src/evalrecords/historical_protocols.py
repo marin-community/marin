@@ -91,6 +91,7 @@ HISTORICAL_HARBOR_BENCHMARKS = {
     "terminal-bench/terminal-bench-2-1": "terminal-bench-2.1",
     "DCAgent2/swebench-verified-random-100-folders": "swebench-verified-100",
     "DCAgent/swebench-verified": "swebench-verified",
+    "swebench_multilingual": "swebench-multilingual",
     "DCAgent/dev_set_v2": "ot-tblite",
     "openthoughts-tblite": "ot-tblite",
     "aime": "aime-agent",
