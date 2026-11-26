@@ -617,6 +617,7 @@ def main() -> None:
         len(samples),
         skipped,
     )
+    args.report_dir.mkdir(parents=True, exist_ok=True)
     (args.report_dir / "sampling.json").write_text(
         json.dumps(
             {
