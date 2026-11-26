@@ -304,6 +304,110 @@ def test_resolve_base_digest_retries_429_honoring_retry_after(monkeypatch):
     assert 7.0 in sleeps
 
 
+def test_resolve_base_digest_remints_the_token_when_a_throttle_outlives_its_ttl(monkeypatch):
+    """The native-conversion-r2e-gym-v1-v7 failure: the bearer is minted once and
+    reused across a throttle window that outlives the token's 300-second TTL, so the
+    registry answers the next admitted request with 401 and the attempt dies. The
+    manifest fetch must re-mint before the TTL passes."""
+    clock = [1000.0]
+    monkeypatch.setattr(native_source_conversion.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(native_source_conversion.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(native_source_conversion, "_DOCKER_HUB_TOKEN", None)
+    monkeypatch.setattr(native_source_conversion, "_DIGEST_CACHE", {})
+    exchanges = []
+    manifest_attempts = []
+
+    class FakeResponse:
+        def __init__(self, headers, body=b""):
+            self.headers = headers
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self._body
+
+    def fake_urlopen(request, timeout=None):
+        url = request if isinstance(request, str) else request.full_url
+        if "/token?" in url:
+            token = f"t{len(exchanges)}"
+            exchanges.append(token)
+            return FakeResponse({}, json.dumps({"token": token}).encode())
+        manifest_attempts.append(request.headers["Authorization"])
+        if len(manifest_attempts) == 1:
+            raise urllib.error.HTTPError(url, 429, "rate limited", {"Retry-After": "600"}, None)
+        return FakeResponse({"Docker-Content-Digest": "sha256:" + "e" * 64})
+
+    monkeypatch.setattr(native_source_conversion.urllib.request, "urlopen", fake_urlopen)
+    pinned = native_source_conversion._resolve_base_digest("namanjain12/sympy_final:deadbeef")
+    assert pinned == "namanjain12/sympy_final@sha256:" + "e" * 64
+    assert manifest_attempts == ["Bearer t0", "Bearer t1"]  # the second request carries a re-minted token
+    assert len(exchanges) == 2
+    assert clock[0] == 1600.0  # the throttle window was slept out, not died in
+
+
+def test_a_registry_401_fails_closed_without_a_retry_storm(monkeypatch):
+    """A 401 against a token minted within the TTL is an identity refusal, not a
+    throttle: it is a typed rejection raised immediately, with no re-mint loop."""
+    monkeypatch.setattr(
+        native_source_conversion.time,
+        "sleep",
+        lambda seconds: (_ for _ in ()).throw(AssertionError("a refused identity must not sleep-retry")),
+    )
+    monkeypatch.setattr(native_source_conversion, "_DOCKER_HUB_TOKEN", None)
+    monkeypatch.setattr(native_source_conversion, "_DIGEST_CACHE", {})
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, body):
+            self.headers = {}
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self._body
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(request if isinstance(request, str) else request.full_url)
+        if isinstance(request, str):
+            return FakeResponse(json.dumps({"token": "t0"}).encode())
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(native_source_conversion.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(BasePinRejected, match="refused to serve"):
+        native_source_conversion._resolve_base_digest("namanjain12/sympy_final:deadbeef")
+    assert len(calls) == 2  # one token exchange, one manifest request, nothing else
+
+
+def test_refused_credentials_fail_closed_at_the_token_exchange(monkeypatch):
+    """Expired or wrong submit-time credentials are a typed rejection naming the
+    exchange — never a retry storm and never an error that reads like a missing tag."""
+    monkeypatch.setenv("DOCKERHUB_USERNAME", "builder")
+    monkeypatch.setenv("DOCKERHUB_TOKEN", "expired-secret")
+    monkeypatch.setattr(native_source_conversion, "_DOCKER_HUB_TOKEN", None)
+    monkeypatch.setattr(native_source_conversion, "_DIGEST_CACHE", {})
+    calls = []
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(request if isinstance(request, str) else request.full_url)
+        url = request if isinstance(request, str) else request.full_url
+        raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(native_source_conversion.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(BasePinRejected, match="submit-time Docker Hub credentials"):
+        native_source_conversion._resolve_base_digest("namanjain12/sympy_final:deadbeef")
+    assert len(calls) == 1  # the exchange alone; no manifest attempt follows a refused identity
+
+
 def test_a_missing_base_image_is_a_typed_per_task_exclusion(monkeypatch):
     """A tag that no longer exists upstream excludes its row with evidence — never a
     substitute image, never a silently shrunken population (ruling 2026-11-26)."""

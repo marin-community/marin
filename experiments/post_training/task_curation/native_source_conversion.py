@@ -95,6 +95,12 @@ MANIFEST_ACCEPT = (
 )
 DIGEST_PATTERN = r"sha256:[0-9a-f]{64}"
 RATE_LIMIT_MAX_WAIT_SECONDS = 600.0
+# Docker Hub bearer tokens expire 300 seconds after mint (confirmed from the auth
+# service's iat/exp claims); re-mint before that so a request is never sent with a
+# token the registry has already expired. Native-conversion-r2e-gym-v1-v7 failed all
+# three attempts on exactly this: a throttle window outlived the token, and the
+# registry answered the next admitted request with 401 instead of the manifest.
+TOKEN_TTL_SECONDS = 240.0
 _FROM = re.compile(r"\s+")
 
 
@@ -380,6 +386,18 @@ def _docker_hub_credentials() -> tuple[str, str] | None:
     return None
 
 
+def _rate_limit_delay(error: urllib.error.HTTPError, attempt: int) -> float:
+    """The wait one 429 asks for: Retry-After verbatim when numeric, else a doubling
+    backoff capped at the window cap."""
+    delay = error.headers.get("Retry-After")
+    seconds = (
+        float(delay)
+        if delay and delay.replace(".", "", 1).isdigit()
+        else min(2.0 ** min(attempt, 10), RATE_LIMIT_MAX_WAIT_SECONDS)
+    )
+    return min(seconds, RATE_LIMIT_MAX_WAIT_SECONDS)
+
+
 def _open_with_rate_limit_retry(request: urllib.request.Request, what: str):
     """Open a registry URL, honoring the server's rate-limit windows.
 
@@ -387,7 +405,9 @@ def _open_with_rate_limit_retry(request: urllib.request.Request, what: str):
     names one, otherwise a doubling wait capped at the window cap — and retries
     without a failure ceiling: the conversion job stays alive until the registry
     admits the request (coordinator ruling 2026-11-26, the anonymous-limit rerun).
-    Any other error propagates immediately.
+    Any other error propagates immediately. Manifest requests must not use this
+    loop directly: a throttle window outlives the bearer's TTL, so the manifest
+    fetch re-mints through ``_fetch_manifest_digest`` instead.
     """
     attempt = 0
     while True:
@@ -396,15 +416,73 @@ def _open_with_rate_limit_retry(request: urllib.request.Request, what: str):
         except urllib.error.HTTPError as error:
             if error.code != 429:
                 raise
-            delay = error.headers.get("Retry-After")
-            seconds = (
-                float(delay)
-                if delay and delay.replace(".", "", 1).isdigit()
-                else min(2.0 ** min(attempt, 10), RATE_LIMIT_MAX_WAIT_SECONDS)
-            )
-            seconds = min(seconds, RATE_LIMIT_MAX_WAIT_SECONDS)
+            seconds = _rate_limit_delay(error, attempt)
             attempt += 1
             LOGGER.warning("registry rate limited on %s; wait %.0fs (attempt %d) then retry", what, seconds, attempt)
+            time.sleep(seconds)
+
+
+def _mint_registry_token(token_url: str, credentials: tuple[str, str] | None, reference: str) -> str:
+    """Exchange for one registry pull token, failing closed on a refused exchange.
+
+    A 401/403 here means the registry rejected this identity — expired or wrong
+    submit-time credentials — which no retry can fix, so it is a typed rejection
+    naming the cause instead of an HTTP error that reads like a missing tag.
+    """
+    if credentials:
+        username, secret = credentials
+        basic = base64.b64encode(f"{username}:{secret}".encode()).decode()
+        request = urllib.request.Request(token_url, headers={"Authorization": f"Basic {basic}"})
+    else:
+        request = token_url
+    try:
+        with _open_with_rate_limit_retry(request, f"{reference} token exchange") as response:
+            return json.loads(response.read())["token"]
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            refused = "the submit-time Docker Hub credentials" if credentials else "the anonymous token exchange"
+            raise BasePinRejected(f"The registry refused {refused} for {reference} (HTTP {error.code})") from None
+        raise
+
+
+def _fetch_manifest_digest(
+    registry_host: str, scope_repo: str, tag: str, reference: str, mint_token: Callable[[], str]
+) -> str:
+    """Fetch the manifest digest, keeping the bearer token fresh across throttle windows.
+
+    Docker Hub pull windows run for an hour while its bearer tokens expire after
+    300 seconds (TOKEN_TTL_SECONDS re-mints before that). A token held across a
+    throttle window turns the next admitted request into a 401 — the
+    native-conversion-r2e-gym-v1-v7 failure — so every request carries a token
+    minted within the TTL. A 429 sleeps out the window without a failure ceiling
+    (coordinator ruling 2026-11-26); a 404 is the typed missing-base rejection; any
+    other error, including a 401 a fresh token cannot legitimately earn, propagates.
+    """
+    url = f"https://{registry_host}/v2/{scope_repo}/manifests/{urllib.parse.quote(tag)}"
+    token: str | None = None
+    minted_at = 0.0
+    attempt = 0
+    while True:
+        if token is None or (time.monotonic() - minted_at) > TOKEN_TTL_SECONDS:
+            token = mint_token()
+            minted_at = time.monotonic()
+        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": MANIFEST_ACCEPT})
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.headers.get("Docker-Content-Digest")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                raise BasePinMissing(f"The base image {reference} no longer exists upstream") from None
+            if error.code in (401, 403):
+                raise BasePinRejected(
+                    f"The registry refused to serve {reference} to this identity (HTTP {error.code}); "
+                    "the bearer was minted within the token TTL, so re-minting cannot clear it"
+                ) from None
+            if error.code != 429:
+                raise
+            seconds = _rate_limit_delay(error, attempt)
+            attempt += 1
+            LOGGER.warning("registry rate limited on %s; wait %.0fs (attempt %d) then retry", url, seconds, attempt)
             time.sleep(seconds)
 
 
@@ -450,30 +528,20 @@ def _resolve_base_digest(reference: str) -> str:
         f"&scope=repository:{urllib.parse.quote(scope_repo)}:pull"
     )
     credentials = _docker_hub_credentials()
-    if credentials:
-        username, secret = credentials
-        basic = base64.b64encode(f"{username}:{secret}".encode()).decode()
-        token_request = urllib.request.Request(token_url, headers={"Authorization": f"Basic {basic}"})
-        with _open_with_rate_limit_retry(token_request, f"{reference} token exchange") as response:
-            token = json.loads(response.read())["token"]
-    else:
-        bearer = _docker_hub_bearer()
-        if bearer:
-            token = bearer
-        else:
-            with _open_with_rate_limit_retry(token_url, f"{reference} token") as response:
-                token = json.loads(response.read())["token"]
-    request = urllib.request.Request(
-        f"https://{registry_host}/v2/{scope_repo}/manifests/{urllib.parse.quote(tag)}",
-        headers={"Authorization": f"Bearer {token}", "Accept": MANIFEST_ACCEPT},
-    )
-    try:
-        with _open_with_rate_limit_retry(request, f"{reference} manifest") as response:
-            manifest_digest = response.headers.get("Docker-Content-Digest")
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            raise BasePinMissing(f"The base image {reference} no longer exists upstream") from None
-        raise
+    mounted = None if credentials else _docker_hub_bearer()
+
+    def mint_token() -> str:
+        # A mounted bearer is a static secret that expires like any other token:
+        # only the first mint may use it, every re-mint renews through the token
+        # endpoint (authenticated when submit-time credentials are present,
+        # anonymous otherwise).
+        nonlocal mounted
+        if mounted is not None:
+            token, mounted = mounted, None
+            return token
+        return _mint_registry_token(token_url, credentials, reference)
+
+    manifest_digest = _fetch_manifest_digest(registry_host, scope_repo, tag, reference, mint_token)
     if not manifest_digest or not re.fullmatch(DIGEST_PATTERN, manifest_digest):
         raise BasePinRejected(f"The registry returned no usable manifest digest for {reference}")
     return f"{repo}@{manifest_digest}"
