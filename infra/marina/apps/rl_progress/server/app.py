@@ -13,19 +13,36 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import ProgrammingError
 
-_RETAINED_FIELDS = ("issue", "gate", "gate_result", "model", "evaldash_run_ids", "grader_report")
-_RETAINED_VALUES = ", ".join(
-    f"'{key}', COALESCE(NULLIF(EXCLUDED.record -> '{key}', 'null'::jsonb), rl_runs.record -> '{key}', 'null'::jsonb)"
-    for key in _RETAINED_FIELDS
+_RETAINED_FIELDS = (
+    "issue",
+    "gate",
+    "gate_result",
+    "model",
+    "grader_report",
+    "is_control",
+    "evaluation_data_identity",
+    "native_run_id",
+    "base_commit",
+    "base_preset_version",
+    "launch_config",
 )
 _UPSERT = text(
-    f"""INSERT INTO rl_runs (run_id, attempt_id, record)
+    """INSERT INTO rl_runs (run_id, attempt_id, record)
     VALUES (:run_id, :attempt_id, CAST(:record AS jsonb))
     ON CONFLICT (run_id, attempt_id) DO UPDATE
       SET record = CASE
         WHEN EXCLUDED.record ->> 'status' = 'running'
           AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record
-        ELSE EXCLUDED.record || jsonb_build_object({_RETAINED_VALUES})
+        WHEN :older_publication
+          AND rl_runs.record -> 'commit' IS NOT NULL
+          AND rl_runs.record ->> 'status' IN ('succeeded', 'failed') THEN rl_runs.record || jsonb_build_object(
+            'issue', COALESCE(NULLIF(rl_runs.record -> 'issue', 'null'::jsonb), EXCLUDED.record -> 'issue')
+          )
+        ELSE EXCLUDED.record || (
+            SELECT jsonb_object_agg(key, COALESCE(NULLIF(EXCLUDED.record -> key, 'null'::jsonb),
+                                                  rl_runs.record -> key, 'null'::jsonb))
+            FROM unnest(CAST(:retained_fields AS text[])) AS retained(key)
+        )
       END
     RETURNING record"""
 )
@@ -53,6 +70,8 @@ def create_api(services):
 
     @api.post("/runs")
     def publish(record: dict[str, Any]) -> dict:
+        older_publication = "evaldash_run_ids" in record and "commit" not in record
+        record.pop("evaldash_run_ids", None)
         try:
             encoded = json.dumps(record, allow_nan=False)
             summary = AttemptSummary.model_validate_json(encoded, extra="forbid")
@@ -65,15 +84,23 @@ def create_api(services):
         try:
             with engine.begin() as connection:
                 incoming = summary.model_dump(mode="json")
+                if older_publication:
+                    del incoming["commit"]
                 stored = connection.execute(
                     _UPSERT,
-                    {"run_id": summary.run_id, "attempt_id": summary.attempt_id, "record": summary.model_dump_json()},
+                    {
+                        "run_id": summary.run_id,
+                        "attempt_id": summary.attempt_id,
+                        "record": json.dumps(incoming, allow_nan=False),
+                        "older_publication": older_publication,
+                        "retained_fields": list(_RETAINED_FIELDS),
+                    },
                 ).scalar_one()
                 repaired = dict(stored)
                 for field in _RETAINED_FIELDS:
-                    if incoming[field] is None:
+                    if incoming.get(field) is None:
                         try:
-                            json.dumps(repaired[field], allow_nan=False)
+                            json.dumps(repaired.get(field), allow_nan=False)
                         except ValueError:
                             repaired[field] = None
                 try:
@@ -81,10 +108,12 @@ def create_api(services):
                 except ValidationError as error:
                     invalid = {item["loc"][0] for item in error.errors() if item["loc"]}
                     for field in _RETAINED_FIELDS:
-                        if field in invalid and incoming[field] is None:
+                        if field in invalid and incoming.get(field) is None:
                             repaired[field] = None
                     summary = AttemptSummary.model_validate_json(json.dumps(repaired, allow_nan=False), strict=True)
                 normalized = summary.model_dump(mode="json")
+                if "commit" not in stored:
+                    del normalized["commit"]
                 if normalized != stored:
                     connection.execute(
                         text(
@@ -94,11 +123,19 @@ def create_api(services):
                         {
                             "run_id": summary.run_id,
                             "attempt_id": summary.attempt_id,
-                            "record": summary.model_dump_json(),
+                            "record": json.dumps(normalized, allow_nan=False),
                         },
                     )
-                if "evaldash_run_ids" in record and "preset_version" not in record:
-                    return {key: normalized[key] for key in record}
+                if older_publication:
+                    response = {key: normalized[key] for key in record}
+                    groups = (
+                        response.get("evaluations", ()),
+                        (response.get("gate_result") or {}).get("comparisons", ()),
+                    )
+                    for group in groups:
+                        for comparison in group:
+                            comparison.pop("evaluation_score", None)
+                    return response
                 return normalized
         except ProgrammingError as error:
             details = error.orig.args[0]
@@ -114,7 +151,7 @@ def create_api(services):
             rows = connection.execute(
                 text(
                     """SELECT run_id, attempt_id,
-                    CASE WHEN jsonb_typeof(record) = 'object' THEN record - 'grader_report'
+                    CASE WHEN jsonb_typeof(record) = 'object' THEN record - 'grader_report' - 'launch_config'
                          ELSE record END AS record,
                     COALESCE(record -> 'grader_report' <> 'null'::jsonb, false) AS has_grader_report
                     FROM rl_runs ORDER BY run_id, attempt_id"""
@@ -143,6 +180,19 @@ def create_api(services):
                 record["has_grader_report"] = row["has_grader_report"]
                 records.append(record)
         return {"runs": records, "skipped_records": skipped}
+
+    @api.get("/configuration")
+    def configuration(run_id: str, attempt_id: str):
+        with engine.connect() as connection:
+            config = connection.execute(
+                text(
+                    "SELECT record -> 'launch_config' FROM rl_runs WHERE run_id = :run_id AND attempt_id = :attempt_id"
+                ),
+                {"run_id": run_id, "attempt_id": attempt_id},
+            ).scalar_one_or_none()
+        if config is None:
+            raise HTTPException(404, detail="No configuration recorded for this attempt")
+        return config
 
     @api.get("/graders")
     def graders(run_id: str, attempt_id: str):

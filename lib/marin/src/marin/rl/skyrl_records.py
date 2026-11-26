@@ -41,6 +41,8 @@ class RecordedEvaluationProfile(BaseModel):
 class RecordedCallback(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
     type: str
+    eval_before_train: bool | None = None
+    eval_steps: int | None = None
     additional_evaluations: dict[str, RecordedEvaluationProfile] | None = None
 
 
@@ -90,6 +92,10 @@ class RecordedLaunch(BaseModel):
     project_name: str = Field(validation_alias=AliasPath("skyrl", "trainer", "project_name"))
     logger: list[str] = Field(validation_alias=AliasPath("skyrl", "trainer", "logger"))
     callbacks: list[RecordedCallback] | None = Field(validation_alias=AliasPath("skyrl", "trainer", "callbacks"))
+    eval_before_train: bool | None = Field(
+        default=None, validation_alias=AliasPath("skyrl", "trainer", "eval_before_train")
+    )
+    eval_interval: int | None = Field(default=None, validation_alias=AliasPath("skyrl", "trainer", "eval_interval"))
     batch_invariant: bool = Field(validation_alias=AliasPath("skyrl", "trainer", "algorithm", "batch_invariant"))
     max_turns: int = Field(validation_alias=AliasPath("skyrl", "generator", "max_turns"))
     eval_sampling_params: dict[str, Any] = Field(

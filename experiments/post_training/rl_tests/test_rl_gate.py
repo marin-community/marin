@@ -49,7 +49,7 @@ from experiments.post_training import rl_publication as publication
 from experiments.post_training import rl_scoring as scoring
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.rl_command import EXIT_CODES
-from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
+from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunOptions, read_run_inputs, run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
     append_metrics,
@@ -189,9 +189,10 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
         return gate.gate_step(
             preset,
             tuple(candidates),
-            inputs=RunInputs(
-                preset_name=preset.name,
+            inputs=run_inputs(
+                preset.name,
                 requirements=(key + "<=control", key + "<=control", key + "<=0", "speed/update_seconds<=control"),
+                preset=preset,
             ),
             table=snowball_model.SNOWBALL,
         )
@@ -275,6 +276,11 @@ def test_budget_stop_uses_the_actual_final_evaluation(recorded_runs, preset_tabl
     row = publication.build_record(str(root), preset, table=table, attempt=attempt)
     assert row.status == "succeeded" and row.failed_facts == []
     assert (row.planned_updates, row.optimizer_steps, row.measured_updates) == (12, 2, [1, 2])
+    assert {
+        (score.profile, score.step)
+        for comparison in row.evaluations
+        if (score := comparison.evaluation_score) is not None and score.final
+    } == {("eval_lite", 2)}
     metrics = measurements.read_skyrl_metrics(str(root), attempt_id="recorded-attempt")
     _, invalid = measurements.measured_training(preset.with_updates(12), metrics, 100)
     assert not next(fact for fact in invalid if fact.name == "gross_rollout_budget_reached").holds
@@ -740,7 +746,7 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         )
         else (setting,)
     )
-    inputs = RunInputs(preset_name=preset.name, settings=settings)
+    inputs = run_inputs(preset.name, settings=settings, preset=preset)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
         root = tmp_path / name / version

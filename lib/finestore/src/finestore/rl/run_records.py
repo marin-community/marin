@@ -94,6 +94,8 @@ class RunIndexIdentity(BaseModel):
     branch: str | None
     source_revision: Identity
     tree_hash: Identity | None = None
+    base_commit: Identity | None = None
+    base_preset_version: Identity | None = None
     dirty: bool
     pr_number: Annotated[StrictInt, Field(gt=0)] | None = None
     submitted_at: str | None = None

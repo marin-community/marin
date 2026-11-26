@@ -922,6 +922,7 @@ def test_submission_exit_codes_and_publication_retries(
         assert snapshot["publication"]["unserved_records"] == [], snapshot["publication"]
         assert len(published) == 1 and published[0]["status"] == "succeeded"
         assert published[0]["optimizer_steps"] == 0 and published[0]["data_identity"] is None
+        assert published[0]["evaluation_data_identity"]
         return
     paths = [
         [f"{training.name}-{recipe.RUN_ARTIFACT_VERSION}", f"native-{index}"]
@@ -987,12 +988,17 @@ def test_submission_exit_codes_and_publication_retries(
     ],
 )
 def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
-    preset_table, recorded_runs, monkeypatch, model, outcome, pr_number
+    preset_table, recorded_runs, monkeypatch, model, outcome, pr_number, tmp_path
 ):
     early_failure = outcome != "succeeded"
+    real_archive = model == "snowball" and not early_failure
+    entry_module = f"experiments.post_training.{model}_rl"
+    if real_archive:
+        entry_module = "experiments.post_training.rl_tests.archive_preset_fixture"
+        monkeypatch.setenv("MARIN_RL_TEST_SELECTION_ROOT", recipe.SELECTION_ROOT)
     if model == "mochi":
         table = MOCHI
-        preset = table.by_name["train-medium"]
+        preset = nominal = table.by_name["train-medium"]
         binding = recipe.selection_artifact(preset.tasks)
         path = Path(binding.path()) / "summary.json"
         if not path.is_file():
@@ -1001,18 +1007,40 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         fake_s3(monkeypatch, str(marker).removeprefix("s3://"))
     else:
         table = snowball_model.SNOWBALL
+        nominal = table.by_name["train-long"]
         preset = replace(
-            table.by_name["train-long"].with_updates(2),
+            nominal.with_updates(2),
             checkpoints="none",
             export="none",
             checkpoint_every=None,
             evaluations=(),
         )
         table = preset_table(preset)
+    git_output = snowball.git_output
+    source_ref = git_output(["rev-parse", "HEAD"], cwd=recipe.REPO_ROOT)
+    archive_tree = git_output(["rev-parse", "HEAD^{tree}"], cwd=recipe.REPO_ROOT)
+    monkeypatch.setattr(
+        Provenance, "capture", lambda *a, **kw: Provenance("tree-one", source_ref, False, "branch", "test")
+    )
+
+    def base_ref(args, cwd, **kwargs):
+        if args[0] == "merge-base":
+            assert args == ["merge-base", source_ref, "origin/main"]
+            if outcome == "interrupted":
+                raise RuntimeError("main merge base unavailable")
+            return archive_tree
+        return git_output(args, cwd, **kwargs)
+
+    monkeypatch.setattr(snowball, "git_output", base_ref)
     built = snowball.build_experiment(preset, table=table)
     source = recorded_runs(preset.name, built.runs[0].name, inputs=built.inputs, attempt_id="native-old", table=table)
     receipt = json.loads((source / "terminal.json").read_text())
     launch = receipt["config"]
+    historical_launch = json.loads(json.dumps(launch))
+    historical_launch["skyrl"]["trainer"]["max_steps"] += 1
+    if real_archive:
+        historical_launch = gate.compose_preset(nominal)
+    historical_version = gate.config_version(historical_launch)
     client, job = fake_iris(monkeypatch, "index-coordinator")
     monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
@@ -1038,6 +1066,14 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
             if pr_number is None:
                 raise subprocess.CalledProcessError(1, argv)
             return subprocess.CompletedProcess(argv, 0, str(pr_number))
+        if argv[:2] == ["git", "archive"]:
+            assert argv[2] == archive_tree
+        if argv[1:4] == ["-m", entry_module, "_preset-config"]:
+            assert argv[4:] == [preset.name]
+            assert (kwargs["cwd"] / "vendor/skyrl/cloud/iris/config_cli.py").is_file()
+            assert str(kwargs["cwd"]) in kwargs["env"]["PYTHONPATH"]
+            if not real_archive:
+                return subprocess.CompletedProcess(argv, 0, json.dumps(historical_launch))
         return subprocess.run(argv, **kwargs)
 
     monkeypatch.setattr(
@@ -1101,7 +1137,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     client.submit.side_effect = native_prepared
     client.job.return_value.state_only.side_effect = state
     arguments = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, "--run"]
-    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), entry_module=__name__), arguments)
+    result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), entry_module=entry_module), arguments)
     assert result.exit_code == 0, (result.output, result.exception)
     grafana_link = next(
         line.strip().removeprefix("run: ") for line in reversed(result.output.splitlines()) if "grafana.oa.dev" in line
@@ -1112,6 +1148,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
         still_prepared = CliRunner().invoke(snowball.rl_publication.command(table), [*saved_attempt, "--issue", "73"])
         assert still_prepared.exit_code == 1
         assert read_attempt(str(source / "exports"), "native-indexed").issue is None
+        assert snowball.rl_publication.lineage_issue(str(source / "exports")) is None
 
     @click.command()
     def follow():
@@ -1145,7 +1182,14 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     assert all(row.run_id == terminal.run_id and row.pr_number == pr_number for row in running)
     assert parse_qs(urlsplit(grafana_link).query)["var-run"] == [terminal.run_id]
     assert re.fullmatch(rf"{model}-{preset.name}-[^/]+-[0-9a-f]{{8}}", terminal.run_id)
-    assert terminal.source_revision == "base=commit-one tree=tree-one"
+    assert terminal.source_revision == f"base={source_ref} tree=tree-one"
+    expected_base = None if outcome == "interrupted" else historical_version
+    assert terminal.base_preset_version == expected_base
+    assert terminal.base_commit == (archive_tree if expected_base else None)
+    assert terminal.preset_version == gate.config_version(launch) != historical_version
+    assert all(row.base_preset_version == expected_base for row in running)
+    if expected_base is None:
+        assert "The base preset version is unavailable from the branch's main merge base." in terminal.evidence
     if not early_failure:
         assert parse_qs(urlsplit(terminal.grafana_url).query)["var-job"] == [receipt["result"]["iris_job_id"]]
     assert terminal.gate_result is None

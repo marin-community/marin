@@ -11,6 +11,7 @@ import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlencode
 
 import click
@@ -50,6 +51,7 @@ from experiments.post_training.rl_command import attempt_grafana_url
 from experiments.post_training.rl_measurements import (
     InvalidComparison,
     RunInputs,
+    evaluation_protocol,
     evaluation_status,
     lineage_windows,
     measured_training,
@@ -122,7 +124,12 @@ class _TerminalMeasurements:
 
 
 def _terminal_measurements(
-    run_output: str, preset: presets.Preset, attempt: AttemptRecord, launch: RecordedLaunch, evidence: list[str]
+    run_output: str,
+    preset: presets.Preset,
+    attempt: AttemptRecord,
+    launch: RecordedLaunch,
+    evidence: list[str],
+    inputs: RunInputs,
 ) -> _TerminalMeasurements:
     attempt_id = launch.attempt_id
     result = attempt.native.result
@@ -138,8 +145,11 @@ def _terminal_measurements(
         invariants = ()
     failed = [fact.name for fact in invariants if not fact.holds]
     evaluations = []
-    if result.state == "succeeded" or attempt.metrics_started_at is not None:
-        status = evaluation_status(run_output, preset, attempt, launch)
+    has_evaluation = bool(launch.validation_data or launch.evaluation_data) or any(
+        callback.type == "evaluation" for callback in launch.callbacks or ()
+    )
+    if has_evaluation and (result.state == "succeeded" or attempt.metrics_started_at is not None):
+        status = evaluation_status(run_output, preset, attempt, launch, inputs=inputs)
         evaluations = list(status.evaluations)
         failed.extend(fact.name for fact in status.evaluation_invariants if not fact.holds)
         if status.evaluation_error is not None:
@@ -191,15 +201,38 @@ def _read_grader_report(launch: RecordedLaunch, attempt_id: str, evidence: list[
 def _gate_result(report: gate.GateReport | None) -> GateResult | None:
     if report is None:
         return None
+    decisions = report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)
+    decision_metrics = {row.metric for row in decisions}
+    history_scores = [
+        row
+        for row in report.rows(ComparisonRole.SLICE)
+        if row.metric not in decision_metrics
+        and (
+            row.metric.partition("/")[2] in {"mean", "family_mean"}
+            or ("/family/" in row.metric and row.metric.endswith("/mean"))
+        )
+    ]
     return GateResult(
         verdict=report.verdict,
         effect=report.effect,
         reason=report.reason,
         invariants=list(report.invariants),
-        comparisons=list(report.rows(ComparisonRole.OBJECTIVE, ComparisonRole.GUARD, ComparisonRole.REQUIREMENT)),
+        comparisons=[*decisions, *history_scores],
         attempt_ids=list(report.run.attempt_ids),
         replicates=report.run.replicates,
     )
+
+
+def _evaluation_data_identity(launch: RecordedLaunch, evidence: list[str]) -> str | None:
+    sources = [*launch.validation_data, *(source for group in launch.evaluation_data.values() for source in group)]
+    if not sources:
+        return None
+    try:
+        for name in launch.evaluation_data:
+            evaluation_protocol(launch, name)
+    except InvalidComparison:
+        evidence.append("The stored evaluation protocol is unavailable.")
+    return "; ".join(sorted({f"{source.identity}/{source.relative_path}" for source in sources}))
 
 
 def build_record(
@@ -210,8 +243,8 @@ def build_record(
     attempt: AttemptRecord,
     report: gate.GateReport | None = None,
     gate_name: str | None = None,
-    evaldash_run_ids: tuple[str, ...] | None = None,
     gate_failure: bool = False,
+    control: bool = False,
 ) -> AttemptSummary:
     """Build a progress row from stored native outputs without live lookups."""
     launch, result = recorded_launch(attempt), attempt.native.result
@@ -233,7 +266,7 @@ def build_record(
     terminal = result.state.is_terminal
     interrupted = attempt.interruption is not None and not terminal
     measured = (
-        _terminal_measurements(run_output, preset, attempt, launch, evidence)
+        _terminal_measurements(run_output, preset, attempt, launch, evidence, inputs)
         if terminal
         else _TerminalMeasurements(preset.measured)
     )
@@ -244,18 +277,28 @@ def build_record(
         failed.append("required_gate_report")
     if not provenance and index is None and terminal:
         evidence.append("Recorded source provenance is unavailable.")
+    if index is not None and index.base_preset_version is None:
+        evidence.append("The base preset version is unavailable from the branch's main merge base.")
     grader_report = _read_grader_report(launch, attempt_id, evidence) if terminal else None
+    evaluation_data = _evaluation_data_identity(launch, evidence)
     return AttemptSummary(
         run_id=attempt.index_run_id,
+        native_run_id=attempt.run_id,
         attempt_id=attempt_id,
         label=run_label(inputs),
         series=preset.name,
-        model=index.model if index is not None else launch.model_name,
+        model=index.model if index is not None else launch.model_name or table.model,
         preset_version=index.preset_version if index is not None else gate.config_version(attempt.native.config, launch),
-        is_control=index.is_control if index is not None else False,
+        is_control=True if control else index.is_control if index is not None else None,
+        base_commit=index.base_commit if index is not None else None,
+        base_preset_version=index.base_preset_version if index is not None else None,
+        evaluation_data_identity=evaluation_data,
         user=index.user if index is not None else None,
-        branch=index.branch if index is not None else None,
-        dirty=index.dirty if index is not None else None,
+        branch=index.branch if index is not None else provenance.get("branch"),
+        commit=index.source_revision if index is not None else provenance.get("base_commit"),
+        settings=list(map(_visible_setting, inputs.settings)),
+        launch_config=cast(dict, redact_value(attempt.native.config)),
+        dirty=index.dirty if index is not None else provenance.get("dirty"),
         pr_number=index.pr_number if index is not None else None,
         cluster=launch.cluster,
         issue=lineage_issue(launch.export_root),
@@ -279,7 +322,6 @@ def build_record(
         evidence=evidence,
         status="failed" if failed else "succeeded" if terminal else "running",
         failed_facts=failed,
-        evaldash_run_ids=list(dict.fromkeys(evaldash_run_ids)) if evaldash_run_ids is not None else None,
         gate=gate_name,
         gate_result=_gate_result(report),
         elapsed_seconds=measured.elapsed_seconds,
@@ -393,15 +435,13 @@ def publish_runs(
     gate_path: str | None = None,
     service_url: str | None = None,
     attempt_id: str | None = None,
-    evaldash_run_ids: tuple[str, ...] | None = None,
     issue: int | None = None,
     coordinator: str | None = None,
     interrupted: bool = False,
     gate_required: bool = False,
+    control: bool = False,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
-    if evaldash_run_ids is not None and (len(outputs) != 1 or attempt_id is None):
-        raise ValueError("EvalDash run IDs require exactly one output and its explicit attempt ID")
     result = PublicationOutcome()
     snapshots = {}
     for path in outputs:
@@ -456,8 +496,8 @@ def publish_runs(
                     attempt=receipt,
                     report=current_report,
                     gate_name=read_record(gate_path).name if current_report is not None else None,
-                    evaldash_run_ids=evaldash_run_ids,
                     gate_failure=missing_gate,
+                    control=control,
                 )
                 if issue is not None:
                     assigned = assign_issue(recorded_launch(receipt).export_root, receipt.run_id, selected_id, issue)
@@ -486,11 +526,13 @@ def publish_controls(
     except InvalidComparison as error:
         raise click.UsageError(str(error)) from error
     configure_coreweave_s3()
+    outputs = tuple(gate.control_path(preset, pin, index, table=table) for index in range(pin.replicates))
     result = publish_runs(
-        [gate.control_path(preset, pin, index, table=table) for index in range(pin.replicates)],
+        outputs,
         table.by_name[pin.preset],
         table=table,
         service_url=service_url,
+        control=True,
     )
     if result.unserved_records:
         result.retry = "Repeat the control publication command."
@@ -505,21 +547,17 @@ def command(table: presets.ModelPresets) -> click.Command:
     @click.option("--marina-url", "url", help="Marina origin (defaults to the Marina service).")
     @click.option("--run-output", "run_output", help="Stored native run output; requires --attempt.")
     @click.option("--attempt", help="Publish this stored attempt from --run-output, without native execution.")
-    @click.option("--evaldash-run-id", multiple=True, help="Link an EvalDash run to this attempt. Repeatable.")
     @click.option("--issue", type=click.IntRange(min=1), help="Associate an existing native attempt with an issue.")
     def command(
         preset_name: str,
         url: str | None,
         run_output: str | None,
         attempt: str | None,
-        evaldash_run_id: tuple[str, ...],
         issue: int | None,
     ) -> None:
         """Publish pinned controls or one stored native attempt."""
         if (run_output is None) != (attempt is None):
             raise click.UsageError("--run-output and --attempt are required together")
-        if evaldash_run_id and attempt is None:
-            raise click.UsageError("--evaldash-run-id requires --run-output and --attempt")
         if issue is not None and attempt is None:
             raise click.UsageError("--issue requires --run-output and --attempt")
         if run_output is not None:
@@ -530,7 +568,6 @@ def command(table: presets.ModelPresets) -> click.Command:
                 table=table,
                 service_url=url,
                 attempt_id=attempt,
-                evaldash_run_ids=evaldash_run_id or None,
                 issue=issue,
             )
             if result.unserved_records:

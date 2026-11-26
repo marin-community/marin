@@ -9,15 +9,18 @@ Use the selected model entry's compare command to compare existing results on CP
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import math
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import redirect_stdout
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
@@ -49,6 +52,7 @@ from marin.rl.skyrl import (
     SkyRLRunConfig,
     read_skyrl_attempt,
     run_skyrl,
+    skyrl_cpu_environment,
     skyrl_execution,
 )
 from marin.rl.skyrl_records import (
@@ -288,6 +292,7 @@ def build_experiment(
         resume=resume,
         options=options,
         sft_preset=sft_preset,
+        preset=preset,
     )
     runs = []
     for replicate in range(replicates):
@@ -539,6 +544,67 @@ def run_index_identity(
     )
 
 
+def _base_preset(module: str, index: RunIndexIdentity) -> tuple[str | None, str | None]:
+    """Fingerprint the nominal preset at the source commit's main merge base."""
+    root = recipe.REPO_ROOT
+    preset = index.preset
+    try:
+        base = git_output(["merge-base", index.source_revision, "origin/main"], cwd=root, timeout=4)
+    except (OSError, RuntimeError):
+        logger.debug("Git could not resolve the main merge base for preset %s", preset)
+        return None, None
+    if index.is_control and index.branch == "main" and base.startswith(index.source_revision) and not index.dirty:
+        return base, index.preset_version
+    try:
+        snapshot = subprocess.run(
+            [
+                "git",
+                "archive",
+                base,
+                "experiments/__init__.py",
+                "experiments/post_training",
+                "experiments/evaluation",
+                "config",
+                "pyproject.toml",
+                "infra/buckets/pyproject.toml",
+                "infra/deploy/pyproject.toml",
+                "infra/marina/pyproject.toml",
+                "infra/marina/apps/rl_progress/applet.toml",
+                "infra/pulumi/pyproject.toml",
+                "lib",
+                "vendor/harbor",
+                "vendor/skyrl",
+            ],
+            cwd=root,
+            capture_output=True,
+            check=True,
+            timeout=30,
+        ).stdout
+        with tempfile.TemporaryDirectory(prefix="rl-main-base-") as directory:
+            path = Path(directory)
+            with tarfile.open(fileobj=io.BytesIO(snapshot)) as archive:
+                archive.extractall(path, filter="data")
+            sources = [path, *sorted(path.glob("lib/*/src"))]
+            result = subprocess.run(
+                [sys.executable, "-m", module, "_preset-config", preset],
+                text=True,
+                capture_output=True,
+                check=True,
+                cwd=path,
+                env={
+                    **skyrl_cpu_environment(),
+                    "PYTHONNOUSERSITE": "1",
+                    "PYTHONPATH": os.pathsep.join(map(str, sources)),
+                },
+                timeout=180,
+            )
+            launch = json.loads(result.stdout)
+            return base, rl_gate.config_version(launch) if isinstance(launch, dict) else None
+    except (OSError, subprocess.SubprocessError, tarfile.TarError, ValueError, InvalidComparison) as error:
+        logger.debug("Could not load preset %s from main commit %s (%s)", preset, base, type(error).__name__)
+        return base, None
+
+
 class _PublicationWatch(BaseModel):
     job: str
     preset: str
@@ -697,7 +763,11 @@ def _submit_from_launcher(
     if not module:
         raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
     submitted_at = datetime.now(UTC).isoformat()
-    index = context.meta["rl_index"].model_copy(update={"submitted_at": submitted_at})
+    index: RunIndexIdentity = context.meta["rl_index"]
+    base_commit, base_version = _base_preset(module, index)
+    index = index.model_copy(
+        update={"submitted_at": submitted_at, "base_commit": base_commit, "base_preset_version": base_version}
+    )
     runs = _from_handles(rl_handles).runs
     indexed_runs = {
         step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).run_id: index for step in runs
@@ -723,6 +793,7 @@ def _submit_from_launcher(
         "coordinator_job_id": str(job),
         "iris_url": job.dashboard_url(_IRIS_DASHBOARD_URL),
         "submitted_at": submitted_at,
+        "base_preset_version": index.base_preset_version,
         "runs": submitted,
     }
     _print_status(result)
@@ -1057,6 +1128,18 @@ def _run_graph(handles: list[ArtifactStep], max_concurrent: int) -> None:
         build_artifacts(gate, max_concurrent=max_concurrent)
 
 
+def _preset_config_command(table: presets.ModelPresets) -> click.Command:
+    @click.command()
+    @click.argument("preset")
+    def describe(preset: str) -> None:
+        selected = table.by_name.get(preset)
+        with redirect_stdout(sys.stderr):
+            config = rl_gate.compose_preset(selected) if selected is not None else None
+        click.echo(json.dumps(config))
+
+    return describe
+
+
 def main(
     table: presets.ModelPresets,
     *,
@@ -1071,6 +1154,8 @@ def main(
     try:
         if args and args[0] == "_follow-publication":
             selected, args = _follow_command(table), args[1:]
+        elif args and args[0] == "_preset-config":
+            selected, args = _preset_config_command(table), args[1:]
         elif args and args[0] in {"compare", "publish"}:
             if init is not None and args[0] == "compare":
                 raise click.UsageError("Python init cannot be used with compare")
