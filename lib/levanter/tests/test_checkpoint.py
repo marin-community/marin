@@ -1467,7 +1467,7 @@ def test_prune_aborts_payload_removal_when_metadata_delete_fails(tmp_path, monke
     after_files = sorted(str(p.relative_to(step1_dir)) for p in step1_dir.rglob("*") if p.is_file())
     assert after_files == before_files
     # Discovery excludes a checkpoint with a durable delete intent, even if removing metadata failed.
-    assert _get_checkpoint_steps(temporary_path) == [2]
+    assert [c.step for c in discover_checkpoint_candidates(temporary_path)] == [2]
 
 
 @pytest.mark.parametrize(

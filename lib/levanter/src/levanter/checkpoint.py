@@ -52,7 +52,7 @@ from levanter.utils.types import FilterSpec
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_METADATA_FILENAME = "metadata.json"
-_PENDING_DELETE_SUFFIX = ".pending-delete"
+_PENDING_DELETE_PREFIX = ".pending-delete."
 _OBJECT_STORE_SCHEMES = frozenset({"s3", "s3a", "gs", "gcs"})
 
 _CHECKPOINT_CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
@@ -691,7 +691,7 @@ class Checkpointer:
             destination = f"step-{step}"
             fs, plain_path = _get_fs_and_plain_path(prefix_join(self.temporary_base_path, destination))
             should_save = (
-                not fs.exists(plain_path + _PENDING_DELETE_SUFFIX)
+                not fs.exists(_pending_delete_path(plain_path))
                 and not any(
                     _is_committed_checkpoint(prefix_join(root, destination)) for root in self._checkpoint_roots()
                 )
@@ -773,7 +773,7 @@ class Checkpointer:
                 # Publish the intent before the remover can unpublish the checkpoint.
                 fs, plain_path = _get_fs_and_plain_path(record.path)
                 try:
-                    fs.touch(plain_path + _PENDING_DELETE_SUFFIX)
+                    fs.touch(_pending_delete_path(plain_path))
                 except OSError:
                     logger.exception("Could not record deletion intent for %s", record.path)
                     retained.append(record)
@@ -813,7 +813,7 @@ class Checkpointer:
             return
         for entry in entries:
             name = os.path.basename(entry["name"])
-            destination = name.removesuffix(_PENDING_DELETE_SUFFIX)
+            destination = name.removeprefix(_PENDING_DELETE_PREFIX)
             if entry["type"] == "file" and name != destination and re.fullmatch(r"step-[0-9]+", destination):
                 self._async_checkpoint_remover_queue.put(prefix_join(root, destination))
 
@@ -868,7 +868,7 @@ class Checkpointer:
         pending_delete = False
         if jax.process_index() == 0:
             fs, plain_path = _get_fs_and_plain_path(path)
-            marker = plain_path + _PENDING_DELETE_SUFFIX
+            marker = _pending_delete_path(plain_path)
             if fs.exists(marker):
                 self._async_checkpoint_remover_queue.join()
                 pending_delete = fs.exists(marker)
@@ -904,7 +904,7 @@ class Checkpointer:
             checkpoint = self._async_checkpoint_remover_queue.get(block=True)
             try:
                 fs, plain_path = _get_fs_and_plain_path(checkpoint)
-                marker = plain_path + _PENDING_DELETE_SUFFIX
+                marker = _pending_delete_path(plain_path)
                 try:
                     metadata = load_checkpoint_metadata(plain_path, fs=fs)
                 except FileNotFoundError:
@@ -1341,10 +1341,15 @@ def _discover_checkpoint_candidates_single(
     return sorted(candidates, key=_checkpoint_candidate_sort_key)
 
 
+def _pending_delete_path(path: str) -> str:
+    parent, name = os.path.split(path.rstrip("/"))
+    return os.path.join(parent, _PENDING_DELETE_PREFIX + name)
+
+
 def _is_committed_checkpoint(path: str, fs: AbstractFileSystem | None = None) -> bool:
     fs, plain_path = _get_fs_and_plain_path(path, fs=fs)
     return fs.exists(os.path.join(plain_path, CHECKPOINT_METADATA_FILENAME)) and not fs.exists(
-        plain_path.rstrip("/") + _PENDING_DELETE_SUFFIX
+        _pending_delete_path(plain_path)
     )
 
 
