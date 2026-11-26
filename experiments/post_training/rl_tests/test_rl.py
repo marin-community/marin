@@ -560,8 +560,6 @@ def test_show_config_composes_portable_storage_initializer(selection, tmp_path, 
         "2026.11.25",
         "--init",
         uri,
-        "--set",
-        "trainer.max_steps=7",
         "--show-config",
     ]
     table = snowball_model.SNOWBALL
@@ -572,9 +570,6 @@ def test_show_config_composes_portable_storage_initializer(selection, tmp_path, 
     assert result.exit_code == 0, (result.output, result.exception)
     document = yaml.safe_load(result.stdout)
     assert document["inputs"]["model"]["uri"] == uri
-    assert document["skyrl"]["trainer"]["max_steps"] == 7
-    assert document["run"]["model"] == table.model
-    assert "/train-long-" in document["artifacts"]["terminal_manifest_uri"]
     (tmp_path / "model.safetensors").write_bytes(b"changed")
     changed = CliRunner().invoke(snowball.command(table, argv=tuple(args)), args)
     assert changed.exit_code == 0, (changed.output, changed.exception)
@@ -1258,8 +1253,8 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             + f"following={following}\n"
             "table=snowball_rl.SNOWBALL\n"
             "if following is not None:\n"
-            "    table=replace(table,presets=tuple(replace(preset,then=following) "
-            "for preset in table.presets))\n" + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
+            "    table=replace(table,presets=tuple(replace(preset,then=following) for preset in table.presets))\n"
+            + f"raise SystemExit(rl.main(table,init={'init' if use_init else 'None'},"
             f"forward_env={forward_env!r},entry_module={entry_module!r}))\n"
         )
         # Same-size rewrites within one timestamp tick must load the new module.

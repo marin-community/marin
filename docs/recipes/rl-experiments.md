@@ -272,7 +272,8 @@ interface. Each preset's steps use its own `revision`.
   before printing the graph and status, including the run name, allocation and output path. Repeat the
   plan from the same source with the same inputs to look up an existing run.
   For a saved attempt, status can include its job ID, completed update, evaluations and verdict.
-  Use `--show-config` to print the composed SkyRL launch YAML with the selected preset and overrides.
+  Use `--show-config` to print the first replicate's validated SkyRL launch YAML.
+  An initializer produced by another run is shown at its artifact root.
 - **Submit and wait.** Replace `--plan` with `--run` to submit an Iris coordinator. Add `--wait` for
   the terminal report. Pass `--issue ISSUE_NUMBER` when the experimenter supplies an issue number.
   If tracking is undecided, ask whether to open a new issue, use an existing one, or run without an issue.
@@ -400,7 +401,7 @@ weights. Set a positive cadence to also save periodic checkpoints.
 `--checkpoints best` and `--checkpoints best_and_final` require a checkpoint cadence and evaluation.
 With `--checkpoints best_and_final --export best_and_final`, SkyRL retains the final native checkpoint
 alongside any selected best native checkpoint. If no evaluation window qualifies, it exports the final
-policy and records `used_final_fallback` in the terminal model receipt. Presets choose their checkpoint storage
+policy. The terminal model receipt records the exported step. Presets choose their checkpoint storage
 through `retention.checkpoints_in_run_output`.
 A preset can set `minimum_task_coverage` to change the primary evaluation's 99% eligibility threshold.
 

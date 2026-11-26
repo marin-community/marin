@@ -295,7 +295,7 @@ def published_model(
             raise click.BadParameter("storage initializers use the export's embedded tokenizer", param_hint="--init")
         export = str(StoragePath(value))
         try:
-            digest = hugging_face_export_digest(export, embedded_tokenizer=True)
+            digest = hugging_face_export_digest(export)
         except (FileNotFoundError, ValueError) as error:
             raise click.BadParameter(str(error), param_hint="--init") from error
         name = f"models/storage-init/{digest}"
@@ -730,15 +730,7 @@ def run_execution(
     required_env = ("WANDB_API_KEY", "WANDB_ENTITY") if wandb_entity else ("WANDB_API_KEY",)
     if preset.output_ttl_days is not None:
         required_env += ("MARIN_PREFIX",)
-    return replace(
-        layout_execution(preset.recipe.layout),
-        wandb_entity=wandb_entity or preset.wandb_entity,
-        required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
-    )
-
-
-def layout_execution(layout: presets.Layout) -> IrisSkyRLExecution:
-    """Map a model layout to the Iris execution shared by training and evaluation."""
+    layout = preset.recipe.layout
     return IrisSkyRLExecution(
         cluster=layout.cluster,
         cluster_config=cluster_config_path(layout.cluster),
@@ -754,6 +746,8 @@ def layout_execution(layout: presets.Layout) -> IrisSkyRLExecution:
         container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
         role_topology=layout.role_topology,
         excluded_nvlink_domains=layout.excluded_nvlink_domains,
+        wandb_entity=wandb_entity or preset.wandb_entity,
+        required_env_vars=tuple(dict.fromkeys((*required_env, *forward_env))),
     )
 
 

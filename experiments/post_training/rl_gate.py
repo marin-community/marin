@@ -686,24 +686,14 @@ def _native_program(native_root: str, modules: tuple[str, ...], body: str) -> st
 
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
-    program = _native_program(
-        str(recipe.REPO_ROOT / "vendor/skyrl"),
-        ("cloud.iris.launch_config", "skyrl_train", "marinskyrl"),
-        "from cloud.iris import launch_config\n"
-        "from rigging.filesystem.s3_compat import configure_coreweave_s3\n"
-        "configure_coreweave_s3()\n"
-        "configs = [launch_config.load_launch_config(path) for path in sys.argv[1:]]\n"
-        "documents = [OmegaConf.to_container(config, resolve=True) for config in configs]\n"
-        f"if {validate_driver!r}:\n"
-        "    for config in configs:\n"
-        "        launch_config.validate_launch_driver_config(config)\n"
-        "print(json.dumps(documents))\n",
+    flags = ("--validate-driver",) if validate_driver else ()
+    return _native_json(
+        "marinskyrl", "iris", "compose", "--checkout", str(recipe.REPO_ROOT / "vendor/skyrl"), *flags, "--", *paths
     )
-    return _native_json("python", "-c", program, *paths)
 
 
-def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> None:
-    """Validate a planned launch through the native CPU composer and driver."""
+def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> dict:
+    """Return the planned launch validated by the native CPU composer and driver."""
     # The artifact root supplies the storage reference before the initializer's export exists.
     model = spec.model
     if isinstance(model, SkyRLPolicyModel):
@@ -718,7 +708,7 @@ def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[Sk
     with tempfile.TemporaryDirectory(prefix="rl-plan-") as directory:
         path = Path(directory) / "launch.yaml"
         path.write_text(config.launch_config_yaml)
-        compose_configs([str(path)], validate_driver=True)
+        return compose_configs([str(path)], validate_driver=True)[0]
 
 
 def _changed_config_keys(left: dict[str, object], right: dict[str, object]) -> set[str]:

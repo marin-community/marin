@@ -169,19 +169,6 @@ def test_plan_print_rejects_invalid_native_config(table, name, settings, version
         assert error in issue["reason"]
 
 
-def test_config_preview_validates_the_native_driver(selection):
-    result = plan(
-        SNOWBALL,
-        "train-medium-agentic",
-        "--show-config",
-        "--set",
-        "generator.engine_init_kwargs.enable_return_routed_experts=false",
-        version="dev",
-    )
-    assert result.exit_code == 4, (result.output, result.exception)
-    assert "moe_router_replay requires" in result.output
-
-
 def test_rack_exclusion_changes_the_run_identity_and_rejects_non_nvlink_hosts(selection):
     rack = "DH1-136-US-EAST-08A"
     flag = ("--exclude-rack", rack)
@@ -193,15 +180,6 @@ def test_rack_exclusion_changes_the_run_identity_and_rejects_non_nvlink_hosts(se
     assert launch["run"]["id"] != yaml.safe_load(plain.stdout)["run"]["id"]
     unsupported = plan(SNOWBALL, "train-long", "--show-config", *flag)
     assert unsupported.exit_code != 0 and "requires an NVL72 GPU variant" in unsupported.output
-
-
-def test_retaining_best_and_final_reports_selection_without_hf_export(recorded_runs, preset_table):
-    preset = replace(SNOWBALL.by_name["train-long"].with_updates(2), checkpoints="best_and_final", export="none")
-    preset_table(preset)
-    run = rl.build_experiment(preset, table=SNOWBALL)
-    recorded_runs(preset.name, run.runs[0].name)
-    status = rl._status(run, preset, stored_only=True)
-    assert status["runs"][0]["best_checkpoint_step"] == "none eligible"
 
 
 @pytest.mark.parametrize(

@@ -13,7 +13,6 @@ import json
 import math
 import os
 import sys
-import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
@@ -47,7 +46,6 @@ from marin.rl.skyrl import (
     SkyRLReceiptLookupError,
     SkyRLRun,
     SkyRLRunConfig,
-    SkyRLSpec,
     read_skyrl_attempt,
     run_skyrl,
     skyrl_execution,
@@ -158,7 +156,7 @@ class RLExperiment:
     runs: tuple[ArtifactStep[SkyRLRun], ...]
     gate: ArtifactStep[rl_gate.GateReport] | None = None
     inputs: RunInputs | None = None
-    spec: SkyRLSpec | None = None
+    plan_document: dict | None = None
 
 
 def _provenance(*, control: bool) -> Provenance:
@@ -240,7 +238,7 @@ def _with_run_options(
                 layout=replace(
                     layout,
                     priority=priority or layout.priority,
-                    excluded_nvlink_domains=tuple(sorted(set(layout.excluded_nvlink_domains + excluded_nvlink_domains))),
+                    excluded_nvlink_domains=tuple(sorted(set(excluded_nvlink_domains))),
                 ),
             ),
         )
@@ -359,36 +357,8 @@ def build_experiment(
         if preset.gated and not control
         else None
     )
-    if validate_plan:
-        rl_gate.validate_plan(preset, replace(spec, name=runs[0].name), runs[0])
-    return RLExperiment(tuple(runs), gate, inputs, spec)
-
-
-def _show_launch_configs(run: RLExperiment, preset: presets.Preset, *, forward_env: tuple[str, ...]) -> None:
-    assert run.spec is not None
-    prefix = recipe.run_prefix(preset)
-    model = run.spec.model
-    pending_sft = (
-        run.inputs is not None
-        and run.inputs.sft_preset is not None
-        and isinstance(model, ArtifactHfModel)
-        and model.relative_path is None
-        and not check_cache(model.step.path(prefix))
-    )
-    with tempfile.TemporaryDirectory(prefix="rl-show-config-") as directory:
-        paths = []
-        for index, step in enumerate(run.runs):
-            if pending_sft:
-                assert isinstance(model, ArtifactHfModel)
-                spec = replace(run.spec, name=step.name, model=replace(model, relative_path="<terminal-hf-export>"))
-                step = recipe.run_step(
-                    preset, spec, wandb_entity=os.environ.get(_WANDB_ENTITY_ENV), forward_env=forward_env
-                )
-            path = Path(directory) / f"launch-{index}.yaml"
-            path.write_text(materialized_config(step, prefix).launch_config_yaml)
-            paths.append(str(path))
-        documents = rl_gate._native_json("marinskyrl", "iris", "compose", *paths)
-    click.echo(yaml.safe_dump(documents[0] if len(documents) == 1 else documents, sort_keys=False), nl=False)
+    plan_document = rl_gate.validate_plan(preset, replace(spec, name=runs[0].name), runs[0]) if validate_plan else None
+    return RLExperiment(tuple(runs), gate, inputs, plan_document)
 
 
 def _evaluation_failed(snapshot: dict, preset: presets.Preset) -> bool:
@@ -692,17 +662,9 @@ def _run_command(
                 job, rl_handles, preset, table=table, service_url=options["url"], has_following=len(handles) > count
             )
 
-    def show_plan() -> bool:
-        preview = click.get_current_context().meta.get("rl_config_preview")
-        if preview is None:
-            return False
-        run, preset, forward_env = preview
-        _show_launch_configs(run, preset, forward_env=forward_env)
-        return True
-
     return click.command(
         cls=RLCommand, help=__doc__ + "\n\n" + "\n".join(f"{preset.name}: {preset.budget}" for preset in table.presets)
-    )(build_options_with_runner(checked, runner, show_plan=show_plan))
+    )(build_options_with_runner(checked, runner))
 
 
 def command(
@@ -1007,7 +969,7 @@ def command(
             control=control,
             requirements=requirements,
             issue=issue,
-            validate_plan=from_launcher and not show_config,
+            validate_plan=from_launcher or show_config,
         )
         assert run.inputs is not None
         if do_run and from_launcher:
@@ -1019,8 +981,8 @@ def command(
             )
             click.get_current_context().meta["rl_training_type"] = validated["runtime"]["training_type"]
         if show_config:
-            click.get_current_context().meta["rl_config_preview"] = (run, preset, forward_env)
-            return run.runs
+            click.echo(yaml.safe_dump(run.plan_document, sort_keys=False), nl=False)
+            raise click.exceptions.Exit(0)
         model = preset.model
         if (
             table.needs_completed_default_export

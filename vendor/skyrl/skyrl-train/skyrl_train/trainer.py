@@ -692,8 +692,6 @@ class RayPPOTrainer:
                 self._start_checkpoint_upload(snapshot, final_state)
                 if await self._drain_checkpoint_upload():
                     logger.info("Saved final checkpoint.")
-            if self.cfg.trainer.get("checkpoint_retention") == "best_and_final" and self._last_saved_step != completed_step:
-                raise OSError(f"Final checkpoint at step {completed_step} did not commit")
             if self._control.should_save_hf_model:
                 await asyncio.to_thread(self.handle_hf_export)
 

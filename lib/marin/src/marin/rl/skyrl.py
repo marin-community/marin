@@ -697,8 +697,6 @@ class IrisSkyRLExecution:
             raise ValueError("SkyRL target_cluster and parent_cluster_config must be set together")
         if self.target_cluster is not None and self.target_cluster != self.cluster:
             raise ValueError("SkyRL target_cluster must match the execution cluster")
-        if any(not domain.strip() for domain in self.excluded_nvlink_domains):
-            raise ValueError("SkyRL excluded NVLink domains must be nonempty labels")
 
 
 _FINGERPRINT_EXECUTION = IrisSkyRLExecution(

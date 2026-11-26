@@ -22,7 +22,6 @@ from marin.rl.skyrl import (
     SkyRLGenerationPlan,
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
-    SkyRLRun,
 )
 from pydantic import BaseModel, Field, PositiveInt
 from rolloutengine.agents.pi.agent import PI_HARNESS
@@ -432,7 +431,7 @@ class Preset:
     batch_mix: BatchMix | None = None
     held_out_tasks: str | None = None
     checkpoint_evaluation: tuple[CheckpointCohort, ...] = ()
-    then: Callable[[ArtifactStep[SkyRLRun]], ArtifactStep] | None = None
+    then: Callable[[ArtifactStep], ArtifactStep] | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
     gaps: tuple[str, ...] = ()
@@ -443,8 +442,6 @@ class Preset:
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
             raise ValueError("measured window must lie within the planned steps")
-        if not 0 < self.minimum_task_coverage <= 1:
-            raise ValueError("minimum_task_coverage must be in (0, 1]")
         if self.gated and not self.guards:
             raise ValueError("gated presets require guards")
         if self.held_out is not None and not self.held_out_tasks:
