@@ -7,13 +7,14 @@ from pathlib import Path
 
 from cloud.iris import launch
 from cloud.iris.config_cli import verify_checkout
-from finestore.rl.run_records import LaunchResult
+from finestore.rl.run_records import LaunchResult, read_attempt
 
 
 def main() -> None:
     verify_checkout(Path(sys.argv[1]), launch)
     args = launch.create_parser().parse_args(sys.argv[3:])
     config = launch.load_launch_config(args.config)
+    assert read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id)) is None
     launch._record_prepared_attempt(config)
     response = LaunchResult.model_validate_json(Path(sys.argv[2]).read_text()).model_copy(
         update={"run_id": str(config.run.id), "attempt_id": str(config.run.attempt_id)}

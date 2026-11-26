@@ -276,7 +276,9 @@ def selection_artifact(value: str) -> ArtifactStep:
     name, separator, version = value.rpartition("@")
     if not separator or is_mutable_version(version):
         raise click.BadParameter("use NAME@VERSION with an immutable task selection version")
-    return ArtifactStep.adopt(f"{SELECTION_PREFIX}/{name}", version, str(StoragePath(SELECTION_ROOT) / name / version))
+    return ArtifactStep.adopt(
+        f"{SELECTION_PREFIX}/{name}", version, str(StoragePath(SELECTION_ROOT) / name / version), read_only=True
+    )
 
 
 def published_model(value: str, *, preset: Preset) -> SkyRLModelSource:

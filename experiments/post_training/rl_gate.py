@@ -97,8 +97,8 @@ def parse_requirement(text: str) -> Requirement:
 def with_objectives(candidate: RunMeasurements, preset: presets.Preset) -> RunMeasurements:
     values = dict(candidate.values)
     for metric in preset.objectives:
-        if metric.window == presets.WindowStatistic.GAIN_PER_GPU_HOUR:
-            gain = values.get(metric.key.removesuffix("_per_gpu_hour"))
+        if metric.source is not None:
+            gain = values.get(metric.source)
             if gain is not None and candidate.gpu_hours:
                 values[metric.key] = gain / candidate.gpu_hours
     return replace(candidate, values=values)
@@ -702,17 +702,8 @@ def _native_config(operation: str, *args: str, checkout: Path | None = None):
     logger.info("%s took %.2f s", preparation, monotonic() - started)
     with tempfile.TemporaryDirectory(prefix="skyrl-config-") as directory:
         progress = Path(directory) / "stage"
-        command = [
-            str(interpreter),
-            "-I",
-            "-m",
-            _NATIVE_CONFIG_MODULE,
-            "--checkout",
-            str(checkout),
-            "--progress-file",
-            str(progress),
-            *args,
-        ]
+        command = [str(interpreter), "-I", "-m", _NATIVE_CONFIG_MODULE]
+        command += ["--checkout", str(checkout), "--progress-file", str(progress), *args]
         started = monotonic()
         try:
             result = run_skyrl_cpu(command, timeout=120)
@@ -723,11 +714,8 @@ def _native_config(operation: str, *args: str, checkout: Path | None = None):
                 f"{_native_diagnostic(error, progress)}"
             ) from error
         logger.info("%s took %.2f s", operation, monotonic() - started)
-        output = result.stdout.strip()
-        if not output:
-            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
         try:
-            return json.loads(output)
+            return json.loads(result.stdout)
         except ValueError as error:
             raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 

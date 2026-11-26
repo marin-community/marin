@@ -7,7 +7,7 @@ import subprocess
 import sys
 from copy import deepcopy
 from dataclasses import replace
-from importlib.machinery import ModuleSpec
+from importlib.util import find_spec
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse, urlsplit
@@ -130,6 +130,14 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
 
     # Published train-long controls still contain defaults removed by the TaskSpec migration.
     planned = configs["train-long"]
+    trainer = planned["skyrl"]["trainer"]
+    assert trainer["use_sample_packing"]
+    for role in ("policy", "ref"):
+        geometry = trainer[role]["megatron_config"]
+        assert geometry["context_parallel_size"] == 2
+        assert geometry["transformer_config_kwargs"]["cp_comm_type"] == "all_gather"
+    for name in ("train-medium-tools", "train-long-checkpoint-eval"):
+        assert configs[name]["skyrl"]["trainer"]["policy"]["megatron_config"]["context_parallel_size"] == 1
     recorded = deepcopy(planned)
     recorded["skyrl"]["data"].update(task_cache_dir="~/.cache/marinskyrl/tasks", terminal_bench_data=[])
     del recorded["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]
@@ -185,13 +193,13 @@ def test_missing_control_pin(selection, mode, exit_code):
             "--plan",
             ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
             "trainer.train_batch_size=2",
-            "lcm_dp_size=16",
+            "lcm_dp_size=8",
         ),
         (
             "--run",
             ("trainer.policy_mini_batch_size=2", "generator.n_samples_per_prompt=8"),
             "trainer.train_batch_size=2",
-            "lcm_dp_size=16",
+            "lcm_dp_size=8",
         ),
     ],
     ids=["plan-batch-size", "run-batch-size"],
@@ -560,11 +568,10 @@ def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, 
     initializer = ArtifactStep.adopt("tests/initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint)
     task_set_name = snowball_model.DEFAULT_EVAL_LITE_NAME
     task_set_version = snowball_model.DEFAULT_EVAL_LITE_VERSION
-    new_task_set = tmp_path / task_set_name / "2026.11.05"
+    original_task_set = Path(recipe.selection_artifact(f"{task_set_name}@{task_set_version}").path())
+    new_task_set = Path(recipe.selection_artifact(f"{task_set_name}@2026.11.05").path())
     new_task_set.mkdir(parents=True)
-    (new_task_set / "summary.json").write_bytes(
-        (tmp_path / task_set_name / task_set_version / "summary.json").read_bytes()
-    )
+    (new_task_set / "summary.json").write_bytes((original_task_set / "summary.json").read_bytes())
     changed_task_set = replace(
         learning,
         held_out_tasks=f"{task_set_name}@2026.11.05",
@@ -898,6 +905,7 @@ def test_submission_exit_codes_and_publication_retries(
         assert "skyrl.trainer.policy.optimizer_config.lr" in result.output
     if "candidate-compose" in case:
         assert "native configuration cannot be composed:" in result.output and "gspo" in result.output.lower()
+        assert "Compose document 1/1" in result.output
     if case == "unexpected":
         assert "KeyError" in result.output and "grader_kind_counts" in result.output
     if case == "child":
@@ -1221,6 +1229,7 @@ def test_refusals_use_exit_four(selection, arguments, capsys, tmp_path, request)
         assert "use the preset's declared owned keys" in result.output
 
 
+@pytest.mark.parametrize("recorded_runs", [2], indirect=True, ids=["one-task-per-family"])
 def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations(
     recorded_runs, preset_table, tmp_path, monkeypatch
 ):
@@ -1246,6 +1255,15 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
+    published_selections = Path(recipe.SELECTION_ROOT)
+
+    def selection_files():
+        return {
+            path: (path.stat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+            for path in (published_selections, *published_selections.rglob("*"))
+        }
+
+    before_launch = selection_files()
     settings = ("trainer.max_steps=3", "trainer.project_name=fixture-project")
     set_args = [arg for setting in settings for arg in ("--set", setting)]
     built = snowball.build_experiment(
@@ -1330,12 +1348,15 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         *set_args,
     ]
     client, job = fake_iris(monkeypatch, "train-coordinator")
-    default_module = model_entry_fixture.__spec__.name
+    default_module = snowball_model.__name__
+    second_entry = "experiments.post_training.mochi_rl"
     mode, coordinator_module = "valid", default_module
     entries = {}
 
     def invoke_entry(name, patch):
-        patch.setattr(sys.modules["__main__"], "__spec__", ModuleSpec(name, loader=None))
+        module_spec = find_spec(name)
+        assert module_spec is not None and module_spec.loader is not None
+        patch.setattr(sys.modules["__main__"], "__spec__", module_spec)
         return model_entry_fixture.main(entries[name], arguments)
 
     def submit(**kwargs):
@@ -1407,7 +1428,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             preflight.setattr(gate, "compose_configs", lambda paths, **_: [config for _ in paths])
             return CliRunner().invoke(command, args)
 
-    for override in (None, "second_model_entry"):
+    for override in (None, second_entry):
         coordinator_module = override or default_module
         module(default_module, entry_module=override)
         if override is not None:
@@ -1417,6 +1438,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         assert "best_checkpoint_step: 2" in result.output and f"{preset.evaluations[0].name}@3/scored" in result.output
         assert "http://127.0.0.1:55777/" in result.output and "test-initializer-credential" not in result.output
     assert len(native_calls) == 1
+    assert selection_files() == before_launch
     assert published[-1].optimizer_steps == published[-1].planned_updates == 3
     assert (published[-1].model, published[-1].issue) == ("snowball", 73)
 
@@ -1426,7 +1448,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "overlapping-environment-mismatch",
         "dependency-environment-mismatch",
     ):
-        coordinator_module = "second_model_entry"
+        coordinator_module = second_entry
         module(
             default_module,
             entry_module=coordinator_module,
@@ -1486,7 +1508,6 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     assert not facts[f"{preset.evaluations[0].name}/step-2/answers_complete"]["holds"]
     assert not facts[f"{preset.evaluations[0].name}/task_coverage"]["holds"]
 
-    default_module = model_entry_fixture.__spec__.name
     mode, coordinator_module = "valid", default_module
     module(coordinator_module)
     resumed = invoke_with_preflight_stub(entry)
