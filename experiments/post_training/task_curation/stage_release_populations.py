@@ -31,9 +31,16 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     from huggingface_hub import HfApi, hf_hub_download  # noqa: PLC0415
+    from marin.execution.artifact import (  # noqa: PLC0415
+        ArtifactRecord,
+        result_type_name,
+    )
 
     from experiments.post_training.task_curation.harbor_cohort_release import (  # noqa: PLC0415
         release_repo as release_repo_name,
+    )
+    from experiments.post_training.task_curation.lexical_artifacts import (  # noqa: PLC0415
+        SourceTextPopulation,
     )
     from experiments.post_training.task_curation.release_population import (  # noqa: PLC0415
         stage_release_population,
@@ -65,6 +72,25 @@ def main() -> None:
             dataset_revision=head,
             main_output_dir=f"{text_uri}/outputs/main",
             specs_output_dir=f"{text_uri}/specs",
+        )
+        # The scan's raw_load requires the artifact record sidecar at the staged
+        # path; write it through fsutil (the local s3fs has no credentials). The
+        # record carries the payload minus its path, matching what a step runner
+        # persists, so raw_load rebuilds the full model at the staged location.
+        population = SourceTextPopulation(**record)
+        payload_fields = {name for name in SourceTextPopulation.model_fields if name != "path"}
+        sidecar = args.workdir / f"{slug}.artifact.json"
+        sidecar.write_text(
+            ArtifactRecord(
+                output_path=text_uri,
+                result_type=result_type_name(SourceTextPopulation),
+                result=population.model_dump(mode="json", include=payload_fields),
+            ).model_dump_json(indent=2)
+        )
+        subprocess.run(
+            ["uv", "run", "--no-sync", "fsutil", "cp", str(sidecar), text_uri + "/.artifact.json"],
+            check=True,
+            stdout=subprocess.DEVNULL,
         )
         populations.append(record)
     args.output.parent.mkdir(parents=True, exist_ok=True)
