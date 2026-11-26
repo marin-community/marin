@@ -20,8 +20,10 @@ from taskcompendium.models import (
     TaskSpec,
     TextMessage,
 )
+from taskcompendium.pipeline.models import IntendedUse
 from zephyr.context import ZephyrContext
 
+from experiments.post_training.task_curation.campaign import error_chain
 from experiments.post_training.task_curation.task_store import TaskRow, TaskStore, task_store_step
 
 
@@ -43,13 +45,13 @@ def task(identifier: str) -> TaskSpec:
     )
 
 
-def curated_source(root: Path, *shards: list[str]) -> ArtifactStep:
+def curated_source(root: Path, *shards: list[str], intended_use: str = "train", mode: str = "full") -> ArtifactStep:
     """A curation artifact whose final/ shards hold the given task IDs; normalize/ holds an unadmitted task."""
     (root / "final").mkdir(parents=True)
     (root / "normalize").mkdir()
     manifest = {
-        "intended_use": "train",
-        "mode": "full",
+        "intended_use": intended_use,
+        "mode": mode,
         "datasets": {"final": str(root / "final")},
         "admission_counts": {"admitted": sum(map(len, shards))},
     }
@@ -122,3 +124,21 @@ def test_a_store_version_keeps_the_sources_it_was_first_built_with(tmp_path):
     with pytest.raises(FingerprintMismatchError):
         run(task_store_step("fixture", "2026.11.26.1", sources={"fixture:math": math, "fixture:code": code}))
     assert list(TaskStore.open("fixture", "2026.11.26.1").sources) == ["fixture:math"]
+
+
+def test_store_records_each_sources_use_and_refuses_unadmitted_curation(tmp_path):
+    math = curated_source(tmp_path / "math", ["m1"])
+    bench = curated_source(tmp_path / "bench", ["b1"], intended_use="eval")
+    store = resolve(task_store_step("fixture", "2026.11.26.1", sources={"fixture:math": math, "fixture:bench": bench}))
+
+    assert {source_id: source.intended_use for source_id, source in store.sources.items()} == {
+        "fixture:bench": IntendedUse.EVAL,
+        "fixture:math": IntendedUse.TRAIN,
+    }
+    training = [source_id for source_id, source in store.sources.items() if source.intended_use == IntendedUse.TRAIN]
+    assert [row.task_id for row in read(store.select_sources(*training), tmp_path)] == ["m1"]
+
+    quick = curated_source(tmp_path / "quick", ["q1"], mode="quick")
+    with pytest.raises(Exception) as raised:
+        run(task_store_step("fixture", "2026.11.26.2", sources={"fixture:quick": quick}))
+    assert "need SAMPLE/FULL curation: fixture:quick is quick" in error_chain(raised.value)

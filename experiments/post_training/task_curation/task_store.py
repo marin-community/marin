@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 import pyarrow.parquet as pq
+from finestore.rl.curation import CurationMode
 from marin.execution.artifact import Artifact, read_record
 from marin.execution.lazy import ArtifactStep, StepContext
 from pydantic import BaseModel, ConfigDict
@@ -21,6 +22,7 @@ from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import TaskSpec
+from taskcompendium.pipeline.models import IntendedUse
 from zephyr.dataset import Dataset
 
 from experiments.post_training.task_curation.curation_catalog import MANIFEST_FILENAME
@@ -52,6 +54,8 @@ class CuratedSource(BaseModel):
     root: str
     manifest_sha256: str
     """SHA-256 of the canonical ``manifest.json``; the admitted files themselves are not hashed."""
+    intended_use: IntendedUse
+    """Whether the source's tasks are for training or evaluation, as its manifest records."""
 
     def task_files(self) -> tuple[str, ...]:
         manifest = _read_manifest(self.root)
@@ -111,13 +115,16 @@ class TaskStoreConfig:
 
 
 def build_task_store(config: TaskStoreConfig) -> TaskStore:
-    """Pin each source by its current manifest."""
-    return TaskStore(
-        sources={
-            source_id: CuratedSource(root=root, manifest_sha256=canonical_sha256(_read_manifest(root)))
-            for source_id, root in sorted(config.sources.items())
-        }
-    )
+    """Pin each source by its current manifest; only SAMPLE and FULL curation admits tasks."""
+    sources = {}
+    for source_id, root in sorted(config.sources.items()):
+        manifest = _read_manifest(root)
+        if manifest["mode"] not in {CurationMode.SAMPLE, CurationMode.FULL}:
+            raise ValueError(f"Task store sources need SAMPLE/FULL curation: {source_id} is {manifest['mode']}")
+        sources[source_id] = CuratedSource(
+            root=root, manifest_sha256=canonical_sha256(manifest), intended_use=manifest["intended_use"]
+        )
+    return TaskStore(sources=sources)
 
 
 def task_store_step(name: str, version: str, *, sources: Mapping[str, ArtifactStep]) -> ArtifactStep[TaskStore]:
