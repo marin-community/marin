@@ -130,6 +130,7 @@ async def test_budget_retry_counts_each_checkpointed_update_and_runs_terminal_ev
     retry.context.start.assert_not_called()
     retry._evaluate_and_log.assert_awaited_once()
     assert retry._evaluate_and_log.await_args.args[0].global_step == 2
+    assert retry._evaluate_and_log.await_args.args[0].is_last_step
 
 
 @pytest.mark.asyncio

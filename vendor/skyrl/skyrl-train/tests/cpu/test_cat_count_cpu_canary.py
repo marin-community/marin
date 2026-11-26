@@ -501,7 +501,13 @@ def test_cat_count_gross_rollout_budget(tmp_path, cat_count_policy, cat_count_se
     cfg.data.sampling.kind = "adaptive-source"
     cfg.trainer.algorithm.dynamic_sampling.type = "filter"
     cfg.trainer.callbacks = [
-        {"type": "evaluation", "eval_steps": 7, "eval_before_train": False, "eval_on_train_end": True}
+        {
+            "type": "evaluation",
+            "eval_steps": 7,
+            "eval_before_train": False,
+            "eval_on_train_end": True,
+            "additional_evaluations": {"final_task_set": {"schedule": "final"}},
+        }
     ]
     records = run_process(forkserver_context, root, cfg)
     training = [row for row in records if "policy/raw_grad_norm" in row]
@@ -544,6 +550,7 @@ def test_cat_count_gross_rollout_budget(tmp_path, cat_count_policy, cat_count_se
         ("1", panel_rows),
         (str(stop), panel_rows),
     ]
+    assert [row["step"] for row in records if "eval/final_task_set/all/num_attempted" in row] == [stop]
 
 
 @pytest.mark.timeout(RUN_TIMEOUT_SECONDS)

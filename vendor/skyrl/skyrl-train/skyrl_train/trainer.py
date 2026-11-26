@@ -670,7 +670,7 @@ class RayPPOTrainer:
         """Run train-end callbacks, evaluation, and saves at the last completed optimizer step."""
         await self._drain_checkpoint_upload()
         self.global_step = completed_step
-        final_state = self._create_trainer_state(epoch=epoch)
+        final_state = replace(self._create_trainer_state(epoch=epoch), is_last_step=True)
         self._control.reset()
         self._control = await self.callback_handler.call_event_async(
             "on_train_end", final_state, self._control, trainer=self
