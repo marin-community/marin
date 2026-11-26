@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Daytona requests that fail in transit, and their retry."""
+"""Retry safe Daytona requests after temporary provider failures."""
 
 import logging
 from asyncio import sleep
@@ -12,13 +12,13 @@ from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
-# Gateway and availability statuses a Daytona API request may return transiently.
-TRANSIENT_DAYTONA_STATUS = frozenset({502, 503, 504})
+# Throttling, gateway and availability responses can recover with backoff.
+TRANSIENT_DAYTONA_STATUS = frozenset({429, 502, 503, 504})
 TRANSIENT_RETRIES = 3
 
 
 def is_transient_daytona_error(error: DaytonaError) -> bool:
-    """Whether a request failed in transit: a lost connection, or a gateway or availability status.
+    """Whether a request lost its connection, was throttled, or was temporarily unavailable.
 
     The provider may have run the request, so repeat only a request that is safe to run twice.
     """
@@ -26,7 +26,7 @@ def is_transient_daytona_error(error: DaytonaError) -> bool:
 
 
 async def retry_transient[T](request: Callable[[], Awaitable[T]]) -> T:
-    """Repeat a provider request that failed in transit. The request must be safe to run twice."""
+    """Repeat a temporary provider failure. The request must be safe to run twice."""
     backoff = ExponentialBackoff(initial=0.5, maximum=4, factor=2, jitter=0.5)
     for _ in range(TRANSIENT_RETRIES):
         try:

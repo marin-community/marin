@@ -36,6 +36,7 @@ from daytona import (
     DaytonaConnectionError,
     DaytonaError,
     DaytonaNotFoundError,
+    DaytonaRateLimitError,
     DaytonaTimeoutError,
     DaytonaValidationError,
     Image,
@@ -2026,21 +2027,28 @@ def test_snapshot_request_interchange_rejects_a_mismatched_name(tmp_path) -> Non
     [
         DaytonaError("Failed to get sandbox: 502 Bad Gateway", status_code=502),
         DaytonaConflictError("Failed to remove sandbox: Sandbox state change in progress", status_code=409),
+        DaytonaRateLimitError("Failed to get sandbox: ThrottlerException: Too Many Requests", status_code=429),
     ],
 )
-def test_sandbox_deletion_retries_a_transient_error(monkeypatch, transient) -> None:
+@pytest.mark.parametrize("operation", ["get", "delete"])
+def test_sandbox_deletion_retries_a_transient_error(monkeypatch, transient, operation) -> None:
     class FlakyGateway:
         def __init__(self):
             self.attempts = 0
             self.deleted = []
 
         async def get(self, name):
+            if operation == "get":
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise transient
             return SimpleNamespace(name=name)
 
         async def delete(self, sandbox):
-            self.attempts += 1
-            if self.attempts == 1:
-                raise transient
+            if operation == "delete":
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise transient
             self.deleted.append(sandbox.name)
 
     async def no_wait(delay):
@@ -2052,6 +2060,7 @@ def test_sandbox_deletion_retries_a_transient_error(monkeypatch, transient) -> N
     asyncio.run(_delete_named_sandbox(client, "fixture"))
 
     assert client.deleted == ["fixture"]
+    assert client.attempts == 2
 
 
 def test_sandbox_deletion_reports_a_conflict_that_outlasts_the_deadline(monkeypatch) -> None:
