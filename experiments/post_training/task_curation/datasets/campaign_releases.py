@@ -6,9 +6,9 @@
 Each entry pins an immutable Hugging Face revision in the RL Data Atlas.
 Rebuilt TaskCompendium cohorts use ``prebuilt.import_prebuilt`` to validate and
 admit their published tasks without repeating conversion. Their qualification
-evidence and oversight levels describe the checks behind admission.
-Native Harbor cohorts use ``prebuilt.import_harbor_prebuilt`` and require
-exact-package control receipts for admission.
+evidence and oversight levels describe the checks behind admission. The
+swesmith repair campaign's taskspec re-pin admits its canonical conversion
+release through ``import_taskcompendium_prebuilt``.
 
 Retired legacy pointers are tracked in retired-inventory-only.json. Their
 underlying artifacts and prior evidence remain archived.
@@ -25,9 +25,10 @@ from finestore.rl.curation import (
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
+from experiments.post_training.task_curation.datasets.native_releases import taskspec_lexical_evidence
 from experiments.post_training.task_curation.prebuilt import (
     PrebuiltCohort,
-    import_harbor_prebuilt,
     import_prebuilt,
     import_taskcompendium_prebuilt,
 )
@@ -1093,7 +1094,7 @@ def sources() -> list[RlDataSource]:
             ),
         ),
         RlDataSource(
-            pipeline=import_harbor_prebuilt,
+            pipeline=import_taskcompendium_prebuilt,
             config=swesmith_repaired,
             info=SourceInfo(
                 data_restriction=DataRestriction.OPEN,
@@ -1106,7 +1107,11 @@ def sources() -> list[RlDataSource]:
                 upstream_url=TASKTROVE_UPSTREAM_URL,
                 family="swe-repo",
                 tags=("agentic", "language:python", "campaign-release", "verified"),
-                task_format=TaskFormat.HARBOR,
+                task_format=TaskFormat.TASKSPEC,
+                lexical_contamination=taskspec_lexical_evidence(
+                    {"repo": swesmith_repaired.repo, "revision": swesmith_repaired.revision},
+                    lexical_measurements()["TaskTrove:swesmith-verifier-repaired-v5"],
+                ),
                 count=swesmith_repaired.expected_rows,
                 dataset=swesmith_repaired.dataset,
                 daytona_snapshot_count=0,

@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 from finestore.rl.curation import (
     DataRestriction,
+    DeconReceiptStatus,
     LexicalUse,
     OracleValidation,
     SourceOrigin,
@@ -34,7 +35,10 @@ from experiments.post_training.task_curation.declaration_audit import (
     selected_pins,
 )
 from experiments.post_training.task_curation.grading_binding import GradingCensusReceipt
-from experiments.post_training.task_curation.lexical_binding import bind_lexical_measurement
+from experiments.post_training.task_curation.lexical_binding import (
+    LexicalMeasurementReceipt,
+    bind_lexical_measurement,
+)
 from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
@@ -300,11 +304,49 @@ def test_ledger_entry_with_mismatched_conversion_identity_fails_closed():
 
 def test_ledger_sources_read_the_conversion_identity_from_the_entry(monkeypatch):
     """native_releases reads the conversion identity from the ledger entry instead of the
-    hard-coded 2026.11.12.1."""
+    hard-coded 2026.11.12.1; a taskspec entry declares the executable TaskSpec release."""
 
     monkeypatch.setattr(retirement, "RETIREMENTS_PATH", Path("fixture-ledger"))
     monkeypatch.setattr(native_releases, "read_registry_json", lambda path: {"entries": [ledger_entry()]})
+    monkeypatch.setattr(
+        native_releases,
+        "lexical_measurements",
+        lambda: {SOURCE_ID: LexicalMeasurementReceipt.model_validate(lexical_receipt())},
+    )
     declared = {source.info.id: source for source in ledger_sources()}
     source = declared[SOURCE_ID]
     assert source.version == CONVERSION_VERSION
     assert source.dataset.name == RELEASE_REPO
+    assert source.info.task_format is TaskFormat.TASKSPEC
+    assert source.pipeline is native_releases.import_taskcompendium_prebuilt
+    lexical = source.info.lexical_contamination
+    assert lexical is not None and lexical.receipt is not None
+    assert lexical.receipt.status is DeconReceiptStatus.CLEAN
+    assert (lexical.receipt.release.dataset_id, lexical.receipt.release.dataset_revision) == (
+        RELEASE_REPO,
+        RELEASE_REVISION,
+    )
+    assert lexical.admission_blocker(RELEASE_REPO, RELEASE_REVISION) is None
+
+
+def test_taskspec_entry_without_a_lexical_receipt_fails_closed(monkeypatch):
+    """A taskspec conversion entry whose lexical measurement was never registered refuses
+    the declaration instead of admitting an uncertified population."""
+    monkeypatch.setattr(retirement, "RETIREMENTS_PATH", Path("fixture-ledger"))
+    monkeypatch.setattr(native_releases, "read_registry_json", lambda path: {"entries": [ledger_entry()]})
+    monkeypatch.setattr(native_releases, "lexical_measurements", lambda: {})
+    with pytest.raises(ValueError, match="no registered lexical measurement receipt"):
+        ledger_sources()
+
+
+def test_taskspec_lexical_evidence_requires_a_clean_measurement():
+    """A flagged population can never carry the clean release receipt."""
+    receipt = LexicalMeasurementReceipt.model_validate(lexical_receipt())
+    flagged = receipt.measurement.model_copy(update={"contaminated_tasks": 1, "contaminated_fraction": 0.5})
+    flagged_receipt = LexicalMeasurementReceipt.model_validate(
+        {**receipt.model_dump(mode="json"), "measurement": flagged.model_dump(mode="json")}
+    )
+    with pytest.raises(ValueError, match="not clean"):
+        native_releases.taskspec_lexical_evidence(
+            {"repo": RELEASE_REPO, "revision": RELEASE_REVISION}, flagged_receipt
+        )
