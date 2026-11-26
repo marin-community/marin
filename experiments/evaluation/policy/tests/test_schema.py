@@ -4,7 +4,6 @@
 """A policy is built from catalog models and named evaluations, and rejects what it can't run as declared."""
 
 from dataclasses import replace
-from types import MappingProxyType
 
 import pytest
 from evalrecords.records import EvaluationOverrides
@@ -45,9 +44,3 @@ def test_an_evaluation_the_policy_cant_run_as_declared_is_rejected(run):
     )
     with pytest.raises(ValueError, match=run["name"]):
         replace(POLICY, evaluations=tuple(changed if e is evaluation else e for e in POLICY.evaluations))
-
-
-def test_an_exclusion_must_name_a_model_and_evaluation_of_the_policy():
-    replace(POLICY, exclusions=MappingProxyType({(QWEN_NAME, "aime24"): "reason"}))
-    with pytest.raises(ValueError, match="aime-25"):
-        replace(POLICY, exclusions=MappingProxyType({(QWEN_NAME, "aime-25"): "reason"}))

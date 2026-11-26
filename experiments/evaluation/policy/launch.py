@@ -3,9 +3,7 @@
 
 """Turn a policy's evaluations for one model into launcher specs: one server per model, several evaluations at once."""
 
-import hashlib
 import json
-import subprocess
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -19,7 +17,7 @@ from marin.evaluation.serving_config import (
     native_context_window,
     resolved_serve_config,
 )
-from rigging.provenance import git_output
+from rigging.provenance import Provenance, git_output
 
 from experiments.evaluation.curated import pinned_model, selection_dataset
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
@@ -155,16 +153,12 @@ def run_key(model: PolicyModel, platform: Platform) -> str:
     )
 
 
-def source_state(root: Path) -> str:
-    """The checkout a launch runs from, as a run-ID part: the commit, and a digest of any uncommitted changes."""
+def source_checkout(root: Path) -> str:
+    """The checkout a launch runs from, as a run-ID part: the commit, and for uncommitted changes the tree they
+    make, which identifies their tracked content."""
     commit = git_output(["rev-parse", "HEAD"], root)[:12]
-    if not git_output(["status", "--porcelain"], root):
-        return commit
-    digest = hashlib.sha256(subprocess.check_output(["git", "diff", "HEAD", "--binary"], cwd=root))
-    for name in git_output(["ls-files", "--others", "--exclude-standard"], root).splitlines():
-        digest.update(name.encode())
-        digest.update((root / name).read_bytes())
-    return f"{commit}-dirty{digest.hexdigest()[:8]}"
+    provenance = Provenance.from_git(root)
+    return f"{commit}-dirty{provenance.tree_hash}" if provenance.dirty else commit
 
 
 def launch_specs(

@@ -21,11 +21,12 @@ from taskcompendium.evaluation.selection import SELECTIONS_TABLE, Selection, Sel
 
 from experiments.evaluation.curated import selection_dataset
 from experiments.evaluation.policy import cli
-from experiments.evaluation.policy.launch import model_evaluations, source_state
+from experiments.evaluation.policy.launch import model_evaluations, source_checkout
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
     RunCheck,
     RunEvidence,
+    RunName,
     RunState,
     expected_runs,
     found_runs,
@@ -44,9 +45,9 @@ HEAD = "0123456789ab"
 OLD = "ba9876543210"
 
 
-def _runs(model, names, *, limit=None, state=HEAD, attempt=1, policy=POLICY) -> dict[str, ExpectedRun]:
+def _runs(model, names, *, limit=None, checkout=HEAD, attempt=1, policy=POLICY) -> dict[str, ExpectedRun]:
     plan = model_evaluations(policy, model, names)
-    suffixes = {evaluation.name: run_suffix(state, attempt) for evaluation in plan.evaluations}
+    suffixes = {evaluation.name: run_suffix(checkout, attempt) for evaluation in plan.evaluations}
     return {run.name: run for run in expected_runs(policy, plan, limit=limit, run_suffixes=suffixes)}
 
 
@@ -81,19 +82,19 @@ def _evidence(
 
 def test_a_run_id_names_its_inputs_commit_and_attempt(qwen, records):
     full, again, smoke = _runs(qwen, {"aime24"}), _runs(qwen, {"aime24"}), _runs(qwen, {"aime24"}, limit=20)
-    old, rerun = _runs(qwen, {"aime24"}, state=OLD), _runs(qwen, {"aime24"}, attempt=2)
+    old, rerun = _runs(qwen, {"aime24"}, checkout=OLD), _runs(qwen, {"aime24"}, attempt=2)
     assert full["aime24"].run_id == again["aime24"].run_id
     assert full["aime24"].base == old["aime24"].base == rerun["aime24"].base != smoke["aime24"].base
     assert len({run["aime24"].run_id for run in (full, old, rerun)}) == 3
-    assert split_run_id(rerun["aime24"].run_id) == (full["aime24"].base, HEAD, 2)
+    assert split_run_id(rerun["aime24"].run_id) == RunName(base=full["aime24"].base, checkout=HEAD, attempt=2)
 
 
 def test_runs_of_the_same_inputs_are_found_at_every_commit_and_attempt(qwen, records):
-    for state, attempt in ((OLD, 1), (HEAD, 1), (HEAD, 2)):
-        _write(_runs(qwen, {"aime24"}, state=state, attempt=attempt)["aime24"])
+    for checkout, attempt in ((OLD, 1), (HEAD, 1), (HEAD, 2)):
+        _write(_runs(qwen, {"aime24"}, checkout=checkout, attempt=attempt)["aime24"])
     _write(_runs(qwen, {"aime24"}, limit=20)["aime24"])
     found = found_runs(_runs(qwen, {"aime24"})["aime24"])
-    assert [(run.state, run.attempt) for run in found] == [(HEAD, 1), (HEAD, 2), (OLD, 1)]
+    assert [(run.checkout, run.attempt) for run in found] == [(HEAD, 1), (HEAD, 2), (OLD, 1)]
     assert all(run.step_succeeded for run in found)
 
 
@@ -120,7 +121,7 @@ def test_a_run_that_falls_short_has_problems(qwen, records, status, evidence, st
 
 
 def test_a_run_from_uncommitted_changes_never_complies(qwen, records):
-    run = _runs(qwen, {"aime24"}, state=f"{HEAD}-dirty0badf00d")["aime24"]
+    run = _runs(qwen, {"aime24"}, checkout=f"{HEAD}-dirty0badf00d")["aime24"]
     problems = run_problems(_write(run), _evidence(run), run, step_succeeded=True)
     assert problems == ("launched from a checkout with uncommitted changes",)
 
@@ -182,17 +183,17 @@ def test_uncommitted_changes_give_a_launch_its_own_state(tmp_path):
     subprocess.run(
         ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"], check=True
     )
-    clean = source_state(tmp_path)
+    clean = source_checkout(tmp_path)
     (tmp_path / "a.py").write_text("two\n")
-    edited = source_state(tmp_path)
+    edited = source_checkout(tmp_path)
     (tmp_path / "a.py").write_text("three\n")
-    assert len(clean) == 12 and edited.startswith(f"{clean}-dirty") and source_state(tmp_path) != edited
+    assert len(clean) == 12 and edited.startswith(f"{clean}-dirty") and source_checkout(tmp_path) != edited
 
 
-def _found(state: str, attempt: int, status: RunStatus | None) -> "cli.FoundRun":
+def _found(checkout: str, attempt: int, status: RunStatus | None) -> "cli.FoundRun":
     record = None if status is None else _FakeRecord(status)
     return cli.FoundRun(
-        run_id=f"base-{state}-a{attempt}", state=state, attempt=attempt, record=record, step_succeeded=True
+        run_id=f"base-{checkout}-a{attempt}", checkout=checkout, attempt=attempt, record=record, step_succeeded=True
     )
 
 

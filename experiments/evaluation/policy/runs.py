@@ -40,7 +40,7 @@ from experiments.evaluation.policy.schema import Policy
 
 _MAX_VALUE_CHARS = 60
 _SINGLE_TURN = frozenset({OperationKind.CHAT_GENERATION, OperationKind.TEXT_GENERATION})
-_SUFFIX = re.compile(r"(?P<state>[0-9a-f]{12}(?:-dirty[0-9a-f]{8})?)-a(?P<attempt>[1-9][0-9]*)")
+_SUFFIX = re.compile(r"(?P<checkout>[0-9a-f]{12}(?:-dirty[0-9a-f]{7,40})?)-a(?P<attempt>[1-9][0-9]*)")
 _RUN_ID = re.compile(rf"(?P<base>.+-[0-9a-f]{{32}})-{_SUFFIX.pattern}")
 CAPPED_WARNING = 0.10
 """Share of single-turn replies stopped by their output cap above which a run is flagged."""
@@ -48,9 +48,9 @@ SCORED_WARNING = 0.95
 """Share of a task's attempts scored below which the run is flagged."""
 
 
-def run_suffix(state: str, attempt: int) -> str:
+def run_suffix(checkout: str, attempt: int) -> str:
     """The run-ID part naming the checkout a run was launched from and its attempt there."""
-    return f"{state}-a{attempt}"
+    return f"{checkout}-a{attempt}"
 
 
 class RunState(StrEnum):
@@ -81,12 +81,22 @@ class ExpectedRun:
 
 
 @dataclass(frozen=True)
+class RunName:
+    """The parts of a policy run ID: its inputs digest, the checkout it was launched from, and its attempt there."""
+
+    base: str
+    checkout: str
+    """The commit, with the tree of uncommitted changes if any."""
+    attempt: int
+
+
+@dataclass(frozen=True)
 class FoundRun:
     """A run of an expected run's inputs, at some commit and attempt."""
 
     run_id: str
-    state: str
-    """The commit it was launched from, with a digest of uncommitted changes if any."""
+    checkout: str
+    """The commit it was launched from, with the tree of uncommitted changes if any."""
     attempt: int
     record: EvalRunRecord | None
     """None until the run finishes."""
@@ -94,7 +104,7 @@ class FoundRun:
 
     @property
     def dirty(self) -> bool:
-        return "-dirty" in self.state
+        return "-dirty" in self.checkout
 
 
 @dataclass(frozen=True)
@@ -154,13 +164,13 @@ def found_runs(expected: ExpectedRun) -> tuple[FoundRun, ...]:
         runs.append(
             FoundRun(
                 run_id=run_id,
-                state=match["state"],
+                checkout=match["checkout"],
                 attempt=int(match["attempt"]),
                 record=record,
                 step_succeeded=check_cache(prefix_join(expected.batch.records_prefix, run_id)),
             )
         )
-    return tuple(sorted(runs, key=lambda run: (run.state, run.attempt)))
+    return tuple(sorted(runs, key=lambda run: (run.checkout, run.attempt)))
 
 
 def differences(expected: object, actual: object, path: str) -> list[str]:
@@ -268,7 +278,7 @@ def run_problems(
     # The base also covers what no recorded field shows: the inference build, accelerator and agent concurrency.
     if (match := _SUFFIX.fullmatch(record.run_id.removeprefix(f"{expected.base}-"))) is None:
         problems.append(f"run_id: ran {record.run_id}, not a run of {expected.base}")
-    elif "-dirty" in match["state"]:
+    elif "-dirty" in match["checkout"]:
         problems.append("launched from a checkout with uncommitted changes")
     if record.version != batch.version:
         problems.append(f"version {record.version!r}, not {batch.version!r}")
@@ -318,7 +328,7 @@ def compliant_run(runs: Collection[FoundRun], expected: ExpectedRun) -> tuple[Fo
     newest: dict[str, FoundRun] = {}
     for run in runs:
         if run.record is not None and not run.dirty:
-            newest[run.state] = run
+            newest[run.checkout] = run
     for run in sorted(newest.values(), key=lambda run: run.record.created_at, reverse=True):
         check = check_found(run, expected)
         if check is not None and check.state is RunState.VALID:
@@ -355,8 +365,8 @@ def find_record(run_id: str) -> tuple[EvalRunRecord, str]:
     raise FileNotFoundError(f"no record for {run_id} under {POLICY_RECORDS_PREFIXES}")
 
 
-def split_run_id(run_id: str) -> tuple[str, str, int]:
-    """A policy run ID's base, the checkout state it was launched from, and its attempt there."""
+def split_run_id(run_id: str) -> RunName:
+    """The parts of a policy run ID."""
     if (match := _RUN_ID.fullmatch(run_id)) is None:
         raise ValueError(f"{run_id} is not a policy run ID")
-    return match["base"], match["state"], int(match["attempt"])
+    return RunName(base=match["base"], checkout=match["checkout"], attempt=int(match["attempt"]))

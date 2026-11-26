@@ -30,7 +30,7 @@ from experiments.evaluation.policy.launch import (
     evaluation_context,
     model_evaluations,
     policy_model,
-    source_state,
+    source_checkout,
 )
 from experiments.evaluation.policy.runs import (
     ExpectedRun,
@@ -223,7 +223,7 @@ class _Decision:
     """The run ID named with --rerun that this attempt runs again."""
 
 
-def _decide(runs: tuple[FoundRun, ...], expected: ExpectedRun, state: str, rerun: Collection[str]) -> _Decision:
+def _decide(runs: tuple[FoundRun, ...], expected: ExpectedRun, checkout: str, rerun: Collection[str]) -> _Decision:
     """Decide one evaluation of a launch.
 
     A run named in ``rerun`` gets the next attempt at this checkout if it finished and is invalid or flagged.
@@ -231,7 +231,7 @@ def _decide(runs: tuple[FoundRun, ...], expected: ExpectedRun, state: str, rerun
     doesn't comply waits for ``--rerun``, since running its attempt again would overwrite it; an unfinished or
     failed run resumes; else attempt 1 starts.
     """
-    here = [run for run in runs if run.state == state]
+    here = [run for run in runs if run.checkout == checkout]
     if named := [run for run in runs if run.run_id in rerun]:
         (target,) = named
         check = check_found(target, expected)
@@ -257,29 +257,30 @@ def _launch_plan(
     rerun: Collection[str],
     *,
     limit: int | None,
-    state: str,
+    checkout: str,
     **placement,
 ) -> _ModelPlan:
     """Resolve one model's launch: its evaluations, which of them already have a compliant run, and the attempt
     each of the rest runs as. ``placement`` is the priority band and cluster ``expected_runs`` takes."""
     try:
         plan = model_evaluations(policy, model, evaluations)
-        first = {evaluation.name: run_suffix(state, 1) for evaluation in plan.evaluations}
-        decisions = {
-            expected.name: _decide(found_runs(expected), expected, state, rerun)
-            for expected in expected_runs(policy, plan, limit=limit, run_suffixes=first, **placement)
-        }
+        first = {evaluation.name: run_suffix(checkout, 1) for evaluation in plan.evaluations}
+        initial = expected_runs(policy, plan, limit=limit, run_suffixes=first, **placement)
+        decisions = {expected.name: _decide(found_runs(expected), expected, checkout, rerun) for expected in initial}
         suffixes = {
-            name: run_suffix(state, decision.attempt)
+            name: run_suffix(checkout, decision.attempt)
             for name, decision in decisions.items()
             if decision.attempt is not None
         }
         remaining = tuple(evaluation for evaluation in plan.evaluations if evaluation.name in suffixes)
-        runs = (
-            expected_runs(policy, replace(plan, evaluations=remaining), limit=limit, run_suffixes=suffixes, **placement)
-            if remaining
-            else ()
-        )
+        if suffixes == first:
+            runs = initial
+        elif remaining:
+            runs = expected_runs(
+                policy, replace(plan, evaluations=remaining), limit=limit, run_suffixes=suffixes, **placement
+            )
+        else:
+            runs = ()
     except ValueError as error:
         raise click.ClickException(f"{model.name}: {error}") from error
     return _ModelPlan(
@@ -292,9 +293,9 @@ def _launch_plan(
     )
 
 
-def _print_launch(policy: Policy, plan: _ModelPlan, state: str) -> None:
+def _print_launch(policy: Policy, plan: _ModelPlan, checkout: str) -> None:
     model = plan.model.model
-    click.echo(f"policy {policy.version} @ {state}  model {model.name}")
+    click.echo(f"policy {policy.version} @ {checkout}  model {model.name}")
     click.echo(f"  {model.location}@{model.revision}  served at {plan.model.window}")
     for name, reason in sorted(plan.excluded.items()):
         click.echo(f"  excluded {name}: {reason}")
@@ -411,7 +412,7 @@ def launch(
     targets = _targets(policy, model_names, all_models, model_config)
     if targets is None:
         raise click.UsageError("name --model, --all-models or --model-config")
-    state = source_state(find_project_root())
+    checkout = source_checkout(find_project_root())
     plans = [
         _launch_plan(
             policy,
@@ -419,7 +420,7 @@ def launch(
             evaluations,
             frozenset(rerun),
             limit=limit,
-            state=state,
+            checkout=checkout,
             priority_band=priority_band_value(priority),
             federated_cluster=federated_cluster,
         )
@@ -433,7 +434,7 @@ def launch(
     for plan in plans:
         for batch in plan.batches:
             require_coreweave_credentials(batch)
-        _print_launch(policy, plan, state)
+        _print_launch(policy, plan, checkout)
     if dry_run or not batches:
         return
     with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
@@ -442,18 +443,18 @@ def launch(
             click.echo(f"submitted {group.group_id}  job {group.job.job_id}  records {group.records_prefix}")
 
 
-def _status(runs: tuple[FoundRun, ...], expected: ExpectedRun, state: str) -> str:
+def _status(runs: tuple[FoundRun, ...], expected: ExpectedRun, checkout: str) -> str:
     """The compliant run of an evaluation, else its newest run's standing, else ``not run``."""
     if (hit := compliant_run(runs, expected)) is not None:
         run, check = hit
-        where = "this commit" if run.state == state else f"commit {run.state[:7]}"
+        where = "this commit" if run.checkout == checkout else f"commit {run.checkout[:7]}"
         return f"{_run_summary(check)} ({where})"
     if not runs:
         return "not run"
     newest = max(runs, key=lambda run: (run.record.created_at if run.record else "~", run.attempt))
     check = check_found(newest, expected)
     if check is None:
-        return f"running @{newest.state[:7]}"
+        return f"running @{newest.checkout[:7]}"
     return _run_summary(check)
 
 
@@ -470,11 +471,11 @@ def status(version: str, model_names: tuple[str, ...], all_models: bool, model_c
     configure_coreweave_s3()
     targets = _targets(policy, model_names, all_models, model_config) or _targets(policy, (), True, None)
     assert targets is not None
-    state = source_state(find_project_root())
+    checkout = source_checkout(find_project_root())
     for model in targets:
         try:
             plan = model_evaluations(policy, model)
-            suffixes = {evaluation.name: run_suffix(state, 1) for evaluation in plan.evaluations}
+            suffixes = {evaluation.name: run_suffix(checkout, 1) for evaluation in plan.evaluations}
             full = expected_runs(policy, plan, limit=None, run_suffixes=suffixes)
             smoke = {run.name: run for run in expected_runs(policy, plan, limit=limit, run_suffixes=suffixes)}
         except ValueError as error:
@@ -482,8 +483,8 @@ def status(version: str, model_names: tuple[str, ...], all_models: bool, model_c
         rows = tuple(
             (
                 run.name,
-                _status(found_runs(run), run, state),
-                _status(found_runs(smoke[run.name]), smoke[run.name], state),
+                _status(found_runs(run), run, checkout),
+                _status(found_runs(smoke[run.name]), smoke[run.name], checkout),
             )
             for run in full
         )
@@ -496,9 +497,9 @@ def status(version: str, model_names: tuple[str, ...], all_models: bool, model_c
 def _verified(policy: Policy, record: EvalRunRecord, records_prefix: str) -> RunCheck:
     """Check a record against the run the policy expects, built by this checkout, which must be the run's own."""
     root = find_project_root()
-    _base, state, attempt = split_run_id(record.run_id)
+    name = split_run_id(record.run_id)
     head = git_output(["rev-parse", "HEAD"], root)
-    if head != record.provenance.git_sha or state != head[:12] or git_output(["status", "--porcelain"], root):
+    if head != record.provenance.git_sha or name.checkout != head[:12] or git_output(["status", "--porcelain"], root):
         raise ValueError(f"check it from a clean checkout of its commit: git checkout {record.provenance.git_sha}")
     assert record.evaluation.curated is not None
     plan = model_evaluations(policy, record_model(policy, record), {record.evaluation.name})
@@ -508,7 +509,7 @@ def _verified(policy: Policy, record: EvalRunRecord, records_prefix: str) -> Run
         policy,
         plan,
         limit=record.evaluation.curated.settings.source_limit,
-        run_suffixes={record.evaluation.name: run_suffix(state, attempt)},
+        run_suffixes={record.evaluation.name: run_suffix(name.checkout, name.attempt)},
     )
     return check_run(record, expected, step_succeeded=check_cache(prefix_join(records_prefix, record.run_id)))
 
