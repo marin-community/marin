@@ -42,3 +42,15 @@ def runtime_profile_for_strategy(
 def task_setup_command(profile: RuntimeProfile) -> str:
     """Return the Iris setup invocation for the selected frozen profile."""
     return shlex.join(("bash", f"{MARINSKYRL_TASK_ROOT}/cloud/iris/setup_task_runtime.sh", profile.value))
+
+
+def local_disk_setup_script(disk_root: str) -> str:
+    """Return shell setup for ext4 tools and a new disk root; the pool validates existing roots."""
+    return f"""set -euo pipefail
+[ "$(id -u)" -eq 0 ] || {{ echo 'LOCAL disk quotas require a privileged root worker' >&2; exit 1; }}
+if ! command -v mkfs.ext4 >/dev/null; then
+  apt-get update
+  apt-get install -y --no-install-recommends e2fsprogs
+fi
+mkdir -p -m 0700 -- {shlex.quote(disk_root)}
+"""

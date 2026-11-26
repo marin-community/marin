@@ -7,7 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
+from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.sandbox import SandboxUnavailable
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 
