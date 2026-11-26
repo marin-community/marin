@@ -6,6 +6,7 @@
 import json
 import sys
 import uuid
+from ctypes import POINTER, cast
 from types import SimpleNamespace
 
 import pynvml
@@ -19,6 +20,7 @@ from cloud.iris.role_topology import (
     FabricSample,
     RoleTopology,
     node_physical_labels,
+    probe_fabric_info,
 )
 
 CLUSTER_UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
@@ -102,6 +104,24 @@ def test_invalid_physical_placement_is_rejected(audit, tmp_path, label, value):
 def test_unhealthy_node_fabric_is_rejected(overrides):
     with pytest.raises(ValueError):
         node_physical_labels(rank=0, gpus_per_node=4, host="host-0", fabric_info=fabric_info(**overrides))
+
+
+def test_fabric_probe_reads_versioned_nvml_output(monkeypatch):
+    def write_fabric_info(handle, output):
+        info = cast(output, POINTER(pynvml.c_nvmlGpuFabricInfoV_t)).contents
+        assert info.version in (pynvml.nvmlGpuFabricInfo_v2, pynvml.nvmlGpuFabricInfo_v3)
+        info.clusterUuid[:] = CLUSTER_UUID.bytes
+        info.cliqueId = 1
+        info.state = pynvml.NVML_GPU_FABRIC_STATE_COMPLETED
+        info.status = pynvml.NVML_SUCCESS
+
+    monkeypatch.setattr(pynvml, "nvmlInit", lambda: None)
+    monkeypatch.setattr(pynvml, "nvmlShutdown", lambda: None)
+    monkeypatch.setattr(pynvml, "nvmlDeviceGetCount", lambda: 1)
+    monkeypatch.setattr(pynvml, "nvmlDeviceGetHandleByIndex", lambda index: index)
+    monkeypatch.setattr(pynvml, "nvmlDeviceGetGpuFabricInfoV", write_fabric_info)
+
+    assert probe_fabric_info() == fabric_info()[:1]
 
 
 def test_wrong_gpu_count_is_rejected():

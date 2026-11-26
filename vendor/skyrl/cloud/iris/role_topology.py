@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import Mapping, Sequence
+from ctypes import byref
 from dataclasses import dataclass
 from typing import Any
 
@@ -92,7 +93,7 @@ def probe_fabric_info() -> tuple[FabricSample, ...]:
         for index in range(pynvml.nvmlDeviceGetCount()):
             handle = pynvml.nvmlDeviceGetHandleByIndex(index)
             info = pynvml.c_nvmlGpuFabricInfoV_t()
-            pynvml.nvmlDeviceGetGpuFabricInfoV(handle, info)
+            pynvml.nvmlDeviceGetGpuFabricInfoV(handle, byref(info))
             samples.append(
                 FabricSample(
                     cluster_uuid=uuid.UUID(bytes=bytes(info.clusterUuid)),
