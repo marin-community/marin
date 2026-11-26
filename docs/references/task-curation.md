@@ -275,6 +275,10 @@ retired; missing reference evidence does not establish saturation.
 
 ### Rebuild a Snowball training selection
 
+Ungated Snowball presets and Mochi use `snowball-100k@2026.11.25.1`
+and `eval-lite@2026.11.25.1`. These manifests use catalog source IDs for training
+and evaluation subsets. The selection summaries record the parent versions.
+
 `recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
 admitted training sources, with a quota for each source. It excludes the
 development panel (`heldout`) and EvalLite (`exclusions`) by task ID, full
@@ -1050,4 +1054,3 @@ grader as unsupported on Daytona, independently of the task machine's image.
 A mixed deployment may run the agent on Daytona and the grader locally, but
 that does not qualify both machine slots for Daytona. CalibForge declares an
 image for its grader.
-

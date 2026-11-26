@@ -109,7 +109,7 @@ REUSED_FROM_RUN = "reused_response_from_run"
 # Run descriptor key listing, for each run whose responses this root reused, its root, run identity and driver revision.
 RESPONSE_SOURCES = "response_sources"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.23.1"
+EVALUATION_EXECUTION_REVISION = "2026.11.25.1"
 
 
 # Time for a judge-graded attempt's grading beyond the judge's own transport budget.

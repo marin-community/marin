@@ -1142,6 +1142,45 @@ async def test_json_answer_grades_typed_evidence_and_rejects_duplicate_keys(answ
     assert "12" not in json.dumps(model.requests[0].messages)
 
 
+async def test_text_block_assistant_reply_keeps_valid_score():
+    model = ReplayModel([{"role": "assistant", "content": [{"type": "output_text", "text": "12"}]}])
+
+    result = await engine(model).run_task(rollout_spec(arithmetic_task()))
+
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_malformed_harness_prompt_precedes_malformed_model_reply():
+    async def agent(_context, complete):
+        await complete(Prompt(({"role": "user", "content": 7},), {}))
+
+    malformed = {
+        "role": "assistant",
+        "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": '{"cmd": "'}}],
+    }
+    model = ReplayModel([malformed])
+    runner = engine(model, harnesses={"agent": AgentHarness(agent)})
+
+    with pytest.raises(GradedRolloutInterrupted) as failure:
+        await runner.run_task(rollout_spec(arithmetic_task(), harness="agent"))
+
+    assert failure.value.operation is RolloutOperation.GRADE
+
+
+async def test_duplicate_tool_call_ids_in_one_model_turn_score_zero():
+    async def agent(_context, complete):
+        await complete(Prompt(({"role": "user", "content": "Solve the task."},), {}))
+
+    call = {"id": "reused", "type": "function", "function": {"name": "bash", "arguments": "{}"}}
+    model = ReplayModel([{"role": "assistant", "content": "", "tool_calls": [call, call]}])
+
+    result = await engine(model, harnesses={"agent": AgentHarness(agent)}).run_task(
+        rollout_spec(arithmetic_task(), harness="agent")
+    )
+
+    assert (result.grade.status, result.grade.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
 @pytest.mark.parametrize("provider", ["machine", "harness"])
 async def test_unknown_provider_fails_before_startup(provider):
     factory = RecordingShellSimFactory()

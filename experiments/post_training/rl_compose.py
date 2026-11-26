@@ -79,6 +79,8 @@ from experiments.post_training.task_curation.swesmith_training import SWESMITH_D
 
 REPO_ROOT = find_project_root(Path(__file__))
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
+# Version of the stored run artifact. Preset versions are composed configuration hashes.
+RUN_ARTIFACT_VERSION = "2026.11.25"
 
 
 def override_document(settings: tuple[str, ...]) -> dict:
@@ -193,14 +195,12 @@ def _write_sample(selection: str, filename: str, count: int, seed: int, output: 
         (destination / SUMMARY_FILENAME).write_text(json.dumps({"selection_strata": definition.model_dump(mode="json")}))
 
 
-def sampled_tasks_step(
-    selection: ArtifactStep, filename: str, count: int, seed: int, *, revision: str, namespace: str
-) -> ArtifactStep:
+def sampled_tasks_step(selection: ArtifactStep, filename: str, count: int, seed: int, *, namespace: str) -> ArtifactStep:
     identity = fingerprint_hash(json.dumps((selection.name, selection.version, filename, count, seed)))
     return apply(
         f"{namespace}/sample-{identity}",
         _write_sample,
-        version=revision,
+        version=selection.version,
         selection=selection,
         filename=filename,
         count=count,
@@ -598,7 +598,6 @@ def run_spec(
                 evaluation.file,
                 evaluation.sample,
                 preset.seed,
-                revision=preset.revision,
                 namespace=preset.sample_namespace,
             )
         sources = (ArtifactDataSource(tasks_for_evaluation, relative_path=f"{evaluation.file}.parquet"),)
@@ -645,7 +644,7 @@ def run_spec(
     plan = workload.plan
     return SkyRLSpec(
         name=name,
-        version=preset.revision,
+        version=RUN_ARTIFACT_VERSION,
         config_yaml=yaml.safe_dump(SkyRLRecipe.from_document(config.to_skyrl()).to_skyrl(), sort_keys=False),
         model=model,
         model_name=model_name,

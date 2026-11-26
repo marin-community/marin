@@ -587,7 +587,7 @@ class RayPPOTrainer:
             await self._drain_checkpoint_upload()
         finally:
             try:
-                await self.context.close()
+                await self._guarded_async(self.context.close(), timeout=30, label="Rollout context shutdown")
             finally:
                 await self._teardown()
                 self._shutdown_complete = True

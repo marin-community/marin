@@ -6,10 +6,19 @@ aggregates, and head-to-head difference intervals."""
 
 
 import pytest
+from evaldash import app as evaldash_app
 from evaldash.app import MemoryRecordStore
-from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
+from evaldash.metrics import (
+    ALL_COHORTS,
+    build_comparison,
+    build_meta,
+    build_model_detail,
+    build_panel,
+    eval_suites,
+    panel_request,
+)
 from evalrecords.eval_policy import EVALCHEMY_COMMIT
-from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS
+from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_24_VERSION
 from evalrecords.eval_stats import Completeness, MissingPolicy
 from evalrecords.model_identity import model_config_digest
 from evalrecords.records import (
@@ -37,6 +46,7 @@ from evalrecords.records import (
     TaskCoverage,
     TaskMachineSettings,
 )
+from starlette.testclient import TestClient
 
 ITEMS = 1000
 
@@ -400,7 +410,7 @@ def test_model_history_keeps_legacy_alias_compatible_with_new_protocol():
         metric_kind=MetricKind.BINARY,
     )
 
-    detail = build_model_detail([legacy, declared], "m")
+    detail = build_model_detail([legacy, declared], "m", panel_request())
 
     assert detail is not None
     assert [point["run_id"] for point in detail["history"]["drop"]] == [legacy.run_id, declared.run_id]
@@ -798,7 +808,7 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
 
 def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
     def policy_run(thinking: bool, config_thinking: bool, created_at: str, name: str = "same-name") -> EvalRunRecord:
-        record = _record(name, "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
+        record = _record(name, "math500", SEPTEMBER_24_VERSION, created_at, 0.5)
         model_config = _model_config(
             name=name, location="org/model", chat_template_kwargs={"enable_thinking": config_thinking}
         )
@@ -808,7 +818,7 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
                 "provenance": record.provenance.model_copy(update={"eval_runtime": EVALCHEMY_COMMIT}),
                 "evaluation": record.evaluation.model_copy(
                     update={
-                        "source_digest": POLICY_SOURCE_DIGESTS["eval-policy-2026-09-24-verified"]["math500"],
+                        "source_digest": POLICY_SOURCE_DIGESTS[SEPTEMBER_24_VERSION]["math500"],
                         "tasks": (EvalTaskRef(name="MATH500", num_fewshot=0, generation=True),),
                         "evalchemy": EvalchemyRef(
                             apply_chat_template=True,
@@ -838,17 +848,64 @@ def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
         }
     )
     records = [first, second, invalid, other_invalid, previous_cohort, smoke]
-    request = panel_request(cohort="eval-policy-2026-09-24-verified", model_query="same-name")
+    request = panel_request(cohort=SEPTEMBER_24_VERSION, model_query="same-name")
     panel = build_panel(records, request)
 
     assert len(panel["rows"]) == 1
     assert panel["rows"][0]["model"] == "same-name"
     assert panel["rows"][0]["cells"]["math500"]["run_id"] == second.run_id
     assert [(item["run_id"], item["benchmark"]) for item in panel["policy_rejections"]] == [(invalid.run_id, "math500")]
-    detail = build_model_detail([first, second, invalid], "same-name")
+    detail = build_model_detail([first, second, invalid], "same-name", request)
     assert detail is not None
     rejected_run = next(run for run in detail["runs"] if run["run_id"] == invalid.run_id)
     assert rejected_run["headline"] is None
+
+
+def test_policy_violations_only_exclude_runs_in_a_named_cohort():
+    policy = SEPTEMBER_24_VERSION
+    prior = [_record(model, "math500", "v1", "2026-09-24T00:00:00+00:00", 0.4) for model in ("a", "b")]
+    violating = [_record(model, "math500", policy, "2026-09-25T00:00:00+00:00", 0.6) for model in ("a", "b")]
+    records = prior + violating
+    newest = {record.model.name: record.run_id for record in violating}
+
+    panel = build_panel(records, panel_request())
+    comparison = build_comparison(records, panel_request(), ("a", "b"))
+
+    assert {row["model"]: row["cells"]["math500"]["run_id"] for row in panel["rows"]} == newest
+    assert panel["policy_rejections"] == []
+    assert {model: cell["run_id"] for model, cell in comparison["rows"][0]["cells"].items()} == newest
+    assert comparison["policy_rejections"] == []
+    assert "math500" in build_meta(violating)["evals"]
+
+    named_panel = build_panel(records, panel_request(cohort=policy))
+    named_comparison = build_comparison(records, panel_request(cohort=policy), ("a", "b"))
+
+    assert named_panel["rows"] == []
+    assert {item["run_id"] for item in named_panel["policy_rejections"]} == set(newest.values())
+    assert named_comparison["rows"] == []
+    assert {item["run_id"] for item in named_comparison["policy_rejections"]} == set(newest.values())
+
+    store = MemoryRecordStore()
+    store.refresh(records)
+    config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
+    api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
+    with TestClient(api.app) as client:
+        panel_rows = client.get("/panel", params={"cohort": ALL_COHORTS}).json()["rows"]
+        panel_cell = next(row for row in panel_rows if row["model"] == "a")["cells"]["math500"]
+        detail = client.get("/models/a", params={"cohort": ALL_COHORTS}).json()
+        history = client.get("/history", params={"model": "a", "task": "math500", "cohort": ALL_COHORTS}).json()
+
+        assert panel_cell["run_id"] == newest["a"]
+        assert next(run for run in detail["runs"] if run["run_id"] == newest["a"])["headline"]["value"] == 0.6
+        assert detail["history"]["math500"][-1]["run_id"] == newest["a"]
+        assert history["points"][-1]["run_id"] == newest["a"]
+
+        named_detail = client.get("/models/a", params={"cohort": policy}).json()
+        named_history = client.get("/history", params={"model": "a", "task": "math500", "cohort": policy}).json()
+        rejected = next(run for run in named_detail["runs"] if run["run_id"] == newest["a"])
+        assert rejected["headline"] is None
+        assert rejected["policy_violations"]
+        assert newest["a"] not in {point["run_id"] for point in named_history["points"]}
 
 
 def test_panel_groups_tau_context_override_with_other_evals_despite_archived_config_alias():
@@ -985,7 +1042,7 @@ def test_comparison_keeps_protocol_variants_and_matches_historical_shots():
     assert panel["families"] == [{"family": "gsm8k", "variants": [selected], "default": selected}]
     comparison = build_comparison(records, request, ("old",))
     assert comparison["rows"][0]["benchmark"] == selected
-    detail = build_model_detail(records, "old")
+    detail = build_model_detail(records, "old", panel_request())
     assert detail is not None
     assert set(detail["history"]) == set(rows)
 
