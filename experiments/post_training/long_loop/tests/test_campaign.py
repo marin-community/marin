@@ -143,20 +143,21 @@ def test_campaign_preserves_131_controls_and_disables_learning_clock():
     assert campaign.rl.stopping is RlStopping.MAX_STEPS
 
 
-def test_unpublished_source_does_not_fall_back_to_raw_converter(tmp_path):
-    candidates = b"mix_id,k,sources\nfixture,1,tests:raw\n"
-    (tmp_path / "mix_candidates_v2.csv").write_bytes(candidates)
+@pytest.mark.parametrize("generation,candidate_id", [("v2", "fixture"), ("v3", "v3-fixture")])
+def test_unpublished_source_does_not_fall_back_to_raw_converter(tmp_path, generation, candidate_id):
+    candidates = f"mix_id,k,sources\n{candidate_id},1,tests:raw\n".encode()
+    (tmp_path / f"mix_candidates_{generation}.csv").write_bytes(candidates)
     (tmp_path / "source_pins.json").write_text(
         json.dumps(
             {
                 "catalog_load": {"load_id": "54405be9b4db4c2d9828549469abe759"},
-                "candidate_sha256": {"v2": hashlib.sha256(candidates).hexdigest()},
+                "candidate_sha256": {generation: hashlib.sha256(candidates).hexdigest()},
                 "sources": {"tests:raw": {"status": "Pending", "intended_use": "train", "files": ["raw.parquet"]}},
             }
         )
     )
     with pytest.raises(ValueError, match=r"Served R40 catalog cannot admit.*tests:raw"):
-        load_mix("v2-fixture", tmp_path)
+        load_mix(f"{generation}-fixture", tmp_path)
 
 
 def test_authorized_campaign_divergence_keeps_exact_retained_pins():

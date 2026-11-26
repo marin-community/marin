@@ -86,7 +86,9 @@ def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
     if digest != catalog["candidate_sha256"][generation]:
         raise ValueError("Candidate CSV changed; publish a fresh catalog binding first")
     with candidates.open(newline="") as stream:
-        matches = [row for row in csv.DictReader(stream) if row["mix_id"] == identifier]
+        matches = [
+            row for row in csv.DictReader(stream) if row["mix_id"] == (identifier if generation == "v2" else mix_id)
+        ]
     if len(matches) != 1:
         raise ValueError(f"Expected one candidate for {mix_id}, found {len(matches)}")
     row = matches[0]
