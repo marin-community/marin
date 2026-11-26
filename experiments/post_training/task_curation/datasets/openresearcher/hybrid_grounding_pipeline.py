@@ -214,7 +214,7 @@ async def hybrid_grounded_rows(
                 process.stdin.write(request)
                 await process.stdin.drain()
                 result = await asyncio.wait_for(retrieval_response(process.stdout), timeout=retrieval_timeout)
-            except (asyncio.TimeoutError, TimeoutError) as error:
+            except TimeoutError:
                 # A stalled server blocks every concurrent question; restart once
                 # and replay the request rather than hanging the artifact.
                 logger.warning("Retrieval server stalled on %s; restarting", canonical_sha256(queries))
@@ -234,7 +234,6 @@ async def hybrid_grounded_rows(
     try:
         return await screen_population(rows, connection, tokenizer, retrieve, output, config.concurrency)
     finally:
-        server_log.close()
         (output / "search-server.log").write_text((work / "search-server.log").read_text(errors="replace")[-20000:])
         process.stdin.close()
         try:
