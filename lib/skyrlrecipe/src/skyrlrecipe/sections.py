@@ -575,6 +575,9 @@ class Trainer(Section):
     rollout_token_budget: PositiveInt | None = field(None)
     """A synchronous run stops and evaluates the primary panel after the first full optimizer update to reach this
     many training response tokens across all groups."""
+    rollout_token_eval_milestones: tuple[PositiveInt, ...] = field([])
+    """Evaluate the primary panel on the first completed update to cross each cumulative training response token
+    milestone below the terminal budget."""
     reset_distillation_token_count_on_resume: bool = field(False)
     reset_global_step_on_resume: bool = field(False)
     callbacks: tuple[Callback, ...] | None = field(None)

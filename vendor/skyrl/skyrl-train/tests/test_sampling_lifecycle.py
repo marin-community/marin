@@ -42,13 +42,14 @@ class CheckpointPolicy:
 def budget_trainer(tmp_path, monkeypatch):
     monkeypatch.setattr("skyrl_train.trainer.ray.get", lambda refs: refs)
 
-    def make(*, budget=100, mode=ResumeMode.LATEST, resume_path=None, reset_step=False, eval_interval=-1):
+    def make(*, budget=100, milestones=(), mode=ResumeMode.LATEST, resume_path=None, reset_step=False, eval_interval=-1):
         cfg = get_default_config()
         cfg.trainer.ckpt_path = str(tmp_path)
         cfg.trainer.ckpt_interval = 1
         cfg.trainer.max_ckpts_to_keep = -1
         cfg.trainer.rollout_buffer.max_staleness_steps = 0
         cfg.trainer.rollout_token_budget = budget
+        cfg.trainer.rollout_token_eval_milestones = list(milestones)
         cfg.trainer.eval_interval = eval_interval
         cfg.trainer.offload_optimizer_during_rollouts = False
         cfg.trainer.resume_mode = mode.value
@@ -129,6 +130,31 @@ async def test_budget_retry_counts_each_checkpointed_update_and_runs_terminal_ev
     retry.context.start.assert_not_called()
     retry._evaluate_and_log.assert_awaited_once()
     assert retry._evaluate_and_log.await_args.args[0].global_step == 2
+
+
+@pytest.mark.asyncio
+async def test_budget_recovers_an_interrupted_milestone_evaluation(budget_trainer):
+    first = budget_trainer(milestones=(40, 50))
+    first.global_step = 1
+    first.all_metrics[GROSS_ROLLOUT_TOKENS_METRIC] = 65
+    first._evaluate_and_log.side_effect = OSError("evaluation interrupted")
+    with pytest.raises(OSError, match="evaluation interrupted"):
+        await first._run_step_end_callbacks(first._create_trainer_state(epoch=0))
+    # Both milestones crossed in one step share a single snapshot.
+    first._evaluate_and_log.assert_awaited_once()
+    await first._drain_checkpoint_upload()
+
+    async def evaluate_with_timer(_state, timer, **_kwargs):
+        with timer:
+            pass
+
+    retry = budget_trainer(milestones=(40, 50))
+    retry._evaluate_and_log.side_effect = evaluate_with_timer
+    retry.context.start.side_effect = RuntimeError("reached new rollout work")
+    with pytest.raises(RuntimeError, match="reached new rollout work"):
+        await retry._train_loop()
+    retry._evaluate_and_log.assert_awaited_once()
+    assert retry._evaluate_and_log.await_args.args[0].global_step == 1
 
 
 @pytest.mark.asyncio

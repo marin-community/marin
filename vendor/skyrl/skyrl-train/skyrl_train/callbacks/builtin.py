@@ -197,18 +197,27 @@ class DistillationTokenBudgetCallback(TrainerCallback):
 
 
 class RolloutTokenBudgetCallback(TrainerCallback):
-    """Stop synchronous training at the first completed update that reaches the gross spend."""
+    """Schedule evaluations and stop synchronous training by gross rollout spend."""
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, budget: int):
+    def __init__(self, budget: int, eval_milestones: tuple[int, ...] = ()):
         self.budget = budget
+        self.eval_milestones = eval_milestones
+
+    def _crossed_milestone(self, previous: int, total: int) -> bool:
+        return any(previous < milestone <= total for milestone in self.eval_milestones)
 
     def on_train_begin(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
         if state.global_step > 0:
             control.should_evaluate = False
-        if trainer.rollout_gross_response_tokens_total >= self.budget:
+        total = trainer.rollout_gross_response_tokens_total
+        if total >= self.budget:
             control.should_training_stop = True
+        elif state.global_step > 0 and self.eval_milestones:
+            # The checkpoint can be saved before this update's evaluation.
+            previous = total - trainer.rollout_gross_response_tokens_last_update
+            control.should_evaluate = self._crossed_milestone(previous, total)
         return control
 
     def on_step_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
@@ -217,6 +226,7 @@ class RolloutTokenBudgetCallback(TrainerCallback):
         if tokens < 0 or tokens != gross:
             raise ValueError(f"{GROSS_ROLLOUT_TOKENS_METRIC} must be a non-negative integer, got {gross!r}")
         trainer.rollout_gross_response_tokens_total += tokens
+        trainer.rollout_gross_response_tokens_last_update = tokens
         total = trainer.rollout_gross_response_tokens_total
         trainer.all_metrics[CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC] = total
         if total >= self.budget:
@@ -226,6 +236,8 @@ class RolloutTokenBudgetCallback(TrainerCallback):
             control.should_training_stop = True
             # Publish the stopping update's metrics before the terminal evaluation can fail.
             control.should_evaluate = False
+        elif self._crossed_milestone(total - tokens, total):
+            control.should_evaluate = True
         return control
 
     def on_train_end(self, state: TrainerState, control: TrainerControl, *, trainer, **kwargs) -> TrainerControl:
@@ -1027,7 +1039,7 @@ class InferenceStatsCallback(TrainerCallback):
 def _add_runtime_callbacks(cfg: DictConfig, callbacks: List[TrainerCallback]) -> None:
     budget = cfg.trainer.get("rollout_token_budget")
     if budget is not None:
-        callbacks.append(RolloutTokenBudgetCallback(budget))
+        callbacks.append(RolloutTokenBudgetCallback(budget, tuple(cfg.trainer.get("rollout_token_eval_milestones", ()))))
     interval = getattr(cfg.generator, "inference_stats_interval", 1)
     if (
         cfg.generator.backend == "vllm"

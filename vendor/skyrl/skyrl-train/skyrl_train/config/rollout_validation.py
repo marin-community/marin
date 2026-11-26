@@ -94,6 +94,13 @@ def validate_rollout_launch(
     if operation is EntrypointOperation.GENERATE and compile_distillation_plan_from_config(cfg) is not None:
         raise ValueError("teacher-scored distillation is training-only and cannot be configured for generation")
     budget = cfg.trainer.get("rollout_token_budget")
+    milestones = tuple(cfg.trainer.get("rollout_token_eval_milestones", ()))
+    if milestones and (
+        type(budget) is not int
+        or any(type(value) is not int for value in milestones)
+        or not all(left < right for left, right in zip((0, *milestones), (*milestones, budget), strict=True))
+    ):
+        raise ValueError("trainer.rollout_token_eval_milestones must increase strictly between zero and the budget")
     if budget is not None:
         if type(budget) is not int or budget <= 0:
             raise ValueError("trainer.rollout_token_budget must be a positive integer")

@@ -177,6 +177,7 @@ TYPES = MappingProxyType(
         "trainer.algorithm.group_admission.stall_timeout": "int | float | None",
         "trainer.distillation_token_budget": "PositiveInt | None",
         "trainer.rollout_token_budget": "PositiveInt | None",
+        "trainer.rollout_token_eval_milestones": "tuple[PositiveInt, ...]",
         "trainer.rope_theta": "int | float | None",
         "generator.trajectory_retention.reward_below": "int | float | None",
         "generator.trajectory_retention.reward_above": "int | float | None",

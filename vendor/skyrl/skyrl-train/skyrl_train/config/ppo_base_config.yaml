@@ -285,6 +285,9 @@ trainer:
   # A synchronous run stops and evaluates the primary panel after the first
   # full optimizer update to reach this many training response tokens across all groups.
   rollout_token_budget: null
+  # Evaluate the primary panel on the first completed update to cross each
+  # cumulative training response token milestone below the terminal budget.
+  rollout_token_eval_milestones: []
   reset_distillation_token_count_on_resume: false
   reset_global_step_on_resume: false
   ckpt_path: "${oc.env:HOME}/ckpts/"

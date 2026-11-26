@@ -365,6 +365,7 @@ class RayPPOTrainer:
         self._domain_balancer: DomainGradientBalancer | None = None
         self.distillation_scored_tokens_total = 0
         self.rollout_gross_response_tokens_total = 0
+        self.rollout_gross_response_tokens_last_update = 0
 
         self.reward_kl_controller: Optional[Union[FixedKLController, AdaptiveKLController]] = None
         configure_ray_worker_logging()
@@ -2878,6 +2879,8 @@ class RayPPOTrainer:
         }
         if self.cfg.trainer.get("rollout_token_budget") is not None:
             trainer_state["rollout_gross_response_tokens_total"] = self.rollout_gross_response_tokens_total
+            if self.cfg.trainer.get("rollout_token_eval_milestones"):
+                trainer_state["rollout_gross_response_tokens_last_update"] = self.rollout_gross_response_tokens_last_update
         trainer_state_path = os.path.join(global_step_folder, TRAINER_STATE_FILENAME)
         trainer_state_buffer = stdlib_io.BytesIO()
         torch.save(trainer_state, trainer_state_buffer)
@@ -3025,6 +3028,17 @@ class RayPPOTrainer:
                     "and a valid saved gross rollout token total for its step"
                 )
             self.rollout_gross_response_tokens_total = total
+            milestones = tuple(self.cfg.trainer.get("rollout_token_eval_milestones", ()))
+            saved_milestones = tuple(saved_config["trainer"].get("rollout_token_eval_milestones", ()))
+            if global_step > 0 and not reset_step and milestones != saved_milestones:
+                raise ValueError("A rollout token budget checkpoint requires the same evaluation milestones")
+            if milestones:
+                tokens = 0 if reset_step or global_step == 0 else trainer_state.get(
+                    "rollout_gross_response_tokens_last_update"
+                )
+                if type(tokens) is not int or not 0 <= tokens <= total:
+                    raise ValueError("A rollout token milestone checkpoint requires the saved last update's gross tokens")
+                self.rollout_gross_response_tokens_last_update = tokens
         saved_attempt = saved_config.get("runtime", {}).get("attempt_id")
         if saved_attempt is not None:
             self._resume_checkpoint = CheckpointReference(

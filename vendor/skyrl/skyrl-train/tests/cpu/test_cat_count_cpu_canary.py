@@ -496,6 +496,7 @@ def test_cat_count_gross_rollout_budget(tmp_path, cat_count_policy, cat_count_se
     root = tmp_path / "budget"
     cfg = cat_count_config(root, cat_count_policy, steps=6)
     cfg.trainer.rollout_token_budget = 450
+    cfg.trainer.rollout_token_eval_milestones = [1]
     cfg.trainer.eval_interval = -1
     cfg.data.sampling.kind = "adaptive-source"
     cfg.trainer.algorithm.dynamic_sampling.type = "filter"
@@ -538,8 +539,10 @@ def test_cat_count_gross_rollout_budget(tmp_path, cat_count_policy, cat_count_se
         for row in cat_count_session
         if row["name"] == "training_metric_value" and row["attributes"].get("metric") == "eval/all/num_attempted"
     ]
+    panel_rows = sum(len(Path(path).read_text().splitlines()) for path in cfg.data.val_data)
     assert [(row["attributes"]["step"], row["value"]) for row in measured] == [
-        (str(stop), sum(len(Path(path).read_text().splitlines()) for path in cfg.data.val_data))
+        ("1", panel_rows),
+        (str(stop), panel_rows),
     ]
 
 
