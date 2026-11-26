@@ -36,9 +36,7 @@ def test_stitched_rows_replaces_only_target_identities_and_records_provenance():
         ("tb2/a", 1): (original("tb2/a", 1, 7, "infrastructure"), {"record_id": "rec-1"}),
     }
     replays = {("tb2/a", 1): (original("tb2/a", 1, 0, "graded"), "rec-replay", "archive.zip")}
-    rows, replacements = stitched_rows(
-        originals, replays, {("tb2/a", 1)}, sampling_seed=lambda task, repetition: 99
-    )
+    rows, replacements = stitched_rows(originals, replays, {("tb2/a", 1)}, sampling_seed=lambda task, repetition: 99)
 
     # Sorted by identity; the graded original is preserved verbatim.
     assert [row["repetition"] for row in rows] == [0, 1]

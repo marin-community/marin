@@ -63,8 +63,8 @@ def sample_rank(identity: list) -> str:
 def main(argv: list[str] | None = None) -> None:
     # The vendored SkyRL scripts ship in SkyRL's frozen CPU environment (cpu-submit
     # --skyrl); they are not Marin workspace dependencies.
-    from vendor.skyrl.scripts.loop_audit import read_rows, trial_turns, verdict_passed
-    from vendor.skyrl.scripts.repeat_stall_counterfactual import simulate_trial, summarize
+    from vendor.skyrl.scripts.loop_audit import read_rows, trial_turns, verdict_passed  # noqa: PLC0415
+    from vendor.skyrl.scripts.repeat_stall_counterfactual import simulate_trial, summarize  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True)
@@ -96,7 +96,9 @@ def main(argv: list[str] | None = None) -> None:
     suppressed = defaultdict(int)
     timing = defaultdict(list)
     selected = []
-    rows = input_rows(read_rows(args.pattern), {cohort: read_rows(pattern) for cohort, pattern in replacements.items()}, membership)
+    rows = input_rows(
+        read_rows(args.pattern), {cohort: read_rows(pattern) for cohort, pattern in replacements.items()}, membership
+    )
     for ordinal, row in enumerate(rows):
         cohort = membership.get(row.get("task_id"))
         if cohort is None:

@@ -1,20 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the registered ×0.75 correctness override receipts."""
+"""Tests for the registered 0.75 correctness multiplier receipts."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from experiments.post_training.mochi_loop_guards.user_overrides import (
-    CONSERVATION_RECEIPT_NAME,
     CLOCK_RECEIPT_NAME,
+    CONSERVATION_RECEIPT_NAME,
     GATE_RECEIPT_NAME,
     override_receipts,
 )
 
-NOW = datetime(2026, 11, 26, 17, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 11, 26, 17, 0, tzinfo=UTC)
 
 
 def cohort(name, passes, correctness_min_raw, ub_count=None, ub_cap=None):

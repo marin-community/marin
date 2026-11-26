@@ -5,7 +5,7 @@
 
 Promoted from the ad-hoc ``apply-user-overrides.py`` and ``submit-user-overrides.py``
 worker scripts. ``apply-user-overrides`` recomputes both S1 arms' gate receipts under the
-registered ×0.75 correctness override and refuses to issue receipts when a repeat window
+registered 0.75 correctness multiplier and refuses to issue receipts when a repeat window
 trigger fires; ``publish-user-overrides`` publishes the receipts to the experiment root,
 marks the conserved initializer, and inventories it.
 
@@ -22,7 +22,7 @@ import argparse
 import json
 import math
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -39,7 +39,9 @@ CLOCK_OVERRIDE = {
     "T32": "2026-11-27T20:01:36-05:00",
     "deadline": "2026-11-28T12:01:36-05:00",
     "decision": "I3 restored; supersedes original T20 drop; original receipt retained",
-    "supersedes": "s3://marin-us-east-08a/marin/users/benfeuer/mochi-loop-guards/decisions/i3-t20-budget-drop-2026.11.26.json",
+    "supersedes": (
+        "s3://marin-us-east-08a/marin/users/benfeuer/mochi-loop-guards/decisions/i3-t20-budget-drop-2026.11.26.json"
+    ),
 }
 CONSERVATION_OVERRIDE = {
     "kind": "user override",
@@ -48,7 +50,9 @@ CONSERVATION_OVERRIDE = {
     "source": "s3://marin-us-east-08a/marin/models/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1",
     "HF": "open-athena/Marin-Mochi-535B-A23B@sft-fullab-v2-step-400407",
     "HF_private": False,
-    "private_conversion_blocker": "HF403: Private storage limit reached for org open-athena; org plan/capacity must be resolved",
+    "private_conversion_blocker": (
+        "HF403: Private storage limit reached for org open-athena; org plan/capacity must be resolved"
+    ),
     "new_S1_weights": False,
     "new_S2_weights_policy": (
         "Export both arms to PRIVATE open-athena repos with OpenMDW1.1 LICENSE, required model-card warnings and "
@@ -60,7 +64,8 @@ CLOCK_RECEIPT_NAME = "clock-extension-user-override.json"
 GATE_RECEIPT_NAME = "correctness-gate-user-override.json"
 CONSERVATION_RECEIPT_NAME = "checkpoint-conservation-user-override.json"
 RP_REPEAT_DECISION = (
-    "No preregistered trigger; cancel exact repeat; originals remain authoritative; repeat excluded from scientific verdict"
+    "No preregistered trigger; cancel exact repeat; originals remain authoritative; "
+    "repeat excluded from scientific verdict"
 )
 FAILURE_REASONS = {
     "stop": ["TBLite repeat-turn share exceeds unchanged I1 cap"],
@@ -137,7 +142,7 @@ def apply_receipts(argv: list[str] | None = None) -> None:
     receipts = override_receipts(
         json.loads(Path(args.stop_receipt).read_text()),
         json.loads(Path(args.rp_receipt).read_text()),
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
     )
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -165,7 +170,9 @@ def apply_receipts(argv: list[str] | None = None) -> None:
 def publish_receipts(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--receipts-dir", required=True, help="Directory of override receipt JSON files")
-    parser.add_argument("--hf-inventory", required=True, help="HF repository inventory JSON for the conserved checkpoint")
+    parser.add_argument(
+        "--hf-inventory", required=True, help="HF repository inventory JSON for the conserved checkpoint"
+    )
     parser.add_argument("--root", required=True, help="Regional experiment root to publish into")
     args = parser.parse_args(argv)
     configure_coreweave_s3()
@@ -178,7 +185,9 @@ def publish_receipts(argv: list[str] | None = None) -> None:
     (source / ".conservation.json").write_text(json.dumps(payload[CONSERVATION_RECEIPT_NAME], indent=2) + "\n")
     (root / "conservation" / "sft-400407-HF-inventory.json").write_text(json.dumps(hf, indent=2) + "\n")
     entries = [{"name": file.name, "size": file.size()} for file in (source / "*").glob() if file.isfile()]
-    (root / "conservation" / "sft-400407-regional-inventory.json").write_text(json.dumps(entries, indent=2, default=str) + "\n")
+    (root / "conservation" / "sft-400407-regional-inventory.json").write_text(
+        json.dumps(entries, indent=2, default=str) + "\n"
+    )
     for entry in entries:
         if "manifest" in entry["name"].lower() or "sha" in entry["name"].lower():
             if entry["size"] < 10_000_000:

@@ -30,9 +30,11 @@ from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
+import pyarrow.parquet as pq
 import yaml
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
+from rolloutengine.models import TASK_ROLLOUT_COLUMN, TaskRolloutSpec
 
 MASTER_SEED = 20261125
 REGISTERED_ORIGINAL_TRIALS = 267
@@ -105,8 +107,9 @@ def stitch(argv: list[str] | None = None) -> None:
     """Stitch one registered replay over the original TB2 run's ungraded identities."""
     # The vendored SkyRL scripts ship in SkyRL's frozen CPU environment (cpu-submit
     # --skyrl); they are not Marin workspace dependencies.
-    from vendor.skyrl.scripts.loop_audit import is_infrastructure_error, read_rows
-    from skyrl_train.mismatch_probe.protocol import request_seed
+    from skyrl_train.mismatch_probe.protocol import request_seed  # noqa: PLC0415
+
+    from vendor.skyrl.scripts.loop_audit import is_infrastructure_error, read_rows  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--original-run-output", required=True)
@@ -135,7 +138,11 @@ def stitch(argv: list[str] | None = None) -> None:
     targets = {(item["task_id"], item["repetition_id"]) for item in receipt["target_trials"]}
     task_ids = set(receipt["selected_task_ids"])
     expected_replays = args.expected_tasks * REPETITIONS_PER_TASK
-    if len(originals) != args.expected_originals or len(targets) != args.expected_targets or len(task_ids) != args.expected_tasks:
+    if (
+        len(originals) != args.expected_originals
+        or len(targets) != args.expected_targets
+        or len(task_ids) != args.expected_tasks
+    ):
         raise ValueError("Recovery census differs from the registered rule")
     if {identity for identity, (row, _) in originals.items() if is_infrastructure_error(row)} != targets:
         raise ValueError("Recovery targets include a graded outcome or omit an original infrastructure outcome")
@@ -212,9 +219,7 @@ def stitch(argv: list[str] | None = None) -> None:
     if set(replays) != {(task_id, repetition) for task_id in task_ids for repetition in range(REPETITIONS_PER_TASK)}:
         raise ValueError("Recovery task/repetition set is incomplete")
 
-    result, replacements = stitched_rows(
-        originals, replays, targets, sampling_seed=partial(request_seed, MASTER_SEED)
-    )
+    result, replacements = stitched_rows(originals, replays, targets, sampling_seed=partial(request_seed, MASTER_SEED))
     for replacement in replacements:
         replay = replays[(replacement["task_id"], replacement["repetition_id"])][0]
         replacement["replay_still_infrastructure"] = is_infrastructure_error(replay)
@@ -234,10 +239,7 @@ def stitch(argv: list[str] | None = None) -> None:
         "extra_replayed_graded_ignored": len(replays) - len(replacements),
         "remaining_infrastructure": sum(is_infrastructure_error(row) for row in result),
         "frozen_task_repetition_seed_set_sha256": digest(
-            [
-                (task, repetition, request_seed(MASTER_SEED, task, repetition))
-                for task, repetition in sorted(originals)
-            ]
+            [(task, repetition, request_seed(MASTER_SEED, task, repetition)) for task, repetition in sorted(originals)]
         ),
         "replacements": replacements,
     }
@@ -249,8 +251,9 @@ def repetition_ledger(argv: list[str] | None = None) -> None:
     """Bind every retained TB2 trial to its frozen task/repetition identity and seed."""
     # The vendored SkyRL scripts ship in SkyRL's frozen CPU environment (cpu-submit
     # --skyrl); they are not Marin workspace dependencies.
-    from vendor.skyrl.scripts.loop_audit import is_infrastructure_error, read_rows
-    from skyrl_train.mismatch_probe.protocol import request_seed
+    from skyrl_train.mismatch_probe.protocol import request_seed  # noqa: PLC0415
+
+    from vendor.skyrl.scripts.loop_audit import is_infrastructure_error, read_rows  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, help="Saved TB2 eval jsonl for the original run")
@@ -315,7 +318,9 @@ def repetition_ledger(argv: list[str] | None = None) -> None:
     if {identity: len(items) for identity, items in retained.items()} != {
         identity: len(items) for identity, items in raw_groups.items()
     }:
-        raise ValueError("Retained/raw TB2 scientific-content multisets differ; do not infer repetition from completion ordinal")
+        raise ValueError(
+            "Retained/raw TB2 scientific-content multisets differ; do not infer repetition from completion ordinal"
+        )
     ledger = []
     for identity, metadata_list in retained.items():
         originals = raw_groups[identity]
@@ -345,9 +350,6 @@ def repetition_ledger(argv: list[str] | None = None) -> None:
 
 def recovery_selection(argv: list[str] | None = None) -> None:
     """Publish the recovery task selection and its registered recovery receipt."""
-    import pyarrow.parquet as pq
-    from rolloutengine.models import TASK_ROLLOUT_COLUMN, TaskRolloutSpec
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", required=True, help="Verified tb2-repetition-ledger receipt")
     parser.add_argument("--source", required=True, help="Frozen TB2 panel parquet the ledger came from")
@@ -406,11 +408,22 @@ def recovery_selection(argv: list[str] | None = None) -> None:
         "preserved_original_graded_trials": ledger["trial_count"] - len(failures),
         "extra_replayed_original_graded_trials_ignored": len(rows) * REPETITIONS_PER_TASK - len(failures),
         "repetitions_per_task": REPETITIONS_PER_TASK,
-        "rule": "one replay; replace only frozen original ungraded task/repetition identities; preserve all original graded outcomes",
+        "rule": (
+            "one replay; replace only frozen original ungraded task/repetition identities; "
+            "preserve all original graded outcomes"
+        ),
         "target_trials": failures,
     }
     (root / "recovery-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
-    print(json.dumps({key: value for key, value in receipt.items() if key not in ("target_trials", "selected_spec_sha256", "selected_task_ids", "source_row_indices")}))
+    print(
+        json.dumps(
+            {
+                key: value
+                for key, value in receipt.items()
+                if key not in ("target_trials", "selected_spec_sha256", "selected_task_ids", "source_row_indices")
+            }
+        )
+    )
 
 
 def main(argv: list[str] | None = None) -> None:

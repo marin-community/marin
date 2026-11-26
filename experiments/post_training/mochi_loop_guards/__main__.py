@@ -29,25 +29,9 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import SecretResolutionError, require_secret
 
 from experiments.post_training import rl, rl_compose
-from experiments.post_training.mochi_loop_guards.presets import (
-    S0,
-    S0_TB2_RECOVERY,
-    S1_RP,
-    S1_STOP,
-    S2_CONTROL,
-    S2_TREATMENT,
-)
-from experiments.post_training.rl_presets import ModelPresets
+from experiments.post_training.mochi_loop_guards.presets import GUARDS
 
 REGIONAL_ROOT = "s3://marin-us-east-08a/marin"
-GUARDS = ModelPresets(
-    model="mochi",
-    presets=(S0, S0_TB2_RECOVERY, S1_STOP, S1_RP, S2_CONTROL, S2_TREATMENT),
-    namespace="mochi-loop-guards",
-    control_pins={},
-    needs_completed_default_export=False,
-)
-
 # Declared stage credentials, resolved file-first before GPU allocation. The RL-pool
 # stages (S2) also talk to the dedicated RL Daytona org.
 RUN_SECRETS = ("WANDB_API_KEY", "DAYTONA_EVAL_API_KEY", "HF_TOKEN")

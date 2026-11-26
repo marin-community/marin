@@ -24,6 +24,7 @@ from experiments.post_training.rl_presets import (
     Evaluation,
     Generation,
     Layout,
+    ModelPresets,
     Preset,
     Recipe,
 )
@@ -345,14 +346,10 @@ def export_command(ckpt_path: str, step: int, launch_config: str, *, export_path
     )
 
 
-if __name__ == "__main__":
-    from experiments.post_training.rl_presets import ModelPresets
-
-    GUARDS = ModelPresets(
-        model="mochi",
-        presets=(S0, S1_STOP, S1_RP, S2_CONTROL, S2_TREATMENT),
-        namespace="mochi-loop-guards",
-        control_pins={},
-        needs_completed_default_export=True,
-    )
-    print(GUARDS.name, [preset.name for preset in GUARDS.presets])
+GUARDS = ModelPresets(
+    model="mochi",
+    presets=(S0, S0_TB2_RECOVERY, S1_STOP, S1_RP, S2_CONTROL, S2_TREATMENT),
+    namespace="mochi-loop-guards",
+    control_pins={},
+    needs_completed_default_export=False,
+)

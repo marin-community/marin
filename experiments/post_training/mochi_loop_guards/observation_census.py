@@ -16,6 +16,7 @@ import argparse
 import collections
 import hashlib
 import json
+
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -28,7 +29,7 @@ DIAGNOSTIC_ONLY = (
 def main(argv: list[str] | None = None) -> None:
     # The vendored SkyRL scripts ship in SkyRL's frozen CPU environment (cpu-submit
     # --skyrl); they are not Marin workspace dependencies.
-    from vendor.skyrl.scripts.loop_audit import read_rows, trial_turns, verdict_passed
+    from vendor.skyrl.scripts.loop_audit import read_rows, trial_turns, verdict_passed  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True)

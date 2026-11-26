@@ -51,7 +51,7 @@ def test_verified_files_matches_sizes_hashes_and_flags_hf_only_files():
     manifest, hf, listing, contents = fixture()
     results = verified_files(hf, manifest, listing, read_source(contents))
 
-    shard0, shard1, config, readme = results
+    shard0, _shard1, config, readme = results
     assert shard0["hash_basis"].endswith("HF LFS SHA256")
     assert config["hash_basis"] == "regional content read SHA256"
     assert config["regional_ETag"] == "etag-2"
@@ -68,7 +68,7 @@ def test_verified_files_rejects_a_size_mismatch():
 def test_verified_files_rejects_a_changed_small_file():
     manifest, hf, listing, contents = fixture()
     contents["config.json"] = "conf?"
-    with pytest.raises(AssertionError, match="config.json"):
+    with pytest.raises(AssertionError, match=r"config\.json"):
         verified_files(hf, manifest, listing, read_source(contents))
 
 

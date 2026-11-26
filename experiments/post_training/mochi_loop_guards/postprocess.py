@@ -32,10 +32,15 @@ from pathlib import Path
 
 import yaml
 from marin.rl.skyrl import skyrl_cpu_command
+from marin.rl.skyrl_records import read_stored_skyrl_attempts
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training import rl_compose
 from experiments.post_training.mochi_loop_guards import audit
+from experiments.post_training.mochi_loop_guards.presets import GUARDS
+from experiments.post_training.rl_measurements import evaluation_status, read_recorded_launch
+from experiments.post_training.rl_publication import build_record
 
 REGIONAL_ROOT = "s3://marin-us-east-08a/marin"
 EXECUTION_REGION = "s3://marin-us-east-08a/"
@@ -92,14 +97,6 @@ def retain_traces(argv: list[str] | None = None) -> None:
 
 def report_refresh(argv: list[str] | None = None) -> None:
     """Refresh the saved-data evaluation status and attempt summary for one stage preset."""
-    # The presets table is bound in the package launcher; importing it here keeps the
-    # analysis modules free of a launcher import at module load.
-    from experiments.post_training import rl_compose
-    from experiments.post_training.mochi_loop_guards.__main__ import GUARDS
-    from experiments.post_training.rl_measurements import evaluation_status, read_recorded_launch
-    from experiments.post_training.rl_publication import build_record
-    from marin.rl.skyrl_records import read_stored_skyrl_attempts
-
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-output", required=True)
     parser.add_argument("--preset-name", required=True, help="Stage preset name in the loop-guards table")
@@ -160,7 +157,7 @@ def postprocess(argv: list[str] | None = None) -> None:
             "--output",
             args.output,
             *(["--baseline", args.baseline] if args.baseline else []),
-            *sum((["--exclude-cohort", cohort] for cohort in args.exclude_cohort), []),
+            *[part for cohort in args.exclude_cohort for part in ("--exclude-cohort", cohort)],
         ]
     )
     manifest_path = str(output / "resolved-manifest.json")
@@ -170,7 +167,13 @@ def postprocess(argv: list[str] | None = None) -> None:
         (output / "regional-counterfactual.py").write_text(counterfactual_path.read_text())
         subprocess.run(
             _skyrl_analysis_command(
-                "counterfactual", "--manifest", manifest_path, "--pattern", pattern, "--output", str(output / "counterfactual")
+                "counterfactual",
+                "--manifest",
+                manifest_path,
+                "--pattern",
+                pattern,
+                "--output",
+                str(output / "counterfactual"),
             ),
             check=True,
         )
@@ -178,7 +181,13 @@ def postprocess(argv: list[str] | None = None) -> None:
         steps.append("census")
         subprocess.run(
             _skyrl_analysis_command(
-                "observation_census", "--manifest", manifest_path, "--pattern", pattern, "--output", str(output / "observation-census.json")
+                "observation_census",
+                "--manifest",
+                manifest_path,
+                "--pattern",
+                pattern,
+                "--output",
+                str(output / "observation-census.json"),
             ),
             check=True,
         )
@@ -194,9 +203,9 @@ def postprocess(argv: list[str] | None = None) -> None:
         "steps": steps,
         "model_trials_created": 0,
         "complete": True,
-        "counterfactual_module_sha256": hashlib.sha256(counterfactual_path.read_bytes()).hexdigest()
-        if args.counterfactual
-        else None,
+        "counterfactual_module_sha256": (
+            hashlib.sha256(counterfactual_path.read_bytes()).hexdigest() if args.counterfactual else None
+        ),
     }
     (output / "postprocessing-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt), flush=True)

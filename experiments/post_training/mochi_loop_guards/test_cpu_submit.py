@@ -12,7 +12,13 @@ PROGRAM = ["python", "-m", "experiments.post_training.mochi_loop_guards", "audit
 
 
 def envelope(arguments, **overrides):
-    values = {"job_name": "mochi-loop-guards-audit", "cpu": 16, "memory": "64GB", "disk": "128GB", "arguments": arguments}
+    values = {
+        "job_name": "mochi-loop-guards-audit",
+        "cpu": 16,
+        "memory": "64GB",
+        "disk": "128GB",
+        "arguments": arguments,
+    }
     values.update(overrides)
     return submit_command(**values)
 

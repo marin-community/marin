@@ -99,7 +99,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--timeout", type=int, default=TIMEOUT_SECONDS, help="Job timeout in seconds")
     parser.add_argument("--cluster", default=CLUSTER)
     parser.add_argument("--priority", default=PRIORITY)
-    parser.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="Forward an environment variable")
+    parser.add_argument(
+        "--env", action="append", default=[], metavar="KEY=VALUE", help="Forward an environment variable"
+    )
     parser.add_argument("--secret", action="append", default=[], metavar="NAME", help="Deliver a named secret file")
     parser.add_argument("--skyrl", action="store_true", help="Run inside SkyRL's frozen CPU environment")
     parser.add_argument("arguments", nargs=argparse.REMAINDER, metavar="-- ARGUMENTS")
