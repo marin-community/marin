@@ -330,16 +330,16 @@ def test_a_replaced_child_gets_its_own_job_key(state):
     assert {(j.job_id, j.submitted_at_ms) for j in rows.jobs} == {(child, 3_000)}
 
 
-_CLUSTER_CONFIGS = sorted((Path(__file__).parents[3] / "config").glob("*.yaml"))
+_FINELOG_CLUSTER_CONFIGS = [
+    path for path in sorted((Path(__file__).parents[3] / "config").glob("*.yaml")) if load_config(path).finelog.config
+]
 
 
-@pytest.mark.parametrize("config_path", _CLUSTER_CONFIGS, ids=lambda p: p.stem)
+@pytest.mark.parametrize("config_path", _FINELOG_CLUSTER_CONFIGS, ids=lambda p: p.stem)
 def test_every_cluster_config_forwards_under_its_own_name_or_not_at_all(config_path):
     # A forwarder ships only rows named for its forwarding.cluster, and the controller
     # names its rows with the cluster config name, so a mismatch would drop them.
     config = load_config(config_path)
-    if not config.finelog.config:
-        return
     forwarding = load_finelog_config(config.finelog.config).forwarding
     assert forwarding is None or forwarding.cluster == config.name
 
