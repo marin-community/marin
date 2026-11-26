@@ -63,7 +63,7 @@ def census_documents(census_root: str, slug: str) -> tuple[dict, dict]:
 def _lexical_receipt(source_id: str, receipt_input: dict, measurement: dict) -> dict:
     from finestore.rl.curation import ActorCensusInput, LexicalContaminationEvidence  # noqa: PLC0415
 
-    from experiments.post_training.task_curation.lexical_binding import (
+    from experiments.post_training.task_curation.lexical_binding import (  # noqa: PLC0415
         LexicalMeasurementReceipt as Receipt,
     )
 
