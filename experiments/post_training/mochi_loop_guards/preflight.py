@@ -6,7 +6,7 @@
 Builds a fixture panel selection locally (the real selection is published in region by
 ``selection.py``), then runs the RL CLI's plan path for each stage and saves every launch
 document plus a receipt. The S3 arms bind the declared start checkpoint standing in for the
-S2x export, which does not exist until T+34:
+S2x exports before those trained model artifacts exist:
 
     uv run --package marin-core python -m experiments.post_training.mochi_loop_guards.preflight \\
         --output <scratch dir>
@@ -19,6 +19,7 @@ from pathlib import Path
 
 import yaml
 from marin.execution.lazy import materialized_config
+from marin.rl.skyrl import ResolvedModelLocator
 from rolloutengine.models import TASK_ROLLOUT_COLUMN, TaskRolloutSpec
 from zephyr.writers import write_parquet_file
 
@@ -174,14 +175,7 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
 
     original_root = recipe.SELECTION_ROOT
-    receipt = {
-        "stages": [],
-        "s2x_export_command": presets.export_command(
-            "s3://marin-us-east-08a/tmp/ttl=3d/mochi-loop-guards/s2-antithrash-treatment",
-            S2_TREATMENT.updates,
-            "<S2 launch document, resolved at T+32>",
-        ),
-    }
+    stages = []
     # The preflight runs the CLI's plan path entirely on local fixtures: the selection root
     # and the artifact store both resolve into the output directory (rl_tests/fixtures.py
     # uses the same patching for its plan-path tests).
@@ -202,13 +196,30 @@ def main() -> None:
         pool = fixture_pool(Path(recipe.SELECTION_ROOT))
         logger.info("fixture selection at %s", selection)
         for stage in STAGES:
-            receipt["stages"].append(plan_stage(stage, output, pool_selection=pool if "s2-" in stage else None))
+            stages.append(plan_stage(stage, output, pool_selection=pool if "s2-" in stage else None))
             logger.info("planned %s", stage)
     finally:
         recipe.SELECTION_ROOT = original_root
         recipe.artifact_prefix = original_prefix
         rl_command.configure_coreweave_s3 = original_configure
         rl_module.check_cache = original_cache
+    launch_config = output / "s2-antithrash-treatment.yaml"
+    document = yaml.safe_load(launch_config.read_text())
+    model = document["inputs"]["model"]
+    command = presets.export_command(
+        document["artifacts"]["checkpoint_root"],
+        S2_TREATMENT.updates,
+        str(launch_config),
+        model=ResolvedModelLocator(
+            uri=model["uri"],
+            identity=model["identity"],
+            local_path=model["local_path"],
+            tokenizer_uri=model["tokenizer_uri"],
+            tokenizer_revision=model["tokenizer_revision"],
+        ),
+        export_path=f"{presets.PANEL_ROOT}/exports/s2-antithrash-treatment-preflight",
+    )
+    receipt = {"stages": stages, "s2x_export_command": command}
     (output / "preflight-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt, indent=2))
 

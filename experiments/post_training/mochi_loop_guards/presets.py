@@ -11,9 +11,17 @@ antithrash pair sets ``generator.trajectory_reward_shaping.antithrash``. See
 """
 
 from dataclasses import replace
+from shlex import join
 
 from marin.execution.lazy import ArtifactStep
-from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLGenerationPlan, SkyRLRetentionPolicy
+from marin.rl.skyrl import (
+    ArtifactHfModel,
+    MegatronGeometry,
+    ResolvedModelLocator,
+    SkyRLGenerationPlan,
+    SkyRLRetentionPolicy,
+    skyrl_cpu_command,
+)
 from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
@@ -325,24 +333,55 @@ S2_TREATMENT = replace(rl_arm("s2-antithrash-treatment", antithrash=True, update
 def s3_panel(name: str, export: ArtifactHfModel) -> Preset:
     """One S3 arm: the budgeted follow-up cohorts on one S2 export, with S0's frozen protocol.
 
-    The export binds at T+34 from the S2x export artifact; the plan preflight validates the
+    The export binds after S2x conversion; the plan preflight validates the
     stage with the declared start checkpoint standing in for the export.
     """
     return panel_preset(name, model=export, layout=GUARD_ARM_LAYOUT, cohorts=FOLLOWUP_COHORTS)
 
 
-def export_command(ckpt_path: str, step: int, launch_config: str, *, export_path: str | None = None) -> str:
-    """The S2x export command for one arm: 48 export GPUs derived from the run's launch config.
+def export_command(
+    ckpt_path: str,
+    step: int,
+    launch_config: str,
+    *,
+    model: ResolvedModelLocator,
+    export_path: str,
+) -> str:
+    """Dry-run one S2x export using the saved model locator and 48 policy GPUs.
 
-    The export gang restores the saved policy geometry and writes the HF export beside the
-    checkpoint; the S3 panel then consumes that export as its initializer.
+    The export gang restores the saved policy geometry and writes to the explicit regional
+    destination; the S3 panel then consumes that export as its initializer.
     """
-    destination = export_path or f"{ckpt_path.rstrip('/')}/exports"
-    return (
-        "uv run --project vendor/skyrl python vendor/skyrl/cloud/iris/export_hf_checkpoint.py"
-        f" --ckpt_path {ckpt_path} --step {step} --launch-config {launch_config}"
-        f" --cluster cw-us-east-08a --priority production --num-nodes 12 --gpus-per-node 4"
-        f" --gpu-variant GB200 --export_path {destination} --dry-run"
+    return join(
+        skyrl_cpu_command(
+            "python",
+            "vendor/skyrl/cloud/iris/export_hf_checkpoint.py",
+            "--ckpt_path",
+            ckpt_path,
+            "--step",
+            str(step),
+            "--launch-config",
+            launch_config,
+            "--model_path",
+            model.local_path,
+            "--model-source-uri",
+            model.uri,
+            "--model-source-identity",
+            model.identity,
+            "--cluster",
+            "cw-us-east-08a",
+            "--priority",
+            "production",
+            "--num-nodes",
+            "12",
+            "--gpus-per-node",
+            "4",
+            "--gpu-variant",
+            "GB200",
+            "--export_path",
+            export_path,
+            "--dry-run",
+        )
     )
 
 
