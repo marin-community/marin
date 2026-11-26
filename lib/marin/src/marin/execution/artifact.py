@@ -388,7 +388,7 @@ def check_drift(step: StepSpec) -> None:
 
     If a record exists whose fingerprint differs from the step's, raises
     :class:`FingerprintMismatchError` for an ``expected_fingerprint`` pin, or logs a
-    field-level warning and serves the cached output.
+    field-level warning before the caller serves the cached output.
     """
     fingerprint = step.hash_attrs.get(FINGERPRINT_KEY)
     if fingerprint is None:

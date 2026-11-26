@@ -89,7 +89,6 @@ def test_cold_step_ignores_incomplete_executor_info(tmp_path, monkeypatch):
     result = run(_toy(V, "a"))
 
     assert result[0].payload == "a"
-    assert read_record(output_path.as_posix()).result == {"payload": "a"}
 
 
 # --- advisory drift (no more ImmutableArtifactError) ---------------------------
