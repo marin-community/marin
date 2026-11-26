@@ -829,21 +829,19 @@ def _submit_from_launcher(
         environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
     submission_path = os.environ.get(rl_publication.CONTROL_SUBMISSION_ENV)
 
-    def record_control_submission(job: JobName) -> None:
-        submission = rl_publication.ControlSubmission(job=str(job), outputs=tuple(native_ids))
-        assert submission_path is not None
-        StoragePath(submission_path).write_text(submission.model_dump_json())
+    submit = partial(submit_or_run, module, handles, max_concurrent, environment, argv=argv)
+    if submission_path:
+        if not index.is_control or context.params["wait"]:
+            raise click.UsageError("the nightly control submission path requires a detached control run")
+        path = StoragePath(submission_path)
 
-    if submission_path and (not index.is_control or context.params["wait"]):
-        raise click.UsageError("the nightly control submission path requires a detached control run")
-    job = submit_or_run(
-        module,
-        handles,
-        max_concurrent,
-        environment,
-        argv=argv,
-        before_submit=record_control_submission if submission_path else None,
-    )
+        def record_control_submission(job: JobName) -> None:
+            submission = rl_publication.ControlSubmission(job=str(job), outputs=tuple(native_ids))
+            path.write_text(submission.model_dump_json())
+
+        job = submit(before_submit=record_control_submission)
+    else:
+        job = submit()
     submitted = [
         {
             "name": step.name,

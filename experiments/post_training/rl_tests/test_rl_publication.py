@@ -355,7 +355,9 @@ def test_concurrent_issue_claims_keep_one_lineage_issue(tmp_path, monkeypatch):
     assert {attempt.issue for attempt in read_attempts(export_root).values()} == {winner}
 
 
-def test_nightly_resumes_publication_and_refills_only_the_control_deficit(recorded_runs, monkeypatch, tmp_path):
+def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
+    recorded_runs, monkeypatch, tmp_path, cache_native_compositions
+):
     monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
     sources = ("accepted", "preempted", "unprepared")
     preset = nightly.SNOWBALL.by_name["speed-medium"]
