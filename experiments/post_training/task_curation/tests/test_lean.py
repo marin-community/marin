@@ -8,8 +8,7 @@ import os
 import time
 
 import pytest
-from shellbox.backends.daytona.machine import DaytonaMachineFactory
-from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
+from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.machine import CommandSemantics
 from taskcompendium.models import EnvironmentRequirements, TextMessage
 from taskcompendium.pipeline.models import ImportRejection
@@ -437,16 +436,15 @@ def test_the_statement_check_fails_on_a_reference_that_does_not_validate(source,
 LEAN_GRADER_IMAGE = (
     "ghcr.io/marin-community/rollout-images@sha256:86b746ca83cb4883d9ef9732df3ded3330c8c998fe4daad534a2c12ecd5c7339"
 )
-LEAN_GRADER_IMAGE_GIB = 15
+LEAN_GRADER_IMAGE_MB = 15 * 1024
 """What the grader image unpacks to."""
 
 
 @pytest.mark.parametrize("controls", [proofs.LEAN_PROOF_CONTROLS, NUMINA_CONTROLS], ids=["proofnet", "numina"])
-def test_lean_controls_give_a_daytona_snapshot_room_for_the_grader_image(controls):
-    machines = CampaignMachines(image_factory=DaytonaMachineFactory())
+def test_lean_controls_give_the_image_machine_room_for_the_grader_image(controls):
+    machines = CampaignMachines(image_factory=IrisMachineFactory(controller_url="http://controller.invalid"))
     environment = EnvironmentRequirements(
         command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=LEAN_GRADER_IMAGE
     )
     _, spec = machines.machine(environment, controls.memory_mb, controls.storage_mb)
-    resources = snapshot_request_for_spec(spec).resources
-    assert resources.disk is not None and resources.disk > LEAN_GRADER_IMAGE_GIB
+    assert spec.storage_mb is not None and spec.storage_mb > LEAN_GRADER_IMAGE_MB
