@@ -197,6 +197,8 @@ rl:
       chat_template_kwargs:
         enable_thinking: true
       engine_init_kwargs:
+        # Return active partial generations before the 1800-second turn deadline.
+        request_timeout_seconds: 1770
         moe_backend: triton
         enable_auto_tool_choice: true
         tool_call_parser: hermes

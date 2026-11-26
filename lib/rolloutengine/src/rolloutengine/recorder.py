@@ -420,6 +420,8 @@ class _Recorder:
         max_total = self.limits.max_total_tokens
         self.budget_reached = max_total is not None and self.spent_tokens + turn.request_tokens >= max_total
         self.stop_reason = turn.stop_reason
+        if turn.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON:
+            self.stopped = True
         self.step_observations, self.step_data, self.step_metrics = (), None, {}
         self.events.emit(
             ModelTurnCompleted(

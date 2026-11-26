@@ -1989,6 +1989,42 @@ async def test_one_task_supports_independent_turn_deadlines():
         await asyncio.gather(limited, unlimited, return_exceptions=True)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
+async def test_a_transport_deadline_keeps_partial_tokens_for_grading_and_refuses_another_turn(answer, reward):
+    class PartialModel(ReplayModel):
+        async def complete(self, request):
+            turn = await super().complete(request)
+            if len(self.requests) == 1:
+                return replace(turn, stop_reason="total_turn_timeout", metadata={"routes": [[1, 2]]})
+            return turn
+
+    class AsksAgain:
+        context_recovery = ContextRecovery.NEVER
+
+        def check(self, task, limits):
+            pass
+
+        async def run(self, context, session):
+            await session.start(Prompt(({"role": "user", "content": "Return 12."},), {}))
+            await session.reply(())
+
+    model = PartialModel([{"role": "assistant", "content": answer}, {"role": "assistant", "content": "0"}])
+    record = await engine(model, harnesses={"fixture": AsksAgain()}).run_task(
+        rollout_spec(arithmetic_task(), harness="fixture", total_turn_timeout=5)
+    )
+    assert (record.rollout.stop_reason, record.grade.status, record.grade.reward) == (
+        "total_turn_timeout",
+        Outcome.GRADED,
+        reward,
+    )
+    [step] = record.rollout.conversations[0].steps
+    assert step.turn.response_token_ids == (20,)
+    assert step.turn.logprobs == (-0.5,)
+    assert step.turn.metadata == {"routes": [[1, 2]]}
+    assert len(model.requests) == 1
+
+
 @pytest.mark.parametrize(
     "phase,budget",
     [

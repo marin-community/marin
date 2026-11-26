@@ -1589,6 +1589,31 @@ shared with training; it does not detect all circular reasoning. Normal source
 answer extraction can accept raw text, so explicit final markers are also
 reported. Neither signal is a correctness grade.
 
+## Mochi turn deadlines and partial responses
+
+The Mochi Exp3 and Exp4 round recipes set
+`generator.engine_init_kwargs.request_timeout_seconds: 1770`. The asynchronous
+vLLM wrapper ends an active decode through vLLM's abort API, reserving 30 seconds
+inside the 1,800-second turn deadline for returning its exact partial response.
+Tokens, behavior logprobs, routes and policy-step stamps are retained; no EOS
+token is synthesized. The transport marks the turn `total_turn_timeout`, and
+the rollout engine runs the task verifier on the retained response and refuses
+another model turn. A request that generated no tokens is left to the outer
+deadline and remains unavailable. The 2,280-second attempt limit is unchanged.
+
+An archived `generated_tokens=0` with “Turn deadline expired before the first
+response” means no completed response reached the rollout recorder. It does
+not establish that the serving engine generated no tokens. Correlate the
+session ID with `request_timing` and inspect engine queue metrics. SkyRL's
+engine snapshots are in `telemetry_v1.marinskyrl` with `metric_source=vllm`;
+standalone serving uses `telemetry_v1.vllm`. Unavailable rows have zero token
+loss masks and are excluded from RLOO baselines. Retained generation samples
+also include groups the learner rejects, so report their rates separately
+from consumed-batch metrics.
+
+Use a fresh round version after adopting this runtime change. Editing a recipe
+does not change an already submitted run.
+
 ## Mochi DSpark serving gate
 
 `rounds/mochi-exp4-dspark-rl.yaml` prepares Exp4 RL from the regional Mochi SFT

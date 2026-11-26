@@ -71,6 +71,8 @@ from skyrl_train.inference_engines.placement import inference_worker_placement
 from skyrl_train.inference_engines.vllm.numa import set_async_worker_numa_affinity
 from skyrl_train.inference_engines.policy_steps import PolicyStepStamps
 from skyrl_train.inference_engines.request_timing import RequestTimings
+from skyrl_train.inference_engines.request_deadline import finish_partial_on_timeout
+from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON
 from skyrl_train.inference_engines.inference_http_backend import OpenAIRequest
 from skyrl_train.weight_sync.expert_block.receiver import ExpertBlockReceiver
 from skyrl_train.weight_sync.weight_loader import WeightLoader
@@ -1050,6 +1052,9 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         self._stats_attributes: Dict[str, str] = {}
         self._rendezvous_port_reservation = kwargs.pop("rendezvous_port_reservation", None)
         self._weight_sync_pause_policy: WeightSyncPausePolicy = kwargs.pop("weight_sync_pause_policy")
+        self._request_timeout = kwargs.pop("request_timeout_seconds", None)
+        if self._request_timeout is not None and self._request_timeout <= 0:
+            raise ValueError("request_timeout_seconds must be positive")
         setup_envvars_for_vllm(kwargs, bundle_indices)
         vllm_v1_disable_multiproc = kwargs.pop("vllm_v1_disable_multiproc", False)
         logger.info(
@@ -1380,12 +1385,29 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         result = await self.llm.add_lora(lora_request)
         return result
 
+    async def _finish_partial_request(self, request_id: str) -> bool:
+        key = self._request_timings.request_key(request_id)
+        timing = self._request_timings.requests.get(key)
+        if timing is None or timing.generated_tokens == 0:
+            return False
+        external_ids = {
+            state.external_req_id
+            for state in self.llm.output_processor.request_states.values()
+            if self._request_timings.request_key(state.external_req_id) == key
+        }
+        if not external_ids:
+            return False
+        # The pinned vLLM abort path emits accumulated tokens, logprobs and
+        # routes as a final output. Do not cancel its response collector first.
+        await self.llm.abort(external_ids)
+        logger.info("request_deadline request_id={} generated_tokens={}", key, timing.generated_tokens)
+        return True
+
     async def _collect_outputs(
         self, prompt_token_ids, request_id: str, sampling_params: SamplingParams, priority: int = 0
     ):
         """Collect a single prompt's final output and the policy steps of its tokens."""
         # Check if LoRA is enabled and create LoRA request
-        final_output = None
         lora_request = None
 
         if self._is_lora:
@@ -1397,7 +1419,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                     lora_name=f"{lora_int_id}", lora_int_id=lora_int_id, lora_path="/dummy_lora_path"
                 )
 
-        try:
+        async def collect():
+            final_output = None
             async for request_output in self.llm.generate(
                 prompt=TokensPrompt(prompt_token_ids=prompt_token_ids),
                 sampling_params=sampling_params,
@@ -1406,7 +1429,16 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
                 priority=priority,
             ):
                 final_output = request_output
+            if final_output is None:
+                raise RuntimeError("vLLM ended generation without a request output")
+            return final_output
 
+        try:
+            final_output, deadline_finished = await finish_partial_on_timeout(
+                collect(), self._request_timeout, lambda: self._finish_partial_request(request_id)
+            )
+            if deadline_finished and final_output.outputs[0].finish_reason == "abort":
+                final_output.outputs[0].finish_reason = TOTAL_TURN_TIMEOUT_STOP_REASON
             return final_output, self._policy_steps.finish(request_id, len(final_output.outputs[0].token_ids))
         finally:
             self._request_timings.finish(request_id)
@@ -1633,20 +1665,31 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
         try:
             if endpoint == "/chat/completions":
                 if exact_prompt_token_ids is None:
-                    generator = await self.openai_serving_chat.create_chat_completion(request, minimal_request)
+                    pending = self.openai_serving_chat.create_chat_completion(request, minimal_request)
                 else:
-                    generator = await self.openai_serving_chat.create_chat_completion_with_exact_prompt(
+                    pending = self.openai_serving_chat.create_chat_completion_with_exact_prompt(
                         request, minimal_request, exact_prompt_token_ids
                     )
+                generator, deadline_finished = await finish_partial_on_timeout(
+                    pending, self._request_timeout, lambda: self._finish_partial_request(request_id)
+                )
                 assert isinstance(generator, (ChatCompletionResponse, ErrorResponse))
             else:
-                generator = await self.openai_serving_completion.create_completion(request, minimal_request)
+                generator, deadline_finished = await finish_partial_on_timeout(
+                    self.openai_serving_completion.create_completion(request, minimal_request),
+                    self._request_timeout,
+                    lambda: self._finish_partial_request(request_id),
+                )
                 assert isinstance(generator, (CompletionResponse, ErrorResponse))
             response = generator.model_dump()
             if isinstance(generator, ErrorResponse):
                 response["request_id"] = request_id
                 response["error_category"] = "server_error"
                 return response
+            if deadline_finished:
+                for item in response["choices"]:
+                    if item["finish_reason"] == "abort":
+                        item["finish_reason"] = TOTAL_TURN_TIMEOUT_STOP_REASON
             choice = response["choices"][0]
             # vLLM generates a chat completion under its response id, which parallel samples share.
             if (
