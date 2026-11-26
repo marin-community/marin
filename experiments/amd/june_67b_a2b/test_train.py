@@ -81,13 +81,38 @@ class RecordingCheckpointer:
         pass
 
 
-def _batches(nan_at_step=None):
+# A float32 written over int32 words, as the MI355X stray writes do: 1.0f read as an int32.
+FLOAT_BITS = np.float32(1.0).view(np.int32)
+
+
+def _damage_tokens(batch):
+    tokens = batch.tokens.copy()
+    tokens[0, :2] = FLOAT_BITS
+    return batch._replace(tokens=tokens)
+
+
+def _damage_loss_weight(batch):
+    weight = batch.loss_weight.copy()
+    weight[1, 3] = np.nan
+    return batch._replace(loss_weight=weight)
+
+
+def _damage_segment_ids(batch):
+    q_seg, kv_seg = batch.attn_mask.segment_ids
+    kv_seg = kv_seg.copy()
+    kv_seg[2, 4:6] = FLOAT_BITS
+    return batch._replace(attn_mask=AttentionMask(is_causal=True, segment_ids=(q_seg, kv_seg)))
+
+
+def _batches(damage_at_steps=(), damage=_damage_tokens):
     tokens = np.asarray(jax.random.randint(jax.random.key(1), (4, CONFIG.max_seq_len), 0, CONFIG.vocab_size))
+    segment_ids = np.zeros(tokens.shape, np.int32)
+    segment_ids[:, CONFIG.max_seq_len // 2 :] = 1
     for step in range(NUM_STEPS):
         weight = np.ones(tokens.shape, np.float32)
-        if step == nan_at_step:
-            weight[0, 0] = np.nan
-        yield Batch(np.roll(tokens, step, axis=0), weight, None)
+        mask = AttentionMask(is_causal=True, segment_ids=(segment_ids, segment_ids.copy()))
+        batch = Batch(np.roll(tokens, step, axis=0), weight, mask)
+        yield damage(batch) if step in damage_at_steps else batch
 
 
 @pytest.fixture(scope="module")
@@ -95,19 +120,35 @@ def trainer():
     """One compiled train step and the initial state, on four CPU devices."""
     optimizer = AdamConfig(learning_rate=1e-2, warmup=0.0).build(NUM_STEPS)
     with use_test_devices(4), jax.set_mesh(compact_grug_mesh(expert_axis_size=2)):
-        step = train._make_train_step(optimizer, POLICY, z_loss_weight=0.0, ema_beta=None, microbatches=1, zero1=False)
+        step = train._make_train_step(
+            optimizer,
+            POLICY,
+            vocab_size=CONFIG.vocab_size,
+            z_loss_weight=0.0,
+            ema_beta=None,
+            microbatches=1,
+            zero1=False,
+        )
         init = jax.jit(
             lambda key: train.initial_state(CONFIG, optimizer=optimizer, mp=POLICY, key=key, ema_beta=None, zero1=False)
         )
         yield step, lambda: init(jax.random.key(0))
 
 
-def _run_loop(trainer, *, nan_at_step=None, checkpoint=True, checkpointer=None):
+def _poison_opt_state(state):
+    """Non-finite optimizer moments: the next update makes the parameters non-finite while its loss stays finite."""
+    nan_moments = jax.tree.map(lambda x: x * jnp.nan if jnp.issubdtype(x.dtype, jnp.floating) else x, state.opt_state)
+    return dataclasses.replace(state, opt_state=nan_moments)
+
+
+def _run_loop(trainer, *, poison_at_step=None, batches=None, checkpoint=True, checkpointer=None):
     train_step, initial = trainer
     dispatched = []
 
     def counting_step(state, batch, *, compute_watch):
         dispatched.append(state.step)
+        if int(state.step) == poison_at_step:
+            state = _poison_opt_state(state)
         return train_step(state, batch, compute_watch=compute_watch)
 
     hooks, model_hooks = [], []
@@ -129,7 +170,7 @@ def _run_loop(trainer, *, nan_at_step=None, checkpoint=True, checkpointer=None):
         state = train._train_loop(
             counting_step,
             initial(),
-            LoadingTimeTrackerIterator(_batches(nan_at_step)),
+            LoadingTimeTrackerIterator(_batches() if batches is None else batches),
             num_train_steps=NUM_STEPS,
             state_callbacks=runner,
             checkpointer=checkpointer,
@@ -138,7 +179,7 @@ def _run_loop(trainer, *, nan_at_step=None, checkpoint=True, checkpointer=None):
             diagnose_numerics=False,
             hooks_read_state=lambda step: (step + 1) % 2 == 0,
         )
-    except FloatingPointError as e:
+    except (FloatingPointError, ValueError) as e:
         error = str(e)
     return LoopRun(
         state=state,
@@ -171,12 +212,12 @@ def test_pipelined_loop_trains_and_hooks_like_stepping_one_at_a_time(trainer):
     ]
 
 
-def test_nonfinite_loss_raises_one_step_late_and_is_never_checkpointed(trainer):
-    unchecked = _run_loop(trainer, nan_at_step=2, checkpoint=False)
-    checked = _run_loop(trainer, nan_at_step=2)
+def test_nonfinite_state_raises_one_step_late_and_is_never_checkpointed(trainer):
+    unchecked = _run_loop(trainer, poison_at_step=2, checkpoint=False)
+    checked = _run_loop(trainer, poison_at_step=2)
 
     for run in (unchecked, checked):
-        assert run.error.startswith("Non-finite Grug loss at step 3"), run.error
+        assert run.error.startswith("Non-finite Grug state at step 3"), run.error
         # Steps 0 and 1 were hooked; step 2 was not.
         assert [s for s, *_ in run.hooks] == [0, 1]
     # Without a checkpointer, step 3 was dispatched before step 2's loss was fetched.
@@ -184,6 +225,35 @@ def test_nonfinite_loss_raises_one_step_late_and_is_never_checkpointed(trainer):
     # With one, step 2 is checked before its state can be saved: no state after the non-finite step is saved.
     assert checked.checkpoints is not None and [s for s, *_ in checked.checkpoints] == [1, 2]
     assert checked.dispatched == 3
+
+
+@pytest.mark.parametrize("damage", [_damage_tokens, _damage_loss_weight, _damage_segment_ids])
+def test_step_with_damaged_inputs_keeps_the_state_and_training_continues(trainer, damage):
+    train_step, initial = trainer
+    clean = list(_batches())
+    state = initial()
+    for step in (0, 1, 3):
+        state, _, _ = train_step(state, clean[step], compute_watch=False)
+
+    run = _run_loop(trainer, batches=_batches(damage_at_steps={2}, damage=damage))
+
+    assert run.error is None
+    # The damaged batch changed nothing but the step count: the state is that of training on the other three batches.
+    assert int(run.state.step) == NUM_STEPS
+    for got, want in zip(
+        jax.tree.leaves((run.state.params, run.state.opt_state)),
+        jax.tree.leaves((state.params, state.opt_state)),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(got, want)
+    assert [s for s, _, force in run.hooks if not force] == list(range(NUM_STEPS))
+    assert run.checkpoints is not None and [s for s, *_ in run.checkpoints] == [1, 2, 3, 4, 4]
+
+
+def test_damaged_inputs_on_every_step_raise(trainer):
+    run = _run_loop(trainer, batches=_batches(damage_at_steps=set(range(NUM_STEPS))))
+
+    assert run.error is not None and run.error.startswith("4 consecutive steps up to 3 failed the input check")
 
 
 @pytest.mark.parametrize(("every", "saved_steps"), [(2, [2, 4]), (3, [3, 4])])
@@ -258,7 +328,13 @@ def accumulation_runs():
                     )
                 )
                 train_step = train._make_train_step(
-                    OPTIMIZER, policy, z_loss_weight=1e-3, ema_beta=None, microbatches=microbatches, zero1=zero1
+                    OPTIMIZER,
+                    policy,
+                    vocab_size=CONFIG.vocab_size,
+                    z_loss_weight=1e-3,
+                    ema_beta=None,
+                    microbatches=microbatches,
+                    zero1=zero1,
                 )
                 state = initial(jax.random.key(0))
                 lowered[key] = (initial, state, train_step.lower(state, PADDED_BATCH))
