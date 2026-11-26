@@ -1,5 +1,5 @@
 {
-  "revision": "b6b19498d91e1e70fa7aace332a232c5ebdc4460",
+  "revision": "d0b972fc8d6c24f5e2fff82d48ebec3390ed3526",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -1041,10 +1041,25 @@
       "sha256": "2065d4bb0ca453cf3ac8eae3f2ca087f3622f0079c9f72e041a8e70be3b25076",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/lexical-remediation-20261116-v1/source-identities-2065d4bb0ca453cf.json"
     },
+    "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1": {
+      "input_sha256": "a979e4210fea0bdf62514a124c5c41ab6b625faa8e91e604f2c53adee3420c4e",
+      "sha256": "5ca78c72e7e21987a809edac8cb5678f62603663644d5fdb7c9af8bf04025a3c",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/overlap-disposition-v6/source-identities-citation.json"
+    },
+    "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1": {
+      "input_sha256": "9ded525798e51c81b9f178d9166fbd38b51249f945705002f30ef015009d32dc",
+      "sha256": "faba00c13396056228f8d193e74bfd2da30c7cee7b58fe0935b8a0330df7f239",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/overlap-disposition-v6/source-identities-freeform.json"
+    },
     "Nvidia:Nemotron-RL-InverseIFEval-v1": {
       "input_sha256": "aace4cee98596e1bf3ecb4644d598ef3ecf96301ab156076cfc9e9b8170738ce",
       "sha256": "f9fc8033c51a2a04fd5738affbbd83988772a8ad2778a585906cfe3083310920",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemotron-inverse-ifeval/2026.11.25.1/admission-evidence-v1/overlap-disposition-v1/source-identities.json"
+    },
+    "Nvidia:Nemotron-RL-QA-Abstention-v1": {
+      "input_sha256": "2f7cd081c24286c66fbc6e0f54eac8c0404d174b319ba7f3b41e61ae82fcf388",
+      "sha256": "3ec21c19a8317bbcd363e1ba9b806e210201f26aa98609aab070afa2413a7193",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/qa-abstention/2026.11.26.1/admission-evidence-v1/overlap-disposition-v1/source-identities.json"
     },
     "Nvidia:Nemotron-RL-agent-workplace_assistant": {
       "input_sha256": "ddd5f2acabbebeef7adb1f7b4f021c462c331864f3676dcf0fcd9262627458e6",
@@ -1795,6 +1810,11 @@
       "input_sha256": "2e4237e857f1c7ec631055e727c4b34a27780b325e2a7955efbe7b9e0301077e",
       "sha256": "758cc2a90d510a013d91e13d9dfa434734bd4f6c8685c091b86b1edd45e1f575",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/litecoder-terminalworld/2026.11.22.1/terminalworld-seven-neighbor-survey-v1/source-identities.json"
+    },
+    "Yatin:Edge-Agent-Reasoning-WebSearch-260K": {
+      "input_sha256": "c4cdb95a3be3db8d3dc5cd7323e09efbab13d154f24ed2d14c5fbb2d02ea3190",
+      "sha256": "3f2e277d59d6f84d3a4c6df346147262e989115bb6bbbe42035e8d125d06bf0e",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/admission-evidence-v1/source-identities.json"
     },
     "agentica-org:deepscaler": {
       "input_sha256": "6748f8b98f2a59545360c465f31d89f655e19d4ffb817185a24550d0dd935e25",
