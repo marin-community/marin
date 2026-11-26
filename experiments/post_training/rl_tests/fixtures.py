@@ -79,6 +79,14 @@ SELECTION_IDENTITY = "fixture-selection@2026.11.10"
 NATIVE_RECORD = json.loads(Path(__file__).with_name("native_record.json").read_text())
 
 
+def printed_status(output):
+    # CliRunner merges stderr into result.output; status is on result.stdout. A plan prints its
+    # lowered steps after the status, so the YAML ends where the first StepSpec begins.
+    output = output.partition("\nStepSpec(")[0]
+    marker = output.rfind("\npreset:")
+    return yaml.safe_load(output[marker + 1 if marker >= 0 else 0 :].split("\n# ", 1)[0])
+
+
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))

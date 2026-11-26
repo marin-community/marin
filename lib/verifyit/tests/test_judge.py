@@ -1362,26 +1362,21 @@ def test_pairwise_judges_both_orders_and_weights_decisive_verdicts(fake_judge):
 
 
 @pytest.mark.parametrize(
-    "reply,reward",
+    "reply,verdict",
     [
-        # The same verdict in both positions means the judge preferred position A each time.
-        ("[[a>b]]", 0.5),
-        ("mentions [[B>A]] early but concludes [[A>B]]", 0.5),
-        ("[B>A] then the official [[A=B]]", 0.5),
-        ("[[B>>A]]", 0.5),
+        ("[[a>b]]", "A>B"),
+        ("mentions [[B>A]] early but concludes [[A>B]]", "A>B"),
+        ("[B>A] then the official [[A=B]]", "A=B"),
+        # A stray single-bracket "[B>A]" after the double-bracket verdict does not win.
+        ("[[A=B]] footnote [B>A]", "A=B"),
+        ("[[B>>A]]", "B>>A"),
     ],
 )
-def test_pairwise_verdict_takes_last_match_of_first_matching_pattern(fake_judge, reply, reward):
+def test_pairwise_verdict_takes_last_match_of_first_matching_pattern(fake_judge, reply, verdict):
+    # fake_judge reuses the single reply for both games.
     fake_judge.replies = [reply]
     result = grade_judge.grade_judge_candidate(_pairwise_spec(), "candidate")
-    assert (result.status, result.reward) == (Status.SCORED, reward)
-
-
-def test_pairwise_verdict_patterns_prefer_double_brackets(fake_judge):
-    # "[[A=B]]" also contains the single-bracket match "A=B"; a stray "[B>A]" must not win.
-    fake_judge.replies = ["[[A=B]] footnote [B>A]", "[[A=B]]"]
-    result = grade_judge.grade_judge_candidate(_pairwise_spec(), "candidate")
-    assert [game["verdict"] for game in result.detail["games"]] == ["A=B", "A=B"]
+    assert [game["verdict"] for game in result.detail["games"]] == [verdict, verdict]
 
 
 @pytest.mark.parametrize("reply", ["no verdict at all", "[[A>>>B]]"])
