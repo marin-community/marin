@@ -288,6 +288,42 @@ class _HierarchyReader:
         return {"hierarchy": [{"kind": "subject", "subject_id": f"D{index:02d}"} for index in range(1, 21)]}
 
 
+def test_sweep_reads_the_pending_manifest_without_a_browser(tmp_path, monkeypatch):
+    """R40 #62: the pending-manifest prefetch ran on a never-navigated page, so its package
+    fetch was cross-origin and every sweep died on CORS ('Failed to fetch'). The manifest
+    ships with the served package: the reader reads it, and no browser starts for it."""
+
+    class _ManifestReader:
+        def __init__(self) -> None:
+            self.paths: list[str] = []
+            self.cache: dict[str, Any] = {}
+
+        def get(self, path: str) -> Any:
+            self.paths.append(path)
+            if path == "api/curriculum/releases":
+                return {"releases": [{"release_id": "current", "selected": True}]}
+            if path == "measurements/oracle-inventory.json":
+                return {}
+            if path == "measurements/pending-filtered-releases.json":
+                return {"sources": [{"source_id": "Marin:pending-a"}, {"source_id": "Marin:pending-b"}]}
+            raise AssertionError(f"unexpected read: {path}")
+
+    def _no_browser(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("browser_checks launched a browser for the pending manifest")
+
+    monkeypatch.setattr(release_check, "sync_playwright", _no_browser)
+    monkeypatch.setattr(release_check, "sweep_units", lambda *args, **kwargs: [])
+    monkeypatch.setattr(release_check, "run_sweep_units", lambda *args, **kwargs: [])
+    reader = _ManifestReader()
+    release_check.browser_checks(reader, "https://x/", {"sources": []}, tmp_path, local=True, stored_groups=[])
+    assert reader.paths == [
+        "api/curriculum/releases",
+        "measurements/oracle-inventory.json",
+        "measurements/pending-filtered-releases.json",
+    ]
+    assert release_check.pending_release_sources(reader) == {"Marin:pending-a", "Marin:pending-b"}
+
+
 def test_full_sweep_splits_into_bounded_parallel_units(tmp_path, monkeypatch):
     """R40 #60: the full sweep was one serial page walk (40+ min); it is split per layout
     and per domain/case chunk so a bounded page pool runs it."""

@@ -52,7 +52,6 @@ from .release_browser import (
     evidence_cases,
     evidence_smoke,
     evidence_sweep,
-    pending_release_ids,
     report_failed_request,
     report_failed_response,
     source_sweep,
@@ -489,6 +488,17 @@ def sweep_family(key: str) -> SweepFamily:
     return SweepFamily.READABILITY
 
 
+def pending_release_sources(reader: CatalogReader) -> set[str]:
+    """The candidate presentations the sweep covers, from the served package's manifest.
+
+    The manifest ships with the package, not the API. A browser fetch of it from a page
+    that never navigated is cross-origin and dies on CORS (R40 #62), so the reader reads it
+    server-side in both the local and hosted modes.
+    """
+    manifest = reader.get("measurements/pending-filtered-releases.json")
+    return {row["source_id"] for row in manifest["sources"]}
+
+
 def browser_checks(
     reader: CatalogReader,
     root: str,
@@ -571,15 +581,7 @@ def browser_checks(
             route.continue_()
 
     full = {family for family in SweepFamily if family in full_families or scope is BrowserScope.FULL}
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch()
-        try:
-            # The pending-release manifest ships with the served package, not the API.
-            context = browser.new_context()
-            context.route(root + "**", route_request)
-            pending = pending_release_ids(context.new_page(), root)
-        finally:
-            browser.close()
+    pending = pending_release_sources(reader)
     units = sweep_units(reader, expected, releases, shots, full, pending, root=root)
     outcomes = run_sweep_units(units, root, route_request, errors, workers)
     by_family = {
