@@ -20,6 +20,12 @@ class ExpertNormalization(StrEnum):
     PER_EXPERT = "per_expert"
 
 
+class BankOptimizer(StrEnum):
+    MUONH = "muonh"
+    ADAM = "adam"
+    RMS = "rms"
+
+
 def _match_named_update_sharding() -> optax.GradientTransformation:
     """Restore named mesh sharding without touching single-device arrays."""
 
@@ -234,6 +240,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     gate_router_weight_decay: float = 0.0
     expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS
     schedule_extension: ScheduleExtension | None = None
+    bank_optimizer: BankOptimizer = BankOptimizer.MUONH
 
     def __post_init__(self):
         extension = self.schedule_extension
@@ -298,11 +305,30 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 components.append(optax.scale(-lr))
                 return optax.chain(*components)
 
+            def adam_rms_transform_at(lr):
+                components = []
+                if self.max_grad_norm:
+                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
+                # Matches arm F (scale_by_adam(b1=0, b2=beta2, eps=epsilon)) with 1 array (nu) per leaf;
+                # intentionally omits gate_router_weight_decay.
+                components.append(
+                    optax.scale_by_rms(
+                        decay=self.beta2,
+                        eps=self.epsilon,
+                        eps_in_sqrt=False,
+                        bias_correction=True,
+                    )
+                )
+                components.append(optax.scale(-lr))
+                return optax.chain(*components)
+
             transforms = {
                 "muonh": muonh_transform(),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
             }
+            if self.bank_optimizer == BankOptimizer.RMS:
+                transforms["adam_rms"] = adam_rms_transform_at(adam_lr)
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
@@ -328,6 +354,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             if path_lower.endswith(".weight"):
                 return "adam"
             if hasattr(param, "ndim") and param.ndim in (2, 3, 4):
+                if param.ndim == 4:
+                    if self.bank_optimizer == BankOptimizer.ADAM:
+                        return "adam"
+                    if self.bank_optimizer == BankOptimizer.RMS:
+                        return "adam_rms"
                 return "muonh"
             return "adam"
 
@@ -335,6 +366,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
 
 __all__ = [
+    "BankOptimizer",
     "ExpertNormalization",
     "GrugMoeMuonHConfig",
     "ScheduleExtension",

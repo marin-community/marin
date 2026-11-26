@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import tomllib
+from collections import Counter
 from datetime import timedelta
 from io import StringIO
 from pathlib import Path
@@ -39,6 +40,7 @@ from levanter.grug.grug_moe import (
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
 )
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_test_devices
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -56,7 +58,12 @@ from experiments.grug.moe_hero_ep.grugmuon_hero import (
     _zeropower_via_newtonschulz_local,
     _zeropower_via_newtonschulz_replicated,
 )
-from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization, GrugMoeMuonHConfig, ScheduleExtension
+from experiments.grug.moe_hero_ep.optimizer import (
+    BankOptimizer,
+    ExpertNormalization,
+    GrugMoeMuonHConfig,
+    ScheduleExtension,
+)
 
 GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
 
@@ -1886,3 +1893,237 @@ def test_muonh_resume_into_extension_scales_every_lr_group(tmp_path):
                     ratio / 0.05, rel=0.02
                 )
             params = optax.apply_updates(params, updates)
+
+
+def test_bank_optimizer_rms_groups_slots_and_first_step():
+    # Use a tiny Mochi-layout Transformer (36 array leaves) to verify exact 20/1/12/3 group counts.
+    model_cfg = model.GrugModelConfig(
+        vocab_size=129,
+        hidden_dim=32,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=32,
+        num_experts=8,
+        num_experts_per_token=2,
+        num_layers=2,
+        max_seq_len=8,
+        sliding_window=4,
+        latent_dim=16,
+        num_shared_experts=2,
+        sconv=True,
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        m = model.Transformer.init(model_cfg, key=jax.random.PRNGKey(0))
+    params = jax.tree.map(lambda x: jnp.asarray(np.asarray(x), dtype=jnp.float32), eqx.filter(m, eqx.is_array))
+    grads = jax.tree.map(lambda x: jnp.sin(x) * 0.2, params)
+
+    settings = dict(
+        learning_rate=0.02,
+        adam_lr=3.2905e-05,
+        warmup=0,
+        use_syrk=False,
+        expert_normalization=ExpertNormalization.ALL_EXPERTS,
+    )
+    muonh_cfg = GrugMoeMuonHConfig(**settings)
+    adam_cfg = GrugMoeMuonHConfig(**settings, bank_optimizer=BankOptimizer.ADAM)
+    rms_cfg = GrugMoeMuonHConfig(**settings, bank_optimizer=BankOptimizer.RMS)
+
+    assert dict(Counter(jax.tree.leaves(muonh_cfg.create_mask(params)))) == {
+        "muonh": 23,
+        "adamh": 1,
+        "adam": 12,
+    }
+    assert dict(Counter(jax.tree.leaves(rms_cfg.create_mask(params)))) == {
+        "muonh": 20,
+        "adamh": 1,
+        "adam": 12,
+        "adam_rms": 3,
+    }
+
+    opt_adam = adam_cfg.build(100)
+    opt_rms = rms_cfg.build(100)
+    st_adam = opt_adam.init(params)
+    st_rms = opt_rms.init(params)
+
+    # Confirm 1 persistent array per bank (nu only, no mu) in adam_rms state.
+    rms_state = st_rms.inner_state.inner_states["adam_rms"].inner_state[0]
+    bank_arrays = [leaf for leaf in jax.tree.leaves(rms_state.nu) if leaf is not None]
+    assert len(bank_arrays) == 3
+
+    # Step 1 update under BankOptimizer.RMS equals BankOptimizer.ADAM (1.0x),
+    # and adam_rms does not inherit gate_router_weight_decay.
+    u_adam, _ = opt_adam.update(grads, st_adam, params)
+    u_rms, _ = opt_rms.update(grads, st_rms, params)
+    rms_wd_cfg = GrugMoeMuonHConfig(**settings, bank_optimizer=BankOptimizer.RMS, gate_router_weight_decay=0.1)
+    opt_rms_wd = rms_wd_cfg.build(100)
+    u_rms_wd, _ = opt_rms_wd.update(grads, opt_rms_wd.init(params), params)
+    for bank_name in ("w_gate", "w_up", "w_down"):
+        a = getattr(u_adam.stacked_blocks.stacked.mlp.expert_mlp, bank_name)
+        b = getattr(u_rms.stacked_blocks.stacked.mlp.expert_mlp, bank_name)
+        c = getattr(u_rms_wd.stacked_blocks.stacked.mlp.expert_mlp, bank_name)
+        np.testing.assert_allclose(np.asarray(b), np.asarray(a), rtol=1e-6, atol=1e-7)
+        np.testing.assert_array_equal(np.asarray(c), np.asarray(b))
+
+
+def test_masked_restore_migrates_bank_rms_state(tmp_path):
+    params = {
+        "token_embed": jnp.arange(1, 9, dtype=jnp.float32).reshape(2, 4),
+        "matrix": jnp.arange(1, 13, dtype=jnp.float32).reshape(3, 4),
+        "mlp": {
+            "expert_mlp": {
+                "w_gate": jnp.arange(1, 49, dtype=jnp.float32).reshape(2, 2, 3, 4),
+                "w_up": jnp.arange(49, 97, dtype=jnp.float32).reshape(2, 2, 3, 4),
+                "w_down": jnp.arange(97, 145, dtype=jnp.float32).reshape(2, 2, 3, 4),
+            }
+        },
+        "rms_attn": {"weight": jnp.ones((2, 4), dtype=jnp.float32)},
+    }
+    grads = jax.tree.map(lambda x: jnp.sin(x) * 0.2, params)
+    settings = dict(
+        learning_rate=0.02,
+        adam_lr=0.02,
+        warmup=0,
+        use_syrk=False,
+        expert_normalization=ExpertNormalization.ALL_EXPERTS,
+    )
+    old_opt = GrugMoeMuonHConfig(**settings, bank_optimizer=BankOptimizer.MUONH).build(100)
+    old_opt_state = old_opt.init(params)
+    _, old_opt_state = old_opt.update(grads, old_opt_state, params)
+    _, old_opt_state = old_opt.update(grads, old_opt_state, params)
+
+    saved_state = train.GrugTrainState(
+        step=jnp.asarray(2, dtype=jnp.int32),
+        params=params,
+        master_params=None,
+        opt_state=old_opt_state,
+        ema_params=None,
+        pending_qb_betas=None,
+    )
+    ckpt_dir = tmp_path / "step-2"
+    save_checkpoint(saved_state, step=2, checkpoint_path=str(ckpt_dir))
+    saved_params_np = [np.asarray(x).copy() for x in jax.tree.leaves(saved_state.params)]
+    saved_opt_np = {p: np.asarray(x).copy() for p, x in jax.tree_util.tree_leaves_with_path(saved_state.opt_state)}
+
+    rms_opt = GrugMoeMuonHConfig(**settings, bank_optimizer=BankOptimizer.RMS).build(100)
+    unmigrated_template = train.restore_template_from(
+        train.GrugTrainState(
+            step=jnp.asarray(0, dtype=jnp.int32),
+            params=params,
+            master_params=None,
+            opt_state=rms_opt.init(params),
+            ema_params=None,
+            pending_qb_betas=None,
+        )
+    )
+
+    # Migrated restore under BankOptimizer.RMS masks only the 3 nu leaves + adam_rms count (4 leaves).
+    masked_specs: dict = {}
+    masked_template = train.template_for_candidate_layout(
+        unmigrated_template,
+        str(ckpt_dir),
+        train.MasterParamMode.DEVICE,
+        masked_bank_specs_out=masked_specs,
+    )
+    assert len(masked_specs) == 4
+    restored = load_checkpoint(masked_template, str(ckpt_dir), allow_partial=False)
+    restored = train.fill_moved_bank_optimizer_state(restored, masked_specs)
+
+    zero_count = 0
+    for path, leaf in jax.tree_util.tree_leaves_with_path(restored.opt_state):
+        if train._is_moved_bank_rms_leaf_path(path):
+            spec = masked_specs[path]
+            assert leaf.shape == spec.shape
+            assert leaf.dtype == spec.dtype
+            assert leaf.sharding == spec.sharding
+            np.testing.assert_array_equal(np.asarray(leaf), np.zeros(spec.shape, dtype=np.dtype(spec.dtype)))
+            zero_count += 1
+    assert zero_count == 4
+    assert int(restored.step) == 2
+    for p_new, p_old in zip(jax.tree.leaves(restored.params), saved_params_np, strict=True):
+        np.testing.assert_array_equal(np.asarray(p_new), p_old)
+    for path, leaf in jax.tree_util.tree_leaves_with_path(restored.opt_state):
+        if train._is_moved_bank_rms_leaf_path(path):
+            continue
+        np.testing.assert_array_equal(np.asarray(leaf), saved_opt_np[path])
+
+    # A 5th missing leaf still fails with FileNotFoundError.
+    bad_template = dataclasses.replace(
+        masked_template,
+        params={
+            **masked_template.params,
+            "extra_missing": jax.ShapeDtypeStruct(
+                (2, 2), jnp.float32, sharding=masked_template.params["matrix"].sharding
+            ),
+        },
+    )
+    with pytest.raises(FileNotFoundError):
+        load_checkpoint(bad_template, str(ckpt_dir), allow_partial=False)
+
+
+def test_fill_moved_bank_rms_pinned_host_sharded_zeros():
+    devices = jax.devices()
+    if len(devices) < 8:
+        pytest.skip(
+            f"requires >= 8 devices (got {len(devices)}; run with XLA_FLAGS=--xla_force_host_platform_device_count=8)"
+        )
+    mesh = Mesh(np.array(devices[:8]).reshape(2, 4), ("data", "expert"))
+    bank_sharding = NamedSharding(mesh, P(None, "expert", "data", None))
+    other_sharding = NamedSharding(mesh, P(None))
+
+    params = {
+        "matrix": jax.device_put(jnp.ones((3, 4), dtype=jnp.float32), other_sharding),
+        "mlp": {
+            "expert_mlp": {
+                "w_gate": jax.device_put(jnp.ones((2, 8, 4, 6), dtype=jnp.float32), bank_sharding),
+                "w_up": jax.device_put(jnp.ones((2, 8, 4, 6), dtype=jnp.float32), bank_sharding),
+                "w_down": jax.device_put(jnp.ones((2, 8, 4, 6), dtype=jnp.float32), bank_sharding),
+            }
+        },
+    }
+    opt = GrugMoeMuonHConfig(
+        learning_rate=0.02,
+        adam_lr=0.02,
+        warmup=0,
+        use_syrk=False,
+        expert_normalization=ExpertNormalization.ALL_EXPERTS,
+        bank_optimizer=BankOptimizer.RMS,
+    ).build(100)
+    offloaded_opt_state = jax.tree.map(
+        lambda x: (
+            jax.jit(
+                lambda arr=x: arr,
+                out_shardings=NamedSharding(
+                    mesh, x.sharding.spec if hasattr(x.sharding, "spec") else P(), memory_kind="pinned_host"
+                ),
+            )()
+            if isinstance(x, jax.Array)
+            else x
+        ),
+        opt.init(params),
+    )
+    template = jax.tree.map(
+        lambda leaf: (
+            jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding) if isinstance(leaf, jax.Array) else leaf
+        ),
+        train.GrugTrainState(
+            step=jnp.asarray(0, dtype=jnp.int32),
+            params=params,
+            master_params=None,
+            opt_state=offloaded_opt_state,
+            ema_params=None,
+            pending_qb_betas=None,
+        ),
+    )
+    masked, specs = train.mask_moved_bank_optimizer_state(template)
+    assert len(specs) == 4
+    filled = train.fill_moved_bank_optimizer_state(masked, specs)
+    for path, spec in specs.items():
+        leaf = dict(jax.tree_util.tree_leaves_with_path(filled.opt_state))[path]
+        assert leaf.sharding == spec.sharding
+        assert leaf.sharding.memory_kind == "pinned_host"
+        if leaf.ndim == 4:
+            assert len(leaf.addressable_shards) == 8
+            for shard in leaf.addressable_shards:
+                assert shard.data.shape == (2, 2, 2, 6)
+                np.testing.assert_array_equal(np.asarray(shard.data), 0.0)
+        else:
+            assert int(leaf) == 0
