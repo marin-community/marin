@@ -4,6 +4,7 @@
 import asyncio
 import json
 import math
+import re
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -1961,10 +1962,8 @@ class UserTurnTokenizer(CharacterTokenizer):
         self.template_kwargs = []
 
     def encode(self, text, *, add_special_tokens=False):
-        # Like a BPE vocabulary, a leading-space letter is one token.
-        if len(text) == 2 and text[0] == " " and text[1].isalpha():
-            return [ord(text[1]) + 1000]
-        return super().encode(text, add_special_tokens=add_special_tokens)
+        # Like a byte-level BPE vocabulary, a space before a letter joins it as one token, alone or in context.
+        return [ord(piece[-1]) + 1000 if len(piece) == 2 else ord(piece) for piece in re.findall(r" [A-Za-z]|.", text)]
 
     def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, **kwargs):
         assert not tokenize and add_generation_prompt
@@ -2037,8 +2036,9 @@ def rotated_corpus(tmp_path):
     return corpus
 
 
-async def run_rotated(corpus, output, run_config, tokenizer, scorer):
-    config = run_config.model_copy(update={"chat_template_kwargs": {"enable_thinking": False}})
+async def run_rotated(corpus, output, run_config, tokenizer, scorer, chat_template=None):
+    model = run_config.model.model_copy(update={"chat_template": chat_template})
+    config = run_config.model_copy(update={"chat_template_kwargs": {"enable_thinking": False}, "model": model})
     async with openai.AsyncOpenAI(api_key="test", base_url="http://fixture.test/v1") as unused:
         await run_evaluation(
             (corpus,),
@@ -2078,6 +2078,21 @@ async def test_user_turn_choice_terms_score_rendered_contexts_and_record_folded_
     assert sample.prompt_text == "<user>x<assistant>"
 
 
+class DummyPrefixTokenizer(UserTurnTokenizer):
+    def encode(self, text, *, add_special_tokens=False):
+        # Like SentencePiece, standalone text gains a dummy-prefix token that the same text after a context lacks.
+        if len(text) == 1 and text.isalpha():
+            return [ord(text) + 2000]
+        return super().encode(text, add_special_tokens=add_special_tokens)
+
+
+class ServedTemplateTokenizer(UserTurnTokenizer):
+    def apply_chat_template(self, conversation, *, tokenize, add_generation_prompt, chat_template=None, **kwargs):
+        assert chat_template is not None
+        (message,) = conversation
+        return chat_template.replace("{content}", message["content"])
+
+
 class SplitSpellingTokenizer(UserTurnTokenizer):
     def encode(self, text, *, add_special_tokens=False):
         # Every letter spelling takes two tokens, so no pooled alternative can be scored.
@@ -2097,3 +2112,37 @@ async def test_pooled_terms_without_a_single_token_spelling_are_invalid_and_send
     (attempt,) = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert attempt["outcome"] == "invalid_task"
     assert "encodes as one token" in attempt["error"]
+
+
+@pytest.mark.asyncio
+async def test_pooled_spellings_that_tokenize_differently_in_context_are_invalid(tmp_path, run_config, rotated_corpus):
+    scorer = TableScorer({})
+    output = str(tmp_path / "results")
+
+    await run_rotated(rotated_corpus, output, run_config, DummyPrefixTokenizer(), scorer)
+
+    assert scorer.calls == []
+    (attempt,) = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert attempt["outcome"] == "invalid_task"
+    assert "tokenizes differently after its context" in attempt["error"]
+
+
+@pytest.mark.asyncio
+async def test_user_turns_render_with_the_serving_chat_template_override(tmp_path, run_config, rotated_corpus):
+    contexts = {"x": "[served]x[reply]", "y": "[served]y[reply]"}
+    scorer = TableScorer(
+        {
+            (contexts["x"], "A"): 0.2,
+            (contexts["x"], " A"): 0.1,
+            (contexts["y"], "B"): 0.3,
+            (contexts["x"], "B"): 0.4,
+            (contexts["y"], "A"): 0.2,
+        }
+    )
+    output = str(tmp_path / "results")
+
+    await run_rotated(
+        rotated_corpus, output, run_config, ServedTemplateTokenizer(), scorer, chat_template="[served]{content}[reply]"
+    )
+
+    assert {context for context, _ in scorer.calls} == set(contexts.values())

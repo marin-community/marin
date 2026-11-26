@@ -116,12 +116,15 @@ model or combine several prompts per item. Build the operation in a read
 function when you need either; `importers/evalchemy/spp.py` uses both.
 
 - `context_format=LikelihoodContext.USER_TURN` renders each request's context
-  as one user message with the served model's chat template, its generation
-  prompt and the run's `chat_template_kwargs`. The corpus stays model-agnostic.
+  as one user message with the served model's chat template (the serving
+  config's `chat_template` override when it sets one), its generation prompt and
+  the run's `chat_template_kwargs`. The corpus stays model-agnostic.
 - `terms` maps several requests to each choice. Choice `i` scores the sum over
   `terms[i]` of the log-sum-exp of each group's request log-likelihoods. A group
   pools alternative spellings of one answer, such as `"A"` and `" A"`; it keeps
-  only those the run's tokenizer encodes, by itself, as one token. Summing
+  only those the run's tokenizer encodes, by itself, as one token, and an item is
+  invalid when such a token changes after the context (as with SentencePiece's
+  dummy prefix). Summing
   groups combines prompt variants, such as every cyclic option order, so a
   fixed preference for one letter or position cancels.
 

@@ -203,3 +203,11 @@ def test_agent_worker_rejects_a_server_window_other_than_the_planned_one(created
     with pytest.raises(ValueError, match="planned agent window"):
         evaluator(SESSION, "s3://results/agent", {}, backend_state=lambda: InferenceBackendState.READY)
     assert submitted == {}
+
+
+def test_runs_carry_the_serving_chat_template_override_without_changing_runs_that_have_none(created):
+    template = "{% for message in messages %}{{ message['content'] }}{% endfor %}"
+    model = replace(MODEL, serve=replace(MODEL.serve, chat_template=template))
+
+    assert runtime_config(model, CuratedSettings(), SESSION).model.chat_template == template
+    assert "chat_template" not in runtime_config(MODEL, CuratedSettings(), SESSION).model.model_dump(mode="json")

@@ -39,10 +39,23 @@ class EvaluationTokenizer(Protocol):
     ) -> str | list[int]: ...
 
 
-def user_turn_context(tokenizer: EvaluationTokenizer, text: str, chat_template_kwargs: Mapping[str, bool | str]) -> str:
-    """Render ``text`` as one user message followed by the served model's generation prompt."""
+def user_turn_context(
+    tokenizer: EvaluationTokenizer,
+    text: str,
+    chat_template_kwargs: Mapping[str, bool | str],
+    chat_template: str | None = None,
+) -> str:
+    """Render ``text`` as one user message followed by the served model's generation prompt.
+
+    ``chat_template`` is the serving-side override; without one the tokenizer's own template renders.
+    """
+    override = {"chat_template": chat_template} if chat_template is not None else {}
     rendered = tokenizer.apply_chat_template(
-        [{"role": "user", "content": text}], tokenize=False, add_generation_prompt=True, **chat_template_kwargs
+        [{"role": "user", "content": text}],
+        tokenize=False,
+        add_generation_prompt=True,
+        **override,
+        **chat_template_kwargs,
     )
     if not isinstance(rendered, str):
         raise TypeError("The tokenizer returned token ids for an untokenized chat template")

@@ -51,6 +51,7 @@ from rolloutengine.likelihood import (
     LikelihoodScore,
     LikelihoodScorer,
     LikelihoodTransportError,
+    encode_pair,
 )
 from rolloutengine.models import (
     GradedRolloutInterrupted,
@@ -187,6 +188,8 @@ class ModelIdentity(RunModel):
     tokenizer_revision: str
     context_window: int = Field(gt=0)
     serving: dict[str, str]
+    chat_template: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """The serving-side chat template override, which user-turn likelihood contexts render with."""
 
 
 class EvaluationRunConfig(RunModel):
@@ -649,12 +652,13 @@ async def _score_likelihood(
     evidence: TaskEvidence,
     tokenizer: EvaluationTokenizer | None,
     chat_template_kwargs: Mapping[str, bool | str],
+    chat_template: str | None,
 ) -> Outcome:
     operation = case.item.operation
     assert isinstance(operation, ChoiceLikelihood | ContinuationLikelihood)
     requests = operation.requests if isinstance(operation, ChoiceLikelihood) else (operation.request,)
     user_turn = isinstance(operation, ChoiceLikelihood) and operation.context_format is LikelihoodContext.USER_TURN
-    contexts = _likelihood_contexts(requests, user_turn, tokenizer, chat_template_kwargs)
+    contexts = _likelihood_contexts(requests, user_turn, tokenizer, chat_template_kwargs, chat_template)
     single_token = single_token_flags(operation, tokenizer) if isinstance(operation, ChoiceLikelihood) else None
     results = []
     failure_evidence = None
@@ -663,8 +667,9 @@ async def _score_likelihood(
     error = None
     try:
         if isinstance(operation, ChoiceLikelihood):
-            # Reject a pooled group with no single-token alternative before sending any request.
+            # Reject an unscorable pooled group before sending any request.
             operation.scored_terms(single_token)
+            _check_pooled_tokens(operation, contexts, tokenizer, single_token)
         async with asyncio.timeout(timeout):
             for context, request in zip(contexts, requests, strict=True):
                 results.append(await scorer(context, request.continuation, seed=attempt.seed))
@@ -763,13 +768,43 @@ def _likelihood_contexts(
     user_turn: bool,
     tokenizer: EvaluationTokenizer | None,
     chat_template_kwargs: Mapping[str, bool | str],
+    chat_template: str | None,
 ) -> tuple[str, ...]:
     """The contexts sent to the scorer: verbatim, or each rendered as a user turn with the served chat template."""
     if not user_turn:
         return tuple(request.context for request in requests)
     if tokenizer is None:
         raise ValueError("User-turn likelihood contexts require the run's pinned tokenizer")
-    return tuple(user_turn_context(tokenizer, request.context, chat_template_kwargs) for request in requests)
+    return tuple(
+        user_turn_context(tokenizer, request.context, chat_template_kwargs, chat_template) for request in requests
+    )
+
+
+def _check_pooled_tokens(
+    operation: ChoiceLikelihood,
+    contexts: tuple[str, ...],
+    tokenizer: EvaluationTokenizer | None,
+    single_token: tuple[bool, ...] | None,
+) -> None:
+    """Require each pooled single-token alternative to end its scored continuation with that same token.
+
+    A tokenizer that normalizes standalone text, such as SentencePiece's dummy prefix, can encode a spelling
+    alone as one token and differently after the context, so the scorer would compare another token.
+    """
+    if single_token is None:
+        return
+    assert tokenizer is not None
+    for index in operation.pooled_requests():
+        if not single_token[index]:
+            continue
+        request = operation.requests[index]
+        (alone,) = tokenizer.encode(request.continuation, add_special_tokens=False)
+        # The prefix token only fills an empty context, which a pooled request never scores without.
+        _, scored = encode_pair(tokenizer, contexts[index], request.continuation, prefix_token_id=0)
+        if not scored or scored[-1] != alone:
+            raise UnscorableChoice(
+                f"Pooled continuation {request.continuation!r} tokenizes differently after its context"
+            )
 
 
 def _choice_loglikelihood(
@@ -1183,6 +1218,7 @@ async def run_evaluation(
                         config.task_evidence,
                         tokenizer,
                         config.chat_template_kwargs,
+                        config.model.chat_template,
                     )
                     failures += outcome is Outcome.INFRA_ERROR
                     continue
