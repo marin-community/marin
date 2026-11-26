@@ -225,24 +225,59 @@ def test_failed_run_emits_alert(tmp_path):
     assert [row["kind"] for row in rows] == ["STAGE_START", "STAGE_FAIL"]
 
 
-def test_fresh_qc_panel_at_an_older_pin_replays_as_stale(tmp_path):
-    """A complete panel the prior load served at an older pin replays and reports its currency."""
+def test_fresh_qc_panels_replay_by_scope_and_report_pin_currency(tmp_path):
+    """SAMPLE panels hold their drawn sample, FULL panels every retained task; a panel at an
+    older pin replays and reports its currency."""
 
-    def staged_panel(name: str, records: int, current_pin: bool) -> dict:
-        document = {"items": [{}] * records, "raw": [{}] * records, "receipt": {"current_pin": current_pin}}
+    def staged_panel(name: str, scope: str, records: int, *, sample_size=None, retained=None, current_pin=True):
+        document = {
+            "items": [{}] * records,
+            "raw": [{}] * records,
+            "assessment": {"scope": scope},
+            "receipt": {"current_pin": current_pin, "panel": {"sample_size": sample_size, "retained_tasks": retained}},
+        }
         raw = gzip.compress(json.dumps(document).encode())
         path = tmp_path / f"{name}.json.gz"
         path.write_bytes(raw)
         return {
             "source_id": f"Test:{name}",
             "status": "complete",
-            "records": cl.QC_PANEL_RECORDS,
+            "records": records,
             "reference": {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()},
         }
 
     inputs = _inputs(tmp_path)
     loader = lambda staged, load_id, source_id, query: {"items": len(staged["items"])}  # noqa: E731
-    stale = cl._stage_qc_panel(inputs, staged_panel("stale", cl.QC_PANEL_RECORDS, False), loader, None)
-    assert stale["current_pin"] is False and stale["counts"] == {"items": cl.QC_PANEL_RECORDS}
+    n = cl.QC_PANEL_RECORDS
+    sample = cl._stage_qc_panel(
+        inputs, staged_panel("sample", "sample", n, sample_size=n, current_pin=False), loader, None
+    )
+    assert sample["current_pin"] is False and sample["counts"] == {"items": n}
+    small = staged_panel("small", "sample", 91, sample_size=91, retained=91)
+    assert cl._stage_qc_panel(inputs, small, loader, None)["counts"] == {"items": 91}
+    full = staged_panel("full", "full", 2 * n, retained=2 * n)
+    assert cl._stage_qc_panel(inputs, full, loader, None)["counts"] == {"items": 2 * n}
     with pytest.raises(ValueError, match="is not a complete panel"):
-        cl._stage_qc_panel(inputs, staged_panel("short", cl.QC_PANEL_RECORDS - 1, True), loader, None)
+        cl._stage_qc_panel(inputs, staged_panel("short", "sample", n - 1, sample_size=n), loader, None)
+
+
+def test_orphaned_review_panels_of_removed_sources_are_dropped():
+    """History staging carries the prior load's panels; a source outside the load loses its panel."""
+    calls = []
+
+    def query(sql, parameters):
+        calls.append(sql.split()[0])
+        return (
+            {"rows": [{"source_id": "Test:removed-b"}, {"source_id": "Test:removed-a"}]}
+            if sql.startswith("SELECT")
+            else {}
+        )
+
+    assert cl._drop_orphaned_review_panels(query, "load") == ["Test:removed-a", "Test:removed-b"]
+    assert calls == ["SELECT", "DELETE"]
+    calls.clear()
+    assert (
+        cl._drop_orphaned_review_panels(lambda sql, parameters: calls.append(sql.split()[0]) or {"rows": []}, "load")
+        == []
+    )
+    assert calls == ["SELECT"]

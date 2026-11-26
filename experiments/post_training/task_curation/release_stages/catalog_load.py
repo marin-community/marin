@@ -324,11 +324,17 @@ def _run_write(
         raise ValueError("fresh QC index names different loads than this release")
     reviews_loader = reviews_loader if reviews_loader is not None else load_content_reviews
     qc_results = [_stage_qc_panel(inputs, panel, reviews_loader, query) for panel in fresh_qc["receipts"]]
-    selected_panels = query(
-        "SELECT COUNT(*) AS n FROM atlas_review_current WHERE load_id=:load", {"load": inputs.target_load_id}
-    )["rows"][0]["n"]
-    if selected_panels != inputs.expected_selected_panels:
-        raise ValueError(f"{selected_panels} selected review panels, expected {inputs.expected_selected_panels}")
+    orphaned_panels = _drop_orphaned_review_panels(query, inputs.target_load_id)
+    selected = {
+        row["source_id"]
+        for row in query(
+            "SELECT source_id FROM atlas_review_current WHERE load_id=:load", {"load": inputs.target_load_id}
+        )["rows"]
+    }
+    unselected = sorted({result["source_id"] for result in qc_results} - selected)
+    if unselected:
+        raise ValueError(f"fresh QC panels are not selected after the replay: {unselected[:5]}")
+    selected_panels = len(selected)
     sealed_difficulty = None
     if inputs.difficulty_snapshot is not None:
         sealed_difficulty = load_difficulty_seal(inputs.difficulty_snapshot, query, inputs.target_load_id)
@@ -351,6 +357,11 @@ def _run_write(
         "fresh_qc_results": qc_results,
         "stale_pin_panels": sorted(row["source_id"] for row in qc_results if not row["current_pin"]),
         "selected_review_panels": selected_panels,
+        # The plan's hand-counted expectation is recorded, not enforced: it predates the
+        # release's removals. The enforced invariant is above (every fresh panel selected,
+        # no panel for a source outside the load).
+        "plan_expected_selected_panels": inputs.expected_selected_panels,
+        "orphaned_review_panels_dropped": orphaned_panels,
         "difficulty_coverage": coverage_result,
         "sealed_difficulty": sealed_difficulty,
         "result": result,
@@ -394,14 +405,44 @@ def _default_retain(query_factory: Callable[[], Query], control: RetryControl, s
     return retain
 
 
+def _drop_orphaned_review_panels(query: Query, load_id: str) -> list[str]:
+    """Drop selected review panels whose source is not in the load; return their sources.
+
+    History staging carries the prior load's selections, including the release's planned
+    removals; a removed source's panel must not survive into the new load.
+    """
+    orphans = sorted(
+        row["source_id"]
+        for row in query(
+            "SELECT r.source_id FROM atlas_review_current r WHERE r.load_id=:load AND NOT EXISTS"
+            " (SELECT 1 FROM atlas_sources s WHERE s.load_id=:load AND s.id=r.source_id)",
+            {"load": load_id},
+        )["rows"]
+    )
+    if orphans:
+        query(
+            "DELETE FROM atlas_review_current r WHERE r.load_id=:load AND NOT EXISTS"
+            " (SELECT 1 FROM atlas_sources s WHERE s.load_id=:load AND s.id=r.source_id)",
+            {"load": load_id},
+        )
+    return orphans
+
+
 def _stage_qc_panel(inputs: CatalogLoadInputs, panel: dict, reviews_loader: Callable[..., dict], query: Query) -> dict:
-    if panel["status"] != "complete" or panel["records"] != QC_PANEL_RECORDS:
-        raise ValueError(f"fresh QC panel {panel['source_id']} is {panel['status']!r} with {panel['records']} records")
+    if panel["status"] != "complete":
+        raise ValueError(f"fresh QC panel {panel['source_id']} is {panel['status']!r}")
     raw = StoragePath(panel["reference"]["uri"]).read_bytes()
     if hashlib.sha256(raw).hexdigest() != panel["reference"]["sha256"]:
         raise ValueError(f"fresh QC panel digest mismatch for {panel['source_id']}")
     staged = json.loads(gzip.decompress(raw))
-    if not len(staged["items"]) == len(staged["raw"]) == QC_PANEL_RECORDS:
+    # A SAMPLE panel holds its drawn sample (QC_PANEL_RECORDS, or the whole population of a
+    # smaller source); a FULL panel holds every retained task.
+    scope = staged["assessment"]["scope"]
+    measured = staged["receipt"]["panel"]
+    expected = measured["sample_size"] if scope == "sample" else measured["retained_tasks"] if scope == "full" else None
+    if expected is None or (scope == "sample" and expected > QC_PANEL_RECORDS):
+        raise ValueError(f"fresh QC panel {panel['source_id']} has scope {scope!r} of size {expected}")
+    if not panel["records"] == len(staged["items"]) == len(staged["raw"]) == expected:
         raise ValueError(f"fresh QC panel {panel['source_id']} is not a complete panel")
     # A panel the prior load served at an older population pin replays as stale: the
     # loader records its pin currency, matching the admission gate's sample_pin_stale.
