@@ -27,15 +27,16 @@ EXECUTION_CONFIG_KEYS = frozenset(
         "replica_axis_size",
     }
 )
-# Model settings that change how training runs but not the exported weights or HF config. Export identity
-# omits them, so turning one on keeps earlier exports valid.
-TRAINING_ONLY_MODEL_KEYS = frozenset({"shadow_experts"})
+# Model fields added after exports were pinned that do not change the exported weights or HF config. Export
+# identity omits them, so exports pinned before a field existed stay valid. Older fields that only affect
+# training, such as `capacity_factor`, stay in the identity.
+POST_PIN_MODEL_KEYS = frozenset({"shadow_experts"})
 EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
 
 
 def export_identity(config: dict) -> dict:
-    """An encoded export configuration without the model's training-only settings."""
-    model = {key: value for key, value in config["model"].items() if key not in TRAINING_ONLY_MODEL_KEYS}
+    """An encoded export configuration without the model fields added after exports were pinned."""
+    model = {key: value for key, value in config["model"].items() if key not in POST_PIN_MODEL_KEYS}
     return {**config, "model": model}
 
 

@@ -833,13 +833,16 @@ def _shadow_weights(
 
     The forward ``psum`` is exact, since only the owner contributes. The backward sums every shard's
     gradient in float32 and rounds it once onto the owner's slot. It expects each shard's own cotangent,
-    as ``shard_map(check_vma=False)`` delivers; with replication checking the cotangent arrives summed.
+    as ``shard_map(check_vma=False)`` delivers; with replication checking the cotangent arrives summed,
+    so the forward rejects that mode.
     """
     weights, _ = _shadow_weights_fwd(local_experts, moe_w13_local, moe_w2_local, experts, shard_id)
     return weights
 
 
 def _shadow_weights_fwd(local_experts, moe_w13_local, moe_w2_local, experts, shard_id):
+    if "expert" in jax.typeof(moe_w13_local).manual_axis_type.varying:
+        raise ValueError("shadow experts need shard_map(check_vma=False); the backward would sum gradients twice")
     owned = (experts // local_experts == shard_id)[:, None, None]
     local = experts % local_experts
     w13 = jax.lax.psum(jnp.where(owned, moe_w13_local[local], 0), "expert")
