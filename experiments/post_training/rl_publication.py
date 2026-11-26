@@ -451,6 +451,9 @@ def publish_runs(
             gate_path = submitted_gate.completed_path(candidates)
         report = gate.read_gate_report(gate_path)
         if report is not None:
+            current_ids = tuple(row.attempt_id for row in candidates if row is not None)
+            if len(current_ids) == len(outputs) and report.run.attempt_ids != current_ids:
+                raise ValueError("Gate report attempts differ from the current output group; repeat with --wait")
             result.gate_path = gate_path
     except Exception as error:
         report = None

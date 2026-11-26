@@ -477,12 +477,12 @@ def test_snowball_publication_updates_attempts_and_publishes_controls(
     )
     table = preset_table(preset)
     monkeypatch.setattr(publication, "configure_coreweave_s3", lambda: None)
-    controls = write_controls(recorded_runs, preset.name, cohort_run_id="nightly-batch")
-    for index, root in enumerate(controls):
-        metrics = read_skyrl_metrics(str(root))
-        for row in metrics.values():
-            row["policy/entropy"] = 0.48 + index * 0.01
-        append_metrics(root, metrics)
+    entropies = iter(0.48 + index * 0.01 for index in range(gate.CONTROL_COUNT))
+    controls = write_controls(
+        lambda *args, **kwargs: recorded_runs(*args, metrics={"policy/entropy": next(entropies)}, **kwargs),
+        preset.name,
+        cohort_run_id="nightly-batch",
+    )
     sources = [
         recorded_runs(
             preset.name, f"tests/publication-{i}", metrics={"policy/entropy": float(i)}, attempt_id=f"native-{i}"
