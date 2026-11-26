@@ -187,37 +187,10 @@ Serving Mochi drafts requires ShortConv state to survive rejected proposals.
 The promoted wheel needs the upstream fix for that verification path.
 [ShortConv verifier fix](https://github.com/marin-community/vllm/pull/140)
 
-For SkyRL, set `DRAFT_HF` to the `hf` path printed by the fit stage and
-`DRAFT_SKYRL` to a fresh, durable S3 path in the same region. The draft uses
-the policy tokenizer. Generate its model manifest and upload the marker after
-the model files are in place.
-
-```bash
-(
-set -eu
-draft_staging=$(mktemp -d)
-trap 'rm -rf -- "$draft_staging"' EXIT
-uv run fsutil cp -r "$DRAFT_HF" "$draft_staging/model"
-uv run python - "$draft_staging" <<'PY'
-import sys
-from pathlib import Path
-
-from vendor.skyrl.marinskyrl.model_manifest import snapshot_model_manifest
-
-root = Path(sys.argv[1])
-manifest = snapshot_model_manifest(root / "model", None, None, tokenizer_mode="policy")
-(root / ".marinskyrl-model-manifest.json").write_text(manifest.model_dump_json(indent=2) + "\n")
-print(manifest.identity)
-PY
-uv run fsutil verified-copy "$draft_staging/model" "$DRAFT_SKYRL"
-uv run fsutil cp "$draft_staging/.marinskyrl-model-manifest.json" \
-  "$DRAFT_SKYRL/.marinskyrl-model-manifest.json"
-)
-```
-
-Set `generator.speculative_decoding.model` with `source_uri` set to `DRAFT_SKYRL`
-and `source_identity` set to the printed digest. Use the verifier that supplied
-the teacher activations. [RL launch options](rl-experiments.md)
+The Mochi fit stage publishes a SkyRL-ready checkpoint under `MARIN_PREFIX`
+and prints a JSON object with its `source_uri` and `source_identity`. Pass that
+object as `generator.speculative_decoding.model`. Use the verifier that supplied
+the teacher activations and its policy tokenizer. [RL launch options](rl-experiments.md)
 
 ## Submit the Snowball Iris job
 

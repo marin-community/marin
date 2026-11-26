@@ -15,7 +15,7 @@ import click
 import draccus
 from levanter.models.snowball import SnowballConfig
 from marin.execution.artifact import is_mutable_version
-from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity, lower
+from marin.execution.lazy import OUT, ArtifactStep, apply, artifact_identity, lower, resolve
 from marin.execution.step_runner import StepRunner
 from marin.training.drafting.dspark_data import (
     DraftDataConfig,
@@ -26,7 +26,6 @@ from marin.training.drafting.dspark_data import (
 )
 from marin.training.drafting.dspark_distillation import (
     DEFAULT_DRAFT_SEED,
-    HF_DRAFT_SUBDIRECTORY,
     DraftRecipe,
     DSparkExport,
     require_supported_vllm_release,
@@ -67,6 +66,7 @@ _TARGETS = MappingProxyType(
     }
 )
 _RECIPE_VERSION = "2026.11.24"
+_MOCHI_CHECKPOINT_VERSION = "2026.11.25"
 _MOCHI_AGENTIC_PRESET = "mochi-agentic"
 _MOCHI_SCALE_PRESET = "mochi-agentic-50m"
 
@@ -184,7 +184,7 @@ def artifacts(
             config.teacher.relative_path,
             prepared,
             mochi.cached_recipe(recipe, config.mochi_sample),
-            _RECIPE_VERSION,
+            _MOCHI_CHECKPOINT_VERSION,
             config.mochi_sample,
         )
     else:
@@ -334,10 +334,16 @@ def main(
         if cache is not None:
             click.echo(str(cache))
         return
+    if stage == "train":
+        result = resolve(draft)
+        source_uri = str(StoragePath(result.path) / result.hf_subdirectory)
+        if result.source_identity is not None:
+            click.echo(json.dumps({"source_uri": source_uri, "source_identity": result.source_identity}))
+        else:
+            click.echo(source_uri)
+        return
     terminal = prepared if stage == "prepare" else draft
     StepRunner().run([lower(terminal)], dry_run=stage == "plan")
-    if stage == "train":
-        click.echo(str(StoragePath(draft.path(prefix)) / HF_DRAFT_SUBDIRECTORY))
 
 
 if __name__ == "__main__":

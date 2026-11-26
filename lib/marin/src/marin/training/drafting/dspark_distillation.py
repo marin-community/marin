@@ -156,6 +156,7 @@ class DSparkExport(Artifact):
     speculators_revision: str
     vllm_source_commit: str
     loss_implementation: str = _LOSS_IMPLEMENTATION
+    source_identity: str | None = None
 
 
 def _gpu_device_split(visible_devices: str, recipe: DraftRecipe) -> tuple[str, str]:
@@ -300,9 +301,9 @@ def validate_draft(checkpoint: Path, recipe: DraftRecipe, expected_mapping: np.n
     return config
 
 
-def _publish_checkpoint(
+def _prepare_checkpoint(
     *,
-    output: StoragePath,
+    export: Path,
     training: Path,
     teacher_identity: str,
     recipe: DraftRecipe,
@@ -327,10 +328,10 @@ def _publish_checkpoint(
     if index.is_file():
         names.append(index.name)
 
-    output.mkdirs()
+    export.mkdir()
     for name in names:
-        (output / name).upload_from(str(checkpoint / name))
-    (output / CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
+        (export / name).hardlink_to(checkpoint / name)
+    (export / CONFIG_NAME).write_text(json.dumps(config, indent=2) + "\n")
     return DSparkExport(
         steps=state["global_step"],
         validation=metrics,
@@ -485,9 +486,8 @@ def _speculators_environment(devices: str) -> dict[str, str]:
     return env
 
 
-def _fit_and_publish(
+def _fit(
     *,
-    output: str,
     teacher_path: Path,
     teacher_identity: str,
     recipe: DraftRecipe,
@@ -512,7 +512,7 @@ def _fit_and_publish(
     extra_packages = (str(rigging_source),) if hidden_states.scheme in ("s3", "gs") else ()
     python = _install_speculators(scratch, env, extra_packages)
     steps, packages = _prepare_trainer_inputs(python, data, scratch, recipe, split.train, env)
-    logger.info("Training DSpark for %s at %s for %d optimizer steps", teacher_identity, output, steps)
+    logger.info("Training DSpark for %s for %d optimizer steps", teacher_identity, steps)
     with server_context as server:
         train = _write_config_and_build_command(
             teacher_path,
@@ -527,8 +527,8 @@ def _fit_and_publish(
             endpoint=server.server_url if server is not None else None,
         )
         subprocess.run(train, env=env, check=True)
-    return _publish_checkpoint(
-        output=StoragePath(output) / HF_DRAFT_SUBDIRECTORY,
+    return _prepare_checkpoint(
+        export=scratch / HF_DRAFT_SUBDIRECTORY,
         training=training,
         teacher_identity=teacher_identity,
         recipe=recipe,
@@ -548,9 +548,8 @@ def _stage_frozen_weights(source: StoragePath, teacher_path: Path) -> None:
     (teacher_path / SAFE_TENSORS_INDEX_NAME).write_text(json.dumps({"weight_map": weights}))
 
 
-def train_cached_and_export(
+def train_cached_draft(
     *,
-    output: str,
     teacher: str,
     teacher_identity: str,
     recipe: DraftRecipe,
@@ -558,15 +557,14 @@ def train_cached_and_export(
     hidden_states: StoragePath,
     split: PreparedSplits,
 ) -> DSparkExport:
-    """Train on prepared Arrow data and indexed hidden states in object storage."""
+    """Train on cached activations and prepare an HF draft under scratch."""
 
     require_supported_vllm_release()
     _require_training_rows(split, recipe.trainer_ranks)
     teacher_path = scratch / "teacher"
     _stage_frozen_weights(StoragePath(teacher), teacher_path)
     devices = ",".join(_worker_gpu_devices().split(",")[: recipe.trainer_ranks])
-    return _fit_and_publish(
-        output=output,
+    return _fit(
         teacher_path=teacher_path,
         teacher_identity=teacher_identity,
         recipe=recipe,
@@ -610,8 +608,7 @@ def train_and_export(
             for pattern in ("tokenizer*", "chat_template*", "special_tokens_map.json", "added_tokens.json"):
                 for file in (tokenizer_path / pattern).glob():
                     file.download_to(str(teacher_path / file.name))
-        return _fit_and_publish(
-            output=output,
+        result = _fit(
             teacher_path=teacher_path,
             teacher_identity=teacher_identity,
             recipe=recipe,
@@ -621,3 +618,8 @@ def train_and_export(
             devices=trainer_devices,
             server_context=_teacher_environment(teacher_path, recipe, hidden_states, teacher_devices),
         )
+        export = StoragePath(output) / result.hf_subdirectory
+        export.mkdirs()
+        for path in (scratch / result.hf_subdirectory).iterdir():
+            (export / path.name).upload_from(str(path))
+        return result

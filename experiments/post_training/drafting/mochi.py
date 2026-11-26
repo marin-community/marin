@@ -52,13 +52,15 @@ from marin.training.drafting.dspark_distillation import (
     DraftRecipe,
     DSparkExport,
     extraction_config,
-    train_cached_and_export,
+    train_cached_draft,
 )
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 from safetensors.torch import load_file
+
+from vendor.skyrl.marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, snapshot_model_manifest
 
 logger = logging.getLogger(__name__)
 _GPUS_PER_NODE = 4
@@ -197,8 +199,7 @@ def _train_cached(config: CachedTraining, *, cache_key: str) -> DSparkExport:
     with TemporaryDirectory(prefix="mochi-dspark-fit-") as directory:
         scratch = Path(directory)
         _, split = _stage_data(config.prepared, scratch, config.sample)
-        return train_cached_and_export(
-            output=config.output,
+        result = train_cached_draft(
             teacher=config.teacher,
             teacher_identity=config.teacher_identity,
             recipe=config.recipe,
@@ -206,6 +207,17 @@ def _train_cached(config: CachedTraining, *, cache_key: str) -> DSparkExport:
             hidden_states=cache,
             split=split,
         )
+        export = scratch / result.hf_subdirectory
+        manifest = snapshot_model_manifest(export, None, None, tokenizer_mode="policy")
+        destination = StoragePath(config.output) / result.hf_subdirectory
+        destination.mkdirs()
+        marker = destination / MODEL_MANIFEST_FILENAME
+        if marker.exists():
+            marker.rm()
+        for entry in manifest.files:
+            (destination / entry.path).upload_from(str(export / entry.path))
+        marker.write_text(manifest.model_dump_json(indent=2) + "\n")
+        return result.model_copy(update={"source_identity": manifest.identity})
 
 
 def _select_smoke_data(data: Dataset, split: PreparedSplits, destination: Path) -> tuple[Dataset, PreparedSplits]:

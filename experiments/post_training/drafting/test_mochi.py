@@ -1,9 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from dataclasses import asdict, replace
+from pathlib import Path
 
+import numpy as np
 from datasets import Dataset
 from marin.execution.lazy import ArtifactStep, artifact_identity, resolve
 from marin.training.drafting.activation_store import activation_path, get_or_build_activation_cache
@@ -11,9 +14,11 @@ from marin.training.drafting.dspark_data import ARROW_DATASET_DIR, PREPARED_DIR,
 from marin.training.drafting.dspark_distillation import DSparkExport
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
+from safetensors.numpy import save_file
 
 from experiments.post_training import dspark_sft
 from experiments.post_training.drafting import mochi
+from vendor.skyrl.marinskyrl.model_manifest import HF_WEIGHT_INDEX_FILENAME, MODEL_MANIFEST_FILENAME, ModelManifest
 
 
 def test_mochi_fits_both_draft_sizes_from_one_activation_cache(tmp_path, monkeypatch):
@@ -38,9 +43,16 @@ def test_mochi_fits_both_draft_sizes_from_one_activation_cache(tmp_path, monkeyp
         assert split == expected_split
         assert activation_path(hidden_states, 0).read_bytes() == b"row 0"
         assert Dataset.load_from_disk(str(scratch / "data" / ARROW_DATASET_DIR))[0] == dataset[0]
-        return DSparkExport(steps=3, validation={}, trainer_packages={}, speculators_revision="", vllm_source_commit="")
+        result = DSparkExport(
+            steps=3, validation={}, trainer_packages={}, speculators_revision="", vllm_source_commit=""
+        )
+        export = scratch / result.hf_subdirectory
+        export.mkdir()
+        (export / "config.json").write_text("{}")
+        save_file({"weight": np.ones(1)}, str(export / "model.safetensors"))
+        return result
 
-    monkeypatch.setattr(mochi, "train_cached_and_export", fit)
+    monkeypatch.setattr(mochi, "train_cached_draft", fit)
 
     get_or_build_activation_cache(
         root,
@@ -50,4 +62,12 @@ def test_mochi_fits_both_draft_sizes_from_one_activation_cache(tmp_path, monkeyp
     for version, size in (("2026.11.24", mochi.DraftSize.ONE_LAYER), ("2026.11.25", mochi.DraftSize.TWO_LAYERS)):
         recipe = replace(config, mochi_draft_size=size).training_recipe()
         draft = mochi.checkpoint_step(teacher, "", prepared, recipe, version, mochi.Sample.ALL)
-        resolve(draft)
+        result = resolve(draft)
+        export = Path(result.path) / result.hf_subdirectory
+        manifest = ModelManifest.model_validate_json((export / MODEL_MANIFEST_FILENAME).read_text())
+        assert result.source_identity == manifest.identity
+        assert manifest.tokenizer_mode == "policy"
+        index = json.loads((export / HF_WEIGHT_INDEX_FILENAME).read_text())
+        assert index["weight_map"] == {"weight": "model.safetensors"}
+        for entry in manifest.files:
+            assert hashlib.sha256((export / entry.path).read_bytes()).hexdigest() == entry.sha256
