@@ -62,12 +62,13 @@ from finestore.layout import (
 )
 from finestore.migrations import migrate_for_write
 from finestore.reader import ReadView
-from finestore.shard_writer import ROW_GROUP_TARGET_BYTES, ShardWriter, table_row_groups
+from finestore.shard_writer import ShardWriter, table_row_groups
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLUSH_INTERVAL = 5.0
-DEFAULT_MAX_BUFFER_BYTES = ROW_GROUP_TARGET_BYTES
+# A table flushes, committing one shard, when its pending appends reach this many Arrow bytes.
+DEFAULT_MAX_BUFFER_BYTES = 100 * 1024 * 1024
 DEFAULT_COMPACTION_LEVELS = (16, 4, 4)
 _CLOSE_COMPACTION_MAX_INPUT_BYTES = 64 * 1024 * 1024
 _CLOSE_COMPACTION_MAX_INPUT_ROWS = 16_384
