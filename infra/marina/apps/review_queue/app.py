@@ -5,10 +5,11 @@
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import zip_longest
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException
@@ -23,7 +24,8 @@ GITHUB_TIMEOUT = 4
 PAGE_SIZE = 100
 BATCH_SIZE = 4
 DISCOVERY_INTERVAL = timedelta(minutes=15)
-HISTORY_WINDOW = timedelta(days=14)
+HISTORY_WINDOW = timedelta(days=7)
+DISCOVERY_OVERLAP = timedelta(minutes=1)
 RETRY_SECONDS = 60
 REVIEW_STATES = frozenset({"approved", "changes_requested", "commented", "dismissed"})
 READ_SNAPSHOT = text("SELECT * FROM queue_snapshot")
@@ -39,6 +41,7 @@ class PullSummary(TypedDict):
     draft: bool
     requested_reviewers: list[dict[str, str]]
     requested_teams: list[dict[str, str]]
+    author: NotRequired[str | None]
 
 
 class ReviewFact(TypedDict):
@@ -64,7 +67,7 @@ class ReviewedPull(TypedDict):
 
 class ReviewerSummary(TypedDict):
     reviewed: int
-    lines_per_week: int
+    reviewed_lines: int
     avg_response_hours: float | None
     response_count: int
     pulls: list[ReviewedPull]
@@ -73,6 +76,7 @@ class ReviewerSummary(TypedDict):
 class SyncProgress(TypedDict):
     completed: int
     total: int
+    history_discovered: bool
 
 
 class OpenPull(PullSummary):
@@ -85,6 +89,7 @@ class QueuePayload(TypedDict):
     prs: list[OpenPull]
     stats: dict[str, ReviewerSummary]
     sync: SyncProgress
+    history_days: int
 
 
 @dataclass
@@ -96,7 +101,7 @@ class ReviewerHistory:
     def summary(self) -> ReviewerSummary:
         return {
             "reviewed": len(self.pulls),
-            "lines_per_week": round(self.lines / (HISTORY_WINDOW / timedelta(weeks=1))),
+            "reviewed_lines": self.lines,
             "avg_response_hours": sum(self.responses) / len(self.responses) if self.responses else None,
             "response_count": len(self.responses),
             "pulls": sorted(self.pulls, key=lambda pull: pull["submitted_at"], reverse=True),
@@ -118,6 +123,10 @@ def migrate(connection: Connection) -> None:
         )
     )
     connection.execute(text("INSERT INTO queue_snapshot DEFAULT VALUES ON CONFLICT DO NOTHING"))
+    connection.execute(text("ALTER TABLE queue_snapshot ADD COLUMN IF NOT EXISTS history_since timestamptz"))
+    connection.execute(
+        text("ALTER TABLE queue_snapshot ADD COLUMN IF NOT EXISTS history_prs jsonb NOT NULL DEFAULT '[]'")
+    )
     connection.execute(
         text(
             """
@@ -142,13 +151,14 @@ def pr_summary(pr: dict) -> PullSummary:
         "created_at": pr["created_at"],
         "updated_at": pr["updated_at"],
         "draft": pr["draft"],
+        "author": pr["user"]["login"] if pr.get("user") else None,
         "requested_reviewers": [{"login": user["login"]} for user in pr["requested_reviewers"]],
         "requested_teams": [{"slug": team["slug"]} for team in pr["requested_teams"]],
     }
 
 
-def review_facts(timeline: list[dict]) -> list[ReviewFact]:
-    """Keep one submitted review per person and PR, with matched response time when available."""
+def review_facts(timeline: list[dict], author: str | None) -> list[ReviewFact]:
+    """Keep each external reviewer's latest review and its matched request time when available."""
     requests = {}
     reviews: dict[str, ReviewFact] = {}
     for event in timeline:
@@ -163,6 +173,8 @@ def review_facts(timeline: list[dict]) -> list[ReviewFact]:
             if user is None or user["type"] != "User":
                 continue
             login = user["login"].lower()
+            if author and login == author.lower():
+                continue
             submitted = datetime.fromisoformat(event["submitted_at"])
             requested = requests.pop(login, None)
             previous = reviews.get(login)
@@ -186,34 +198,47 @@ async def github_get(client: httpx.AsyncClient, path: str, **params: str | int) 
     return response
 
 
-async def open_prs(client: httpx.AsyncClient) -> list[PullSummary]:
-    pulls = {}
+async def github_pages(client: httpx.AsyncClient, path: str, **params: str) -> AsyncIterator[list[dict]]:
     page = 1
     while True:
-        response = await github_get(client, "pulls", state="open", per_page=PAGE_SIZE, page=page)
-        for pr in response.json():
-            pulls[pr["number"]] = pr_summary(pr)
+        response = await github_get(client, path, per_page=PAGE_SIZE, page=page, **params)
+        yield response.json()
         if "next" not in response.links:
-            return list(pulls.values())
+            return
         page += 1
+
+
+async def open_prs(client: httpx.AsyncClient) -> list[PullSummary]:
+    pulls = {}
+    async for page in github_pages(client, "pulls", state="open"):
+        for pr in page:
+            pulls[pr["number"]] = pr_summary(pr)
+    return list(pulls.values())
+
+
+async def recent_prs(
+    client: httpx.AsyncClient, previous: list[PullSummary], cutoff: datetime, since: datetime
+) -> list[PullSummary]:
+    """Fetch changed PRs and keep all known PRs inside the rolling window."""
+    pulls = {pr["number"]: pr for pr in previous if datetime.fromisoformat(pr["updated_at"]) >= cutoff}
+    async for page in github_pages(client, "pulls", state="all", sort="updated", direction="desc"):
+        for pr in page:
+            if datetime.fromisoformat(pr["updated_at"]) < since:
+                return sorted(pulls.values(), key=lambda item: item["updated_at"], reverse=True)
+            pulls[pr["number"]] = pr_summary(pr)
+    return sorted(pulls.values(), key=lambda item: item["updated_at"], reverse=True)
 
 
 async def pr_metadata(client: httpx.AsyncClient, number: int) -> PullMetadata:
     detail = (await github_get(client, f"pulls/{number}")).json()
     timeline = []
-    # Only complete timelines can reliably pair a request with its response.
-    for page in range(1, 4):
-        response = await github_get(client, f"issues/{number}/timeline", per_page=PAGE_SIZE, page=page)
-        timeline.extend(response.json())
-        if "next" not in response.links:
-            break
-    else:
-        timeline = []
+    async for page in github_pages(client, f"issues/{number}/timeline"):
+        timeline.extend(page)
     return {
         "number": number,
         "updated_at": detail["updated_at"],
         "lines": detail["additions"] + detail["deletions"],
-        "reviews": review_facts(timeline),
+        "reviews": review_facts(timeline, detail["user"]["login"] if detail.get("user") else None),
     }
 
 
@@ -221,7 +246,7 @@ def pending_metadata(snapshot: Row, versions: dict[int, str]) -> list[int]:
     """Return PR numbers with missing or stale metadata in sync order."""
     pending = [pr for pr in snapshot.open_prs if pr["requested_reviewers"] or pr["requested_teams"]]
     # Interleave requests and recently updated PRs before checking older open PRs.
-    prioritized = (pr for pair in zip_longest(pending, snapshot.recent_prs) for pr in pair if pr is not None)
+    prioritized = (pr for pair in zip_longest(pending, snapshot.history_prs) for pr in pair if pr is not None)
     numbers = dict.fromkeys(
         pr["number"] for pr in (*prioritized, *snapshot.open_prs) if versions.get(pr["number"], "") < pr["updated_at"]
     )
@@ -241,17 +266,22 @@ def retry_seconds(error: httpx.HTTPStatusError) -> int:
     return RETRY_SECONDS
 
 
-async def refresh_snapshot(connection: Connection, client: httpx.AsyncClient) -> Row:
+async def refresh_snapshot(connection: Connection, client: httpx.AsyncClient, snapshot: Row) -> Row:
+    started = datetime.now(UTC)
+    cutoff = started - HISTORY_WINDOW
+    since = cutoff
+    if snapshot.history_since and snapshot.history_since <= cutoff:
+        since = max(cutoff, snapshot.history_since + HISTORY_WINDOW - DISCOVERY_OVERLAP)
     opened = await open_prs(client)
-    recent = await github_get(client, "pulls", state="all", sort="updated", direction="desc", per_page=PAGE_SIZE)
+    recent = await recent_prs(client, snapshot.history_prs, cutoff, since)
     snapshot = connection.execute(
         text(
             """
-            UPDATE queue_snapshot SET refreshed_at = clock_timestamp(),
-                open_prs = :open_prs, recent_prs = :recent_prs RETURNING *
+            UPDATE queue_snapshot SET refreshed_at = :started,
+                open_prs = :open_prs, history_prs = :history_prs, history_since = :cutoff RETURNING *
         """
-        ).bindparams(bindparam("open_prs", type_=JSONB), bindparam("recent_prs", type_=JSONB)),
-        {"open_prs": opened, "recent_prs": [pr_summary(pr) for pr in recent.json()]},
+        ).bindparams(bindparam("open_prs", type_=JSONB), bindparam("history_prs", type_=JSONB)),
+        {"open_prs": opened, "history_prs": recent, "started": started, "cutoff": cutoff},
     ).one()
     connection.execute(text("DELETE FROM review_metadata WHERE fetched_at < now() - interval '30 days'"))
     return snapshot
@@ -288,14 +318,17 @@ async def sync_batch(connection: Connection) -> int:
                 timeout=GITHUB_TIMEOUT,
             ) as client,
         ):
-            if snapshot.refreshed_at is None or datetime.now(UTC) - snapshot.refreshed_at >= DISCOVERY_INTERVAL:
-                snapshot = await refresh_snapshot(connection, client)
+            now = datetime.now(UTC)
+            cutoff = now - HISTORY_WINDOW
+            if snapshot.history_since is None or not cutoff - DISCOVERY_INTERVAL < snapshot.history_since <= cutoff:
+                snapshot = await refresh_snapshot(connection, client, snapshot)
             versions = dict(connection.execute(text("SELECT number, updated_at FROM review_metadata")).tuples().all())
             missing = pending_metadata(snapshot, versions)
             for number in missing[:BATCH_SIZE]:
                 save_metadata(connection, await pr_metadata(client, number))
             if len(missing) <= BATCH_SIZE:
-                delay = max(1, int((snapshot.refreshed_at + DISCOVERY_INTERVAL - datetime.now(UTC)).total_seconds()))
+                next_scan = snapshot.history_since + HISTORY_WINDOW + DISCOVERY_INTERVAL
+                delay = max(1, int((next_scan - datetime.now(UTC)).total_seconds()))
     except httpx.HTTPStatusError as error:
         delay = retry_seconds(error)
         logger.warning("Review queue sync paused after GitHub HTTP %s", error.response.status_code)
@@ -313,22 +346,31 @@ def enriched_open_prs(prs: list[PullSummary], metadata: dict[int, Row]) -> list[
     opened: list[OpenPull] = []
     for pr in prs:
         cached = metadata.get(pr["number"])
+        author = (pr.get("author") or "").lower()
         opened.append(
             {
                 **pr,
                 "lines": cached.lines if cached and cached.updated_at >= pr["updated_at"] else None,
-                "reviewed_reviewers": [{"login": review["login"]} for review in cached.reviews] if cached else [],
+                "reviewed_reviewers": (
+                    [{"login": review["login"]} for review in cached.reviews if review["login"] != author]
+                    if cached
+                    else []
+                ),
             }
         )
     return opened
 
 
-def reviewer_history(records: list[Row], titles: dict[int, str]) -> dict[str, ReviewerSummary]:
+def reviewer_history(records: list[Row], pulls: dict[int, PullSummary]) -> dict[str, ReviewerSummary]:
     cutoff = datetime.now(UTC) - HISTORY_WINDOW
     stats: dict[str, ReviewerHistory] = {}
     for row in records:
+        pr = pulls.get(row.number)
+        author = (pr.get("author") or "").lower() if pr else ""
         reviews: list[ReviewFact] = row.reviews
         for review in reviews:
+            if review["login"] == author:
+                continue
             submitted = datetime.fromisoformat(review["submitted_at"])
             if submitted < cutoff:
                 continue
@@ -337,7 +379,7 @@ def reviewer_history(records: list[Row], titles: dict[int, str]) -> dict[str, Re
             item.pulls.append(
                 {
                     "number": row.number,
-                    "title": titles.get(row.number),
+                    "title": pr["title"] if pr else None,
                     "lines": row.lines,
                     "submitted_at": review["submitted_at"],
                 }
@@ -352,14 +394,19 @@ def queue_payload(connection: Connection) -> QueuePayload:
     snapshot = connection.execute(READ_SNAPSHOT).one()
     records = list(connection.execute(text("SELECT number, updated_at, lines, reviews FROM review_metadata")).all())
     metadata = {row.number: row for row in records}
-    titles = {pr["number"]: pr["title"] for pr in snapshot.open_prs + snapshot.recent_prs}
+    pulls = {pr["number"]: pr for pr in snapshot.history_prs + snapshot.open_prs}
     versions = {number: row.updated_at for number, row in metadata.items()}
     total = len(pending_metadata(snapshot, {}))
     return {
         "refreshed_at": snapshot.refreshed_at,
         "prs": enriched_open_prs(snapshot.open_prs, metadata),
-        "stats": reviewer_history(records, titles),
-        "sync": {"completed": total - len(pending_metadata(snapshot, versions)), "total": total},
+        "stats": reviewer_history(records, pulls),
+        "sync": {
+            "completed": total - len(pending_metadata(snapshot, versions)),
+            "total": total,
+            "history_discovered": snapshot.history_since is not None,
+        },
+        "history_days": HISTORY_WINDOW.days,
     }
 
 

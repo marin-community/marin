@@ -32,10 +32,7 @@
 
       <section class="queue" aria-labelledby="queue-title">
         <div class="section-heading">
-          <div class="view-switch" role="group" aria-label="Reviewer view">
-            <button id="queue-view" type="button" aria-pressed="true">Open reviews</button>
-            <button id="load-view" type="button" aria-pressed="false">Reviewer load</button>
-          </div>
+          <div><h2 id="queue-title">Reviewers</h2><p id="history-window" class="window-note"></p></div>
           <div class="filters">
             <label class="filter-label">Find or star a handle <input id="search" type="search" placeholder="Search reviewers" autocomplete="off"></label>
             <label class="filter-label mobile-sort">Sort by
@@ -44,16 +41,14 @@
             <button class="mobile-sort" id="sort-direction" type="button" aria-label="Reverse sort order">↑</button>
           </div>
         </div>
-        <h2 class="sr-only" id="queue-title">Reviewer queue and load</h2>
-        <p class="load-note" id="load-note" hidden>Compare <span class="pending-key">pending diff size</span> and <span class="weekly-key">weekly reviewed lines</span>. Bar lengths compare reviewers within each column.</p>
         <div id="favorite-suggestion" class="favorite-suggestion" hidden></div>
         <div id="sort-headings" class="column-headings" role="group" aria-label="Sort reviewer rows"></div>
         <div id="reviewers" class="reviewers" aria-live="polite"><p class="empty">Loading reviewer requests…</p></div>
         <details class="data-note">
           <summary>How these numbers are calculated</summary>
           <p>Pending lines count additions plus deletions. A plus sign means some PR sizes are still loading. Multiple reviewers can receive the same PR.</p>
-          <p>Open PRs stay with their reviewers after a review is submitted. Avg response measures time from request to submission. Lines per week uses the diff sizes from recent reviews, normalized to one week.</p>
-          <p>Sync covers all open PRs and a sample of recently updated PRs. Reviewer assignments, diff sizes, and review history fill in as PR details are synced.</p>
+          <p>Open PRs stay with their reviewers after a review is submitted. Avg response measures time from request to submission. Reviewer load sums additions and deletions once per PR reviewed in the displayed period.</p>
+          <p>Sync covers open PRs and all PRs updated in that period. Reviewer assignments, diff sizes, and review history fill in as PR details are synced.</p>
         </details>
       </section>
 

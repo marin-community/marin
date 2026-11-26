@@ -9,7 +9,7 @@ const sortColumns = {
   pending: { label: "Pending PRs", direction: -1, value: (row) => row.pendingCount },
   lines: { label: "Pending lines", direction: -1, value: (row) => row.volume.lines },
   response: { label: "Avg response", direction: 1, value: (row) => row.stats?.avg_response_hours },
-  load: { label: "Lines / week", direction: -1, value: (row) => row.stats?.lines_per_week },
+  load: { label: "Reviewer load", direction: -1, value: (row) => row.stats?.reviewed_lines },
 };
 
 function link(url, label, className = "") {
@@ -93,22 +93,13 @@ function loadFavorites() {
   return new Set(names.filter((name) => typeof name === "string" && GITHUB_HANDLE.test(name)).map((name) => name.toLowerCase()));
 }
 
-function metric(label, value, className = "", ratio = null) {
+function metric(label, value, className = "") {
   const cell = document.createElement("span");
   cell.className = `metric ${className}`;
   const name = document.createElement("span");
   name.className = "metric-label";
   name.textContent = label;
   cell.append(name, value);
-  if (ratio !== null) {
-    const bar = document.createElement("span");
-    bar.className = "load-bar";
-    bar.setAttribute("aria-hidden", "true");
-    const fill = document.createElement("span");
-    fill.style.width = `${ratio * 100}%`;
-    bar.append(fill);
-    cell.append(bar);
-  }
   return cell;
 }
 
@@ -130,18 +121,18 @@ function pendingVolume(requests) {
   return { lines, partial: sizes.length < requests.length };
 }
 
-function reviewerMetrics(pendingCount, stats, volume, scale) {
+function reviewerMetrics(pendingCount, stats, volume) {
   const lines = volume.lines === null ? "—" : `${numberFormat.format(volume.lines)}${volume.partial ? "+" : ""}`;
   const response = stats?.avg_response_hours;
   const duration = response == null ? "—" : response < 1 ? `${Math.round(response * 60)}m` : `${Math.round(response)}h`;
   const average = metric("Avg response", duration);
   if (stats?.response_count) average.title = `Based on ${stats.response_count} matched reviews`;
-  const weekly = stats ? numberFormat.format(stats.lines_per_week) : "—";
+  const load = stats ? numberFormat.format(stats.reviewed_lines) : "—";
   return [
     metric("Pending PRs", String(pendingCount), "pending-count"),
-    metric("Pending lines", lines, "pending-lines", scale && volume.lines !== null ? volume.lines / scale.pending : null),
+    metric("Pending lines", lines),
     average,
-    metric("Lines / week", weekly, "weekly-lines", scale && stats ? stats.lines_per_week / scale.weekly : null),
+    metric("Reviewer load", load),
   ];
 }
 
@@ -188,7 +179,7 @@ function prDisclosure(line, handle, openPulls, history, expanded) {
   return requestsList;
 }
 
-function reviewerEntry({ name, openPulls, pendingCount, stats, volume }, scale, favorites, expanded, toggleFavorite) {
+function reviewerEntry({ name, openPulls, pendingCount, stats, volume }, favorites, expanded, toggleFavorite) {
   const handle = name.toLowerCase();
   const entry = document.createElement("div");
   entry.className = "reviewer-entry";
@@ -199,18 +190,17 @@ function reviewerEntry({ name, openPulls, pendingCount, stats, volume }, scale, 
   const identity = document.createElement("span");
   identity.className = "reviewer-name";
   identity.textContent = name;
-  line.append(identity, ...reviewerMetrics(pendingCount, stats, volume, scale));
-  const history = scale ? (stats?.pulls ?? []).filter((pr) => !openPulls.some((open) => open.number === pr.number)) : [];
+  line.append(identity, ...reviewerMetrics(pendingCount, stats, volume));
+  const history = (stats?.pulls ?? []).filter((pr) => !openPulls.some((open) => open.number === pr.number));
   const requestsList = prDisclosure(line, handle, openPulls, history, expanded);
   entry.append(line, favoriteButton(name, favorites.has(handle), toggleFavorite));
   if (requestsList) entry.append(requestsList);
   return entry;
 }
 
-function reviewerGroups(prs, stats, favorites, view) {
+function reviewerGroups(prs, stats, favorites) {
   const groups = new Map();
-  const extra = view === "load" ? [...favorites, ...Object.keys(stats)] : favorites;
-  for (const name of extra) groups.set(name, { name, openPulls: [] });
+  for (const name of [...favorites, ...Object.keys(stats)]) groups.set(name, { name, openPulls: [] });
   for (const pr of prs) {
     const reviewers = new Map();
     for (const { login } of pr.reviewed_reviewers ?? []) reviewers.set(login.toLowerCase(), { login, status: "reviewed" });
@@ -246,19 +236,15 @@ function sortedReviewers(groups, favorites, order) {
   });
 }
 
-function renderReviewers(prs, stats, favorites, expanded, toggleFavorite, view, order) {
-  const groups = sortedReviewers(reviewerGroups(prs, stats, favorites, view), favorites, order);
-  const scale = view === "load" ? {
-    pending: Math.max(1, ...groups.map((item) => item.volume.lines ?? 0)),
-    weekly: Math.max(1, ...groups.map((item) => item.stats?.lines_per_week ?? 0)),
-  } : null;
+function renderReviewers(prs, stats, favorites, expanded, toggleFavorite, order) {
+  const groups = sortedReviewers(reviewerGroups(prs, stats, favorites), favorites, order);
   const query = $("search").value.trim().toLowerCase();
   const list = $("reviewers");
   const focused = document.activeElement?.dataset.focus;
   list.replaceChildren();
   const visible = groups.filter(({ name }) => name.toLowerCase().includes(query));
   if (!visible.length) emptyMessage(list, query ? "No matching reviewer in the queue." : "No open reviews.");
-  for (const item of visible) list.append(reviewerEntry(item, scale, favorites, expanded, toggleFavorite));
+  for (const item of visible) list.append(reviewerEntry(item, favorites, expanded, toggleFavorite));
   if (focused) list.querySelector(`[data-focus="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   renderFavoriteSuggestion(query, groups, toggleFavorite);
 }
@@ -308,14 +294,13 @@ async function api(path, options) {
 
 function startReviewQueue() {
   let current = { prs: [], stats: {}, refreshed_at: null };
-  let view = "queue";
   let order = { column: "name", direction: 1 };
   let timer;
   const favorites = loadFavorites();
   const expanded = new Set();
 
   function render() {
-    renderReviewers(current.prs, current.stats, favorites, expanded, toggleFavorite, view, order);
+    renderReviewers(current.prs, current.stats, favorites, expanded, toggleFavorite, order);
   }
 
   function changeSort(column, direction) {
@@ -330,15 +315,6 @@ function startReviewQueue() {
       button.setAttribute("aria-label", active ? `${button.textContent}, ${button.dataset.direction}` : button.textContent);
     }
     if (current.refreshed_at) render();
-  }
-
-  function changeView(next) {
-    if (view === next) return;
-    view = next;
-    $("queue-view").setAttribute("aria-pressed", String(view === "queue"));
-    $("load-view").setAttribute("aria-pressed", String(view === "load"));
-    $("load-note").hidden = view !== "load";
-    changeSort(view === "load" ? "load" : "name", view === "load" ? -1 : 1);
   }
 
   function toggleFavorite(name) {
@@ -359,12 +335,16 @@ function startReviewQueue() {
         render();
         renderOtherQueues(current.prs);
       }
-      const { completed, total } = current.sync;
-      $("sync-count").textContent = total ? `${completed} of ${total} PR details synced` : "Queue up to date";
+      const { completed, total, history_discovered } = current.sync;
+      const partial = !history_discovered || completed < total;
+      $("history-window").textContent = `Reviewer load: diff lines reviewed in the last ${current.history_days} days${partial ? " · sync in progress" : ""}`;
+      $("sync-count").textContent = history_discovered
+        ? (total ? `${completed} of ${total} PR details synced` : "Queue up to date")
+        : `Finding PRs from the last ${current.history_days} days…`;
       const progress = $("sync-progress");
       progress.max = total || 1;
       progress.value = completed;
-      progress.hidden = !total;
+      progress.hidden = !history_discovered || !total;
       const snapshot = new Date(current.refreshed_at);
       const sameDay = snapshot.toDateString() === new Date().toDateString();
       const timestamp = sameDay ? snapshot.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : snapshot.toLocaleDateString([], { month: "short", day: "numeric" });
@@ -380,7 +360,7 @@ function startReviewQueue() {
     $("refresh").disabled = true;
     try {
       await loadQueue();
-      if (current.refreshed_at && current.sync.completed < current.sync.total) {
+      if (current.refreshed_at && (!current.sync.history_discovered || current.sync.completed < current.sync.total)) {
         $("updated").textContent = "Checking for missing PR details…";
       }
       const { retry_in } = await api("sync", { method: "POST", headers: { "X-Review-Queue": "sync" } });
@@ -400,8 +380,6 @@ function startReviewQueue() {
 
   $("refresh").addEventListener("click", refresh);
   $("search").addEventListener("input", render);
-  $("queue-view").addEventListener("click", () => changeView("queue"));
-  $("load-view").addEventListener("click", () => changeView("load"));
   for (const [column, { label, direction }] of Object.entries(sortColumns)) {
     const option = new Option(column === "name" ? "Name" : label, column);
     $("sort").append(option);
