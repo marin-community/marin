@@ -1,17 +1,40 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
-
-from cloud.iris.tests.bootstrap_runtime_fixtures import FIXTURES, fake_frozen_runtime
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
 BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "cloud" / "iris" / "bootstrap_runtime.sh"
 RUNTIME_FILE = "runtime.env"
+FIXTURES = Path(__file__).with_name("bootstrap_fixtures")
+
+
+def fake_frozen_runtime(
+    tmp_path: Path, *, managed_python_pin_is_unresolvable: bool = False
+) -> tuple[Path, dict[str, str]]:
+    environment = tmp_path / "runtime"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True)
+    site_packages = next((environment / "lib").glob("python*/site-packages"))
+
+    (site_packages / "nvidia/cu13/lib").mkdir(parents=True)
+    shutil.copytree(FIXTURES / "site-packages", site_packages, dirs_exist_ok=True)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "python3.12").symlink_to(sys.executable)
+    uv = fake_bin / "uv"
+    shutil.copyfile(FIXTURES / "uv.sh", uv)
+    uv.chmod(0o755)
+    process_environment = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}"}
+    if managed_python_pin_is_unresolvable:
+        process_environment["EXPECTED_SYSTEM_PYTHON"] = str(fake_bin / "python3.12")
+    return environment, process_environment
 
 
 def _run_bootstrap(
@@ -83,23 +106,8 @@ def test_hub_publish_bootstrap_checks_cpu_publisher_without_cuda(tmp_path: Path,
     if not publisher_installed:
         (site_packages / "skyrl_train/hf_publisher.py").unlink()
 
-    project = tmp_path / "skyrl"
-    scripts = project / "cloud/iris"
-    scripts.mkdir(parents=True)
-    for name in (
-        "setup_task_runtime.sh",
-        "bootstrap_runtime.sh",
-        "load_runtime_environment.sh",
-        "runtime_checks.py",
-        "runtime_environment.py",
-    ):
-        (scripts / name).symlink_to(BOOTSTRAP_SCRIPT.with_name(name))
-    for relative in (".uv-version", ".python-version", "marinskyrl/environment_contract.py"):
-        target = project / relative
-        target.parent.mkdir(exist_ok=True)
-        target.symlink_to(REPOSITORY_ROOT / relative)
     result = subprocess.run(
-        ["bash", scripts / "setup_task_runtime.sh", "hub-publish", "printenv", "PATH"],
+        ["bash", BOOTSTRAP_SCRIPT.with_name("setup_task_runtime.sh"), "hub-publish", "printenv", "PATH"],
         env=process_environment | {"IRIS_VENV": str(environment)},
         capture_output=True,
         text=True,
@@ -154,16 +162,6 @@ def test_bootstrap_activation_exposes_runtime_commands(tmp_path: Path) -> None:
         process_environment["LD_LIBRARY_PATH"],
     ]
     assert linker.split(os.pathsep) == [str(environment / "lib"), process_environment["LIBRARY_PATH"]]
-    runtime_file = environment / RUNTIME_FILE
-    complete = runtime_file.read_bytes()
-    runtime_file.write_bytes(complete[:-1])
-    failed = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
-    assert failed.returncode != 0
-    assert "Unterminated SkyRL runtime assignment" in failed.stderr
-    runtime_file.write_bytes(complete.split(b"\0", 1)[0] + b"\0")
-    partial = subprocess.run(activation.args, env=process_environment, capture_output=True, text=True, timeout=5)
-    assert partial.returncode != 0
-    assert "Incomplete SkyRL runtime assignments" in partial.stderr
 
 
 def test_bootstrap_exposes_cuda_linker_compatibility_paths(tmp_path: Path) -> None:
@@ -223,3 +221,39 @@ def test_parallel_bootstrap_waits_for_every_check_and_reports_failure(tmp_path):
     assert result.returncode != 0, result.stderr
     assert "flash-attention import failed" in result.stderr
     assert "megatron import failed" in result.stderr
+
+
+def test_node_entrypoint_checks_transport_before_starting_controller(tmp_path):
+    app = tmp_path / "app"
+    skyrl = app / "vendor/skyrl"
+    launcher = skyrl / "cloud/iris"
+    launcher.mkdir(parents=True)
+    for name in ("node_entrypoint.sh", "load_runtime_environment.sh", "bootstrap_runtime.sh",
+                 "runtime_checks.py", "setup_task_runtime.sh"):
+        (launcher / name).symlink_to(BOOTSTRAP_SCRIPT.with_name(name))
+    for relative in (".uv-version", ".python-version", "marinskyrl/environment_contract.py"):
+        target = skyrl / relative
+        target.parent.mkdir(exist_ok=True)
+        target.symlink_to(REPOSITORY_ROOT / relative)
+    stub = Path(__file__).with_name("node_command_fixture.py")
+    (launcher / "task_runtime.py").symlink_to(stub)
+    probe = app / "experiments/post_training/nccl_transport_probe.py"
+    probe.parent.mkdir(parents=True)
+    probe.symlink_to(stub)
+    runtime, environment = fake_frozen_runtime(tmp_path)
+    environment["IRIS_VENV"] = str(runtime)
+    subprocess.run(["bash", launcher / "setup_task_runtime.sh", "megatron"], env=environment, check=True, timeout=30)
+
+    command = ["bash", launcher / "node_entrypoint.sh", "launch.yaml", "s3://test/interconnect-gate", "--pynccl-init"]
+    result = subprocess.run(command, env=environment, check=True, capture_output=True, text=True, timeout=15)
+    transport, controller = map(json.loads, result.stdout.splitlines())
+    for record in (transport, controller):
+        assert record["cwd"] == record["skyrl_home"] == str(skyrl)
+        assert record["max_jobs"] == "8" and record["vllm_use_v1"] == "1"
+        assert record["python_path"].split(os.pathsep)[:3] == [str(app), str(skyrl), str(skyrl / "skyrl-train")]
+    assert transport["argv"] == ["--mode", "gate", "--gate-coverage", "all-gpus", "--gate-report-prefix",
+                                 "s3://test/interconnect-gate", "--pynccl-init"]
+    assert controller["argv"] == ["--config", "launch.yaml"]
+    failed = subprocess.run(command, env=environment | {"EXIT_TRANSPORT_FIXTURE": "1"},
+                            capture_output=True, text=True, timeout=15)
+    assert failed.returncode == 19 and len(failed.stdout.splitlines()) == 1

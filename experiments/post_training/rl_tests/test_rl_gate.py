@@ -34,7 +34,6 @@ from marin.execution.lazy import ArtifactStep, run
 from marin.rl import skyrl as skyrl_api
 from marin.rl.skyrl import ArtifactHfModel, SkyRLPolicyModel, SkyRLRun, run_skyrl_cpu
 from marin.rl.skyrl_records import RecordedLaunch, read_skyrl_metrics
-from rigging.provenance import Provenance
 from scipy.stats import t
 from skyrlrecipe.documents import get_path, set_path
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
@@ -51,7 +50,6 @@ from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import RUN_INPUTS_FILENAME, RunInputs, RunOptions, read_run_inputs
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
-    cache_native_compositions,
     controls,
     edit_receipt,
     evaluation_task_rows,
@@ -633,6 +631,46 @@ def test_native_failure_stops_build_child(tmp_path, exit_early):
     assert monotonic() < deadline, "native failure waited for the build child to finish"
 
 
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (subprocess.TimeoutExpired("compose", 120, stderr="sk\x1b-fixture-abcdefghijklmnopqrstuvwxyz"), "[REDACTED]"),
+        (subprocess.TimeoutExpired("compose", 120), "timed out after 120 s"),
+        (subprocess.CompletedProcess([], 0, "", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 0, "{", ""), "returned invalid JSON"),
+        (subprocess.CompletedProcess([], 1, "", ""), "exited with status 1"),
+        (FileNotFoundError("native composer executable missing"), "native composer executable missing"),
+    ],
+    ids=["redacted-timeout", "timeout", "empty", "invalid-json", "nonzero", "missing-executable"],
+)
+def test_native_composition_reports_failure(monkeypatch, outcome, expected):
+    monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", lambda *args, **kwargs: sys.executable)
+
+    def compose(command, *, timeout):
+        Path(command[command.index("--progress-file") + 1]).write_text("Compose document 1/1")
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(gate, "run_skyrl_cpu", compose)
+    with pytest.raises(gate.InvalidComparison) as failure:
+        gate.compose_configs(["launch.yaml"])
+    message = str(failure.value)
+    assert expected in message and "native configuration cannot be composed" in message
+    if isinstance(outcome, Exception) or outcome.returncode:
+        assert "Compose document 1/1" in message
+    assert "fixture-abcdefghijklmnopqrstuvwxyz" not in message
+
+
+def test_native_composition_reports_environment_preparation_timeout(monkeypatch):
+    def prepare(timeout, **kwargs):
+        raise subprocess.TimeoutExpired("prepare", timeout)
+
+    monkeypatch.setattr(gate, "prepare_skyrl_cpu_python", prepare)
+    with pytest.raises(gate.InvalidComparison, match=r"Prepare SkyRL CPU environment.*timed out after 300 s"):
+        gate.compose_configs(["launch.yaml"])
+
+
 @pytest.mark.timeout(15)
 def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
     marker = tmp_path / "cancellation"
@@ -659,7 +697,6 @@ def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
         "omitted-current-nondefault",
         "omitted-schema-nondefault",
         "omitted-candidate-default",
-        "schema-timeout",
         "protocol-temperature",
         "evaluation-cadence",
         "malformed-seed",
@@ -679,7 +716,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
             "omitted-current-nondefault",
             "omitted-schema-nondefault",
             "omitted-candidate-default",
-            "schema-timeout",
         )
         else (setting,)
     )
@@ -753,7 +789,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         "omitted-current-nondefault": {"config.skyrl.generator.chat_template_kwargs": {}},
         "omitted-schema-nondefault": {"config.skyrl.trainer.policy.optimizer_config.weight_decay": 0.0},
         "omitted-candidate-default": {"config.skyrl.generator.chat_template_kwargs": {}},
-        "schema-timeout": {"config.skyrl.generator.chat_template_kwargs": {}},
     }.get(case, {})
     if omissions:
         omitted = [candidate] if case == "omitted-candidate-default" else control_roots
@@ -762,68 +797,6 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
                 for path, original in omissions.items():
                     parent, key = path.rsplit(".", 1)
                     assert get_path(receipt, parent).pop(key) == original
-    if case == "schema-timeout":
-        cache_native_compositions(monkeypatch)
-        secret = "sk-fixture-abcdefghijklmnopqrstuvwxyz"
-        run_native = gate.run_skyrl_cpu
-        for diagnostic in ("timeout", "last-phase", "empty", "invalid-json", "empty-stderr", "oserror", "bootstrap"):
-            with monkeypatch.context() as unavailable:
-                unavailable.setattr(
-                    Provenance,
-                    "capture",
-                    lambda *_, tag=diagnostic: Provenance(tag, "commit-one", False, "branch", "test"),
-                )
-
-                def unavailable_defaults(command, *args, diagnostic=diagnostic, **kwargs):
-                    if command[1:4] == ["-I", "-m", "cloud.iris.config_cli"] and command[-2] == "schema-defaults":
-                        phase = Path(command[command.index("--progress-file") + 1])
-                        if diagnostic == "timeout":
-                            phase.write_text("Import native modules")
-                            interrupted_secret = secret.replace("sk-", "sk\x1b-")
-                            raise subprocess.TimeoutExpired(
-                                command, kwargs["timeout"], stderr=f"Interrupted with {interrupted_secret}"
-                            )
-                        if diagnostic == "last-phase":
-                            phase.write_text("Read native schema defaults")
-                            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
-                        if diagnostic == "oserror":
-                            raise FileNotFoundError("native composer executable missing")
-                        if diagnostic == "empty-stderr":
-                            return subprocess.CompletedProcess(command, 1, "", "")
-                        output = "not JSON" if diagnostic == "invalid-json" else ""
-                        return subprocess.CompletedProcess(command, 0, output, "")
-                    return run_native(command, *args, **kwargs)
-
-                if diagnostic == "bootstrap":
-
-                    def prepare_timeout(timeout, **kwargs):
-                        raise subprocess.TimeoutExpired("prepare", timeout)
-
-                    unavailable.setattr(gate, "prepare_skyrl_cpu_python", prepare_timeout)
-                else:
-                    unavailable.setattr(gate, "run_skyrl_cpu", unavailable_defaults)
-                report = compare(preset.name, "--candidate", name)
-                assert (
-                    report["verdict"] == "invalid" and "native configuration cannot be composed" in report["reason"]
-                ), report
-                if diagnostic == "timeout":
-                    assert "timed out after 120 s" in report["reason"]
-                    assert "Import native modules" in report["reason"]
-                    assert "Interrupted with [REDACTED]" in report["reason"] and secret not in report["reason"]
-                if diagnostic == "last-phase":
-                    assert report["reason"].endswith(". Read native schema defaults timed out after 120 s")
-                if diagnostic == "empty":
-                    assert report["reason"].endswith("Read native schema defaults returned no output")
-                if diagnostic == "invalid-json":
-                    assert report["reason"].endswith("Read native schema defaults returned invalid JSON")
-                if diagnostic == "oserror":
-                    assert report["reason"].endswith("native composer executable missing")
-                if diagnostic == "empty-stderr":
-                    assert report["reason"].endswith("exited with status 1")
-                if diagnostic == "bootstrap":
-                    assert "Prepare SkyRL CPU environment" in report["reason"]
-                    assert "timed out after 300 s" in report["reason"]
-        return
     reasons = {
         "stale-default": ("control config differs",),
         "zero-spread": ("variation is zero",),

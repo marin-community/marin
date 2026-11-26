@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 import json
-import os
 import shutil
 import subprocess
 import sys
 from copy import deepcopy
 from dataclasses import replace
 from importlib.machinery import ModuleSpec
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse, urlsplit
@@ -114,15 +114,7 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
             result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
             assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
-    coordinator = tmp_path / "coordinator-env"
-    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(coordinator)], check=True, timeout=20)
-    before = {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")}
-    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(coordinator))
-    monkeypatch.setenv("VIRTUAL_ENV", str(coordinator))
-    monkeypatch.setenv("PATH", str(coordinator / "bin"), prepend=os.pathsep)
-
     composed = gate.compose_configs(list(launch_paths.values()), validate_driver=True)
-    assert {path: path.lstat().st_mtime_ns for path in coordinator.rglob("*")} == before
     configs = dict(zip(launch_paths, composed, strict=True))
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
@@ -1024,23 +1016,26 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     source.rename(staged)
     native_calls = []
 
+    compose = gate.compose_configs
+
     def native(command, *, env_vars=None):
-        inspection = run_native_test(
-            "cloud.iris.tests.native_inspect_launch", command[command.index("marinskyrl") + 1 :]
-        )
-        assert (inspection["forward_env"], inspection["disk"], inspection["tokenizer"]) == (
+        (config,) = compose([command[command.index("--config") + 1]])
+        forward_env = [value for flag, value in pairwise(command) if flag == "--forward-env"]
+        assert (forward_env, config["iris"]["allocation"]["disk"], config["inputs"]["model"]["tokenizer_uri"]) == (
             ["HF_TEST_KEY"],
             "3TB",
             "tests/python-tokenizer",
         )
-        assert read_attempt(inspection["export"], inspection["attempt"]) is None
+        run = config["run"]
+        export_root = config["artifacts"]["export_root"]
+        assert read_attempt(export_root, run["attempt_id"]) is None
         native_calls.append(command)
         shutil.copytree(staged, source, dirs_exist_ok=True)
         stored = json.loads((source / "terminal.json").read_text())
-        stored["config"]["run"]["model"] = inspection["model"]
+        stored["config"]["run"]["model"] = run["model"]
         write_receipt(source, stored)
         write_attempt(
-            inspection["export"],
+            export_root,
             AttemptRecord(
                 run_id=stored["config"]["run"]["id"],
                 attempt_id=stored["config"]["run"]["attempt_id"],

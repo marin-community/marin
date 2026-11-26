@@ -13,4 +13,4 @@ load_runtime_environment "$(skyrl_task_runtime_file)"
 
 python "$app_dir/experiments/post_training/nccl_transport_probe.py" \
   --mode gate --gate-coverage all-gpus --gate-report-prefix "$gate_report_prefix" "$@"
-exec python cloud/iris/task_runtime.py --config "$config" --environment-prepared
+exec python cloud/iris/task_runtime.py --config "$config"

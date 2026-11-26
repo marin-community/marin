@@ -50,7 +50,8 @@ import socket
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import IO
 
@@ -362,13 +363,7 @@ def read_worker_census(streams: tuple[list[str], ...]) -> NcclCensus:
     ]
     census = parse_nccl_census(all_lines)
     benchmark = parse_nccl_census(benchmark_lines)
-    return NcclCensus(
-        census.nccl_version,
-        census.transports,
-        census.ib_device_lines,
-        benchmark.nvls_rank_counts,
-        benchmark.mnnvl_channels,
-    )
+    return replace(census, nvls_rank_counts=benchmark.nvls_rank_counts, mnnvl_channels=benchmark.mnnvl_channels)
 
 
 def collect_worker(handle: WorkerProcess) -> RankResult:
@@ -541,22 +536,12 @@ def run_launcher(args: argparse.Namespace) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     selected = set(args.variants.split(",")) if args.variants else None
     results = []
+    run = partial(run_variant, pynccl_init=args.pynccl_init)
     for offset, variant in enumerate(variants):
         if selected is not None and variant.name not in selected:
             continue
         logger.info("[task %s] variant %s starting", task_index, variant.name)
-        results.append(
-            run_variant(
-                variant,
-                rank_offset,
-                local_gpus,
-                world_size,
-                master_host,
-                base_port + 1 + offset,
-                log_dir,
-                pynccl_init=args.pynccl_init,
-            )
-        )
+        results.append(run(variant, rank_offset, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir))
         logger.info("[task %s] variant %s finished pass=%s", task_index, variant.name, results[-1]["pass"])
 
     if coordinator:
@@ -634,20 +619,9 @@ def run_gate(args: argparse.Namespace) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     rank_offset = task_index if args.gate_coverage == "first-pair" else task_index * local_gpus
     results = []
+    run = partial(run_variant, pynccl_init=args.pynccl_init, allow_interhost_nvlink=args.gate_single_nvlink_domain)
     for offset, variant in enumerate(gate_variants):
-        results.append(
-            run_variant(
-                variant,
-                rank_offset,
-                local_gpus,
-                world_size,
-                master_host,
-                base_port + offset,
-                log_dir,
-                pynccl_init=args.pynccl_init,
-                allow_interhost_nvlink=args.gate_single_nvlink_domain,
-            )
-        )
+        results.append(run(variant, rank_offset, local_gpus, world_size, master_host, base_port + offset, log_dir))
     if task_index == 0:
         ctx.registry.unregister(endpoint_id)
     verdicts = [result["interconnect_verdict"] for result in results]

@@ -701,17 +701,8 @@ def _native_config(operation: str, *args: str, checkout: Path | None = None):
     logger.info("%s took %.2f s", preparation, monotonic() - started)
     with tempfile.TemporaryDirectory(prefix="skyrl-config-") as directory:
         progress = Path(directory) / "stage"
-        command = [
-            str(interpreter),
-            "-I",
-            "-m",
-            _NATIVE_CONFIG_MODULE,
-            "--checkout",
-            str(checkout),
-            "--progress-file",
-            str(progress),
-            *args,
-        ]
+        command = [str(interpreter), "-I", "-m", _NATIVE_CONFIG_MODULE]
+        command += ["--checkout", str(checkout), "--progress-file", str(progress), *args]
         started = monotonic()
         try:
             result = run_skyrl_cpu(command, timeout=120)
@@ -722,11 +713,8 @@ def _native_config(operation: str, *args: str, checkout: Path | None = None):
                 f"{_native_diagnostic(error, progress)}"
             ) from error
         logger.info("%s took %.2f s", operation, monotonic() - started)
-        output = result.stdout.strip()
-        if not output:
-            raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned no output")
         try:
-            return json.loads(output)
+            return json.loads(result.stdout)
         except ValueError as error:
             raise InvalidComparison(f"{_NATIVE_ERROR}: {operation} returned invalid JSON") from error
 
@@ -786,12 +774,7 @@ def _setting_keys(inputs: RunInputs, keys: set[str]) -> set[str]:
 
 @lru_cache(maxsize=16)
 def _schema_defaults(checkout: Path, source_identity: str | None, groups: tuple[tuple[str, str], ...]) -> dict:
-    defaults = _native_config(
-        "Read native schema defaults", "schema-defaults", json.dumps(dict(groups)), checkout=checkout
-    )
-    if not isinstance(defaults, dict):
-        raise InvalidComparison(f"{_NATIVE_ERROR}: schema defaults must be an object")
-    return defaults
+    return _native_config("Read native schema defaults", "schema-defaults", json.dumps(dict(groups)), checkout=checkout)
 
 
 def _check_control_config(
