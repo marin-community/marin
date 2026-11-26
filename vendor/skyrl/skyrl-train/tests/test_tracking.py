@@ -21,6 +21,7 @@ import ray
 from skyrl_train import trainer as trainer_module
 from skyrl_train.entrypoints import main_base
 from skyrl_train.entrypoints.main_base import BasePPOExp
+from skyrl_train.utils import tracking as tracking_module
 from skyrl_train.utils.tracking import Tracking
 
 
@@ -145,7 +146,7 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
 
 
 @pytest.mark.parametrize("training_fails", [False, True])
-def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, training_fails):
+def test_training_exit_uses_separate_deadlines_for_trainer_and_records(tmp_path, monkeypatch, training_fails):
     times = iter((100.0, 125.0))
     monkeypatch.setattr(main_base, "time", SimpleNamespace(monotonic=lambda: next(times)))
     failure = RuntimeError("training failed")
@@ -153,8 +154,10 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
 
     class Timer:
         def __init__(self, timeout, callback):
+            self.timeout = timeout
             self.callback = callback
             self.armed = False
+            self.joined = False
             timers.append(self)
 
         def start(self):
@@ -164,14 +167,17 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
             self.armed = False
 
         def join(self):
-            pass
+            self.joined = True
 
         def expire(self):
             if self.armed:
                 self.callback()
 
-    monkeypatch.setattr(trainer_module, "threading", SimpleNamespace(Timer=Timer))
+    clock = SimpleNamespace(Timer=Timer)
+    monkeypatch.setattr(trainer_module, "threading", clock)
     monkeypatch.setattr(trainer_module, "os", SimpleNamespace(_exit=exits.append))
+    monkeypatch.setattr(tracking_module, "threading", clock)
+    monkeypatch.setattr(tracking_module, "os", SimpleNamespace(_exit=exits.append))
 
     trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
     trainer.evaluation_wall_time = 7.0
@@ -190,12 +196,32 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
     async def shutdown():
         asyncio.get_running_loop().set_default_executor(RecordingExecutor())
 
+    def close_records():
+        assert [timer.armed for timer in timers] == [False, True]
+        timers[1].expire()
+        assert exits == [1]
+
+    records = tracking_module._RecordsAdapter.__new__(tracking_module._RecordsAdapter)
+    records.store = SimpleNamespace(close=close_records)
+
     @contextmanager
     def tracker():
         try:
             yield
         finally:
             timers[0].expire()
+            assert exits == []
+            records.finish()
+
+    write_attempt = main_base.write_attempt
+
+    def write_timing(*args):
+        assert [timer.armed for timer in timers] == [False, False, True]
+        timers[2].expire()
+        assert exits == [1, 1]
+        write_attempt(*args)
+
+    monkeypatch.setattr(main_base, "write_attempt", write_timing)
 
     trainer.train = train
     trainer.shutdown = shutdown
@@ -213,6 +239,8 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
     else:
         BasePPOExp._run(experiment)
     assert executor_shutdown and all(executor_shutdown)
-    assert exits == []
+    assert exits == [1, 1]
+    assert [timer.timeout for timer in timers] == [120, 120, 120]
+    assert all(timer.joined and not timer.armed for timer in timers)
     assert (attempt := read_attempt(str(tmp_path), "native-attempt")) is not None
     assert attempt.elapsed_excluding_eval_seconds == 18.0

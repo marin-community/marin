@@ -364,6 +364,14 @@ under the preset's output root.
    all gated presets of a model, or `model/preset` for one. Every selector must name a gated target.
    The workflow replies with the reason if it refuses a comment.
 
+   Pending submissions are stored at
+   `s3://marin-us-east-08a/marin/ci/rl-controls/pending/<model>-<preset>.json`. If a record is
+   blocking refresh, save a copy and use the workflow's launch log to verify the coordinator and
+   output paths. Wait for any active workflow or coordinator for that preset to finish. For a missing
+   coordinator, wait at least 15 minutes from the recording time and confirm that Iris still cannot
+   find it. Publish any recoverable terminal receipts first. Then delete only that preset's pending
+   object and dispatch a refresh for `model/preset` on `main`.
+
 ## Tasks and evaluation
 
 [EvalLite](../references/task-curation.md#evallite) is the held-out selection evaluated by speed-short,

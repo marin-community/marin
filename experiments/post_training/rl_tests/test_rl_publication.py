@@ -35,7 +35,7 @@ from finestore.rl.run_records import (
 )
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
-from iris.resources.state import JobState
+from iris.resources.state import JobState, TaskState
 from marin.execution.artifact import RECORD_FILENAME, Artifact
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
@@ -357,11 +357,19 @@ def test_concurrent_issue_claims_keep_one_lineage_issue(tmp_path, monkeypatch):
     assert {attempt.issue for attempt in read_attempts(export_root).values()} == {winner}
 
 
+@pytest.mark.parametrize(
+    ("terminal_task", "reason", "reconcile_exit"),
+    [
+        (TaskState.PREEMPTED, "WorkloadEvictedDueToPreempted: priority", 0),
+        (TaskState.WORKER_FAILED, "PodDeleted: pod was deleted while the attempt was active", 0),
+        (TaskState.WORKER_FAILED, "Training worker crashed", 1),
+    ],
+)
 def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
-    recorded_runs, monkeypatch, tmp_path, cache_native_compositions
+    recorded_runs, monkeypatch, tmp_path, cache_native_compositions, capsys, terminal_task, reason, reconcile_exit
 ):
     monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
-    sources = ("accepted", "preempted", "unprepared")
+    sources = ("accepted", "failed", "unprepared")
     preset = nightly.SNOWBALL.by_name["speed-medium"]
     control_base = "checkpoints/snowball-rl/controls/speed-medium-"
     version = gate.config_version(gate.compose_preset(preset))
@@ -397,7 +405,12 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
             raise ConnectError(Code.NOT_FOUND, f"Job {job} not found")
         return states[str(job)]
 
-    monkeypatch.setattr(nightly, "open_iris_client", lambda **_: nullcontext(SimpleNamespace(job_state=job_state)))
+    def job_status(job):
+        assert str(job) == child_job
+        return SimpleNamespace(state=JobState.WORKER_FAILED, task_state_counts={terminal_task: 1}, error_message=reason)
+
+    client = SimpleNamespace(job_state=job_state, job_status=job_status)
+    monkeypatch.setattr(nightly, "open_iris_client", lambda **_: nullcontext(client))
     unavailable = True
 
     def publish(record, _url):
@@ -412,10 +425,12 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
     state_dir = StoragePath(str(tmp_path))
     job_prefix = "/runner/checkpoints-snowball-rl-controls-speed-medium-"
     coordinator = job_prefix + "123-1-coordinator"
+    child_job = f"{coordinator}/training"
 
     def submit(command, *, env):
         batch = command[command.index("--control") + 1]
-        requests[batch] = int(command[command.index("--replicates") + 1])
+        requested_preset = command[command.index("--preset") + 1]
+        requests[requested_preset, batch] = int(command[command.index("--replicates") + 1])
         submit_job = f"{job_prefix}{batch}-coordinator"
         submission = publication.ControlSubmission(
             job=submit_job,
@@ -455,8 +470,17 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         monkeypatch.setattr("sys.argv", argv)
         return nightly.main()
 
-    assert tick("123-1") == tick("124-1") == 0
-    assert requests == {"123-1": 3}
+    assert tick("123-1") == 0
+    pending = state_dir / "snowball-speed-medium.json"
+    first_handoff = publication.ControlSubmission.model_validate_json(pending.read_text())
+    assert tick("124-1") == 0
+    assert requests == {(preset.name, "123-1"): 3}
+    assert publication.ControlSubmission.model_validate_json(pending.read_text()) == first_handoff
+    grace_end = first_handoff.recorded_at + timedelta(minutes=15)
+    assert (
+        f"Pending record {pending}: Iris job {coordinator} not found yet. Grace ends at {grace_end.isoformat()}."
+        in capsys.readouterr().out
+    )
     states[legacy_job] = JobState.RUNNING
     legacy_path = recorded_runs(preset.name, control_base + "legacy", control=True, attempt_id="legacy")
     with edit_receipt(legacy_path) as receipt:
@@ -469,25 +493,111 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
         output = recorded_runs(preset.name, control_base + attempt_id, control=True, attempt_id=attempt_id)
         with edit_receipt(output) as receipt:
             receipt["config"]["run"]["coordinator_iris_job_id"] = coordinator
-            if attempt_id == "preempted":
-                receipt["result"]["state"] = "failed"
+            if attempt_id == "failed":
+                receipt["result"].update(state="failed", iris_job_id=child_job, iris_job_state="worker_failed")
     states[coordinator] = JobState.FAILED
     assert tick("125-1") == 1
-    assert requests == {"123-1": 3}
-    assert "accepted" not in rows and rows["preempted"].status == "failed"
-    assert tick("126-1") == 0
-    assert requests == {"123-1": 3}
+    assert requests == {(preset.name, "123-1"): 3}
+    assert "accepted" not in rows and rows["failed"].status == "failed"
+    assert tick("126-1") == reconcile_exit
+    assert not pending.exists()
+    assert requests == {(preset.name, "123-1"): 3}
     states[legacy_job] = JobState.SUCCEEDED
     assert tick("127-1") == 0
-    assert requests == {"123-1": 3, "127-1": 1}
+    assert requests == {(preset.name, "123-1"): 3, (preset.name, "127-1"): 1}
     assert rows["legacy"].status == "succeeded"
 
     assert rows["accepted"].status == "succeeded" and rows["accepted"].preset_version == version
-    assert rows["preempted"].status == "failed" and "native_attempt" in rows["preempted"].failed_facts
+    assert rows["failed"].status == "failed" and "native_attempt" in rows["failed"].failed_facts
 
-    states[job_prefix + "127-1-coordinator"] = JobState.FAILED
-    monkeypatch.setattr(nightly.subprocess, "Popen", lambda *args, **kwargs: SimpleNamespace(poll=lambda: 0))
-    assert tick("128-1") == 1
+
+@pytest.mark.parametrize(
+    ("scenario", "exit_code"),
+    [
+        ("failed-before-preparation", 1),
+        ("missing-handoff", 1),
+        ("expired-grace", 0),
+        ("legacy-nonterminal", 1),
+        ("durable-nonterminal", 1),
+    ],
+)
+def test_nightly_recovers_pending_controls(
+    recorded_runs, monkeypatch, tmp_path, cache_native_compositions, capsys, scenario, exit_code
+):
+    monkeypatch.setattr(nightly, "_OBSERVATION_SECONDS", 0)
+    monkeypatch.setenv("IRIS_USER", "runner")
+    preset = nightly.SNOWBALL.by_name["speed-medium"]
+    state_dir = StoragePath(str(tmp_path))
+    pending = state_dir / "snowball-speed-medium.json"
+    job_prefix = "/runner/checkpoints-snowball-rl-controls-speed-medium-"
+    previous = job_prefix + "previous-coordinator"
+    replacement = job_prefix + "new-coordinator"
+    output_name = "checkpoints/snowball-rl/controls/speed-medium-previous"
+    output = tmp_path / output_name / recipe.RUN_ARTIFACT_VERSION
+    rows, launches, states = {}, {}, {}
+
+    def publish(record, _url):
+        rows[record.attempt_id] = record
+        return "https://progress.test"
+
+    def job_state(job):
+        if str(job) not in states:
+            raise ConnectError(Code.NOT_FOUND, f"Job {job} not found")
+        return states[str(job)]
+
+    def submit(command, *, env):
+        key = (command[command.index("--preset") + 1], command[command.index("--control") + 1])
+        launches[key] = int(command[command.index("--replicates") + 1])
+        if scenario != "missing-handoff":
+            handoff = publication.ControlSubmission(
+                job=replacement, outputs=(str(output),), recorded_at=datetime.now(UTC)
+            )
+            StoragePath(env[publication.CONTROL_SUBMISSION_ENV]).write_text(handoff.model_dump_json())
+        return SimpleNamespace(poll=lambda: 0)
+
+    monkeypatch.setattr(rl_index, "list_attempts", lambda: list(rows.values()))
+    monkeypatch.setattr(publication, "publish_result", publish)
+    monkeypatch.setattr(nightly, "open_iris_client", lambda **_: nullcontext(SimpleNamespace(job_state=job_state)))
+    monkeypatch.setattr(nightly, "subprocess", SimpleNamespace(Popen=submit))
+    if scenario.endswith("nonterminal"):
+        assert output == recorded_runs(preset.name, output_name, control=True, attempt_id="partial")
+        with edit_receipt(output) as receipt:
+            receipt["config"]["run"]["coordinator_iris_job_id"] = previous
+            receipt["result"].update(state="submitted", iris_job_id=f"{previous}/training")
+        states[previous] = JobState.SUCCEEDED
+    if scenario == "failed-before-preparation":
+        states[previous] = JobState.FAILED
+    if scenario == "legacy-nonterminal":
+        assert publication.publish_running(str(output), preset, nightly.SNOWBALL, previous, None, set())
+        assert rows["partial"].status == "running"
+    elif scenario != "missing-handoff":
+        handoff = publication.ControlSubmission(
+            job=previous, outputs=(str(output),), recorded_at=datetime.now(UTC) - timedelta(minutes=16)
+        )
+        pending.write_text(handoff.model_dump_json())
+
+    assert nightly._run_controls("new", [("snowball", preset)], state_dir) == exit_code
+    captured = capsys.readouterr()
+    if scenario == "durable-nonterminal":
+        assert not launches and not rows
+        assert publication.ControlSubmission.model_validate_json(pending.read_text()).job == previous
+        assert "Publication requires a terminal native attempt" in captured.out
+        assert "Terminal publication remains pending" in captured.err
+        return
+    assert launches == {(preset.name, "new"): gate.CONTROL_COUNT}
+    if scenario == "missing-handoff":
+        assert not pending.exists()
+        assert "launcher exited without a pending handoff" in captured.err
+        return
+    assert publication.ControlSubmission.model_validate_json(pending.read_text()).job == replacement
+    assert "launcher exited without a pending handoff" not in captured.err
+    if scenario == "failed-before-preparation":
+        assert "Coordinator ended before preparing a native attempt" in captured.out
+    if scenario == "legacy-nonterminal":
+        assert rows["partial"].status == "failed"
+        assert rows["partial"].failed_facts == ["missing_terminal_receipt"]
+        assert nightly._run_controls("later", [("snowball", preset)], state_dir) == 0
+        assert "missing_terminal_receipt" not in capsys.readouterr().out
 
 
 def test_control_presets_select_multiple_models_without_duplicates():

@@ -659,6 +659,8 @@ class BasePPOExp:
             return self._run()
 
     def _run(self):
+        from skyrl_train.utils.tracking import records_write_deadline  # noqa: PLC0415
+
         # Force the orchestrator onto CPython's stock asyncio event loop (epoll),
         # NOT uvloop. Ray installs uvloop globally in every worker by default
         # (RAY_USE_UVLOOP defaults True -> default_worker.py:221 try_install_uvloop).
@@ -697,14 +699,15 @@ class BasePPOExp:
                 logger.info("Trainer time excluding evaluation: {:.3f} seconds", elapsed)
                 runtime = self.cfg.get("runtime") or {}
                 try:
-                    write_attempt(
-                        str(self.cfg.trainer.export_path),
-                        AttemptRecord(
-                            run_id=runtime["run_id"],
-                            attempt_id=runtime["attempt_id"],
-                            elapsed_excluding_eval_seconds=elapsed,
-                        ),
-                    )
+                    with records_write_deadline("Trainer timing write"):
+                        write_attempt(
+                            str(self.cfg.trainer.export_path),
+                            AttemptRecord(
+                                run_id=runtime["run_id"],
+                                attempt_id=runtime["attempt_id"],
+                                elapsed_excluding_eval_seconds=elapsed,
+                            ),
+                        )
                 except Exception as error:
                     logger.warning(
                         "Could not store trainer time for attempt {} ({})",

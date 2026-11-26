@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from enum import Enum, auto
 from html import escape
@@ -19,10 +19,12 @@ from pathlib import Path
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finestore.rl.rl_progress import AttemptSummary, completed_controls
+from finestore.rl.run_records import AttemptRecord, LaunchState
 from iris.cli.connect import open_iris_client
+from iris.client.client import IrisClient
 from iris.cluster.client.job_info import resolve_job_user
 from iris.cluster.types import JobName
-from iris.resources.state import JobState, is_job_finished
+from iris.resources.state import JobState, TaskState, is_job_finished
 from marin.execution.remote import sanitize_job_name
 from marin.rl.skyrl import IRIS_HUB_CLUSTER_CONFIG
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -43,7 +45,7 @@ class _Observation(Enum):
     WAITING = auto()
     VISIBLE = auto()
     FINISHED = auto()
-    FAILED_BEFORE_PREPARATION = auto()
+    FAILED = auto()
 
 
 def select_presets(selection: str) -> list[tuple[str, Preset]]:
@@ -108,11 +110,41 @@ def _read_submission(path: StoragePath) -> rl_publication.ControlSubmission | No
     return submission
 
 
+def _job_was_interrupted(client: IrisClient, job: JobName) -> bool:
+    try:
+        status = client.job_status(job)
+    except ConnectError as error:
+        if error.code == Code.NOT_FOUND:
+            return False
+        raise
+    if status.state == JobState.KILLED:
+        return True
+    # An exhausted worker failure can come from the workload or a lost pod.
+    return (
+        status.state == JobState.WORKER_FAILED
+        and not status.task_state_counts.get(TaskState.FAILED)
+        and (
+            bool(status.task_state_counts.get(TaskState.PREEMPTED))
+            or status.error_message.startswith(("PodDeleted:", "Evicted:", "WorkloadEvicted"))
+        )
+    )
+
+
+def _control_was_interrupted(client: IrisClient, coordinator: JobName, receipt: AttemptRecord) -> bool:
+    result = receipt.native.result
+    if result.state == LaunchState.SUCCEEDED or (not result.state.is_terminal and receipt.interruption is None):
+        return False
+    if job_id := result.iris_job_id or receipt.iris_job_id:
+        job = JobName.from_wire(job_id)
+        return job.root_job == coordinator and _job_was_interrupted(client, job)
+    return receipt.interruption is not None and _job_was_interrupted(client, coordinator)
+
+
 def _publish_submission(
     submission: rl_publication.ControlSubmission,
     model: str,
     preset: Preset,
-    job_state: Callable[[JobName], JobState],
+    client: IrisClient,
     published: set[tuple[str, str]],
     *,
     pending_file: StoragePath | None = None,
@@ -130,15 +162,23 @@ def _publish_submission(
         or any(run.parent != prefix.parent or not run.name.startswith(prefix.name) for run in runs)
     ):
         raise ValueError(f"Control submission for {model}/{preset.name} has a foreign job or output")
+    missing = False
     try:
-        state = job_state(job)
+        state = client.job_state(job)
     except ConnectError as error:
         if error.code != Code.NOT_FOUND:
             raise
-        # The hub also accepted the original submission. Give a lost RPC time to finish before
-        # treating a missing root as abandoned. Rows recovered from the index have already run.
-        if submission.recorded_at is not None and datetime.now(UTC) - submission.recorded_at < _SUBMISSION_GRACE:
-            return _Observation.WAITING
+        # A submit RPC can outlast its caller. Keep its handoff until the grace expires.
+        if submission.recorded_at is not None:
+            grace_end = submission.recorded_at.astimezone(UTC) + _SUBMISSION_GRACE
+            if datetime.now(UTC) < grace_end:
+                print(
+                    f"Pending record {pending_file}: Iris job {job} not found yet. "
+                    f"Grace ends at {grace_end.isoformat()}.",
+                    flush=True,
+                )
+                return _Observation.WAITING
+        missing = True
         state = JobState.FAILED
 
     if not is_job_finished(state):
@@ -154,13 +194,17 @@ def _publish_submission(
         coordinator=submission.job,
         interrupted=state != JobState.SUCCEEDED,
         allow_unprepared=True,
+        fail_incomplete_control=pending_file is None and state == JobState.SUCCEEDED,
     )
     print(outcome.model_dump_json(), flush=True)
     if outcome.unserved_records:
         raise RuntimeError(f"Terminal publication remains pending for {submission.job}")
+    failed = any(not _control_was_interrupted(client, job, receipt) for receipt in outcome.ineligible_controls)
+    if not outcome.attempts and not missing:
+        failed = state != JobState.KILLED and (state != JobState.WORKER_FAILED or not _job_was_interrupted(client, job))
     if pending_file is not None:
         pending_file.rm()
-    return _Observation.FINISHED if outcome.attempts else _Observation.FAILED_BEFORE_PREPARATION
+    return _Observation.FAILED if failed else _Observation.FINISHED
 
 
 def _running_submissions(
@@ -187,7 +231,7 @@ def _running_submissions(
 
 def _observe_startup(
     started: dict[tuple[str, str], tuple[Preset, StoragePath, subprocess.Popen]],
-    job_state: Callable[[JobName], JobState],
+    client: IrisClient,
     published: set[tuple[str, str]],
 ) -> bool:
     failed = False
@@ -211,12 +255,12 @@ def _observe_startup(
                             failed = True
                         del started[target]
                     continue
-                status = _publish_submission(submission, target[0], preset, job_state, published, pending_file=path)
+                status = _publish_submission(submission, target[0], preset, client, published, pending_file=path)
             except Exception as error:
                 errors[target] = error
                 continue
             errors.pop(target, None)
-            failed |= status is _Observation.FAILED_BEFORE_PREPARATION
+            failed |= status is _Observation.FAILED
             if status is not _Observation.WAITING:
                 visible.add(target)
                 if exit_code is not None:
@@ -266,9 +310,8 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
             )
             for submission, pending_file in sources:
                 try:
-                    status = _publish_submission(
-                        submission, model, preset, client.job_state, published, pending_file=pending_file
-                    )
+                    status = _publish_submission(submission, model, preset, client, published, pending_file=pending_file)
+                    failed |= status is _Observation.FAILED
                     if status in {_Observation.WAITING, _Observation.VISIBLE}:
                         blocked.add(target)
                 except Exception as error:
@@ -310,7 +353,7 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
             except (ValueError, OSError, RuntimeError) as error:
                 print(f"{model}/{preset.name}: {error}", file=sys.stderr)
                 failed = True
-        failed |= _observe_startup(started, client.job_state, published)
+        failed |= _observe_startup(started, client, published)
     return int(failed)
 
 

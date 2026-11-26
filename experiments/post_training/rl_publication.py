@@ -80,6 +80,7 @@ class PublicationOutcome(BaseModel):
     errors: list[str] = Field(default_factory=list)
     urls: dict[str, str] = Field(default_factory=dict)
     attempts: dict[str, AttemptRecord] = Field(default_factory=dict, exclude=True)
+    ineligible_controls: list[AttemptRecord] = Field(default_factory=list, exclude=True)
     gate_path: str | None = Field(default=None, exclude=True)
     retry: str | None = None
 
@@ -432,6 +433,7 @@ def publish_runs(
     interrupted: bool = False,
     submitted_gate: gate.GateAddress | None = None,
     allow_unprepared: bool = False,
+    fail_incomplete_control: bool = False,
 ) -> PublicationOutcome:
     """Rebuild and upsert terminal or interrupted attempts, isolating publication failures."""
     if coordinator is None and issue is not None and (len(outputs) != 1 or attempt_id is None):
@@ -492,11 +494,16 @@ def publish_runs(
                 and receipt.native.config["run"].get("coordinator_iris_job_id") != coordinator
             ):
                 continue
-            if attempt_id is None and not receipt.native.result.state.is_terminal and receipt.interruption is None:
+            nonterminal = not receipt.native.result.state.is_terminal and receipt.interruption is None
+            current_control = allow_unprepared and selected_id == current_id
+            recover_incomplete = (
+                nonterminal and fail_incomplete_control and receipt.index is not None and receipt.index.is_control
+            )
+            if attempt_id is None and nonterminal and not (current_control or recover_incomplete):
                 continue
             destination = (receipt.index_run_id, selected_id)
             try:
-                if not receipt.native.result.state.is_terminal and receipt.interruption is None:
+                if nonterminal and not recover_incomplete:
                     raise ValueError("Publication requires a terminal native attempt")
                 current_report = report if selected_id == current_id else None
                 missing_gate = (
@@ -518,16 +525,19 @@ def publish_runs(
                     gate_name=read_record(gate_path).name if current_report is not None else None,
                     gate_failure=missing_gate,
                 )
+                if recover_incomplete:
+                    record = record.model_copy(update={"status": "failed", "failed_facts": ["missing_terminal_receipt"]})
                 if issue is not None:
                     assigned = assign_issue(recorded_launch(receipt).export_root, receipt.run_id, selected_id, issue)
                     record = record.model_copy(update={"issue": assigned})
                 url = publish_result(record, service_url)
                 result.served_records.append(destination)
                 if (
-                    (selected_id == current_id or attempt_id is not None)
+                    (selected_id == current_id or attempt_id is not None or recover_incomplete)
                     and record.is_control
                     and record.status != "succeeded"
                 ):
+                    result.ineligible_controls.append(receipt)
                     result.errors.append(
                         f"Control {record.run_id}/{record.attempt_id} is ineligible: {', '.join(record.failed_facts)}"
                     )

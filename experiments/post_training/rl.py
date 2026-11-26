@@ -831,6 +831,7 @@ def _submit_from_launcher(
         environment["GIT_COMMIT"] = revision
     if preset.output_ttl_days is not None:
         environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
+    # The coordinator reuses argv. The handoff path belongs to the launcher environment.
     submission_path = os.environ.get(rl_publication.CONTROL_SUBMISSION_ENV)
 
     submit = partial(submit_or_run, module, handles, max_concurrent, environment, argv=argv)
