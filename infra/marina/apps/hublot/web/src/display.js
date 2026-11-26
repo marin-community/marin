@@ -54,12 +54,12 @@ export function entryOccupancyAtLongestWait(data, range) {
   return longest?.outstanding == null ? null : longest;
 }
 
-export function canceledAttemptCount(data, range) {
+export function canceledGroupJobCount(data, range) {
   let count = null;
-  for (const attempt of data) {
-    if (!inRange(attempt, range) || attempt.outcome == null) continue;
+  for (const job of data) {
+    if (!inRange(job, range) || job.outcome == null) continue;
     count ??= 0;
-    if (attempt.outcome === 'cancelled') count++;
+    if (job.outcome === 'cancelled') count++;
   }
   return count;
 }

@@ -13,7 +13,7 @@ const coordMarker = { ...marker, color: '#827394' };
 
 function StageNode({ id, data }) {
   const { node, wires, value, selected, inspectable, hasSettings, onInspect, onInfo, onToggle } = data;
-  const unit = value?.unit === 'attempts' && value.count === '1' ? 'attempt' : value?.unit;
+  const unit = value?.unit === 'jobs' && value.count === '1' ? 'attempt' : value?.unit;
   const Label = inspectable ? 'button' : 'div';
   const action = inspectable ? { type: 'button', onClick: (event) => { event.stopPropagation(); onInspect(id); } } : {};
   return (

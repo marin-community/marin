@@ -129,7 +129,7 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
             "grader": package.grader,
         }
     )
-    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
+    request = replace(request, inputs=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
     observed = []
 
     class Engine:
@@ -201,7 +201,7 @@ async def test_assistant_prefix_worker_grades_only_an_ended_turn_without_its_ter
             "grader": verifyit_package(StructureClosureSpec(prefix, expected, ClosureFormat.CODE_FENCE)).grader,
         }
     )
-    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
+    request = replace(request, inputs=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
 
     stop_piece = TurnEndTokenizer.pieces[stop_token]
 
@@ -248,7 +248,7 @@ async def test_a_malformed_turn_is_rejected_or_penalized_by_reward_shaping(
         {"trajectory_reward_shaping": {"enabled": True, "reasoning_span": {"penalty": penalty, "target": target}}},
     )
     task = request.inputs[0].spec.task.model_copy(update={"reasoning_markup": policy})
-    request = replace(request, rows=(task_input(lowered_task(task, max_turns=1)),))
+    request = replace(request, inputs=(task_input(lowered_task(task, max_turns=1)),))
 
     class Client:
         """Reports a stray end marker on the reply's last token, as the chat transport records one."""

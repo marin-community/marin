@@ -5,7 +5,7 @@ import { GridComponent, MarkAreaComponent, MarkLineComponent } from 'echarts/com
 import { CanvasRenderer } from 'echarts/renderers';
 import { cards, nodes } from './contracts.js';
 import {
-  canceledAttemptCount, cardSeries, clock, elapsed, hasValues, inRange, number,
+  canceledGroupJobCount, cardSeries, clock, elapsed, hasValues, inRange, number,
   entryOccupancyAtLongestWait, sampleAt, timingDistribution, utc,
 } from './display.js';
 import { ChartLegend } from './Legends.jsx';
@@ -242,10 +242,10 @@ function ChartDialog({ title, endpoints, phases, children, onClose }) {
 }
 
 const tabNames = {
-  'entries/s': 'Entry rate', 'attempts/s': 'Attempt rate', 'groups/s': 'Group rate',
+  'entries/s': 'Entry rate', 'jobs/s': 'Group job rate', 'groups/s': 'Group rate',
   'groups/batch': 'Groups per batch', 'rollouts/eval': 'Eval grades', requests: 'Requests',
-  groups: 'Queue depth', 'policy steps': 'Policy lag', attempts: 'Active attempts', entries: 'Quarantine',
-  'awaits/attempt': 'Model awaits', 'rollouts/group': 'Rollouts per group', 'tokens/step': 'Training tokens',
+  groups: 'Queue depth', 'policy steps': 'Policy lag', jobs: 'Active group jobs', entries: 'Quarantine',
+  'awaits/job': 'Model awaits', 'rollouts/group': 'Rollouts per group', 'tokens/step': 'Training tokens',
   'sequences/step': 'Training sequences', s: 'Timing', 's per 10 s': 'Waiting per 10 s',
 };
 
@@ -324,7 +324,7 @@ function cardSummary(definition, model, range, unit, cancellations) {
   }
   if (definition.cancellationSummary && cancellations !== null) {
     return {
-      headline: number.format(cancellations) + (cancellations === 1 ? ' canceled attempt' : ' canceled attempts'),
+      headline: number.format(cancellations) + (cancellations === 1 ? ' canceled group job' : ' canceled group jobs'),
       context: 'Recorded worker outcomes in this time range',
     };
   }
@@ -396,14 +396,14 @@ export function InspectorCard({
   const gapSignal = definition.gapSignal ?? definition.series[0];
   const showGap = definition.gap && !model.series[gapSignal]?.some((s) => hasValues(s, range));
   const cancellations = definition.cancellationSummary || definition.rejectionSummary
-    ? canceledAttemptCount(model.series.attemptTime[0].data, range) : null;
+    ? canceledGroupJobCount(model.series.groupJobTime[0].data, range) : null;
   const summary = cardSummary(definition, model, range, unit, cancellations);
   const waits = definition.batchWaitZoom ? model.phases.filter(({ kind, end, start }) =>
     kind === 'rollout_wait' && start < range.to && end >= range.from) : [];
   const links = (definition.links ?? (showGap && definition.related ? [definition.related] : []))
     .filter((link) => availableCards.has(link.id));
   if (definition.rejectionSummary && cancellations !== null && availableCards.has('workers')) {
-    links.push({ id: 'workers', label: 'View canceled attempts in Workers' });
+    links.push({ id: 'workers', label: 'View canceled group jobs in Workers' });
   }
   const distributions = series.filter((signal) => signal.distribution);
   const distribution = distributionOpen ?
@@ -415,8 +415,8 @@ export function InspectorCard({
   if (unit === 's per 10 s') caption = '10 s means it waited through the whole bin.';
   if (unit === 's') caption = 'Duration in seconds';
   if (definition.lagCaption && unit === 'policy steps' && model.maxStaleness != null) caption = 'Configured staleness limit · ' + model.maxStaleness + ' steps';
-  if (unit === 'attempts') caption = 'Intervals reconstructed from recorded worker calls.';
-  if (id === 'workers' && unit === 's') caption = 'Wait totals within an attempt can overlap.';
+  if (unit === 'jobs') caption = 'Intervals reconstructed from recorded worker calls.';
+  if (id === 'workers' && unit === 's') caption = 'Waits within a group job can overlap.';
   if (series.some((signal) => signal.id === 'entryReleases')) caption = 'Releases are counted when groups leave for training.';
   if (grouped) caption = summaryCount + ' ' + definition.summaries[grouped.id] +
     (summaryCount === 1 ? ' summary' : ' summaries') + ' in view';

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { flowGraph, cards } from '../src/contracts.js';
 import { createMeasurements, cumulativeRate, waitShare } from '../src/measurements.js';
 import {
-  canceledAttemptCount, cardsWithSamples, entryOccupancyAtLongestWait, recordedNodeSettings, timingDistribution,
+  canceledGroupJobCount, cardsWithSamples, entryOccupancyAtLongestWait, recordedNodeSettings, timingDistribution,
 } from '../src/display.js';
 import { driverPhases, driverSetup } from '../src/phases.js';
 
@@ -118,7 +118,7 @@ test('a task selection wait ending without a recorded launch adds no group start
 });
 
 test('Dispatch summarizes occupancy at the longest task selection wait with run coverage', () => {
-  const attempt = (start, end) => ({
+  const job = (start, end) => ({
     name: 'rollout_call', timestamp_ms: end, seq: end,
     body_json: { started_unix_ms: start, finished_unix_ms: end },
   });
@@ -126,7 +126,7 @@ test('Dispatch summarizes occupancy at the longest task selection wait with run 
     name: 'rollout_wait_seconds', timestamp_ms, seq: timestamp_ms, value,
     attributes_json: { wait: 'prompt', stat: 'sum' },
   });
-  const rows = [attempt(1000, 23_000), attempt(2000, 35_000), wait(5500, 5), wait(40_000, 20),
+  const rows = [job(1000, 23_000), job(2000, 35_000), wait(5500, 5), wait(40_000, 20),
     { name: 'rollout_groups', timestamp_ms: 25_000, seq: 25_000, value: 1, attributes_json: { disposition: 'consumed' } }];
   const context = { startMs: 0, endMs: 45_000, trainingRows: 2 };
   const { series } = createMeasurements(rows, window, [], null, context);
@@ -165,32 +165,32 @@ test('batch volumes use consumed groups from the complete wait, while releases k
 });
 
 test('recorded worker intervals give concurrency, and only successful calls supply handoff tokens', () => {
-  const attempt = (start, end, outcome, tokens) => ({
+  const job = (start, end, outcome, tokens) => ({
     name: 'rollout_call', timestamp_ms: end, seq: end,
     attributes_json: { outcome }, body_json: {
       started_unix_ms: start, finished_unix_ms: end, response_tokens: tokens,
     },
   });
-  const rows = [attempt(2000, 18_000, 'success', 180), attempt(4000, 8000, 'success', 80),
-    attempt(31_000, 37_000, 'failure', 370)];
+  const rows = [job(2000, 18_000, 'success', 180), job(4000, 8000, 'success', 80),
+    job(31_000, 37_000, 'failure', 370)];
   const { series } = createMeasurements(rows, window);
-  assert.deepEqual(series.activeAttempts[0].data.map((point) => point.value), [2, 1, 0, 1, null]);
-  assert.deepEqual(series.attemptTime[0].data.map((point) => point.value), [4, 16, 6]);
+  assert.deepEqual(series.activeGroupJobs[0].data.map((point) => point.value), [2, 1, 0, 1, null]);
+  assert.deepEqual(series.groupJobTime[0].data.map((point) => point.value), [4, 16, 6]);
   assert.deepEqual(series.handoffTokens[0].data.map((point) => point.count ?? null), [80, 180, null, null, null]);
 });
 
-test('Workers counts canceled attempts by their recorded finish times', () => {
-  const attempt = (end, outcome) => ({
+test('Workers counts canceled group jobs by their recorded finish times', () => {
+  const job = (end, outcome) => ({
     name: 'rollout_call', timestamp_ms: end, seq: end, attributes_json: { outcome },
     body_json: { started_unix_ms: end - 1000, finished_unix_ms: end },
   });
-  const rows = [attempt(12_000, 'success'), attempt(18_001, 'cancelled'),
-    attempt(18_200, 'cancelled'), attempt(35_500, null)];
-  const attempts = createMeasurements(rows, window).series.attemptTime[0].data;
-  assert.equal(canceledAttemptCount(attempts, window), 2);
-  assert.equal(canceledAttemptCount(attempts, { from: 18_001, to: 18_200 }), 1);
-  assert.equal(canceledAttemptCount(attempts, { from: 10_000, to: 15_000 }), 0);
-  assert.equal(canceledAttemptCount(attempts, { from: 30_000, to: 40_000 }), null);
+  const rows = [job(12_000, 'success'), job(18_001, 'cancelled'),
+    job(18_200, 'cancelled'), job(35_500, null)];
+  const jobs = createMeasurements(rows, window).series.groupJobTime[0].data;
+  assert.equal(canceledGroupJobCount(jobs, window), 2);
+  assert.equal(canceledGroupJobCount(jobs, { from: 18_001, to: 18_200 }), 1);
+  assert.equal(canceledGroupJobCount(jobs, { from: 10_000, to: 15_000 }), 0);
+  assert.equal(canceledGroupJobCount(jobs, { from: 30_000, to: 40_000 }), null);
 });
 
 test('timing distributions count observations in the selected window, including zero and bucket boundaries', () => {
@@ -229,7 +229,7 @@ test('training-only startup logs show the training dataset count', () => {
   assert.equal(driverSetup(rows.slice(0, 2), startup).trainingRows, null);
 });
 
-test('driver timers locate evals and the final checkpoint, and require one attempt', () => {
+test('driver timers locate evals and the final checkpoint, and require one execution', () => {
   const row = (epoch_ms, seq, tail) => ({ epoch_ms, seq, key: '/user/job/0:0',
     line: 'skyrl_train.trainer:_finalize_training:682 - ' + tail });
   const rows = [

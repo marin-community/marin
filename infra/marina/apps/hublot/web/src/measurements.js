@@ -364,13 +364,13 @@ function evaluationSummaries(rows, window) {
 function attachEntryOccupancy(rows, points, window, { startMs, endMs, trainingRows }) {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || window.from > startMs ||
       window.to <= endMs || !Number.isSafeInteger(trainingRows) || trainingRows < 1) return;
-  const attempts = rows.filter((row) => row.name === 'rollout_call' && Number.isFinite(row.body.started_unix_ms));
+  const jobs = rows.filter((row) => row.name === 'rollout_call' && Number.isFinite(row.body.started_unix_ms));
   const exits = rows.filter((row) => row.name === 'rollout_groups' && Number.isFinite(row.value));
-  if (!attempts.length || !exits.length || new Set([...attempts, ...exits].map((row) => seriesKey(row, {}))).size !== 1) return;
+  if (!jobs.length || !exits.length || new Set([...jobs, ...exits].map((row) => seriesKey(row, {}))).size !== 1) return;
 
   // Dispatch marks a UID live at launch. The Buffer's dispositions release it.
   const changes = [
-    ...attempts.map((row) => ({ t: row.body.started_unix_ms, delta: 1 })),
+    ...jobs.map((row) => ({ t: row.body.started_unix_ms, delta: 1 })),
     ...exits.map((row) => ({ t: row.timestamp_ms, delta: -row.value })),
   ].sort((a, b) => a.t - b.t);
   const waits = points.filter((point) => point.waitStart != null).sort((a, b) => a.waitStart - b.waitStart);
