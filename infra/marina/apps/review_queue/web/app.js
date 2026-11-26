@@ -79,8 +79,7 @@ function reviewerCard(name, requests, max) {
   return card;
 }
 
-function renderReviewers(prs) {
-  const groups = groupBy(prs, "requested_reviewers", "login");
+function renderReviewers(groups) {
   const query = $("search").value.trim().toLowerCase();
   const visible = groups.filter(([name]) => name.toLowerCase().includes(query));
   const list = $("reviewers");
@@ -134,7 +133,7 @@ function render(prs) {
   $("reviewer-count").textContent = String(people.length);
   $("team-count").textContent = String(teams.length);
   $("unassigned-count").textContent = String(noReviewRequest.length);
-  renderReviewers(prs);
+  renderReviewers(people);
   renderCompact("teams", teams);
   renderUnassigned(noReviewRequest);
 }
@@ -180,7 +179,7 @@ function startReviewQueue() {
   }
 
   $("refresh").addEventListener("click", refresh);
-  $("search").addEventListener("input", () => renderReviewers(current));
+  $("search").addEventListener("input", () => renderReviewers(groupBy(current, "requested_reviewers", "login")));
   refresh();
 }
 
