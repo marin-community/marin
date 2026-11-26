@@ -54,7 +54,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO
+from typing import IO, Literal
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -468,10 +468,11 @@ def run_launcher(args: argparse.Namespace) -> None:
         endpoint_name = args.endpoint_name
         coordinator = rank_offset == 0
     else:
-        endpoint_name = f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}"
+        endpoint_name = rendezvous_endpoint_name(job_info, mode="launcher")
         coordinator = task_index == 0
+    variants = build_variants(extra_env=args.env_pairs)
     if coordinator:
-        base_port = allocate_port_block(len(build_variants()) + 1)
+        base_port = allocate_port_block(len(variants) + 1)
         master_host = job_info.advertise_host
         access = EndpointAccess.ENDPOINT_ACCESS_LINK if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
         endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}", access=access)
@@ -489,7 +490,7 @@ def run_launcher(args: argparse.Namespace) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     selected = set(args.variants.split(",")) if args.variants else None
     results = []
-    for offset, variant in enumerate(build_variants(extra_env=args.env_pairs)):
+    for offset, variant in enumerate(variants):
         if selected is not None and variant.name not in selected:
             continue
         logger.info("[task %s] variant %s starting", task_index, variant.name)
@@ -515,8 +516,10 @@ def run_launcher(args: argparse.Namespace) -> None:
     (RESULT_DIR / f"results-task{task_index}.json").write_text(json.dumps(report, indent=2))
 
 
-def gate_endpoint_name(job_info: JobInfo) -> str:
-    """Give each GPU gang its own rendezvous within the coordinator namespace."""
+def rendezvous_endpoint_name(job_info: JobInfo, *, mode: Literal["launcher", "gate"]) -> str:
+    """Give each worker gang and retry its own rendezvous."""
+    if mode == "launcher":
+        return job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}").to_wire()
     job = hashlib.sha256(str(job_info.job_id).encode()).hexdigest()[:16]
     return f"{ENDPOINT_BASE_NAME}-gate-{job}-attempt-{job_info.attempt_id}"
 
@@ -554,7 +557,7 @@ def run_gate(args: argparse.Namespace) -> None:
     gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
-    endpoint_name = gate_endpoint_name(job_info)
+    endpoint_name = rendezvous_endpoint_name(job_info, mode="gate")
     gate_variants = [
         variant
         for variant in build_variants(extra_env=args.env_pairs or None)

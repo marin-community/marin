@@ -1,26 +1,47 @@
 # Hublot
 
 Open `/hublot/` in Marina and enter an exact Finelog run ID, Iris job path, or
-execution UID. Hublot searches the last 72 hours on the Marin Finelog hub. Use
-**Load window** for an older execution or a different time range. Links can
-include `run`, `from`, and `to`, with times in UTC epoch milliseconds. If an ID
-matches multiple executions, choose one by cluster and job.
+execution UID. A link with `?run=<execution-id>` opens the recorded run.
+Use the time bar to select a portion of it. Hublot searches the last seven
+days on the Marin Finelog hub and offers a UTC start date when lookup fails.
+If an ID matches multiple executions, choose one by cluster and job.
 
 Select a stage or stream to open its inspector. Select a batch wait in the
 Trainer card to focus the shared time range. Inference shows request counts,
 KV cache usage, and mean prefill and decode time per finished request when
 those samples are available. Model input and Model output show fleet token
 rates. Select **Per GPU** when the configured inference GPU count is available.
+The graph samples fleet request counts and token rates automatically for the
+selected time range. The Inference chart reuses those counts and samples timing
+or KV cache usage when you select that tab. Each sampled point covers up to
+30 seconds. Hublot also loads detail for every chart in the selected range,
+including charts you have yet to open. The bar at the bottom shows overall
+progress. Select **Load detail** to move a chart ahead of background reads.
+Select ten minutes or less for 10-second points and per-engine charts.
+White chart backgrounds mark gaps between recorded phases.
 
 ## Finelog reads
 
-Marina authorizes access to the named app and proxies its read API. The backend
-uses fixed Finelog queries scoped to one resolved execution and a UTC window of
-10 seconds to 60 minutes. It reads counter samples up to 15 seconds outside
-the window and looks 30 minutes ahead for completed spans. Finelog pages resume
-after the last timestamp and sequence number. The browser computes measurements
-after all pages arrive. The backend asks for a shorter window when the read
-exceeds the record, response size, or time limit.
+Marina authorizes access to the named app and proxies its read API. Hublot
+looks up the controller start and end first. It reads settings with the
+timeline for the resolved window of 10 seconds to 7 days. The graph reads up to
+twelve short slices, starting near recent activity. Open charts can read
+more samples while waiting for detail, up to 72 slices per overview.
+The first request reads up to four slices. Later requests read up to twelve
+and skip the intervening data. Background detail reads requests and token
+rates before inference timing and KV cache. Opening a tab brings its metrics
+forward in the queue. Selections over two hours start with a 20-minute page.
+Later pages cover up to two hours. Charts fill in as each page arrives.
+Each Marina worker runs one Hublot read at a time and waits at least two seconds
+after a background read before accepting another. Detail uses time buckets
+for long windows and engine samples for short ones. Changing the time range
+updates the queue to the new range.
+Finelog adds observed counter increments across engines,
+skips resets and gaps, and computes latency from matched request counts and
+duration totals. It averages gauges within each engine before combining engines.
+Counter reads include 15 seconds of samples on either side. The overview looks
+30 minutes ahead for spans that finish outside the window. Hublot asks for a
+shorter window when a read reaches the record, size, or time limit.
 
 The signal definitions in `web/src/contracts.js` drive both the browser charts
 and the server predicates. Run `npm run sync-query-contract` in `web/` after

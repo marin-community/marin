@@ -32,7 +32,7 @@ Use `train-long` for EvalLite or `train-long-checkpoint-eval` to add the agentic
 | Snowball `train-long` | Full training and checkpoint quality | 40 H100s, 100 updates by default, hours to days. Check the plan and use the reported GPU-hours for cost. | EvalLite active set of 100 tasks at step 0 and every 10 updates. Evaluation coverage invariants, without a calibrated control comparison. | Train a release candidate with checkpoint recovery and durable HF export. | Ran with a five-step SFT initializer and two RL updates |
 | Snowball `train-long-checkpoint-eval` | Full training with agentic checkpoint evaluation | 40 H100s, 100 updates by default, hours to days plus Daytona sandbox costs. | EvalLite plus 90 agent episodes at each checkpoint evaluation. Coverage invariants without a calibrated control comparison. | Qualify current training weights on BFCL, SWE-bench Verified and OpenThoughts-TBLite. Requires the [Daytona evaluation account and sandbox capacity](#agentic-checkpoint-evaluation). | CPU plan only |
 
-Mochi RL starts from the completed production SFT export, which supplies the weights and tokenizer.
+Mochi RL starts from the production SFT step-400407 export and its pinned Hugging Face tokenizer.
 Use `--sft PRESET` to build a starting model or `--init NAME@VERSION` to use a published model.
 Mochi’s medium presets run two updates and its long presets run up to 10,000 updates.
 A preset ending in `-agentic` trains on agent tasks. Snowball's `train-long-checkpoint-eval` adds agent episodes to checkpoint evaluation.
@@ -64,9 +64,8 @@ checkpoint and returns its HF export. When step zero wins, the result points to 
 model and trained checkpoints stay only if `keep_every` or an outstanding export protects them.
 Detached launches use the trainer’s rolling checkpoint window.
 
-The smaller Snowball layouts pack one trajectory per replica with context parallelism of one and
-no separate packing token budget, and the campaign layout splits a 102,400-token request into
-20,480 packed token positions per context rank, with an update at that length still unmeasured.
+The 40-H100 `train-long` preset packs samples across two Megatron context ranks. The agentic
+campaign layout splits a 102,400-token request into 20,480 packed token positions per context rank.
 
 `train-medium-tools` runs Linux tasks and image graders on Daytona sandboxes in the RL organization, so set
 `DAYTONA_RL_API_KEY`.
@@ -268,8 +267,17 @@ Snowball uses four proposals. The `speed-short` burst preset uses a 0.80 vLLM GP
 fraction. The other presets use 0.75.
 To compare another draft against the same policy, set `generator.speculative_decoding.model` to a
 JSON object with `source_uri` and `source_identity`. For `hf://` sources, use the full Hub commit SHA.
+Use `--set generator.speculative_decoding.num_speculative_tokens=N` to sweep proposal count.
 With an alternate initializer, set the complete `generator.speculative_decoding` block to use its
 compatible draft. Online draft training remains EAGLE3-only.
+
+Mochi one-rack presets using the pinned step-400407 initializer default to a
+766M two-layer DSpark draft with four proposals. An alternate initializer can
+supply a compatible draft through `generator.speculative_decoding`. The
+one-rack vLLM memory fraction of 0.775 gave
+about 119,400 KV tokens per inference GPU in the five-update trial. Use `--set generator.speculative_decoding=null`
+to run plain decoding. Also set `--set generator.gpu_memory_utilization=0.75` to
+reproduce the previous one-rack serving budget. Three-rack presets use plain decoding.
 
 Set `TASK_SELECTION` to a published `NAME@VERSION`. Custom selections must use the default development panel (`recipe.heldout`)
 and record the complete frozen EvalLite in their recipe's `exclusions`. The builder checks those recorded inputs.
@@ -303,7 +311,8 @@ The gate writes `gate_report.json` and `gate_report.md`. Status prints verdict, 
 path, followed by the Markdown tables of objectives, guards, invariants and reported statistics.
 JSON comparison rows have `objective`, `guard`, `requirement`, `reported` or `slice` roles.
 `run_inputs.json` records the requested settings and inputs for comparison; `run.config_changes` lists
-explicit settings and derived differences. Native elapsed time and allocated GPUs determine gain per GPU-hour.
+explicit settings and derived differences. The gate estimates GPU-hours from the configured GPU
+count and the time between the first recorded workload start and native job completion.
 
 Each gated preset uses one control pin in `snowball_rl.SNOWBALL.control_pins`, with a source commit, revision and
 replicate count. Data-medium shares learning-medium's pin. Before submission, the command composes the
