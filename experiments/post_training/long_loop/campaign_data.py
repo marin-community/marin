@@ -13,13 +13,10 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from huggingface_hub import hf_hub_download
+from huggingface_hub import get_hf_file_metadata, hf_hub_download, hf_hub_url
 from iris.cluster.client.job_info import get_job_info
 from marin.rl.curriculum import (
-    CurriculumEntry,
     PoolRow,
-    RlCurriculum,
-    SamplingMode,
     SourcePin,
     draw_validation_split,
     validation_payload,
@@ -31,10 +28,17 @@ from taskcompendium.models import TaskSpec
 
 from experiments.post_training.long_loop.exp3_data import PreparedPools
 from experiments.post_training.long_loop.rl_terminal_evaluation import native_command
+from experiments.post_training.task_curation.curriculum import (
+    ServedCatalogSource,
+    curriculum_entries,
+    served_catalog_sources,
+    weighted_curriculum,
+)
 
 CAMPAIGN = Path(__file__).with_name("campaign")
 SEED = 20261020
 VALIDATION_SIZE = 200
+CATALOG_LOAD_ID = "54405be9b4db4c2d9828549469abe759"
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +53,15 @@ class CampaignMix:
     def weights(self) -> dict[str, float]:
         return {source: 1 / len(self.sources) for source in self.sources}
 
+    @property
+    def curriculum_catalog(self) -> dict[str, ServedCatalogSource]:
+        return {
+            label: ServedCatalogSource(
+                pin["name"], pin["version"], SourcePin(pin["repo"], pin["revision"], pin["url"]), pin["recipe"]
+            )
+            for label, pin in self.sources.items()
+        }
+
 
 def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
     """Resolve a version-prefixed CSV candidate, refusing unsealed or changed releases."""
@@ -57,6 +70,8 @@ def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
         raise ValueError("mix-id must start with v2- or v3-")
     pins_path = directory / "source_pins.json"
     catalog = json.loads(pins_path.read_text())
+    if catalog["catalog_load"]["load_id"] != CATALOG_LOAD_ID:
+        raise ValueError("Campaign requires the explicitly selected R40 served catalog load")
     candidates = directory / f"mix_candidates_{generation}.csv"
     content = candidates.read_bytes()
     digest = hashlib.sha256(content).hexdigest()
@@ -70,10 +85,35 @@ def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
     names = row["sources"].split(";")
     if len(names) != len(set(names)) or len(names) != int(row["k"]):
         raise ValueError("Candidate sources repeat or disagree with k")
-    sources = {name: catalog["sources"][name] for name in sorted(names)}
-    pending = [name for name, pin in sources.items() if pin["admission"] != "catalog"]
+    available = served_catalog_sources(
+        {**catalog, "sources": {name: catalog["sources"][name] for name in names if name in catalog["sources"]}}
+    )
+    pending = {
+        name: catalog["sources"].get(name, {}).get("status", "Missing") for name in names if name not in available
+    }
     if pending:
-        raise ValueError(f"Awaiting sealed retained publications, not raw converters: {pending}")
+        raise ValueError(f"Served R40 catalog cannot admit this mix: {pending}")
+    entries = curriculum_entries(
+        mix_id, CATALOG_LOAD_ID, weights={name: 1 / len(names) for name in names}, catalog=available
+    )
+    sources = {}
+    for entry in sorted(entries, key=lambda entry: entry.label):
+        source = catalog["sources"][entry.label]
+        if source["pipeline"]["files"] != ["tasks.parquet"]:
+            raise ValueError(f"Catalog source lacks the published TaskSpec cohort: {entry.label}")
+        if not source["actor_census_input"] or source["route"] not in {"agentic", "nonagentic"}:
+            raise ValueError(f"Catalog source lacks its measured population or actor route: {entry.label}")
+        sources[entry.label] = {
+            "name": entry.source,
+            "version": entry.version,
+            "repo": entry.pin.name,
+            "revision": entry.pin.revision,
+            "url": entry.pin.url,
+            "recipe": entry.recipe,
+            "count": source["actor_census_input"]["measured_tasks"],
+            "route": source["route"],
+            "catalog_load_id": CATALOG_LOAD_ID,
+        }
     return CampaignMix(mix_id, sources, digest, hashlib.sha256(pins_path.read_bytes()).hexdigest())
 
 
@@ -102,27 +142,14 @@ def partition_mix(mix: CampaignMix, rows: dict[str, list[dict]], version: str) -
                 raise ValueError(f"Cross-source holdout leakage: {label}/{identity.id}")
             else:
                 training[label].append(stamped)
-    entries = tuple(
-        CurriculumEntry(
-            label=label,
-            source=pin["name"],
-            version=pin["version"],
-            pin=SourcePin(
-                pin["repo"], pin["revision"], f"https://huggingface.co/datasets/{pin['repo']}/tree/{pin['revision']}"
-            ),
-            recipe="experiments.post_training.task_curation.retained_release.import_retained",
-            weight=mix.weights[label],
-        )
-        for label, pin in mix.sources.items()
-    )
-    curriculum = RlCurriculum(
-        name=f"rl-data-campaign/{mix.id}",
-        version=version,
-        mode=SamplingMode.WEIGHTED,
+    curriculum = weighted_curriculum(
+        f"rl-data-campaign/{mix.id}",
+        version,
+        weights=mix.weights,
         seed=SEED,
-        entries=entries,
-        stages=(),
-        validation=split.validation,
+        validation_size=VALIDATION_SIZE,
+        pool_rows=identities,
+        catalog=mix.curriculum_catalog,
     )
     return PreparedPools(curriculum, training, validation)
 
@@ -160,24 +187,32 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
     if get_job_info() is None or not output.startswith("s3://marin-us-east-08a/"):
         raise ValueError("Campaign pools must be materialized inside an 08a Iris CPU job")
     rows = {}
+    source_readbacks = {}
     for label, pin in mix.sources.items():
         logger.info("Reading campaign cohort %s at %s@%s", label, pin["repo"], pin["revision"])
+        token = require_secret("HF_TOKEN")
+        metadata = get_hf_file_metadata(
+            hf_hub_url(pin["repo"], "tasks.parquet", revision=pin["revision"], repo_type="dataset"), token=token
+        )
+        if metadata.etag is None or len(metadata.etag) != 64:
+            raise ValueError(f"Published cohort lacks an immutable SHA256 blob: {label}")
         local = Path(
             hf_hub_download(
                 pin["repo"],
                 "tasks.parquet",
                 revision=pin["revision"],
                 repo_type="dataset",
-                token=require_secret("HF_TOKEN"),
+                token=token,
             )
         )
         with local.open("rb") as stream:
-            if hashlib.file_digest(stream, "sha256").hexdigest() != pin["sha256"]:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != metadata.etag:
                 raise ValueError(f"Atlas release changed: {label}")
         records = pq.read_table(local).to_pylist()
         if len(records) != pin["count"]:
             raise ValueError(f"Atlas population changed: {label}")
         logger.info("Verified campaign cohort %s: %d rows and exact parquet SHA", label, len(records))
+        source_readbacks[label] = {"parquet_sha256": metadata.etag, "rows": len(records), "catalog_pin": pin}
         for row in records:
             retained_task(row, label)
         with tempfile.TemporaryDirectory() as temporary:
@@ -222,6 +257,7 @@ def prepare_pools(*, output: str, mix: CampaignMix, pool_version: str, launch_do
         "routes": {label: pin["route"] for label, pin in mix.sources.items()},
         "sources": mix.sources,
         "mix": asdict(mix),
+        "source_readbacks": source_readbacks,
     }
     (destination / "manifest.json").write_text(json.dumps(document, indent=2))
     logger.info(

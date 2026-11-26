@@ -9,11 +9,55 @@ from pathlib import Path
 import pytest
 from marin.rl.curriculum import PoolRow
 
-from experiments.post_training.task_curation.curriculum import ordered_curriculum, weighted_curriculum
+from experiments.post_training.task_curation.curriculum import (
+    curriculum_entries,
+    ordered_curriculum,
+    served_catalog_sources,
+    weighted_curriculum,
+)
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 from experiments.post_training.task_curation.tests.numbers_pipeline import number_source
 
 _DUMMY_INPUT = Path("/unused/numbers.txt")
+
+
+def test_served_catalog_admission_and_pins_drive_curriculum_entries():
+    source = {
+        "status": "Available",
+        "intended_use": "train",
+        "dataset_id": "open-athena/retained",
+        "dataset_revision": "a" * 40,
+        "current_release": {"repo": "open-athena/retained", "revision": "a" * 40, "url": "https://example.org/release"},
+        "pipeline": {
+            "name": "retained-recipe",
+            "version": "2026.11.13.1",
+            "source": "open-athena/retained",
+            "revision": "a" * 40,
+        },
+    }
+    document = {
+        "catalog_load": {"load_id": "r40-fixture"},
+        "sources": {
+            "available": source,
+            "pending": {**source, "status": "Pending"},
+            "excluded": {**source, "status": "Excluded", "license_exception": True},
+        },
+    }
+    catalog = served_catalog_sources(document)
+    (entry,) = curriculum_entries("mix", "1", weights={"available": 1.0}, catalog=catalog)
+    assert (entry.source, entry.version, entry.pin.name, entry.pin.revision) == (
+        "retained-recipe",
+        "2026.11.13.1",
+        "open-athena/retained",
+        "a" * 40,
+    )
+    assert entry.recipe == "atlas:r40-fixture/retained-recipe@2026.11.13.1"
+    for label in ("pending", "excluded"):
+        with pytest.raises(ValueError, match="unknown RL source"):
+            curriculum_entries("mix", "1", weights={label: 1.0}, catalog=catalog)
+    document["sources"]["available"] = {**source, "pipeline": {**source["pipeline"], "revision": "b" * 40}}
+    with pytest.raises(ValueError, match="release and pipeline disagree"):
+        served_catalog_sources(document)
 
 
 def _catalog() -> dict[str, RlDataSource]:

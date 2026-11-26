@@ -66,7 +66,7 @@ class CurriculumEntry:
     """The source recipe's version."""
     pin: SourcePin
     recipe: str
-    """The curation pipeline identity as ``module.qualname``."""
+    """The curation callable identity or immutable served catalog pipeline reference."""
     weight: float | None = None
     """The weighted-mode mixture weight; ``None`` in ordered mode."""
 

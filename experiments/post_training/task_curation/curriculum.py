@@ -16,6 +16,7 @@ the training set and disjoint from it.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from marin.rl.curriculum import (
     CurriculumEntry,
@@ -32,6 +33,40 @@ from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.sources import runnable_sources
 
 
+@dataclass(frozen=True)
+class ServedCatalogSource:
+    """One admitted pipeline binding read from an immutable served catalog load."""
+
+    name: str
+    version: str
+    pin: SourcePin
+    recipe: str
+
+
+type CurriculumCatalog = Mapping[str, RlDataSource | ServedCatalogSource]
+
+
+def served_catalog_sources(document: dict) -> dict[str, ServedCatalogSource]:
+    """Bind Available training sources, refusing inconsistent release/pipeline pins."""
+    load_id = document["catalog_load"]["load_id"]
+    bound = {}
+    for label, source in document["sources"].items():
+        if source["status"] != "Available" or source["intended_use"] != "train":
+            continue
+        release, pipeline = source["current_release"], source["pipeline"]
+        if (release["repo"], release["revision"]) != (pipeline["source"], pipeline["revision"]):
+            raise ValueError(f"Served catalog release and pipeline disagree: {label}")
+        if (source["dataset_id"], source["dataset_revision"]) != (release["repo"], release["revision"]):
+            raise ValueError(f"Served catalog dataset and release disagree: {label}")
+        bound[label] = ServedCatalogSource(
+            pipeline["name"],
+            pipeline["version"],
+            SourcePin(release["repo"], release["revision"], release["url"]),
+            f"atlas:{load_id}/{pipeline['name']}@{pipeline['version']}",
+        )
+    return bound
+
+
 def _recipe_identity(pipeline: object) -> str:
     """The ``module.qualname`` identity of a source's curation pipeline callable."""
     qualname = getattr(pipeline, "__qualname__", None)
@@ -41,7 +76,7 @@ def _recipe_identity(pipeline: object) -> str:
     return f"{kind.__module__}.{kind.__qualname__}"
 
 
-def _entry(label: str, source: RlDataSource, weight: float | None) -> CurriculumEntry:
+def _entry(label: str, source: RlDataSource | ServedCatalogSource, weight: float | None) -> CurriculumEntry:
     """One curriculum entry over a catalog source: its sampling label, pin, recipe identity, and weight.
 
     ``label`` is the sampling key the trainer resolves rows by: the pool row's
@@ -49,22 +84,27 @@ def _entry(label: str, source: RlDataSource, weight: float | None) -> Curriculum
     labels, so a label may name a route or a stamped source population rather than
     the catalog name; ``source`` is always the catalog invocation name.
     """
-    dataset = source.dataset
-    if dataset is None:
-        raise ValueError(f"source {label} has no pinned dataset; curricula record pinned sources only")
-    if source.pipeline is None:
-        raise ValueError(f"source {label} has no curation pipeline; curricula record runnable sources only")
+    if isinstance(source, ServedCatalogSource):
+        pin, recipe = source.pin, source.recipe
+    else:
+        dataset = source.dataset
+        if dataset is None:
+            raise ValueError(f"source {label} has no pinned dataset; curricula record pinned sources only")
+        if source.pipeline is None:
+            raise ValueError(f"source {label} has no curation pipeline; curricula record runnable sources only")
+        pin = SourcePin(name=dataset.name, revision=dataset.revision, url=dataset.url)
+        recipe = _recipe_identity(source.pipeline)
     return CurriculumEntry(
         label=label,
         source=source.name,
         version=source.version,
-        pin=SourcePin(name=dataset.name, revision=dataset.revision, url=dataset.url),
-        recipe=_recipe_identity(source.pipeline),
+        pin=pin,
+        recipe=recipe,
         weight=weight,
     )
 
 
-def _resolved(name: str, catalog: Mapping[str, RlDataSource]) -> RlDataSource:
+def _resolved(name: str, catalog: CurriculumCatalog) -> RlDataSource | ServedCatalogSource:
     source = catalog.get(name)
     if source is None:
         raise ValueError(f"unknown RL source {name!r}; the catalog knows: {sorted(catalog)}")
@@ -76,7 +116,7 @@ def curriculum_entries(
     version: str,
     *,
     weights: Mapping[str, float],
-    catalog: Mapping[str, RlDataSource] | None = None,
+    catalog: CurriculumCatalog | None = None,
 ) -> tuple[CurriculumEntry, ...]:
     """The catalog-bound entries a weight-random curriculum over these sources records."""
     sources = runnable_sources() if catalog is None else catalog
@@ -91,7 +131,7 @@ def weighted_curriculum(
     seed: int = 0,
     validation_size: int,
     pool_rows: Mapping[str, Sequence[PoolRow]],
-    catalog: Mapping[str, RlDataSource] | None = None,
+    catalog: CurriculumCatalog | None = None,
 ) -> RlCurriculum:
     """Build a weight-random curriculum over named catalog sources.
 
@@ -124,7 +164,7 @@ def curriculum_with_validation(
     weights: Mapping[str, float],
     seed: int,
     validation: CurriculumValidation,
-    catalog: Mapping[str, RlDataSource] | None = None,
+    catalog: CurriculumCatalog | None = None,
 ) -> RlCurriculum:
     """Build a weight-random curriculum over named catalog sources with a drawn holdout.
 
@@ -153,7 +193,7 @@ def ordered_curriculum(
     seed: int = 0,
     validation_size: int,
     pool_rows: Mapping[str, Sequence[PoolRow]],
-    catalog: Mapping[str, RlDataSource] | None = None,
+    catalog: CurriculumCatalog | None = None,
 ) -> RlCurriculum:
     """Build an ordered curriculum over named catalog sources.
 

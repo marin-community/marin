@@ -11,7 +11,7 @@ on `cw-us-east-08a`, with all racks eligible.
 
 ```bash
 uv run python -m experiments.post_training.long_loop.campaign \
-  --mix-id v2-anchor-exp5-01 --max-steps 50 --version 2026.11.26.501 \
+  --mix-id v2-mix-032 --max-steps 50 --version 2026.11.26.501 \
   --validation-output campaign-validation
 ```
 
@@ -45,15 +45,20 @@ evaluating it.
 
 The CSV snapshot is configuration metadata copied byte-for-byte from
 `experiments/human/long-loop-data-ablation/mix-candidates/mix_candidates_v{2,3}.csv`.
-`source_pins.json` binds its sources to the pinned Atlas
-publication registry, including full parquet hashes, counts, licenses and
-source-route evidence. SWE-smith binds its existing retained release under the
-canonical catalog's user-assumed-admission override; its QC status is recorded
-without changing the source bytes. Raw converters for
-`SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119` and
-`AllenAI:Dolci-Think-SFT-Clean-v2/precise-if` still require published TaskSpecs.
-Affected mixes fail closed. A re-sealed grader release needs a fresh reviewed
-catalog binding before use.
+`source_pins.json` is an immutable configuration readback of Atlas load
+`54405be9b4db4c2d9828549469abe759`, snapshot `assembly-r40-cut-v1`, served by Atlas
+revision 39. The CSV supplies only source IDs and k. The catalog supplies each
+release, pipeline version, admission status and measured actor route. Shared
+`curriculum_entries` and `weighted_curriculum` bind these entries and their holdout;
+there is no branch-local admission override. A source outside `Available` training
+status leaves its mixes waiting while the next runnable candidate fills the slot.
+This includes both repaired SWE sources and any other Pending or unbound source.
+
+HF blob SHA-256 metadata is checked against the exact catalog-pinned revision in
+region before reading TaskSpecs. The published literal TaskSpec byte hashes and
+catalog population counts are verified without reserializing source rows. Each
+pool manifest records its actual input readbacks. A changed catalog admission or
+release requires a fresh readback and artifact version.
 
 The coordinator owns the rated queue and watchdog. Take candidates in
 `experiments/human/long-loop-data-ablation/campaign/queue.json` order, keep three

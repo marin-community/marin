@@ -25,7 +25,14 @@ from experiments.post_training.task_curation.curriculum_manifest import curricul
 
 def test_equal_mix_holdout_preserves_task_bytes_and_pins():
     pins = {
-        label: {"name": label, "version": "3", "repo": f"tests/{label}", "revision": "a" * 40}
+        label: {
+            "name": label,
+            "version": "3",
+            "repo": f"tests/{label}",
+            "revision": "a" * 40,
+            "url": "https://example.org/pin",
+            "recipe": "atlas:fixture/retained@3",
+        }
         for label in ("first", "second")
     }
     mix = CampaignMix("v2-fixture", pins, "b" * 64, "c" * 64)
@@ -68,7 +75,14 @@ def test_equal_mix_holdout_preserves_task_bytes_and_pins():
 
 
 def test_cross_source_holdout_leakage_is_rejected():
-    pin = {"name": "fixture", "version": "1", "repo": "tests/pin", "revision": "a" * 40}
+    pin = {
+        "name": "fixture",
+        "version": "1",
+        "repo": "tests/pin",
+        "revision": "a" * 40,
+        "url": "https://example.org/pin",
+        "recipe": "atlas:fixture/retained@3",
+    }
     mix = CampaignMix("v2-leak", {"first": pin, "second": pin}, "b" * 64, "c" * 64)
     rows = [{"task_spec": json.dumps({"id": f"shared-{i}"})} for i in range(180)]
     with pytest.raises(ValueError, match="Cross-source holdout leakage"):
@@ -86,7 +100,7 @@ def test_retained_checksum_uses_published_json_bytes_without_reserializing():
 
 
 def test_campaign_preserves_131_controls_and_disables_learning_clock():
-    mix = load_mix("v2-anchor-exp5-01")
+    mix = load_mix("v2-mix-032")
     campaign = campaign_round(mix, "2026.11.26.501", max_steps=50)
     reference = load_round(REFERENCE)
     before, after = dataclasses.asdict(reference), dataclasses.asdict(campaign)
@@ -124,17 +138,18 @@ def test_unpublished_source_does_not_fall_back_to_raw_converter(tmp_path):
     (tmp_path / "source_pins.json").write_text(
         json.dumps(
             {
+                "catalog_load": {"load_id": "54405be9b4db4c2d9828549469abe759"},
                 "candidate_sha256": {"v2": hashlib.sha256(candidates).hexdigest()},
-                "sources": {"tests:raw": {"admission": "pending-publication", "files": ["raw.parquet"]}},
+                "sources": {"tests:raw": {"status": "Pending", "intended_use": "train", "files": ["raw.parquet"]}},
             }
         )
     )
-    with pytest.raises(ValueError, match=r"Awaiting sealed retained publications.*tests:raw"):
+    with pytest.raises(ValueError, match=r"Served R40 catalog cannot admit.*tests:raw"):
         load_mix("v2-fixture", tmp_path)
 
 
 def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, monkeypatch):
-    mix = load_mix("v2-anchor-exp5-01")
+    mix = load_mix("v2-mix-032")
     spec = campaign_round(mix, "2026.11.26.501", max_steps=50)
     rows = {
         label: [{"task_spec": json.dumps({"id": f"{label}-{index}"})} for index in range(60)] for label in mix.sources
