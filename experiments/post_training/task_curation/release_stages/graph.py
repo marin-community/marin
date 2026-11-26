@@ -1017,11 +1017,11 @@ _STAGE_SPECS: dict[str, StageSpec] = {
         "strict_audit_before",
         "strict_audit",
         strict_audit_stage.__name__,
-        ("catalog_load", "curriculum_load"),
+        ("census", "catalog_load", "curriculum_load"),
         False,
     ),
     "strict_audit_after": StageSpec(
-        "strict_audit_after", "strict_audit", strict_audit_stage.__name__, ("marina_release",), False
+        "strict_audit_after", "strict_audit", strict_audit_stage.__name__, ("census", "marina_release"), False
     ),
     "package_preview": StageSpec(
         "package_preview", "package_preview", package_preview_stage.__name__, ("strict_audit_before", "census"), False
@@ -1964,6 +1964,7 @@ def _strict_audit_step(
     declarations: ArtifactStep,
     identity_backend: ArtifactStep,
     phase: str,
+    census: ArtifactStep,
     catalog_load: ArtifactStep | None = None,
     curriculum_load: ArtifactStep | None = None,
     origin_handle: ArtifactStep | None = None,
@@ -1973,15 +1974,13 @@ def _strict_audit_step(
             raise ValueError("the before-phase audit reads the live applet origin, not a published revision")
         if catalog_load is None or curriculum_load is None:
             raise ValueError("the before-phase audit runs after both loads and needs their handles")
-        deps = (declarations, identity_backend, catalog_load, curriculum_load)
+        deps = (declarations, identity_backend, census, catalog_load, curriculum_load)
     else:
         if origin_handle is None:
             raise ValueError("the after-phase audit needs the marina release for its published origin")
-        deps = (declarations, identity_backend, origin_handle)
+        deps = (declarations, identity_backend, census, origin_handle)
     spec = _STAGE_SPECS[f"strict_audit_{phase}"]
-    identity = _identity_fields(
-        plan, "release_id", "source_revision", "expected_source_count", "expected_population_tasks"
-    )
+    identity = _identity_fields(plan, "release_id", "source_revision", "expected_source_count")
 
     def build_inputs(ctx: StepContext) -> dict:
         if phase == "before":
@@ -1999,7 +1998,8 @@ def _strict_audit_step(
             "backend": _resolved_proof(ctx, identity_backend)["documents"]["backend_map"],
             "identity": _resolved_proof(ctx, identity_backend)["documents"]["identity_survey"],
             "expected_source_count": plan.expected_source_count,
-            "retained_tasks": plan.expected_population_tasks,
+            # The measured census total, not the plan's hand count (R40: 4,272,894 vs 4,363,214).
+            "retained_tasks": _resolved_proof(ctx, census)["tasks"],
             "phase": phase,
         }
 
@@ -2267,12 +2267,14 @@ def release_graph(plan: ReleasePlan, *, preflight: PreflightPolicy | None = None
     catalog_load = _catalog_load_step(plan, catalog_stage)
     curriculum_load = _curriculum_load_step(plan, compose, text_scans)
 
-    audit_before = _strict_audit_step(plan, declarations, identity_backend, "before", catalog_load, curriculum_load)
+    audit_before = _strict_audit_step(
+        plan, declarations, identity_backend, "before", census, catalog_load, curriculum_load
+    )
     package = _package_preview_step(plan, audit_before, census)
     check_preflight = _release_check_step(plan, "preflight", package, None, None, None)
     check_hosted = _release_check_step(plan, "hosted", None, check_preflight, None, None)
     marina = _marina_release_step(plan, package, check_preflight, check_hosted)
-    audit_after = _strict_audit_step(plan, declarations, identity_backend, "after", origin_handle=marina)
+    audit_after = _strict_audit_step(plan, declarations, identity_backend, "after", census, origin_handle=marina)
     hosted = _hosted_check_step(plan, declarations, identity_backend, marina)
     check_postpublish = _release_check_step(plan, "postpublish", None, check_preflight, check_hosted, marina)
     exposure = _exposure_probe_step(plan, marina, hosted, check_postpublish, audit_after)

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from finestore.rl.status_taxonomy import PendingStage, SourceStatus
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.backend_requirements import BackendSurvey
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
@@ -38,6 +39,7 @@ from experiments.post_training.task_curation.release_stages.manifest import Arti
 from infra.marina.apps.rl_data_catalog.release_browser import evidence_sweep
 from infra.marina.apps.rl_data_catalog.release_check import CatalogReader, browser_checks
 from infra.marina.apps.rl_data_catalog.release_curriculum import curriculum_invariants
+from infra.marina.apps.rl_data_catalog.server.content_access import backend_metadata, content_is_withheld
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 STRICT_AUDIT_SUFFIX = "strict-audit"
@@ -128,6 +130,40 @@ def _survey_groups(survey: SourceIdentitySurvey) -> dict[str, dict]:
     return groups
 
 
+# The catalog load serves an Available declaration as typed Pending at one of these
+# backend stages (the registry declaration is untouched); see load.py's downgrades.
+LOAD_TIME_PENDING_STAGES = frozenset(
+    stage.value
+    for stage in (
+        PendingStage.BACKEND_VERIFICATION_PENDING,
+        PendingStage.BACKEND_PROFILE_PENDING,
+        PendingStage.BACKEND_PREPARATION_PENDING,
+    )
+)
+
+
+def served_status_matches(row: dict, declaration: dict) -> bool:
+    """The served status is the declared one, or the load's typed backend Pending downgrade."""
+    if row.get("status") == declaration.get("status"):
+        return True
+    return (
+        declaration.get("status") == SourceStatus.AVAILABLE.value
+        and row.get("status") == SourceStatus.PENDING.value
+        and row.get("stage") in LOAD_TIME_PENDING_STAGES
+    )
+
+
+def served_backend_row(survey_row: dict, declaration: dict) -> dict:
+    """The serving projection of one sealed survey row.
+
+    The catalog load serves the declaration's grading evidence in place of the survey's
+    survey-time copy (recorded as ``grading_evidence_rebound``), and the API serves only
+    backend metadata for a source whose content is withheld.
+    """
+    row = {**survey_row, "grading_environment": declaration.get("grading_environment")}
+    return backend_metadata(row) if content_is_withheld(declaration) else row
+
+
 def served_retained_tasks(served: dict) -> int:
     """The served catalog's total retained task count."""
     return sum(int(row["task_count"]) for row in served["sources"])
@@ -184,12 +220,16 @@ def audit_served_population(
         row = served_rows[source_id]
         declaration = declarations[source_id]
         for field in DECLARATION_FIELDS:
+            if field == "status":
+                if not served_status_matches(row, declaration):
+                    mismatches.setdefault(source_id, []).append("served status differs from the sealed declaration")
+                continue
             if row.get(field) != declaration.get(field):
                 mismatches.setdefault(source_id, []).append(f"served {field} differs from the sealed declaration")
         expected_row = backend_rows.get(source_id)
         if expected_row is None:
             mismatches.setdefault(source_id, []).append("backend survey carries no row for this source")
-        elif row.get("backend_capabilities") != expected_row:
+        elif row.get("backend_capabilities") != served_backend_row(expected_row, declaration):
             mismatches.setdefault(source_id, []).append(
                 "served backend capabilities differ from the sealed backend survey row"
             )

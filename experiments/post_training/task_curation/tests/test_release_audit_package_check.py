@@ -968,3 +968,23 @@ def test_release_check_binds_the_package_to_the_census_and_its_counted_sources(t
         )
         with pytest.raises(ValueError, match=message):
             release_check.run_release_check(inputs, dry_run=True, repo_root=root, feeds=_feeds(root))
+
+
+def test_strict_audit_reads_the_serving_projection_of_sealed_rows():
+    """The load serves typed backend Pending, rebinds grading evidence and withholds content."""
+    available = {
+        "id": "Marin:fixture",
+        "status": "Available",
+        "grading_environment": {"evidence_url": "s3://fixture/current.json"},
+    }
+    pending = {"status": "Pending", "stage": strict_audit.PendingStage.BACKEND_PROFILE_PENDING.value}
+    assert strict_audit.served_status_matches(pending, available)
+    assert not strict_audit.served_status_matches({"status": "Pending", "stage": "Snapshot repair queued"}, available)
+    assert not strict_audit.served_status_matches({"status": "Excluded"}, available)
+
+    survey_row = {"source_id": "Marin:fixture", "basis": "matched", "task_count": 3, "backends": {}}
+    survey_row["grading_environment"] = {"evidence_url": "s3://fixture/survey-time.json"}
+    served = strict_audit.served_backend_row(survey_row, available)
+    assert served["grading_environment"] == available["grading_environment"]
+    withheld = {**available, "data_restriction": "private_always"}
+    assert strict_audit.served_backend_row(survey_row, withheld) == strict_audit.backend_metadata(served)
