@@ -7,7 +7,6 @@ import asyncio
 import tempfile
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -22,20 +21,21 @@ SCALE_COHORT = "fixture-scale"
 CATALOG_RELOAD_TIMEOUT = 30.0
 
 
-def _ingest_fixture_records(database: DatabaseSpec, prefix: str) -> None:
+def _ingest_fixture_records(database: DatabaseSpec, prefixes: tuple[str, ...]) -> None:
     engine = engine_for(database, APP)
     try:
         with engine.begin() as connection:
             evaldash_app.migrate(connection)
         ingestor = evaldash_app.PostgresIngestor(
             engine,
-            (prefix,),
+            prefixes,
             evaldash_app.DEFAULT_INGEST_INTERVAL,
             evaldash_app.DEFAULT_REVALIDATE_AFTER,
         )
         # Another app's journeys may already have started Playwright's main-thread loop.
         with ThreadPoolExecutor(max_workers=1) as pool:
-            pool.submit(asyncio.run, ingestor.run_once()).result()
+            failed = pool.submit(asyncio.run, ingestor.run_once()).result()
+        assert not failed, f"Could not ingest fixture prefixes: {failed}"
     finally:
         engine.dispose()
 
@@ -52,7 +52,7 @@ def seeded_records(marina_database: DatabaseSpec) -> Iterator[str]:
             record.model_copy(update={"rl_attempt": RLAttemptRef(run_id="native/fixture", attempt_id="wanted")}), prefix
         )
         fixtures.build_native_fixtures(prefix)
-        _ingest_fixture_records(marina_database, prefix)
+        _ingest_fixture_records(marina_database, (prefix,))
         yield prefix
 
 
@@ -87,6 +87,7 @@ def _scale_records(base: EvalRunRecord, prefix: str) -> Iterator[EvalRunRecord]:
                     "evaluation": evaluation,
                     "results_path": f"{prefix}/{run_id}/results",
                     "jobs": {},
+                    "rl_attempt": None,
                     "status": RunStatus.FAILED if failed else RunStatus.SUCCEEDED,
                     "error": "Fixture grader failure" if failed else None,
                     "metrics": {} if failed else {evaluation.name: {"acc,none": score}},
@@ -104,32 +105,20 @@ def _reload_catalog(kernel: Kernel) -> None:
 
 @pytest.fixture(scope="module")
 def scale_cohort(marina_kernel: Kernel, marina_database: DatabaseSpec, seeded_records: str) -> Iterator[str]:
-    prefix = f"{seeded_records}/{SCALE_COHORT}"
     engine = engine_for(marina_database, APP)
-    try:
-        base = next(
-            record for record in results_db.fetch_snapshot(engine).records if record.run_id == "snowball-2026.07.20-mmlu"
-        )
-        now = datetime.now(UTC)
-        observations = [
-            results_db.RecordObservation(
-                path=record_path(prefix, record.run_id),
-                object_version="fixture",
-                verified_at=now,
-                next_verify_at=now,
-                kind=results_db.ObservationKind.CHANGED,
-                run_id=record.run_id,
-                record=record,
+    with tempfile.TemporaryDirectory(prefix="evaldash-scale-") as prefix:
+        try:
+            base = next(
+                record
+                for record in results_db.fetch_snapshot(engine).records
+                if record.run_id == "snowball-2026.07.20-mmlu"
             )
-            for record in _scale_records(base, prefix)
-        ]
-        results_db.configure_prefixes(engine, (seeded_records, prefix))
-        results_db.reconcile_prefix(
-            engine, prefix, [observation.path for observation in observations], observations, now, 0
-        )
-        _reload_catalog(marina_kernel)
-        yield SCALE_COHORT
-    finally:
-        results_db.configure_prefixes(engine, (seeded_records,))
-        engine.dispose()
-        _reload_catalog(marina_kernel)
+            for record in _scale_records(base, prefix):
+                write_record(record, prefix)
+            _ingest_fixture_records(marina_database, (seeded_records, prefix))
+            _reload_catalog(marina_kernel)
+            yield SCALE_COHORT
+        finally:
+            results_db.configure_prefixes(engine, (seeded_records,))
+            engine.dispose()
+            _reload_catalog(marina_kernel)

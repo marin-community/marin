@@ -935,21 +935,13 @@ def test_policy_violations_only_exclude_runs_in_a_named_cohort():
     newest = {record.model.name: record.run_id for record in violating}
 
     panel = build_panel(records, panel_request())
-    comparison = build_comparison(records, panel_request(), ("a", "b"))
-
     assert {row["model"]: row["cells"]["math500"]["run_id"] for row in panel["rows"]} == newest
     assert panel["policy_rejections"] == []
-    assert {model: cell["run_id"] for model, cell in comparison["rows"][0]["cells"].items()} == newest
-    assert comparison["policy_rejections"] == []
     assert "math500" in build_meta(violating)["evals"]
 
     named_panel = build_panel(records, panel_request(cohort=policy))
-    named_comparison = build_comparison(records, panel_request(cohort=policy), ("a", "b"))
-
     assert named_panel["rows"] == []
     assert {item["run_id"] for item in named_panel["policy_rejections"]} == set(newest.values())
-    assert named_comparison["rows"] == []
-    assert {item["run_id"] for item in named_comparison["policy_rejections"]} == set(newest.values())
 
     store = MemoryRecordStore()
     policy_only = _record("policy-only", "math500", policy, "2026-09-25T00:00:00+00:00", 0.6)
@@ -958,6 +950,14 @@ def test_policy_violations_only_exclude_runs_in_a_named_cohort():
     config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
     api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
     with TestClient(api.app) as client:
+        comparison = client.get("/compare", params={"models": "a,b", "cohort": ALL_COHORTS}).json()
+        assert {model: cell["run_id"] for model, cell in comparison["rows"][0]["cells"].items()} == newest
+        assert comparison["policy_rejections"] == []
+
+        named_comparison = client.get("/compare", params={"models": "a,b", "cohort": policy}).json()
+        assert named_comparison["rows"] == []
+        assert {item["run_id"] for item in named_comparison["policy_rejections"]} == set(newest.values())
+
         candidates = []
         for cohort in (ALL_COHORTS, policy, ALL_COHORTS):
             response = client.get("/comparison-models", params={"cohort": cohort})
