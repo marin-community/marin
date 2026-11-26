@@ -147,12 +147,13 @@ asks for a fork:
 
 ```bash
 gh pr create --title "<title>" --body-file "<body-file>" \
-  --label agent-generated --label agentic-lint
+  --label agent-generated
 ```
 
 - Always add the `agent-generated` label.
-- Add `agentic-lint` only after advisory review completed and every finding was fixed or answered.
-  The label records that lint pass; without it, CI launches a Loom lint review.
+- Leave `agentic-lint` off at publication. CI runs the lint review against the
+  published PR title and description, then applies the label after reporting
+  findings. The local advisory review remains required before publication.
 - Never credit yourself in commits or PR descriptions.
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
 
