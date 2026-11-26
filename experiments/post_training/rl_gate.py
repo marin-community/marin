@@ -686,10 +686,9 @@ def _native_program(native_root: str, modules: tuple[str, ...], body: str) -> st
 
 def compose_configs(paths: Sequence[str], *, validate_driver: bool = False) -> list[dict]:
     """Compose launch files and optionally check the driver configuration in SkyRL's CPU environment."""
+    checkout = str(recipe.REPO_ROOT / "vendor/skyrl")
     flags = ("--validate-driver",) if validate_driver else ()
-    return _native_json(
-        "marinskyrl", "iris", "compose", "--checkout", str(recipe.REPO_ROOT / "vendor/skyrl"), *flags, "--", *paths
-    )
+    return _native_json("python", "-m", "cloud.iris.launch_config", "--checkout", checkout, *flags, "--", *paths)
 
 
 def validate_plan(preset: presets.Preset, spec: SkyRLSpec, step: ArtifactStep[SkyRLRun]) -> dict:
