@@ -223,7 +223,7 @@ class _Recorder:
 
     @property
     def has_response(self) -> bool:
-        """Whether a conversation has a model turn. The engine grades only then."""
+        """Whether any recorded conversation has a model turn."""
         conversation = self.conversation
         return (conversation is not None and conversation.has_turn) or any(record.steps for record in self.earlier)
 
