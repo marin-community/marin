@@ -3847,6 +3847,12 @@ The output contains `oracle-filter.json`, unchanged retained rows in
 `tasks.parquet`, `static-exclusions.json`, a diagnostic `static-retention.json`,
 and typed `NoOracleStaticRetentionEvidence` in `static-retention-evidence.json`. Supply
 `--recipe-identity` when the source recipe processor consumes the receipt.
+For an execution plan using `DaytonaDeclarativeMachineFactory`, pass
+`--docker-build-execution declarative` to the `static_retention` command above
+to assess its shipped build context on that route. The default `reject` mode continues to hold unresolved builds. This option
+changes static compatibility assessment; it does not execute the build, establish
+a successful trial, or alter task bytes. The selected mode is recorded in the
+diagnostic summary.
 `load_oracle_filter` and `require_oracle_filter` require an independently configured
 `source_context` for static retention. Consumers reconstruct their expected context
 from current source configuration, independently of the receipt, and compare the

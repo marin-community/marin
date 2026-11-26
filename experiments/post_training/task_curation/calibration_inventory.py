@@ -24,7 +24,7 @@ from taskcompendium.execution_applicability import is_nonagentic_task
 from taskcompendium.grading_environment import assess_grading_environment
 from taskcompendium.harbor.adapter import unsupported_harbor_contract
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import DOCKER_IMAGE_PATTERN, CommandSemantics, TaskSpec
+from taskcompendium.models import DOCKER_IMAGE_PATTERN, CommandSemantics, DockerBuildExecution, TaskSpec
 from taskcompendium.runtime.resources import has_oracle_solution, resource_bytes
 
 from experiments.post_training.task_curation.difficulty_artifacts import regional_lock_url
@@ -74,7 +74,7 @@ def packages_lock_available(path: str) -> bool:
     return StoragePath(regional_lock_url(path)).exists()
 
 
-def task_blockers(task: TaskSpec) -> set[str]:
+def task_blockers(task: TaskSpec, *, docker_build: DockerBuildExecution = DockerBuildExecution.REJECT) -> set[str]:
     """Record static execution blockers; an empty set supplies no qualification evidence."""
     if is_nonagentic_task(task):
         boundary = assess_grading_environment(task)
@@ -95,7 +95,7 @@ def task_blockers(task: TaskSpec) -> set[str]:
         if has_oracle_solution(task) and "solution/solve.sh" not in oracle_paths:
             blockers.add("oracle_without_solve_sh")
     else:
-        unsupported = unsupported_harbor_contract(task)
+        unsupported = unsupported_harbor_contract(task, docker_build=docker_build)
         if unsupported is not None:
             blockers.add(unsupported)
         environments = [task.environment_requirements]

@@ -55,6 +55,7 @@ def test_native_inventory_preserves_pinned_multistage_environment_and_detects_fr
         "files": {path: base64.b64encode(content).decode() for path, content in files.items()},
         "file_metadata": {path: {"mode": "0644", "mtime_ns": 0} for path in files},
         "archive_links": {},
+        "directory_metadata": {},
         "archive_sha256": hashlib.sha256(b"native").hexdigest(),
     }
     task = native_task(
@@ -79,6 +80,7 @@ def test_mutable_native_environment_is_a_repair_even_with_executable_oracle():
         "files": {path: base64.b64encode(content).decode() for path, content in files.items()},
         "file_metadata": {path: {"mode": "0755", "mtime_ns": 0} for path in files},
         "archive_links": {},
+        "directory_metadata": {},
         "archive_sha256": hashlib.sha256(b"native").hexdigest(),
     }
     task = native_task(
