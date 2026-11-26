@@ -176,7 +176,7 @@ def test_campaign_preserves_131_controls_and_disables_learning_clock():
     before, after = dataclasses.asdict(reference), dataclasses.asdict(campaign)
     for field in ("name", "slug", "version", "evaluation_checkpoints"):
         after[field] = before[field]
-    for field in ("max_steps", "stopping", "native_checkpoint_storage", "pools"):
+    for field in ("max_steps", "stopping", "native_checkpoint_storage", "pools", "role_plan", "megatron"):
         after["rl"][field] = before["rl"][field]
     after["rl"]["execution"]["coordinator_name"] = before["rl"]["execution"]["coordinator_name"]
     after["rl"]["execution"].pop("coordinator_secret_sources")
@@ -257,7 +257,7 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, 
     model = tmp_path / "model"
     model.mkdir()
     config = json.dumps(
-        {"grugmoe_artifact_schema_version": 1, "num_hidden_layers": 36, "num_attention_heads": 32, "num_experts": 128}
+        {"grugmoe_artifact_schema_version": 1, "num_hidden_layers": 48, "num_attention_heads": 32, "num_experts": 128}
     ).encode()
     export = b'{"step":2100}'
     (model / "config.json").write_bytes(config)
@@ -279,6 +279,16 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, 
     native = yaml.safe_load(materialized_config(step, str(tmp_path / "outputs")).launch_config_yaml)
     assert native["skyrl"]["trainer"]["max_steps"] == 50
     assert native["skyrl"]["trainer"]["epochs"] == 50
+    # Reproduce the campaign reset through the native wire format: PP16 needs
+    # 64 training GPUs while the five EP16 serving engines remain on80 GPUs.
+    assert native["iris"]["allocation"]["num_nodes"] == 36
+    assert native["iris"]["allocation"]["gpus_per_node"] == 4
+    assert native["skyrl"]["trainer"]["placement"]["policy_num_nodes"] == 16
+    geometry = native["skyrl"]["trainer"]["policy"]["megatron_config"]
+    assert geometry["pipeline_model_parallel_size"] == 16
+    assert geometry["context_parallel_size"] == 4
+    assert geometry["tensor_model_parallel_size"] == 1
+    assert geometry["expert_model_parallel_size"] == 4
     assert not any(callback["type"] == "wall_time_budget" for callback in native["skyrl"]["trainer"]["callbacks"])
     assert native["skyrl"]["generator"]["speculative_decoding"]["num_speculative_tokens"] == 4
     # Rendering must not open the intentionally absent parquet bodies on the Mac.
@@ -293,7 +303,8 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, 
 
     monkeypatch.setattr(campaign, "REFERENCE", authored)
     monkeypatch.setattr(campaign, "remote", capture_remote)
-    campaign.campaign_graph(mix, spec)
+    graph = campaign.campaign_graph(mix, spec)
+    assert graph.plan["gpu_footprint"] == {"trainer": 64, "rollout": 80, "total": 144}
     # The production coordinator is already regional. A child cluster constraint
     # becomes a second federation request, which an 08a controller rejects.
     assert len(dispatched) == 2

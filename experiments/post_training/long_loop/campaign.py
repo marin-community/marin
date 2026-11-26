@@ -36,6 +36,7 @@ from experiments.post_training.long_loop.round_runner import (
 
 REFERENCE = Path(__file__).with_name("campaign") / "mochi131.yaml"
 REFERENCE_SOURCE = "fe4695fbcd27e365284dccab649a40d6caa9fb2b"
+CAMPAIGN_PIPELINE_STAGES = 16
 CAMPAIGN_SECRET_NAMES = (
     "CW_KEY_ID",
     "CW_KEY_SECRET",
@@ -71,6 +72,16 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
     # Stored TaskRolloutSpecs carry the catalog's per-task harness and machine sizing.
     recipe["environment"]["task_sessions"]["task_spec"]["harness_by_dataset"] = {}
+    megatron = {**reference.rl.megatron, "pipeline_model_parallel_size": CAMPAIGN_PIPELINE_STAGES}
+    trainer_gpus = (
+        megatron["pipeline_model_parallel_size"]
+        * megatron["context_parallel_size"]
+        * megatron["tensor_model_parallel_size"]
+    )
+    role_plan = {
+        **reference.rl.role_plan,
+        "policy_num_nodes": trainer_gpus // reference.rl.role_plan["policy_num_gpus_per_node"],
+    }
     return dataclasses.replace(
         reference,
         name=f"rl-data-campaign/{mix.id}",
@@ -80,6 +91,8 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
         rl=dataclasses.replace(
             reference.rl,
             recipe=recipe,
+            role_plan=role_plan,
+            megatron=megatron,
             max_steps=max_steps,
             stopping=RlStopping.MAX_STEPS,
             native_checkpoint_storage=SkyRLCheckpointStorage.TEMPORARY,
@@ -239,6 +252,8 @@ def main(mix_id: str, max_steps: int, validation_output: Path) -> ArtifactStep:
         reference,
         rl=dataclasses.replace(
             reference.rl,
+            role_plan=spec.rl.role_plan,
+            megatron=spec.rl.megatron,
             max_steps=max_steps,
             stopping=RlStopping.MAX_STEPS,
             native_checkpoint_storage=SkyRLCheckpointStorage.TEMPORARY,

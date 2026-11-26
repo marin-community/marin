@@ -6,8 +6,10 @@
 removed. Every source has weight `1/k`.
 The initializer, four-proposal DSpark draft, optimizer, batch, context,
 drain/rolling policy, staleness, TP1/BF16 and CUDA graphs stay fixed. The actual
-request is 128 GB200: 48 trainer and 80 rollout GPUs, at production priority
+request is 144 GB200: 64 trainer and 80 rollout GPUs, at production priority
 on `cw-us-east-08a`, with all racks eligible.
+The campaign uses PP16/CP4/TP1/EP4 for training after backward activation
+allocations exhausted memory with PP12. Serving geometry is unchanged.
 
 ```bash
 uv run python -m experiments.post_training.long_loop.campaign \
@@ -50,19 +52,30 @@ The CSV snapshot is configuration metadata copied byte-for-byte from
 revision 39. The CSV supplies only source IDs and k. The catalog supplies each
 release, pipeline version, admission status and measured actor route. Shared
 `curriculum_entries` and `weighted_curriculum` bind these entries and their holdout;
-there is no branch-local admission override. A source outside `Available` training
-status leaves its mixes waiting while the next runnable candidate fills the slot.
-This includes both repaired SWE sources and any other Pending or unbound source.
+the user-authorized admission divergence permits retained Pending and Excluded
+pins and records each difference in the manifest. Never substitute a population.
+An unbound source or an unresolved task-environment or grader defect holds its
+mix while the next runnable candidate fills the slot. Qualified re-seals and
+re-pins return held mixes to their rated queue positions.
 
 HF blob SHA-256 metadata is checked against the exact catalog-pinned revision in
 region before reading TaskSpecs. The published literal TaskSpec byte hashes and
 catalog population counts are verified without reserializing source rows. Each
 pool manifest records its actual input readbacks. A changed catalog admission or
 release requires a fresh readback and artifact version.
+Preparation reads and lowers payloads in bounded batches, retaining task identities
+for the holdout draw. Each mix must finish its regional CPU pool build before its
+RL coordinator is submitted.
 
 The coordinator owns the rated queue and watchdog. Take candidates in
 `experiments/human/long-loop-data-ablation/campaign/queue.json` order, keep three
 experiments active once the queue is ready, and record actual job IDs, metrics,
-best export, EvalDash URL and storage receipts in its `runs.csv`. The example
+best export, EvalDash URL and storage receipts in the run table of
+[marin-logbooks issue91](https://github.com/marin-community/marin-logbooks/issues/91),
+using `campaign-runs set`. The CSV run tracker is retired. The example
 above is a dry-run candidate, not a queue selection. Never infer completion,
 coverage or a score from rollout progress.
+
+An OOM in any pool or training worker halts new submissions and refills until
+the coordinator responds. Record the stage, rank, memory and sequence evidence;
+other active runs continue. Never cancel a running job without explicit permission.
