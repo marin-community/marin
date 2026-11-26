@@ -185,7 +185,6 @@ def _verify_prior_pins(config: ReleaseConfig) -> dict[str, ArtifactRef]:
         "backend",
         "composed_release",
         "composed_coverage",
-        "oracle_inventory",
         "source_counts",
     ):
         ref = getattr(prior, name)
@@ -535,7 +534,6 @@ def derive_release_plan(
             "prior_release": prior_pins["composed_release"].model_dump(mode="json"),
             "prior_coverage": prior_pins["composed_coverage"].model_dump(mode="json"),
             "registry_index": registry_index.model_dump(mode="json"),
-            "oracle_inventory": prior_pins["oracle_inventory"].model_dump(mode="json"),
             "source_counts": prior_pins["source_counts"].model_dump(mode="json"),
             "parity_receipt": config.parity_receipt.model_dump(mode="json") if config.parity_receipt else None,
             "exposure_input_check": (

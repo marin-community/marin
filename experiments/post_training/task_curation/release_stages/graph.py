@@ -178,7 +178,6 @@ class ReleasePins(BaseModel):
     prior_coverage: ArtifactRef
     prior_manifest: ArtifactRef | None = None
     registry_index: ArtifactRef
-    oracle_inventory: ArtifactRef
     source_counts: ArtifactRef
     exposure_input_check: ArtifactRef | None = None
     parity_receipt: ArtifactRef | None = None

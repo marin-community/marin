@@ -35,7 +35,10 @@ class PriorRelease(BaseModel):
     declarations export, the identity/backend surveys the compose retains rows
     from, the composed curriculum release and coverage, the package artifacts).
     The derivation digest-verifies every pin it consumes; URIs are pointers, the
-    digests arrive with them and are never re-typed.
+    digests arrive with them and are never re-typed. ``source_counts`` is the
+    prior load's counts document, carried only for its ruling citations — the
+    package's oracle inventory and source counts derive from the release's own
+    sealed census, never from the prior release.
     """
 
     release_id: str
@@ -44,7 +47,6 @@ class PriorRelease(BaseModel):
     backend: ArtifactRef | None = None
     composed_release: ArtifactRef | None = None
     composed_coverage: ArtifactRef | None = None
-    oracle_inventory: ArtifactRef | None = None
     source_counts: ArtifactRef | None = None
 
     def validate_shape(self) -> None:
@@ -56,7 +58,6 @@ class PriorRelease(BaseModel):
             "backend",
             "composed_release",
             "composed_coverage",
-            "oracle_inventory",
             "source_counts",
         ):
             ref = getattr(self, name)
