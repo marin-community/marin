@@ -3,9 +3,12 @@
 
 """Tests for the one generic in-region CPU submit path."""
 
+import subprocess
+
 import pytest
 from marin.rl.skyrl import skyrl_cpu_command
 
+from experiments.post_training.mochi_loop_guards import cpu_submit
 from experiments.post_training.mochi_loop_guards.cpu_submit import submit_command
 
 PROGRAM = ["python", "-m", "experiments.post_training.mochi_loop_guards", "audit", "--run-output", "s3://run"]
@@ -52,6 +55,49 @@ def test_submit_command_translates_env_and_secret_flags():
         "DAYTONA_RL_API_KEY",
         "env:DAYTONA_RL_API_KEY",
     ]
+
+
+def test_cpu_submit_cli_forwards_secret_flags_and_submission_exit_code(monkeypatch):
+    submitted = []
+
+    def run(command):
+        submitted.extend(command)
+        return subprocess.CompletedProcess(command, 19)
+
+    monkeypatch.setattr(cpu_submit.subprocess, "run", run)
+    with pytest.raises(SystemExit) as outcome:
+        cpu_submit.main(
+            [
+                "--job-name",
+                "mochi-loop-guards-conserve",
+                "--cpu",
+                "16",
+                "--memory",
+                "64GB",
+                "--disk",
+                "128GB",
+                "--secret",
+                "CW_KEY_ID",
+                "--secret",
+                "CW_KEY_SECRET",
+                "--",
+                "fsutil",
+                "verified-copy",
+                "s3://source/checkpoint",
+                "s3://permanent/checkpoint",
+            ]
+        )
+    assert outcome.value.code == 19
+    first_secret = submitted.index("--secret")
+    assert submitted[first_secret : first_secret + 6] == [
+        "--secret",
+        "CW_KEY_ID",
+        "env:CW_KEY_ID",
+        "--secret",
+        "CW_KEY_SECRET",
+        "env:CW_KEY_SECRET",
+    ]
+    assert submitted[-4:] == ["fsutil", "verified-copy", "s3://source/checkpoint", "s3://permanent/checkpoint"]
 
 
 def test_submit_command_skyrl_flag_swaps_the_inner_environment():

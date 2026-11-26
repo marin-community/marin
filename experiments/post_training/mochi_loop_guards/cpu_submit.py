@@ -102,7 +102,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--env", action="append", default=[], metavar="KEY=VALUE", help="Forward an environment variable"
     )
-    parser.add_argument("--secret", action="append", default=[], metavar="NAME", help="Deliver a named secret file")
+    parser.add_argument(
+        "--secret", dest="secrets", action="append", default=[], metavar="NAME", help="Deliver a named secret file"
+    )
     parser.add_argument("--skyrl", action="store_true", help="Run inside SkyRL's frozen CPU environment")
     parser.add_argument("arguments", nargs=argparse.REMAINDER, metavar="-- ARGUMENTS")
     args = parser.parse_args(argv)
