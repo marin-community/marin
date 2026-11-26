@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 import pytest
 from finelog.client import FlushResult, LogClient
 from finelog.embedded import require_embedded_server
+from pydantic import ValidationError
 from taskcompendium.grading_result import Outcome
 
 import rolloutengine.finelog_observer as finelog_observer
@@ -26,6 +27,7 @@ from rolloutengine.harness.external import AgentHarness
 from rolloutengine.models import (
     ConversationStarted,
     Graded,
+    GradedRolloutInterrupted,
     Prompt,
     RolloutEvent,
     RolloutInterrupted,
@@ -196,14 +198,15 @@ async def test_values_that_the_encoder_refuses_do_not_lose_the_other_rows(finelo
     # Nothing checks what a harness reports before its rows are queued: here numbers as tool call IDs, and a lone
     # surrogate in a role and in a tool name.
     odd = {"role": "tool\ud800", "tool_call_id": 7, "content": "12"}
-    result = await run_two_turns(
-        log,
-        content_fraction=1.0,
-        run_id="odd",
-        observation=odd,
-        tool_call=ToolCallCompleted(7, "calculator\ud800", 2, False, 0.0),
-    )
-    assert (result.grade.status, result.grade.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+    with pytest.raises(GradedRolloutInterrupted) as failure:
+        await run_two_turns(
+            log,
+            content_fraction=1.0,
+            run_id="odd",
+            observation=odd,
+            tool_call=ToolCallCompleted(7, "calculator\ud800", 2, False, 0.0),
+        )
+    assert isinstance(failure.value.__cause__, ValidationError)
     await run_two_turns(log, content_fraction=1.0)
     # A verifier's error detail reaches the grade unchecked.
     observer = FinelogObserver(log, SCOPE, content_fraction=1.0)

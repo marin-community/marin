@@ -235,10 +235,14 @@ class RolloutEngine:
 
     async def _grade(self, attempt: _Attempt, machine: Machine | None, resources: AsyncExitStack) -> None:
         spec, recorder = attempt.spec, attempt.recorder
-        messages = recorder.graded_messages()
-        if messages is None:
+        conversation = recorder.graded_conversation()
+        if conversation is None:
             # The attempt ended before the first response, so the grader sees an empty reply to the task.
             messages = (*conversation_messages(spec.task.context.events), {"role": "assistant", "content": ""})
+            model_messages = ()
+        else:
+            messages = conversation.messages
+            model_messages = tuple(step.turn.message for step in conversation.steps)
         started = time.monotonic()
         failure = None
         try:
@@ -247,6 +251,7 @@ class RolloutEngine:
                 grade = await _grade_rollout(
                     spec,
                     messages,
+                    model_messages,
                     attempt.outputs,
                     machine,
                     self.machine_factories,
