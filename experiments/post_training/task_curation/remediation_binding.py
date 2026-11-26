@@ -21,7 +21,7 @@ from finestore.rl.curation import (
     PipelineReference,
     WithinSourceDedupEvidence,
 )
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from taskcompendium.pipeline.models import IntendedUse
 
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt, bind_actor_census
@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.retained_release import (
     RETAINED_IMPORT_VERSION,
     RetainedCohort,
     import_retained,
+    import_taskspec_carry,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 from experiments.post_training.task_curation.within_source_binding import bind_within_source_dedup
@@ -114,6 +115,37 @@ class StaticRetentionBinding(BaseModel):
         return self
 
 
+class RetainedGradingCarry(BaseModel):
+    """Retained grading evidence carried forward through verified content identity.
+
+    Coordinator ruling 2026-11-25 ~22:20 EST (derived from the user's 2026-11-25 ~20:00
+    principle that a previously admitted source is re-admitted unless its code is
+    broken): a re-pinned release whose content is byte-identical to the prior admitted
+    pin carries the prior pin's retained grading instead of regrading the population.
+    The carry is explicit so it is never mistaken for a fresh census: it names the
+    carried-from pin and the content-identity proof digest, and it admits only when the
+    grader/verifier identity is unchanged and the converter change touched format only.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    carried_from_repo: str
+    carried_from_revision: str
+    identity_proof_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    grader_identity_unchanged: bool
+    converter_format_only: bool
+    tasks: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _admission_conditions(self) -> "RetainedGradingCarry":
+        if not self.grader_identity_unchanged or not self.converter_format_only:
+            raise ValueError(
+                "A carried retained release admits only with unchanged grader identity and a "
+                "format-only converter change; anything else fails closed"
+            )
+        return self
+
+
 class RetainedReleaseReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -125,6 +157,7 @@ class RetainedReleaseReceipt(BaseModel):
     original_info: SourceInfo
     retained_dedup: WithinSourceDedupEvidence
     static_retention: StaticRetentionBinding | None = None
+    carry: RetainedGradingCarry | None = None
 
     @model_validator(mode="after")
     def _exact_retained_pin(self) -> "RetainedReleaseReceipt":
@@ -133,12 +166,17 @@ class RetainedReleaseReceipt(BaseModel):
             raise ValueError("Retention lineage contains another source")
         if self.grading.source_id != self.source_id or self.grading.input != self.actor.input:
             raise ValueError("Retained grading evidence belongs to another actor census input")
+        # The importer identity the new pin's census and dedup must describe: the retained
+        # importer for a fresh retention, or the publication's own conversion format for a
+        # carried one (the carried release was converted by its declared format, not by the
+        # retained importer).
+        importer = RETAINED_IMPORT_VERSION if self.carry is None else publication.format
         if (
             self.actor.input.dataset_id,
             self.actor.input.dataset_revision,
             self.actor.input.converter_version,
             self.actor.input.measured_tasks,
-        ) != (publication.repo, publication.revision, RETAINED_IMPORT_VERSION, publication.plan.retained_count):
+        ) != (publication.repo, publication.revision, importer, publication.plan.retained_count):
             raise ValueError("Retained census does not cover the new pin and importer")
         dedup = self.retained_dedup
         if (
@@ -151,12 +189,15 @@ class RetainedReleaseReceipt(BaseModel):
         ) != (
             publication.repo,
             publication.revision,
-            RETAINED_IMPORT_VERSION,
+            importer,
             publication.plan.retained_count,
             publication.plan.retained_count,
             0,
         ):
             raise ValueError("Active dedup evidence must describe the retained population")
+        if self.carry is not None:
+            if self.carry.tasks != self.actor.input.measured_tasks:
+                raise ValueError("The carried grading population differs from the new census count")
         if self.static_retention is not None:
             static = self.static_retention.evidence
             if (
@@ -311,9 +352,13 @@ def _retained_population(
 ) -> RlDataSource[RetainedCohort]:
     publication = receipt.publication
     plan = publication.plan
+    # A carried release was converted in its own declared format, not by the retained
+    # importer; its population config and import step declare that format (ruling
+    # 2026-11-25 ~22:20 EST). A fresh retention keeps the retained importer identity.
+    version = RETAINED_IMPORT_VERSION if receipt.carry is None else publication.format
     config = RetainedCohort(
         name=name + "-retained",
-        version=RETAINED_IMPORT_VERSION,
+        version=version,
         release=publication.release,
         original_dataset=SourceReference(plan.source_dataset_id, plan.source_revision, dataset.url),
         expected_rows=plan.retained_count,
@@ -340,6 +385,10 @@ def _retained_population(
         ),
     )
     retained = RlDataSource(info=info, config=config, pipeline=import_retained)
+    if receipt.carry is not None:
+        # The carried release's tasks.parquet carries the taskspec schema (no runtime
+        # column); its import reads that schema with the census-measured empty shapes.
+        retained = replace(retained, pipeline=import_taskspec_carry)
     retained = bind_actor_census(retained, receipt.actor)
     if receipt.static_retention is None:
         return retained

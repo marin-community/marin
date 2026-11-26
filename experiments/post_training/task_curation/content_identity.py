@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import TaskSpec
 
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.registry import read_registry_json
@@ -109,6 +110,72 @@ def artifact_spec_digest(population: SourceTextPopulation) -> str:
                 for encoded in batch.column(0).to_pylist():
                     digest.update(encoded.encode())
     return digest.hexdigest()
+
+
+def carry_task_digests(population: SourceTextPopulation) -> dict[str, str]:
+    """Digest every TaskSpec's grader/verifier structure in the population's spec shards.
+
+    The carried-release admission verifies the grader identity separately from the task
+    bytes (ruling 2026-11-25 ~22:20 EST): a re-serialized TaskSpec whose grader structure
+    changed refuses even when other content matches.
+    """
+    digests: dict[str, str] = {}
+    for path in sorted(StoragePath(f"{population.specs_output_dir}/*.parquet").glob(), key=str):
+        with path.open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(batch_size=512):
+                columns = batch.column_names
+                specs = batch.column(columns.index("task_spec")).to_pylist()
+                identifiers = batch.column(columns.index("id")).to_pylist()
+                for index, encoded in enumerate(specs):
+                    task = TaskSpec.model_validate_json(encoded)
+                    grader = task.grader.model_dump(mode="json")
+                    digest = hashlib.sha256(json.dumps(grader, sort_keys=True).encode()).hexdigest()
+                    if identifiers[index] in digests and digests[identifiers[index]] != digest:
+                        raise ValueError(f"Conflicting grader for task {identifiers[index]} in {population.source_id}")
+                    digests[identifiers[index]] = digest
+    return digests
+
+
+def verify_carry_content(original: SourceTextPopulation, reissued: SourceTextPopulation) -> str:
+    """Verify the carried-release identity between a prior pin's population and the re-pinned one.
+
+    The re-pin re-keys tasks to canonical ids, so the comparison runs on digest multisets:
+    every TaskSpec's exact bytes and every grader/verifier structure must match exactly, and
+    both populations must be self-consistent with their declared spec digests. Returns the
+    carry identity digest recorded beside the proof; any differing task or grader refuses.
+    """
+    for population in (original, reissued):
+        declared = artifact_spec_digest(population)
+        if declared != population.task_specs_sha256:
+            raise ValueError(
+                f"{population.source_id}: artifact at {population.path} declares "
+                f"{population.task_specs_sha256[:12]} but its specs digest to {declared[:12]}"
+            )
+    original_digests = sorted(population_task_digests(original).values())
+    reissued_digests = sorted(population_task_digests(reissued).values())
+    if original_digests != reissued_digests:
+        differing = len(
+            {key for key, count in _counts(original_digests).items() if _counts(reissued_digests).get(key) != count}
+        )
+        raise ValueError(
+            f"Carry content identity refused: {differing} task digest values differ between the prior pin "
+            f"and the re-pinned population of {original.source_id}; a single changed task fails closed"
+        )
+    original_graders = sorted(carry_task_digests(original).values())
+    reissued_graders = sorted(carry_task_digests(reissued).values())
+    if original_graders != reissued_graders:
+        raise ValueError(
+            f"Carry grader identity refused: the grader/verifier structures differ between the prior pin "
+            f"and the re-pinned population of {original.source_id}"
+        )
+    return canonical_sha256(original_digests + original_graders)
+
+
+def _counts(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return counts
 
 
 def build_identity_receipt(

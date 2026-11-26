@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import pyarrow as pa
@@ -31,6 +32,7 @@ from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_q
 
 RETAINED_IMPORT_VERSION = "2026.11.13.1"
 RETAINED_ADMISSION_VERSION = "2026.11.13.2"
+TASKSPEC_CARRY_IMPORT_VERSION = "2026.11.26.1"
 RETAINED_SCHEMA = NORMALIZED_SCHEMA.append(pa.field("runtime", pa.large_string()))
 
 
@@ -64,8 +66,14 @@ class RetainedImport:
     lexical_contamination: LexicalContaminationEvidence | None
 
 
-def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
-    """Read exact published bytes, preserving the original qualification provenance."""
+def run_retained_import(invocation: RetainedImport, *, taskspec_rows: bool = False) -> CampaignArtifact:
+    """Read exact published bytes, preserving the original qualification provenance.
+
+    ``taskspec_rows`` reads a carried release's tasks.parquet in the taskspec schema
+    (``path``/``task_spec``/``task_sha256``, no ``runtime`` column): the census measured
+    those tasks with empty declared shapes, so the import defaults the runtime to ``{}``
+    (ruling 2026-11-25 ~22:20 EST).
+    """
     cohort = invocation.cohort
     admitted = invocation.mode is not SourceProcessingMode.QUICK
     if admitted:
@@ -100,7 +108,7 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
                     {
                         **normalization_columns(task.id, task.source, task, None, (), task.source.row),
                         "task_json": encoded,
-                        "runtime": row["runtime"],
+                        "runtime": (row.get("runtime") or "{}") if taskspec_rows else row["runtime"],
                     }
                 )
             writer.write_table(pa.Table.from_pylist(records, schema=RETAINED_SCHEMA))
@@ -154,6 +162,29 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
 
 def import_retained(source: RlDataSource[RetainedCohort], options: PipelineOptions) -> ArtifactStep[CampaignArtifact]:
     """Admit a verified subset through its existing qualification and fresh release gates."""
+    return _retained_import_step(source, options, taskspec_rows=False)
+
+
+def import_taskspec_carry(
+    source: RlDataSource[RetainedCohort], options: PipelineOptions
+) -> ArtifactStep[CampaignArtifact]:
+    """Admit a carried release through its taskspec tasks.parquet schema.
+
+    The carried releases were converted in their declared format, not by the retained
+    importer (ruling 2026-11-25 ~22:20 EST); the import reads the taskspec rows and
+    declares its own importer identity.
+    """
+    return _retained_import_step(source, options, taskspec_rows=True, carry=True)
+
+
+def _retained_import_step(
+    source: RlDataSource[RetainedCohort],
+    options: PipelineOptions,
+    *,
+    taskspec_rows: bool,
+    carry: bool = False,
+) -> ArtifactStep[CampaignArtifact]:
+    """Admit a verified subset through its existing qualification and fresh release gates."""
     source = licensed_source(source)
     if options.mode is not SourceProcessingMode.QUICK:
         if "excluded" in source.info.tags:
@@ -173,11 +204,16 @@ def import_retained(source: RlDataSource[RetainedCohort], options: PipelineOptio
             source.info.lexical_contamination,
         )
 
+    kind = "taskspec-carry" if carry else "retained"
     return ArtifactStep(
-        name=f"retained/{options.mode.value}/{config.release.repo}/{config.release.revision}",
-        version=RETAINED_IMPORT_VERSION if options.mode is SourceProcessingMode.QUICK else RETAINED_ADMISSION_VERSION,
+        name=f"{kind}/{options.mode.value}/{config.release.repo}/{config.release.revision}",
+        version=(
+            TASKSPEC_CARRY_IMPORT_VERSION
+            if carry
+            else RETAINED_IMPORT_VERSION if options.mode is SourceProcessingMode.QUICK else RETAINED_ADMISSION_VERSION
+        ),
         artifact_type=CampaignArtifact,
-        run=run_retained_import,
+        run=partial(run_retained_import, taskspec_rows=taskspec_rows),
         build_config=build_config,
         deps=(),
     )
