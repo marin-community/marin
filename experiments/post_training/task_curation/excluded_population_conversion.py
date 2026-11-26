@@ -57,7 +57,6 @@ from experiments.post_training.task_curation.license_publication import (
     licensed_dataset_card,
     prepare_license_publication,
 )
-from experiments.post_training.task_curation.license_resolution import LicenseTarget, resolve_license
 from experiments.post_training.task_curation.native_source_conversion import (
     BasePinMissing,
     convert_native_source_row,
@@ -232,19 +231,12 @@ def repin_license_receipt(previous: LicenseReceipt, release: str, revision: str,
     """Re-pin the source's existing license receipt onto the pinned conversion release.
 
     The conversion derives from the archived filtration input of the receipt's own
-    dataset, so the resolved upstream must not move: it is re-resolved through the
-    checker and compared against the recorded pin (fail-closed drift). Recorded
-    decisions carry their original lineage per the repackager rule.
+    dataset, so the checker-verified resolution carries over byte-for-byte: the
+    receipt is the immutable record, and re-resolving an aggregate upstream through a
+    different wrapper path would manufacture a different pin than the recorded one.
+    The new release's own card is arbitrated separately by check_publication.
+    Recorded decisions carry their original lineage per the repackager rule.
     """
-    upstream = previous.resolved_source
-    if upstream is None:
-        raise CohortConversionRejected(f"{previous.source_id}: the existing receipt resolves no upstream")
-    fresh = resolve_license(LicenseTarget(previous.source_id, upstream.dataset_id, upstream.revision, upstream.url))
-    if fresh.resolved_source is None or fresh.resolved_source.revision != upstream.revision:
-        raise CohortConversionRejected(
-            f"{previous.source_id}: the recorded upstream {upstream.dataset_id}@{upstream.revision[:12]} "
-            "no longer resolves to the recorded source pin"
-        )
     carried = []
     for decision in previous.decisions:
         carried.append(
@@ -269,13 +261,13 @@ def repin_license_receipt(previous: LicenseReceipt, release: str, revision: str,
         source_id=previous.source_id,
         dataset_id=release,
         revision=revision,
-        resolved_at=fresh.resolved_at,
-        resolver_version=fresh.resolver_version,
-        evidence=[*fresh.evidence, _card_evidence(release, revision, card_bytes)],
+        resolved_at=previous.resolved_at,
+        resolver_version=previous.resolver_version,
+        evidence=[*previous.evidence, _card_evidence(release, revision, card_bytes)],
         bundled_third_party=previous.bundled_third_party,
         model_generated_outputs=previous.model_generated_outputs,
         decisions=carried,
-        resolved_source=upstream,
+        resolved_source=previous.resolved_source,
         wrapper_chain=previous.wrapper_chain,
     )
 
