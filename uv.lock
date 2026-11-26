@@ -280,6 +280,7 @@ overrides = [
     { name = "gradio", specifier = ">=6.16.0" },
     { name = "jupyter-server", specifier = ">=2.18.2" },
     { name = "jupyterlab", specifier = ">=4.6.4" },
+    { name = "latex2sympy2-extended", git = "https://github.com/XiaoyuanWang111/latex2sympy2_extended?rev=8178050ae0122dbe8ef711c8e7ee1b724b8e98c4" },
     { name = "lxml", specifier = ">=6.1.0" },
     { name = "mistune", specifier = ">=3.3.3" },
     { name = "multipart", specifier = ">=1.3.1" },
@@ -4365,14 +4366,10 @@ wheels = [
 [[package]]
 name = "latex2sympy2-extended"
 version = "1.11.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/XiaoyuanWang111/latex2sympy2_extended?rev=8178050ae0122dbe8ef711c8e7ee1b724b8e98c4#8178050ae0122dbe8ef711c8e7ee1b724b8e98c4" }
 dependencies = [
     { name = "antlr4-python3-runtime" },
     { name = "sympy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/30/75/456da2da05f6380ea96e6ea804ab2c03e41fc3ed80052307fe8efe6ea20e/latex2sympy2_extended-1.11.0.tar.gz", hash = "sha256:9695657c81b50abba2636638638618db59f4663ed2a4a12d62cef74a40e28fec", size = 207023, upload-time = "2026-01-10T01:43:21.319Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/61/f75cd1fa54d8434276126034aed54dd120747de9a8fa013cdd79545ccbeb/latex2sympy2_extended-1.11.0-py3-none-any.whl", hash = "sha256:aebb77d52ce269e25028e4bea89ddb14d242ba36bcf7b636496fb5fd9728d234", size = 209050, upload-time = "2026-01-10T01:43:19.458Z" },
 ]
 
 [[package]]

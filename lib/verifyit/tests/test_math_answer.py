@@ -632,6 +632,26 @@ def test_answers_math_verify_cannot_compare_grade_by_their_meaning(expected, can
     assert grade_math.grade_math_candidate(spec, candidate).reward == reward
 
 
+# Under antlr 4.9.3 and 4.11, latex2sympy2_extended 1.11.0 from PyPI raises on every percent number,
+# and math-verify falls back to the raw text or to the number before the sign: 20\% rejected 0.2.
+# The workspace overrides it with a fixed build (pyproject.toml).
+@pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])
+@pytest.mark.parametrize(
+    ("expected", "candidate", "reward"),
+    [
+        (r"20\%", "0.2", 1),
+        (r"20\%", r"\frac{1}{5}", 1),
+        (r"12.5\%", "0.125", 1),
+        ("0.2", r"20\%", 1),
+        (r"50\% \cdot 80", "40", 1),
+        (r"50\% \cdot 80", "80", 0),
+    ],
+)
+def test_percentages_are_hundredths(profile, expected, candidate, reward):
+    spec = MathSpec(expected=expected, profile=profile)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == reward
+
+
 def test_an_undefined_reference_is_an_invalid_task():
     with pytest.raises(InvalidTask, match="undefined"):
         grade_math.grade_math_candidate(MathSpec(expected=r"\frac{1}{0}"), "1")

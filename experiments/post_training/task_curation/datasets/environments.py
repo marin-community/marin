@@ -24,6 +24,10 @@ SCIENTIFIC_STACK = (
 MATH_SCORERS = (
     # TaskTrove math uses verifyit's symbolic comparator in the grader sandbox.
     "math-verify==0.9.0",
+    # The fixed latex2sympy2_extended build the workspace pins (pyproject.toml says why and when to
+    # drop it), as a commit archive because the build compiles requirements to a hash lock.
+    "latex2sympy2-extended @ https://github.com/XiaoyuanWang111/latex2sympy2_extended/archive/"
+    "8178050ae0122dbe8ef711c8e7ee1b724b8e98c4.tar.gz",
     "sympy==1.13.3",
     "antlr4-python3-runtime==4.11.0",
 )

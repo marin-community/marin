@@ -3,7 +3,7 @@
 
 """Pinned grader dependencies and source data archives."""
 
-from experiments.post_training.task_curation.datasets.environments import PUNKT_TAB
+from experiments.post_training.task_curation.datasets.environments import MATH_SCORERS, PUNKT_TAB
 from experiments.post_training.task_curation.environment import Archive, Environment
 
 BASIC_GRADER = Environment(requirements=("tomli-w==1.2.0",))
@@ -25,9 +25,7 @@ LIVECODEBENCH_PRO_GRADER = Environment(
 )
 # Harness Unicode normalization uses NumPy's fixed-width string operations.
 ALIAS_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "numpy==2.3.5"))
-MATH_GRADER = Environment(
-    requirements=("tomli-w==1.2.0", "math-verify==0.9.0", "sympy==1.13.3", "antlr4-python3-runtime==4.11.0")
-)
+MATH_GRADER = Environment(requirements=("tomli-w==1.2.0", *MATH_SCORERS))
 MATH_JUDGE_GRADER = Environment(requirements=(*MATH_GRADER.requirements, "openai==2.24.0"))
 JUDGE_GRADER = Environment(requirements=(*BASIC_GRADER.requirements, "openai==2.24.0"))
 # The ARC-AGI-2 grid grader uses verifyit's JSON Schema mode.

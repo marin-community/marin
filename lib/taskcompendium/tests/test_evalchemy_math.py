@@ -78,6 +78,28 @@ def test_gsm8k_strict_match_uses_the_flexible_equivalence_rules(response, refere
     assert (metrics["exact_match,strict-match"], metrics["exact_match,flexible-extract"]) == (expected, expected)
 
 
+# Under the antlr 4.11 pin, latex2sympy2_extended 1.11.0 from PyPI raises on every percent number, and
+# these scorers compared the raw text: \boxed{10\%} scored 0 against MATH500's reference 10.
+@pytest.mark.parametrize(
+    ("scorer", "config", "response", "reward"),
+    [
+        ("boxed_math", {"expected": "10"}, r"The area decreases by $\boxed{10\%}$.", 1),
+        ("boxed_math", {"expected": r"20\%"}, r"\boxed{0.2}", 1),
+        ("boxed_math", {"expected": r"20\%"}, r"\boxed{\frac{1}{5}}", 1),
+        ("boxed_math", {"expected": r"20\%"}, r"\boxed{0.21}", 0),
+        ("olympiad", {"expected": [r"20\%"], "judged": False}, r"\boxed{0.2}", 1),
+    ],
+)
+def test_source_math_scorers_read_percentages(scorer, config, response, reward):
+    assert score(scorer, config, response).reward == reward
+
+
+def test_minerva_math_verify_metric_reads_a_percent_solution():
+    document = {"solution": r"So the rate is $\boxed{7\%}$."}
+    response = "Final Answer: The final answer is $0.07$. I hope it is correct."
+    assert score("minerva_math", {"document": document}, response).detail["metrics"]["math_verify,none"] == 1
+
+
 @pytest.mark.parametrize("threaded", [False, True])
 def test_minerva_symbolic_timeout_is_a_nonmatch(threaded):
     if threaded:
