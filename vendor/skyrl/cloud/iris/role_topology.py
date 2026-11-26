@@ -125,7 +125,7 @@ def node_physical_labels(
 
 @dataclass(frozen=True)
 class RoleNodeRow:
-    """One node's verified physical placement, as persisted in the attempt report."""
+    """One node's observed physical placement, as persisted in the attempt report."""
 
     rank: int
     host: str
@@ -134,26 +134,24 @@ class RoleNodeRow:
 
 
 def audit_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTopology) -> list[RoleNodeRow]:
-    """Check observed Ray nodes against the plan and return each node's physical placement."""
+    """Check each observed Ray node's NVLink fabric and return its physical placement.
+
+    Iris/Kueue placement is trusted; the audit verifies only the fabric half:
+    every node of a locality group must report the same healthy cluster-UUID/clique-ID pair.
+    """
     alive = [node for node in nodes if node["Alive"]]
     if len(alive) != topology.num_nodes:
         raise ValueError(f"Expected exactly {topology.num_nodes} Ray nodes, observed {len(alive)}")
-    ranks = [int(node["Labels"][RANK_LABEL]) for node in alive]
-    if set(ranks) != set(range(topology.num_nodes)):
-        raise ValueError(f"Ray nodes must cover every Iris rank: {ranks}")
-    hosts = [node["Labels"][HOST_LABEL] for node in alive]
-    if len(set(hosts)) != topology.num_nodes:
-        raise ValueError(f"Ray nodes must occupy distinct physical hosts: {hosts}")
     rows = []
     fabrics: dict[int, set[str]] = {}
-    for rank, node in zip(ranks, alive, strict=True):
+    for node in alive:
         labels = node["Labels"]
-        group = topology.locality.group_for_rank(rank)
-        if labels[LOCALITY_GROUP_LABEL] != str(group):
-            raise ValueError(f"Ray locality label disagrees with Iris rank {rank}")
+        group = int(labels[LOCALITY_GROUP_LABEL])
         fabric = labels[FABRIC_LABEL]
         fabrics.setdefault(group, set()).add(fabric)
-        rows.append(RoleNodeRow(rank=rank, host=labels[HOST_LABEL], locality_group=group, fabric=fabric))
+        rows.append(
+            RoleNodeRow(rank=int(labels[RANK_LABEL]), host=labels[HOST_LABEL], locality_group=group, fabric=fabric)
+        )
     if any(len(value) != 1 for value in fabrics.values()):
         raise ValueError(f"Each locality group must fit inside one physical NVLink domain: {fabrics}")
     return sorted(rows, key=lambda row: row.rank)

@@ -71,12 +71,6 @@ def _native_window(attempt: AttemptRecord, launch: RecordedLaunch) -> NativeWind
     return NativeWindow(seconds, launch.num_nodes * launch.gpus_per_node)
 
 
-def native_gpu_hours(attempt: AttemptRecord, launch: RecordedLaunch) -> float | None:
-    """Multiply the stored native job window by its GPU allocation."""
-    window = _native_window(attempt, launch)
-    return window.seconds * window.gpus / 3600 if window is not None and window.seconds > 0 else None
-
-
 def lineage_windows(history: Sequence[LineageEntry]) -> list[NativeWindow] | None:
     """Read the native windows and allocations for a complete checkpoint lineage."""
     if not history or history[-1].record.resumed_step not in (None, 0):
@@ -648,7 +642,12 @@ def read_measurements(
         values[key + "/initial"] = value
         if key in values:
             values[key + "/gain"] = values[key] - value
-    gpu_hours = native_gpu_hours(terminal, launch)
+    result = terminal.native.result
+    gpu_hours = None
+    if terminal.started_at and result.finished_at:
+        seconds = (recipe.utc_millis(result.finished_at) - recipe.utc_millis(terminal.started_at)) / 1000
+        if seconds > 0:
+            gpu_hours = seconds * launch.num_nodes * launch.gpus_per_node / 3600
     slices = {key: len({row["task_id"] for row in rows}) for key, rows in score_slices(final).items()}
     return RunMeasurements(
         config=terminal.native.config,

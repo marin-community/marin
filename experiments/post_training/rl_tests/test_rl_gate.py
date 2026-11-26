@@ -716,7 +716,7 @@ def test_gate_compares_recorded_configuration_and_defaults(
     preset = snowball_model.SNOWBALL.by_name["speed-medium" if case == "missing-guard" else "learning-medium"]
     setting = "trainer.policy.optimizer_config.lr=2e-6"
     settings = () if case in {"cached-default", "zero-spread", "omitted-candidate-default"} else (setting,)
-    inputs = RunInputs(preset_name=preset.name, settings=settings)
+    inputs = run_inputs(preset.name, settings=settings, preset=preset)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
         root = tmp_path / name / version
@@ -977,6 +977,8 @@ def test_python_run_saves_typed_inputs_for_comparison(
         fingerprint=built.runs[0].fingerprint(),
         inputs=built.inputs,
     )
+    with edit_receipt(source) as receipt:
+        receipt["result"]["started_at"] = "2026-11-06T17:40:00+00:00"
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / RUN_INPUTS_FILENAME).unlink()
