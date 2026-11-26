@@ -70,6 +70,7 @@ from experiments.post_training.task_curation.release_stages.release_config impor
 )
 from experiments.post_training.task_curation.source_duplicate_ci import fingerprint_input
 from experiments.post_training.task_curation.sources import all_sources
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
 
 DERIVATION_RECEIPT_KIND = "atlas-release-derivation"
 DERIVATION_RECEIPT_NAME = "derivation-receipt.json"
@@ -458,7 +459,17 @@ def derive_release_plan(
             " staging first: " + str(present_removals[:5])
         )
 
-    targets = tuple(sorted(set(declared_ids) - prior_ids - removed_ids))
+    prior_pins = _verify_prior_pins(config)
+    prior_declarations = _verify_prior_pin(prior_pins["declarations"], "prior_release.declarations")
+    prior_curriculum = _verify_prior_pin(prior_pins["composed_release"], "prior_release.composed_release")
+    prior_inventory = {canonical_source_id(row["id"]): row for row in prior_curriculum["inventory"]}
+    replacements = {
+        source_id
+        for previous in (prior_declarations, prior_inventory)
+        for source_id, row in previous.items()
+        if source_id in declared and fingerprint_input(row) != fingerprint_input(declared[source_id])
+    }
+    targets = tuple(sorted((set(declared_ids) - prior_ids | replacements) - removed_ids))
 
     populations: dict[str, str] = {}
     task_counts: dict[str, int] = {}
@@ -486,18 +497,6 @@ def derive_release_plan(
     if unknown_exclusions:
         raise ValueError(f"QC exclusions the prior load holds no panel for: {unknown_exclusions[:5]}")
     expected_panels = len([sid for sid in prior.review_panel_source_ids if sid not in exclusion_ids])
-
-    prior_pins = _verify_prior_pins(config)
-    prior_declarations = _verify_prior_pin(prior_pins["declarations"], "prior_release.declarations")
-    drifted = sorted(
-        source_id
-        for source_id, row in prior_declarations.items()
-        if source_id in declared
-        and source_id not in targets
-        and fingerprint_input(row) != fingerprint_input(declared[source_id])
-    )
-    if drifted:
-        raise ValueError(f"non-target declarations drifted from the prior release: {drifted[:5]}")
 
     registry_index = _read_registry_index(targets)
     measured = _measured_dependency(repo_root, config.freeze_source_revision)
@@ -615,6 +614,7 @@ def derive_release_plan(
             "population_task_counts": dict(sorted(task_counts.items())),
             "population_evidence_kinds": dict(sorted(evidence_kinds.items())),
             "targets": list(targets),
+            "replacement_sources": sorted(replacements),
             "oracle_empty_sources": sorted(k for k, v in evidence_kinds.items() if v == "oracle-empty"),
             "integrity_contract_targets": sorted(plan.validation_integrity_contracts),
         },

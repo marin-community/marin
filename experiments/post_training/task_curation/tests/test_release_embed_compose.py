@@ -191,7 +191,7 @@ def _seal_json(tmp_path: Path, name: str, document) -> ArtifactRef:
 
 
 def _composition(
-    tmp_path: Path, *, drift=None, overlap=False, param_change=None, expected_tasks=2, removed=False
+    tmp_path: Path, *, drift=None, overlap=False, param_change=None, expected_tasks=2, removed=False, replacement=False
 ) -> tuple[dict, int]:
     """A sealed composition manifest over a one-source retained release plus one fresh.
 
@@ -202,6 +202,10 @@ def _composition(
     """
     old_decl = _declaration("retained")
     fresh_decl = _declaration("admitted")
+    if replacement:
+        fresh_decl = _declaration("retained", "2").model_copy(
+            update={"task_count": 2, "within_source_dedup": deduplication_evidence("fixture", "2", "1", count=2)}
+        )
     removed_decl = _declaration("removed")
     current_decl = fresh_decl
     if drift == "task_count":
@@ -291,6 +295,18 @@ def test_compose_plan_accepts_an_additions_manifest(tmp_path):
     assert len(plan.sources) == 2 and len(plan.inventory) == 2
 
 
+def test_compose_replaces_a_changed_population_without_carrying_its_old_count(tmp_path):
+    document, expected = _composition(tmp_path, replacement=True, removed=True)
+    plan = compose.compose_plan(document, expected, ())
+    release = compose.compose_release(plan, document, {"uri": "/inputs.json", "sha256": "a" * 64})
+    assert {row.source_id: row.task_count for row in release.sources} == {"Marin:retained": 2, "Marin:removed": 1}
+    assert release.task_count == 3
+    inventory = {row.id: row for row in release.inventory}
+    assert inventory["Marin:retained"].dataset_revision == "2"
+    assert plan.retained_task_count == 1
+    assert plan.replaced_sources == {"Marin:retained"}
+
+
 def test_compose_plan_drops_planned_removals_from_the_retained_curriculum(tmp_path):
     """A planned removal never survives into the composed release."""
     document, expected = _composition(tmp_path)
@@ -335,7 +351,7 @@ def test_compose_release_carries_lineage_and_totals(tmp_path):
         ("task_count", False, None, 2, "changed its census binding or task count"),
         ("display_name", False, None, 2, "changed non-consumer fields"),
         ("insufficient", False, None, 2, "insufficient-context"),
-        (None, True, None, 2, "overlap the retained curriculum"),
+        (None, True, None, 2, "current target declarations do not cover exactly the fresh inventory"),
         (None, False, "subject_distance", 2, "disagree on subject_distance"),
         (None, False, None, 3, "expected 3"),
     ],

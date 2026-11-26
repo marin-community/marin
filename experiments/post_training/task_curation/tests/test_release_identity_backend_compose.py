@@ -402,28 +402,36 @@ def test_refuses_runtime_defaults_drift(tmp_path):
         compose_stage.run_identity_backend_compose(inputs, dry_run=True, registry_reader=reader, feeds=_feeds(tmp_path))
 
 
-def test_refuses_overlapping_prior_backend_rows(tmp_path):
-    prior = _backend_survey([_measured_source(source_id) for source_id in (*PRIOR_IDS, TARGETS[0])])
-    inputs, reader = _build(tmp_path, prior_backend=prior)
-    with pytest.raises(ValueError, match="re-pins"):
-        compose_stage.run_identity_backend_compose(inputs, dry_run=True, registry_reader=reader, feeds=_feeds(tmp_path))
-
-
-def test_refuses_retained_review_touching_a_target(tmp_path):
+def test_replaces_backend_and_identity_without_reusing_old_population_reviews(tmp_path):
+    prior_backend = _backend_survey(
+        [
+            *[_measured_source(source_id) for source_id in PRIOR_IDS],
+            _measured_source(TARGETS[0], task_count=7),
+        ]
+    )
     fingerprints = {source_id: _fingerprint(source_id) for source_id in PRIOR_IDS}
-    fingerprints[TARGETS[0]] = _fingerprint(TARGETS[0])
-    reviews = [_review(PRIOR_IDS[0], TARGETS[0], fingerprints[PRIOR_IDS[0]], fingerprints[TARGETS[0]])]
-    inputs, reader = _build(tmp_path, prior_identity=_identity_survey(fingerprints, reviews))
-    with pytest.raises(ValueError, match="touches"):
-        compose_stage.run_identity_backend_compose(inputs, dry_run=True, registry_reader=reader, feeds=_feeds(tmp_path))
-
-
-def test_refuses_retained_fingerprint_overlapping_a_target(tmp_path):
-    fingerprints = {source_id: _fingerprint(source_id) for source_id in PRIOR_IDS}
-    fingerprints[TARGETS[1]] = _fingerprint(TARGETS[1])
-    inputs, reader = _build(tmp_path, prior_identity=_identity_survey(fingerprints, []))
-    with pytest.raises(ValueError, match="re-pins"):
-        compose_stage.run_identity_backend_compose(inputs, dry_run=True, registry_reader=reader, feeds=_feeds(tmp_path))
+    fingerprints[TARGETS[0]] = _fingerprint(TARGETS[0], task_count=7)
+    stale = _review(PRIOR_IDS[0], TARGETS[0], fingerprints[PRIOR_IDS[0]], fingerprints[TARGETS[0]])
+    retained = _review(PRIOR_IDS[1], PRIOR_IDS[2], fingerprints[PRIOR_IDS[1]], fingerprints[PRIOR_IDS[2]])
+    inputs, reader = _build(
+        tmp_path,
+        prior_backend=prior_backend,
+        prior_identity=_identity_survey(fingerprints, [stale, retained]),
+    )
+    before = Path(inputs.prior_identity.uri).read_bytes()
+    proof = compose_stage.run_identity_backend_compose(
+        inputs, dry_run=False, registry_reader=reader, feeds=_feeds(tmp_path)
+    )
+    backend = json.loads(Path(proof["documents"]["backend_map"]["uri"]).read_text())
+    identity = json.loads(Path(proof["documents"]["identity_survey"]["uri"]).read_text())
+    assert {row["source_id"]: row["task_count"] for row in backend["sources"]} == {
+        source_id: 3 for source_id in (*PRIOR_IDS, *TARGETS)
+    }
+    assert identity["fingerprints"][TARGETS[0]]["task_count"] == 3
+    assert identity["fingerprints"][PRIOR_IDS[0]] == fingerprints[PRIOR_IDS[0]].model_dump(mode="json")
+    assert identity["reviews"] == [retained.model_dump(mode="json")]
+    assert Path(inputs.prior_identity.uri).read_bytes() == before
+    assert proof["identity"]["superseded_review_count"] == 1
 
 
 def test_refuses_registry_fingerprint_with_no_tasks(tmp_path):

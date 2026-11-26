@@ -186,7 +186,9 @@ def _prior_pins(tmp_path: Path, declared: dict) -> PriorRelease:
         declarations=ArtifactRef(**pin("declarations", declared)),
         identity=ArtifactRef(**pin("identity", {"fingerprints": {}, "reviews": []})),
         backend=ArtifactRef(**pin("backend", {"sources": [], "snapshot_id": "assembly-prior-v1"})),
-        composed_release=ArtifactRef(**pin("composed_release", {"release_id": "priorrelease"})),
+        composed_release=ArtifactRef(
+            **pin("composed_release", {"release_id": "priorrelease", "inventory": list(declared.values())})
+        ),
         composed_coverage=ArtifactRef(**pin("composed_coverage", {"coverage": {}})),
         oracle_inventory=ArtifactRef(**pin("oracle_inventory", {"sources": 2})),
         source_counts=ArtifactRef(**pin("source_counts", {"sources": 2})),
@@ -228,7 +230,12 @@ def frozen_layer(tmp_path, monkeypatch):
     monkeypatch.setattr(plan_derivation, "_freeze_artifact_version", lambda repo_root, revision: FREEZE_ARTIFACT_VERSION)
     registry_index = tmp_path / "registry-index.json"
     registry_index.write_text(
-        json.dumps({"revision": "registryrev", "sources": {TARGET_ID: {"repo": "r"}, LATE_ID: {"repo": "r"}}})
+        json.dumps(
+            {
+                "revision": "registryrev",
+                "sources": {RETAINED_ID: {"repo": "r"}, TARGET_ID: {"repo": "r"}, LATE_ID: {"repo": "r"}},
+            }
+        )
     )
     monkeypatch.setattr(plan_derivation, "REGISTRY_INDEX_PATH", registry_index)
     return tmp_path
@@ -376,15 +383,34 @@ def test_derivation_refuses_unresolvable_populations(tmp_path, frozen_layer, dep
         _derive(tmp_path, layer, config, monkeypatch, panels=[RETAINED_ID], available=[RETAINED_ID])
 
 
-def test_derivation_refuses_prior_drift(tmp_path, frozen_layer, deployment, monkeypatch):
-    """A drifted retained declaration fails the derivation before any stage runs."""
+@pytest.mark.parametrize("lagging_projection", ["declarations", "composed_release"])
+def test_derivation_targets_changed_existing_populations(
+    tmp_path, frozen_layer, deployment, monkeypatch, lagging_projection
+):
     layer = _source_layer(tmp_path, (RETAINED_ID, TARGET_ID))
     declared = _declaration_dump(layer)
-    drifted = json.loads(json.dumps(declared[RETAINED_ID]))
-    drifted["dataset_revision"] = "2"
-    prior = _prior_pins(tmp_path, {RETAINED_ID: drifted, TARGET_ID: declared[TARGET_ID]})
-    with pytest.raises(ValueError, match="drifted from the prior release"):
-        _derive(tmp_path, layer, _config(prior), monkeypatch, panels=[RETAINED_ID], available=[RETAINED_ID])
+    prior = _prior_pins(tmp_path, declared)
+    old = {**declared[RETAINED_ID], "dataset_revision": "old-pin"}
+    ref = getattr(prior, lagging_projection)
+    path = Path(ref.uri)
+    document = {**declared, RETAINED_ID: old} if lagging_projection == "declarations" else {"inventory": [old]}
+    path.write_text(json.dumps(document))
+    prior = prior.model_copy(
+        update={lagging_projection: ArtifactRef(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())}
+    )
+    derived = _derive(
+        tmp_path,
+        layer,
+        _config(prior),
+        monkeypatch,
+        panels=[RETAINED_ID],
+        available=[RETAINED_ID],
+        contract_tasks={RETAINED_ID: 2, TARGET_ID: 2},
+    )
+    plan = ReleasePlan.model_validate(derived.plan_document)
+    assert set(plan.targets) == {RETAINED_ID, TARGET_ID}
+    assert plan.expected_contract_tasks == 4
+    assert derived.receipt["measured"]["replacement_sources"] == [RETAINED_ID]
 
 
 def test_derivation_applies_config_policy(tmp_path, frozen_layer, deployment, monkeypatch):

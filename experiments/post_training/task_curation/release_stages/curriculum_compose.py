@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Curriculum compose: add the admitted populations to the retained curriculum.
+"""Curriculum compose: add or replace admitted populations in the retained curriculum.
 
 One maintained module replaces the per-release curriculum composition workers (see
 INVENTORY.md). The composed release carries every retained assignment value byte for
@@ -99,6 +99,10 @@ class ComposePlan:
     retained_task_count: int
     removed_sources: tuple[str, ...]
 
+    @property
+    def replaced_sources(self) -> frozenset[str]:
+        return frozenset(self.targets) & {row.source_id for row in self.old_release.sources}
+
 
 def read_reference(reference: dict) -> dict:
     """Digest-verify one sealed {uri, sha256} reference and parse its JSON."""
@@ -139,10 +143,11 @@ def read_retained_release(reference: dict) -> AlignmentRelease:
 
 
 def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources: tuple[str, ...]) -> ComposePlan:
-    """Verify every read-side assertion for one additions-mode composition.
+    """Verify retained populations and the fresh alignment for additions or replacements.
 
     The plan's removed sources leave the retained curriculum: their release sources,
-    inventory rows, assignments and coverage statistics are not carried.
+    inventory rows, assignments and coverage statistics are not carried. Replacement
+    sources also leave the retained set; their current alignment supplies every row.
     """
     rebound = document.get("rebound")
     if rebound:
@@ -180,14 +185,14 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
     unknown = sorted(removed - {source.source_id for source in old.sources})
     if unknown:
         raise ValueError(f"planned removals are absent from the retained curriculum: {unknown[:5]}")
-    old_sources = {source.source_id: source for source in old.sources if source.source_id not in removed}
-    retained_inventory = [declaration for declaration in old.inventory if declaration.id not in removed]
-    if len(old.inventory) - len(retained_inventory) != len(removed):
+    replaced = targets & {source.source_id for source in old.sources}
+    omitted = removed | replaced
+    old_sources = {source.source_id: source for source in old.sources if source.source_id not in omitted}
+    retained_inventory = [declaration for declaration in old.inventory if declaration.id not in omitted]
+    if len(old.inventory) - len(retained_inventory) != len(omitted):
         raise ValueError("planned removals do not each drop exactly one retained inventory row")
     if not targets.isdisjoint(removed):
         raise ValueError("a target is also a planned removal")
-    if not targets.isdisjoint(old_sources.keys()):
-        raise ValueError("fresh populations overlap the retained curriculum; additions mode cannot replace sources")
     for source in fresh.sources:
         if not (source.task_count == source.input_rows == source.converted_rows == source.ready_count):
             raise ValueError(f"fresh population {source.source_id} is not fully converted")
@@ -199,7 +204,7 @@ def compose_plan(document: dict, expected_fresh_task_count: int, removed_sources
         sid: canonical_declaration(QualifiedSourceDeclaration.model_validate(row))
         for sid, row in current_target_declarations.items()
     }
-    if set(current_inventory) != set(fresh_inventory) or not set(fresh_inventory) <= targets:
+    if set(current_inventory) != set(fresh_inventory) or set(fresh_inventory) != targets:
         raise ValueError("the current target declarations do not cover exactly the fresh inventory")
     for sid, original in fresh_inventory.items():
         current = current_inventory[sid]
@@ -441,7 +446,8 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
     """The write-mode tail: retained pass, coverage recompute, exact unions, seals."""
     old_sources = {source.source_id: source for source in plan.old_release.sources}
     removed = frozenset(plan.removed_sources)
-    selected = frozenset(old_sources) - removed
+    omitted = removed | plan.replaced_sources
+    selected = frozenset(old_sources) - omitted
     retained_files = context.execute(
         Dataset.from_list(list(enumerate(plan.old_release.paths))).map(
             partial(
@@ -477,7 +483,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
     )
     # Statistic keys lead with source_id; a removed source's statistics are not carried.
     expected_statistics = {
-        key: value for key, value in statistics_by_key(plan.old_coverage.paths).items() if key[0] not in removed
+        key: value for key, value in statistics_by_key(plan.old_coverage.paths).items() if key[0] not in omitted
     }
     fresh_statistics = statistics_by_key(plan.fresh_coverage.paths)
     if expected_statistics.keys() & fresh_statistics.keys():
@@ -488,7 +494,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
     expected_confidence = {
         key: value
         for key, value in statistics_by_key(plan.old_coverage.confidence_paths).items()
-        if key[0] not in removed
+        if key[0] not in omitted
     }
     fresh_confidence = statistics_by_key(plan.fresh_coverage.confidence_paths)
     if expected_confidence.keys() & fresh_confidence.keys():
@@ -528,6 +534,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
         "fresh_sources": list(plan.targets),
         "retained_source_count": len(selected),
         "removed_sources": sorted(removed),
+        "replacement_sources": sorted(plan.replaced_sources),
         "retained_scores_byte_identical": True,
         "non_target_sources_and_inventory_unchanged": True,
         "statistics_exact_union": True,
@@ -537,6 +544,7 @@ def _finish_compose(inputs, plan, document, release, context, root, alert_feeds,
         # by the checks above this seal — the retained readback verified every assignment
         # value byte for byte, the statistics/confidence unions are exact, and the
         # additions-mode compose never rewrites task ids or public inputs.
+        "unchanged_scope": "retained_sources",
         "all_retained_assignment_values_verified": all(row["all_retained_values_verified"] for row in retained_files),
         "all_statistics_and_confidence_values_unchanged": True,
         "all_task_ids_unchanged": True,

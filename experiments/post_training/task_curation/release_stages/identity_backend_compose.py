@@ -120,11 +120,7 @@ def verify_backend_alignment(
     ):
         if retained != fresh_value:
             raise ValueError(f"prior and fresh {name} disagree; the retained settings must be carried unchanged")
-    prior_ids = {row.source_id for row in prior.sources}
-    overlap = sorted(prior_ids & set(targets))
-    if overlap:
-        raise ValueError(f"prior map already holds {overlap[:4]}; additions mode never re-pins")
-    retained = [row for row in prior.sources if row.source_id not in removed]
+    retained = [row for row in prior.sources if row.source_id not in set(removed) | set(targets)]
     composed = sorted([*retained, *fresh.sources], key=lambda row: row.source_id)
     if len(composed) != len(retained) + len(targets):
         raise ValueError("composed backend rows do not equal the retained rows plus the targets")
@@ -208,10 +204,12 @@ def compose_identity_survey(
     unknown = sorted(set(removed) - set(prior.fingerprints))
     if unknown:
         raise ValueError(f"planned removals are absent from the retained identity: {unknown[:4]}")
-    retained = {source_id: fp for source_id, fp in prior.fingerprints.items() if source_id not in removed}
+    replaced = set(prior.fingerprints) & set(targets)
+    omitted = set(removed) | replaced
+    retained = {source_id: fp for source_id, fp in prior.fingerprints.items() if source_id not in omitted}
     fingerprints: dict[str, SourceFingerprint | None] = {**retained, **fresh_fingerprints}
     retained_reviews = [
-        review for review in prior.reviews if not {review.similarity.left, review.similarity.right} & set(removed)
+        review for review in prior.reviews if not {review.similarity.left, review.similarity.right} & omitted
     ]
     for review in retained_reviews:
         pair = review.similarity
@@ -232,9 +230,6 @@ def compose_identity_survey(
                 continue
             if recorded != canonical_sha256(fingerprint.inputs):
                 raise ValueError(f"retained review measurement inputs disagree with the fingerprint for {side}")
-    overlap = sorted(set(prior.fingerprints) & set(targets))
-    if overlap:
-        raise ValueError(f"retained identity already holds {overlap[:4]}; additions mode never re-pins")
     if len(fingerprints) != len(retained) + len(targets):
         raise ValueError("composed fingerprints do not equal the retained fingerprints plus the targets")
     served_reviews = retained_reviews
@@ -301,6 +296,12 @@ def _compose(
         "retained_review_count": len(identity_survey.reviews),
         "pair_reviews_touching_targets": 0,
     }
+    replaced = set(targets) & set(prior_identity.fingerprints)
+    if replaced:
+        identity_counts["replaced_fingerprints"] = sorted(replaced)
+        identity_counts["superseded_review_count"] = sum(
+            bool({row.similarity.left, row.similarity.right} & replaced) for row in prior_identity.reviews
+        )
     completed_at = datetime.now(tz=UTC).isoformat(timespec="seconds")
     receipt_base = {
         "release_id": inputs.release_id,

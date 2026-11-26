@@ -1,5 +1,5 @@
 {
-  "r41": {
+  "atlas-2026.11.27": {
     "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/difficulty-ledger/v1/sealed-snapshots/5c6a25cecc5172d33db614d24640b8d00cdac77ee3bae610adff3bf250bfbb56/manifest.json",
     "sha256": "c09b275b5c7eb1de09cda63b5cb1084854d1a957ff58e62a188e273c72bbf0db"
   }

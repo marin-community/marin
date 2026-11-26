@@ -306,3 +306,20 @@ new load without overwriting a prior binding. Atlas source columns and aggregate
 coverage use only cells matching the loaded declaration's population. Partial
 cells keep their attempt counts while difficulty and pass rate remain null.
 The column retains the immutable manifest receipt for inspection.
+
+## Calendar release names and population replacements
+
+New catalog releases use `atlas-YYYY.MM.DD`, with `.N` for another cut on the
+same date. The config filename, `release_id`, and difficulty snapshot registry
+key use that same name. Marina's `/v/NN` identifies an applet revision. Historical
+release names retain their original spelling.
+
+Derivation selects new source IDs and existing IDs whose fingerprint differs
+from either the prior declarations or the retained curriculum inventory. This
+also detects a curriculum projection that lagged behind an earlier catalog cut.
+Every target passes the existing census, corpus preparation and fresh alignment
+stages. Composition removes replaced populations' archived assignments, source
+rows and coverage vectors before merging the fresh alignment. Assignments and
+statistics for unaffected sources retain their existing values. The handoff
+records replacement source IDs and scopes its unchanged-value evidence to the
+retained sources.
