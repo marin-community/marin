@@ -13,7 +13,7 @@ const coordMarker = { ...marker, color: '#827394' };
 
 function StageNode({ id, data }) {
   const { node, wires, value, selected, inspectable, hasSettings, onInspect, onInfo, onToggle } = data;
-  const unit = value?.unit === 'attempts' && value.count === '1' ? 'attempt' : value?.unit;
+  const unit = value?.unit === 'jobs' && value.count === '1' ? 'job' : value?.unit;
   const Label = inspectable ? 'button' : 'div';
   const action = inspectable ? { type: 'button', onClick: (event) => { event.stopPropagation(); onInspect(id); } } : {};
   return (
@@ -75,7 +75,7 @@ function streamGeometry(edge, sx, sy, tx, ty) {
     const bends = toDispatch ? [[railX, sy]] : [[railX, sy], [railX, ty]];
     return { path: roundedPath([start, ...bends, end]), label: [railX, midY] };
   }
-  if (edge.id === 'prompts' && edge.to[0] === 'rollouts') {
+  if (edge.id === 'entries' && edge.to[0] === 'rollouts') {
     return { path: roundedPath([start, [sx, ty], end]), label: [midX, ty] };
   }
   return { path: roundedPath([start, end]), label: [midX, midY] };

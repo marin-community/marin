@@ -228,11 +228,11 @@ def store(telemetry_table):
                 **({"clock_domain": "inclusive_wall", "root": "step", "parent": ""} if phase == "step" else {}),
             },
         )
-    for value in (10, 30):
-        add("rollout_wait_seconds", value, attributes={"wait": "slot", "stat": "sum"})
-    for value in (2, 10):
-        add("rollout_waits", value, attributes={"wait": "slot"})
-    add("rollout_wait_seconds", 18, attributes={"wait": "slot", "stat": "max"})
+    for wait, value in (("slot", 10), ("lease", 30)):
+        add("rollout_wait_seconds", value, attributes={"wait": wait, "stat": "sum"})
+    for wait, value in (("slot", 2), ("lease", 10)):
+        add("rollout_waits", value, attributes={"wait": wait})
+    add("rollout_wait_seconds", 18, attributes={"wait": "lease", "stat": "max"})
     for value in (1, 5, 3):
         add("rollout_queue_depth", value)
     add("rollout_capacity", 64)
@@ -406,6 +406,12 @@ def store(telemetry_table):
     sync_resource = json.dumps({"role": "trainer", "host": "trainer", "training_type": "sync"})
     add("work_completed", 64, attributes={"work_kind": "rollout"})
     add("work_completed", 512, attributes={"work_kind": "sample"})
+    # Keep these waits in the same bucket without moving the other panels' fixture timestamps.
+    for wait, total, count, longest in (("prompt", 27, 3, 12), ("task", 5, 1, 5)):
+        timestamp = BASE_EPOCH_MS + 10
+        add("rollout_wait_seconds", total, attributes={"wait": wait, "stat": "sum"}, timestamp=timestamp)
+        add("rollout_waits", count, attributes={"wait": wait}, timestamp=timestamp)
+        add("rollout_wait_seconds", longest, attributes={"wait": wait, "stat": "max"}, timestamp=timestamp)
     distractors = []
     for row in rows:
         for column, replacement in (

@@ -46,7 +46,7 @@ export function hasValues(series, range) {
   return series.data.some((point) => Number.isFinite(point.value) && inRange(point, range));
 }
 
-export function promptOccupancyAtLongestWait(data, range) {
+export function entryOccupancyAtLongestWait(data, range) {
   let longest;
   for (const wait of data) {
     if (inRange(wait, range) && (!longest || wait.value > longest.value)) longest = wait;
@@ -54,12 +54,12 @@ export function promptOccupancyAtLongestWait(data, range) {
   return longest?.outstanding == null ? null : longest;
 }
 
-export function canceledAttemptCount(data, range) {
+export function canceledGroupJobCount(data, range) {
   let count = null;
-  for (const attempt of data) {
-    if (!inRange(attempt, range) || attempt.outcome == null) continue;
+  for (const job of data) {
+    if (!inRange(job, range) || job.outcome == null) continue;
     count ??= 0;
-    if (attempt.outcome === 'cancelled') count++;
+    if (job.outcome === 'cancelled') count++;
   }
   return count;
 }

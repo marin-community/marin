@@ -32,6 +32,7 @@ from marin.rl.skyrl_records import (
 from pydantic import BaseModel
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath
+from skyrlrecipe import RecipePatch
 from taskcompendium.grading_result import Outcome
 
 from experiments.post_training import rl_compose as recipe
@@ -195,7 +196,7 @@ def run_inputs(
     options: RunOptions | None = None,
     sft_preset: str | None = None,
 ) -> RunInputs:
-    values = recipe.override_document(tuple(settings))
+    values = RecipePatch.settings_document(settings)
     return RunInputs(
         preset_name=preset_name,
         settings=tuple(f"{key}={json.dumps(value, sort_keys=True)}" for key, value in sorted(values.items())),

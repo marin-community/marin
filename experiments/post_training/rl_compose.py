@@ -52,8 +52,7 @@ from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from skyrlrecipe import RecipePatch, SkyRLRecipe, sections
 from skyrlrecipe.declared import EvaluationProfile
-from skyrlrecipe.documents import MISSING, get_path, merge_mappings, set_path
-from skyrlrecipe.settings import parse_setting as typed_setting_value
+from skyrlrecipe.documents import MISSING, ROLLOUT_BUFFER_LEASE_LIMIT, get_path, set_path
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 
@@ -79,17 +78,6 @@ from experiments.post_training.task_curation.swesmith_training import SWESMITH_D
 
 REPO_ROOT = find_project_root(Path(__file__))
 SELECTION_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / SELECTION_PREFIX)
-
-
-def override_document(settings: tuple[str, ...]) -> dict:
-    """Canonical explicit user values for preset ownership and stored input identity."""
-    document = {}
-    for text in settings:
-        key, _, raw = text.partition("=")
-        patch = {}
-        set_path(patch, key, typed_setting_value(RecipePatch, key, raw))
-        document = merge_mappings(document, patch)
-    return document
 
 
 BATCH_SETTINGS = {
@@ -213,7 +201,7 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
     """Validate typed settings, then enforce the preset's input and measurement ownership."""
     try:
         updated = config.with_settings(settings)
-        values = override_document(settings)
+        values = RecipePatch.settings_document(settings)
     except (ValueError, TypeError) as error:
         raise click.BadParameter(str(error)) from error
 
@@ -545,7 +533,7 @@ def run_spec(
                 f"({workers.num_workers} workers x {workers.cpus_per_worker}); "
                 f"the driver task's Iris CPU request is {driver_cpus}."
             )
-    explicit = override_document(settings)
+    explicit = RecipePatch.settings_document(settings)
     authored = config.to_skyrl()
     batch_changes = {
         field: value for key, field in BATCH_SETTINGS.items() if (value := get_path(authored, key)) is not MISSING
@@ -554,13 +542,13 @@ def run_spec(
     if batch_changes:
         workload = workload.with_batches(batch_changes)
         preset = replace(preset, recipe=replace(preset.recipe, layout=replace(preset.recipe.layout, workload=workload)))
-    micro_batch, in_flight = workload.batch_parameters(config)
+    micro_batch, lease_limit = workload.batch_parameters(config)
     derived = {}
     if batch_changes and get_path(explicit, "trainer.micro_forward_batch_size_per_gpu") is MISSING:
-        derived["micro_forward_batch_size_per_gpu"] = micro_batch
-    if get_path(authored, "trainer.rollout_buffer.max_in_flight") is MISSING:
-        derived["rollout_buffer"] = {"max_in_flight": in_flight}
-    config = config.merge(RecipePatch.from_document({"trainer": derived}))
+        set_path(derived, "trainer.micro_forward_batch_size_per_gpu", micro_batch)
+    if get_path(authored, ROLLOUT_BUFFER_LEASE_LIMIT) is MISSING:
+        set_path(derived, ROLLOUT_BUFFER_LEASE_LIMIT, lease_limit)
+    config = config.merge(RecipePatch.from_document(derived))
     default, selection = task_selections(preset, tasks)
     summary = selection_summary(selection)
     _refuse_judged(summary, "train")

@@ -12,7 +12,14 @@ from typing import Any, Self
 from pydantic import Field, PositiveInt, ValidationError, model_validator
 
 from .budget import ContextBudget
-from .documents import MISSING, get_path, merge_mappings, set_path
+from .documents import (
+    MISSING,
+    get_path,
+    merge_mappings,
+    normalize_rollout_buffer_config,
+    normalize_setting_path,
+    set_path,
+)
 from .model import FrozenMap, OpenMap, freeze, thaw
 from .ownership import OWNER_MESSAGES, REMOVED
 from .rules import RLEntrypoint, validate_engine_init_kwargs, validate_tp_divides_heads
@@ -45,6 +52,7 @@ class RecipePatch(RecipeSections):
 
     @classmethod
     def from_document(cls, document: Mapping[str, Any]) -> Self:
+        document = normalize_rollout_buffer_config(document)
         _reject_author_paths(document)
         return cls.model_validate_json(json.dumps(thaw(freeze(document)), allow_nan=False))
 
@@ -54,22 +62,28 @@ class RecipePatch(RecipeSections):
             document = merge_mappings(document, patch.to_skyrl())
         return type(self).from_document(document)
 
-    def with_settings(self, settings: Sequence[str]) -> Self:
-        document = self.to_skyrl()
+    @classmethod
+    def settings_document(cls, settings: Sequence[str], *, base: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Apply ordered typed settings to a sparse recipe document."""
+        document = dict(base) if base is not None else {}
         for setting in settings:
             key, separator, raw = setting.partition("=")
             if not separator or not key:
                 raise ValueError(f"a setting must have dotted.key=value form: {setting!r}")
+            key = normalize_setting_path(key)
             patch = {}
             set_path(patch, key, None)
             _reject_author_paths(patch)
             try:
-                value = parse_setting(type(self), key, raw)
+                value = parse_setting(cls, key, raw)
             except (ValidationError, json.JSONDecodeError) as error:
                 raise ValueError(f"setting {setting!r}: {error}") from error
             set_path(patch, key, value)
-            document = merge_mappings(document, patch)
-        return type(self).from_document(document)
+            document = merge_mappings(document, normalize_rollout_buffer_config(patch))
+        return document
+
+    def with_settings(self, settings: Sequence[str]) -> Self:
+        return type(self).from_document(self.settings_document(settings, base=self.to_skyrl()))
 
 
 class SkyRLRecipe(RecipePatch):

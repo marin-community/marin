@@ -366,7 +366,7 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
             generator["n_samples_per_prompt"],
             trainer["micro_train_batch_size_per_gpu"],
             trainer["micro_forward_batch_size_per_gpu"],
-            trainer["rollout_buffer"]["max_in_flight"],
+            trainer["rollout_buffer"]["max_outstanding_leases"],
             trainer["policy"]["optimizer_config"]["lr"],
         ) == (64, 64, 8, 2, 2, 64, 2e-6)
     trainer, generator = configs[0]["skyrl"]["trainer"], configs[0]["skyrl"]["generator"]

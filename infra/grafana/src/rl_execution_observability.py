@@ -303,7 +303,11 @@ WITH selected AS (
            json_get(attributes_json, 'outcome') AS outcome,
            json_get(attributes_json, 'role') AS role,
            json_get(attributes_json, 'rank') AS rank,
-           json_get(attributes_json, 'wait') AS wait,
+           CASE json_get(attributes_json, 'wait')
+               WHEN 'slot' THEN 'lease'
+               WHEN 'prompt' THEN 'task'
+               ELSE json_get(attributes_json, 'wait')
+           END AS wait,
            json_get(attributes_json, 'stat') AS stat,
            json_get(attributes_json, 'disposition') AS disposition,
            json_get(attributes_json, 'clock_domain') AS clock_domain,

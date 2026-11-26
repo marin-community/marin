@@ -437,20 +437,20 @@ class RolloutBuffer(Section):
     max_staleness_steps: NonNegativeInt = field(0)
     "How many steps the generating policy may lag the step that trains on its group. colocate_all requires 0."
     batch_policy: Literal["full_batch", "rolling"] = field("full_batch")
-    """How committed groups form batches when max_staleness_steps > 0. full_batch trains each step on exactly the
+    """How submitted groups form batches when max_staleness_steps > 0. full_batch trains each step on exactly the
     groups leased for it, waiting for the slowest, so training never favors rollouts that finish quickly. rolling
-    fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout
+    fills each batch in submission order and regenerates groups that miss the staleness window, so a slow rollout
     never blocks training, but quick rollouts train more often and at lower staleness."""
     max_stale_retries: int = field(1)
-    """How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
-    prompt waits until the prompt order offers it again."""
+    """How many times rolling regenerates a group that missed the staleness window before the entry returns to its
+    usual selection order."""
     max_unusable_groups: PositiveInt = field(3)
     """How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
-    prompt may produce before it sits out 10 training steps. Each pool keeps enough eligible prompts to fill its
+    dataset entry may produce before it sits out 10 steps. Each pool keeps enough eligible entries to fill its
     open batches and one spare."""
-    max_in_flight: PositiveInt | None = field(None)
-    """Cap on prompt groups generating at once. Iris defaults to 1.5 training batches, rounded up. Elsewhere null
-    bounds generation only by staleness."""
+    max_outstanding_leases: PositiveInt | None = field(None)
+    """Cap on outstanding leases, including a lease held while dispatch selects an entry. Iris defaults to 1.5
+    training batches, rounded up. Elsewhere null leaves the lease count bounded by the batch window."""
     object_store_root: str | None = field(None)
     """Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then records
     URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps payloads

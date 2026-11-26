@@ -93,10 +93,10 @@ class PreferencePairDataset(PromptDataset):
         super().__init__(tokenizer=tokenizer, **kwargs)
 
     def collate_fn(self, rows) -> list[dict]:
-        inputs = []
+        entries = []
         for prompt, _, preference, uid in rows:
             extra_info = preference.get("extra_info") or {}
-            inputs.append(
+            entries.append(
                 {
                     "uid": uid,
                     "input": PreferenceInput(
@@ -114,7 +114,7 @@ class PreferencePairDataset(PromptDataset):
                     ),
                 }
             )
-        return inputs
+        return entries
 
     def _read_files_and_tokenize(self):
         if self.data_format is PreferencePairFormat.TOKENIZED:

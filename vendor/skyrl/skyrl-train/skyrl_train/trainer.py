@@ -1398,7 +1398,7 @@ class RayPPOTrainer:
                 "policy_cp": megatron.get("context_parallel_size"),
                 "policy_ep": megatron.get("expert_model_parallel_size"),
                 # The dashboard's name for the most groups generating at once.
-                "generation_workers": buffer.max_concurrent_rollouts,
+                "generation_workers": buffer.effective_lease_limit,
                 "mini_batch_size": buffer.batch_size,
                 "max_staleness_steps": buffer.max_staleness_steps,
             },

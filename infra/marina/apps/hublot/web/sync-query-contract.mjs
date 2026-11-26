@@ -7,12 +7,16 @@ import { driverLinePatterns, driverPhaseMarkers, driverTimestamp } from './src/p
 const literal = (value) => "'" + value.replaceAll("'", "''") + "'";
 const predicate = ({ name, countName, filter, metricPattern }) => {
   const names = countName ? 'name IN (' + [name, countName].map(literal).join(', ') + ')' : 'name = ' + literal(name);
-  const terms = [names, ...Object.entries(filter).map(([key, value]) =>
-    'json_get(attributes_json, ' + literal(key) + ') = ' + literal(value))];
+  const terms = [names, ...Object.entries(filter).map(([key, value]) => {
+    const attribute = 'json_get(attributes_json, ' + literal(key) + ')';
+    return Array.isArray(value)
+      ? attribute + ' IN (' + value.map(literal).join(', ') + ')'
+      : attribute + ' = ' + literal(value);
+  })];
   if (metricPattern) terms.push("regexp_like(json_get(attributes_json, 'metric'), " + literal(metricPattern) + ')');
   return '(' + terms.join(' AND ') + ')';
 };
-const dispatch = [signals.slotWait, signals.promptWait];
+const dispatch = [signals.leaseWait, signals.taskWait];
 const readSeparately = new Set(['async_phase_window', 'rollout_call', 'rollout_groups', 'async_run_configuration', 'weight_sync_completed']);
 const regular = [...new Set(Object.values(signals)
   .filter((s) => s.name && !readSeparately.has(s.name) && !dispatch.includes(s)).map(predicate))];

@@ -253,7 +253,7 @@ class WholeTaskProjection:
             _training_decision(rollout, self.error_handling, logprobs_required=required)
             for rollout in rollouts
         ]
-        classes = [row.metadata.metric_class for row in request.rows]
+        classes = [task_input.metadata.metric_class for task_input in request.inputs]
         metrics = [
             {key: value for key, value in rollout.metrics.items() if key in TASK_TIMING_KEYS}
             if environment == TASKCOMPENDIUM_ENVIRONMENT
@@ -292,7 +292,7 @@ class StepTaskProjection:
         projected_ids = []
         final_steps = []
         classes = []
-        for rollout, trajectory_id, row in zip(rollouts, trajectory_ids, request.rows, strict=True):
+        for rollout, trajectory_id, task_input in zip(rollouts, trajectory_ids, request.inputs, strict=True):
             turns = _step_rollouts(rollout)
             for index, sample in enumerate(turns):
                 last = index == len(turns) - 1
@@ -312,7 +312,7 @@ class StepTaskProjection:
                 projected_id.step = index
                 projected_ids.append(projected_id)
                 final_steps.append(last)
-                classes.append(row.metadata.metric_class)
+                classes.append(task_input.metadata.metric_class)
         metrics = [
             {key: value for key, value in sample.metrics.items() if key in TASK_TIMING_KEYS} for sample in samples
         ]
@@ -576,7 +576,7 @@ def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollo
     }
     metrics.update({f"{TASK_ROLLOUT_METRIC_PREFIX}{name}": float(value) for name, value in counters.items()})
     batch["rollout_metrics"] = metrics
-    environments = [row.metadata.metric_class for row in request.rows]
+    environments = [task_input.metadata.metric_class for task_input in request.inputs]
     for rollout, environment in zip(rollouts, environments, strict=True):
         if environment != TASKCOMPENDIUM_ENVIRONMENT:
             continue

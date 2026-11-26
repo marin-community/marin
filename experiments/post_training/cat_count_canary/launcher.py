@@ -242,7 +242,7 @@ def training_config(
             rollout_buffer=sections.RolloutBuffer(
                 max_staleness_steps=0 if lane == "sync" else 2,
                 batch_policy="full_batch",
-                max_in_flight=batch_size,
+                max_outstanding_leases=batch_size,
                 object_store_root=None,
             ),
         ),

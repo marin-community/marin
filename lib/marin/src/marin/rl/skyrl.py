@@ -37,6 +37,7 @@ from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from skyrlrecipe import RLEntrypoint
+from skyrlrecipe.documents import normalize_rollout_buffer_config, rollout_buffer_fingerprint_config
 from skyrlrecipe.locality import RoleTopologyMode, plan_nvlink_roles
 
 from marin.evaluation.utils import discover_hf_checkpoints
@@ -1020,6 +1021,7 @@ def _launch_config_yaml(
     spec: SkyRLSpec,
     execution: IrisSkyRLExecution,
     *,
+    recipe: dict,
     export_hf: bool,
     run_id: str,
     attempt_id: str,
@@ -1031,7 +1033,6 @@ def _launch_config_yaml(
     coordinator_iris_job_id: str | None,
     starting_checkpoint: ResolvedNativeCheckpoint | None,
 ) -> str:
-    recipe = _parsed_config(spec.config_yaml)
     recipe["entrypoint"] = spec.topology.role_plan.entrypoint
     _materialize_role_plan_config(recipe, spec.topology.role_plan)
     for callback in recipe.get("trainer", {}).get("callbacks") or []:
@@ -1178,9 +1179,9 @@ def skyrl_step(
             resolved_config_uri=prefix_join(ctx.output_path, RESOLVED_LAUNCH_FILENAME),
             terminal_manifest_uri=prefix_join(ctx.output_path, TERMINAL_RECEIPT_FILENAME),
         )
-        draft_training = _declared_config_value(
-            _parsed_config(spec.config_yaml), "generator.speculative_decoding.training"
-        )
+        project_recipe = rollout_buffer_fingerprint_config if ctx.is_fingerprint else normalize_rollout_buffer_config
+        recipe = dict(project_recipe(_parsed_config(spec.config_yaml)))
+        draft_training = _declared_config_value(recipe, "generator.speculative_decoding.training")
         draft_checkpoint_root = (
             prefix_join(output.checkpoint_root, "drafts")
             if draft_training is not _MISSING_CONFIG_VALUE and draft_training is not None
@@ -1217,6 +1218,7 @@ def skyrl_step(
             launch_config_yaml=_launch_config_yaml(
                 spec,
                 execution,
+                recipe=recipe,
                 export_hf=export_hf,
                 run_id=run_id,
                 attempt_id=attempt_id,

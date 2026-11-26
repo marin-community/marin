@@ -113,10 +113,10 @@ REGULAR_SIGNALS = (
 )
 DISPATCH_WAITS = (
     "(name = 'rollout_wait_seconds'"
-    " AND json_get(attributes_json, 'wait') = 'slot'"
+    " AND json_get(attributes_json, 'wait') IN ('lease', 'slot')"
     " AND json_get(attributes_json, 'stat') = 'sum')"
     " OR (name = 'rollout_wait_seconds'"
-    " AND json_get(attributes_json, 'wait') = 'prompt'"
+    " AND json_get(attributes_json, 'wait') IN ('task', 'prompt')"
     " AND json_get(attributes_json, 'stat') = 'sum')"
 )
 DRIVER_MARKERS = (

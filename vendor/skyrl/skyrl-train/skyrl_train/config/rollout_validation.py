@@ -10,11 +10,11 @@ from marinskyrl.runtime_options import WeightSyncTransport
 
 GROUPS_PER_FAMILY_KEY = "trainer.rollout_buffer.groups_per_family"
 FAMILY_COLUMN = "family"
-SPARE_PROMPTS_PER_POOL = 1
+SPARE_ENTRIES_PER_POOL = 1
 
 
 class BatchPolicy(StrEnum):
-    """How committed groups are batched. Both policies coincide at max_staleness_steps=0."""
+    """How submitted groups are batched. Both policies coincide at max_staleness_steps=0."""
 
     FULL_BATCH = "full_batch"
     ROLLING = "rolling"
@@ -48,9 +48,9 @@ def validate_groups_per_family(cfg: DictConfig) -> dict[str, int]:
 
 
 def minimum_family_pool_sizes(groups_per_family: Mapping[str, int], max_staleness_steps: int) -> dict[str, int]:
-    """Return the minimum distinct prompt count for each family, including one spare."""
+    """Return the minimum number of distinct dataset entries for each family, including one spare."""
     return {
-        family: (max_staleness_steps + 1) * count + SPARE_PROMPTS_PER_POOL for family, count in groups_per_family.items()
+        family: (max_staleness_steps + 1) * count + SPARE_ENTRIES_PER_POOL for family, count in groups_per_family.items()
     }
 
 
@@ -69,7 +69,7 @@ def validate_family_pools(
         available = family_counts[family]
         if available < needed:
             raise ValueError(
-                f"{GROUPS_PER_FAMILY_KEY} requires {needed} distinct prompts for family {family!r} "
+                f"{GROUPS_PER_FAMILY_KEY} requires {needed} distinct entries for family {family!r} "
                 f"to fill its open batches and keep one spare, found {available}"
             )
 

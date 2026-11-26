@@ -90,7 +90,7 @@ class _WholeTrajectoryAccumulator:
         self.uids.extend(uids)
         self.metadata.extend(request.metadata)
         if isinstance(request, TaskRequestBatch):
-            expected = [row.spec.task.id for row in request.rows]
+            expected = [task_input.spec.task.id for task_input in request.inputs]
             if batch.get("task_ids") != expected:
                 raise ValueError("evaluation output task IDs differ from request TaskSpecs")
 
@@ -107,12 +107,13 @@ class _StepWiseAccumulator:
         if trajectory_ids is None or output_ids is None:
             raise ValueError("step-wise evaluation requires trajectory IDs")
         inputs_by_id = {
-            trajectory_id.instance_id: row for trajectory_id, row in zip(trajectory_ids, request.metadata, strict=True)
+            trajectory_id.instance_id: metadata
+            for trajectory_id, metadata in zip(trajectory_ids, request.metadata, strict=True)
         }
         expected_ids = (
             {
-                trajectory_id.instance_id: row.spec.task.id
-                for trajectory_id, row in zip(trajectory_ids, request.rows, strict=True)
+                trajectory_id.instance_id: task_input.spec.task.id
+                for trajectory_id, task_input in zip(trajectory_ids, request.inputs, strict=True)
             }
             if isinstance(request, TaskRequestBatch)
             else None
@@ -137,19 +138,19 @@ async def _collect_evaluation_rollouts(
     accumulator: _EvaluationAccumulator,
     pool: EvaluationPool,
 ) -> _EvaluationRollouts:
-    """Collect every selected row and repetition within the shared evaluation pool."""
+    """Collect every selected entry and repetition within the shared evaluation pool."""
     trajectory_batches: List[TrajectoryBatch] = []
     last_request = None
     last_batch = None
     pbar = None
     try:
-        rows = [row for prompts in eval_dataloader for row in prompts]
-        pbar = tqdm(total=len(rows) * cfg.generator.eval_n_samples_per_prompt, initial=0, desc="Evaluation Progress")
+        entries = [entry for batch in eval_dataloader for entry in batch]
+        pbar = tqdm(total=len(entries) * cfg.generator.eval_n_samples_per_prompt, initial=0, desc="Evaluation Progress")
 
-        async def collect(row, repetition):
+        async def collect(entry, repetition):
             nonlocal last_request, last_batch
             request, uids = prepare_trajectory_request(
-                [row],
+                [entry],
                 1,
                 get_sampling_params_for_backend(cfg.generator.backend, cfg.generator.eval_sampling_params),
                 "eval",
@@ -176,16 +177,16 @@ async def _collect_evaluation_rollouts(
 
         async with asyncio.TaskGroup() as tasks:
             for repetition in range(cfg.generator.eval_n_samples_per_prompt):
-                for row in rows:
-                    tasks.create_task(collect(row, repetition))
+                for entry in entries:
+                    tasks.create_task(collect(entry, repetition))
     finally:
         if pbar is not None:
             pbar.close()
 
     if last_request is None or last_batch is None:
         raise ValueError("evaluation dataloader produced no batches")
-    if len(trajectory_batches) != len(rows) * cfg.generator.eval_n_samples_per_prompt:
-        raise RuntimeError("evaluation did not return every selected row and repetition")
+    if len(trajectory_batches) != len(entries) * cfg.generator.eval_n_samples_per_prompt:
+        raise RuntimeError("evaluation did not return every selected entry and repetition")
     return _EvaluationRollouts(
         batch=concatenate_trajectory_batches(trajectory_batches),
         uids=accumulator.uids,

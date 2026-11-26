@@ -22,7 +22,7 @@ from skyrl_train.evaluation_profiles import record_evaluation_profiles, resolve_
 
 from skyrl_train.config.objective_spec import validate_objective
 from skyrlrecipe import ContextBudget, RLEntrypoint, SkyRLRecipe
-from skyrlrecipe.documents import set_path
+from skyrlrecipe.documents import normalize_rollout_buffer_config, set_path
 
 from cloud.iris.paths import resolve_paths_in_dict
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT as CHECKPOINT_EXPORT_MODULE
@@ -34,8 +34,8 @@ from marinskyrl.speculative_decoding import STANDARD_TRAINING_ENTRYPOINT, parse_
 
 RL_CONFIG_TASK_DIR = "/tmp/marin-rl-configs"
 RL_CONFIG_PAYLOAD_ENV = "MARIN_RL_CONFIG_B64"
-# Prompt groups generating at once, in training batches, for a recipe that leaves rollout_buffer.max_in_flight null.
-IN_FLIGHT_BATCHES = 1.5
+# Default outstanding lease limit as a multiple of the training batch size.
+OUTSTANDING_LEASE_BATCHES = 1.5
 TRAINER_NON_PATH_KEYS = frozenset(
     {
         "policy.model.path",
@@ -83,9 +83,9 @@ class HPCGeometry(Protocol):
     gpus_per_node: int
 
 
-def _materialize_context_budget(raw: Dict[str, Any], budget: ContextBudget) -> Dict[str, Any]:
+def _materialize_context_budget(raw: Mapping[str, Any], budget: ContextBudget) -> Dict[str, Any]:
     """Populate launch-owned token limits from the authored request budget."""
-    materialized = copy.deepcopy(raw)
+    materialized = copy.deepcopy(dict(raw))
     for path, value in budget.derived_values().items():
         set_path(materialized, path, value)
     return materialized
@@ -138,10 +138,11 @@ def parse_rl_config(document: Mapping[str, Any] | DictConfig) -> ParsedRLConfig:
         group = compose_config_groups({"algorithm_recipe": config_groups["algorithm_recipe"]}, config_name=None)
         raw = OmegaConf.to_container(OmegaConf.merge(OmegaConf.to_container(group, resolve=False), raw), resolve=False)
         assert isinstance(raw, dict)
-    recipe = SkyRLRecipe.from_document(raw)
+    authored = normalize_rollout_buffer_config(raw)
+    recipe = SkyRLRecipe.from_document(authored)
     distillation_plan = compile_distillation_plan(raw)
     entrypoint = RL_ENTRYPOINTS[recipe.entrypoint]
-    materialized_raw = _materialize_context_budget(raw, recipe.context_budget)
+    materialized_raw = _materialize_context_budget(authored, recipe.context_budget)
     trainer = materialized_raw["trainer"]
     generator = materialized_raw["generator"]
     if recipe.trainer.policy.megatron_config.moe_router_replay:
@@ -353,12 +354,12 @@ def compose_config_groups(config_groups: Mapping[str, str], *, config_name: str 
     return config
 
 
-def _resolve_max_in_flight(config: DictConfig) -> None:
-    """Default the groups generating at once to IN_FLIGHT_BATCHES training batches."""
+def _resolve_max_outstanding_leases(config: DictConfig) -> None:
+    """Default the outstanding lease limit to a multiple of the training batch size."""
     rollout_buffer = config.trainer.rollout_buffer
-    if rollout_buffer.max_in_flight is not None:
+    if rollout_buffer.max_outstanding_leases is not None:
         return
-    rollout_buffer.max_in_flight = math.ceil(IN_FLIGHT_BATCHES * config.trainer.train_batch_size)
+    rollout_buffer.max_outstanding_leases = math.ceil(OUTSTANDING_LEASE_BATCHES * config.trainer.train_batch_size)
 
 
 def compose_skyrl_config(
@@ -370,7 +371,7 @@ def compose_skyrl_config(
     config = compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
     OmegaConf.set_struct(config, False)
     config = OmegaConf.merge(config, _skyrl_config_sections(parsed, exp_args, hpc))
-    _resolve_max_in_flight(config)
+    _resolve_max_outstanding_leases(config)
     validate_nemotron_ultra_grading(config, parsed.distillation_plan)
     validate_objective(config)
     return CompiledSkyRLConfig(

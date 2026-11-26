@@ -222,7 +222,8 @@ function field(row, path) {
 
 function includes(row, signal) {
   return (row.name === signal.name || (signal.countName !== undefined && row.name === signal.countName)) &&
-    Object.entries(signal.filter).every(([key, value]) => row.attributes[key] === value) &&
+    Object.entries(signal.filter).every(([key, value]) =>
+      Array.isArray(value) ? value.includes(row.attributes[key]) : row.attributes[key] === value) &&
     (!signal.metricPattern || new RegExp(signal.metricPattern).test(row.attributes.metric ?? ''));
 }
 
@@ -234,7 +235,7 @@ function points(rows, s, window) {
       (Number.isFinite(start) && Number.isFinite(end) && end >= start ? (end - start) / 1000 : null) :
       field(row, s.value ?? (s.transform === 'duration' ? 'body_json.duration_seconds' : 'value'));
     if (!Number.isFinite(value) || !Number.isFinite(t) || t < window.from || t >= window.to) return [];
-    const dispatchWait = s === signals.promptWait || s === signals.slotWait;
+    const dispatchWait = s === signals.taskWait || s === signals.leaseWait;
     return [{ t, value: value * (s.factor ?? 1), ...eventDetails(row),
       ...(dispatchWait && value >= 0 ? { waitStart: t - Math.round(value * 1000) } : {}) }];
   }).sort((a, b) => a.t - b.t);
@@ -324,7 +325,7 @@ function entriesForSignal(id, s, rows, window, phases) {
 const phaseLabel = { rollout_wait: 'Trainer batch wait', training: 'Training', weight_sync: 'Weight sync' };
 
 function dispatchWaitTimes(rows, window) {
-  const waits = [signals.slotWait, signals.promptWait].map((signal) =>
+  const waits = [signals.leaseWait, signals.taskWait].map((signal) =>
     rows.filter((row) => Number.isFinite(row.value) && row.value >= 0 && includes(row, signal)));
   const owners = new Set(waits.flat().map((row) => seriesKey(row, {})));
   if (owners.size !== 1) return {};
@@ -332,8 +333,8 @@ function dispatchWaitTimes(rows, window) {
   const spans = waits.map((samples) => samples.map((row) => ({
     start: row.timestamp_ms - Math.round(row.value * 1000), end: row.timestamp_ms,
   })));
-  return Object.fromEntries(['slotWaitTime', 'promptWaitTime'].map((id, index) => [id, [{
-    id, label: [signals.slotWait, signals.promptWait][index].label,
+  return Object.fromEntries(['leaseWaitTime', 'taskWaitTime'].map((id, index) => [id, [{
+    id, label: [signals.leaseWait, signals.taskWait][index].label,
     unit: 's per 10 s', group: null, kind: 'line', data: waitTime(spans[index], spans.flat(), window),
   }]]));
 }
@@ -360,16 +361,16 @@ function evaluationSummaries(rows, window) {
     }).sort((a, b) => a.t - b.t);
 }
 
-function attachPromptOccupancy(rows, points, window, { startMs, endMs, trainingRows }) {
+function attachEntryOccupancy(rows, points, window, { startMs, endMs, trainingRows }) {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || window.from > startMs ||
       window.to <= endMs || !Number.isSafeInteger(trainingRows) || trainingRows < 1) return;
-  const attempts = rows.filter((row) => row.name === 'rollout_call' && Number.isFinite(row.body.started_unix_ms));
+  const jobs = rows.filter((row) => row.name === 'rollout_call' && Number.isFinite(row.body.started_unix_ms));
   const exits = rows.filter((row) => row.name === 'rollout_groups' && Number.isFinite(row.value));
-  if (!attempts.length || !exits.length || new Set([...attempts, ...exits].map((row) => seriesKey(row, {}))).size !== 1) return;
+  if (!jobs.length || !exits.length || new Set([...jobs, ...exits].map((row) => seriesKey(row, {}))).size !== 1) return;
 
   // Dispatch marks a UID live at launch. The Buffer's dispositions release it.
   const changes = [
-    ...attempts.map((row) => ({ t: row.body.started_unix_ms, delta: 1 })),
+    ...jobs.map((row) => ({ t: row.body.started_unix_ms, delta: 1 })),
     ...exits.map((row) => ({ t: row.timestamp_ms, delta: -row.value })),
   ].sort((a, b) => a.t - b.t);
   const waits = points.filter((point) => point.waitStart != null).sort((a, b) => a.waitStart - b.waitStart);
@@ -406,7 +407,7 @@ export function createMeasurements(rawRows, window, configRows = [], inferenceGp
       series[id] = entriesForSignal(id, signal, rows, window, phases);
     }
   }
-  attachPromptOccupancy(rows, series.promptWait[0].data, window, context);
+  attachEntryOccupancy(rows, series.taskWait[0].data, window, context);
   if (Number.isSafeInteger(inferenceGpus) && inferenceGpus > 0) {
     for (const id of ['promptTokens', 'generation']) {
       const [total] = series[id];
@@ -423,7 +424,7 @@ export function createMeasurements(rawRows, window, configRows = [], inferenceGp
   const batchTarget = config ? field(config, signals.batchTarget.value) : null;
   const maxStaleness = config?.body.max_staleness_steps;
   const configFields = {
-    maxConcurrentRollouts: 'generation_workers', policyNodes: 'policy_nodes', policyGpusPerNode: 'policy_gpus_per_node',
+    outstandingLeaseLimit: 'generation_workers', policyNodes: 'policy_nodes', policyGpusPerNode: 'policy_gpus_per_node',
     policyTp: 'policy_tp', policyPp: 'policy_pp', policyCp: 'policy_cp', policyEp: 'policy_ep',
   };
   const configuration = Object.fromEntries(Object.entries(configFields).flatMap(([key, fieldName]) => {

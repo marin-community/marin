@@ -1,4 +1,4 @@
-"""The training dataset as an endless sequence of prompts."""
+"""The training dataset as an endless sequence of entries."""
 
 from __future__ import annotations
 
@@ -14,25 +14,25 @@ from skyrl_train.config.rollout_validation import FAMILY_COLUMN
 from skyrl_train.group_admission import AdmissionRejection
 
 STALE_RETRIES_EXHAUSTED_METRIC = "async/stale_retries_exhausted"
-QUARANTINED_PROMPTS_METRIC = "async/quarantined_prompts"
-# Training steps a quarantined prompt sits out before the loader offers it again.
+QUARANTINED_ENTRIES_METRIC = "async/quarantined_prompts"
+# Training steps a quarantined entry sits out before the selector offers it again.
 QUARANTINE_STEPS = 10
 # Rejections of a group training cannot use: no loss tokens, or too few graded samples for its baseline. A broken
 # grader causes them, and so does an infrastructure failure, whose samples are masked.
 UNUSABLE_GROUP_REJECTIONS = frozenset(
     {AdmissionRejection.FULLY_MASKED.value, AdmissionRejection.BELOW_MINIMUM_GROUP_SIZE.value}
 )
-# Dispositions that say nothing about whether the prompt's groups are usable.
+# Dispositions that say nothing about whether the entry's groups are usable.
 NEUTRAL_DISPOSITIONS = frozenset({AdmissionRejection.STALE.value, AdmissionRejection.DUPLICATE_UID.value})
 
 
-class PromptGroupDataset(Protocol):
+class RolloutDataset(Protocol):
     def __len__(self) -> int: ...
 
     def __getitem__(self, index: int) -> Any: ...
 
     def uid(self, index: int) -> str:
-        """The uid of row ``index``'s prompt group, without loading the row."""
+        """The uid of the entry at row ``index``, without loading the row."""
         ...
 
     def label(self, index: int) -> str:
@@ -44,7 +44,7 @@ class PromptGroupDataset(Protocol):
 
 @dataclass(frozen=True)
 class JudgedGroup:
-    """A prompt group that batch selection judged in one step, kept or discarded, with its per-sample rewards.
+    """A rollout group that batch selection judged in one step, kept or discarded, with its per-sample rewards.
 
     ``uid`` is the dataset row the group was generated from.
     """
@@ -53,8 +53,8 @@ class JudgedGroup:
     rewards: tuple[float, ...]
 
 
-class PromptOrder(Protocol):
-    """The dataset rows the loader offers, in order; an adaptive order learns from each step's judged groups."""
+class DatasetEntryOrder(Protocol):
+    """The dataset rows the selector offers, in order; an adaptive order learns from each step's judged groups."""
 
     def next_index(self) -> int: ...
 
@@ -111,27 +111,31 @@ class SeededPasses:
 
 
 @dataclass(frozen=True)
-class PromptLoaderState:
-    """The prompt order's position and the prompts awaiting regeneration."""
+class DatasetEntrySelectorState:
+    """The entry order's position and the entries awaiting regeneration."""
 
     order: dict[str, Any]
     retries: list[dict]
 
 
-class PromptLoader:
-    """Yield one prompt at a time, re-offering prompts whose rollouts must be regenerated first.
+# Old torch.save checkpoints resolve this name when unpickling selector state.
+PromptLoaderState = DatasetEntrySelectorState
 
-    A batch trains at most one group per uid, so the loader never offers a uid that is live: already generating,
-    or committed and not yet trained or discarded. A draw whose uid is live is dropped rather than generated as a
+
+class DatasetEntrySelector:
+    """Yield one entry at a time, re-offering entries whose rollouts must be regenerated first.
+
+    A batch trains at most one group per uid, so the selector never offers a uid that is live: already generating,
+    or submitted and not yet trained or discarded. A draw whose uid is live is dropped rather than generated as a
     copy the batch would reject.
 
-    A prompt whose group missed the staleness window is regenerated at most ``max_stale_retries`` times in a row;
-    after that it waits until the prompt order offers it again.
+    The selector re-offers an entry whose group missed the staleness window up to ``max_stale_retries`` times in
+    a row. After that the entry returns to its usual selection order.
 
-    A prompt whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
-    every sample, is quarantined: the loader does not offer it for the next ``QUARANTINE_STEPS`` training steps, then
-    offers it again with a fresh count. The same rejections follow an infrastructure failure, so a prompt must be
-    able to return. Quarantine keeps enough eligible prompts to fill the open batches and one spare in each pool.
+    An entry whose last ``max_unusable_groups`` groups were all unusable, for example because its grader failed on
+    every sample, is quarantined: the selector does not offer it for the next ``QUARANTINE_STEPS`` training steps, then
+    offers it again with a fresh count. The same rejections follow an infrastructure failure, so an entry must be
+    able to return. Quarantine keeps enough eligible entries to fill the open batches and one spare in each pool.
     Retry counts and quarantine restart empty when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
@@ -139,8 +143,8 @@ class PromptLoader:
 
     def __init__(
         self,
-        dataset: PromptGroupDataset,
-        order: PromptOrder,
+        dataset: RolloutDataset,
+        order: DatasetEntryOrder,
         *,
         batch_size: int,
         minimum_pool_size: int,
@@ -157,7 +161,7 @@ class PromptLoader:
         self._uid_count = len(self._uid_rows)
         if self._uid_count < minimum_pool_size:
             raise ValueError(
-                f"the training dataset has {self._uid_count} distinct prompts and needs {minimum_pool_size} "
+                f"the training dataset has {self._uid_count} distinct entries and needs {minimum_pool_size} "
                 "to fill the open batches and keep one spare"
             )
         self._dataset = dataset
@@ -170,7 +174,7 @@ class PromptLoader:
         self._family_orders = {}
         if self._family_rows:
             if not isinstance(order, SeededPasses):
-                raise ValueError("family prompt pools require seeded passes")
+                raise ValueError("family entry pools require seeded passes")
             self._family_orders = {family: order.for_pool(len(rows)) for family, rows in self._family_rows.items()}
         self._minimum_pool_size = minimum_pool_size
         self._draw_limit = 2 * batch_size
@@ -185,22 +189,23 @@ class PromptLoader:
         self._retries_exhausted = 0
         self._scan_start = 0
 
-    def next_prompt(self, live: Collection[str], family: str | None = None) -> dict | None:
-        """Offer a prompt in the requested family whose uid is neither live nor quarantined.
+    def next_entry(self, live: Collection[str], family: str | None = None) -> dict | None:
+        """Offer an entry in the requested family whose uid is neither live nor quarantined.
 
-        Prompts awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
+        Entries awaiting regeneration come first. A family lease advances only that family's seeded pass. Without
         a family lease, two batches' worth of draws precede a scan that can pick a row the order weights at zero.
+        Return None when no entry is currently eligible.
         """
 
         def eligible(uid: str) -> bool:
             return self._available(uid, live) and (family is None or self._families.get(uid) == family)
 
-        for position, prompt in enumerate(self._retries):
-            if eligible(prompt["uid"]):
+        for position, entry in enumerate(self._retries):
+            if eligible(entry["uid"]):
                 del self._retries[position]
-                return self._label_family(prompt)
+                return self._label_family(entry)
         if family is not None:
-            return self._next_family_prompt(live, family)
+            return self._next_family_entry(live, family)
         # Every usable dataset uid is live, so drawing would only advance the order. A quarantined uid is never live.
         if len(live) + len(self._quarantined) >= self._uid_count:
             return None
@@ -216,7 +221,7 @@ class PromptLoader:
                 return self._offer(index)
         return None
 
-    def _next_family_prompt(self, live: Collection[str], family: str) -> dict | None:
+    def _next_family_entry(self, live: Collection[str], family: str) -> dict | None:
         rows = self._family_rows.get(family)
         if not rows:
             return None
@@ -232,18 +237,18 @@ class PromptLoader:
                 return self._offer(index)
         return None
 
-    def retry(self, prompt: dict) -> None:
-        """Queue a prompt whose group missed the staleness window, unless it used up its regenerations."""
-        uid = prompt["uid"]
+    def retry(self, entry: dict) -> None:
+        """Queue an entry whose group missed the staleness window, unless it used up its regenerations."""
+        uid = entry["uid"]
         count = self._stale_retries.pop(uid, 0)
         if count >= self._max_stale_retries:
             self._retries_exhausted += 1
             return
         self._stale_retries[uid] = count + 1
-        self._retries.append(prompt)
+        self._retries.append(entry)
 
     def record_disposition(self, uid: str, disposition: str) -> None:
-        """Count a group that left the buffer toward its prompt's quarantine."""
+        """Count a group that left the buffer toward its entry's quarantine."""
         if disposition in NEUTRAL_DISPOSITIONS:
             return
         if disposition not in UNUSABLE_GROUP_REJECTIONS:
@@ -267,8 +272,8 @@ class PromptLoader:
             scope = ""
         if eligible <= minimum:
             logger.warning(
-                "Prompt {} produced {} unusable groups in a row (last: {}) and stays in rotation: "
-                "requires {} eligible prompts{}",
+                "Entry {} produced {} unusable groups in a row (last: {}) and stays in rotation: "
+                "requires {} eligible entries{}",
                 self._log_name(uid),
                 count,
                 disposition,
@@ -278,8 +283,8 @@ class PromptLoader:
             return
         self._quarantined[uid] = self._step + QUARANTINE_STEPS
         logger.warning(
-            "Quarantined prompt {} for {} steps after {} unusable groups in a row (last: {}). "
-            "{} eligible prompts remain{}",
+            "Quarantined entry {} for {} steps after {} unusable groups in a row (last: {}). "
+            "{} eligible entries remain{}",
             self._log_name(uid),
             QUARANTINE_STEPS,
             count,
@@ -289,10 +294,10 @@ class PromptLoader:
         )
 
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
-        """Report one training step's judged groups to the prompt order and return its metrics.
+        """Report one training step's judged groups to the entry order and return its metrics.
 
-        Each call is one training step: prompts whose quarantine has run out become available again. The metrics
-        include how many stale prompts used up their regenerations since the previous call and how many prompts are
+        Each call is one training step: entries whose quarantine has run out become available again. The metrics
+        include how many stale entries used up their regenerations since the previous call and how many entries are
         quarantined.
         """
         self._step += 1
@@ -301,16 +306,16 @@ class PromptLoader:
         return {
             **self._order.observe(groups),
             STALE_RETRIES_EXHAUSTED_METRIC: float(exhausted),
-            QUARANTINED_PROMPTS_METRIC: float(len(self._quarantined)),
+            QUARANTINED_ENTRIES_METRIC: float(len(self._quarantined)),
         }
 
-    def state_dict(self) -> PromptLoaderState:
+    def state_dict(self) -> DatasetEntrySelectorState:
         order = self._order.state_dict()
         if self._family_orders:
             order["family_orders"] = {family: passes.state_dict() for family, passes in self._family_orders.items()}
-        return PromptLoaderState(order, list(self._retries))
+        return DatasetEntrySelectorState(order, list(self._retries))
 
-    def load_state_dict(self, state: PromptLoaderState) -> None:
+    def load_state_dict(self, state: DatasetEntrySelectorState) -> None:
         self._order.load_state_dict(state.order)
         saved_families = state.order.get("family_orders", {})
         for family, order in self._family_orders.items():
@@ -326,9 +331,9 @@ class PromptLoader:
         return uid not in live and uid not in self._quarantined
 
     def _offer(self, index: int) -> dict:
-        (prompt,) = self._dataset.collate_fn([self._dataset[index]])
-        self._stale_retries.pop(prompt["uid"], None)
-        return self._label_family(prompt)
+        (entry,) = self._dataset.collate_fn([self._dataset[index]])
+        self._stale_retries.pop(entry["uid"], None)
+        return self._label_family(entry)
 
-    def _label_family(self, prompt: dict) -> dict:
-        return {**prompt, FAMILY_COLUMN: self._families[prompt["uid"]]} if self._families else prompt
+    def _label_family(self, entry: dict) -> dict:
+        return {**entry, FAMILY_COLUMN: self._families[entry["uid"]]} if self._families else entry

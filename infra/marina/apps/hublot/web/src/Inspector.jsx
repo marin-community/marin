@@ -5,8 +5,8 @@ import { GridComponent, MarkAreaComponent, MarkLineComponent } from 'echarts/com
 import { CanvasRenderer } from 'echarts/renderers';
 import { cards, nodes } from './contracts.js';
 import {
-  canceledAttemptCount, cardSeries, clock, elapsed, hasValues, inRange, number,
-  promptOccupancyAtLongestWait, sampleAt, timingDistribution, utc,
+  canceledGroupJobCount, cardSeries, clock, elapsed, hasValues, inRange, number,
+  entryOccupancyAtLongestWait, sampleAt, timingDistribution, utc,
 } from './display.js';
 import { ChartLegend } from './Legends.jsx';
 import { phaseTypes } from './phases.js';
@@ -242,10 +242,10 @@ function ChartDialog({ title, endpoints, phases, children, onClose }) {
 }
 
 const tabNames = {
-  'prompts/s': 'Prompt rate', 'attempts/s': 'Attempt rate', 'groups/s': 'Group rate',
+  'entries/s': 'Entry rate', 'jobs/s': 'Group job rate', 'groups/s': 'Group rate',
   'groups/batch': 'Groups per batch', 'rollouts/eval': 'Eval grades', requests: 'Requests',
-  groups: 'Queue depth', 'policy steps': 'Policy lag', attempts: 'Active attempts', prompts: 'Quarantine',
-  'awaits/attempt': 'Model awaits', 'rollouts/group': 'Rollouts per group', 'tokens/step': 'Training tokens',
+  groups: 'Queue depth', 'policy steps': 'Policy lag', jobs: 'Active group jobs', entries: 'Quarantine',
+  'awaits/job': 'Model awaits', 'rollouts/group': 'Rollouts per group', 'tokens/step': 'Training tokens',
   'sequences/step': 'Training sequences', s: 'Timing', 's per 10 s': 'Waiting per 10 s',
 };
 
@@ -261,7 +261,7 @@ function PointDetails({ point, series, model, range, origin, group, onClear }) {
     const value = other.data.find((item) => item.t === record.t && item.step === record.step);
     return value ? [[other, value]] : [];
   });
-  const promptFlow = series.some((signal) => signal.id === 'promptReleases');
+  const entryFlow = series.some((signal) => signal.id === 'entryReleases');
   const bins = records.filter(([, record]) => record.count != null);
   const phase = model.phases.find(({ start, end }) => start <= point.time && point.time < end);
   const extraQueue = records.some(([signal]) => signal.unit === 'requests') ?
@@ -293,8 +293,8 @@ function PointDetails({ point, series, model, range, origin, group, onClear }) {
       {waitPhases.length > 0 && <div><dt>Phases during wait</dt><dd>{waitPhases.join(' · ')}</dd></div>}
       {bins.map(([signal, record]) => <div key={signal.id + '/count'}>
         <dt>{bins.length === 1 ? 'Count in this bin' : signal.label + ' in this bin'}</dt>
-        <dd>{number.format(record.count)}{!promptFlow && ' across ' + record.samples + ' records'}
-          {promptFlow && <small className="record-window">
+        <dd>{number.format(record.count)}{!entryFlow && ' across ' + record.samples + ' records'}
+          {entryFlow && <small className="record-window">
             {clock(record.first, true)}{record.first !== record.last && ' to ' + clock(record.last, true)} UTC
           </small>}
         </dd>
@@ -314,17 +314,17 @@ function PointDetails({ point, series, model, range, origin, group, onClear }) {
 }
 
 function cardSummary(definition, model, range, unit, cancellations) {
-  if (definition.promptOccupancySummary) {
-    const wait = promptOccupancyAtLongestWait(model.series.promptWait[0].data, range);
+  if (definition.entryOccupancySummary) {
+    const wait = entryOccupancyAtLongestWait(model.series.taskWait[0].data, range);
     if (!wait) return null;
     return {
-      headline: number.format(wait.outstanding) + ' of ' + number.format(model.run.trainingRows) + ' training prompts in use',
-      context: 'Estimated at the start of the longest prompt wait in view (' + quantity(wait.value, 's') + ')',
+      headline: number.format(wait.outstanding) + ' of ' + number.format(model.run.trainingRows) + ' training entries in use',
+      context: 'Estimated at the start of the longest task selection wait in view (' + quantity(wait.value, 's') + ')',
     };
   }
   if (definition.cancellationSummary && cancellations !== null) {
     return {
-      headline: number.format(cancellations) + (cancellations === 1 ? ' canceled attempt' : ' canceled attempts'),
+      headline: number.format(cancellations) + (cancellations === 1 ? ' canceled group job' : ' canceled group jobs'),
       context: 'Recorded worker outcomes in this time range',
     };
   }
@@ -396,14 +396,14 @@ export function InspectorCard({
   const gapSignal = definition.gapSignal ?? definition.series[0];
   const showGap = definition.gap && !model.series[gapSignal]?.some((s) => hasValues(s, range));
   const cancellations = definition.cancellationSummary || definition.rejectionSummary
-    ? canceledAttemptCount(model.series.attemptTime[0].data, range) : null;
+    ? canceledGroupJobCount(model.series.groupJobTime[0].data, range) : null;
   const summary = cardSummary(definition, model, range, unit, cancellations);
   const waits = definition.batchWaitZoom ? model.phases.filter(({ kind, end, start }) =>
     kind === 'rollout_wait' && start < range.to && end >= range.from) : [];
   const links = (definition.links ?? (showGap && definition.related ? [definition.related] : []))
     .filter((link) => availableCards.has(link.id));
   if (definition.rejectionSummary && cancellations !== null && availableCards.has('workers')) {
-    links.push({ id: 'workers', label: 'View canceled attempts in Workers' });
+    links.push({ id: 'workers', label: 'View canceled group jobs in Workers' });
   }
   const distributions = series.filter((signal) => signal.distribution);
   const distribution = distributionOpen ?
@@ -415,9 +415,9 @@ export function InspectorCard({
   if (unit === 's per 10 s') caption = '10 s means it waited through the whole bin.';
   if (unit === 's') caption = 'Duration in seconds';
   if (definition.lagCaption && unit === 'policy steps' && model.maxStaleness != null) caption = 'Configured staleness limit · ' + model.maxStaleness + ' steps';
-  if (unit === 'attempts') caption = 'Intervals reconstructed from recorded worker calls.';
-  if (id === 'workers' && unit === 's') caption = 'Wait totals within an attempt can overlap.';
-  if (series.some((signal) => signal.id === 'promptReleases')) caption = 'Releases are counted when groups leave for training.';
+  if (unit === 'jobs') caption = 'Intervals reconstructed from recorded worker calls.';
+  if (id === 'workers' && unit === 's') caption = 'Waits within a group job can overlap.';
+  if (series.some((signal) => signal.id === 'entryReleases')) caption = 'Releases are counted when groups leave for training.';
   if (grouped) caption = summaryCount + ' ' + definition.summaries[grouped.id] +
     (summaryCount === 1 ? ' summary' : ' summaries') + ' in view';
   const endpoints = edge && <div className="card-endpoints" data-testid="card-endpoints">

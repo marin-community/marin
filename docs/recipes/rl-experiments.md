@@ -14,8 +14,8 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 
 | Preset | What it measures | Default work and estimated cost | Evaluation and gate | When to use it | Ran on GPU |
 |---|---|---|---|---| --- |
-| `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers. 11m42s and 1.56 H100-hours in the four-proposal comparison. | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
-| `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
+| `speed-short` | Generation throughput per GPU | 8 H100s, 512 tasks × four answers. 11m42s and 1.56 H100-hours in the four-proposal comparison. | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
+| `data-short` | Fraction of tasks with both passing and failing answers | 8 H100s, 256 candidate training tasks × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
 | `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
 | `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. 20m12s and 13.47 H100-hours in the four-proposal comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
@@ -184,7 +184,7 @@ Set `WANDB_API_KEY` before submission. `WANDB_ENTITY` selects the team and defau
 
 For the Snowball presets in the first table, short presets use eight H100s and training
 presets use 40. East is `cw-us-east-02a`. The 40-H100 layout has 32 policy GPUs and eight engine GPUs,
-128 prompts × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
+128 tasks × four answers and a 24,576-token window. Natural replies allow 8,192 tokens.
 These training presets use staleness 2 and TIS. Speed-long has no evaluation,
 checkpoints or export; learner and engine token rates are descriptive telemetry.
 
@@ -433,6 +433,15 @@ step-zero and final evaluations when enabled.
 The dashboards are available through the [RL Grafana dashboard](https://grafana.oa.dev/d/marin-rl-runs/rl-post-training),
 [Marina RL progress](https://applets.marina.oa.dev/a/6c971887-1e22-45b1-9dcb-dd775829df57/) and
 [EvalDash](https://marina.oa.dev/evaldash/).
+
+When rollout spans are enabled, task dispatch reports `rollout_wait_seconds`
+and `rollout_waits` with `role=trainer`. The `lease` wait measures time from
+requesting a lease until the buffer grants it. The `task` wait measures time
+from that grant until dispatch selects an eligible task entry. Earlier runs
+and static preference-pair runs use `slot` and `prompt` for those waits.
+Hublot and Grafana read both spellings. In other Finelog queries, group
+`slot` with `lease` and `prompt` with `task`. Sum durations with `stat=sum`
+and use `rollout_waits` for counts.
 
 ## Agentic checkpoint evaluation
 

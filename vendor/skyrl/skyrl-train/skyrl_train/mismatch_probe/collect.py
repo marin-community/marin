@@ -155,9 +155,9 @@ class ProbeCollector:
         samples = int(self.spec.prompts.samples_per_prompt)
         if len(trainer.eval_dataset) < count:
             raise ValueError(
-                f"mismatch probe requested {count} validation prompts but only {len(trainer.eval_dataset)} exist"
+                f"mismatch probe requested {count} validation task entries but only {len(trainer.eval_dataset)} exist"
             )
-        prompts = trainer.eval_dataset.collate_fn([trainer.eval_dataset[i] for i in range(count)])
+        task_entries = trainer.eval_dataset.collate_fn([trainer.eval_dataset[i] for i in range(count)])
         seeds = []
         sample_ids = []
         uids = []
@@ -169,7 +169,7 @@ class ProbeCollector:
             * int(generator.max_num_seqs),
             count * samples,
         )
-        logger.info("Mismatch probe generation: prompts={} samples={} max_in_flight={}", count, samples, concurrency)
+        logger.info("Mismatch probe generation: task_entries={} samples={} concurrency={}", count, samples, concurrency)
         await trainer.trajectory_runner.start_eval_session(
             run_name=trainer.cfg.trainer.get("run_name") or "mismatch-probe",
             eval_step=trainer.global_step,
@@ -179,14 +179,14 @@ class ProbeCollector:
             async with EvaluationPool(concurrency) as pool:
                 async with asyncio.TaskGroup() as group:
                     tasks = []
-                    for prompt in prompts:
+                    for task_entry in task_entries:
                         for repetition in range(samples):
-                            seed = request_seed(int(self.spec.seed), prompt["uid"], repetition)
+                            seed = request_seed(int(self.spec.seed), task_entry["uid"], repetition)
                             sampling = get_sampling_params_for_backend(
                                 trainer.cfg.generator.backend, trainer.cfg.generator.sampling_params
                             )
                             sampling["seed"] = seed
-                            request, _ = prepare_trajectory_request([prompt], 1, sampling, "eval", 0)
+                            request, _ = prepare_trajectory_request([task_entry], 1, sampling, "eval", 0)
                             request.trajectory_ids[0].repetition_id = repetition
                             tasks.append(
                                 group.create_task(
@@ -194,8 +194,8 @@ class ProbeCollector:
                                 )
                             )
                             seeds.append(seed)
-                            sample_ids.append(f"{prompt['uid']}:{repetition}")
-                            uids.append(prompt["uid"])
+                            sample_ids.append(f"{task_entry['uid']}:{repetition}")
+                            uids.append(task_entry["uid"])
                 # Completion order must not change the frozen bank's sample positions.
                 batches = [task.result() for task in tasks]
         finally:

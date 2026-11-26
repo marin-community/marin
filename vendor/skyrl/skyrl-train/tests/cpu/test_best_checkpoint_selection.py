@@ -11,7 +11,7 @@ from skyrl_train.callbacks.builtin import create_callbacks_from_config
 from skyrl_train.checkpoint_listing import ROLLOUT_STATE_FILENAME
 from skyrl_train.hf_export_schema import TRAINER_STATE_FILENAME
 from skyrl_train.rollouts.context import TrainingContextState
-from skyrl_train.rollouts.loader import PromptLoaderState
+from skyrl_train.rollouts.loader import DatasetEntrySelectorState
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.utils.trainer_utils import ResumeMode
 
@@ -153,7 +153,7 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
             return []
 
     async def rollout_state():
-        return TrainingContextState(PromptLoaderState({}, []), [], None)
+        return TrainingContextState(DatasetEntrySelectorState({}, []), [], None)
 
     config = OmegaConf.create(
         {

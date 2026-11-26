@@ -85,7 +85,7 @@ def tiny_training_config(
     num_prompts: int = 64,
     dp_size: int = 1,
     micro_batch_size: int = 8,
-    max_in_flight: int = 8,
+    max_outstanding_leases: int = 8,
     dump_data_batch: bool = False,
 ) -> DictConfig:
     """Build a complete training config for the policy in ``model_dir``, writing its data and outputs under ``root``.
@@ -114,7 +114,7 @@ def tiny_training_config(
             },
             "rollout_buffer": {
                 "max_staleness_steps": MAX_STALENESS_STEPS[mode],
-                "max_in_flight": max_in_flight,
+                "max_outstanding_leases": max_outstanding_leases,
                 "object_store_root": str(root / "rollouts") if OBJECT_STORE_PAYLOADS[mode] else None,
             },
             "train_batch_size": TRAIN_BATCH_SIZE,

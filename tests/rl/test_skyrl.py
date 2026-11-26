@@ -739,6 +739,25 @@ def test_skyrl_step_fingerprint_includes_roles_and_excludes_placement() -> None:
         skyrl_step(dataclasses.replace(spec, validation_data=(conflicting_source,)), _execution()).fingerprint()
 
 
+def test_skyrl_lease_limit_rename_preserves_artifact_identity() -> None:
+    spec = _spec()
+    recipe = yaml.safe_load(spec.config_yaml)
+
+    def step_for(buffer):
+        recipe["trainer"]["rollout_buffer"] = buffer
+        return skyrl_step(dataclasses.replace(spec, config_yaml=yaml.safe_dump(recipe)), _execution())
+
+    old = step_for({"max_in_flight": 5})
+    new = step_for({"max_outstanding_leases": 5})
+    mixed = step_for({"max_in_flight": 9, "max_outstanding_leases": 5})
+    changed_limit = step_for({"max_outstanding_leases": 6})
+    assert old.fingerprint() == new.fingerprint() == mixed.fingerprint()
+    assert old.fingerprint() != changed_limit.fingerprint()
+    for step in (old, new, mixed):
+        launch = yaml.safe_load(materialized_config(step, prefix="s3://test").launch_config_yaml)
+        assert launch["skyrl"]["trainer"]["rollout_buffer"] == {"max_outstanding_leases": 5}
+
+
 @pytest.mark.parametrize(
     ("cluster", "explicit_hca", "expected_hca"),
     [

@@ -87,6 +87,16 @@ def test_recipe_round_trip_preserves_immutable_containers_and_mapping_order():
         assert list(document["generator"]["engine_init_kwargs"].items()) == original_routes
 
 
+@pytest.mark.parametrize(
+    "setting",
+    ["trainer.rollout_buffer.max_in_flight=3", 'trainer.rollout_buffer={"max_in_flight":3}'],
+)
+def test_old_lease_limit_setting_overrides_an_existing_limit(base_recipe, setting):
+    recipe = base_recipe.with_settings(["trainer.rollout_buffer.max_outstanding_leases=6"])
+    updated = recipe.with_settings([setting])
+    assert updated.to_skyrl()["trainer"]["rollout_buffer"] == {"max_outstanding_leases": 3}
+
+
 def test_settings_merge_required_sections_and_preserve_empty_mappings(base_recipe):
     base = base_recipe
     authored_trainer = {

@@ -627,6 +627,7 @@ def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, re
         "omitted-current-nondefault",
         "omitted-schema-nondefault",
         "omitted-candidate-default",
+        "old-lease-limit",
         "schema-timeout",
         "protocol-temperature",
         "evaluation-cadence",
@@ -651,6 +652,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         )
         else (setting,)
     )
+    if case == "old-lease-limit":
+        settings = ("trainer.rollout_buffer.max_in_flight=3",)
     inputs = RunInputs(preset_name=preset.name, settings=settings)
     if case.startswith("initializer"):
         name, version = "tests/custom-init", "2026.11.07"
@@ -712,6 +715,11 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         assert json.loads((candidate / "terminal.json").read_text())["config"]["iris"]["priority"] == "production"
     else:
         candidate = recorded_runs(preset.name, name, inputs=inputs)
+    if case == "old-lease-limit":
+        for old in [*control_roots, candidate]:
+            with edit_receipt(old) as receipt:
+                buffer = get_path(receipt, "config.skyrl.trainer.rollout_buffer")
+                buffer["max_in_flight"] = buffer.pop("max_outstanding_leases")
     omissions = {
         "omitted-default": {
             "config.skyrl.generator.chat_template_kwargs": {},
@@ -805,6 +813,8 @@ def test_gate_compares_recorded_configuration_and_defaults(preset_table, recorde
         assert (report["verdict"], report["effect"]) == ("pass", "no change"), report
         if case.startswith("initializer"):
             assert "inputs.model.uri" in report["run"]["config_changes"]
+        if case == "old-lease-limit":
+            assert "skyrl.trainer.rollout_buffer.max_outstanding_leases" in report["run"]["config_changes"]
     if case == "cached-default":
         promoted = replace(
             preset,
@@ -1014,7 +1024,10 @@ def test_python_run_saves_typed_inputs_for_comparison(
             "skyrl.generator.max_num_seqs",
             "skyrl.trainer.train_batch_size",
             "skyrl.trainer.micro_forward_batch_size_per_gpu",
-            "skyrl.trainer.rollout_buffer.max_in_flight",
+            "skyrl.trainer.rollout_buffer.max_outstanding_leases",
         } <= set(report["run"]["config_changes"])
         trainer = read_attempt(str(source / "exports"), "recorded-attempt").native.config["skyrl"]["trainer"]
-        assert (trainer["micro_forward_batch_size_per_gpu"], trainer["rollout_buffer"]["max_in_flight"]) == (2, 64)
+        assert (trainer["micro_forward_batch_size_per_gpu"], trainer["rollout_buffer"]["max_outstanding_leases"]) == (
+            2,
+            64,
+        )

@@ -27,7 +27,7 @@ from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.io import io
 from skyrl_train.rollouts.buffer import (
     PayloadReference,
-    AdmittedRollout,
+    AdmittedGroupMetadata,
     RolloutContentPolicy,
     RolloutGroup,
     RolloutLease,
@@ -47,7 +47,7 @@ _writes = ThreadPoolExecutor(max_workers=PAYLOAD_IO_THREADS, thread_name_prefix=
 class PayloadStore(Protocol):
     """How rollout payloads are written, read by the trainer, and carried through a checkpoint.
 
-    A ``ReadyRollout.payload`` holds one reference, or None for a group whose verdict excludes it from training.
+    A ``SubmittedGroup.payload`` holds one reference, or None for a group whose verdict excludes it from training.
     """
 
     @property
@@ -56,7 +56,7 @@ class PayloadStore(Protocol):
         ...
 
     def writer(self, buffer: ActorHandle, content_policy: RolloutContentPolicy) -> RolloutWriter:
-        """A picklable writer that rollout workers use to commit groups to ``buffer``."""
+        """A picklable writer that rollout workers use to submit groups to ``buffer``."""
         ...
 
     async def fetch(self, payloads: Sequence) -> list[RolloutGroup]: ...
@@ -78,7 +78,7 @@ class RolloutReader:
 
     buffer: ActorHandle
     payloads: PayloadStore
-    selected: tuple[AdmittedRollout, ...]
+    selected: tuple[AdmittedGroupMetadata, ...]
     stall_timeout: float
 
     async def read(self, batch_id: int, indices: tuple[int, ...]) -> list[RolloutGroup]:
@@ -131,7 +131,7 @@ class RolloutReader:
 
 @dataclass(frozen=True)
 class MemoryRolloutWriter:
-    """Store payloads in Ray's object store, owned by the writing process, and commit their verdicts."""
+    """Store payloads in Ray's object store, owned by the writing process, and submit their verdicts."""
 
     buffer: ActorHandle
     content_policy: RolloutContentPolicy
@@ -144,7 +144,7 @@ class MemoryRolloutWriter:
             # another owner when that process releases the object while receiving it back, as the synchronous
             # trainer's driver does, and reading it then never completes.
             payload = await asyncio.get_running_loop().run_in_executor(_writes, ray.put, group)
-        await self.buffer.commit.remote(lease.lease_id, group.prompt, verdict, PayloadReference(payload))
+        await self.buffer.submit_group.remote(lease.lease_id, group.entry, verdict, PayloadReference(payload))
 
 
 class MemoryPayloads:
@@ -179,7 +179,7 @@ class MemoryPayloads:
 
 @dataclass(frozen=True)
 class ObjectStoreRolloutWriter:
-    """Write each trainable group to its own object, then commit its verdict with the object's URI."""
+    """Write each trainable group to its own object, then submit its verdict with the object's URI."""
 
     buffer: ActorHandle
     content_policy: RolloutContentPolicy
@@ -192,7 +192,7 @@ class ObjectStoreRolloutWriter:
             uri = join_resource_path(self.object_store_root, f"{lease.lease_id}{ROLLOUT_OBJECT_SUFFIX}")
             await asyncio.get_running_loop().run_in_executor(_writes, _write_group, uri, group)
             payload = uri
-        await self.buffer.commit.remote(lease.lease_id, group.prompt, verdict, PayloadReference(payload))
+        await self.buffer.submit_group.remote(lease.lease_id, group.entry, verdict, PayloadReference(payload))
 
 
 @dataclass(frozen=True)

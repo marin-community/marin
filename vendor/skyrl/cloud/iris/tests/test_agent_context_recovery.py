@@ -146,7 +146,7 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
 
     task = text_task().model_copy(update={"grader": verifyit_package(NumericSpec("12", 0, 0)).grader})
     request = TaskRequestBatch(
-        rows=(task_input(lowered_task(task, "pi", max_turns=2 if sample_first else 1)),),
+        inputs=(task_input(lowered_task(task, "pi", max_turns=2 if sample_first else 1)),),
     )
     worker = TaskRolloutWorker(
         worker_config,
@@ -194,7 +194,7 @@ async def test_native_worker_keeps_a_workspace_verdict_without_sampled_tokens(ag
         }
     )
     request = TaskRequestBatch(
-        rows=(task_input(lowered_task(task, "pi", backend="shellsim", total_turn_timeout=0.1)),),
+        inputs=(task_input(lowered_task(task, "pi", backend="shellsim", total_turn_timeout=0.1)),),
     )
     worker = TaskRolloutWorker(
         worker_config,
@@ -244,7 +244,7 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
                                 "pi", backend="shellsim"))
         for task_id in ("machine-a", "machine-b")
     )
-    request = TaskRequestBatch(rows=(*rows, task_input(lowered_task(text_task("inline"), "pi"))))
+    request = TaskRequestBatch(inputs=(*rows, task_input(lowered_task(text_task("inline"), "pi"))))
     worker = TaskRolloutWorker(
         worker_config,
         WholeTaskProjection(worker_config, WorkerTokenizer()),
@@ -278,7 +278,7 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
 
     environment = SHELL_ENVIRONMENT.model_copy(update={"setup_commands": (f"exit {exit_code}",)})
     task = text_task().model_copy(update={"environment_requirements": environment})
-    request = TaskRequestBatch(rows=(task_input(lowered_task(task, "pi", backend="shellsim")),))
+    request = TaskRequestBatch(inputs=(task_input(lowered_task(task, "pi", backend="shellsim")),))
     worker = TaskRolloutWorker(
         worker_config,
         WholeTaskProjection(worker_config, WorkerTokenizer()),

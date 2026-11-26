@@ -1,4 +1,4 @@
-"""Wall time and waits of each rollout call and of the loop that dispatches rollout tasks."""
+"""Wall time and waits of each rollout call and of the loop that dispatches group jobs."""
 
 import asyncio
 import contextlib

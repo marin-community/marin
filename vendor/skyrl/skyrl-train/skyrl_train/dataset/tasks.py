@@ -104,7 +104,7 @@ class TaskDataset(PromptDataset):
         return TaskRolloutSpec.model_validate_json(self.dataframe[index][TASK_ROLLOUT_COLUMN]).task.id
 
     def collate_fn(self, rows) -> list[dict]:
-        inputs = []
+        task_entries = []
         for _, environment, extras, uid in rows:
             lowered = TaskRolloutSpec.model_validate_json(extras[TASK_ROLLOUT_COLUMN])
             if isinstance(lowered.task.grader, NoGrader) and {"extras", "config"} <= lowered.task.grader.contract.keys():
@@ -116,7 +116,7 @@ class TaskDataset(PromptDataset):
                 if ultra is not None and "blend" in ultra and "agent" in ultra
                 else ()
             )
-            inputs.append(
+            task_entries.append(
                 {
                     "uid": uid,
                     "input": TaskInput(
@@ -139,7 +139,7 @@ class TaskDataset(PromptDataset):
                     ),
                 }
             )
-        return inputs
+        return task_entries
 
 
 def _stored_prompt(lowered: TaskRolloutSpec) -> dict:

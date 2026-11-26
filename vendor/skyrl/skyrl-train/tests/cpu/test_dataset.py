@@ -75,7 +75,7 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     [
         (None, "requires a family column"),
         ([None] * 4 + ["math"] * 3 + ["agentic"], "requires a family on every training row"),
-        (["math"] * 3 + ["agentic"] * 5, "requires 3 distinct prompts for family 'agentic'"),
+        (["math"] * 3 + ["agentic"] * 5, "requires 3 distinct entries for family 'agentic'"),
     ],
     ids=["missing-column", "null-before-named", "no-spare-after-filtering"],
 )
