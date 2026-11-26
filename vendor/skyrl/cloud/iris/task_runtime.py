@@ -34,7 +34,6 @@ import json
 import os
 from pathlib import Path
 import queue
-import re
 import shutil
 import signal
 import socket
@@ -135,10 +134,6 @@ except ImportError as error:
 RENDEZVOUS_FILENAME = "ray_head.json"
 DONE_FILENAME = "ray_head.done"
 HEAD_RESULT_SUCCEEDED = "succeeded"
-_NVIDIA_DEVICE_MOUNT = Path("/var/run/nvidia-container-devices")
-_EAST02_H100_HOST_GPUS = 8
-_PCI_ADDRESS = re.compile(r"((?:[0-9a-f]{4}){1,2}):([0-9a-f]{2}):([01][0-9a-f])\.([0-7])", re.IGNORECASE)
-_NVIDIA_GPU_UUID = re.compile(r"GPU-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -2286,99 +2281,6 @@ def _print_env_snapshot() -> None:
         print(f"  {key}={os.environ.get(key, '<unset>')}", flush=True)
 
 
-def _uses_east02_partial_gpu_mask(config: DictConfig) -> bool:
-    iris = config.iris
-    allocation = iris.allocation
-    if (
-        (iris.target_cluster or iris.cluster) != "cw-us-east-02a"
-        or iris.container_profile != "CONTAINER_PROFILE_PRIVILEGED"
-        or (allocation.num_nodes, allocation.gpus_per_node, allocation.gpu_variant) != (1, 2, "H100")
-        or _num_tasks() != 1
-        or config.run.mode != RunMode.TRAIN
-        or config.runtime.profile != RuntimeProfile.MEGATRON
-    ):
-        return False
-    # vLLM's parallel executors can clear or replace the CUDA mask.
-    # Use host PCI ordinals only for the local single-rank paths verified on East02.
-    generator = config.skyrl.get("generator", {})
-    if generator.get("backend") != "vllm" or not generator.get("run_engines_locally"):
-        return False
-    if any(
-        generator.get(f"inference_engine_{axis}_parallel_size", 1) != 1
-        for axis in ("tensor", "pipeline", "data", "expert")
-    ):
-        return False
-    for role in (config.skyrl.trainer.policy, config.skyrl.trainer.ref):
-        geometry = role.megatron_config
-        if (
-            geometry.tensor_model_parallel_size != 1
-            or geometry.pipeline_model_parallel_size != 1
-            or geometry.context_parallel_size != 1
-            or geometry.expert_model_parallel_size != 1
-            or geometry.expert_tensor_parallel_size not in (None, 1)
-        ):
-            return False
-
-    return os.environ.get("NVIDIA_VISIBLE_DEVICES") == str(_NVIDIA_DEVICE_MOUNT)
-
-
-def _host_gpu_uuids_in_pci_order(listing: str) -> list[str]:
-    devices = {}
-    uuids = set()
-    for line in listing.splitlines():
-        address, _, uid = line.partition(",")
-        bus = _PCI_ADDRESS.fullmatch(address.strip())
-        uid = uid.strip().lower()
-        if bus is None or _NVIDIA_GPU_UUID.fullmatch(uid) is None:
-            raise RuntimeError("The NVIDIA host inventory contains an invalid PCI address or GPU UUID")
-        bdf = tuple(int(field, 16) for field in bus.groups())
-        if bdf in devices or uid in uuids:
-            raise RuntimeError("The NVIDIA host inventory repeats a PCI address or GPU UUID")
-        devices[bdf] = uid
-        uuids.add(uid)
-
-    if len(devices) != _EAST02_H100_HOST_GPUS:
-        raise RuntimeError(f"Expected {_EAST02_H100_HOST_GPUS} East02 H100 devices in the host inventory")
-    return [devices[bdf] for bdf in sorted(devices)]
-
-
-def pin_allocated_nvidia_gpus(config: DictConfig) -> None:
-    """Set node-local CUDA visibility before Ray for local two-H100 East02 training.
-
-    On privileged launches using NVIDIA volume mounts and single-rank model
-    parallelism, set `CUDA_VISIBLE_DEVICES` to the mounted GPUs' PCI ordinals
-    and `CUDA_DEVICE_ORDER` to `PCI_BUS_ID`. Allocation and inventory errors
-    propagate before either environment update.
-    """
-    if not _uses_east02_partial_gpu_mask(config):
-        return
-
-    expected = config.iris.allocation.gpus_per_node
-    mounted = [path.name.lower() for path in _NVIDIA_DEVICE_MOUNT.iterdir() if path.name.startswith("GPU-")]
-    assigned = set(mounted)
-    if len(mounted) != expected:
-        raise RuntimeError(f"Iris reserved {expected} GPUs, but the NVIDIA plugin mounted {len(mounted)}")
-    if len(assigned) != expected or any(_NVIDIA_GPU_UUID.fullmatch(uid) is None for uid in assigned):
-        raise RuntimeError("The NVIDIA plugin mounted invalid or duplicate GPU UUIDs")
-
-    probe_env = os.environ.copy()
-    probe_env.pop("CUDA_VISIBLE_DEVICES", None)
-    listing = subprocess.check_output(
-        ["nvidia-smi", "--query-gpu=pci.bus_id,uuid", "--format=csv,noheader"],
-        env=probe_env,
-        text=True,
-        timeout=15,
-    )
-    host_uuids = _host_gpu_uuids_in_pci_order(listing)
-    if not assigned.issubset(host_uuids):
-        raise RuntimeError("The NVIDIA plugin's GPU allocation does not match the host inventory")
-
-    # CUDA PCI ordering maps NVML's physical UUIDs to the numeric IDs Ray and SkyRL expect.
-    mask = ",".join(str(index) for index, uid in enumerate(host_uuids) if uid in assigned)
-    os.environ.update(CUDA_DEVICE_ORDER="PCI_BUS_ID", CUDA_VISIBLE_DEVICES=mask)
-    _log(f"[accelerators] using {expected} allotted GPUs in PCI order: {mask}")
-
-
 def main() -> None:
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
@@ -2386,7 +2288,6 @@ def main() -> None:
     if not cli_args.environment_prepared:
         os.environ.update({str(key): str(value) for key, value in launch_config.runtime.task_env.items()})
     args = _runtime_namespace(launch_config)
-    pin_allocated_nvidia_gpus(launch_config)
     if args.role_topology is not None:
         args.ray_labels = {
             **args.role_topology.node_labels(_rank()),
