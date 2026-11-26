@@ -2335,9 +2335,10 @@ def pin_allocated_nvidia_gpus(expected: int) -> None:
     )
     devices = [tuple(field.strip() for field in line.split(",")) for line in listing.splitlines()]
     # CUDA PCI ordering maps NVML's physical UUIDs to the numeric IDs Ray and SkyRL expect.
-    mask = ",".join(str(index) for index, (_, uid) in enumerate(sorted(devices)) if uid in assigned)
-    if len(mask.split(",")) != expected:
+    indices = [str(index) for index, (_, uid) in enumerate(sorted(devices)) if uid in assigned]
+    if len(indices) != expected:
         raise RuntimeError("The NVIDIA plugin's GPU allocation does not match visible devices")
+    mask = ",".join(indices)
     os.environ.update(CUDA_DEVICE_ORDER="PCI_BUS_ID", CUDA_VISIBLE_DEVICES=mask)
     _log(f"[accelerators] using {expected} allotted GPUs in PCI order: {mask}")
 
