@@ -56,6 +56,7 @@ class TestSpec(Record):
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    __test__ = False
 
     schema_version: Literal[1] = 1
     id: str
@@ -420,6 +421,8 @@ async def _check_reference(client: VllmEndpoint, references: ReferenceLookup, sp
         try:
             response = await client.complete(case.tokens, label=f"reference-{case.id}", prompt_scores=True)
             (choice,) = response["choices"]
+            # Prompt scores cover the interior positions; the generated token
+            # supplies the final next-token score, including full-length histories.
             positions = [*choice["prompt_logprobs"][1:], choice["logprobs"]["top_logprobs"][0]]
             if len(positions) != len(case.tokens):
                 raise ValueError(f"Missing prompt log probabilities: {case.id}")
@@ -525,6 +528,8 @@ async def _check_settled_branch(
         return result
     sibling = await client.complete(alternate, label=f"{label}-settled-alternate")
     result["alternate_cached_tokens"] = cached_tokens(sibling)
+    if cached_tokens(sibling) > boundary:
+        raise ValueError("Sibling cache reuse crosses the divergent token")
     after = await client.complete(branch, label=f"{label}-settled-repeat")
     result["repeat_cached_tokens"] = cached_tokens(after)
     if cached_tokens(sibling) == shared_checkpoint < expected and cached_tokens(after) == expected:
@@ -648,7 +653,14 @@ async def _check_cache(
             # full replay boundary. Reusing only the original prompt is insufficient.
             divergence = (len(history) - 1) // block_size * block_size - block_size
             if divergence <= len(decode_prefix):
-                raise ValueError("The generated history cannot reach an intermediate branch checkpoint")
+                replayed_decode_reuse.append(
+                    {
+                        "requested_boundary": length,
+                        "status": "incomplete",
+                        "reason": "The generated history cannot reach an intermediate branch checkpoint",
+                    }
+                )
+                continue
             other_token = next(token for token in source if token != history[divergence])
             replay_alternate = (*history[:divergence], other_token, *history[divergence + 1 :])
             replayed = await _check_settled_branch(

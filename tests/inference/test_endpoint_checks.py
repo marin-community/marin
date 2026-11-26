@@ -197,6 +197,8 @@ class HttpEngine:
             (len(prefix) for prefix in self.prefixes if len(prefix) < len(tokens) and tokens[: len(prefix)] == prefix),
             default=0,
         )
+        if self.mode == "branch-over-reuse" and request.headers["X-Request-Id"].endswith("-settled-alternate"):
+            cached = len(tokens) - 1
         # Inject a sibling write after the prepared branch has been observed.
         if self.mode == "branch-corrupt" and request.headers["X-Request-Id"].endswith("-settled-alternate"):
             for previous in self.histories:
@@ -354,6 +356,8 @@ async def http_endpoint(engine: HttpEngine):
         ("bad-scores", "failed", "reference"),
         ("non-finite", "failed", "reference"),
         ("non-finite-repeat", "failed", "cache"),
+        ("branch-over-reuse", "failed", "cache"),
+        ("short-generated-history", "incomplete", "cache"),
         ("reference-error", "failed", "reference"),
         ("cache-error", "failed", "cache"),
         ("prefill-only", "incomplete", "cache"),
@@ -369,6 +373,8 @@ async def test_http_suite_requires_numerics_and_exercised_paths(
     tmp_path, reference_fixture, mode, expected_status, affected_check
 ):
     spec = reference_fixture
+    if mode == "short-generated-history":
+        spec = spec.model_copy(update={"cache_decode_tokens": 2})
     if mode == "branch-corrupt":
         spec = spec.model_copy(
             update={

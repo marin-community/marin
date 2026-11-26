@@ -29,6 +29,9 @@ without copying it or generating new goldens.
 binding requests one task with eight H100s; Hero requests four tasks with four
 GB200s each. Multi-host startup remains with the caller. Placement and serving
 settings describe a candidate; they do not establish its qualification.
+For an existing endpoint, use the candidate's serving settings in its spec.
+Observed geometry is retained in `details.identity.parallel_config`; geometry
+is not an acceptance gate.
 
 `tolerance_version`, `provisional`, `rationale` and `evidence` retain the bounds'
 identity and justification. Dtype belongs in `engine_kwargs`. The reference
@@ -117,6 +120,8 @@ report = CheckReport(
 Runtime provenance is run metadata. The adapter records the observed `/version`;
 callers can add their full runtime source commit to `endpoint.metadata` as above.
 That label is not an expected-version argument or a numerical acceptance limit.
+Callers qualifying a runtime must compare the observed server build with their
+pinned launcher release before accepting its results.
 Checkpoint, tokenizer, dtype, hardware, EOS and cache configuration are still
 checked against the immutable reference and execution settings.
 
@@ -125,17 +130,19 @@ checked against the immutable reference and execution settings.
 Both adapters call `spec.run(endpoint)`. Only `passed` exits successfully.
 `--output` and `--correctness-output` request saving; omitting them leaves results
 in memory. Output paths are artifact directories or storage URIs.
+Use an absolute local path or storage URI for saving and loading. Marin's
+`read_artifact` resolves relative paths against its configured artifact prefix.
 
 ```sh
 uv run python -m marin.testing.inference.check_endpoint \
   --spec experiments/evaluation/inference_correctness/specs/snowball-v0.1.1-vllm-h100.json \
-  --url http://HOST:PORT/v1 --output correctness
+  --url http://HOST:PORT/v1 --output "$PWD/correctness"
 
 uv run pytest --confcutdir=tests/cluster/vllm \
   tests/cluster/vllm/test_inference_correctness.py -o addopts= \
   --endpoint-url http://HOST:PORT/v1 \
   --correctness-spec experiments/evaluation/inference_correctness/specs/snowball-v0.1.1-vllm-h100.json \
-  --correctness-output correctness
+  --correctness-output "$PWD/correctness"
 
 uv run python -m marin.testing.inference.check_endpoint \
   --spec experiments/evaluation/inference_correctness/specs/snowball-v0.1.1-vllm-h100.json --lookup
@@ -202,6 +209,10 @@ versions, provisional labels, measured values and raw observations. Version 1
 JSON reports remain in their original storage; this API does not rewrite or
 silently load them. Reference manifests remain at their existing schema version
 and byte identities. The test-spec schema is independently versioned at 1.
+
+Self-contained long-context reports can be hundreds of megabytes and require
+several GiB during serialization and loading. Save the full report once per run;
+use the CLI's compact status output or a caller's summary for aggregation.
 
 Reference comparisons use saved top-64 and serving top-50 scores. Batch/cache
 comparisons use serving top-50 lists. Decode compares emitted-token probability
