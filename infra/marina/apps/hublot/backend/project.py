@@ -8,6 +8,7 @@ import math
 import re
 from typing import Any
 
+from .queries import CAPACITY_EVENT, CONFIG_EVENT, GPU_METRICS, GRADING_METRICS
 from .query_contract import (
     ATTRIBUTE_FIELDS,
     BODY_FIELDS,
@@ -52,8 +53,39 @@ def _scalars(values: dict[str, Any], fields: tuple[str, ...]) -> dict[str, str |
     }
 
 
-def run_configuration(raw: str | None) -> dict[str, str | int | float | bool]:
-    return _scalars(_object(raw) or {}, _CONFIG_FIELDS)
+def _stable_count(values: set[float]) -> int | None:
+    if len(values) != 1:
+        return None
+    value = next(iter(values))
+    return int(value) if 0 < value < 2**53 and int(value) == value else None
+
+
+def run_facts(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collect run settings from the scoped overview read."""
+    configurations: set[str | None] = set()
+    counts: dict[str, set[float]] = {key: set() for key in (*GPU_METRICS.values(), "bufferCapacity")}
+    separate_grading = False
+    for row in rows:
+        name = row["name"]
+        value = row["value"]
+        if name == CONFIG_EVENT:
+            configurations.add(row["body_json"])
+        elif name == CAPACITY_EVENT and value is not None:
+            counts["bufferCapacity"].add(value)
+        elif name == "training_metric_value":
+            metric = (_object(row["attributes_json"]) or {}).get("metric")
+            if not isinstance(metric, str):
+                continue
+            if metric in GPU_METRICS and value is not None:
+                counts[GPU_METRICS[metric]].add(value)
+            if metric in GRADING_METRICS:
+                separate_grading = True
+    configuration = _scalars(_object(configurations.pop()) or {}, _CONFIG_FIELDS) if len(configurations) == 1 else None
+    settings = {key: _stable_count(values) for key, values in counts.items()}
+    return {
+        "configuration": configuration,
+        "runSettings": {**settings, "separateGrading": separate_grading},
+    }
 
 
 def telemetry_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

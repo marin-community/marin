@@ -3,12 +3,13 @@ import * as echarts from 'echarts/core';
 import { BarChart, LineChart, ScatterChart } from 'echarts/charts';
 import { GridComponent, MarkAreaComponent, MarkLineComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
-import { cards, nodes } from './contracts.js';
+import { cards, inferenceMetricCards, nodes, SAMPLE_SLICE_MS } from './contracts.js';
 import {
   canceledAttemptCount, cardSeries, clock, elapsed, hasValues, inRange, number,
   promptOccupancyAtLongestWait, sampleAt, timingDistribution, utc,
 } from './display.js';
 import { ChartLegend } from './Legends.jsx';
+import { BUCKET_MS } from './measurements.js';
 import { phaseTypes } from './phases.js';
 
 echarts.use([BarChart, LineChart, ScatterChart, GridComponent, MarkAreaComponent, MarkLineComponent, CanvasRenderer]);
@@ -70,7 +71,7 @@ function option(series, range, origin, phases, events, unit) {
   };
 }
 
-function TimePlot({ id, series, range, origin, cursor, setHover, onPoint, phases, events, unit, cardTitle }) {
+function TimePlot({ id, series, range, origin, cursor, setHover, onPoint, phases, events, unit, cardTitle, sampled }) {
   const element = useRef(null);
   const instance = useRef(null);
   useEffect(() => {
@@ -97,7 +98,14 @@ function TimePlot({ id, series, range, origin, cursor, setHover, onPoint, phases
     const y = event.clientY - box.top;
     const width = box.width - grid.left - grid.right;
     if (x < 0 || x > width || y < grid.top || y > box.height - grid.bottom) return null;
-    return Math.min(range.to - 1, Math.round(range.from + x / width * (range.to - range.from)));
+    const duration = range.to - range.from;
+    const time = Math.min(range.to - 1, Math.round(range.from + x / width * duration));
+    if (!sampled) return time;
+    // A 30-second slice can be narrower than the marker in a full-run chart.
+    const tolerance = 4 / width * duration;
+    const nearby = series.flatMap((signal) => signal.data).filter((point) =>
+      point.value != null && inRange(point, range) && Math.abs(point.t - time) <= tolerance);
+    return nearby.sort((a, b) => Math.abs(a.t - time) - Math.abs(b.t - time))[0]?.t ?? time;
   }
 
   function lockPoint(time) {
@@ -227,7 +235,18 @@ function ChartReadout({ time, showContext, origin, range, series, phases, events
   </div>;
 }
 
-function ChartDialog({ title, endpoints, phases, children, onClose }) {
+export function MetricsProgress({ label, percent, onRetry }) {
+  return <footer className="metrics-progress" data-testid="metrics-progress">
+    <span role="status">{label}</span>
+    <progress className="load-progress" aria-label="Dashboard data loaded" max={100} value={percent} />
+    <strong className="metrics-percent">{percent}%</strong>
+    {onRetry && <button type="button" className="related-card" aria-label="Retry incomplete charts" onClick={onRetry}>
+      Retry
+    </button>}
+  </footer>;
+}
+
+function ChartDialog({ title, endpoints, phases, metricsProgress, children, onClose }) {
   const element = useRef(null);
   const titleId = useId();
   useLayoutEffect(() => { element.current.showModal(); }, []);
@@ -238,6 +257,7 @@ function ChartDialog({ title, endpoints, phases, children, onClose }) {
       <button type="button" className="dialog-close" onClick={() => element.current.close()}>Exit full screen</button>
     </header>
     <div className="chart-dialog-main">{children}</div>
+    {metricsProgress && <MetricsProgress {...metricsProgress} />}
   </dialog>;
 }
 
@@ -268,7 +288,7 @@ function PointDetails({ point, series, model, range, origin, group, onClear }) {
     ['waitingCapacity', 'waitingDeferred'].flatMap((name) => {
       const signal = model.series[name]?.find((item) => item.group === (group || null));
       const value = signal && pointAt(signal, point.time, range)?.value;
-      return value == null ? [] : [[signal.label, String(value)]];
+      return value == null ? [] : [[signal.label, number.format(value)]];
     }) : [];
   const evaluation = records.some(([signal]) => signal.id === 'evalGraded') &&
     model.evaluations?.find((row) => row.step === representative.step);
@@ -370,7 +390,7 @@ function cardSummary(definition, model, range, unit, cancellations) {
 
 export function InspectorCard({
   id, edge, model, availableCards, range, origin, hover, setHover, cursor, point, onPoint, onInspect,
-  onPin, onClose, onMove, onFocusSpan,
+  onPin, onClose, onMove, onFocusSpan, detail, metricsProgress, onLoadDetail, onRetryMetrics, onSelectUnit,
   pinned, pinIndex, pinCount, active, register,
 }) {
   const definition = cards[id];
@@ -379,16 +399,18 @@ export function InspectorCard({
   const [distributionOpen, setDistributionOpen] = useState(false);
   const [distributionChoice, setDistributionChoice] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
-  const all = useMemo(() => cardSeries(id, model.series), [id, model.series]);
-  const wholeWindow = model.window;
+  const inferenceUnit = detail?.unit;
+  const all = useMemo(() => cardSeries(id, model.series).filter((signal) =>
+    !inferenceUnit || signal.unit === inferenceUnit), [id, inferenceUnit, model.series]);
+  const wholeWindow = detail?.window ?? model.window;
   const populated = useMemo(() => all.filter((signal) => hasValues(signal, wholeWindow)), [all, wholeWindow]);
   const groups = [...new Set(populated.map((signal) => signal.group).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
   const hasAggregate = populated.some((signal) => !signal.group);
   const group = groups.includes(groupChoice) ? groupChoice : hasAggregate ? '' : groups[0];
   const byGroup = populated.filter((signal) => signal.group === (group || null));
-  const units = [...new Set(byGroup.map((signal) => signal.unit))];
-  const unit = units.includes(unitChoice) ? unitChoice : units[0];
+  const units = inferenceUnit ? Object.keys(inferenceMetricCards) : [...new Set(byGroup.map((signal) => signal.unit))];
+  const unit = inferenceUnit ?? (units.includes(unitChoice) ? unitChoice : units[0]);
   const perGpu = unit === 'tokens/s/GPU';
   const series = useMemo(() => populated.filter((signal) => signal.group === (group || null) && signal.unit === unit),
     [populated, group, unit]);
@@ -423,14 +445,36 @@ export function InspectorCard({
   const endpoints = edge && <div className="card-endpoints" data-testid="card-endpoints">
     {nodes[edge.from[0]].label} <span aria-hidden="true">→</span><span className="sr-only"> to </span> {nodes[edge.to[0]].label}
   </div>;
+  function selectUnit(unit) {
+    if (inferenceUnit) {
+      onSelectUnit(unit);
+      if (point) onPoint(null);
+    } else {
+      setUnitChoice(unit);
+    }
+    setHover(null);
+  }
   const inspectChart = <>
+    {detail?.error && <div className="metric-load-error">
+      <p role="alert">{detail.error}</p>
+      {!detail.detailError && <button type="button" className="related-card" onClick={onRetryMetrics}>Retry overview</button>}
+    </div>}
+    {detail && <div className="metric-resolution">
+      {detail.fine && <span>Detail · {(detail.bucketMs ?? BUCKET_MS) / 1000} s per point</span>}
+      {detail.partial && <span>Detail loading · {detail.bucketMs / 1000} s per point</span>}
+      {detail.sampled && <span>Sampled overview · up to {SAMPLE_SLICE_MS / 1000} s per slice</span>}
+      {!detail.fine && <button type="button" className="related-card" onClick={onLoadDetail}
+        title="Move this chart ahead of background reads" disabled={detail.wantsDetail && !detail.detailError}>
+        {detail.detailError ? 'Retry detail' : 'Load detail'}
+      </button>}
+    </div>}
     {showGap && <p className="card-gap">{definition.gap}</p>}
     {summary && <div className="metric-summary"><strong>{summary.headline}</strong><span>{summary.context}</span></div>}
     {(units.length > 0 || groups.length > 0) &&
       <div className="series-controls">
         <div className="unit-options" role="group" aria-label="Chart units">
           {units.map((item) => <button type="button" key={item}
-            title={item} aria-pressed={unit === item} onClick={() => { setUnitChoice(item); setHover(null); }}>
+            title={item} aria-pressed={unit === item} onClick={() => selectUnit(item)}>
             {definition.tabs?.[item] ?? tabNames[item] ?? item}
           </button>)}
         </div>
@@ -458,15 +502,19 @@ export function InspectorCard({
     {distribution ? <TimingDistribution signal={distribution} range={range} /> : series.length > 0 ? <>
       <div className="chart-exploration" onPointerLeave={() => { if (hover?.id === id) setHover(null); }}>
         <TimePlot id={id} series={series} range={range} origin={origin} cursor={cursor?.time ?? null} setHover={setHover}
-          onPoint={onPoint} phases={model.phases} events={model.events} unit={unit} cardTitle={definition.title} />
+          onPoint={onPoint} phases={model.phases} events={model.events} unit={unit} cardTitle={definition.title}
+          sampled={detail?.sampled} />
         <ChartReadout time={cursor?.time ?? null} showContext={cursor?.id === id} origin={origin} series={series} range={range}
           phases={model.phases} events={model.events} caption={caption} />
       </div>
       {point && <PointDetails point={point} series={series} model={model} range={range} origin={origin}
         group={group} onClear={() => { setHover(null); onPoint(null); }} />}
-      {series.every((s) => !hasValues(s, range)) && <p className="missing-line">No samples in this view.</p>}
-    </> : !showGap && <p className="missing-line">Finelog has no samples for this card in the loaded window.</p>}
-    {!showGap && series.length > 0 && unavailable.length > 0 &&
+      {(!detail || detail.covered) && series.every((s) => !hasValues(s, range)) &&
+        <p className="missing-line">{detail?.sampled ? 'No samples in this overview.' : 'No samples in this view.'}</p>}
+    </> : !showGap && (!detail || detail.covered) && <p className="missing-line">
+      {detail?.sampled ? 'No samples in this overview.' : 'Finelog has no samples for this card in the loaded window.'}
+    </p>}
+    {!showGap && series.length > 0 && unavailable.length > 0 && (!detail || detail.fine) &&
       <p className="missing-line">{definition.missing ?? 'No records for ' + unavailable.map((s) => s.label).join(', ') + '.'}</p>}
     {links.length > 0 && <div className="related-cards">{links.map((link) =>
       <button key={link.id} type="button" className="related-card"
@@ -491,6 +539,8 @@ export function InspectorCard({
             <div className="help-popover">
               <p>{definition.helpByUnit?.[unit] ?? definition.help}</p>
               {perGpu && <p>Per GPU divides the fleet rate by the configured inference GPU count.</p>}
+              {detail && <p>The overview samples short slices and can miss spikes. All charts load detail for the selected range.
+                Load detail moves this chart to the front. Select ten minutes or less for 10-second points and per-engine charts.</p>}
             </div>
           </details>
           {series.length > 0 && <button type="button" aria-label={'Full screen ' + definition.title} title="Full screen"
@@ -502,7 +552,8 @@ export function InspectorCard({
           <button type="button" className="close-card" aria-label={'Close ' + definition.title} onClick={() => onClose(id)}>×</button>
         </div>
       </header>
-      {fullscreen ? <ChartDialog title={definition.title} endpoints={endpoints} phases={model.phases} onClose={() => {
+      {fullscreen ? <ChartDialog title={definition.title} endpoints={endpoints} phases={model.phases}
+        metricsProgress={metricsProgress} onClose={() => {
         setHover(null);
         setFullscreen(false);
       }}>{inspectChart}</ChartDialog> : inspectChart}
