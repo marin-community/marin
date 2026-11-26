@@ -678,7 +678,10 @@ def _watch_publication(
         while True:
             state = parent.state_only()
             for output in watch.outputs:
-                rl_publication.publish_running(output, preset, table, watch.job, watch.service_url, published)
+                try:
+                    rl_publication.publish_running(output, preset, table, watch.job, watch.service_url, published)
+                except Exception as error:
+                    logger.warning("Running row publication will retry for %s (%s)", output, type(error).__name__)
             if is_job_finished(state):
                 break
             if time.monotonic() >= deadline:

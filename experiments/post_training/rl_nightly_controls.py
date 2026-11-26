@@ -23,6 +23,7 @@ from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import resolve_job_user
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
+from marin.execution.remote import sanitize_job_name
 from marin.rl.skyrl import IRIS_HUB_CLUSTER_CONFIG
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -99,9 +100,12 @@ def dispatch_comment(event_path: Path) -> None:
 
 def _read_submission(path: StoragePath) -> rl_publication.ControlSubmission | None:
     try:
-        return rl_publication.ControlSubmission.model_validate_json(path.read_text())
+        submission = rl_publication.ControlSubmission.model_validate_json(path.read_text())
     except FileNotFoundError:
         return None
+    if submission.recorded_at is None:
+        raise ValueError(f"Pending control submission at {path} has no recording time")
+    return submission
 
 
 def _publish_submission(
@@ -115,13 +119,15 @@ def _publish_submission(
 ) -> _Observation:
     table = _TABLES[model]
     job = JobName.from_wire(submission.job)
-    prefix = str(
-        StoragePath(rl_compose.run_prefix(preset)) / rl_compose.control_run_name_prefix(table.namespace, preset.name)
-    )
+    name_prefix = rl_compose.control_run_name_prefix(table.namespace, preset.name)
+    prefix = StoragePath(rl_compose.run_prefix(preset)) / name_prefix
+    job_prefix = sanitize_job_name(name_prefix) + "-"
+    runs = [StoragePath(output).parent for output in submission.outputs]
     if (
         not job.is_root
         or job.user != resolve_job_user()
-        or any(not str(StoragePath(output).parent).startswith(prefix) for output in submission.outputs)
+        or not job.name.startswith(job_prefix)
+        or any(run.parent != prefix.parent or not run.name.startswith(prefix.name) for run in runs)
     ):
         raise ValueError(f"Control submission for {model}/{preset.name} has a foreign job or output")
     try:
@@ -186,34 +192,48 @@ def _observe_startup(
 ) -> bool:
     failed = False
     errors = {}
+    visible = set()
     deadline = time.monotonic() + _OBSERVATION_SECONDS
     while started:
         for target, (preset, path, child) in list(started.items()):
             exit_code = child.poll()
             failed |= exit_code not in (None, 0)
+            if target in visible:
+                if exit_code is not None:
+                    del started[target]
+                continue
             try:
                 submission = _read_submission(path)
-                observation = (
-                    _publish_submission(submission, target[0], preset, job_state, published, pending_file=path)
-                    if submission is not None
-                    else _Observation.WAITING
-                )
-            except (ConnectError, OSError, RuntimeError, ValueError) as error:
+                if submission is None:
+                    if exit_code is not None:
+                        if exit_code == 0:
+                            print(f"{'/'.join(target)}: launcher exited without a pending handoff", file=sys.stderr)
+                            failed = True
+                        del started[target]
+                    continue
+                status = _publish_submission(submission, target[0], preset, job_state, published, pending_file=path)
+            except Exception as error:
                 errors[target] = error
                 continue
             errors.pop(target, None)
-            failed |= observation is _Observation.FAILED_BEFORE_PREPARATION
-            if exit_code is not None and (observation is not _Observation.WAITING or submission is None):
-                del started[target]
-        if not started or time.monotonic() >= deadline:
+            failed |= status is _Observation.FAILED_BEFORE_PREPARATION
+            if status is not _Observation.WAITING:
+                visible.add(target)
+                if exit_code is not None:
+                    del started[target]
+        remaining = deadline - time.monotonic()
+        if not started or remaining <= 0:
             break
-        time.sleep(_POLL_SECONDS)
+        time.sleep(min(_POLL_SECONDS, remaining))
+        if time.monotonic() >= deadline:
+            break
     for target, (_, _, child) in started.items():
-        if child.poll() is None:
+        exit_code = child.poll()
+        if exit_code is None:
             child.kill()
-            child.wait()
+            child.wait(timeout=10)
             print(f"{'/'.join(target)}: launcher exceeded the startup window", file=sys.stderr)
-            failed = True
+        failed |= exit_code != 0
     for target, error in errors.items():
         print(f"{'/'.join(target)}: {error}", file=sys.stderr)
     return failed or bool(errors)
@@ -233,20 +253,28 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
             path = state_dir / f"{model}-{preset.name}.json"
             try:
                 stored = _read_submission(path)
-                if stored is not None:
-                    status = _publish_submission(stored, model, preset, client.job_state, published, pending_file=path)
-                    if status in {_Observation.WAITING, _Observation.VISIBLE}:
-                        blocked.add(target)
-                for submission in _running_submissions(records, *target):
-                    if stored is not None and submission.job == stored.job:
-                        continue
-                    status = _publish_submission(submission, model, preset, client.job_state, published)
-                    if status in {_Observation.WAITING, _Observation.VISIBLE}:
-                        blocked.add(target)
-            except (ConnectError, OSError, RuntimeError, ValueError) as error:
+            except Exception as error:
                 print(f"{model}/{preset.name}: {error}", file=sys.stderr)
                 blocked.add(target)
                 failed = True
+                stored = None
+            sources = [(stored, path)] if stored is not None else []
+            sources.extend(
+                (submission, None)
+                for submission in _running_submissions(records, *target)
+                if stored is None or submission.job != stored.job
+            )
+            for submission, pending_file in sources:
+                try:
+                    status = _publish_submission(
+                        submission, model, preset, client.job_state, published, pending_file=pending_file
+                    )
+                    if status in {_Observation.WAITING, _Observation.VISIBLE}:
+                        blocked.add(target)
+                except Exception as error:
+                    print(f"{model}/{preset.name}: {error}", file=sys.stderr)
+                    blocked.add(target)
+                    failed = True
         records = rl_index.list_attempts()
         for model, preset in selected:
             path = state_dir / f"{model}-{preset.name}.json"

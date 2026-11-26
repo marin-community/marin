@@ -410,12 +410,13 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
 
     monkeypatch.setattr(publication, "publish_result", publish)
     state_dir = StoragePath(str(tmp_path))
-    coordinator = "/runner/coordinator-123-1"
+    job_prefix = "/runner/checkpoints-snowball-rl-controls-speed-medium-"
+    coordinator = job_prefix + "123-1-coordinator"
 
     def submit(command, *, env):
         batch = command[command.index("--control") + 1]
         requests[batch] = int(command[command.index("--replicates") + 1])
-        submit_job = f"/runner/coordinator-{batch}"
+        submit_job = f"{job_prefix}{batch}-coordinator"
         submission = publication.ControlSubmission(
             job=submit_job,
             outputs=tuple(str(tmp_path / (control_base + name) / recipe.RUN_ARTIFACT_VERSION) for name in sources),
@@ -427,8 +428,8 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
 
     monkeypatch.setattr(nightly, "subprocess", SimpleNamespace(Popen=submit))
     monkeypatch.setenv("IRIS_USER", "runner")
-    legacy_job = "/runner/previous-coordinator"
-    mochi_job = "/runner/mochi-coordinator"
+    legacy_job = job_prefix + "previous-coordinator"
+    mochi_job = "/runner/checkpoints-mochi-rl-controls-learning-medium-previous-coordinator"
     states[mochi_job] = JobState.RUNNING
     rows["mochi"] = base.model_copy(
         update={
@@ -483,6 +484,10 @@ def test_nightly_resumes_publication_and_refills_only_the_control_deficit(
 
     assert rows["accepted"].status == "succeeded" and rows["accepted"].preset_version == version
     assert rows["preempted"].status == "failed" and "native_attempt" in rows["preempted"].failed_facts
+
+    states[job_prefix + "127-1-coordinator"] = JobState.FAILED
+    monkeypatch.setattr(nightly.subprocess, "Popen", lambda *args, **kwargs: SimpleNamespace(poll=lambda: 0))
+    assert tick("128-1") == 1
 
 
 def test_control_presets_select_multiple_models_without_duplicates():

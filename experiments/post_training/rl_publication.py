@@ -361,20 +361,16 @@ def publish_running(
     published: set[tuple[str, str]],
 ) -> bool:
     """Upsert prepared attempts and report whether this output has a visible receipt."""
-    try:
-        _, stored = read_stored_skyrl_attempts(path)
-        attempts = _coordinator_attempts(stored, coordinator)
-        for attempt in attempts.values():
-            key = (attempt.index_run_id, attempt.attempt_id)
-            if key in published or attempt.native.result.state.is_terminal or attempt.interruption is not None:
-                continue
-            url = publish_result(build_record(path, preset, table=table, attempt=attempt), service_url)
-            published.add(key)
-            click.echo(f"RL progress {url}")
-        return any((attempt.index_run_id, attempt.attempt_id) in published for attempt in attempts.values())
-    except Exception as error:
-        logger.warning("Running row publication will retry for %s (%s)", path, type(error).__name__)
-        return False
+    _, stored = read_stored_skyrl_attempts(path)
+    attempts = _coordinator_attempts(stored, coordinator)
+    for attempt in attempts.values():
+        key = (attempt.index_run_id, attempt.attempt_id)
+        if key in published or attempt.native.result.state.is_terminal or attempt.interruption is not None:
+            continue
+        url = publish_result(build_record(path, preset, table=table, attempt=attempt), service_url)
+        published.add(key)
+        click.echo(f"RL progress {url}")
+    return any((attempt.index_run_id, attempt.attempt_id) in published for attempt in attempts.values())
 
 
 @dataclass(frozen=True)

@@ -188,7 +188,7 @@ def test_trainer_deadline_ends_before_tracker_closes(tmp_path, monkeypatch, trai
             raise failure
 
     async def shutdown():
-        pass
+        asyncio.get_running_loop().set_default_executor(RecordingExecutor())
 
     @contextmanager
     def tracker():
