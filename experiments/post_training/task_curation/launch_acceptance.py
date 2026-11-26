@@ -97,8 +97,11 @@ def main() -> None:
         "--no-preemptible",
         "--timeout",
         args.timeout,
+        # The Daytona API throttles sandbox creation under fleet-wide churn; a
+        # throttled attempt must retry (the throttle clears in seconds) instead
+        # of failing the whole job on one transient error.
         "--max-retries",
-        "0",
+        "3",
         "--",
         "bash",
         "-c",
