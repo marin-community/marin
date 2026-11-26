@@ -213,6 +213,11 @@ jobs:
       CONTROL_BATCH: ${{ github.run_id }}-${{ github.run_attempt }}
       CONTROL_PRESETS: ${{ inputs.presets }}
     steps:
+      - name: Require main for RL controls
+        if: github.repository != 'marin-community/marin' || github.ref != 'refs/heads/main'
+        run: |
+          echo "RL controls require marin-community/marin main."
+          exit 1
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -233,7 +238,18 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: hai-gcp-models
+      - name: Authenticate Marina with the main-only deployment identity
+        id: marina-auth
+        if: github.repository == 'marin-community/marin' && github.ref == 'refs/heads/main'
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+          export_environment_variables: false
       - name: Submit and publish RL controls
+        env:
+          MARINA_GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.marina-auth.outputs.credentials_file_path }}
         run: |
           set -eo pipefail
           uv run --frozen --all-packages --extra cpu --no-default-groups \
