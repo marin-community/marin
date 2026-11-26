@@ -13,7 +13,7 @@ DOC_URL = f"https://docs.google.com/document/d/{DOC_ID}/edit"
 EXPORT_URL = f"https://docs.google.com/document/d/{DOC_ID}/export?format=md"
 EXPORT_TIMEOUT = 20
 # The Markdown export appends each image as a base64 reference definition.
-INLINE_IMAGE = re.compile(r"^\[image\d+\]: <data:image/[^>]*>$", re.MULTILINE)
+INLINE_IMAGE = re.compile(r"^!\[\]\[image\d+\][ \t]*$|^\[image\d+\]: <data:image/[^>]*>$", re.MULTILINE)
 
 
 @dataclass(frozen=True)

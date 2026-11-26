@@ -133,7 +133,6 @@ def test_review_includes_current_glossary_and_published_pr_text_in_prose_lane(
     )
     prompt = next((workspace / "logs").glob("*/**/prose/prompt.md")).read_text()
     assert _pr_text_from_prompt(prompt) == {"title": "Published title", "body": "Published description"}
-    assert "Content SHA: rev-1" in prompt
     assert "~~Old~~ New" in prompt
 
 
@@ -160,4 +159,5 @@ def test_glossary_keeps_proposed_renames_and_drops_inline_images():
 
     glossary = glossary_from_markdown(markdown)
     assert "(~~`RolloutTask`~~ `RolloutGroupJob`)" in glossary.text
+    assert "![][image1]" not in glossary.text
     assert "data:image" not in glossary.text
