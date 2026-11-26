@@ -1,11 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve a finelog VM's internal IP and query it over Direct VPC egress.
+"""Query a finelog deployment for the bridge.
 
-finelog's cidr auth layer admits the RFC1918 ranges, so the query carries no
-token. Discovery is a GCE instance lookup, so it holds while the monitored
-cluster's controller is down.
+The deployed bridge resolves the finelog VM's internal IP and queries it over
+Direct VPC egress: finelog's cidr auth layer admits the RFC1918 ranges, so the
+query carries no token, and discovery is a GCE instance lookup, so it holds while
+the monitored cluster's controller is down. A workstation bridge instead reaches
+the hub through the Iris IAP proxy, with an IAP token per request
+(IapFinelogSource).
 """
 
 import logging
