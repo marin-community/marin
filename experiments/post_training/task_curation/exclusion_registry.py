@@ -21,6 +21,63 @@ def _note(message: str) -> ExclusionEvidence:
 
 
 MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
+    "Anthropic:hh_rlhf/harmless-base": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): every "
+                "converted task carries NoGrader — the preference converter's typed reason is 'Preference "
+                "labels rank source candidates; scoring a new reply needs a reward model' and the Atlas has "
+                "no reward-model grader, so no task can produce a reward; main declares the preference "
+                "sources 'kept for review only'. Sealed evidence at the pin: the sibling subsets' grading "
+                "censuses (converter 1509fc8638f6) report 100% 'No executable grader is declared' "
+                "(helpful-base 43,699/43,699, helpful-online 21,989, helpful-rejection-sampled 52,382) and "
+                "this subset's 42,378-task census shares that converter and declaration. MIT license gate "
+                "PASSES (registry ingest_c_intake_20261126_a_v1) — the rows are untrainable as RL, not "
+                "banned. Clears only with an executable or judge grader and a zero-missing grading census."
+            ),
+        ),
+    ),
+    "Anthropic:hh_rlhf/helpful-base": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the "
+                "sealed grading census at this pin reports 43,699/43,699 tasks 'No executable grader is "
+                "declared' (s3://marin-us-east-02a/marin/rl-data/atlas/grading-census/2026.11.13.1/results/"
+                "d587beb02be5706914cc/receipt.json) — the preference converter emits NoGrader ('Preference "
+                "labels rank source candidates; scoring a new reply needs a reward model'). MIT license gate "
+                "PASSES (registry ingest_c_intake_20261126_a_v1) — untrainable as RL, not banned. Clears "
+                "only with an executable or judge grader and a zero-missing grading census."
+            ),
+        ),
+    ),
+    "Anthropic:hh_rlhf/helpful-online": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the "
+                "sealed grading census at this pin reports 21,989/21,989 tasks 'No executable grader is "
+                "declared' — the preference converter emits NoGrader ('Preference labels rank source "
+                "candidates; scoring a new reply needs a reward model'). MIT license gate PASSES (registry "
+                "ingest_c_intake_20261126_a_v1) — untrainable as RL, not banned. Clears only with an "
+                "executable or judge grader and a zero-missing grading census."
+            ),
+        ),
+    ),
+    "Anthropic:hh_rlhf/helpful-rejection-sampled": (
+        ExclusionClaim(
+            reason=ExclusionReason.GRADER_MISSING,
+            evidence=_note(
+                "Not a valid RL source as declared (ingest C decision, brief-delegated 2026-11-26): the "
+                "sealed grading census at this pin reports 52,382/52,382 tasks 'No executable grader is "
+                "declared' — the preference converter emits NoGrader ('Preference labels rank source "
+                "candidates; scoring a new reply needs a reward model'). MIT license gate PASSES (registry "
+                "ingest_c_intake_20261126_a_v1) — untrainable as RL, not banned. Clears only with an "
+                "executable or judge grader and a zero-missing grading census."
+            ),
+        ),
+    ),
     "TaskTrove:DCAgent__mix_h4_binary_easy": (
         ExclusionClaim(
             reason=ExclusionReason.NO_SUPPORTED_BACKEND,
