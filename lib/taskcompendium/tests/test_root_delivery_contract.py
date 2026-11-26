@@ -341,3 +341,31 @@ def test_quarantine_remove_moves_refused_inodes_out_of_the_workspace(tmp_path, m
     # Without a quarantine root the refusal propagates (fail closed).
     with pytest.raises(OSError):
         shared_source.quarantine_remove(common, victim, None)
+
+
+def test_shared_source_capture_stream_appends_after_the_source_log(tmp_path: Path) -> None:
+    """The shared-source guest controller captures the original test.sh's stdout into the SAME
+    path the source script's own `cat > test_output.log` writes. Two writers on one file at
+    independent offsets cut the source's test-name lines mid-stream (the DELTA5/DELTA6
+    zero-capture fixtures: the harness echo glued into `✓ <name> (NN`). The capture stream must
+    therefore open in append mode: the source's cat still owns and truncates its log, and the
+    harness's writes land after the source's content instead of stomping it."""
+    source = Path(shared_source.__file__).read_text()
+    assert 'output.open("ab")' in source, (
+        "the shared-source capture stream must open in append mode; 'wb' re-introduces the "
+        "two-writers collision that cut test-name lines"
+    )
+
+    # The mechanism the fix relies on: a handle opened for append keeps writing after
+    # content another writer truncates and rewrites through its own description.
+    log = tmp_path / "test_output.log"
+    with log.open("ab") as stream:
+        stream.write(b"ECHO-SHOULD-NOT-OVERWRITE\n")
+        child = log.open("wb")  # the source's own cat: truncates and rewrites
+        child.write(b"PASS suite\n\xe2\x9c\x93 test line\n")
+        child.close()
+        stream.write(b"test_cmd exit code: 0\n")
+    text = log.read_text()
+    assert text.startswith("PASS suite\n✓ test line\n")
+    assert text.index("ECHO-SHOULD-NOT-OVERWRITE") > text.index("✓ test line")
+    assert "test_cmd exit code: 0" in text
