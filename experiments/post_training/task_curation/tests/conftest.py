@@ -17,7 +17,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.pipeline.reviewer_spec import JudgeTier
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation import driver, inventory, publication_gate
+from experiments.post_training.task_curation import driver, inventory, publication_gate, sources
 from experiments.post_training.task_curation.difficulty_samples import DifficultySource
 from experiments.post_training.task_curation.full_qc_inputs import InputConfig
 from experiments.post_training.task_curation.judges import JUDGE_TIERS, HostedJudgeEndpoint
@@ -50,6 +50,11 @@ def offline_registry(request, monkeypatch):
 
     request.getfixturevalue("isolated_admission_census")
     monkeypatch.setattr(driver, "all_sources", lambda: {})
+    # The defining module's binding is what a local import reads at call time:
+    # the declaration audit's replacement-link check imports all_sources inside
+    # the function, so patching only the driver's import-time binding left the
+    # real registry read live under the download-boundary guard.
+    monkeypatch.setattr(sources, "all_sources", lambda: {})
     # Selection restriction tiers come from the configured estate, which offline
     # unit tests cannot assemble; synthetic selections declare no private source.
     # Patch every importing module's binding, not only the defining one.
