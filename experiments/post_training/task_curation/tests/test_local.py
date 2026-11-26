@@ -14,10 +14,19 @@ import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
 from finestore.reader import ReadView
+from finestore.rl.status_taxonomy import DataRestriction
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
 from taskcompendium.convert.answers import answer_task, exact_answer_task
-from taskcompendium.models import EnvironmentRequirements, TaskSpec, TextMessage, VerifyitGrader, verifyit_spec
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    GraderMachine,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+    grader_environment,
+    verifyit_spec,
+)
 from taskcompendium.pipeline.inputs import SourceFormat, required_grader_environment
 from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from verifyit.spec import ExactSpec
@@ -32,7 +41,7 @@ from experiments.post_training.task_curation.datasets.tasktrove import calendar
 from experiments.post_training.task_curation.driver import main as curation_main
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, planned_lock_url, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 from experiments.post_training.task_curation.tasktrove.compare import source_file_path
 
 
@@ -45,7 +54,15 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
     )
     sources = {
         name: RlDataSource(
-            pipeline=process_rows, info=SourceInfo(id=f"fixture:{name}", title=name, origin="fixture"), config=pipeline
+            pipeline=process_rows,
+            info=SourceInfo(
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset=name,
+                upstream_name=name,
+                build_path="test",
+                origin=SourceOrigin.MARIN,
+            ),
+            config=pipeline,
         )
         for name, pipeline in pipelines.items()
     }
@@ -64,7 +81,11 @@ def run_recipes(pipelines, input_root, output_root, *, inputs, max_workers, cach
 def convert_local_answer(row, context):
     task = answer_task(row, prompt=row.data["prompt"], spec=ExactSpec((row.data["answer"],), ignore_case=False))
     return task.model_copy(
-        update={"grader": task.grader.model_copy(update={"environment": required_grader_environment(context)})}
+        update={
+            "grader": task.grader.model_copy(
+                update={"placement": GraderMachine(environment=required_grader_environment(context))}
+            )
+        }
     )
 
 
@@ -107,12 +128,12 @@ def test_local_campaign_continues_after_missing_input(local_source, tmp_path):
     task = TaskSpec.model_validate_json(records[0]["task_json"])
     grader = cast(VerifyitGrader, task.grader)
     assert verifyit_spec(grader) == ExactSpec(("two",), ignore_case=False)
-    environment = cast(EnvironmentRequirements, grader.environment)
+    environment = cast(EnvironmentRequirements, grader_environment(grader))
     with artifact_prefix(str(tmp_path / "downloads")):
         assert environment.packages_lock == planned_lock_url(source.grader)
     catalog = ReadView(str(output / "catalog"))
     recorded = list(catalog.iter_rows("sources"))
-    successful = next(row for row in recorded if row["atlas_id"] == f"fixture:{source.name}")
+    successful = next(row for row in recorded if row["atlas_id"] == f"Marin:{source.name}")
     assert successful["processed_rows"] == 1
     assert successful["admitted"] is None
     assert successful["verification_status"] is None

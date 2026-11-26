@@ -33,6 +33,7 @@ from levanter.data.mixture import (
 )
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlDataSource,
@@ -52,9 +53,11 @@ from levanter.data.text.formats import (
     LmDatasetFormatBase,
     PrebuiltLmDatasetFormat,
     ProcessedChatDict,
+    SerializedChatLmDatasetFormat,
     TextLmDatasetFormat,
     TokenSeqDict,
 )
+from levanter.data.text.serialized_chat import mask_serialized_chat
 from levanter.data.text.length_bucket import (
     LengthBucket,
     LengthBucketIndex,
@@ -338,6 +341,9 @@ class DatasetComponent(DatasetComponentBase):
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | None = None
+    pack_lookahead_window: int | None = None
+    """Opt-in bounded first-fit lookahead for the packer, in documents. ``None`` (default)
+    keeps the sequential packer; see [pack_documents][levanter.data.packing.pack_documents]."""
     tags: list[str] | None = None
     split: str = "validation"
     flat_cache: bool = False
@@ -397,7 +403,7 @@ def _effective_pack(component: DatasetComponent) -> bool | int:
     if component.pack is not None:
         return component.pack
     fmt = component.format
-    if isinstance(fmt, TextLmDatasetFormat):
+    if isinstance(fmt, TextLmDatasetFormat | SerializedChatLmDatasetFormat):
         return False
     if isinstance(fmt, ChatLmDatasetFormat):
         return True if fmt.pack is None else fmt.pack
@@ -435,12 +441,14 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
+        lookahead_window: int | None = None,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead_window=lookahead_window,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -498,12 +506,14 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         slice_strategy: Literal["left", "right", "raise", "drop"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
+        lookahead_window: int | None = None,
     ):
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
             Pos.size,
             max_segments_per_example=max_segments_per_example,
             slice_strategy=slice_strategy,
+            lookahead_window=lookahead_window,
         )
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
@@ -546,7 +556,32 @@ def dataset_for_component(
     block_cross_document_attention: bool,
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
+    if component.pack_lookahead_window is not None and not pack:
+        raise ValueError(
+            f"Component {component.cache_dir} sets pack_lookahead_window but pack={pack!r} disables packing; "
+            "the lookahead window only applies to packed datasets."
+        )
     fmt = component.format
+    if isinstance(fmt, SerializedChatLmDatasetFormat):
+        max_segments, slice_strategy = _resolve_pack_config(pack)
+        dataset = PackedTokenDataset(
+            cache,
+            Pos,
+            max_segments_per_example=max_segments,
+            slice_strategy=slice_strategy,
+            lookahead_window=component.pack_lookahead_window,
+        )
+
+        def apply_chat_mask(example: GrugLmExample) -> GrugLmExample:
+            masked = mask_serialized_chat(
+                example, message_start_id=fmt.message_start_id, assistant_prefix=fmt.assistant_prefix
+            )
+            # Loss masking needs each document's boundary even with cross-document attention.
+            if not block_cross_document_attention:
+                masked = dataclasses.replace(masked, attn_mask=GrugAttentionMask.causal())
+            return masked
+
+        return dataset.map(apply_chat_mask)
     if isinstance(fmt, TextLmDatasetFormat):
         if pack:
             max_segments, slice_strategy = _resolve_pack_config(pack)
@@ -556,6 +591,7 @@ def dataset_for_component(
                 max_segments_per_example=max_segments,
                 slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
+                lookahead_window=component.pack_lookahead_window,
             )
         return CausalLmDataset(
             TokenSeqDataset(cache, Pos.size),
@@ -573,8 +609,11 @@ def dataset_for_component(
             slice_strategy=slice_strategy,
             mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
+            lookahead_window=component.pack_lookahead_window,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
+        if component.pack_lookahead_window is not None:
+            raise ValueError("pack_lookahead_window is not supported for prebuilt datasets.")
         return PrebuiltLmDataset(
             cache,
             Pos,
@@ -1306,6 +1345,8 @@ class LmDataConfig:
             return {}
 
         catalog = self._loaded_cache_catalog
+        # Materialize the tokenizer once before concurrent cache reads use it.
+        tokenizer = self.the_tokenizer
 
         # Loads are pure GCS metadata reads and parallelize cleanly. Builds may
         # enter `_distributed_build_cache`, which uses unidentified jax
@@ -1328,7 +1369,7 @@ class LmDataConfig:
                     entry.cache_dir,
                     entry.ledger,
                     component.format,
-                    self.the_tokenizer,
+                    tokenizer,
                     self.enforce_eos,
                 )
                 return name, cache, None
@@ -1340,7 +1381,7 @@ class LmDataConfig:
 
             if source is None:
                 try:
-                    cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                    cache = load_lm_dataset_cache(cache_path, component.format, tokenizer, self.enforce_eos)
                 except FileNotFoundError:
                     raise ValueError(f"No source and no cache found for component {name} split {split}")
                 return name, cache, None
@@ -1352,18 +1393,18 @@ class LmDataConfig:
                 if not cache_exists:
                     logger.warning(f"No source for {name} in {split} split and no cache at {cache_path}, skipping")
                     return name, None, None
-                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                cache = load_lm_dataset_cache(cache_path, component.format, tokenizer, self.enforce_eos)
                 return name, cache, None
 
             if not self.auto_build_caches:
                 if not cache_exists:
                     raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
-                cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                cache = load_lm_dataset_cache(cache_path, component.format, tokenizer, self.enforce_eos)
                 return name, cache, None
 
             if cache_exists:
                 try:
-                    cache = load_lm_dataset_cache(cache_path, component.format, self.the_tokenizer, self.enforce_eos)
+                    cache = load_lm_dataset_cache(cache_path, component.format, tokenizer, self.enforce_eos)
                     return name, cache, None
                 except FileNotFoundError:
                     logger.warning(
@@ -1401,7 +1442,7 @@ class LmDataConfig:
 
         for name, (cache_path, shard_source, fmt) in to_build:
             caches[name] = build_lm_dataset_cache(
-                cache_path, shard_source, fmt, self.the_tokenizer, self.cache_options, self.enforce_eos
+                cache_path, shard_source, fmt, tokenizer, self.cache_options, self.enforce_eos
             )
         return caches
 

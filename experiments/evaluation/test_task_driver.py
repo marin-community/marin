@@ -6,6 +6,7 @@
 import json
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from inspect import signature
 from types import SimpleNamespace
 
 import httpx
@@ -17,7 +18,7 @@ from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from iris.client.client import IrisClient, IrisContext, Job, iris_ctx_scope
 from iris.cluster.client import remote_client
-from iris.cluster.types import ResourceSpec
+from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation import task_worker
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity
@@ -123,7 +124,10 @@ class RecoveryEndpoint:
         question = payload["messages"][-1]["content"]
         if question == "colors/0" and payload["seed"] == 7 and self.failures_remaining:
             self.failures_remaining -= 1
-            return httpx.Response(self.status, json={"error": {"message": "temporary fixture failure"}})
+            # The client retries a transient failure after the endpoint's requested delay.
+            return httpx.Response(
+                self.status, json={"error": {"message": "temporary fixture failure"}}, headers={"retry-after-ms": "1"}
+            )
         content = "blue" if question == "paints/1" else "red"
         return httpx.Response(
             200,
@@ -140,7 +144,8 @@ class RecoveryEndpoint:
 
 @pytest.fixture
 def recovery_endpoint(monkeypatch):
-    endpoint = RecoveryEndpoint(failures_remaining=1)
+    # One logical request fails: the client's first request and each of its retries.
+    endpoint = RecoveryEndpoint(failures_remaining=task_worker.MODEL_REQUEST_RETRIES + 1)
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=Tokenizer(WordLevel({"[BOS]": 0, "[UNK]": 1}, unk_token="[UNK]")),
         bos_token="[BOS]",
@@ -186,13 +191,28 @@ def test_retry_drains_later_corpora_and_resumes_only_failed_attempt_with_same_se
 def test_retry_exhaustion_preserves_all_failed_physical_attempts_and_later_grades(
     tmp_path, recovery_corpora, recovery_endpoint, driver_config
 ):
-    recovery_endpoint.failures_remaining = 10
+    recovery_endpoint.failures_remaining = task_worker.DEFAULT_MAX_ATTEMPTS * (task_worker.MODEL_REQUEST_RETRIES + 1)
     output = str(tmp_path / "results")
     with pytest.raises(EvaluationInfrastructureError):
         execute_with_retries(recovery_corpora, output, driver_config, "http://fixture.test/v1", "unused", None)
     terminal = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert sorted(row["retry"] for row in terminal if row["outcome"] == "infra_error") == [0, 1, 2]
     assert len([row for row in terminal if row["outcome"] == "graded"]) == 7
+
+
+def test_in_process_graded_runs_never_build_the_local_sandbox(
+    tmp_path, recovery_corpora, recovery_endpoint, driver_config, monkeypatch
+):
+    recovery_endpoint.failures_remaining = 0
+
+    def unavailable():
+        raise RuntimeError("fixture host has no bubblewrap")
+
+    monkeypatch.setattr(task_worker, "LocalMachineFactory", unavailable)
+    output = str(tmp_path / "results")
+    execute_with_retries(recovery_corpora, output, driver_config, "http://fixture.test/v1", "unused", None)
+    terminal = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [row["outcome"] for row in terminal] == ["graded"] * 8
 
 
 @pytest.mark.parametrize(
@@ -249,6 +269,56 @@ def test_submission_serializes_iris_timeout_and_separates_connection_secrets(iri
     for name, value in connections.items():
         assert request.environment.secrets[name] == value
         assert value.encode() not in request.entrypoint.SerializeToString()
+
+
+def test_worker_regrades_a_responses_root_without_asking_the_endpoint_again(
+    tmp_path, recovery_corpora, recovery_endpoint, driver_config, monkeypatch
+):
+    recovery_endpoint.failures_remaining = 0
+    source, output = str(tmp_path / "results"), str(tmp_path / "regraded")
+    execute_with_retries(recovery_corpora, source, driver_config, "http://fixture.test/v1", "unused", None)
+    asked = len(recovery_endpoint.requests)
+    monkeypatch.setenv(SOLVER_ENDPOINT, "http://fixture.test/v1")
+    monkeypatch.setenv(SOLVER_API_KEY, "unused")
+
+    task_worker.run_worker(recovery_corpora, output, driver_config, 1, source)
+
+    assert len(recovery_endpoint.requests) == asked == 8
+    terminal = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [(row["outcome"], row["completion_tokens"]) for row in terminal] == [("graded", 0)] * 8
+    assert sum(dict(row["metrics"]).get("accuracy", 0) for row in ReadView(output).iter_rows("samples")) == 6
+
+
+def test_cli_sends_the_responses_root_to_the_iris_worker(tmp_path, iris_submission, driver_config, monkeypatch):
+    client, requests = iris_submission
+    config_path = tmp_path / "run.json"
+    config_path.write_text(driver_config.model_dump_json())
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-solver-key")
+    monkeypatch.setattr(task_driver, "open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "task_driver",
+            "--config",
+            str(config_path),
+            "--endpoint",
+            "https://solver.invalid/v1",
+            "--dataset",
+            "s3://fixture/corpus",
+            "--output",
+            "s3://fixture/regraded",
+            "--responses-from",
+            "s3://fixture/results",
+            "--no-wait",
+        ],
+    )
+
+    task_driver.main()
+
+    (request,) = requests
+    worker, arguments, options = Entrypoint.from_proto(request.entrypoint).resolve()
+    assert worker is task_worker.run_worker
+    assert signature(worker).bind(*arguments, **options).arguments["responses_from"] == "s3://fixture/results"
 
 
 def test_served_cli_submits_through_task_client_with_private_judge_connection(

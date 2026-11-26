@@ -1,5 +1,6 @@
 //! Shared Parquet input readers and rewrites over DataFusion scan files.
 
+use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
@@ -8,11 +9,12 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, FileScanConfigBuilder};
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_datasource::FileExtensions;
+use datafusion_datasource_parquet::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
 use futures::TryStreamExt;
-use parquet::arrow::async_reader::{
-    AsyncFileReader, ParquetObjectReader, ParquetRecordBatchStreamBuilder,
-};
+use parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStreamBuilder};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 
@@ -32,15 +34,17 @@ pub async fn open_parquet(source: &str, byte_size: u64) -> Result<ParquetInput, 
         .map_err(|error| {
             StatsError::Internal(format!("resolve Parquet input {source}: {error}"))
         })?;
-    let reader = ParquetObjectReader::new(backend, url.prefix().clone())
-        .with_file_size(byte_size)
-        .with_footer_size_hint(REMOTE_FOOTER_SIZE_HINT);
-    let builder =
-        ParquetRecordBatchStreamBuilder::new(Box::new(reader) as Box<dyn AsyncFileReader>)
-            .await
-            .map_err(|error| {
-                StatsError::Internal(format!("open Parquet input {source}: {error}"))
-            })?;
+    let reader: Box<dyn AsyncFileReader> = DefaultParquetFileReaderFactory::new(backend)
+        .create_reader(
+            0,
+            PartitionedFile::new(url.prefix().to_string(), byte_size),
+            Some(REMOTE_FOOTER_SIZE_HINT),
+            &ExecutionPlanMetricsSet::new(),
+        )
+        .map_err(|error| StatsError::Internal(format!("read Parquet input {source}: {error}")))?;
+    let builder = ParquetRecordBatchStreamBuilder::new(reader)
+        .await
+        .map_err(|error| StatsError::Internal(format!("open Parquet input {source}: {error}")))?;
     Ok(ParquetInput {
         builder,
         cache_guard: None,
@@ -127,15 +131,26 @@ pub fn rewrite_parquet_files(
     })
 }
 
+/// A copy of `file` whose only extension is `extension`, so an access plan
+/// from a later pruning stage replaces, rather than sits beside, an earlier one.
+pub fn with_only_extension<T: Any + Send + Sync>(
+    file: &PartitionedFile,
+    extension: T,
+) -> PartitionedFile {
+    let mut file = file.clone();
+    file.extensions = FileExtensions::default();
+    file.with_extension(extension)
+}
+
 fn rewrite_parquet_scans(
     plan: Arc<dyn ExecutionPlan>,
     rewrite: impl Fn(&FileScanConfig) -> FileScanConfig,
 ) -> Arc<dyn ExecutionPlan> {
     plan.transform_up(|plan| {
-        let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
+        let Some(exec) = plan.downcast_ref::<DataSourceExec>() else {
             return Ok(Transformed::no(plan));
         };
-        let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>() else {
+        let Some(config) = exec.data_source().downcast_ref::<FileScanConfig>() else {
             return Ok(Transformed::no(plan));
         };
         Ok(Transformed::yes(DataSourceExec::from_data_source(rewrite(

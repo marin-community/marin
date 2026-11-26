@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grade an attempt in a fresh machine with the verifyit command or a grader script.
+"""Grade an attempt with the verifyit command or a grader script, in the machine its placement selects.
 
-Grader inputs cross into the grading machine as one archive: verifier resources under
-``/tests``, shared and worker resources, captured agent files, the extracted answer, the captured
-state, the conversation, and copied artifacts. The agent's own machine never grades.
+A ``GraderMachine`` placement grades in a fresh machine. Resources, metadata and extracted
+conversation answers are installed there before environment setup; captured agent files and
+copied artifacts are installed after setup in a separate archive. An ``AgentMachine`` placement
+grades in the agent's machine after its harness ends; only the verifier resources, the extracted
+answer, the state and the conversation are staged there.
 """
 
 import asyncio
@@ -14,14 +16,18 @@ import json
 import math
 import os
 import tarfile
+import time
 from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
-from shellbox.machine import Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
+from shellbox.http_service import forward_http_posts
+from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import Spec, render_spec
 
@@ -30,12 +36,14 @@ from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import (
     CONVERSATION_ANSWERS,
     ActionSubmission,
+    AgentMachine,
     AnswerType,
     ArtifactKind,
     ConversationTrace,
     EnvironmentRequirements,
     ExitCodeReward,
     FileReward,
+    GraderMachine,
     GradingAttempt,
     JsonSubmission,
     MissingArtifactPolicy,
@@ -47,7 +55,6 @@ from taskcompendium.models import (
     TextMessage,
     TextSubmission,
     VerifierArtifact,
-    VerifierCommand,
     VerifyitGrader,
     grader_workspace,
     under_grader_root,
@@ -62,8 +69,13 @@ from taskcompendium.submission import conversation_messages, native_action_text,
 
 GRADING_TIMEOUT = 600.0
 SPEC_PATH = "/tests/verifier.toml"
-VERDICT_PATH = "/logs/verifier/verdict.json"
+VERDICT_DIRECTORY = "/logs/verifier"
+VERDICT_PATH = f"{VERDICT_DIRECTORY}/verdict.json"
 JUDGE_SPEC_PATH = "/tests/judge.toml"
+JUDGE_RELAY_PORT = 8790
+JUDGE_RELAY_URL = f"http://127.0.0.1:{JUDGE_RELAY_PORT}/v1"
+JUDGE_RELAY_KEY = "machine-local-judge-relay"
+JUDGE_RELAY_ROUTES = MappingProxyType({"/v1/chat/completions": "/chat/completions", "/v1/responses": "/responses"})
 STATE_PATH = "/app/state.json"
 STAGING_ARCHIVE = "/tmp/taskcompendium-grading.tar"
 DIAGNOSTIC_OUTPUT_BYTES = 16_384
@@ -112,13 +124,17 @@ def _captured_files(task: TaskSpec, attempt: GradingAttempt, paths: tuple[str, .
     return [StagedFile(path, data) for path, data in selected.items()]
 
 
-async def _run_checked(machine: Machine, command: Command, failure: str) -> None:
+async def _run_checked(machine: Machine, command: Command, failure: str, *, authored: bool = False) -> None:
     result = await machine.run(command)
     if result.reason == ExitReason.TIMED_OUT:
         raise _StepFailed(_infra_error(f"{failure}: timed out", GradingFailure.TIMEOUT, _diagnostics(result)))
     if result.exit_code != 0:
         raise _StepFailed(
-            _infra_error(f"{failure}: exit={result.exit_code}", GradingFailure.EXECUTION, _diagnostics(result))
+            _infra_error(
+                f"{failure}: exit={result.exit_code}",
+                _grader_failure(result) if authored else GradingFailure.EXECUTION,
+                _diagnostics(result),
+            )
         )
 
 
@@ -263,22 +279,39 @@ def _diagnostics(result: Result) -> dict[str, Any]:
     }
 
 
+def _grader_failure(result: Result) -> GradingFailure:
+    """Only an ordinary nonzero exit of an authored command establishes an authored process failure."""
+    if result.reason is ExitReason.EXITED and result.exit_code is not None and 0 < result.exit_code < 128:
+        return GradingFailure.GRADER_EXIT
+    return GradingFailure.EXECUTION
+
+
 def _infra_error(message: str, failure: GradingFailure, diagnostics: dict[str, Any]) -> GradeResult:
     return GradeResult(Outcome.INFRA_ERROR, None, message, diagnostics=diagnostics, failure=failure)
 
 
+def _json_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int | float)
+
+
 def _reward_value(data: bytes, file_format: RewardFileFormat, key: str) -> tuple[float, dict | None]:
     detail = None
-    if file_format == RewardFileFormat.JSON:
+    if file_format in (RewardFileFormat.JSON, RewardFileFormat.JSON_METRICS):
         document = json.loads(data)
         if not isinstance(document, dict):
             raise ValueError("A JSON reward file must hold an object")
         value = document[key]
-        if isinstance(value, bool) or not isinstance(value, int | float):
+        if not _json_number(value):
             raise ValueError("A JSON reward must be a number")
-        detail = document.get("detail")
-        if detail is not None and not isinstance(detail, dict):
-            raise ValueError("A JSON reward detail must be an object")
+        if file_format == RewardFileFormat.JSON_METRICS:
+            detail = {name: metric for name, metric in document.items() if name != key}
+            if not all(_json_number(metric) and math.isfinite(metric) for metric in detail.values()):
+                raise ValueError("JSON reward metrics must be finite numbers")
+            detail = detail or None
+        else:
+            detail = document.get("detail")
+            if detail is not None and not isinstance(detail, dict):
+                raise ValueError("A JSON reward detail must be an object")
     else:
         value = data.decode()
     reward = float(value)
@@ -324,32 +357,31 @@ async def _file_reward(machine: Machine, reward: FileReward, timeout: float, dia
     return _infra_error("Grader did not write a reward file", GradingFailure.MISSING_REWARD, diagnostics)
 
 
-async def _script_reward(
-    machine: Machine, grader: ScriptGrader, timeout: float, preparation_timeout: float | None
-) -> GradeResult:
-    if isinstance(grader.reward, FileReward):
-        paths = tuple(file.path for file in grader.reward.files)
-        directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
-        for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
-            await _run_checked(machine, Command(argv, timeout=preparation_timeout), "Cannot prepare reward files")
+async def _script_reward(machine: Machine, grader: ScriptGrader, timeout: float, env: Mapping[str, str]) -> GradeResult:
     result = await machine.run(
-        Command(grader.argv, cwd=grader.cwd, env=grader.env, timeout=timeout, output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES)
+        Command(
+            grader.argv,
+            cwd=grader.cwd,
+            env={**env, **grader.env},
+            timeout=timeout,
+            output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES,
+        )
     )
     diagnostics = _diagnostics(result)
     if isinstance(grader.reward, ExitCodeReward):
         passed = result.reason == ExitReason.EXITED and result.exit_code == 0
         return GradeResult(Outcome.GRADED, float(passed), passed=passed, diagnostics=diagnostics)
     if result.reason == ExitReason.TIMED_OUT:
-        return _infra_error("Grader command timed out", GradingFailure.TIMEOUT, diagnostics)
+        return _infra_error("Grader command timed out", GradingFailure.GRADER_TIMEOUT, diagnostics)
     if isinstance(grader.reward, FileReward):
         if result.exit_code != 0 and any(file.format is RewardFileFormat.VERDICT_JSON for file in grader.reward.files):
             return _infra_error(
-                f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
+                f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
             )
         return await _file_reward(machine, grader.reward, timeout, diagnostics)
     if result.exit_code != 0:
         return _infra_error(
-            f"Grader command failed: {result.reason}, exit={result.exit_code}", GradingFailure.EXECUTION, diagnostics
+            f"Grader command failed: {result.reason}, exit={result.exit_code}", _grader_failure(result), diagnostics
         )
     lines = [line.strip() for line in result.stdout.decode(errors="replace").splitlines() if line.strip()]
     try:
@@ -363,7 +395,9 @@ async def _script_reward(
     return GradeResult(Outcome.GRADED, reward, diagnostics=diagnostics)
 
 
-async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout: float) -> GradeResult:
+async def _verifyit_reward(
+    machine: Machine, spec: Spec, workspace: str, timeout: float, env: Mapping[str, str]
+) -> GradeResult:
     result = await machine.run(
         Command(
             (
@@ -376,17 +410,18 @@ async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout
             ),
             # Bootstrap trusted imports outside submitted Python modules.
             cwd="/",
+            env=dict(env),
             timeout=timeout,
             output_limit_bytes=DIAGNOSTIC_OUTPUT_BYTES,
         )
     )
     diagnostics = _diagnostics(result)
     if result.reason == ExitReason.TIMED_OUT:
-        return _infra_error("Verifier command timed out", GradingFailure.TIMEOUT, diagnostics)
+        return _infra_error("Verifier command timed out", GradingFailure.GRADER_TIMEOUT, diagnostics)
     if result.exit_code != 0:
         return _infra_error(
             f"Verifier command failed (exit_code={result.exit_code}): {diagnostics['stderr']}",
-            GradingFailure.EXECUTION,
+            _grader_failure(result),
             diagnostics,
         )
     with TemporaryDirectory(prefix="taskcompendium-verdict-") as directory:
@@ -397,44 +432,55 @@ async def _verifyit_reward(machine: Machine, spec: Spec, workspace: str, timeout
 
 @dataclass(frozen=True)
 class _SandboxGrading:
-    """A sandbox grader with its spec, image, working directory, time limit, and inputs from the task machine."""
+    """A machine grader with its spec, placement, working directory, and time limit."""
 
     grader: VerifyitGrader | ScriptGrader
     spec: Spec | None
-    environment: EnvironmentRequirements
-    workspace: str
+    placement: AgentMachine | GraderMachine
+    workspace: str | None
     limit: float
-    collect: tuple[VerifierCommand, ...]
-    artifacts: tuple[VerifierArtifact, ...]
 
 
-def _sandbox_grading(task: TaskSpec, task_machine: Machine | None, timeout: float | None) -> _SandboxGrading:
-    """The task's sandbox grader and the task machine inputs it needs to collect."""
+def _sandbox_grading(task: TaskSpec, timeout: float | None) -> _SandboxGrading:
+    """The task's machine grader."""
     grader = task.grader
-    if isinstance(grader, VerifyitGrader) and grader.environment is not None:
+    if isinstance(grader, VerifyitGrader) and grader.placement is not None:
         limit = GRADING_TIMEOUT if timeout is None else timeout
-        grading = _SandboxGrading(
-            grader, verifyit_spec(grader), grader.environment, grader_workspace(grader), limit, (), ()
-        )
+        grading = _SandboxGrading(grader, verifyit_spec(grader), grader.placement, grader_workspace(grader), limit)
     elif isinstance(grader, ScriptGrader):
         limit = grader.timeout if timeout is None else min(timeout, grader.timeout)
-        grading = _SandboxGrading(grader, None, grader.environment, grader.cwd, limit, grader.collect, grader.artifacts)
+        grading = _SandboxGrading(grader, None, grader.placement, grader.cwd, limit)
     else:
         raise TypeError(
-            f"Sandbox grading requires a verifyit grader with an environment or a script grader, not {grader.kind}"
+            f"Machine grading requires a verifyit grader with a placement or a script grader, not {grader.kind}"
         )
-    if (grading.collect or grading.artifacts) and task_machine is None:
-        raise ValueError("Collecting grader inputs requires the task machine")
     validate_output_paths(task.output_paths)
     return grading
 
 
-def _grading_files(task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrading) -> list[StagedFile]:
-    """Trusted resources and metadata installed before environment setup."""
-    files = [
-        *resource_files(task.resources.verifier, "/tests"),
-        *resource_files(task.resources.all + task.resources.worker, ""),
-    ]
+def _grader_machine_grading(
+    task: TaskSpec, task_machine: Machine | None, timeout: float | None
+) -> tuple[_SandboxGrading, GraderMachine]:
+    """The task's fresh-machine grader; collecting its inputs requires the task machine."""
+    grading = _sandbox_grading(task, timeout)
+    placement = grading.placement
+    if not isinstance(placement, GraderMachine):
+        raise TypeError("This grader grades in the agent's machine, not in a fresh grading machine")
+    if (placement.collect or placement.artifacts) and task_machine is None:
+        raise ValueError("Collecting grader inputs requires the task machine")
+    return grading, placement
+
+
+def _grading_files(
+    task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrading, submissions: list[StagedFile]
+) -> list[StagedFile]:
+    """Verifier resources, metadata and the extracted conversation answer among ``submissions``.
+
+    A fresh machine also receives the task's resources.
+    """
+    files = resource_files(task.resources.verifier, "/tests")
+    if isinstance(grading.placement, GraderMachine):
+        files.extend(resource_files(task.resources.all + task.resources.worker, ""))
     if attempt.state is not None:
         files.append(StagedFile(STATE_PATH, json.dumps(attempt.state.value, allow_nan=False).encode()))
     if grading.spec is not None:
@@ -444,6 +490,16 @@ def _grading_files(task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGra
         files.append(StagedFile(grading.grader.conversation_path, json.dumps(messages, allow_nan=False).encode()))
         if grading.grader.judge is not None:
             files.append(StagedFile(JUDGE_SPEC_PATH, render_spec(grading.grader.judge).encode()))
+    if task.answer_type in CONVERSATION_ANSWERS:
+        if grading.spec is not None:
+            answer_path = verifyit_answer_file(grading.spec)
+        else:
+            assert isinstance(grading.grader, ScriptGrader)
+            answer_path = grading.grader.answer_path
+        if answer_path is not None:
+            answer = next((file for file in reversed(submissions) if file.path == answer_path), None)
+            if answer is not None:
+                files.append(answer)
     return files
 
 
@@ -457,7 +513,7 @@ async def grade_in_sandbox(
     timeout: float | None = None,
     judge_connection: JudgeConnection | None = None,
 ) -> GradeResult:
-    """Grade with a verifyit grader that has an environment, or with a script grader.
+    """Grade with a ``GraderMachine`` placement: a verifyit or script grader in a fresh machine.
 
     The grading machine comes from ``factory`` with ``machine_spec``, applying the environment's
     working directory and variables. ``task_machine`` is the agent's
@@ -465,28 +521,16 @@ async def grade_in_sandbox(
     Input unpacking and environment setup use ``machine_spec.startup_timeout``. The grader's
     execution limit applies only to the grading command, so slow staging cannot consume its budget.
     """
-    grading = _sandbox_grading(task, task_machine, timeout)
-    validate_machine_spec(grading.environment, factory, machine_spec)
+    grading, placement = _grader_machine_grading(task, task_machine, timeout)
+    validate_machine_spec(placement.environment, factory, machine_spec)
     answer_file = None if grading.spec is None else verifyit_answer_file(grading.spec)
-    submissions = _captured_files(task, attempt, (*task.output_paths, *([answer_file] if answer_file else [])))
-    try:
-        if grading.spec is not None and task.answer_type in CONVERSATION_ANSWERS:
-            require_submission_compatibility(task)
-            assert answer_file is not None
-            submission = answer_submission(task, attempt)
-            terminal = terminal_grade(grading.spec, submission)
-            if terminal is not None:
-                return terminal
-            submissions.append(StagedFile(answer_file, _verifyit_answer_bytes(submission)))
-        elif isinstance(grading.grader, ScriptGrader) and grading.grader.answer_path is not None:
-            answer = _script_answer_bytes(answer_submission(task, attempt))
-            submissions.append(StagedFile(grading.grader.answer_path, answer))
-    except SubmissionFailure as error:
-        if not gradeable_empty_text(task, attempt, grading.spec):
-            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
-        empty_answer_file = grading.grader.answer_path if isinstance(grading.grader, ScriptGrader) else answer_file
-        assert empty_answer_file is not None
-        submissions.append(StagedFile(empty_answer_file, b""))
+    answers = _answer_files(task, attempt, grading)
+    if isinstance(answers, GradeResult):
+        return answers
+    submissions = [
+        *_captured_files(task, attempt, (*task.output_paths, *([answer_file] if answer_file else []))),
+        *answers,
+    ]
     if (
         grading.spec is not None
         and not submissions
@@ -496,6 +540,109 @@ async def grade_in_sandbox(
     return await _grade_staged(
         task, attempt, grading, submissions, factory, machine_spec, task_machine, dict(os.environ), judge_connection
     )
+
+
+def _answer_files(task: TaskSpec, attempt: GradingAttempt, grading: _SandboxGrading) -> list[StagedFile] | GradeResult:
+    """The extracted answer as the file the grader reads, or the grade that ends grading before the grader runs."""
+    answer_file = None if grading.spec is None else verifyit_answer_file(grading.spec)
+    try:
+        if grading.spec is not None and task.answer_type in CONVERSATION_ANSWERS:
+            require_submission_compatibility(task)
+            assert answer_file is not None
+            submission = answer_submission(task, attempt)
+            terminal = terminal_grade(grading.spec, submission)
+            if terminal is not None:
+                return terminal
+            return [StagedFile(answer_file, _verifyit_answer_bytes(submission))]
+        if isinstance(grading.grader, ScriptGrader) and grading.grader.answer_path is not None:
+            return [StagedFile(grading.grader.answer_path, _script_answer_bytes(answer_submission(task, attempt)))]
+    except SubmissionFailure as error:
+        if not gradeable_empty_text(task, attempt, grading.spec):
+            return GradeResult(Outcome.SUBMISSION_FAILURE, 0.0, str(error))
+        empty_answer_file = grading.grader.answer_path if isinstance(grading.grader, ScriptGrader) else answer_file
+        assert empty_answer_file is not None
+        return [StagedFile(empty_answer_file, b"")]
+    return []
+
+
+def _grading_env(
+    grading: _SandboxGrading, attempt: GradingAttempt, judge_connection: JudgeConnection | None
+) -> dict[str, str]:
+    """Variables the grading command receives beyond its environment's: the stop reason and a script judge."""
+    env = {}
+    if attempt.stop_reason is not None:
+        env["TASKCOMPENDIUM_STOP_REASON"] = attempt.stop_reason
+    if isinstance(grading.grader, ScriptGrader) and grading.grader.judge is not None:
+        if judge_connection is None:
+            raise ValueError("A script judge requires an explicit connection")
+        model = grading.grader.judge.model.strip() or (judge_connection.default_model or "").strip()
+        if not model:
+            raise ValueError("A script judge requires an explicit model")
+        env.update({BASE_URL_ENV: judge_connection.base_url, API_KEY_ENV: judge_connection.api_key, MODEL_ENV: model})
+    return env
+
+
+def _relay_script_judge(
+    machine: Machine, connection: JudgeConnection, request_timeout: float
+) -> AbstractAsyncContextManager[None]:
+    return forward_http_posts(
+        machine,
+        port=JUDGE_RELAY_PORT,
+        upstream=connection.base_url,
+        routes=JUDGE_RELAY_ROUTES,
+        headers={"Authorization": f"Bearer {connection.api_key}", "Content-Type": "application/json"},
+        timeout=request_timeout,
+    )
+
+
+async def grade_in_agent_machine(
+    task: TaskSpec,
+    attempt: GradingAttempt,
+    task_machine: Machine,
+    *,
+    timeout: float | None = None,
+    judge_connection: JudgeConnection | None = None,
+) -> GradeResult:
+    """Grade with an ``AgentMachine`` placement in the agent's machine, after its harness has returned.
+
+    Verifier resources, the verifyit specification, the conversation and the extracted answer are
+    staged as root and ``/logs/verifier`` is emptied; then the grading command runs with the
+    machine's default user and reads the agent's files where the agent left them. Each staging
+    command and the grading command run under the grader's execution limit. Machine failures
+    propagate.
+    """
+    grading = _sandbox_grading(task, timeout)
+    if not isinstance(grading.placement, AgentMachine):
+        raise TypeError("This grader grades in a fresh grading machine, not in the agent's machine")
+    answers = _answer_files(task, attempt, grading)
+    if isinstance(answers, GradeResult):
+        return answers
+    env = _grading_env(grading, attempt, judge_connection)
+    try:
+        with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
+            archive_path = Path(directory) / "grading.tar"
+            write_archive(archive_path, [*_grading_files(task, attempt, grading, []), *answers], [])
+            await _run_checked(
+                task_machine,
+                Command(
+                    (
+                        "sh",
+                        "-c",
+                        'rm -rf "$1" && mkdir -p "$1" && chmod 777 "$1"',
+                        "verdict-directory",
+                        VERDICT_DIRECTORY,
+                    ),
+                    cwd="/",
+                    timeout=grading.limit,
+                    user=ROOT,
+                ),
+                "Could not clear the verifier log directory",
+            )
+            await _install_grading_archive(task_machine, archive_path, grading.limit, ROOT)
+        await _prepare_reward_files(task_machine, grading, grading.limit)
+        return await _staged_reward(task_machine, grading, env)
+    except _StepFailed as failure:
+        return failure.result
 
 
 async def grade_empty_in_sandbox(
@@ -514,8 +661,8 @@ async def grade_empty_in_sandbox(
     and what it awards an empty answer. Graders that collect inputs from the task machine are
     unsupported. Machine failures propagate.
     """
-    grading = _sandbox_grading(task, None, timeout)
-    validate_machine_spec(grading.environment, factory, machine_spec)
+    grading, placement = _grader_machine_grading(task, None, timeout)
+    validate_machine_spec(placement.environment, factory, machine_spec)
     if isinstance(grading.grader, ScriptGrader):
         answer_file = grading.grader.answer_path
     else:
@@ -540,9 +687,19 @@ async def _grade_staged(
     judge_connection: JudgeConnection | None,
 ) -> GradeResult:
     """Stage the submissions with the task's other grader inputs in a fresh machine and grade them there."""
-    files = _grading_files(task, attempt, grading)
+    placement = grading.placement
+    assert isinstance(placement, GraderMachine)
+    environment = placement.environment
+    files = _grading_files(task, attempt, grading, submissions)
+    judge = grading.grader.judge if isinstance(grading.grader, ScriptGrader) else None
+    relay_connection = judge_connection if judge is not None and factory.backend is Backend.DAYTONA else None
+    guest_connection = (
+        replace(relay_connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
+        if relay_connection is not None
+        else judge_connection
+    )
     try:
-        for command in grading.collect:
+        for command in placement.collect:
             assert task_machine is not None
             await _run_checked(
                 task_machine,
@@ -550,15 +707,16 @@ async def _grade_staged(
                     command.argv,
                     cwd=command.cwd,
                     env=resolve_env_vars(command.env, host_environment),
-                    timeout=grading.limit,
+                    timeout=grading.limit if command.timeout is None else min(command.timeout, grading.limit),
                     user=ROOT,
                 ),
                 "Cannot collect grading inputs",
+                authored=True,
             )
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
             root = Path(directory)
             downloaded = []
-            for index, artifact in enumerate(grading.artifacts):
+            for index, artifact in enumerate(placement.artifacts):
                 assert task_machine is not None
                 local = root / f"artifact-{index}"
                 if await _download_artifact(task_machine, artifact, local, grading.limit):
@@ -567,49 +725,39 @@ async def _grade_staged(
             write_archive(archive_path, files, [])
             submission_archive = root / "submission.tar"
             write_archive(submission_archive, submissions, downloaded)
+            setup_started = time.monotonic()
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(
                     prepare_machine_spec,
-                    grading.environment,
+                    environment,
                     factory,
                     machine_spec,
                     host_environment,
                 )
                 # The grading machine starts in the grader's workspace unless its environment names a
                 # directory; the spec's own workdir is the task machine's, or empty for an image machine.
-                if grading.environment.working_directory is None:
+                # A grader without a workspace starts where its environment does.
+                if environment.working_directory is None and grading.workspace is not None:
                     prepared = replace(prepared, workdir=grading.workspace)
-                if attempt.stop_reason is not None:
-                    prepared = replace(prepared, env={**prepared.env, "TASKCOMPENDIUM_STOP_REASON": attempt.stop_reason})
-                if isinstance(grading.grader, ScriptGrader) and grading.grader.judge is not None:
-                    if judge_connection is None:
-                        raise ValueError("A script judge requires an explicit connection")
-                    model = grading.grader.judge.model.strip() or (judge_connection.default_model or "").strip()
-                    if not model:
-                        raise ValueError("A script judge requires an explicit model")
-                    prepared = replace(
-                        prepared,
-                        env={
-                            **prepared.env,
-                            BASE_URL_ENV: judge_connection.base_url,
-                            API_KEY_ENV: judge_connection.api_key,
-                            MODEL_ENV: model,
-                        },
-                    )
+                prepared = replace(prepared, env={**prepared.env, **_grading_env(grading, attempt, guest_connection)})
                 machine = await factory.create(prepared)
             try:
-                return await _grade_on(
-                    machine,
-                    archive_path,
-                    submission_archive,
-                    grading.workspace,
-                    grading.environment,
-                    grading.spec,
-                    grading.grader,
-                    grading.limit,
-                    preparation_timeout=machine_spec.startup_timeout,
-                    user=setup_user(factory.backend),
-                )
+                async with (
+                    _relay_script_judge(machine, relay_connection, judge.request_timeout)
+                    if relay_connection is not None and judge is not None
+                    else nullcontext()
+                ):
+                    setup_seconds = time.monotonic() - setup_started
+                    result = await _grade_on(
+                        machine,
+                        archive_path,
+                        submission_archive,
+                        environment,
+                        grading,
+                        preparation_timeout=machine_spec.startup_timeout,
+                        user=setup_user(factory.backend),
+                    )
+                return replace(result, verifier_setup_seconds=setup_seconds + result.verifier_setup_seconds)
             finally:
                 await machine.close()
     except _StepFailed as failure:
@@ -622,21 +770,20 @@ async def _grade_on(
     machine: Machine,
     archive_path: Path,
     submission_archive: Path,
-    workspace: str,
     environment: EnvironmentRequirements,
-    spec: Spec | None,
-    grader: VerifyitGrader | ScriptGrader,
-    timeout: float,
+    grading: _SandboxGrading,
     *,
     preparation_timeout: float | None,
     user: str | None,
 ) -> GradeResult:
+    setup_started = time.monotonic()
     await _install_grading_archive(machine, archive_path, preparation_timeout, user)
-    await _run_checked(
-        machine,
-        Command(("mkdir", "-p", workspace), cwd="/", timeout=preparation_timeout),
-        "Could not initialize the grading workspace",
-    )
+    if grading.workspace is not None:
+        await _run_checked(
+            machine,
+            Command(("mkdir", "-p", grading.workspace), cwd="/", timeout=preparation_timeout),
+            "Could not initialize the grading workspace",
+        )
     for setup in environment.setup_commands:
         await _run_checked(
             machine,
@@ -645,10 +792,30 @@ async def _grade_on(
         )
     # Setup provisions the declared environment; candidate files must replace its initial fixtures afterward.
     await _install_grading_archive(machine, submission_archive, preparation_timeout, user)
-    if spec is not None:
-        return await _verifyit_reward(machine, spec, workspace, timeout)
-    assert isinstance(grader, ScriptGrader)
-    return await _script_reward(machine, grader, timeout, preparation_timeout)
+    await _prepare_reward_files(machine, grading, preparation_timeout)
+    setup_seconds = time.monotonic() - setup_started
+    result = await _staged_reward(machine, grading, {})
+    return replace(result, verifier_setup_seconds=setup_seconds)
+
+
+async def _prepare_reward_files(machine: Machine, grading: _SandboxGrading, preparation_timeout: float | None) -> None:
+    """Remove stale reward files a script grader reads, and create their directories."""
+    grader = grading.grader
+    if not (isinstance(grader, ScriptGrader) and isinstance(grader.reward, FileReward)):
+        return
+    paths = tuple(file.path for file in grader.reward.files)
+    directories = tuple(sorted({str(PurePosixPath(path).parent) for path in paths}))
+    for argv in (("mkdir", "-p", *directories), ("rm", "-f", *paths)):
+        await _run_checked(machine, Command(argv, timeout=preparation_timeout), "Cannot prepare reward files")
+
+
+async def _staged_reward(machine: Machine, grading: _SandboxGrading, env: Mapping[str, str]) -> GradeResult:
+    """Run the staged grader and read its reward."""
+    if grading.spec is not None:
+        assert grading.workspace is not None, "Verifyit specs always name a workspace"
+        return await _verifyit_reward(machine, grading.spec, grading.workspace, grading.limit, env)
+    assert isinstance(grading.grader, ScriptGrader)
+    return await _script_reward(machine, grading.grader, grading.limit, env)
 
 
 async def _install_grading_archive(

@@ -265,6 +265,7 @@ def run_controller_serve(
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
+        observability_rows=cluster_config.finelog.controller_rows,
         dashboard_url=cluster_config.dashboard_url,
         federation_public_parent=cluster_config.federation_public_parent,
         budget_parent=cluster_config.budget_parent,

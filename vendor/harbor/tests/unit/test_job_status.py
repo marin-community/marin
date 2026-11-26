@@ -1,19 +1,23 @@
 import asyncio
+import json
 import threading
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
+from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import harbor.environments.factory as environment_factory
 import harbor.utils.artifact_writer as artifact_writer
-import pytest
 from harbor.agents.factory import AgentFactory
+from harbor.archive import ProcessTrialArchive
 from harbor.environments.base import ExecResult
 from harbor.job import Job
 from harbor.metrics.mean import Mean
 from harbor.models.agent.name import AgentName
-from harbor.models.job.config import JobConfig
+from harbor.models.job.config import JobConfig, TelemetryConfig
 from harbor.models.job.result import JobResult, JobStats
 from harbor.models.metric.config import MetricConfig
 from harbor.models.metric.type import MetricType
@@ -32,7 +36,7 @@ from harbor.models.trial.result import (
 from harbor.models.verifier.result import VerifierResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
 from harbor.utils.artifact_writer import ArtifactWriter, get_artifact_writer
-
+from harbor_config.models.job.config import ArchiveConfig
 from tests.unit.fake_agent import FakeAgent
 from tests.unit.test_trial_cleanup import MountedEnvironment
 
@@ -171,32 +175,90 @@ async def _flush_job_snapshots(job: Job) -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("metric_type, expected", [(None, 1.0), (MetricType.SUM, 2.0)])
-async def test_explicit_task_source_preserves_completed_metrics(
-    tmp_path: Path, metric_type: MetricType | None, expected: float, monkeypatch
+@pytest.mark.parametrize(
+    "metric_type, expected, schedule",
+    [
+        (None, 1.0, "sequential"),
+        (MetricType.SUM, 2.0, "overlap"),
+        (None, 1.0, "cancel"),
+        (None, 1.0, "archive_open_error"),
+        (None, 1.0, "archive_close_error"),
+        (None, 1.0, "cancel_drain"),
+    ],
+)
+async def test_job_preserves_metrics_and_telemetry_across_teardown(
+    tmp_path: Path,
+    metric_type: MetricType | None,
+    expected: float,
+    schedule: str,
+    monkeypatch,
+    telemetry_capture,
 ) -> None:
     monkeypatch.setattr(
         environment_factory, "_load_environment_class", lambda _: ScoredEnvironment
     )
-    task_dir = tmp_path / "task"
-    task_dir.mkdir()
-    (task_dir / "task.toml").write_text('[task]\nname = "test/test-task"\n')
-    (task_dir / "instruction.md").write_text("Do nothing.")
-    (task_dir / "environment").mkdir()
-    (task_dir / "tests").mkdir()
-    (task_dir / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
-    job = await Job.create(
-        JobConfig(
-            job_name="named-source",
-            jobs_dir=tmp_path / "jobs",
-            tasks=[TaskConfig(path=task_dir, source="named-dataset")],
-            n_attempts=2,
-            metrics=[] if metric_type is None else [MetricConfig(type=metric_type)],
-            agents=[AgentConfig(name="pi")],
-            environment=EnvironmentConfig(),
-        )
+    started = {name: asyncio.Event() for name in ("first", "second")}
+    release = {name: asyncio.Event() for name in started}
+
+    class GatedAgent(FakeAgent):
+        async def run(self, instruction, environment, context):
+            started[instruction].set()
+            await release[instruction].wait()
+
+    monkeypatch.setitem(AgentFactory._AGENT_MAP, AgentName.PI, GatedAgent)
+    config = TelemetryConfig(
+        endpoint=telemetry_capture.endpoint,
+        root_run_uid="training-run",
+        execution_uid="native-attempt",
+        serving_job_id="/test/native",
     )
-    try:
+    archive_config = None
+    if schedule.startswith("archive_"):
+        root = tmp_path / "archive"
+        if schedule == "archive_open_error":
+            root.touch()
+        archive_config = ArchiveConfig(root=str(root), dataset="named-dataset")
+        if schedule == "archive_close_error":
+            real_close = ProcessTrialArchive.close
+
+            def close_with_io_error(archive):
+                real_close(archive)
+                raise OSError("archive close failed")
+
+            monkeypatch.setattr(ProcessTrialArchive, "close", close_with_io_error)
+    independent_successor = archive_config is not None or schedule == "cancel_drain"
+    jobs = []
+    for name in started:
+        task_dir = tmp_path / name
+        task_dir.mkdir()
+        (task_dir / "task.toml").write_text(f'[task]\nname = "test/{name}"\n')
+        (task_dir / "instruction.md").write_text(name)
+        (task_dir / "environment").mkdir()
+        (task_dir / "tests").mkdir()
+        (task_dir / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
+        jobs.append(
+            await Job.create(
+                JobConfig(
+                    job_name=name,
+                    jobs_dir=tmp_path / "jobs",
+                    tasks=[TaskConfig(path=task_dir, source="named-dataset")],
+                    n_attempts=1 if schedule == "cancel" and name == "first" else 2,
+                    metrics=(
+                        [] if metric_type is None else [MetricConfig(type=metric_type)]
+                    ),
+                    agents=[AgentConfig(name="pi")],
+                    environment=EnvironmentConfig(),
+                    telemetry=(
+                        config.model_copy(update={"execution_uid": "successor-attempt"})
+                        if independent_successor and name == "second"
+                        else config
+                    ),
+                    archive=archive_config if name == "first" else None,
+                )
+            )
+        )
+
+    async def run(job):
         result = await job.run()
         assert len(result.trial_results) == 2
         assert all(trial.exception_info is None for trial in result.trial_results)
@@ -209,11 +271,107 @@ async def test_explicit_task_source_preserves_completed_metrics(
         )
         assert persisted.stats.n_completed_trials == 2
         assert persisted.stats.n_errored_trials == 0
+        assert "telemetry" not in json.loads((job.job_dir / "config.json").read_text())
         assert len(persisted.stats.evals) == 1
         evaluation = next(iter(persisted.stats.evals.values()))
         assert evaluation.metrics == [{metric_type or "mean": expected}]
+
+    running = []
+    try:
+        if schedule == "cancel_drain":
+            telemetry_capture.hold_terminal_for = str(jobs[0].id)
+            release["first"].set()
+            running = [asyncio.create_task(run(jobs[0]))]
+            assert await asyncio.to_thread(telemetry_capture.terminal_received.wait, 5)
+            for _ in range(2):
+                running[0].cancel()
+                # Deliver each cancellation while the final HTTP ACK is withheld.
+                await asyncio.sleep(0)
+            assert not running[0].done()
+            telemetry_capture.release_terminal.set()
+            with pytest.raises(asyncio.CancelledError):
+                await running[0]
+            release["second"].set()
+            await run(jobs[1])
+        elif schedule == "sequential" or archive_config is not None:
+            for index, job in enumerate(jobs):
+                release[job.config.job_name].set()
+                if archive_config is not None and index == 0:
+                    error = (
+                        BrokenProcessPool
+                        if schedule == "archive_open_error"
+                        else OSError
+                    )
+                    with pytest.raises(error):
+                        await run(job)
+                else:
+                    await run(job)
+        else:
+            running = [asyncio.create_task(run(job)) for job in jobs]
+            await asyncio.gather(*(event.wait() for event in started.values()))
+            if schedule == "cancel":
+                running[0].cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await running[0]
+            else:
+                release["first"].set()
+                await running[0]
+            release["second"].set()
+            await running[1]
+
+        names = {str(job.id): job.config.job_name for job in jobs}
+        events = defaultdict(Counter)
+        phases = defaultdict(set)
+        work_kinds = defaultdict(set)
+        terminals = {}
+        for resource, record in telemetry_capture.records:
+            assert resource["service"] == "harbor"
+            assert resource["attributes"]["run_id"] == "training-run"
+            assert resource["attributes"]["serving_job_id"] == "/test/native"
+            assert "harbor_job_uid" not in resource["attributes"]
+            assert "harbor_job_name" not in resource["attributes"]
+            identity = record["attributes"]["harbor_job_uid"]
+            assert record["attributes"]["harbor_job_name"] == names[identity]
+            assert resource["attributes"]["execution_uid"] == (
+                "successor-attempt"
+                if independent_successor and names[identity] == "second"
+                else "native-attempt"
+            )
+            events[identity][record["name"]] += 1
+            if record["name"] == "phase_duration_seconds":
+                phases[identity].add(record["attributes"]["phase"])
+            if record["name"] == "work_completed":
+                work_kinds[identity].add(record["attributes"]["work_kind"])
+            if record["kind"] == "event":
+                assert record["body"]["harbor_job_uid"] == identity
+            if record["name"] == "job_terminal":
+                terminals[names[identity]] = record["body"]["outcome"]
+        for identity, name in names.items():
+            assert events[identity]["job_started"] == 1
+            assert events[identity]["job_terminal"] == 1
+            assert "job" in phases[identity]
+            assert "job" in work_kinds[identity]
+            if schedule != "archive_open_error" or name != "first":
+                assert {"trial_start", "trial_terminal", "trial_queue_wait"} <= events[
+                    identity
+                ].keys()
+                assert {"trial", "queue_wait"} <= phases[identity]
+                assert "trial" in work_kinds[identity]
+        assert terminals == {
+            "first": (
+                "failed"
+                if archive_config is not None
+                else ("cancelled" if schedule == "cancel" else "succeeded")
+            ),
+            "second": "succeeded",
+        }
     finally:
-        job._close_logger_handlers()
+        telemetry_capture.release_terminal.set()
+        for task in running:
+            task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
+        for job in jobs:
+            job._close_logger_handlers()
 
 
 @pytest.mark.unit

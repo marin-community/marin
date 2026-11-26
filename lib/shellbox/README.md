@@ -36,14 +36,14 @@ Shared contracts and OCI image preparation live at the package root. Backend mac
 The `gvisor` extra adds no Python dependency: a wheel cannot register a Docker
 runtime on the host. The Daytona SDK and current Iris dependencies require
 `--prerelease allow`. A checkout can supply Iris as a workspace dependency.
-Iris uses `CONTAINER_PROFILE_SANDBOX`: gVisor, no cluster environment,
-credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
+Iris uses `CONTAINER_PROFILE_SANDBOX`: the cluster's sandbox runtime, no cluster
+environment, credentials or workspace bundle. `NetworkPolicy.ALLOW` permits public internet
 addresses; `DENY` denies external traffic. Neither grants cluster access.
 
 Iris commands and file transfer use the existing `ExecInContainer` RPC and require
 `/bin/sh`, `base64`, `tar`, `head`, `tail` and `wc` in the task image.
 Daytona uses its filesystem API and requires `/bin/sh`, `tar`, `head` and `wc`
-for commands and directory transfer.
+for commands and directory transfer; `open_process` also needs Python 3.8 or newer.
 Daytona uploads each control wrapper into a private command directory before execution,
 so nested shell quoting does not enlarge the argument sent to its execution API.
 The original argv, stdin, environment and working directory are preserved;
@@ -171,7 +171,7 @@ The host handler receives bounded requests on that process's stdout and performs
 operations it authorizes. Model URLs and authentication stay with the host
 handler; a runtime service uses the group-local listener URL and a dummy API key.
 The group needs no route to a model server or cloud storage. The listener requires
-Python 3 in its member image. It supports bounded nonstreaming GET and POST
+Python 3.8 or newer in its member image. It supports bounded nonstreaming GET and POST
 requests, with no caller headers forwarded to the host handler. Request IDs allow
 concurrent calls; responses remain whole messages, without SSE or token streaming.
 There is no per-request exec or guest control endpoint.
@@ -268,13 +268,19 @@ Docker and Daytona stop the command's process group on a timeout. A successful s
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker and Daytona also stop the process group on caller cancellation. Daytona preserves the machine only after confirming the stop and removing private command files; otherwise it closes the machine.
 
+Daytona repeats a request that failed in transit: one that lost its connection or got a 502, 503, or 504 status.
+A command whose request failed in transit runs once: the command script claims its private directory before it runs,
+and the exit trap records the exit code that the machine then reads. The machine waits for that exit code until the command's timeout.
+If the command shell was killed before it recorded an exit code, or the failure persists, `Machine.run` raises an infrastructure error.
+
 Docker keeps the process-group ID on the host and stops commands as the execution user or image default user.
 Before Docker machine reuse, a bounded root probe confirms that the group has no live members. Zombies do not prevent reuse.
 Daytona records process-group leader PIDs as root in a root-only directory before the command changes users.
 Daytona images require `setsid`. Non-root commands require an account in the task machine and util-linux `su --session-command`.
 Model commands that run as root can stop other root-owned processes.
 
-For Daytona, set `DAYTONA_API_KEY` and `DAYTONA_API_URL`. `DAYTONA_TARGET` is optional.
+For Daytona, set `DAYTONA_API_KEY`. The API URL and target region are constants
+(`https://app.daytona.io/api` and `us`).
 Alternatively, supply a function that creates a configured `AsyncDaytona` client to `DaytonaMachineFactory`.
 Each machine owns and closes its client. In the default build mode, the factory
 creates sandboxes from shared snapshots. Snapshot names derive from the registry
@@ -282,6 +288,18 @@ reference or build-context contents and the requested resources. Use immutable
 image references. A mutable tag can select a snapshot built from an earlier image.
 Snapshot creation requires available organization quota.
 Machine cleanup deletes the sandbox and retains the snapshot for reuse.
+`DaytonaMachineFactory(auto_stop_interval=30)` sets the idle-stop interval in
+minutes and configures Daytona to delete sandboxes immediately on stop. An open
+machine renews activity at one-third of that interval because a running guest command does not
+reset Daytona's idle timer. Closing the machine stops renewal before deleting
+the sandbox. If the client process exits without cleanup, renewal stops and idle cleanup
+reclaims the sandbox. `auto_stop_interval=0` disables idle stop and renewal.
+`ttl_minutes` remains the hard wall-clock cap, defaulting to 360 minutes,
+including while activity is renewed.
+Pass `labels={"owner": "agent-eval", "lane": "eval", "job": "swe-rebench"}`
+to attach ownership metadata to every sandbox the factory creates. Use a job
+prefix and lane, without personal information or credentials. The default
+labels contain only `owner=shellbox`; callers supply the lane and job labels.
 The factory accepts `DaytonaNetworkPolicy` with `block_all`, `unrestricted`,
 `network_allow_list`, or `domain_allow_list`. The two allow-list modes require a
 `value`. Without a policy override, the factory uses `MachineSpec.network`.
@@ -415,7 +433,7 @@ finally:
 
 - Each machine has a private root under the host's temporary directory, removed by `close`. Commands see the host's `/usr`, `/bin`, `/sbin` and `/lib*` read-only, together with explicit `read_only` mounts. `/etc` contains copies of only the account databases, name resolution, loader cache, timezone, alternatives and public CA certificates listed in `RUNTIME_CONFIGURATION`. Host shell startup files, `/etc/environment`, password hashes, private keys and other configuration are absent. `/sys` is empty and read-only. `/opt`, `/app`, `/tests`, `/tmp` and `HOME` belong to the machine. Software under the shared program directories and explicit mounts must be trusted and free of credentials.
 - Machines are independent, so a process may run any number of them at once.
-- Files, background processes, PID, IPC and UTS namespaces persist until `close`, with a private `/proc`, `/dev` and `/dev/shm`. Host supervisors and their namespace handles stay outside the guest PID namespace. Under `NetworkPolicy.DENY` a private network contains only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` the machine uses the host network. A successful command may leave a server running for later commands. With writable cgroup delegation, a command timeout or cancellation kills that command and its descendants, including processes that call `setsid`, while preserving files, peers, helpers and background processes from earlier successful commands. Without delegation, interruption closes the machine and every peer. Set `LocalMachineFactory(ttl=...)` to bound the lifetime even when a caller forgets to close it.
+- Files, background processes, PID, IPC and UTS namespaces persist until `close`, with a private `/proc`, `/dev` and `/dev/shm`. Host supervisors and their namespace handles stay outside the guest PID namespace. The machine's lifecycle init is PID 1 of that namespace and keeps the sleeper `sleep 2147483647` running as its child: quiesces that spare PID 1 of the machine, as shared grading quiesces do, cannot close it, and quiesces that spare machines by the sleeper's exact argv cannot either. The init reaps orphaned guest processes, so a background process whose command exited is collected when it dies, and `kill -0`, `/proc` and `pgrep` stop reporting it once it is gone, as with the Docker backend's `--init`. Under `NetworkPolicy.DENY` a private network contains only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` the machine uses the host network. A successful command may leave a server running for later commands. With writable cgroup delegation, a command timeout or cancellation kills that command and its descendants, including processes that call `setsid`, while preserving files, peers, helpers and background processes from earlier successful commands. Without delegation, interruption closes the machine and every peer. Set `LocalMachineFactory(ttl=...)` to bound the lifetime even when a caller forgets to close it.
 - `upload` and `download` run tar inside the guest with a fixed control environment, so absolute symlinks resolve inside the guest root. Uploads to read-only directories fail. Downloads preserve interior symlinks; later downloads replace those links without following them into the host. Host destination roots and ancestors must not be symlinks. A missing guest path raises `RuntimeError`, as the container backends do.
 - With `system_directories=SystemDirectories.COPY_ON_WRITE`, each host-program machine overlays `/usr`, `/bin`, `/sbin` and `/lib*` with a writable layer and makes its private `/etc` writable. Writes persist between commands and `close` discards them; the host's files never change. Writes follow file permissions. `/sys` and host submounts inside overlaid program directories stay read-only; `read_only_system_mounts()` lists those submounts. Downloading the entire host-program root is refused. This mode needs overlayfs and a temporary directory that is not itself on overlayfs.
 - Commands never inherit the host environment, which can hold cluster credentials. Host-program commands get `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`. The trusted host launcher reads configuration through a private file descriptor, keeping environment values out of host process listings, and applies task and command variables after isolation. Its own fixed environment prevents loader options such as `LD_PRELOAD` from affecting it.

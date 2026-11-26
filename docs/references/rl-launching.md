@@ -50,19 +50,77 @@ Iris forwards available HF/W&B/CoreWeave credentials and the current application
 bundle as read-only files; ordinary child jobs inherit that bundle by default.
 See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
 
+Use `--sft PRESET` on the RL command to train a starting model and use its export for RL.
+Both stages use the RL layout's storage prefix.
+
+```bash
+MARIN_PREFIX=s3://marin-us-east-02a/marin uv run python -m experiments.post_training.snowball_rl \
+  --preset train-long --sft mixture-262k-32node --version 2026.11.19.1 --plan
+```
+
+The Mochi RL presets default to the verified CoreWeave copy of the production Mochi SFT
+step-400407 export. Its SkyRL model manifest binds the weights to the SFT run's tokenizer.
+Use the `train-long` preset to plan the standard one-rack loop with the default initializer.
+
+```bash
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-long --version YYYY.MM.DD --plan
+```
+
+The one-rack presets use the pinned two-layer DSpark draft with four proposals when
+the resolved initializer matches step 400407. Selecting a different task mix with
+`--tasks` keeps that default. Three-rack presets use plain decoding pending
+measurements with their 262k context and FlashInfer serving configuration.
+
+Use `--init NAME@VERSION`
+to start from another published model or select an SFT preset with `--sft`.
+Mochi writes artifacts under the cluster's
+`tmp/ttl=3d/` prefix. Set `MARIN_PREFIX` to use a durable prefix.
+
+```bash
+uv run python -m experiments.post_training.mochi_rl \
+  --preset train-medium --sft mixture-262k-176node --version 2026.11.19.1 --plan
+```
+
+Use Mochi's `train-medium-agentic` for two updates on a task mix. Pass a versioned selection
+containing both task families with `--tasks NAME@VERSION`. Enable recovery with
+`--checkpoints latest`. Add `--export latest` to export the final policy.
+
+The Snowball and Mochi preset commands use `--resume NAME@VERSION` to start from
+the newest retained recovery checkpoint of a finished run. Use a checkpointing
+preset and an immutable version. If the source checkpoint changes between
+submission and coordinator startup, the command refuses the launch and shows
+both step numbers. The source checkpoint stays in temporary storage for the
+retention period recorded by its run.
+
+Use the run's resolved launch document to export its best committed native
+checkpoint, including after an early stop.
+
+```bash
+uv run --isolated --frozen --project vendor/skyrl --extra cpu python -m cloud.iris.export_hf_checkpoint \
+  --launch-config ./training-launch.yaml --recover-best
+```
+
+The `cpu` extra runs on macOS. The `vllm` and `megatron` extras and GPU torch
+builds do not run on macOS; export and training jobs run on Iris.
+
 ## One Hydra launch document
 
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
 envelope and no internal command-line rendering layer.
 
-The nested runtime uses the checkout's RolloutEngine for task execution and model requests.
-Harbor tasks use Shellbox. This runtime does not support Harbor agent harnesses such as OpenCode and Terminus.
-See [task rollouts](task-rollouts.md) for task execution and backend limits.
+SkyRL runs prepared TaskSpecs through RolloutEngine and Shellbox. It supplies the serving engine's
+sampled token IDs and log probabilities to the same session for shell, Pi, and Terminus-2 tasks.
+The launch recipe binds agent settings, machine resources, and separately scoped training and
+checkpoint evaluation Daytona credentials. See [task rollouts](task-rollouts.md) for execution
+and backend limits.
 
-The launcher runs `uv run --isolated --project vendor/skyrl --frozen --no-group dev
-marinskyrl` in a child process. SkyRL has its own lock and is excluded from Marin's
+The launcher runs the vendored uv version through `uv tool run`, then starts
+SkyRL's frozen CPU environment with `uv run --project vendor/skyrl`. Both uv
+selections prefer a compatible system interpreter over cached managed builds,
+matching Iris task setup. SkyRL has its own lock and is excluded from Marin's
 workspace. The child discards the parent's Python environment selection. SkyRL
-installs Marin libraries and Harbor from editable paths in the checkout.
+installs the Marin libraries from editable paths in the checkout.
 Marin calls SkyRL through the executable.
 
 Iris submits the Marin repository through its standard workspace bundle.
@@ -108,6 +166,21 @@ submission; warm drafts read it without a cache lock. If any listed draft file o
 the completion marker is missing, node preparation repairs the mirror through
 the existing Hub cache path. Local and object-store inputs keep their loading paths.
 
+Coordinated vLLM data-parallel startup uses `trainer.model_load_retry` for both
+staged local weights and S3 streaming. An actor startup failure recreates the
+whole engine gang with fresh rendezvous ports, within the existing
+`generator.engine_init_timeout_seconds` deadline.
+
+DP rendezvous ports are bound and held on the engine's target node, excluding
+that node's `/proc/sys/net/ipv4/ip_local_port_range`, kernel-reserved service
+ports, and Iris's default named-port range. Kernel reservations also cover
+deployment-specific named-port ranges published by Iris's worker bootstrap.
+The same reserved RPC and process-group port vector is passed explicitly to
+every rank. Rank zero releases the sockets immediately before vLLM binds them;
+excluding the kernel's ephemeral range prevents outbound connections from
+taking those ports during the handoff. The former fixed 20000–29999 pool
+overlapped Iris's widened ephemeral range.
+
 `prepare` only validates the config. Submitting Hub models requires Iris job
 context; run the [experiment entry point](#experiment-entry-point) with `--run`
 to start its CPU coordinator. A local launcher fails before downloading weights.
@@ -133,6 +206,36 @@ resolved launch.yaml +-> configure Ray and staging
 This shape keeps validation mechanical. Adding a launch setting means adding one structured field and
 reading it where the behavior lives; it does not require adding matching CLI flags, argv builders, and
 forwarding tests at every process boundary.
+
+## Publish a checkpoint export
+
+The checkpoint-export GPU job stops after writing and verifying the object-store
+export. When its request includes `hf_hub_repo_id`, the launcher waits for that
+job to exit, then submits a CPU Iris job to upload through the existing Hub
+publisher. The CPU job targets the export's CoreWeave cluster or pins the GCS
+bucket's region on GCP. It reserves staging disk from the export manifest's file
+sizes and downloads up to four files at a time into Iris's disk-backed `/cache`
+mount. This bounds concurrent shard buffers and avoids Docker's memory-backed
+`/tmp`.
+Hub credentials and object-store credentials use Iris's inherited secret files.
+`hf_hub_private`, `hf_hub_revision`, and both `hf_upload_mode` values are preserved.
+
+A failed upload leaves `hf_export_request.json` pending. Rerun the same request:
+a verified object-store export skips GPU conversion and submits only CPU
+publication. A missing or corrupt export still requires conversion. For example,
+with the original checkpoint directory, resolved training configuration, and
+export placement in these variables:
+
+```bash
+uv run --isolated --frozen --project vendor/skyrl --extra cpu --no-group dev \
+  python -m cloud.iris.export_hf_checkpoint \
+  --request "$CHECKPOINT_PATH" --launch-config "$LAUNCH_CONFIG" \
+  --cluster "$CLUSTER" --gpu-variant "$GPU_VARIANT"
+```
+
+Requests become complete only after all requested publication succeeds. Manual
+`--no-wait` exports remain available without a Hub destination; Hub publication
+requires waiting so the CPU job starts after the GPU allocation is released.
 
 ## SkyRL role plan
 
@@ -194,7 +297,7 @@ allocation then disagrees with the derived role plan and is rejected before subm
 
 The preflight requires positive role dimensions, checks batch divisibility, and requires an explicit
 forward microbatch size to equal the training microbatch size. It checks local engine placement,
-rejects unsupported transport settings and separate critic roles, and requires an explicit KL-loss
+rejects unsupported transport settings and requires an explicit KL-loss
 setting. For every launcher, preflight checks policy and reference Megatron parallelism against
 the GPUs assigned to each role. Megatron builds separate dense and expert grids. The role GPU count
 must be divisible by both `TP * PP * CP` and `ETP * EP * PP`, where ETP is expert tensor
@@ -202,12 +305,31 @@ parallelism. An omitted or null ETP inherits the role's TP before these checks.
 Context-parallel ranks participate in the expert grid, so EP need not divide dense
 data parallelism.
 
+A rollout window holds `max_staleness_steps + 1` batches. The training pool needs a distinct
+prompt for each group slot in the window and one spare after dataset preparation.
+
+Set `trainer.rollout_buffer.groups_per_family` for fixed numbers of prompt groups per task family in
+each training batch. Each Parquet training row supplies its `family`. The counts must sum to
+`trainer.train_batch_size`. Use `batch_policy: full_batch` and leave `data.sampling.kind` unset.
+Apply the prompt minimum to each family using its group count per batch. A rejected group releases
+a slot in its own family.
+Each family draws prompts from its own seeded passes. Checkpoints retain the position in each
+family’s order. Omit the family counts to use the configured prompt order, including curriculum sampling.
+
 ## Artifact and runtime boundaries
 
 Identity-bearing inputs belong in `SkyRLSpec`: model and tokenizer,
 data artifacts, a starting native checkpoint, topology, seed, retention, and the rendered config. Cluster routing,
 host resources, priority, and retry policy belong in `IrisSkyRLExecution`; changing placement must
 not fork artifact identity.
+
+The `records` tracker requires a fresh attempt ID and `iris.max_retries=0`.
+Its Iris jobs also use zero preemption retries. After a preemption, start a fresh
+attempt with `trainer.resume_mode=from_path` and `trainer.resume_path` pointing
+to its saved `global_step_N` checkpoint. Known checkpoint ancestors contribute
+metrics through the resumed boundary; a checkpoint without recorded ancestry
+contributes only the new attempt's metrics. Other tracker backends retain Iris's
+ordinary preemption retry budget.
 
 `IrisSkyRLExecution.container_profile` accepts an `iris.rpc.job_pb2.ContainerProfile` enum for the
 coordinator and trainer jobs. Enum names are serialized at the launch boundary. It defaults to `None`,
@@ -220,6 +342,15 @@ can point at an incomplete export. Keep resume behavior and terminal export expl
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
 
+For a single immutable Parquet task selection, the SkyRL driver caches validated rows and prompt
+lengths for 14 days in the checkpoint storage backend's temporary bucket. The key includes the
+selection's Parquet and manifest bytes, the loaded fast tokenizer and template, task runtime settings,
+and the installed preparation code. Each launch applies its own prompt limit to the cached lengths.
+A cache miss validates the selection, writes batches of prepared rows and lengths to driver-local disk,
+and publishes the Parquet object when complete. A hit decodes the object in batches to driver-local
+disk. The driver memory-maps the prepared rows during training, so its local disk needs space for
+the uncompressed dataset as well as the staged Parquet file.
+
 Shared W&B trackers bound final SDK uploads to 30 seconds per process. The
 training entrypoint first waits up to 30 seconds for remote node loggers, then
 finishes its own uploads using the same SDK deadline. These waits can take up to
@@ -229,6 +360,13 @@ or Failed after a primary upload timeout even when training succeeds. Some W&B
 records may remain unuploaded. Other cleanup can still exhaust the existing
 120-second teardown watchdog.
 
+Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
+Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`
+pickle files under `<trainer.export_path>/dumped_data/global_step_<step>_training_input.pkl`.
+Local and cloud export paths use the same format. Dumps contain the batch after
+importance-sampling corrections and advantage calculation. Group UIDs and raw
+rewards are removed before dumping.
+
 SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
 that needs only the latest recovery point, set
 `retention=SkyRLRetentionPolicy(resume_checkpoint_count=1)` in `SkyRLSpec`.
@@ -236,11 +374,12 @@ Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
 recipes can set that field directly. Cleanup runs after the replacement checkpoint
 has uploaded and its latest-checkpoint marker has been published. Pending HF
 exports and the selected best native checkpoint remain protected beyond this
-rolling window. HF export is opt-in: `skyrl_step(..., export_hf=True)` requests a durable terminal
-model and a separate export job. The structured launch config defaults `run.export_hf`
-to false as well. Without export, successful runs retain native recovery checkpoints,
-in-training evaluation, resolved configuration and terminal result records; `SkyRLRun.hf_model_uri`
-is null. Pipelines that serve the resulting model for downstream evaluation must request export.
+rolling window. On success, waiting preset launches apply `checkpoints` and `keep_every` after
+writing the terminal receipt. Detached launches keep the trainer's rolling window. HF export is
+opt-in. `skyrl_step(..., export_hf=True)` requests a durable terminal model and a separate export
+job. With `run.export_hf: false`, `SkyRLRun.hf_model_uri` is null. Successful runs still write
+evaluation, resolved configuration, and terminal result records. Pipelines that serve the
+resulting model for downstream evaluation must request export.
 
 Every HF export writes `generation_config.json` through SkyRL's Hugging Face
 model lifecycle utilities. It keeps the explicit fields of the source model's
@@ -332,4 +471,25 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
 For the current curation, training and evaluation recipe, see the
-[quick RL loop](../recipes/quick-rl-loop.md).
+[Snowball RL experiments](../recipes/rl-experiments.md) and the
+[selection handoff](task-curation.md#train-on-a-snowball-selection).
+
+### NCCL SIMPLE buffers
+
+Policy and reference roles resolve `nccl_buffer_size_bytes` to 4,194,304 bytes
+(4 MiB) by default. The role runtime environment sets `NCCL_BUFFSIZE` explicitly,
+including inference engines that receive the policy's weight-sync setting. This
+prevents an inherited small-buffer value from replacing the resolved default.
+A `null` value deliberately delegates sizing to the process environment and NCCL
+config files.
+
+NCCL 2.30.7 can return incorrect NVLSTree reductions when its tuned staging payload
+exceeds a SIMPLE FIFO slot. A 256-KiB buffer reproduced this failure through both
+the native C API and ProcessGroupNCCL. A 1-MiB buffer also failed at 512-MiB
+messages; 4-MiB controls passed the tested 16–512-MiB range. See
+[the investigation and source-library A/B](https://github.com/marin-community/marin/issues/11649).
+This mitigation uses the existing library and preserves byte verification. It
+does not establish correctness for every message size or topology. Check resolved
+role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
+a new configuration. Reference workers now retain larger buffers, so include that
+memory in colocated-role capacity estimates.

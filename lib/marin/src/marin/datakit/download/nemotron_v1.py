@@ -87,17 +87,6 @@ def download_nemotron_cc(output_path: str, base_url: str = NCC_BASE_URL) -> None
     logger.info(f"Downloaded Nemotron CC files to {output_path}")
 
 
-def download_nemotron_v1_step() -> StepSpec:
-    """Create a StepSpec that downloads the Nemotron-CC dataset from Common Crawl."""
-
-    return StepSpec(
-        name="raw/nemotron_v1",
-        fn=lambda output_path: download_nemotron_cc(output_path=output_path),
-        # NOTE: use the existing output to avoid re-downloading. Yes this is missing the `n`.
-        override_output_path="raw/nemotro-cc-eeb783",
-    )
-
-
 _NEMOTRON_V1_DATA_ROOT = "contrib/Nemotron/Nemotron-CC/data-jsonl"
 
 # Maps split name → relative path under data-jsonl/ that the normalize

@@ -30,11 +30,30 @@ with DataStore.open("gs://bucket/purchases", writer_id="worker-0") as store:
     token = transaction.token
 ```
 
-The transaction buffers its rows and object bytes in memory. Each participating
-table produces one level-zero Parquet shard. FineStore writes every shard and an
-immutable full manifest before it conditionally advances `HEAD`. Until that final
-write succeeds, none of the transaction is visible. A caller should split a
-transaction when its payload would exceed a safe process-memory bound.
+`store.transaction(message=...)`, and the same argument to
+`store.unbounded_transaction()`, records why a change was made and who made it. The
+manifest of the commit the transaction publishes holds them as `commit_info`, with that
+commit's sequence and publication time, and `ReadView.commit_info` returns the record of
+the pinned commit. `author=` defaults to the user who launched the process, as
+`rigging.provenance.launch_user()` resolves it, so a remote Iris worker records the
+submitting user. FineStore stores the author as given and does not verify it.
+On a non-empty archive, a transaction with no writes returns the checked
+commit token without publishing a new commit.
+
+`transaction.read(table, keys)` returns the newest rows for those primary keys from
+the transaction's pinned snapshot. It also guards the keys, as `require_unchanged`
+guards a whole table: if another writer commits any of them after that snapshot,
+whether the key existed or not, the commit raises `RowConflict` instead of replacing
+the newer row. A drop or replacement of the table raises `CommitConflict`. Rows the
+transaction writes without reading them are not checked. `store.update(table, keys, edit, message=...)`
+is the read-modify-write form for `OnConflict.SUPERSEDE` tables. It reads the rows,
+writes `edit(row)` for each, and on `RowConflict` backs off and runs `edit` again on the
+newer rows, so `edit` must be safe to repeat.
+
+Appends to registered tables and named object writes retain their Arrow buffers
+in memory. Each appended table produces one level-zero Parquet shard. FineStore
+writes every shard and an immutable full manifest before it conditionally advances
+`HEAD`. Until that final write succeeds, none of the transaction is visible.
 
 Ordinary table appends use the same commit path. `store.flush()` atomically publishes
 the currently claimed buffers from all registered tables. `table.flush()` publishes
@@ -46,8 +65,56 @@ A flush uploads each new shard, writes a manifest, and publishes it with one
 compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
 onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
 so commits to one root are serialized; writers that need more aggregate commit
-throughput should write to separate roots. A flush raises `CommitConflict` only after
-losing the compare-and-swap for an hour.
+throughput should write to separate roots. A flush retries compare-and-swap conflicts
+for up to an hour.
+
+## Transactional table changes
+
+A transaction can create, rename, or drop tables. Use a private table to stream
+a rebuild, then rename it into place and write its completion marker:
+
+```python
+from finestore.layout import TableMetadata, TableNameConflict
+
+with store.transaction(base=source_view) as transaction:
+    transaction.require_unchanged("source")
+    table = transaction.create_table("scratch", metadata=TableMetadata(primary_key=("id",)))
+    table.extend(rebuilt_rows)
+    transaction.rename_table("scratch", "results", on_conflict=TableNameConflict.REPLACE)
+    transaction.write_object("build-complete", b"done")
+```
+
+The temporary name is visible inside the transaction. Readers see one final
+namespace after the `HEAD` update. A rename moves the manifest references and
+keeps the shard paths. Renaming to an occupied name raises unless the caller
+sets `TableNameConflict.REPLACE`. Dropping an existing table removes it from
+the final namespace. A created table can be published empty.
+
+Created tables write Arrow batches up to the transaction's byte budget. An
+unbounded transaction uses the store buffer budget for these batches. A single
+row may exceed the budget. The commit checks names changed by DDL and any
+extra names passed to `require_unchanged`. Concurrent content changes fail
+with `CommitConflict`. Physical compaction can proceed while data is staged.
+
+An abandoned transaction can leave unreferenced shards under `data/_staged/`.
+Published tables can reference paths there, so reclamation must account for
+active staging transactions and retained snapshots.
+
+Renaming, dropping, or replacing a previously published table advances its incarnation.
+Append handles registered under an earlier incarnation fail with
+`CommitConflict`. Flush buffered appends before changing a table in the same store.
+After the change, call `store.table(...)` to register a fresh handle. If another
+store changed a registered table, reopen before writing to it. Pinned reads retain
+their earlier view.
+
+The first publication of a table uses the existing manifest format. An
+incarnation change requires the `table-incarnations-v1` manifest feature.
+Upgrade readers such as Marina's EvalDash before writers that drop or replace
+existing tables.
+
+Pass `expected=view.table_version(table)` to `finestore.admin.drop_table` when
+an earlier operation, such as a backup, relied on an exact file set. A drop
+that removes an active table clears the seal.
 
 ## Reads
 
@@ -108,9 +175,9 @@ need no migration. Existing larger inline values remain readable.
 convenience API that returns a complete `bytes` value, while `open_blob` returns a
 forward-only binary file object for incremental reads. Chunk-count and declared-size
 validation completes when the stream reaches EOF; closing it early intentionally skips
-whole-object validation. Each part occupies its own Parquet row group, and blob scans
-request one row with one batch of readahead, so a streaming reader does not materialize
-all of an object's parts. File-set materialization streams committed parts into the
+whole-object validation. Each part occupies its own Parquet row group, and a part read
+holds one row group and reads at most one more ahead, so a streaming reader does not
+materialize all of an object's parts. File-set materialization streams committed parts into the
 destination file to avoid another complete copy. A transaction's `max_bytes` limit
 still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
 and admits one larger file.
@@ -122,12 +189,12 @@ native files and their metadata together, including chunked files that exceed th
 normal transaction buffer limit. A caller can publish completion after this method
 returns; a failed transaction publishes none of its files.
 
-Blob descriptor shards use at most 1024 rows per row group; ordinary tables retain
-their 16,384-row limit. Named-object lookups scan descriptors in 64-row batches
+Blob descriptor shards use at most 1024 rows per row group; ordinary tables use at most
+16,384 rows and 4 MB of Arrow data. Named-object lookups scan descriptors in 64-row batches
 with one batch and one fragment of readahead per shard, single-threaded decoding,
-and no Parquet pre-buffering. This bounds decoding of unrequested inline values after compaction. Descriptor and part
-files also disable fsspec read-ahead so a small column read does not fetch adjacent
-blob payloads. Ordinary table reads keep their filesystem caching behavior. Returned values
+and no Parquet pre-buffering. This bounds decoding of unrequested inline values after compaction. Shard files open
+without fsspec read-ahead, so a small column read does not fetch adjacent blob payloads.
+Returned values
 still occupy memory, and dispersed keys can require reading most row groups;
 bounded decoding does not remove row-group read amplification. `read_blobs` reads
 all requested descriptors together and gathers chunked parts in one parts scan.
@@ -157,6 +224,8 @@ Two adapters build cache behavior on this primitive:
 - `finestore.fileset.FineStoreDirectory` materializes a committed named-object set
   into a local directory and publishes newly created files in payload-bounded batches.
   Iris uses it for XLA's per-fusion autotune directory, replacing the ZIP mirror.
+  A fetch preserves a regular local file when its bytes match the committed blob;
+  missing or different files are atomically replaced.
 
 Both adapters are caches: failures may be treated as misses by their callers. Cache
 cleanup does not acknowledge persistence or return a commit token. Use
@@ -237,16 +306,16 @@ by primary key. An unsorted input, such as a flush with a row missing a key colu
 shard migrated from format 1, is sorted whole in memory, and a compaction holds all of
 its unsorted inputs at once. The merge keeps only the newest version of each key, so
 the output shards of one compaction hold disjoint, ascending key ranges, and the seal
-records the superseded rows it removed. Otherwise memory holds about one decoded row
-group per input plus the rows at the merge frontier; Parquet pre-buffering is disabled
-and a small fsspec file buffer limits speculative byte reads. When the compressed inputs
+records the superseded rows it removed. Otherwise memory holds, per input, the decoded row
+group being merged and up to 4 MB of later groups read ahead on a thread pool, plus the
+rows at the merge frontier. When the compressed inputs
 total at most 16 MiB, compaction prefetches whole shards with up to 16 concurrent reads
 and caches them for both schema and row reads. Larger compactions retain bounded streaming
 reads. Output shards are cut at about `compaction_target_bytes` of decoded data, configurable on `DataStore` or as
 `target_bytes` on `compact_table`; one row group always fits, so a single large row
 group or row can exceed it. Reads apply the same newest-version rule: `iter_rows`
-streams the merge across a view's shards in primary-key order, and `scan` resolves
-versions in one vectorised pass.
+streams the merge across a view's shards in primary-key order, reading each shard as
+compaction does, and `scan` resolves versions in one vectorised pass.
 The manifest replaces the input paths with the output shards through the same `HEAD`
 compare and swap. If another compactor removes an input first, the losing output remains
 unreferenced and the operation is a benign no-op. If another writer adds a shard,
@@ -271,13 +340,15 @@ archive retention or reader leases; it is outside the current API.
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
 row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
-object, the current maintainer epoch, and optional seal state. Writers compute shard
-integrity metadata while streaming Parquet, so it does not require another object-store
-read.
+object, the current maintainer epoch, optional seal state, and the `commit_info` of an
+attributed transaction. Writers compute shard integrity metadata while streaming
+Parquet, so it does not require another object-store read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
-commit. A manifest can also name `required_features`; readers reject features they do
-not implement before exposing a view. This lets future optional metadata remain
+commit. Such a writer copies its parent's `commit_info` into the commits it publishes;
+the record names the sequence of the commit it describes, so readers ignore the copy.
+A manifest can also name `required_features`; readers reject features they do not
+implement before exposing a view. This lets future optional metadata remain
 additive while mandatory semantics fail closed without forcing unrelated archives to
 change their format version.
 
@@ -350,3 +421,14 @@ shared by MarinSkyRL producers and Marin's mismatch reports. Tokenizer identity,
 relative updates and absolute trainer steps are typed provenance fields. This
 contract sits next to `finestore.eval` so producers need only `marin-finestore`
 and CPU report readers need no trainer or inference-engine dependencies.
+
+`finestore.rl.run_records` defines numeric metrics keyed by `(attempt_id, step, name)`
+and typed attempt fields keyed by `(attempt_id, field)` in the same store under
+`<export_root>/run-records`. The evaluations table stores scored task rows keyed by
+`(attempt_id, step, evaluation, task_id)`. `update_attempt` commits a writer's supplied fields;
+omitted fields remain stored and explicit null clears a field. Native configuration,
+terminal result, startup information and checkpoint ancestry have separate fields.
+`read_attempt_metrics` joins only that attempt and its known bounded ancestors;
+joined steps expose `metric_attempt_ids` for per-metric attribution. A step reset
+starts a fresh metric history while retaining its checkpoint provenance.
+`attempt_lineage` exposes those bounded attempt records to history and timing readers.

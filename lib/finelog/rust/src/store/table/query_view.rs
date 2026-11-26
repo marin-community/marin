@@ -17,6 +17,7 @@ use crate::errors::StatsError;
 use crate::partition_policy::SegmentPartition;
 use crate::proto::finelog::stats::CatalogSegment;
 use crate::store::catalog::{ObjectSegmentRecord, SpecLifecycle};
+use crate::store::column_bounds::{self, ColumnBounds};
 use crate::store::object_store::{ObjectReference, ObjectStore};
 use crate::store::table_state::{ArtifactReferences, LocalArtifacts, TableSnapshot};
 
@@ -41,6 +42,8 @@ pub struct PlannedSegment {
     pub row_count: Option<u64>,
     /// Encoded key bounds, when the segment's key column carries them.
     pub key_bounds: Option<(String, String)>,
+    /// Bounds of the table's `catalog_bounds` columns the segment records.
+    pub column_bounds: ColumnBounds,
     pub partition: Option<SegmentPartition>,
     /// Local files the segment's advertised artifacts resolve to.
     pub artifacts: LocalArtifacts,
@@ -102,6 +105,7 @@ fn plan_segment(
         max_seq: segment.max_seq.unwrap_or(i64::MAX),
         row_count: segment.row_count.and_then(|rows| u64::try_from(rows).ok()),
         key_bounds: key_bounds(segment),
+        column_bounds: column_bounds::from_proto(&segment.column_bounds),
         partition,
         artifacts: crate::store::table::segment_view::local_artifacts(store, &artifacts)?,
         objects: SegmentObjects {

@@ -204,3 +204,43 @@ def test_json_round_trip_preserves_run_fields():
         command_line=("python", "-m", "experiments.foo"),
     )
     assert Provenance.from_json(p.to_json()) == p
+
+
+def _payload(**overrides: object) -> str:
+    fields: dict[str, object] = {"tree_hash": "feed", "base_commit": "beef", "dirty": False, "branch": None}
+    fields.update(overrides)
+    return json.dumps(fields)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "made-up-not-json",
+        "[" * 100_000,
+        "null",
+        "[]",
+        json.dumps({"tree_hash": "feed"}),
+        _payload(dirty="false"),
+        _payload(git_remote=42),
+        _payload(branch=["made-up-branch"]),
+        _payload(built_by=123),
+        _payload(command_line=["python", 42]),
+        _payload(command_line="python train.py"),
+    ],
+    ids=[
+        "not-json",
+        "deeply-nested",
+        "null",
+        "list",
+        "missing-fields",
+        "string-dirty",
+        "int-remote",
+        "list-branch",
+        "int-built-by",
+        "int-arg",
+        "string-command-line",
+    ],
+)
+def test_from_json_rejects_a_malformed_payload_with_value_error(raw):
+    with pytest.raises(ValueError):
+        Provenance.from_json(raw)

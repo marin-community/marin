@@ -162,6 +162,13 @@ return train_lm(name="checkpoints/dclm_7b_1x", version="2026.07.01", ...)
 During development, use a `dev` version string (e.g. `"dev"` or `"mylabel-dev"`) to opt out
 of the cache entirely and always rebuild.
 
+When adding an opt-in dataclass field, set `fingerprint_omit_value` to the literal
+value that preserves the pre-field behavior. For example,
+`field(default="native", metadata={"fingerprint_omit_value": "native"})` keeps
+the existing fingerprint for the native kernel. If the default later becomes
+`"fixed"`, leave the omission value pinned to `"native"` so the new behavior
+changes the fingerprint.
+
 ## Adopting pre-existing data
 
 `ArtifactStep.adopt` brings data that already exists on disk into the lazy artifact graph

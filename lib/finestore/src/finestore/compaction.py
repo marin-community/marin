@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Generator, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from functools import partial
@@ -26,7 +26,14 @@ from finestore import shard_writer
 from finestore.commit import ArchiveSnapshot, CommitConflict, CommitCoordinator, CommitDelta, TableReplacement
 from finestore.layout import BlobTables, CommitToken, FineStoreLayout, KeyRange, Shard, SystemColumns
 from finestore.merge import key_values, merge_sorted_runs, sorted_by_key
-from finestore.reader import ReadView, _BoundedReadAheadHandler, _CachedReadHandler, iter_shard_row_groups, shard_schema
+from finestore.reader import (
+    _ROW_GROUP_PREFETCH_WORKERS,
+    ReadView,
+    _CachedReadHandler,
+    _ShardHandler,
+    iter_shard_row_groups,
+    shard_schema,
+)
 from finestore.shard_writer import ShardWriter
 
 logger = logging.getLogger(__name__)
@@ -36,7 +43,6 @@ _COMPACTIONS = telemetry.counter("finestore_compactions", unit="{compaction}")
 _COMPACTIONS_ABANDONED = telemetry.counter("finestore_compactions_abandoned", unit="{compaction}")
 _COMPACTION_INPUT_BYTES = telemetry.counter("finestore_compaction_input_bytes", unit="By")
 _CLOSE_COMPACTION_MAX_ATTEMPTS = 3
-_COMPACTION_FILE_READ_AHEAD_BYTES = 1024 * 1024
 _COMPACTION_PREFETCH_BYTES = 16 * 1024 * 1024
 _COMPACTION_PREFETCH_WORKERS = 16
 COMPACTION_TARGET_BYTES = 400 * 1024 * 1024
@@ -59,10 +65,10 @@ class CompactionResult:
 
 
 def _sorted_run(
-    shard: Shard, unified: pa.Schema, pa_fs: PyFileSystem, primary_key: tuple[str, ...]
+    shard: Shard, unified: pa.Schema, pa_fs: PyFileSystem, primary_key: tuple[str, ...], prefetch: Executor
 ) -> Generator[pa.Table, None, None]:
     """Yield one shard's rows in primary-key order, a row group at a time when the shard is sorted."""
-    with closing(iter_shard_row_groups(shard, unified, pa_fs)) as groups:
+    with closing(iter_shard_row_groups(shard, unified, pa_fs, prefetch)) as groups:
         yield from groups if shard.primary_key_sorted else sorted_by_key(groups, primary_key)
 
 
@@ -231,7 +237,7 @@ def _compact_shards(
             list(pool.map(handler.prefetch, (shard.path for shard in shards)))
         pa_fs = PyFileSystem(handler)
     else:
-        pa_fs = PyFileSystem(_BoundedReadAheadHandler(fs, _COMPACTION_FILE_READ_AHEAD_BYTES))
+        pa_fs = PyFileSystem(_ShardHandler(fs, {shard.path: shard.size_bytes for shard in shards}))
     unified = pa.unify_schemas([shard_schema(shard.path, pa_fs) for shard in shards], promote_options="permissive")
     if SystemColumns.COMMIT not in unified.names:
         unified = unified.append(pa.field(SystemColumns.COMMIT, pa.int64()))
@@ -239,7 +245,10 @@ def _compact_shards(
         unified = unified.append(pa.field(SystemColumns.GENERATION, pa.int32()))
 
     with ExitStack() as stack:
-        runs = [stack.enter_context(closing(_sorted_run(shard, unified, pa_fs, primary_key))) for shard in shards]
+        prefetch = stack.enter_context(ThreadPoolExecutor(max_workers=min(len(shards), _ROW_GROUP_PREFETCH_WORKERS)))
+        runs = [
+            stack.enter_context(closing(_sorted_run(shard, unified, pa_fs, primary_key, prefetch))) for shard in shards
+        ]
         merged = merge_sorted_runs(runs, primary_key)
         if snapshot.manifest.cache_history_floor:
             merged = (

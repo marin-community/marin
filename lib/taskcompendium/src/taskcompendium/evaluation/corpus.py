@@ -17,6 +17,7 @@ from rigging.filesystem.path_validation import validate_relative_file_path
 from rigging.filesystem.storage_path import StoragePath
 
 from taskcompendium.evaluation.spec import (
+    AgentEpisode,
     ChatGeneration,
     EvaluationItem,
     EvaluationModel,
@@ -185,6 +186,12 @@ def validate_item(item: EvaluationItem, protocol: EvaluationProtocol) -> None:
     if item.operation.kind != protocol.operation:
         raise ValueError(f"Evaluation operation differs from its protocol: {item.task_id}")
     source_order(item.source_row)
+    if isinstance(item.operation, AgentEpisode) != (item.episode is not None):
+        raise ValueError(f"Episode inputs belong to agent episodes, which require them: {item.task_id}")
+    if isinstance(item.operation, AgentEpisode):
+        assert item.episode is not None
+        # Rejects a task timeout that leaves no attempt backstop.
+        item.operation.limits_for(item.episode)
     policy = protocol.context_policy
     if policy is not None and policy.output_budget is not None and item.reference_text is None:
         raise ValueError(f"Evaluation output budget requires reference text: {item.task_id}")

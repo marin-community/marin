@@ -32,7 +32,7 @@ class _BarrierWorker(CPUPolicyWorker):
 
 class _BarrierExp(experiment.TinyTrainingExp):
     def get_worker_classes(self):
-        return ray.remote(num_gpus=1)(_BarrierWorker), None, None
+        return ray.remote(num_gpus=1)(_BarrierWorker), None
 
 
 def _run_barrier_training(root, model):

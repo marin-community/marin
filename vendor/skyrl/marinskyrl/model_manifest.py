@@ -9,14 +9,15 @@ import struct
 from typing import BinaryIO, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
+from .model_files import MODEL_MANIFEST_FILENAME
 
-from marinskyrl.hf_model import (
+from .hf_model import (
+    TOKENIZER_CONFIG_NAME,
     normalize_fast_tokenizer_metadata,
     validate_hf_model_weights,
     validate_portable_hf_model_files,
 )
 
-MODEL_MANIFEST_FILENAME = ".marinskyrl-model-manifest.json"
 HF_WEIGHT_INDEX_FILENAME = "model.safetensors.index.json"
 MAX_SAFETENSORS_HEADER_BYTES = 100 * 2**20
 _HEADER_READ_CHUNK_BYTES = 8 * 2**20
@@ -205,8 +206,7 @@ def build_model_manifest(
     )
 
 
-def _ensure_weight_index(snapshot: Path) -> None:
-    shards = sorted(snapshot.glob("*.safetensors"))
+def _ensure_weight_index(snapshot: Path, shards: list[Path]) -> Path:
     shard_headers = {}
     for shard in shards:
         with shard.open("rb") as source:
@@ -220,6 +220,7 @@ def _ensure_weight_index(snapshot: Path) -> None:
     )
     if not index_path.is_file():
         index_path.write_bytes(index_bytes)
+    return index_path
 
 
 def snapshot_model_manifest(
@@ -228,12 +229,19 @@ def snapshot_model_manifest(
     revision: str | None,
     *,
     tokenizer_mode: Literal["embedded", "policy"] = "embedded",
+    model_files: tuple[str, ...] | None = None,
 ) -> ModelManifest:
-    normalize_fast_tokenizer_metadata(snapshot)
-    _ensure_weight_index(snapshot)
-    paths = sorted(
-        path for path in snapshot.rglob("*") if path.is_file() and path.relative_to(snapshot).parts[0] != ".cache"
-    )
+    """Build a manifest for a local snapshot or a selected subset of model files."""
+    if model_files is None or TOKENIZER_CONFIG_NAME in model_files:
+        normalize_fast_tokenizer_metadata(snapshot)
+    if model_files is None:
+        paths = {
+            path for path in snapshot.rglob("*") if path.is_file() and path.relative_to(snapshot).parts[0] != ".cache"
+        }
+    else:
+        paths = {snapshot / validate_model_file_path(name) for name in model_files}
+    shards = sorted(path for path in paths if path.parent == snapshot and path.suffix == ".safetensors")
+    paths.add(_ensure_weight_index(snapshot, shards))
     names = {path.relative_to(snapshot).as_posix() for path in paths}
     validate_model_file_names(names, str(snapshot), tokenizer_mode)
     files = tuple(
@@ -242,7 +250,7 @@ def snapshot_model_manifest(
             size=path.stat().st_size,
             sha256=sha256_file(path),
         )
-        for path in paths
+        for path in sorted(paths)
     )
     return build_model_manifest(
         files,

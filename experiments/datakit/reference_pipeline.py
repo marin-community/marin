@@ -12,12 +12,12 @@ StepRunner-walkable graph. Two modes (``--mode``), same DAG:
 
 Decontamination has four stages that you can run separately:
 
-- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v3.
+- ``decon-bloom`` builds the shared Bloom filter and hash index from eval v6.
 - ``decon-drop`` builds source and global corpus DF filters.
 - ``decon-mark`` marks each selected source from completed Bloom and drop-set stages.
 - ``decon-report`` reads completed marks and writes the validation report.
 
-Run preparation first. This reuses the canonical eval v3 Bloom when it is built::
+Run preparation first. This reuses the canonical eval v6 Bloom when it is built::
 
     python -m experiments.datakit.reference_pipeline \
         --mode full --target decon-drop --sources all \
@@ -119,9 +119,11 @@ from dataclasses import dataclass, field, replace
 from fray.types import ResourceConfig
 from levanter.tokenizers import TokenizerBackend
 from marin.datakit.decon import (
+    BestEffortEvalSuite,
     DeconAttributes,
     DropSetSource,
     RequiredEvalManifest,
+    RequiredEvalSuite,
     all_source_drop_sets_step,
     build_eval_bloom_step,
     decon_step,
@@ -192,6 +194,9 @@ from experiments.datakit.decontam.prepare_eval_corpus import (
     EVAL_CORPUS_VERSION,
     EVALS_RELATIVE,
     LMH_MANIFEST_RELATIVE,
+    UNCHEATABLE_BENCHMARK_NAMES,
+    UNCHEATABLE_MANIFEST_RELATIVE,
+    required_lmh_tasks,
 )
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBED_DOC_SAMPLE_CHARS,
@@ -451,11 +456,6 @@ def select_sources(names: list[str] | None = None) -> dict[str, StepSpec]:
     sources = {name: src.normalized for name, src in selected.items()}
     logger.info("select_sources: %d sources (%s)", len(sources), "all" if names is None else ", ".join(names))
     return sources
-
-
-def default_sources() -> dict[str, StepSpec]:
-    """Every ``all_sources()`` entry, mapped to its normalize StepSpec."""
-    return select_sources(None)
 
 
 def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale, output_prefix: str | None) -> StepSpec:
@@ -813,9 +813,11 @@ def decontamination_steps(
         estimated_doc_count=ESTIMATED_DOC_COUNT,
         false_positive_rate=FALSE_POSITIVE_RATE,
         exclude_eval_dirs=DECON_EXCLUDED_EVAL_TASKS,
-        required_eval_manifest_path=f"{eval_root}/{AA_MANIFEST_RELATIVE}",
+        required_eval_suites=(
+            RequiredEvalSuite(f"{eval_root}/{AA_MANIFEST_RELATIVE}", AA_BENCHMARK_NAMES),
+            RequiredEvalSuite(f"{eval_root}/{UNCHEATABLE_MANIFEST_RELATIVE}", UNCHEATABLE_BENCHMARK_NAMES),
+        ),
         required_eval_corpus_version=EVAL_CORPUS_VERSION,
-        required_eval_names=AA_BENCHMARK_NAMES,
         additional_required_eval_manifests=(
             RequiredEvalManifest(
                 path=prefix_join(prefix_join(marin_prefix(), COVERAGE_RELATIVE), COVERAGE_MANIFEST),
@@ -824,8 +826,9 @@ def decontamination_steps(
                 source_catalog_sha256=reference_sources_sha256(reference_catalog()),
             ),
         ),
-        best_effort_eval_manifest_path=f"{eval_root}/{LMH_MANIFEST_RELATIVE}",
-        best_effort_eval_corpus_version=EVAL_CORPUS_VERSION,
+        best_effort_eval_suite=BestEffortEvalSuite(
+            f"{eval_root}/{LMH_MANIFEST_RELATIVE}", EVAL_CORPUS_VERSION, required_lmh_tasks()
+        ),
         worker_resources=worker_resources,
         max_workers=scale.pool.n_workers,
         zephyr_context=zephyr_context,

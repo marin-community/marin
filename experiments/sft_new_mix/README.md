@@ -38,9 +38,8 @@ see the dataset card for attribution and provenance details.
 
 ## Later training comparison
 
-Matched-token control and candidate training recipes in the `snowball_h100`
-style are later work. This directory currently defines sources only; it does
-not launch training or claim a completed matched-token comparison.
+This directory defines sources for a future matched-token control and candidate
+comparison using the Snowball SFT launcher.
 
 ## Exp3 V5 mix as an artifact graph
 
