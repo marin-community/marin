@@ -509,7 +509,7 @@ _PRESETS = (
         control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
-    replace(_TRAIN_LONG, revision="2026.11.25.1", recipe=_PACKED_TRAIN_LONG_RECIPE),
+    replace(_TRAIN_LONG, recipe=_PACKED_TRAIN_LONG_RECIPE),
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
     _TRAIN_MEDIUM_TOOLS,
