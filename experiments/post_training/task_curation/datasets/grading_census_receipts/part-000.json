@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "7f5e4afc68d8e6cb793437bfc922748e9eb8db0d",
+  "revision": "8eddaf4e3b25e40bb7bfba6e6416c80d8943ea2c",
   "path": "experiments/post_training/task_curation/datasets/grading_census_receipts_inverse_ifeval_20261126_b_v1/part-000.json",
   "sha256": "9565f45b13a40011aa3e9434233a06795b73222914970e0ad2ef70bdefbc65e4"
 }
