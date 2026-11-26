@@ -208,3 +208,19 @@ def test_catalog_respects_response_byte_limit_and_original_snapshot(tmp_path, mo
     result = catalog.served_catalog("fixture", queues=(), ledger=str(tmp_path))
     assert [source.source_id for source in result] == [row["id"] for row in identities]
     assert all(json.loads(source.declaration_json)["payload"] == payload for source in result)
+
+
+def test_catalog_can_keep_a_frozen_load_after_latest_advances(tmp_path, monkeypatch):
+    declaration = {"current_release": None, "pipeline": {}, "actor_census_input": None}
+
+    def query(sql, params):
+        load = params.get("load_id", "latest-load")
+        if "jsonb_build_object" in sql:
+            return {"rows": [{"id": f"fixture:{load}", "load_id": load, "declaration": declaration}]}
+        return {"rows": [{"id": f"fixture:{load}", "declaration": declaration}]}
+
+    monkeypatch.setattr(catalog, "applet_query", lambda *args, **kwargs: query)
+    frozen = catalog.served_catalog("fixture", queues=(), ledger=str(tmp_path), load_id="r40-load")
+    latest = catalog.served_catalog("fixture", queues=(), ledger=str(tmp_path))
+    assert [source.source_id for source in frozen] == ["fixture:r40-load"]
+    assert [source.source_id for source in latest] == ["fixture:latest-load"]

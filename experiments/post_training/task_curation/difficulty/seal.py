@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from finestore.rl.difficulty import PROTOCOL_ID
+from pydantic import TypeAdapter
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -229,6 +230,118 @@ def seal_ledger(
     if ledger_partitions(ledger) != before:
         raise ValueError("Ledger changed before closure; snapshot was not selected")
     write_immutable_bytes(closure, json_bytes({"snapshot": reference.model_dump(), "final_sequence_number": len(rows)}))
+    return reference
+
+
+def capture_snapshot_inventory(ledger: str, destination: str, provenance: dict, cutoff: str) -> dict:
+    """Fix the release inventory before catalog reads or snapshot materialization."""
+    boundary = datetime.fromisoformat(cutoff)
+    if boundary.tzinfo is None:
+        raise ValueError("Snapshot cutoff must include its timezone")
+    if datetime.now(UTC) < boundary:
+        raise ValueError("Cannot capture a future cutoff")
+    root = StoragePath(destination)
+    capture = root / "capture.json"
+    if not capture.exists():
+        inventory = ledger_partitions(ledger)
+        if not inventory:
+            raise ValueError("Cannot snapshot an empty ledger")
+        side_objects = []
+        for directory in ("repair-verifications-parked", "repair-verifications"):
+            for path in sorted((StoragePath(ledger) / "v1" / directory / "**/*.json").glob(), key=str):
+                payload = path.read_bytes()
+                copied = root / "input-provenance" / hashlib.sha256(payload).hexdigest()
+                write_immutable_bytes(copied, payload)
+                side_objects.append(
+                    {
+                        "source_uri": str(path),
+                        "captured_uri": str(copied),
+                        "relative_path": str(path).removeprefix(str(StoragePath(ledger)) + "/"),
+                    }
+                )
+        write_immutable_bytes(
+            capture,
+            json_bytes(
+                {
+                    "ledger": ledger,
+                    "cutoff": cutoff,
+                    "captured_at": datetime.now(UTC).isoformat(),
+                    "partitions": inventory,
+                    "side_objects": side_objects,
+                    "provenance": provenance,
+                }
+            ),
+        )
+    frozen = json.loads(capture.read_text())
+    if (frozen["ledger"], frozen["cutoff"]) != (ledger, cutoff):
+        raise ValueError("Snapshot destination belongs to another cutoff or ledger")
+    return frozen
+
+
+def snapshot_active_ledger(
+    ledger: str,
+    catalog: list[CatalogSource],
+    destination: str,
+    provenance: dict,
+    cutoff: str,
+) -> ArtifactRef:
+    """Seal a frozen copy of pre-cutoff rows while the source ledger stays writable.
+
+    The first capture fixes the partition inventory; retries reuse it. Late writes
+    absent from that inventory are excluded even if their recorded time is older.
+    Only the private snapshot copy receives a closed.json marker.
+    """
+    frozen = capture_snapshot_inventory(ledger, destination, provenance, cutoff)
+    boundary = datetime.fromisoformat(cutoff)
+    root = StoragePath(destination)
+    capture = root / "capture.json"
+    catalog_path = root / "catalog.json"
+    if not catalog_path.exists():
+        write_immutable_bytes(catalog_path, json_bytes([asdict(source) for source in catalog]))
+    catalog = TypeAdapter(list[CatalogSource]).validate_json(catalog_path.read_text())
+    selected = root / "selected-ledger"
+    result = root / "selected-snapshot.json"
+    if result.exists():
+        reference = ArtifactRef.model_validate_json(result.read_text())
+        verify_snapshot(reference)
+        return reference
+    source_inventory = []
+    for uri in frozen["partitions"]:
+        reference, _ = verified_partition(uri)
+        source_inventory.append(reference)
+        payload = StoragePath(uri).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != reference["sha256"]:
+            raise ValueError("Source partition changed after verification")
+        # Keep selected rows byte-for-byte, including optional fields and original JSON formatting.
+        kept = b"".join(
+            line + b"\n"
+            for line in payload.splitlines()
+            if datetime.fromisoformat(json.loads(line)["recorded_at"]) < boundary
+        )
+        if kept:
+            write_immutable_bytes(selected / "v1/rows" / (hashlib.sha256(kept).hexdigest() + ".jsonl"), kept)
+    for item in frozen["side_objects"]:
+        payload = StoragePath(item["captured_uri"]).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != StoragePath(item["captured_uri"]).name:
+            raise ValueError("Captured repair provenance changed")
+        write_immutable_bytes(selected / item["relative_path"], payload)
+    provenance = {
+        **frozen["provenance"],
+        "active_ledger": ledger,
+        "cutoff": cutoff,
+        "capture": str(capture),
+        "captured_at": frozen["captured_at"],
+        "source_partition_inventory": source_inventory,
+        "source_ledger_remains_open": True,
+        "selection": "recorded_at < cutoff, in the first captured partition inventory; late arrivals excluded",
+    }
+    closure = selected / "v1/closed.json"
+    if closure.exists():
+        reference = ArtifactRef.model_validate(json.loads(closure.read_text())["snapshot"])
+        verify_snapshot(reference)
+    else:
+        reference = seal_ledger(str(selected), catalog, str(root / "snapshots"), provenance, cutoff)
+    write_immutable_bytes(result, json_bytes(reference.model_dump()))
     return reference
 
 

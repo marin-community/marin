@@ -9,7 +9,13 @@ from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.difficulty.ledger import append_rows
-from experiments.post_training.task_curation.difficulty.seal import seal_ledger, snapshot_cells, verify_snapshot
+from experiments.post_training.task_curation.difficulty.seal import (
+    capture_snapshot_inventory,
+    seal_ledger,
+    snapshot_active_ledger,
+    snapshot_cells,
+    verify_snapshot,
+)
 from experiments.post_training.task_curation.difficulty.state import CatalogSource, GapReason, LedgerRow, Outcome
 
 
@@ -105,3 +111,31 @@ def test_partial_credit_is_not_a_full_pass_and_unknown_reward_scale_fails_closed
     bad = snapshot_cells([replace(partial, reward=1.25), full], [source], {})[0]
     assert not bad["measured"] and bad["pass_rate"] is None and bad["difficulty"] is None
     assert bad["unqualified_reward_attempts"] == ["partial"]
+
+
+def test_active_snapshot_freezes_cutoff_preserves_repairs_and_keeps_scoring(tmp_path):
+    ledger = str(tmp_path / "active")
+    before = attempt("before", "a")
+    after = replace(attempt("after", "b"), recorded_at="2026-11-24T18:02:00-05:00")
+    append_rows(ledger, [before, after])
+    parked = StoragePath(ledger) / "v1/repair-verifications-parked/nested/hold.json"
+    parked.write_bytes(b'{"state":"held"}\n', auto_mkdir=True)
+    source = CatalogSource("source", "population", (("a", "a" * 64), ("b", "b" * 64)), "queue", "digest")
+    destination = str(tmp_path / "cut")
+    capture_snapshot_inventory(ledger, destination, {}, "2026-11-24T18:01:00-05:00")
+    append_rows(ledger, [replace(before, attempt_id="late-before-materialization")])
+    reference = snapshot_active_ledger(ledger, [source], destination, {}, "2026-11-24T18:01:00-05:00")
+    manifest = verify_snapshot(reference)
+    assert manifest["final_sequence_number"] == 1
+    assert manifest["summary"]["covered_cells"] == 0
+    root = StoragePath(reference.uri).parent
+    assert json.loads((root / "ledger.jsonl").read_text())["attempt_id"] == "before"
+    provenance = json.loads((root / "provenance.json").read_text())
+    saved = provenance["side_objects"][0]
+    assert (root / saved["file"]).read_bytes() == parked.read_bytes()
+    # A late-arriving pre-cutoff row must not alter the selected release snapshot.
+    append_rows(ledger, [replace(before, attempt_id="late-arrival")])
+    append_rows(ledger, [replace(after, attempt_id="still-scoring")])
+    assert not (StoragePath(ledger) / "v1/closed.json").exists()
+    assert snapshot_active_ledger(ledger, [], destination, {"new": "ignored"}, "2026-11-24T18:01:00-05:00") == reference
+    assert verify_snapshot(reference) == manifest

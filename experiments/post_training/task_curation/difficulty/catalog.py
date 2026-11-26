@@ -85,6 +85,7 @@ def served_catalog(
     queues: tuple[tuple[str, str], ...] = DEFAULT_QUEUES,
     token_provider: TokenProvider | None = None,
     ledger: str = DEFAULT_LEDGER,
+    load_id: str | None = None,
 ) -> list[CatalogSource]:
     """Keep every served source; unmatched pins need a fresh frozen task panel."""
     query = applet_query(DEFAULT_MARINA_URL, applet_id, token_provider=token_provider)
@@ -96,8 +97,9 @@ def served_catalog(
         "jsonb_build_object('current_release', declaration->'current_release', "
         "'pipeline', declaration->'pipeline', 'actor_census_input', declaration->'actor_census_input') "
         "AS declaration FROM atlas_sources WHERE load_id = "
-        "(SELECT load_id FROM atlas_current WHERE name = 'latest') ORDER BY id",
-        {},
+        + (":load_id" if load_id is not None else "(SELECT load_id FROM atlas_current WHERE name = 'latest')")
+        + " ORDER BY id",
+        {"load_id": load_id} if load_id is not None else {},
     )["rows"]
     panels: dict[tuple[str, str], CatalogSource] = {}
     for uri, expected in queues:
