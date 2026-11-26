@@ -468,7 +468,7 @@ def run_launcher(args: argparse.Namespace) -> None:
         endpoint_name = args.endpoint_name
         coordinator = rank_offset == 0
     else:
-        endpoint_name = job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}").to_wire()
+        endpoint_name = rendezvous_endpoint_name(job_info, mode="launcher")
         coordinator = task_index == 0
     variants = build_variants(extra_env=args.env_pairs)
     if coordinator:
@@ -516,8 +516,10 @@ def run_launcher(args: argparse.Namespace) -> None:
     (RESULT_DIR / f"results-task{task_index}.json").write_text(json.dumps(report, indent=2))
 
 
-def gate_endpoint_name(job_info: JobInfo) -> str:
-    """Give each GPU gang its own rendezvous within the coordinator namespace."""
+def rendezvous_endpoint_name(job_info: JobInfo, *, mode: str) -> str:
+    """Give each worker gang and retry its own rendezvous."""
+    if mode == "launcher":
+        return job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}").to_wire()
     job = hashlib.sha256(str(job_info.job_id).encode()).hexdigest()[:16]
     return f"{ENDPOINT_BASE_NAME}-gate-{job}-attempt-{job_info.attempt_id}"
 
@@ -555,7 +557,7 @@ def run_gate(args: argparse.Namespace) -> None:
     gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
-    endpoint_name = gate_endpoint_name(job_info)
+    endpoint_name = rendezvous_endpoint_name(job_info, mode="gate")
     gate_variants = [
         variant
         for variant in build_variants(extra_env=args.env_pairs or None)

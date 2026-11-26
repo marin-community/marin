@@ -84,10 +84,6 @@ class StepSpec:
     read_only: bool = False
     """Require an existing output path without running a function or writing any metadata."""
 
-    def __post_init__(self) -> None:
-        if self.read_only and (self.fn is not None or self.resources is not None or self.writes_record or self.deps):
-            raise ValueError("A read-only input cannot have execution settings or dependencies")
-
     @cached_property
     def dep_paths(self) -> list[str]:
         """Physical and resolved output paths of all dependencies."""

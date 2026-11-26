@@ -295,14 +295,10 @@ _PACKED_TRAIN_LONG_RECIPE = replace(
             trainer=sections.Trainer(
                 use_sample_packing=True,
                 policy=sections.Policy(
-                    megatron_config=sections.PolicyMegatronConfig(
-                        transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
-                    ),
+                    megatron_config=sections.PolicyMegatronConfig(transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS)
                 ),
                 ref=sections.Ref(
-                    megatron_config=sections.RefMegatronConfig(
-                        transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS,
-                    ),
+                    megatron_config=sections.RefMegatronConfig(transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS)
                 ),
             ),
         ),

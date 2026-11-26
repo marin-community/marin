@@ -55,7 +55,6 @@ from experiments.post_training.rl_tests.fixtures import (
     fake_s3,
     fake_s3_checkpoint,
     replace_evaluations,
-    write_artifact_record,
     write_published_artifact,
     write_receipt,
     write_skyrl_run_record,
@@ -1055,15 +1054,6 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
     fake_s3(monkeypatch, "marin-test/models/python-init")
-    assert preset.held_out_tasks is not None
-    training_selection = recipe.selection_artifact(preset.tasks)
-    write_artifact_record(
-        Path(training_selection.path()),
-        training_selection.name,
-        training_selection.version,
-        Artifact,
-        config={"seed": 42},
-    )
     published_selections = Path(recipe.SELECTION_ROOT)
 
     def selection_files():

@@ -214,8 +214,6 @@ class ArtifactStep(Generic[T]):
         validate_version(self.version)
         if self.adopt_source is not None and self.override_path is not None:
             raise ValueError(f"{self.name}@{self.version}: an artifact cannot be both adopted and pinned")
-        if self.read_only and (self.adopt_source is None or self.adopt_config is not None):
-            raise ValueError("read_only requires an adopted source without synthetic config")
         if self.output_path_prefix is not None:
             if not self.output_path_prefix or _is_relative_path(self.output_path_prefix):
                 raise ValueError("output_path_prefix must be a storage URI or an absolute directory")
@@ -316,10 +314,8 @@ def materialized_config(handle: "ArtifactStep", prefix: str) -> Any:
 
 def _output_path_spec(handle: "ArtifactStep") -> str:
     """The artifact's existing address or its scheduled name and version."""
-    if handle.read_only:
-        assert handle.adopt_source is not None
-        return handle.adopt_source
-    return handle.override_path or f"{handle.name}/{handle.version}"
+    source = handle.adopt_source if handle.read_only else handle.override_path
+    return source or f"{handle.name}/{handle.version}"
 
 
 def _lower(handle: "ArtifactStep", provenance: Provenance, memo: dict[int, StepSpec] | None = None) -> StepSpec:

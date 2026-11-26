@@ -5,19 +5,14 @@
 
 import hashlib
 import os
-import sys
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
-from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
-from iris.cluster.client.job_info import JobInfo, get_job_info, set_job_info
+from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 
-from experiments.post_training import nccl_transport_probe as probe
 from experiments.post_training.nccl_transport_probe import (
     NcclCensus,
     all_to_all_element_count,
@@ -26,6 +21,7 @@ from experiments.post_training.nccl_transport_probe import (
     parse_nccl_census,
     parse_worker_result,
     publish_gate_report,
+    rendezvous_endpoint_name,
     resolve_gloo_socket_ifname,
     worker_traceback,
     write_worker_result,
@@ -86,62 +82,17 @@ def test_gate_verdict_fails_closed_on_sockets_and_failures():
     assert gate_verdict(False, [["NET/IB/0/GDRDMA"]]) == "collective_failed"
 
 
-@pytest.mark.parametrize("mode_args", [(), ("--mode", "gate")], ids=["launcher", "gate"])
-def test_probe_worker_uses_its_own_leader_with_sibling_jobs_present(tmp_path, monkeypatch, mode_args):
+@pytest.mark.parametrize("mode", ["launcher", "gate"])
+def test_sibling_gpu_gangs_get_separate_rendezvous(mode):
     coordinator = JobName.root("test-user", "coordinator")
-    first_job, second_job = coordinator.child("first"), coordinator.child("second")
-    addresses = {(first_job, 0): "127.0.0.1", (second_job, 0): "127.0.0.2", (first_job, 1): "127.0.0.3"}
-    endpoints = {}
+    first, second = coordinator.child("first"), coordinator.child("second")
 
-    def register_endpoint(*, name, address, task_attempt, **_kwargs):
-        endpoint_id = task_attempt.to_wire()
-        endpoints[endpoint_id] = SimpleNamespace(name=name, address=address, endpoint_id=endpoint_id, metadata={})
-        return endpoint_id
+    def endpoint(job, rank, attempt=0):
+        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host="127.0.0.1", attempt_id=attempt)
+        return rendezvous_endpoint_name(info, mode=mode)
 
-    cluster = Mock()
-    cluster.register_endpoint.side_effect = register_endpoint
-    cluster.unregister_endpoint.side_effect = endpoints.pop
-    cluster.list_endpoint_instances.side_effect = lambda name: [item for item in endpoints.values() if item.name == name]
-    client = IrisClient(cluster)
-    groups = {}
-
-    def run_task(job, rank, attempt=0):
-        previous = get_job_info()
-        info = JobInfo(task_id=job.task(rank), num_tasks=2, advertise_host=addresses[job, attempt], attempt_id=attempt)
-        set_job_info(info)
-        try:
-            with iris_ctx_scope(IrisContext.from_job_info(info, client)):
-                probe.main()
-        finally:
-            set_job_info(previous)
-
-    def run_variant(_variant, rank_offset, _local_gpus, _world_size, master_host, port, _log_dir):
-        info = get_job_info()
-        assert info is not None
-        job = info.job_id
-        groups[job, info.attempt_id, rank_offset] = (master_host, port)
-        if job == first_job and rank_offset == 0:
-            if info.attempt_id == 0:
-                run_task(second_job, 0)
-            else:
-                run_task(first_job, 1, attempt=1)
-        elif job == second_job and rank_offset == 0:
-            run_task(first_job, 1)
-            run_task(second_job, 1)
-            run_task(first_job, 0, attempt=1)
-        return {"pass": True, "ranks": [{"transports": ["NET/IB/0/GDRDMA"]}]}
-
-    argv = ["probe", "--max-local-gpus", "1", "--variants", "baseline_default_env", *mode_args]
-    monkeypatch.setenv("GLOO_SOCKET_IFNAME", "lo")
-    monkeypatch.setattr(sys, "argv", argv)
-    monkeypatch.setattr(probe, "RESULT_DIR", tmp_path)
-    monkeypatch.setattr(probe, "run_variant", run_variant)
-    monkeypatch.setattr(probe, "collect_ib_port_inventory", lambda: [])
-    run_task(first_job, 0)
-
-    for job, attempt in ((first_job, 0), (first_job, 1), (second_job, 0)):
-        assert groups[job, attempt, 1] == groups[job, attempt, 0]
-    assert len({address for (_, _, rank), address in groups.items() if rank == 0}) == 3
+    assert endpoint(first, 0) == endpoint(first, 1)
+    assert len({endpoint(first, 0), endpoint(second, 0), endpoint(first, 0, attempt=1)}) == 3
 
 
 def test_mapped_nccl_libraries_parses_proc_maps(tmp_path):

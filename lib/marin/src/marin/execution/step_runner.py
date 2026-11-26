@@ -16,7 +16,7 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any
@@ -129,30 +129,6 @@ def step_is_built(step: StepSpec) -> bool:
     return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
 
 
-def _record_output_mode(seen: dict[str, bool], step: StepSpec) -> None:
-    location = StoragePath(step.output_path)
-    path = str(location)
-    if location.is_local:
-        _, local_path = url_to_fs(path)
-        path = os.path.realpath(local_path)
-    elif location.scheme == "gcs":
-        path = "gs://" + path.removeprefix("gcs://")
-    if seen.setdefault(path, step.read_only) != step.read_only:
-        raise ValueError(f"{path} is both a read-only input and a step output")
-
-
-def _check_output_modes(root: StepSpec, modes: dict[str, bool]) -> None:
-    pending = [root]
-    visited: set[int] = set()
-    while pending:
-        step = pending.pop()
-        if id(step) in visited:
-            continue
-        visited.add(id(step))
-        _record_output_mode(modes, step)
-        pending.extend(step.deps)
-
-
 def _expand_unseen(
     step: StepSpec,
     seen: set[str],
@@ -217,8 +193,6 @@ class StepRunner:
         scheduled in post-order before the step itself (deduped by
         ``output_path`` across the whole run). Already-succeeded deps
         (``STATUS_SUCCESS`` on disk) resolve via the cache check.
-        A sequence is checked for mixed read/write ownership before scheduling.
-        Iterable streams check ownership as their steps arrive.
         Submit at most ``max_concurrent`` steps (default 8). Keep other ready
         steps in graph order so newly ready dependents can use the next slot.
         """
@@ -234,12 +208,6 @@ class StepRunner:
         max_workers = max_concurrent or 8
         if max_workers < 1:
             raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
-
-        output_modes: dict[str, bool] = {}
-        preflight = isinstance(steps, Sequence)
-        if preflight:
-            for root in steps:
-                _check_output_modes(root, output_modes)
 
         # Capture the fray client on the calling thread so worker threads can
         # inherit it explicitly. More robust than contextvars.copy_context()
@@ -349,8 +317,6 @@ class StepRunner:
 
         scheduled: set[str] = set()
         for raw_step in steps:
-            if not preflight:
-                _check_output_modes(raw_step, output_modes)
             for step in _expand_unseen(raw_step, scheduled, is_built, pruned):
                 path_to_name[step.output_path] = step.name_with_hash
 

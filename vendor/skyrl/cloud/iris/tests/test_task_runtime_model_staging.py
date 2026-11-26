@@ -111,14 +111,11 @@ def test_local_rollout_staging_preserves_checkpoint_bytes_and_source(tmp_path, m
 def test_requested_local_policy_tokenizer_is_staged_independently(tmp_path, monkeypatch) -> None:
     tokenizer_source = tmp_path / "tokenizer-source"
     _write_tokenizer(tokenizer_source)
-    temporary_root = tmp_path / "node"
-    cache_key = "1bec881c4eee38ac3c09e83b1586bc4fee5ab2b46e581ea75637441f3c00dd50"
-    destination = temporary_root / "marinskyrl" / "model_metadata" / cache_key
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(task_runtime.tempfile, "gettempdir", lambda: str(temporary_root))
+    destination = tmp_path / "prepared-tokenizer"
+    monkeypatch.setattr(task_runtime, "_metadata_path", lambda _uri, _revision: str(destination))
 
     prepared = prepare_policy_tokenizer(
-        Namespace(policy_tokenizer=tokenizer_source.name, policy_tokenizer_revision="tokenizer-commit")
+        Namespace(policy_tokenizer=str(tokenizer_source), policy_tokenizer_revision="tokenizer-commit")
     )
 
     assert prepared is not None

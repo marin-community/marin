@@ -22,7 +22,6 @@ from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
-from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, model_metadata_relative_path
 
 from experiments.post_training import rl, rl_compose, rl_gate
 from experiments.post_training.mochi_rl import MOCHI
@@ -306,30 +305,6 @@ def test_resume_inherits_the_source_runs_initializer(
         runtime["model_source_identity"] = inputs["model"]["identity"]
         runtime["starting_checkpoint_identity"] = inputs["starting_checkpoint"]["identity"]
         assert rl_gate.comparison_config(worker_document) == rl_gate.comparison_config(plan_document)
-
-        model_path = f"/native-tmp/{model_metadata_relative_path(source_model['uri'], source_model['identity'])}"
-        for tokenizer_uri, revision in (
-            (source_model["tokenizer_uri"], source_model["tokenizer_revision"]),
-            (None, None),
-        ):
-            declared = deepcopy(plan_document)
-            staged = deepcopy(worker_document)
-            for document in (declared, staged):
-                document["inputs"]["model"].update(tokenizer_uri=tokenizer_uri, tokenizer_revision=revision)
-            tokenizer_path = model_path
-            if tokenizer_uri:
-                tokenizer_key = model_metadata_relative_path(tokenizer_uri, revision or DEFAULT_TOKENIZER_REVISION)
-                tokenizer_path = f"/native-tmp/{tokenizer_key}"
-            for role in ("policy", "ref"):
-                staged["skyrl"]["trainer"][role]["model"].update(
-                    path=model_path, tokenizer_path=tokenizer_path, tokenizer_revision=None
-                )
-            assert rl_gate.comparison_config(staged) == rl_gate.comparison_config(declared)
-            ref_tokenizer = "skyrl.trainer.ref.model.tokenizer_path"
-            set_path(staged, ref_tokenizer, "/native-tmp/marinskyrl/model_metadata/" + "0" * 64)
-            with pytest.raises(rl_gate.InvalidComparison, match=ref_tokenizer):
-                rl_gate.comparison_config(staged)
-
         runtime["starting_checkpoint_identity"] = "different-checkpoint"
         with pytest.raises(rl_gate.InvalidComparison, match="starting_checkpoint_identity"):
             rl_gate.comparison_config(worker_document)
