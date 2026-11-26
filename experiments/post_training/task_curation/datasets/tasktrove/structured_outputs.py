@@ -5,7 +5,6 @@
 
 import json
 
-from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect
 from taskcompendium.convert.delivery import replace_phrases, rewritten_task
 from taskcompendium.convert.json_schema import required_object_conflicts
@@ -21,18 +20,16 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
-from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizedTask, RawRow
+from taskcompendium.pipeline.models import ImportRejection, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.task_curation.datasets.environments import GRADER_PACKAGES
-from experiments.post_training.task_curation.datasets.tasktrove.archives import TaskTroveConverter, tasktrove_source
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.result import archive_conversion
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.structured_outputs import (
     MISSING_INSTRUCTION,
     convert_nemotron_structured_outputs,
 )
-from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
+from experiments.post_training.task_curation.pipeline import CurationRecipe
+from experiments.post_training.task_curation.source import RlDataSource
 
 CONFIG = "laion__nemotron-gym-structured-outputs-v4"
 FILE_DELIVERY = (
@@ -112,30 +109,11 @@ def convert_structured_outputs(row: RawRow, context: ConversionContext) -> TaskS
 
 
 def sources() -> list[RlDataSource[CurationRecipe]]:
-    return [
-        RlDataSource(
-            pipeline=process_rows,
-            info=SourceInfo(
-                data_restriction=DataRestriction.OPEN,
-                upstream_dataset="laion__nemotron-gym-structured-outputs-v4",
-                upstream_name="laion/nemotron-gym-structured-outputs-v4",
-                subset=None,
-                build_path="Task Trove",
-                origin=SourceOrigin.TASKTROVE,
-                family="instruction-following",
-                tags=("agentic", "multi-turn"),
-                count=53870,
-                notes="All formats require both a format check and a source-grounding judge.",
-                task_format=TaskFormat.TASKCOMPENDIUM,
-            ),
-            config=CurationRecipe(
-                name="tasktrove-structured_outputs",
-                source=tasktrove_source(CONFIG),
-                convert=TaskTroveConverter(CONFIG, convert_structured_outputs),
-                version="2",
-                intended_use=IntendedUse.TRAIN,
-                rubric=STRUCTURED_OUTPUTS_RUBRIC,
-                grader=GRADER_PACKAGES,
-            ),
-        )
-    ]
+    """Superseded by the admitted native cohort: the Atlas admission (ingest B,
+    2026-11-25) binds ``TaskTrove:laion__nemotron-gym-structured-outputs-v4`` to the
+    prepared native release through ``datasets.tasktrove_structured_native`` with its
+    license, census and lexical receipts; the conversion-stage declaration here had no
+    license evidence and is not served. The converter stays: it is the staged intake
+    recipe the tests cover.
+    """
+    return []

@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "43cf1387389f032de0b9cbc9bff4f390a69044cc",
+  "path": "experiments/post_training/task_curation/datasets/dolci_precise_if_admitted.json",
+  "sha256": "bb0493fc6b9df2d6bd87300faa76bdffc1b54276d9ac9138777357d112a9b15c"
+}

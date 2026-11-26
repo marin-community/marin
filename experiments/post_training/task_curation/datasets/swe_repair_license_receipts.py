@@ -76,7 +76,9 @@ SWE_REBENCH_V2_1_RECEIPT = LicenseReceipt(
 
 SWESMITH_V5_RELEASE = "open-athena/campaign-release-swesmith-verifier-repaired-v5-0bfcd894-retained-20261116-v1"
 SWESMITH_V5_REVISION = "758b28bf4cc0d0e770329f2944c9451fd578566a"
-TASKTROVE_CARD = "https://huggingface.co/datasets/open-athena/task-trove/resolve/0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c/README.md"
+TASKTROVE_CARD = (
+    "https://huggingface.co/datasets/open-athena/task-trove/resolve/0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c/README.md"
+)
 TASKTROVE_CARD_SHA256 = "e7b0794110fa2b1942f1c8d982ea0cfce0154ca36d517f7c2fde8db34806a1ee"
 SWESMITH_ISSUE_URL = "https://github.com/marin-community/marin/issues/11497#issuecomment-6902843532"
 
@@ -168,9 +170,7 @@ SWESMITH_VERIFIER_REPAIRED_V5_RECEIPT = LicenseReceipt(
         revision="0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
         url="https://huggingface.co/datasets/open-athena/task-trove/tree/0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
         declaration=LicenseEvidence(
-            url=(
-                f"https://huggingface.co/datasets/{SWESMITH_V5_RELEASE}/resolve/{SWESMITH_V5_REVISION}/README.md"
-            ),
+            url=(f"https://huggingface.co/datasets/{SWESMITH_V5_RELEASE}/resolve/{SWESMITH_V5_REVISION}/README.md"),
             kind="wrapper_source",
             sha256="22dfb6f2da39d0c7ac9b59c899a7a2683e3fd17b48252dc7f1a55e292add432c",
             license_ids=[],
@@ -178,8 +178,10 @@ SWESMITH_VERIFIER_REPAIRED_V5_RECEIPT = LicenseReceipt(
                 "L8: license_source:",
                 "L9:   dataset_id: open-athena/task-trove",
                 "L10:   revision: 0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
-                "L11:   url: https://huggingface.co/datasets/open-athena/task-trove/tree/0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
-                "L23: Source pin: `open-athena/swesmith-verifier-repaired-v5-20261112@26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd`. "
+                "L11:   url: "
+                "https://huggingface.co/datasets/open-athena/task-trove/tree/0e8137a6a1eca1e2c8c12eeb90a16c5d7f1f750c",
+                "L23: Source pin: "
+                "`open-athena/swesmith-verifier-repaired-v5-20261112@26bb8c8ffba53adecd1c2a5e9d64b47b9f7e52fd`. "
                 "Converter: `2026.11.12.2@1509fc8638f6be3840b5c82b53348f93152a9c31`.",
             ],
             restrictive_terms=False,

@@ -3,12 +3,20 @@
 
 """The task catalog: training and evaluation dataset declarations, keyed by name."""
 
+from dataclasses import replace
+
 from experiments.evaluation.catalog import evaluation_benchmarks
 from experiments.post_training.task_curation.datasets import (
     atlas_publications,
     campaign_releases,
+    dolci_precise_if_admitted,
+    edge_websearch,
+    inverse_ifeval_admitted,
+    nemo_mcqa,
     nemo_tool_calls,
+    qa_formatting,
     structure_closure,
+    tasktrove_structured_native,
     thoughtcrime,
     unconverted,
 )
@@ -36,6 +44,26 @@ from experiments.post_training.task_curation.datasets.tasktrove import qa as tas
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
 from experiments.post_training.task_curation.source import GRANDFATHERED_MARINSKYRL_SOURCES, RlDataSource, TaskFormat
+
+RUNTIME_STACK_SOURCES = frozenset(
+    {
+        "Nvidia:Nemotron-RL-InverseIFEval-v1",
+        "Nvidia:Nemotron-RL-QA-Abstention-v1",
+        "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1",
+        "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
+    }
+)
+"""Admitted or ruled sources whose converters need the atlas runtime stack: the
+fresh-machine ScriptGrader contract (an unbounded grader deadline and a declared
+grader environment on the grader itself) and the judge tiers this catalog's
+taskcompendium generation cannot express. They stay inventory records at their
+pins until the runtime alignment lands; training waits."""
+
+
+def _staged_runtime(source: RlDataSource) -> RlDataSource:
+    """Project a converter-carrying declaration to an inventory record at its pin."""
+    assert source.info.id in RUNTIME_STACK_SOURCES, source.info.id
+    return RlDataSource(info=replace(source.info, dataset=source.dataset), pipeline=None)
 
 
 def all_sources() -> dict[str, RlDataSource]:
@@ -73,6 +101,12 @@ def all_sources() -> dict[str, RlDataSource]:
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
         *swe_rebench_v2.sources(),
+        *dolci_precise_if_admitted.sources(),
+        *(_staged_runtime(source) for source in inverse_ifeval_admitted.sources()),
+        *nemo_mcqa.sources(),
+        *tasktrove_structured_native.sources(),
+        *edge_websearch.sources(),
+        *(_staged_runtime(source) for source in qa_formatting.sources()),
         *structure_closure.sources(),
         *thoughtcrime.sources(),
         *nemo_tool_calls.sources(),

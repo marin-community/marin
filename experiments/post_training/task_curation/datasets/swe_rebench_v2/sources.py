@@ -12,10 +12,9 @@ this catalog's pipeline has no oracle-filter stage, so the flag has no consumer 
 and is not declared.
 """
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.pipeline.inputs import SourceFormat
 from taskcompendium.pipeline.models import IntendedUse
-
-from finestore.rl.status_taxonomy import DataRestriction
 
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert import (
     IMAGE_BINDINGS_INPUT,

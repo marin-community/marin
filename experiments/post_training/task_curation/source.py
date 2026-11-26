@@ -9,6 +9,8 @@ from typing import Protocol
 
 from finestore.rl.curation import (
     DAYTONA_SAFE_SNAPSHOT_LIMIT,
+    ActorCensusInput,
+    ConvertedExamples,
     DatasetRelease,
     IndependentQC,
     LexicalContaminationEvidence,
@@ -78,6 +80,10 @@ class TaskFormat(StrEnum):
     TASKCOMPENDIUM = "taskcompendium"
     HARBOR = "harbor"
     MARINSKYRL = "marinskyrl"
+    TASKSPEC = "taskspec"
+    """The Atlas row-shape name for canonical TaskSpec rows; the same shape as
+    ``TASKCOMPENDIUM`` under the Atlas's renamed enum (ruling trail: the Atlas
+    admissions of 2026-11-25/26 record ``taskspec``)."""
 
 
 GRANDFATHERED_MARINSKYRL_SOURCES: frozenset[str] = frozenset(
@@ -201,6 +207,12 @@ class SourceInfo:
 
     oversight: OversightEvidence | None = None
     """The review this source's admission rests on, with its evidence pointers."""
+
+    converted_examples: ConvertedExamples | None = None
+    """The measured conversion ledger the Atlas admissions record at the exact pin."""
+
+    actor_census_input: ActorCensusInput | None = None
+    """The measured census the Atlas admission binds at the declared pin."""
 
     @property
     def id(self) -> str:

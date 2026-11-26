@@ -12,6 +12,7 @@ It converts nothing, so it cannot improve on the published cohort's review; the
 source's oversight level and evidence describe the qualification the publish recorded.
 """
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,6 +122,97 @@ def import_prebuilt(source: RlDataSource[PrebuiltCohort], options: PipelineOptio
         tasks = []
         for row in pq.read_table(local).to_pylist():
             task = LoweredSpec.from_document(json.loads(row[LOWERED_TASK_SPEC_COLUMN])).task
+            tasks.append(normalization_columns(task.id, task.source, task, None, (), row["path"]))
+        for view in ("normalize", "final"):
+            folder = destination / view
+            folder.mkdirs(exist_ok=True)
+            with (folder / "part-00000.parquet").open("wb") as handle:
+                pq.write_table(pa.Table.from_pylist(tasks, schema=NORMALIZED_SCHEMA), handle)
+        manifest = {
+            "mode": invocation.mode.value,
+            "intended_use": config.intended_use.value,
+            "input_rows": len(tasks),
+            "converted_rows": len(tasks),
+            "admitted_rows": len(tasks),
+            "rejections": {},
+            "status": "completed",
+            "repo": config.repo,
+            "revision": config.revision,
+            "row_count": config.expected_rows,
+            "tasks_sha256": file_sha256(tasks_path),
+        }
+        (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        return CampaignArtifact(
+            status="completed",
+            result=PipelineResult(
+                status=SourceStatus.COMPLETED,
+                outputs={"tasks": str(destination / TASKS_FILENAME)},
+                evidence={"manifest": str(destination / "manifest.json")},
+                stages=("download", "validate"),
+            ),
+        )
+
+    return ArtifactStep(
+        name=config.name,
+        version=config.version,
+        artifact_type=CampaignArtifact,
+        run=run,
+        build_config=build_config,
+        deps=(),
+    )
+
+
+def import_taskcompendium_cohort(config: PrebuiltCohort) -> Path:
+    """Download a canonical TaskSpec cohort and validate every published row.
+
+    Each row carries its serialized TaskSpec and its own SHA-256; the cohort must
+    admit exactly the declared population with a usable environment.
+    """
+    local = Path(
+        hf_hub_download(repo_id=config.repo, repo_type="dataset", filename=TASKS_FILENAME, revision=config.revision)
+    )
+    seen = set()
+    for batch in pq.ParquetFile(local).iter_batches(batch_size=32):
+        for row in batch.to_pylist():
+            serialized = row["task_spec"]
+            task = TaskSpec.model_validate_json(serialized)
+            if hashlib.sha256(serialized.encode()).hexdigest() != row["task_sha256"]:
+                raise ValueError(f"Published task differs from its recorded hash: {task.id}")
+            if task.id in seen:
+                raise ValueError(f"Duplicate published task: {task.id}")
+            seen.add(task.id)
+            reason = missing_environment(task.model_dump(mode="json"))
+            if reason is not None:
+                raise ValueError(f"{task.id}: {reason}")
+    if len(seen) != config.expected_rows:
+        raise ValueError(f"{config.repo}@{config.revision} has {len(seen)} rows, expected {config.expected_rows}")
+    return local
+
+
+def import_taskcompendium_prebuilt(
+    source: RlDataSource[PrebuiltCohort], options: PipelineOptions
+) -> ArtifactStep[CampaignArtifact]:
+    """Admit a qualified canonical TaskSpec release at its exact published pin."""
+    if EXCLUDED_TAG in source.info.tags:
+        raise ValueError(f"Published cohort is excluded pending qualification: {source.name}")
+    source.require_license()
+    config = source.config
+    assert config is not None
+    if options.mode is SourceProcessingMode.QUICK:
+        raise ValueError(f"A published cohort is imported for admission, not for a quick pass: {source.name}")
+
+    def build_config(context) -> PrebuiltImport:
+        return PrebuiltImport(context.output_path, config, options.mode)
+
+    def run(invocation: PrebuiltImport) -> CampaignArtifact:
+        local = import_taskcompendium_cohort(invocation.cohort)
+        destination = StoragePath(invocation.output_path)
+        destination.mkdirs(exist_ok=True)
+        tasks_path = destination / TASKS_FILENAME
+        tasks_path.upload_from(str(local))
+        tasks = []
+        for row in pq.read_table(local).to_pylist():
+            task = TaskSpec.model_validate_json(row["task_spec"])
             tasks.append(normalization_columns(task.id, task.source, task, None, (), row["path"]))
         for view in ("normalize", "final"):
             folder = destination / view

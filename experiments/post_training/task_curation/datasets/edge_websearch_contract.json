@@ -1,0 +1,22 @@
+{
+  "source_id": "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
+  "repo": "yatin-superintelligence/Edge-Agent-Reasoning-WebSearch-260K",
+  "revision": "7e8e455fff52e6d21dce4ce4a5a1bddd13031e1a",
+  "source_card": {
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/native-inventory-v1/edge-websearch/native/README.md",
+    "sha256": "e2e722aedecbb0134899471b8659d4cc9a4e7d4b74fd2ad765aa5ab6eb9439eb"
+  },
+  "native_contract_preflight": {
+    "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/edge-websearch/2026.11.26.1/native-contract-preflight-v1/result.json",
+    "sha256": "c9d7bd02d0db74e0586198288a5e664b24cfd7d2e5fceebe14d46aff0416189a"
+  },
+  "grading": "new MEDIUM preparation-planning checklist; no native scorer or oracle claimed",
+  "reference_policy": "agent_reasoning retained only as private provenance, not used as judge reference",
+  "public_normalization": "record addition of a source-card-derived planning system instruction; original user_prompt and metadata strings unchanged",
+  "non_data_files": [
+    ".DS_Store",
+    ".gitattributes",
+    "README.md",
+    "Small Agent Working for Frontier.jpg"
+  ]
+}

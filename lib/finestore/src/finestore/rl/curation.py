@@ -173,6 +173,7 @@ class SourceOrigin(StrEnum):
     MARIN = "Marin"
     MARIN_COMMUNITY = "marin-community"
     NEMOTRON = "Nemotron"
+    NVIDIA = "Nvidia"
     OPEN_R1 = "Open-R1"
     OPENAI = "OpenAI"
     OPENATHENA = "OpenAthena"
@@ -199,6 +200,7 @@ class SourceOrigin(StrEnum):
     OPENGCUA = "OpenGCUA"
     PAFITIS = "pafitis"
     SWE_REBENCH = "SWE-rebench"
+    YATIN = "Yatin"
 
 
 def huggingface_dataset_url(repo: str, revision: str) -> str:

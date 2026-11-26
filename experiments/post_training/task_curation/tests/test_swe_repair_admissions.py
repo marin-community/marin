@@ -14,11 +14,10 @@ import re
 
 import pytest
 import tomlkit
-from rigging.filesystem.storage_path import StoragePath
 from finestore.rl.status_taxonomy import DataRestriction
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.task_curation.datasets.atlas_publications import (
-    ASSUMED_ADMISSION_SOURCES,
     bind_publications,
 )
 from experiments.post_training.task_curation.datasets.swe_rebench_v2 import groups
@@ -38,6 +37,12 @@ from experiments.post_training.task_curation.datasets.swe_rebench_v2.convert imp
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.sources import sources as repair_sources
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.upstream.task_files import solve_sh
 from experiments.post_training.task_curation.datasets.swe_rebench_v2.workspace import to_workspace
+from experiments.post_training.task_curation.source import (
+    RlDataSource,
+    SourceInfo,
+    SourceOrigin,
+)
+from experiments.post_training.task_curation.sources import all_sources
 
 PYTHON_ROW = {
     "instance_id": "0b01001001__spectree-64",
@@ -393,8 +398,6 @@ def test_repaired_source_declares_the_atlas_pin():
 def test_swesmith_retained_cohort_declares_the_atlas_pin():
     """The remediated swesmith cohort binds the retained import at its exact Atlas pin,
     and its user-approved license exception passes the stage-0 gate."""
-    from experiments.post_training.task_curation.sources import all_sources
-
     source = all_sources()["TaskTrove:swesmith-verifier-repaired-v5"]
     assert source.name == "swesmith-verifier-repaired-v5-retained"
     assert source.version == "2026.11.13.1"
@@ -408,17 +411,14 @@ def test_swesmith_retained_cohort_declares_the_atlas_pin():
     assert source.intended_use.value == "train"
     source.require_license()
     assert source.info.license_receipt is not None
-    assert any(decision.kind.value == "exception" and decision.approved for decision in source.info.license_receipt.decisions)
+    assert any(
+        decision.kind.value == "exception" and decision.approved for decision in source.info.license_receipt.decisions
+    )
 
 
 def test_binding_preserves_the_declaration_over_retirement():
     """An assumed-admission source survives bind_publications while other retired
     declarations stay dropped."""
-    from experiments.post_training.task_curation.source import (
-        RlDataSource,
-        SourceInfo,
-        SourceOrigin,
-    )
 
     def _source(source_id: str) -> RlDataSource:
         origin, _, dataset = source_id.partition(":")
