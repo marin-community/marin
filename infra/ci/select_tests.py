@@ -162,6 +162,7 @@ EXTERNAL_TEST_INPUTS: dict[str, frozenset[str]] = {
     "iac": frozenset(
         {
             ".github/actions/launch-loom-run/action.yaml",
+            ".github/workflows/agentic-lint.yaml",
             ".github/workflows/ops-codehealth-refinement.yaml",
             ".github/workflows/ops-fork-ferry.yaml",
             ".github/workflows/ops-loom-holistic-review.yaml",

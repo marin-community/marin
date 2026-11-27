@@ -312,8 +312,8 @@ to share run keys and the holistic channel with the Actions launchers.
 1. Roll out this stack using a Loom build with pull request rule support.
 2. In the `loom-oa-dev` GitHub App settings, subscribe to **Pull request** events.
    Confirm a delivery for an eligible PR receives HTTP 202 and that Loom records
-   the expected runs. During overlap, verify both transports resolve to the same
-   run for a shared key.
+   the expected runs at the PR head and links them to the PR. During overlap,
+   verify both transports resolve to the same run for a shared key.
 3. Disable runner launches for the three workflows at the job condition:
 
    ```sh
@@ -325,8 +325,9 @@ to share run keys and the holistic channel with the Actions launchers.
 4. With Actions launches disabled, verify the initial review launches, a
    holistic review on a push, and agentic lint when its label is removed from
    a head without an existing lint run. After those checks, the Loom rollout
-   operator removes the three Actions workflows and the cutover variable.
-   The rule targets keep the federation identities used by existing runs.
+   operator removes the three Actions workflows, their overlap tests, and
+   the cutover variable. The rule targets keep the federation identities
+   used by existing runs.
 
 ## VM permissions
 

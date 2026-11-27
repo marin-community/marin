@@ -298,6 +298,32 @@ def test_deployment_manifest_contains_stack_pull_request_rules(monkeypatch: pyte
     )
 
 
+def test_pull_request_rules_share_run_keys_and_channels_with_actions() -> None:
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())["config"]
+    workflow_paths = {
+        federation["name"]: federation["workflowRef"].split("/", 2)[2].split("@", 1)[0]
+        for federation in stack["marin-loom:githubFederations"]
+    }
+    for rule in stack["marin-loom:githubPullRequestRules"]:
+        federation = rule["target"].get("federation")
+        if federation is None:
+            continue
+        workflow = yaml.safe_load((ROOT.parent.parent / workflow_paths[federation]).read_text())
+        launch = next(
+            step["with"]
+            for job in workflow["jobs"].values()
+            for step in job["steps"]
+            if step.get("uses") == "./.github/actions/launch-loom-run"
+        )
+        for field, action_field in (("idempotency_key", "idempotency-key"), ("channel", "channel")):
+            template = rule["run"].get(field)
+            if template is not None:
+                template = template.replace("{number}", "${{ github.event.pull_request.number }}").replace(
+                    "{head}", "${{ github.event.pull_request.head.sha }}"
+                )
+            assert template == launch.get(action_field), (rule["name"], field)
+
+
 def test_profile_instructions_reject_ambiguous_or_external_sources() -> None:
     with pytest.raises(ValueError, match="only one"):
         ProfileConfig.parse(
