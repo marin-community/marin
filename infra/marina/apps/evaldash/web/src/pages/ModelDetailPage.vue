@@ -15,7 +15,13 @@ const props = defineProps<{ model: string }>()
 const router = useRouter()
 const route = useRoute()
 
-const { data, loading, error, refresh } = useApi<ModelDetail>(() => `api/models/${encodeURIComponent(props.model)}`)
+const selectedCohort = computed(() => {
+  const selected = route.query.cohort
+  return (typeof selected === 'string' && selected) || meta.value?.default_cohort || ALL_COHORTS
+})
+const { data, loading, error, refresh } = useApi<ModelDetail>(
+  () => `api/models/${encodeURIComponent(props.model)}?cohort=${encodeURIComponent(selectedCohort.value)}`,
+)
 const { data: panel, refresh: refreshPanel } = useApi<Panel>(() => 'api/panel?include_archived=1')
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
 
@@ -25,8 +31,11 @@ onMounted(() => {
   refreshMeta()
 })
 watch(
-  () => props.model,
-  refresh,
+  () => [props.model, selectedCohort.value],
+  () => {
+    data.value = null
+    refresh()
+  },
 )
 onViewRefresh(() => {
   refresh()
@@ -38,11 +47,10 @@ onViewRefresh(() => {
 // Cohort scope lives in the URL, including the unversioned and all-runs views.
 const ALL = '__all__'
 const scope = computed<string | null>(() => {
-  const selected = route.query.cohort
-  const cohort = typeof selected === 'string' && selected ? selected : meta.value?.default_cohort
+  const cohort = selectedCohort.value
   if (cohort === ALL_COHORTS) return ALL
   if (cohort === UNVERSIONED_COHORT) return null
-  return cohort ?? data.value?.current_version ?? null
+  return cohort
 })
 watch(
   [() => data.value?.model, () => meta.value?.default_cohort, () => route.query.cohort, () => props.model],

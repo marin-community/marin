@@ -7,16 +7,12 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
-from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from fractions import Fraction
-from pathlib import Path
 from typing import Annotated, ClassVar, Literal
 
-import yaml
 from finestore.rl.rl_progress import Invariant
-from marin.evaluation.eval_env import DAYTONA_EVAL_API_KEY_ENV
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import (
     ArtifactDataSource,
@@ -28,53 +24,33 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
 )
 from pydantic import BaseModel, Field, PositiveInt
+from rolloutengine.agents.pi.agent import PI_HARNESS
 from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.declared import (
     BestCheckpointCallback,
     Callback,
     CheckpointCallback,
     EvaluationCallback,
+    EvaluationCoverage,
     EvaluationProfile,
-    HarborEvaluationCallback,
-    HarborEvaluationCohort,
     HFModelSaveCallback,
+    PooledCheckpointEvaluation,
 )
 from skyrlrecipe.locality import RoleTopologyMode
 
+from experiments.post_training.rl_checkpoint_eval import (
+    CHECKPOINT_EVALUATION_TIMEOUT,
+    MINIMUM_COHORT_COVERAGE,
+    CheckpointCohort,
+    checkpoint_cohorts,
+)
 from experiments.post_training.task_curation.selection import TRAIN_FILENAME
 
 UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 MINIMUM_TASK_COVERAGE = 0.99
 
-
-def harbor_evaluation(path: Path) -> HarborEvaluationCallback:
-    """Load the pinned cohorts and job settings for in-training Harbor evaluation."""
-    config = yaml.safe_load(path.read_text())
-    cohorts = []
-    for cohort in config["cohorts"]:
-        job = deepcopy({**config["job"], **cohort.get("job", {})})
-        job["tasks"] = [
-            {
-                "git_url": cohort["git_url"],
-                "git_commit_id": cohort["git_commit_id"],
-                "path": task_path,
-                "source": cohort["name"],
-            }
-            for task_path in cohort["paths"]
-        ]
-        cohorts.append(HarborEvaluationCohort(name=cohort["name"], job=job, reward_key="reward"))
-    return HarborEvaluationCallback(
-        type="harbor_evaluation",
-        cohorts=tuple(cohorts),
-        timeout=config["timeout"],
-        minimum_coverage=config["minimum_coverage"],
-        minimum_native_coverage=MINIMUM_TASK_COVERAGE,
-        daytona_api_key_env=DAYTONA_EVAL_API_KEY_ENV,
-    )
-
-
-HARBOR_EVALUATION = harbor_evaluation(Path(__file__).with_name("rl_harbor.yaml"))
+CHECKPOINT_EVALUATION = checkpoint_cohorts()
 STOP_TOKEN_IDS = (128001, 128009)
 SAMPLED_TRAJECTORIES = sections.TrajectoryRetention(
     phases=("train", "eval"),
@@ -242,6 +218,23 @@ class Training:
             callbacks.append(
                 CheckpointCallback(type="checkpoint", save_steps=preset.checkpoint_every or preset.updates + 1)
             )
+        minimum_scored_tasks = math.ceil(MINIMUM_TASK_COVERAGE * expected_tasks)
+        checkpoint_scores = None
+        if preset.checkpoint_evaluation:
+            cohorts = {
+                cohort.name: EvaluationCoverage(
+                    expected_tasks=len(cohort.packages),
+                    minimum_scored_tasks=math.ceil(MINIMUM_COHORT_COVERAGE * len(cohort.packages)),
+                )
+                for cohort in preset.checkpoint_evaluation
+            }
+            checkpoint_scores = PooledCheckpointEvaluation(
+                primary=EvaluationCoverage(expected_tasks=expected_tasks, minimum_scored_tasks=minimum_scored_tasks),
+                cohorts=cohorts,
+                timeout=CHECKPOINT_EVALUATION_TIMEOUT,
+            )
+            expected_tasks += sum(coverage.expected_tasks for coverage in cohorts.values())
+            minimum_scored_tasks += sum(coverage.minimum_scored_tasks for coverage in cohorts.values())
         if evaluation is not None:
             callbacks.append(
                 EvaluationCallback(
@@ -250,15 +243,9 @@ class Training:
                     eval_before_train=evaluation.at_start,
                     eval_on_train_end=not evaluation.every or preset.updates % evaluation.every != 0,
                     **({"additional_evaluations": profiles} if profiles else {}),
+                    **({"checkpoint_scores": checkpoint_scores} if checkpoint_scores is not None else {}),
                 )
             )
-        minimum_scored_tasks = math.ceil(MINIMUM_TASK_COVERAGE * expected_tasks)
-        if preset.harbor is not None:
-            callbacks.append(preset.harbor)
-            for cohort in preset.harbor.cohorts:
-                count = len(cohort.job["tasks"])
-                expected_tasks += count
-                minimum_scored_tasks += math.ceil(preset.harbor.minimum_coverage * count)
         if preset.checkpoints == "best":
             assert initial_model_uri is not None
             callbacks.append(
@@ -370,6 +357,12 @@ class Metric:
     higher_is_better: bool
     window: WindowStatistic = WindowStatistic.MEAN
 
+    source: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.window is WindowStatistic.GAIN_PER_GPU_HOUR) != bool(self.source):
+            raise ValueError("Gain-per-GPU-hour metrics require an explicit source key")
+
 
 @dataclass(frozen=True)
 class BatchMix:
@@ -394,16 +387,16 @@ class BatchMix:
 
 def validate_agentic_recipe(config: RecipePatch) -> None:
     document = config.to_skyrl()
-    harbor = (document.get("terminal_bench") or {}).get("harbor", {})
-    attempt_timeout = harbor.get("trial_attempt_timeout_sec")
+    sessions = document.get("environment", {}).get("task_sessions", {})
+    attempt_timeout = sessions.get("task_spec", {}).get("session", {}).get("attempt_timeout")
     if attempt_timeout is None:
         return
-    daytona = document.get("environment", {}).get("task_sessions", {}).get("daytona", {})
+    daytona = sessions.get("daytona") or {}
     if "ttl_minutes" in daytona and daytona["ttl_minutes"] * 60 < attempt_timeout:
-        raise ValueError("Daytona ttl_minutes must cover trial_attempt_timeout_sec")
+        raise ValueError("Daytona ttl_minutes must cover the task attempt timeout")
     stall = config.trainer.algorithm.group_admission.stall_timeout
-    if stall is not None and stall < (1 + harbor.get("max_retries", 0)) * attempt_timeout:
-        raise ValueError("group_admission.stall_timeout must cover the Harbor attempt and configured retries")
+    if PI_HARNESS in sessions.get("agent_harnesses", {}) and stall is not None and stall < 2 * attempt_timeout:
+        raise ValueError("group_admission.stall_timeout must cover the Pi attempt and one retry")
 
 
 CheckpointPolicy = Literal["none", "latest", "best"]
@@ -417,15 +410,12 @@ class Preset:
     """
 
     name: str
-    revision: str
     recipe: Recipe
     updates: int
     measured: range
     tasks_input: Literal["forbidden", "required", "optional"] = "forbidden"
     accepts_settings: bool = True
     accepts_init: bool = False
-    publishes: bool = False
-    control_preset: str | None = None
     checkpoint_every: int | None = None
     checkpoints: CheckpointPolicy = "best"
     keep_every: int | None = None
@@ -433,6 +423,7 @@ class Preset:
     data_settings: frozenset[str] = frozenset()
     tasks: str
     model: ArtifactHfModel
+    speculative_decoding_model: sections.SpeculatorModel | None = None
     evaluations: tuple[Evaluation, ...]
     seed: int
     sample_namespace: str
@@ -442,7 +433,7 @@ class Preset:
     export: CheckpointPolicy = "none"
     batch_mix: BatchMix | None = None
     held_out_tasks: str | None = None
-    harbor: HarborEvaluationCallback | None = None
+    checkpoint_evaluation: tuple[CheckpointCohort, ...] = ()
     then: Callable[[ArtifactStep], ArtifactStep] | None = None
     guards: tuple[Metric, ...] = ()
     objectives: tuple[Metric, ...] = ()
@@ -452,8 +443,6 @@ class Preset:
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
             raise ValueError("measured window must lie within the planned steps")
-        if self.gated and not self.guards:
-            raise ValueError("gated presets require guards")
         if self.held_out is not None and not self.held_out_tasks:
             raise ValueError("held-out evaluations require a held-out task selection")
         cadence = self.checkpoint_every
@@ -477,19 +466,18 @@ class Preset:
             if every and every % cadence:
                 raise ValueError('scheduled evaluations for checkpoints="best" must fall on checkpoint steps')
         validate_agentic_recipe(self.recipe.config)
-        if self.harbor is not None:
+        if self.checkpoint_evaluation:
             if not isinstance(self.recipe.layout.workload, Training) or not self.evaluations:
-                raise ValueError("Harbor evaluation requires a training preset with an evaluation")
-            generator = self.recipe.config.generator
-            if generator is not None and generator.to_skyrl().get("enable_http_endpoint") is False:
-                raise ValueError("Harbor evaluation requires generator.enable_http_endpoint")
+                raise ValueError("Checkpoint cohorts require a training preset with an evaluation")
+            if self.evaluations[0].answers != 1:
+                raise ValueError("Pooled checkpoint evaluation requires one answer per primary task")
         for evaluation in self.evaluations[1:]:
             if evaluation.every is not None or evaluation.at_start:
                 raise ValueError(f"non-primary evaluation {evaluation.name} accepts neither every nor at_start")
 
     @property
     def gated(self) -> bool:
-        return self.control_preset is not None
+        return bool(self.guards)
 
     @property
     def output_ttl_days(self) -> int | None:
@@ -512,20 +500,11 @@ class Preset:
 
 
 @dataclass(frozen=True)
-class ControlPin:
-    preset: str
-    commit: str
-    revision: str
-    replicates: int
-
-
-@dataclass(frozen=True)
 class ModelPresets:
     model: str
     presets: tuple[Preset, ...]
     namespace: str
-    control_pins: Mapping[str, ControlPin]
-    needs_completed_default_export: bool = False
+    default_export_marker: str | None = None
 
     def __post_init__(self) -> None:
         names: set[str] = set()

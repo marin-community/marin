@@ -936,7 +936,7 @@ def test_pipeline_retry_preserves_completed_evaluations(tmp_path, monkeypatch, v
 def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):
     captured: dict = {}
     resolved_value = "resolved-evaluation-secret"
-    runtime_values = {"DAYTONA_TARGET": "test-target", "DAYTONA_API_URL": "https://daytona.example/api"}
+    runtime_values = {"WANDB_API_KEY": "wandb-test-key", "WANDB_PROJECT": "test-project"}
     for name, value in runtime_values.items():
         monkeypatch.setenv(name, value)
 
@@ -1077,11 +1077,11 @@ def test_launch_group_uses_resolved_federated_cluster_and_priority(monkeypatch):
         assert marin_temp_bucket(14, prefix="eval") == "s3://marin-rno2a/tmp/ttl=14d/eval"
 
 
-def test_build_evaluation_batch_places_hosted_judge_with_candidate(monkeypatch):
+def test_build_evaluation_batch_places_hosted_judge_with_candidate(tmp_path, monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
-        evals=resolve_evaluations("aime-harbor"),
+        evals=(HarborDefinition("judged", _write_harbor_config(tmp_path / "policy.yaml")),),
         model=models()["qwen3-8b"],
         platform=Platform.GPU,
         accelerator="H100x1",
@@ -1125,11 +1125,11 @@ def test_build_evaluation_batch_uses_submission_cluster_for_capability_origin(mo
     assert batch.capability_origin == "https://custom-controller.example"
 
 
-def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
+def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch, tmp_path):
     _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
-        evals=resolve_evaluations("aime-harbor,tb2"),
+        evals=tuple(HarborDefinition(name, _write_harbor_config(tmp_path / f"{name}.yaml")) for name in ("aime", "tb2")),
         model=models()["qwen3-8b"],
         platform=Platform.TPU,
         accelerator=None,
@@ -1491,7 +1491,7 @@ def test_launch_reuses_compatible_harbor_results_path(tmp_path, monkeypatch):
     assert record.results_path == output_dir
 
 
-def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch):
+def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch, tmp_path):
     _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
 
@@ -1501,8 +1501,10 @@ def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch):
             "launch",
             "--model",
             "qwen3-8b",
-            "--evals",
-            "aime-harbor,tb2",
+            "--harbor-config",
+            str(_write_harbor_config(tmp_path / "aime.yaml")),
+            "--harbor-config",
+            str(_write_harbor_config(tmp_path / "tb2.yaml")),
             "--resume-results-path",
             "memory://existing-harbor-results",
             "--dry-run",
@@ -1513,7 +1515,7 @@ def test_launch_rejects_resume_for_multiple_evaluations(monkeypatch):
     assert "requires exactly one Harbor evaluation" in result.output
 
 
-def test_policy_launch_rejects_resume_outside_an_evaldash_run(monkeypatch):
+def test_policy_launch_rejects_resume_outside_an_evaldash_run(monkeypatch, tmp_path):
     _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     finalization = (
@@ -1527,8 +1529,8 @@ def test_policy_launch_rejects_resume_outside_an_evaldash_run(monkeypatch):
             "launch",
             "--model",
             "qwen3-8b",
-            "--evals",
-            "tb2",
+            "--harbor-config",
+            str(_write_harbor_config(tmp_path / "tb2.yaml")),
             "--policy-finalization-config",
             str(finalization),
             "--resume-results-path",

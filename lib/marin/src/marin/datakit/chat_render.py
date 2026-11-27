@@ -11,13 +11,13 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from openai_harmony import Message, Role
 from rigging.filesystem.storage_path import prefix_join
+from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
 from transformers.utils.chat_template_utils import render_jinja_template
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 from zephyr.readers import load_parquet
 
 from marin.datakit.chat_normalize import ChatChannel, message_text
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.datakit.normalize import DEFAULT_MAX_WORKERS
 from marin.execution.step_spec import StepSpec
 
@@ -66,7 +66,9 @@ def _inference_message(message: Message) -> dict:
             return {"role": "tool", "name": name, "content": text}
 
 
-def _inference_messages(messages: Sequence[Message]) -> Iterator[dict]:
+def to_template_messages(messages: Sequence[Message]) -> Iterator[dict]:
+    """Convert normalized Harmony turns to the messages accepted by the chat template."""
+
     # A tool handoff ends an assistant turn. Analysis, commentary, and parallel
     # calls before that handoff must share one end-of-turn token.
     for role, group in groupby(messages, key=lambda message: message.author.role):
@@ -98,7 +100,7 @@ def render_marin_chat(
     # reasoning mode from an explicitly supplied value.
     kwargs = {"enable_thinking": enable_thinking} if enable_thinking is not None else {}
     rendered, _ = render_jinja_template(
-        conversations=[list(_inference_messages(messages))],
+        conversations=[list(to_template_messages(messages))],
         chat_template=MARIN_CHAT_TEMPLATE,
         bos_token=bos_token,
         tools=list(tools),

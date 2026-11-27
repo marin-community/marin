@@ -31,6 +31,14 @@ def test_the_run_log_lists_launches_and_one_run_opens(journey: Journey) -> None:
     assert journey.page.url == journey.url(f"/runs/{newest}")
 
 
+def test_eval_detail_links_to_the_native_marina_attempt(journey: Journey) -> None:
+    journey.visit("/runs/snowball-2026.07.20-mmlu")
+    link = journey.page.get_by_role("link", name="RL attempt wanted")
+    expect(link).to_have_attribute(
+        "href", "/a/6c971887-1e22-45b1-9dcb-dd775829df57/#run=native%2Ffixture&attempt=wanted"
+    )
+
+
 def test_the_shell_bar_carries_the_app_and_its_own_navigation(journey: Journey) -> None:
     journey.visit("/runs")
     assert journey.api("/api/marina/me") == {"user": "anonymous", "role": "admin"}

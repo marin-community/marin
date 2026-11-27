@@ -571,7 +571,7 @@ mod tests {
     use bytes::Bytes;
     use connectrpc::codec::CodecFormat;
     use connectrpc::interceptor::run_chain;
-    use connectrpc::response::EncodedResponse;
+    use connectrpc::response::{EncodedBody, EncodedResponse};
     use connectrpc::spec::{Spec, StreamType};
 
     use super::*;
@@ -929,7 +929,10 @@ mod tests {
     }
 
     fn ok_response() -> UnaryResponse {
-        UnaryResponse::from_encoded(EncodedResponse::new(Bytes::new()), CodecFormat::Proto)
+        UnaryResponse::from_encoded(
+            EncodedResponse::new(EncodedBody::Contiguous(Bytes::new())),
+            CodecFormat::Proto,
+        )
     }
 
     async fn run_through(

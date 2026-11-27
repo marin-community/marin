@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Adoption: registering pre-existing data as a managed ``name@version``.
+"""Adoption of pre-existing data as ``name@version`` handles.
 
-An adopted artifact points at data already on disk — consumers resolve to that source and
-nothing is recomputed — while a provenance record at the canonical address records the alias.
+Consumers resolve an adopted artifact to its existing source. Registered adoption records the
+alias at its canonical address. Read-only adoption verifies the source.
 """
 
 import logging
@@ -21,12 +21,19 @@ def test_adopt_resolves_to_source_not_canonical():
     assert art.artifact_type is Artifact
 
 
-def test_adopt_records_pointer_at_canonical_address(tmp_path, monkeypatch):
+@pytest.mark.parametrize("read_only", [False, True], ids=["register", "read-only"])
+def test_adopt_writes_a_pointer_only_when_registered(tmp_path, monkeypatch, read_only):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
-    (tmp_path / "pre_existing").mkdir()
-    run(ArtifactStep.adopt("datasets/external", "2026.06.28", source="pre_existing"))
+    source = tmp_path / "pre_existing"
+    source.mkdir()
+    run(ArtifactStep.adopt("datasets/external", "2026.06.28", source="pre_existing", read_only=read_only))
 
     record = read_record(f"{tmp_path}/datasets/external/2026.06.28")
+    if read_only:
+        assert record is None
+        assert not (tmp_path / "datasets/external/2026.06.28").exists()
+        assert not any(source.iterdir())
+        return
     assert record is not None
     assert record.source == f"{tmp_path}/pre_existing"
     assert record.output_path == f"{tmp_path}/datasets/external/2026.06.28"
@@ -51,12 +58,13 @@ def test_readopt_different_source_warns(tmp_path, monkeypatch, caplog):
     assert "drift" in "\n".join(r.getMessage() for r in caplog.records)
 
 
-def test_adopting_missing_data_fails(tmp_path, monkeypatch):
+@pytest.mark.parametrize("read_only", [False, True], ids=["register", "read-only"])
+def test_adopting_missing_data_fails(tmp_path, monkeypatch, read_only):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     # The adopt step runs in a runner worker thread, so the missing-data error surfaces as
     # the runner's wrapping RuntimeError with the FileNotFoundError as its cause.
     with pytest.raises(RuntimeError) as exc_info:
-        run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="does_not_exist"))
+        run(ArtifactStep.adopt("datasets/x", "2026.06.28", source="does_not_exist", read_only=read_only))
     causes = []
     err: BaseException | None = exc_info.value
     while err is not None:

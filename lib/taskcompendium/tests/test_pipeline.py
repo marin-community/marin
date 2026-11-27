@@ -29,11 +29,13 @@ from taskcompendium.models import (
     ConversationTrace,
     DockerBuildContext,
     EnvironmentRequirements,
+    GraderMachine,
     GradingAttempt,
     NoGrader,
     PlainText,
     ResourceGroups,
     ScriptGrader,
+    ServiceRequirement,
     Source,
     TaskSpec,
     TextMessage,
@@ -284,17 +286,46 @@ def convert_with_build_contexts(row: RawRow, _context: ConversionContext) -> Tas
     return cast(TaskSpec, svamp_row_task(row)).model_copy(
         update={
             "environment_requirements": actor,
-            "grader": ScriptGrader(environment=grader, argv=("true",)),
+            "grader": ScriptGrader(placement=GraderMachine(environment=grader), argv=("true",)),
             "resources": ResourceGroups(worker=(inline_resource("input", b"data"),)),
         }
     )
 
 
-def test_resource_budget_counts_both_build_contexts_and_workspace_files(apple_row, svamp_recipe):
-    recipe = replace(svamp_recipe, convert=convert_with_build_contexts, resource_budget_bytes=64)
+def convert_with_sidecar_build(row: RawRow, context: ConversionContext) -> TaskSpec:
+    """The build-context task with its payload in a sidecar's build context."""
+    task = convert_with_build_contexts(row, context)
+    payload = DockerBuildContext(
+        files=(
+            inline_resource("Dockerfile", b"FROM scratch\n"),
+            inline_resource("payload", b"x" * row.data["attachment_bytes"]),
+        )
+    )
+    actor = task.environment_requirements.model_copy(
+        update={"services": (ServiceRequirement(name="sidecar", docker_build=payload),)}
+    )
+    grader = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        docker_build=DockerBuildContext(files=(inline_resource("Dockerfile", b"FROM scratch\n"),)),
+    )
+    return task.model_copy(
+        update={
+            "environment_requirements": actor,
+            "grader": ScriptGrader(placement=GraderMachine(environment=grader), argv=("true",)),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("convert", "largest"),
+    [(convert_with_build_contexts, 34), (convert_with_sidecar_build, 21)],
+    ids=["grader", "sidecar"],
+)
+def test_resource_budget_counts_every_build_context_and_workspace_file(apple_row, svamp_recipe, convert, largest):
+    recipe = replace(svamp_recipe, convert=convert, resource_budget_bytes=64)
     audits = [
         normalize_row({"locator": "fixture:0", "data": {**apple_row, "attachment_bytes": size}}, recipe)["audit"]
-        for size in (34, 35)
+        for size in (largest, largest + 1)
     ]
     assert audits[0]["normalization_rejection"] is None
     assert audits[1]["normalized"] is None

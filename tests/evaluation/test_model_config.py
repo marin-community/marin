@@ -439,22 +439,24 @@ def test_pipeline_catalog_lowers_a_gang_and_rejects_incompatible_overrides(tmp_p
 
 
 @pytest.mark.parametrize("instances", [1, 8])
-def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instances):
+@pytest.mark.parametrize("request_timeout", [None, 3600])
+def test_broker_deadlines_allow_the_configured_evaluation_request_timeout(instances, request_timeout):
     model = ModelConfig(
         name="test",
         location="test/model",
         serve=ServeConfig(auto_overrides=False),
         resource_hint=ResourceHint(memory="32g"),
+        evaluation_request_timeout=21600,
     )
     choice = MARIN_EVAL_HARDWARE.select(model, Platform.GPU, override="H100x1")
 
     config = inference_config_for_model(
-        model, choice, env_vars={}, priority=0, instances=instances, request_timeout_seconds=3600
+        model, choice, env_vars={}, priority=0, instances=instances, request_timeout_seconds=request_timeout
     )
 
     assert config.broker is not None
     assert (
-        3600
+        (model.evaluation_request_timeout if request_timeout is None else request_timeout)
         < config.broker.worker.request_timeout_seconds
         < config.broker.request_lease_timeout_seconds
         < config.broker.proxy.request_timeout_seconds

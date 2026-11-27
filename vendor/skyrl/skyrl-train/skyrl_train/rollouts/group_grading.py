@@ -24,7 +24,7 @@ async def grade_groups(
     group_ids: Sequence[str],
     graders: Mapping[str, GroupGrader],
     phase: str,
-    error_handling: Sequence[ErrorHandlingConfig],
+    error_handling: ErrorHandlingConfig,
     *,
     logprobs_required: bool,
 ) -> list[TrainingRollout]:
@@ -51,10 +51,7 @@ async def grade_groups(
             raise ValueError(f"Task group {task.id!r} contains different group graders")
         grader = graders[specification.name]
         records = [rollouts[index] for index in indices]
-        eligible = [
-            rollout_loss_eligible(rollouts[index], error_handling[index], logprobs_required=logprobs_required)
-            for index in indices
-        ]
+        eligible = [rollout_loss_eligible(record, error_handling, logprobs_required=logprobs_required) for record in records]
         graded = await asyncio.to_thread(grader, task, specification, records, eligible, phase)
         for index, record in zip(indices, graded, strict=True):
             if record.task_id != task.id:
