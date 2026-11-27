@@ -1,5 +1,6 @@
 from typing import List, Dict, Union, Callable, Optional
 from omegaconf import DictConfig
+from rigging.task_errors import ErrorIdentity
 from enum import Enum
 import ray
 from skyrl_train.workers.worker import PPORayActorGroup
@@ -15,6 +16,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     task_timing_metrics,
 )
 from skyrl_train.trajectory_runners.base import TrajectoryBatch
+from skyrl_train.trajectory_runners.types import ERROR_IDENTITIES_KEY
 from skyrl_train.config.reward_shaping import DEFAULT_ACCEPTED_STOP_REASONS
 from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 from transformers import AutoTokenizer
@@ -26,6 +28,7 @@ from marinskyrl.checkpoint_paths import GLOBAL_STEP_PREFIX
 from skyrl_train.dataset import PromptDataset
 from torchdata.stateful_dataloader import StatefulDataLoader
 from skyrl_train.batch_metrics import consumed_stop_metrics
+from skyrl_train.task_errors import TIMED_OUT_DIAGNOSTIC
 from skyrl_train.task_inputs import TrajectoryMetadata
 
 BasicType = Union[int, float, str, bool, type(None)]
@@ -33,12 +36,8 @@ EVAL_DIAGNOSTIC_FIELDS = frozenset(
     {
         GRADING_DURATION_SECONDS,
         GRADING_FAILURE,
-        "exception_type",
-        "cause_error_type",
-        "operation",
-        "timed_out",
+        TIMED_OUT_DIAGNOSTIC,
         "machine_operation",
-        "provider_status_code",
         "provider_sdk_call",
         "provider_rate_limits",
     }
@@ -300,6 +299,7 @@ def dump_per_dataset_eval_results(
         with io.open_file(filename, "w") as f:
             for i in indices:
                 verification = (trajectory_batch.get("verification_results") or [None] * len(input_prompts))[i]
+                failure = (trajectory_batch.get(ERROR_IDENTITIES_KEY) or [None] * len(input_prompts))[i]
                 entry = {
                     "uid": uids[i],
                     "attempt_id": attempt_id,
@@ -318,6 +318,9 @@ def dump_per_dataset_eval_results(
                     "stop_reason": stop_reasons[i],
                     "exception_type": (trajectory_batch.get("exception_types") or [None] * len(input_prompts))[i],
                     "error_treatment": (trajectory_batch.get("error_treatments") or [None] * len(input_prompts))[i],
+                    "failure": None
+                    if failure is None
+                    else failure.model_dump(mode="json", include=ErrorIdentity.model_fields.keys() - {"diagnostics"}),
                     "server_error": (trajectory_batch.get("server_errors") or [None] * len(input_prompts))[i],
                     "env_class": metadata[i].metric_class,
                     "subset_id": metadata[i].subset_id,

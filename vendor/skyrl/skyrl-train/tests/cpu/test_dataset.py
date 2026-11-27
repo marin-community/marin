@@ -2,6 +2,7 @@ import errno
 import json
 import os
 from dataclasses import replace
+from types import SimpleNamespace
 from importlib.util import spec_from_file_location
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMI
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
+from skyrl_train.entrypoints.main_base import BasePPOExp
 from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.task_inputs import task_messages
 from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
@@ -169,9 +171,10 @@ def test_prepared_selection_reuses_lengths_across_budgets_and_preserves_rollout_
         pytest.fail("A prepared cache hit should not render or tokenize prompts")
 
     monkeypatch.setattr(TokenizersBackend, "apply_chat_template", unavailable)
-    warm = SourceTaskDataset(
-        [cache.path], _selection_tokenizer(), 100, environment_configs=configs, prepared_cache=cache
-    )
+    config = get_default_config()
+    config.trainer.max_prompt_length = 100
+    OmegaConf.update(config, "runtime.prepared_task_cache", OmegaConf.structured(cache), force_add=True)
+    warm = BasePPOExp.task_dataset(SimpleNamespace(cfg=config, tokenizer=_selection_tokenizer()), [cache.path])
 
     assert [full.label(i) for i in range(len(full))] == ["fixture:4", "fixture:1", "fixture:3"]
     assert [warm.label(i) for i in range(len(warm))] == ["fixture:4", "fixture:3"]

@@ -22,6 +22,7 @@ from rolloutengine.grading import _grade_rollout
 from rolloutengine.harness.core import Harness, HarnessContext
 from rolloutengine.machines import _prepare_machine
 from rolloutengine.models import (
+    CLEANUP_ERRORS_DIAGNOSTIC,
     GRADING_SECONDS_METRIC,
     SETUP_COMPLETED_METRIC,
     SETUP_SECONDS_METRIC,
@@ -157,7 +158,7 @@ class RolloutEngine:
         grade = attempt.grade
         if attempt.cleanup.errors:
             cleanup_errors = [asdict(error) for error in attempt.cleanup.errors]
-            grade = replace(grade, diagnostics={**grade.diagnostics, "cleanup_errors": cleanup_errors})
+            grade = replace(grade, diagnostics={**grade.diagnostics, CLEANUP_ERRORS_DIAGNOSTIC: cleanup_errors})
             metrics["cleanup_error_count"] = float(len(cleanup_errors))
         if (
             failure is None

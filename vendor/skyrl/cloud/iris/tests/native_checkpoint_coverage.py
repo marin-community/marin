@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from cloud.iris import launch_config
 from cloud.iris.config_cli import verify_checkout
+from rigging.task_errors import ErrorIdentity, RetryDisposition, RetrySettings, retry_delay
 from skyrl_train.callbacks.base import CallbackHandler, TrainerState, TrainerControl
 from skyrl_train.callbacks import builtin
 
@@ -15,6 +16,12 @@ verify_checkout(Path(sys.argv[1]), launch_config, builtin)
 path = Path(sys.argv[2])
 config = launch_config.load_launch_config(path)
 assert not config.skyrl.generator.enable_http_endpoint
+retry = RetrySettings.model_validate(dict(config.skyrl.environment.task_sessions.retry))
+failure = ErrorIdentity(exception_type="TaskMachineError", retry_disposition=RetryDisposition.TRANSIENT)
+budget = int(sys.argv[3])
+for used in range(budget):
+    assert retry_delay(failure, retry, used) is not None
+assert retry_delay(failure, retry, budget) is None
 state = TrainerState(global_step=0, epoch=0, total_steps=100, num_steps_per_epoch=100)
 scenarios = ((100, 99, 30, 27), (100, 98, 30, 30), (100, 100, 30, 26), (100, 100, 29, 29), (99, 99, 31, 30))
 results = []

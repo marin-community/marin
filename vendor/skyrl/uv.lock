@@ -2852,6 +2852,7 @@ dependencies = [
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-auth" },
+    { name = "httpx" },
     { name = "huggingface-hub", version = "1.26.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
     { name = "huggingface-hub", version = "1.32.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'linux'" },
     { name = "msgspec" },
@@ -2885,6 +2886,7 @@ requires-dist = [
     { name = "google-auth", specifier = ">=2.0.0" },
     { name = "google-auth-oauthlib", marker = "extra == 'iap'", specifier = ">=1.0.0" },
     { name = "google-cloud-secret-manager", marker = "extra == 'secrets'", specifier = ">=2.16.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=1.21.0" },
     { name = "msgspec", specifier = ">=0.20.0" },
     { name = "prometheus-client", marker = "extra == 'prometheus'", specifier = ">=0.24" },
@@ -2901,7 +2903,6 @@ provides-extras = ["iap", "prometheus", "secrets"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
@@ -2909,7 +2910,6 @@ dev = [
     { name = "pytest-xdist" },
 ]
 test = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "prometheus-client", specifier = ">=0.24" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },

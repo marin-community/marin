@@ -49,6 +49,10 @@ so nested shell quoting does not enlarge the argument sent to its execution API.
 The original argv, stdin, environment and working directory are preserved;
 Linux limits still apply to each original argument. The wrapper is removed with
 the command's other temporary files.
+Daytona retries repeatable provider requests using the shared error classifier.
+A lost command reply reattaches to the same command directory, so the command
+executes once. Authentication and certificate failures stop the request;
+sandbox deletion can retry a state-change conflict.
 If command execution fails or is cancelled, later sandbox-deletion failures are
 attached as exception notes. Cleanup failure after a successful command still
 raises an error.

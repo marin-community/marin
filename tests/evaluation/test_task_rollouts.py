@@ -221,7 +221,7 @@ def run_config():
 @pytest.mark.asyncio
 async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, published_corpora, run_config):
     async def model(_request):
-        raise RuntimeError("model adapter bug")
+        raise RuntimeError("model adapter bug") from ConnectionError("connection reset")
 
     output = str(tmp_path / "unexpected-error")
     with pytest.raises(ExceptionGroup) as failure:
@@ -232,9 +232,11 @@ async def test_unexpected_model_error_is_saved_and_propagates(tmp_path, publishe
     failed = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert failed
     assert all((row["retry"], row["outcome"]) == (0, "infra_error") for row in failed)
-    assert all(
-        json.loads(reader.read_blob(row["result_blob"]))["failure"]["exception_type"] == "RuntimeError" for row in failed
-    )
+    failures = [json.loads(reader.read_blob(row["result_blob"]))["failure"] for row in failed]
+    assert all(record["exception_type"] == "RuntimeError" for record in failures)
+    assert all(record["cause_type"] == "ConnectionError" for record in failures)
+    assert all(record["operation"] == "model" for record in failures)
+    assert all(record["retry_disposition"] == "transient" for record in failures)
 
 
 @pytest.mark.asyncio
@@ -1433,7 +1435,7 @@ async def test_agent_episodes_grade_turn_deadlines_and_retry_machine_start_failu
         ("rows.jsonl:1", 0): "submission_failure",
         ("rows.jsonl:2", 0): "graded",
     }
-    assert finished["rows.jsonl:0", 0][1]["failure"]["diagnostics"]["operation"] == "start"
+    assert finished["rows.jsonl:0", 0][1]["failure"]["operation"] == "start"
     stalled = finished["rows.jsonl:1", 0][1]
     assert (stalled["stop_reason"], stalled["limits"]["total_turn_timeout"]) == ("total_turn_timeout", 0.5)
     samples = [sample_from_archive_row(row) for row in reader.iter_rows(ARCHIVE_SAMPLES_TABLE)]
@@ -1793,16 +1795,12 @@ async def test_reuse_asks_the_model_when_a_sampling_option_changed(tmp_path, run
 
 
 @pytest.mark.asyncio
-async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_run_identity(
-    tmp_path, run_config, monkeypatch
-):
+async def test_reuse_records_the_source_run_outside_the_run_identity(tmp_path, run_config):
     strict = publish_colors_corpus(tmp_path, "strict")
     lenient = publish_colors_corpus(tmp_path, "lenient", converter=convert_ignoring_case)
     source, output, fresh = (str(tmp_path / name) for name in ("stored", "regraded", "fresh"))
     red = dict.fromkeys(COLORS, "red")
-    with monkeypatch.context() as older:
-        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
-        await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
+    await run_evaluation((strict,), source, run_config, ScriptedModel(red), machine_factories={})
     await run_evaluation((lenient,), fresh, run_config, ScriptedModel(red), machine_factories={})
 
     await run_evaluation((lenient,), output, run_config, no_model, machine_factories={}, reuse_from=source)
@@ -1811,11 +1809,30 @@ async def test_reuse_records_the_source_run_and_its_driver_revision_outside_the_
 
     regraded = json.loads(ReadView(output).read_blob(RUN_OBJECT))
     assert regraded[RESPONSE_SOURCES] == [
-        {"root": source, "run": stored_run_identity(source), "driver_revision": "older-driver"}
+        {
+            "root": source,
+            "run": stored_run_identity(source),
+        }
     ]
     assert regraded["driver_revision"] == evaluation.EVALUATION_EXECUTION_REVISION
     assert RESPONSE_SOURCES not in json.loads(ReadView(fresh).read_blob(RUN_OBJECT))
     assert run_identity(regraded) == stored_run_identity(fresh)
+
+
+@pytest.mark.asyncio
+async def test_reuse_rejects_a_source_stored_by_another_execution_revision(tmp_path, run_config, monkeypatch):
+    strict = publish_colors_corpus(tmp_path, "strict")
+    source, output = str(tmp_path / "stored"), str(tmp_path / "regraded")
+    with monkeypatch.context() as older:
+        older.setattr(evaluation, "EVALUATION_EXECUTION_REVISION", "older-driver")
+        await run_evaluation(
+            (strict,), source, run_config, ScriptedModel(dict.fromkeys(COLORS, "red")), machine_factories={}
+        )
+
+    with pytest.raises(ValueError, match="execution revision"):
+        await run_evaluation((strict,), output, run_config, no_model, machine_factories={}, reuse_from=source)
+
+    assert ReadView(output).read_blob(RUN_OBJECT) is None
 
 
 @pytest.mark.asyncio

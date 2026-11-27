@@ -27,7 +27,7 @@ from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAIL
 from skyrl_train.io import io
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.trajectory_processing import rollout_successes
-from skyrl_train.trajectory_runners.types import TrajectoryBatch
+from skyrl_train.trajectory_runners.types import ERROR_IDENTITIES_KEY, TrajectoryBatch
 
 
 @dataclass
@@ -89,7 +89,10 @@ class GraderStats:
         results = batch.get("verification_results") or [None] * len(batch["rewards"])
         successes = rollout_successes(batch["rewards"], results)
         final_rows = batch.get("is_last_step") or [True] * len(results)
-        for row, result, passed, final in zip(metadata, results, successes, final_rows, strict=True):
+        identities = batch.get(ERROR_IDENTITIES_KEY) or [None] * len(results)
+        for row, result, passed, final, identity in zip(
+            metadata, results, successes, final_rows, identities, strict=True
+        ):
             if not final:
                 continue
             subset_id = row.subset_id
@@ -112,10 +115,10 @@ class GraderStats:
                 stats.durations.append(duration)
             if failure := result.diagnostics.get(GRADING_FAILURE):
                 stats.grading_failures[failure] += 1
-            elif result.diagnostics.get("operation") == RolloutOperation.GRADE:
+            elif identity is not None and identity.operation == RolloutOperation.GRADE:
                 stats.grading_failures["execution"] += 1
-            elif operation := result.diagnostics.get("operation"):
-                stats.rollout_failures[operation] += 1
+            elif identity is not None and identity.operation:
+                stats.rollout_failures[identity.operation] += 1
 
     def merge(self, other: "GraderStats") -> None:
         """Accumulate observations from a completed group."""

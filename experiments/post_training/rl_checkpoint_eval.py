@@ -12,7 +12,7 @@ from types import MappingProxyType
 import yaml
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import OUT, ArtifactStep, apply
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.agents.terminus.agent import TERMINUS_HARNESS
 from rolloutengine.models import TASK_ROLLOUT_COLUMN, MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from shellbox.machine import NetworkPolicy
@@ -37,6 +37,7 @@ MINIMUM_COHORT_COVERAGE = 0.9
 COHORT_SIZE = 30
 CHECKPOINT_REPLY_TOKENS = 8192
 CHECKPOINT_DAYTONA_TTL = 90
+CHECKPOINT_RETRY_BUDGET = 1
 AGENT_SETUP_TIMEOUT = 360
 AGENT_TIMEOUT = 600
 CLEANUP_TIMEOUT = 30
@@ -170,7 +171,7 @@ def write_checkpoint_tasks(
 
     def rows() -> Iterator[dict[str, str]]:
         for package in cohort.packages:
-            path = f"tasks/{package}{ARCHIVE_SUFFIX}"
+            path = prefix_join("tasks", f"{package}{ARCHIVE_SUFFIX}")
             provenance = Source(
                 dataset=source.name,
                 revision=source.revision,

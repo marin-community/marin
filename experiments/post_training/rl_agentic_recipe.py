@@ -32,6 +32,7 @@ _AGENTIC_RECIPE = RecipePatch(
     environment=sections.Environment(
         task_sessions={
             "daytona": {"api_key_env": _DAYTONA_RL_KEY},
+            "retry": {"max_retries": 1, "wait_multiplier": 2},
             "agent_harnesses": {
                 PI_HARNESS: {
                     "version": SWESMITH_PI_VERSION,

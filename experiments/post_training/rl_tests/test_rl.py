@@ -421,14 +421,23 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
 
 
-def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path):
+@pytest.mark.parametrize("retry_budget", [None, 0, 3], ids=["default-retry", "disabled-retry", "custom-retry"])
+def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path, retry_budget):
     table = snowball_model.SNOWBALL
     preset = table.by_name["train-long-checkpoint-eval"]
-    spec = recipe.run_spec(preset, name="checkpoint-evaluation-coverage", model_name=table.model)
+    spec = recipe.run_spec(
+        preset,
+        name="checkpoint-evaluation-coverage",
+        model_name=table.model,
+        settings=() if retry_budget is None else (f"environment.task_sessions.retry.max_retries={retry_budget}",),
+    )
     step = recipe.run_step(preset, spec)
     path = tmp_path / "checkpoint-evaluation.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
-    results = run_native_test("cloud.iris.tests.native_checkpoint_coverage", [str(path)])
+    results = run_native_test(
+        "cloud.iris.tests.native_checkpoint_coverage",
+        [str(path), str(recipe.CHECKPOINT_RETRY_BUDGET if retry_budget is None else retry_budget)],
+    )
     chosen, *rejected = results
     assert chosen["attempted"] == 190
     assert chosen["scored"] == 184
