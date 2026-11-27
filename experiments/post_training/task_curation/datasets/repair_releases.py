@@ -143,7 +143,7 @@ def sources() -> list[RlDataSource]:
             variant="sealed-20261124",
             cohort_name="swe-rebench-v2-1-repaired-release-20261126-v1",
             recipe_version="2026.11.20.2",
-            expected_rows=7484,
+            expected_rows=7207,
             release_repo="open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
             release_revision="adaba5629b54ca31f8e6055ae2ae680d5555fd49",
             family="swe-repo",
@@ -155,12 +155,12 @@ def sources() -> list[RlDataSource]:
                 "converted",
             ),
             upstream_url="https://huggingface.co/datasets/ibragim-bad/SWE-rebench-V2.1/tree/26c0145ded93168b0d5d095420155901ad2d5a2f",
-            upstream_repo="ibragim-bad/SWE-rebench-V2.1",
-            upstream_revision="26c0145ded93168b0d5d095420155901ad2d5a2f",
+            upstream_repo="open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
+            upstream_revision="adaba5629b54ca31f8e6055ae2ae680d5555fd49",
             origin=SourceOrigin.SWE_REBENCH,
             task_format=TaskFormat.HARBOR,
             count_basis=(
-                "Production machine_spec census over all 7,207 published Harbor tasks at the release cut: "
+                "Production machine_spec census over all 7,207 published Harbor tasks at the release cut "
                 "8 snapshot identities (the ten consolidated group bases, 8 used), 7,207 machine slots, "
                 "zero execution failures"
             ),
