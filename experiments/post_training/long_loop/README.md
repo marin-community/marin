@@ -1742,7 +1742,9 @@ The existing consumed-rollout metrics emit `generate/repeat_stall_fired_count`,
 `generate/repeat_stall_stop_reason_coverage` each step with stop metadata. Fractions
 count terminal trajectories once, rather than weighting multi-turn episodes by
 turn count. The trainer's existing tracker and training telemetry mirror these
-scalars to W&B and Grafana. A non-firing step reports zero.
+scalars to W&B and Grafana. Fired count and fraction report zero on a non-firing
+step; coverage reports the availability of terminal stop reasons. These metrics
+are omitted when the stop-reason field is absent.
 
 Run the local campaign-config grading proof with:
 
