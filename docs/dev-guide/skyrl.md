@@ -165,15 +165,17 @@ as the numerical reference.
 
 ## Batch assembly
 
-The driver builds batches by default. Recipes that support policy-worker slicing can set
-`trainer.batch_builder=worker`. Keep `driver` for these configurations:
+The default `trainer.batch_builder=auto` selects policy workers at startup when the
+configuration supports them. It logs the choice and the reason if it selects the driver.
+Set `trainer.batch_builder=driver` in the recipe to select the driver explicitly.
+Explicit `worker` rejects these configurations:
 
 | Worker startup refusal | Configurations |
 | --- | --- |
-| Objectives and credit | Reference objectives, DPO/FTPO, distillation, unsupported estimators, trajectory selection, step-wise training, advantage normalization, loop advantage credit or marker-target penalties |
-| Placement and output | Colocation, MoE ETP (or its TP fallback) greater than one, rows requiring DP padding, dense batch dumps |
+| Objectives and credit | Reference objectives, DPO/FTPO, distillation, unsupported estimators, trajectory selection, step-wise training, or advantage normalization |
+| Placement and output | Colocation, MoE ETP (or its TP fallback) greater than one, router replay without a readable model expert count, rows requiring DP padding, dense batch dumps |
 
-Outcome estimators and SFT/uniform support scalar and per-turn token rewards. Unexpected loop, teacher or route metadata reports its group uid. Worker mismatch metrics omit p95/p99/p999, ESS, KL/chi-square and collapse-tail statistics, plus rollout/train probability-difference standard deviation. Two-phase payload sharing precedes rank reads and assembly (`timing/load_worker_batch`). Resume rebuilds per-row summaries with bounded parallel reads for either builder. Checkpoints work in either mode.
+Outcome estimators and SFT/uniform support scalar and per-turn token rewards. Unsupported rollout rows stop training with the refusal reason and group uid. The choice stays fixed for the run. Auto selects the driver when it cannot read model metadata needed for expert parallelism or router replay. Two-phase payload sharing precedes rank reads and assembly (`timing/load_worker_batch`). Resume rebuilds per-row summaries with bounded parallel reads for either builder. Checkpoints work in either mode.
 
 ## CI checks
 

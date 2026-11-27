@@ -1,6 +1,7 @@
 import re
 from collections import defaultdict
 from collections.abc import Sequence
+from itertools import repeat
 from math import fsum
 from typing import Dict, List
 
@@ -19,11 +20,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
     rollout_counter_metrics,
     verifier_score_summary,
 )
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
-    aggregate_reward_shaping_components,
-    reward_shaping_metrics,
-    shaping_groups,
-)
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import reward_shaping_metrics, shaping_groups
 from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.advantage_estimators import GRPO_FLAT_REWARD_STD_TOLERANCE
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
@@ -60,7 +57,7 @@ def rollout_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
 
 def _facts_shaping_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
     fields = BatchFields.from_groups([group.fields for group in facts])
-    if "reward_shaping_components" not in fields.first_group_list_fields or any(group.loop_credit for group in facts):
+    if "reward_shaping_components" not in fields.first_group_list_fields:
         return {}
     components = [values for group in facts for values in group.shaping_components]
     totals = [
@@ -86,18 +83,26 @@ def _facts_shaping_metrics(facts: Sequence[RowFacts]) -> dict[str, float]:
     groups = shaping_groups(last, len(lengths))
     violations = [value for group in facts for value in group.reasoning_span_violations]
     token_penalties = [value for group in facts for value in group.reasoning_span_token_penalties]
+    loop_credit = [value for group in facts for value in group.loop_credit_totals]
+    charged = [row for group in facts for row in group.charged_loop_credit_runs]
+    charged_counts = [sum(count for _, count in row) for row in charged]
     return reward_shaping_metrics(
-        trajectory_components=[aggregate_reward_shaping_components(components, rows) for rows in groups],
-        shaped_totals=[totals[rows[-1]] for rows in groups],
-        trajectory_outcomes=[outcomes[rows[-1]] for rows in groups],
-        trajectory_lengths=[sum(lengths[row] for row in rows) for rows in groups],
-        trajectory_stops=[stops[rows[-1]] for rows in groups],
-        loop_incidence=[any(incidence[row] for row in rows) for rows in groups],
-        trajectory_loop_advantages=[0] * len(groups),
-        trajectory_loop_token_counts=[0] * len(groups),
-        charged_loop_advantages=[],
-        reasoning_span_token_penalties=[sum(token_penalties[row] for row in rows) for rows in groups],
-        reasoning_span_incidence=[any(violations[row] for row in rows) for rows in groups],
+        groups=groups,
+        row_components=components,
+        row_shaped_totals=totals,
+        row_outcomes=outcomes,
+        row_lengths=lengths,
+        row_stops=stops,
+        row_loop_incidence=incidence,
+        row_loop_advantages=loop_credit,
+        row_loop_token_counts=charged_counts,
+        charged_loop_advantages=np.fromiter(
+            (value for row in charged for charge, count in row for value in repeat(charge, count)),
+            dtype=np.float64,
+            count=sum(charged_counts),
+        ),
+        row_reasoning_span_penalties=token_penalties,
+        row_reasoning_span_violations=violations,
     )
 
 
@@ -258,8 +263,7 @@ def forward_metrics(
         valid = batch["loss_mask"] > 0
         differences = (batch["rollout_logprobs"][valid] - batch["action_log_probs"][valid]).exp().abs()
         metrics["policy/rollout_train_prob_diff_mean"] = reduction.mean(differences)
-        if reduction.exact_order_statistics:
-            metrics["policy/rollout_train_prob_diff_std"] = differences.std().item()
+        metrics["policy/rollout_train_prob_diff_std"] = reduction.std(differences)
     return metrics
 
 

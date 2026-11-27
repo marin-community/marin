@@ -510,8 +510,8 @@ class Trainer(Section):
     hf_export_checkpoint: Literal["latest", "best"] = field("latest")
     """Best selection queues only the final export, after the last evaluation. latest or best native checkpoint for
     HF export"""
-    batch_builder: Literal["driver", "worker"] = field("driver")
-    "driver, worker"
+    batch_builder: Literal["auto", "driver", "worker"] = field("auto")
+    "auto, driver, worker"
     evaluation_runner: Literal["training", "task"] = field("training")
     "task selects generated validation for offline preference training"
     trajectory_selector: TrajectorySelector = Field(default_factory=TrajectorySelector)

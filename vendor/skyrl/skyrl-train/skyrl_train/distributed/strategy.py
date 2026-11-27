@@ -106,6 +106,20 @@ class DistributedStrategy(ABC):
                 data = data.cpu()
             return data.item() if not is_tensor else data
 
+    def gather_to_first_rank(self, values: torch.Tensor) -> torch.Tensor:
+        """Gather one-dimensional tensors on world rank zero and return an empty tensor elsewhere."""
+        values = values.to(self.collective_device())
+        world_size, rank = dist.get_world_size(), dist.get_rank()
+        sizes = values.new_zeros(world_size, dtype=torch.int64)
+        sizes[rank] = values.numel()
+        splits = self.all_reduce(sizes, "sum").tolist()
+        splits = splits if rank == 0 else [0] * world_size
+        received = values.new_empty(sum(splits))
+        dist.all_to_all_single(
+            received, values, output_split_sizes=splits, input_split_sizes=[values.numel(), *([0] * (world_size - 1))]
+        )
+        return received
+
     def all_gather(self, data: DataT) -> DataT:
         """Perform all_gather across all processes"""
         if isinstance(data, dict):

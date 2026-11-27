@@ -27,6 +27,19 @@ def get_default_config():
     return cfg
 
 
+def load_policy_model_config(cfg: DictConfig, *, local_files_only: bool) -> object:
+    """Read the configured policy revision, including locally registered models."""
+    # Keep Transformers out of planning processes that never read model metadata.
+    from transformers import AutoConfig
+    from skyrl_train.models import register_local_models
+
+    register_local_models()
+    model = cfg.trainer.policy.model
+    return AutoConfig.from_pretrained(
+        model.path, trust_remote_code=True, revision=model.get("revision"), local_files_only=local_files_only
+    )
+
+
 def model_expert_count(config: object) -> int | None:
     """Return a model's declared expert count, including its text configuration."""
     for candidate in (config, getattr(config, "text_config", None)):

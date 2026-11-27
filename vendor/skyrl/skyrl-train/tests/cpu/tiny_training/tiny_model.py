@@ -15,6 +15,7 @@ from pathlib import Path
 import torch
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast, Qwen2Config, Qwen2ForCausalLM
+from verifyit.reasoning_markup import REASONING_DELIMITERS
 
 END_OF_TURN = "<|im_end|>"
 # ChatML, as Qwen's template renders conversations without tools or a default system prompt.
@@ -44,10 +45,15 @@ TRANSITIONS = (
 )
 
 
-def build_tiny_policy(output_dir: Path) -> Path:
+def build_tiny_policy(output_dir: Path, *, stray_reasoning_marker: bool = False) -> Path:
     """Write the tiny policy and its tokenizer as a Hugging Face model directory."""
     tokenizer = _tiny_tokenizer()
-    answer_ids = [_single_token_id(tokenizer, text) for text in ANSWER_TOKENS]
+    answer_tokens = ANSWER_TOKENS
+    if stray_reasoning_marker:
+        _, closer = REASONING_DELIMITERS[0]
+        tokenizer.add_tokens([closer])
+        answer_tokens = (*ANSWER_TOKENS[:-1], closer)
+    answer_ids = [_single_token_id(tokenizer, text) for text in answer_tokens]
     next_ids = [*answer_ids, tokenizer.convert_tokens_to_ids(END_OF_TURN)]
 
     config = Qwen2Config(

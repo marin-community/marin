@@ -6,8 +6,9 @@ import pytest
 import torch
 from finestore.rl.run_records import METRIC_METADATA_KEYS
 from skyrl_train.entrypoints.main_base import BasePPOExp
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import SHAPING_METRIC_PREFIX
 
-from tests.batch_assertions import WORKER_OMITTED_METRICS, assert_metric_parity
+from tests.batch_assertions import assert_metric_parity
 from tests.cpu.tiny_training import experiment
 from tests.cpu.tiny_training.experiment import RolloutShape, TrainingMode, read_metrics
 from tests.cpu.tiny_training.tiny_model import build_tiny_policy
@@ -52,7 +53,14 @@ def _worker_batch_config(root: Path, tiny_policy: Path, builder: str, estimator:
     cfg.trainer.algorithm.advantage_estimator = estimator
     cfg.trainer.algorithm.group_advantage_min_size = None
     cfg.generator.trajectory_reward_shaping.enabled = True
-    cfg.generator.trajectory_reward_shaping.overlong.penalty_scale = 0.0
+    shaping = cfg.generator.trajectory_reward_shaping
+    shaping.overlong.penalty_scale = 0.0
+    shaping.loop.advantage_penalty_per_token = 0.05
+    shaping.loop.minimum_occurrences = 2
+    shaping.reasoning_span.target = "marker"
+    shaping.reasoning_span.penalty = 0.1
+    cfg.generator.sampling_params.ignore_eos = True
+    cfg.generator.sampling_params.temperature = 0.7
     return cfg
 
 
@@ -104,16 +112,18 @@ def _run_worker_batch_case(runs: BaseContext, cfg, target=experiment.run_tiny_tr
 
 
 @pytest.mark.parametrize(
-    ("case", "config_builder", "target"),
+    ("config_builder", "target"),
     [
-        ("grpo", _worker_batch_config, experiment.run_tiny_training),
-        ("sft", preference_config, run_preference_training),
+        (_worker_batch_config, experiment.run_tiny_training),
+        (preference_config, run_preference_training),
     ],
     ids=["grpo", "sft"],
 )
 def test_worker_batches_match_two_driver_updates(
-    forkserver_context: BaseContext, tmp_path: Path, tiny_policy: Path, case, config_builder, target
+    forkserver_context: BaseContext, tmp_path: Path, tiny_policy: Path, config_builder, target
 ):
+    if config_builder is _worker_batch_config:
+        tiny_policy = build_tiny_policy(tmp_path / "marker_policy", stray_reasoning_marker=True)
     results = {}
     for builder in ("driver", "worker"):
         root = tmp_path / builder
@@ -124,9 +134,12 @@ def test_worker_batches_match_two_driver_updates(
     assert [row["trainer/global_step"] for row in steps] == [1, 2]
     assert all(row["policy/raw_grad_norm"] > 0 for row in steps)
     required = {"policy/policy_loss", "policy/raw_grad_norm"}
-    absent = set() if case == "sft" else WORKER_OMITTED_METRICS
+    if config_builder is _worker_batch_config:
+        assert any(row[f"{SHAPING_METRIC_PREFIX}/loop_advantage_mean"] < -1e-6 for row in steps)
+        assert any(row[f"{SHAPING_METRIC_PREFIX}/reasoning_span_penalty_mean"] < 0 for row in steps)
     for actual, expected in zip(steps, baseline, strict=True):
-        assert_metric_parity(actual, expected, required=required, absent=absent)
+        shaping_keys = {key for key in expected if key.startswith(f"{SHAPING_METRIC_PREFIX}/")}
+        assert_metric_parity(actual, expected, required=required | shaping_keys)
     assert all(row["generate/avg_num_tokens"] > 0 for row in steps)
 
 

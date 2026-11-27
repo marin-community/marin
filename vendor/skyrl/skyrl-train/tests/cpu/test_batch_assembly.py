@@ -9,7 +9,7 @@ from hydra import compose, initialize_config_dir
 from skyrl_gym.verification import VerificationResult
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
-from skyrl_train.config.driver_validation import validate_cfg
+from skyrl_train.config.driver_validation import validate_cfg, worker_batch_refusal
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
@@ -29,14 +29,15 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.group_admission import resolve_group_advantage_invariant
 from skyrl_train.rollouts.buffer import AdmittedRollout, RolloutGroup
 from skyrl_train.trajectory_runners.trajectory_processing import (
+    concatenate_trajectory_batches,
     normalize_trajectory_batches,
     token_reward_rows,
 )
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import SHAPING_METRIC_PREFIX, shape_trajectory_rewards
 from skyrl_train.trajectory_runners.types import BatchFields
 from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
-from skyrl_train.metric_reduction import WorldReduction
-from tests.batch_assertions import WORKER_OMITTED_METRICS
 from skyrl_train.utils.advantage_estimators import (
+    apply_loop_advantages,
     compute_advantages_and_returns,
 )
 
@@ -194,6 +195,55 @@ def assert_batch_exact(actual, expected):
     torch.testing.assert_close(actual.routed_experts_tensor(), expected.routed_experts_tensor(), rtol=0, atol=0)
 
 
+def test_row_facts_match_payload_shaping_with_repeated_marker_penalties(worker_config):
+    config = {
+        "enabled": True,
+        "loop": {"advantage_penalty_per_token": 0.025},
+        "reasoning_span": {"target": "marker", "penalty": 0.1},
+    }
+    batches = []
+    for counts, tokens, responses, excluded, last in (
+        ([1, 3, 6], [[0], [0, 1, 2], list(range(6))], [list(range(8))] * 3, [False] * 3, [True, False, True]),
+        ([1, 0], [[], []], [[8] * 8, [9] * 8], [False, True], [True, True]),
+        ([0], [[]], [list(range(8))], [False], [True]),
+    ):
+        batch = {
+            "prompt_token_ids": [[10]] * len(counts),
+            "response_ids": responses,
+            "loss_masks": [[1] * 8 for _ in counts],
+            "rewards": [1.0] * len(counts),
+            "reasoning_span_violations": counts,
+            "reasoning_span_violation_tokens": tokens,
+            "exclude_from_baseline": excluded,
+            "is_last_step": last,
+        }
+        shape_trajectory_rewards(batch, config)
+        batches.append(batch)
+    del batches[-1]["loop_advantages"]
+
+    expected = concatenate_trajectory_batches(batches)["rollout_metrics"]
+    groups = [
+        AdmittedRollout(
+            index,
+            f"g{index}",
+            0,
+            len(batch["response_ids"]),
+            sum(map(len, batch["response_ids"])),
+            RowFacts.from_batch(batch),
+        )
+        for index, batch in enumerate(batches)
+    ]
+    _, actual = plan_worker_batch(
+        worker_config, groups, global_step=0, dp_size=2, max_staleness_steps=0, num_experts=None
+    )
+    shaping = f"{SHAPING_METRIC_PREFIX}/"
+    assert {key: value for key, value in actual.items() if key.startswith(shaping)} == {
+        key: value for key, value in expected.items() if key.startswith(shaping)
+    }
+    # The diagnostic counts six marker subtraction residuals as well as five loop charges.
+    assert actual[shaping + "loop_charged_tokens_mean"] == 11 / 5
+
+
 @pytest.mark.parametrize("dp_size", [1, 3, 8])
 @pytest.mark.parametrize("estimator", ["rloo", "rloo_n", "grpo"])
 @pytest.mark.parametrize("loop_channel", [False, True, "first", "last"])
@@ -210,6 +260,8 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
     )
     with open_dict(algorithm):
         algorithm.resolved_group_advantage = invariant.to_config()
+    marker_penalty = 0.25
+    loop_credit = -0.1
     groups = []
     for index in range(6):
         lengths = [0 if index in (2, 3) else 1, 2, 3, 9 if index == 5 else 4]
@@ -225,10 +277,12 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             "stop_reasons": ["stop", "length", None, "stop"],
         }
         if loop_channel is True or (loop_channel == "first" and index == 0) or (loop_channel == "last" and index == 5):
-            batch["loop_advantages"] = [[0.0] * length for length in lengths]
+            batch["loop_advantages"] = [
+                [-marker_penalty] + [loop_credit] * (length - 1) if length else [] for length in lengths
+            ]
             batch["reasoning_span_violations"] = [int(length > 0) for length in lengths]
             batch["reasoning_span_violation_tokens"] = [[0] if length else [] for length in lengths]
-            batch["reasoning_span_token_penalties"] = [0.25 if length else 0.0 for length in lengths]
+            batch["reasoning_span_token_penalties"] = [marker_penalty if length else 0.0 for length in lengths]
         if index % 2 == 0:
             batch["rewards"] = [
                 [0.0] * (length - 1) + [reward] if length else [] for length, reward in zip(lengths, rewards)
@@ -264,11 +318,14 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         violations = [int(row in active and row not in (8, 12)) for row in range(24)]
         assert normalized["reasoning_span_violations"] == violations
         assert normalized["reasoning_span_violation_tokens"] == [[0] if value else [] for value in violations]
-        assert normalized["reasoning_span_token_penalties"] == [0.25 * value for value in violations]
+        assert normalized["reasoning_span_token_penalties"] == [marker_penalty * value for value in violations]
         lengths = [1, 2, 3, 4] * 6
         lengths[8] = lengths[12] = 0
         lengths[-1] = 9
-        assert normalized["loop_advantages"] == [[0.0] * length for length in lengths]
+        assert normalized["loop_advantages"] == [
+            [-marker_penalty] + [loop_credit] * (length - 1) if violation else [0.0] * length
+            for length, violation in zip(lengths, violations, strict=True)
+        ]
     normalized["rewards"] = token_reward_rows(normalized["rewards"], normalized["response_ids"])
     whole_plan = BatchPlan(
         facts=(RowFacts.from_batch(normalized),), fields=BatchFields.from_batch(normalized), **layout
@@ -286,6 +343,13 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
         exclude_from_baseline=whole.metadata.get("exclude_from_baseline"),
         group_advantage_invariant=invariant,
     )
+    before_credit = whole["advantages"].clone()
+    apply_loop_advantages(whole)
+    if loop_channel:
+        row = 21 if loop_channel == "last" else 1
+        tokens = whole["response_mask"][row].bool()
+        expected = before_credit[row, tokens] + before_credit.new_tensor([-marker_penalty, loop_credit])
+        assert torch.equal(whole["advantages"][row, tokens], expected)
     whole.metadata.update(pad_size=0, global_step=7)
     for rank, expected in enumerate(whole.chunk(whole.batch_size // dp_size)):
         rows = worker_plan.rank_rows(rank, dp_size)
@@ -301,89 +365,14 @@ def test_dp_slices_with_fields_and_longest_rows_on_other_ranks_match_driver(dp_s
             worker_plan,
             rows,
             algorithm,
-            reduction=WorldReduction(lambda values, operation: values + other_scores, True),
+            reduction=SimpleNamespace(combine=lambda values, operation: values + other_scores),
         )
-        assert_batch_exact(actual, expected)
+        assert_batch_exact(apply_loop_advantages(actual), expected)
 
 
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({}, None),
-        ({"batch.loop_advantages": [[0.0, 0.1]] * 4}, "g0.*nonzero loop credit"),
-        ({"batch.teacher_evidence": [None] * 4}, "g0.*teacher evidence"),
-        ({"batch.distillation": [None] * 4}, "g0.*teacher evidence"),
-        ({"batch.student_topk_indices": [None] * 4}, "g0.*teacher evidence"),
-        ({"batch.behavior_topk_logprobs": [None] * 4}, "g0.*teacher evidence"),
-        ({"rows": 3}, "g0.*rows requiring DP padding"),
-        (
-            {
-                "trainer.policy.megatron_config.moe_router_replay": True,
-                "generator.engine_init_kwargs.enable_return_routed_experts": True,
-                "batch.rollout_routed_experts": [np.zeros((2, 1, 1), dtype=np.uint8)] * 4,
-            },
-            "g0.*route dtype without the model expert count",
-        ),
-        ({"trainer.algorithm.use_kl_loss": True}, "DPO and reference-model objectives"),
-        ({"trainer.algorithm.advantage_estimator": "reward"}, "configured loss and estimator"),
-        ({"trainer.algorithm.policy_loss_type": "clip_cov"}, "configured loss and estimator"),
-        ({"trainer.placement.colocate_all": True}, "colocated placement"),
-        ({"trainer.algorithm.distillation": {}}, "distillation"),
-        ({"trainer.trajectory_selector.type": "top_k"}, "trajectory selection"),
-        ({"trainer.step_wise_training": True}, "step-wise training"),
-        ({"trainer.algorithm.advantage_batch_normalize": True}, "advantage batch normalization"),
-        (
-            {
-                "generator.trajectory_reward_shaping.enabled": True,
-                "generator.trajectory_reward_shaping.loop.advantage_penalty_per_token": 0.1,
-            },
-            "loop advantage credit",
-        ),
-        (
-            {
-                "generator.trajectory_reward_shaping.enabled": True,
-                "generator.trajectory_reward_shaping.reasoning_span.target": "marker",
-                "generator.trajectory_reward_shaping.reasoning_span.penalty": 0.5,
-            },
-            "marker-target reasoning penalties",
-        ),
-        ({"trainer.policy.megatron_config.expert_tensor_parallel_size": 2, "model_experts": 4}, "ETP greater than one"),
-        (
-            {
-                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
-                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
-                "model_experts": 4,
-            },
-            "ETP greater than one",
-        ),
-        (
-            {
-                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
-                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
-                "model_experts": 8,
-                "model_type": "grug_moe",
-            },
-            "ETP greater than one",
-        ),
-        (
-            {
-                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
-                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
-            },
-            None,
-        ),
-        (
-            {"trainer.train_batch_size": 3, "trainer.policy_mini_batch_size": 3, "generator.n_samples_per_prompt": 3},
-            "rows requiring DP padding",
-        ),
-        ({"trainer.dump_data_batch": True}, "dense batch dumping"),
-    ],
-)
-def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_semantics(
-    tmp_path, overrides, message, monkeypatch
-):
+@pytest.fixture
+def worker_config(tmp_path):
     cfg = get_default_config()
-    cfg.trainer.batch_builder = "worker"
     cfg.trainer.logger = "console"
     cfg.trainer.algorithm.use_kl_loss = False
     cfg.trainer.placement.colocate_all = False
@@ -393,69 +382,174 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
     cfg.trainer.train_batch_size = cfg.trainer.policy_mini_batch_size = 2
     cfg.trainer.micro_train_batch_size_per_gpu = cfg.trainer.micro_forward_batch_size_per_gpu = 1
     cfg.generator.n_samples_per_prompt = 2
-    metadata = (
-        {"model_type": overrides.get("model_type", "qwen2_moe"), "num_experts": overrides["model_experts"]}
-        if "model_experts" in overrides
-        else {"model_type": "qwen2"}
-    )
-    (tmp_path / "config.json").write_text(json.dumps(metadata))
     cfg.trainer.policy.model.path = str(tmp_path)
-    batch = {
-        "prompt_token_ids": [[1]] * 4,
-        "response_ids": [[2, 3]] * 4,
-        "loss_masks": [[1, 1]] * 4,
-        "rewards": [[0.0, 1.0]] * 4,
-    }
+    return cfg
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason", "metadata"),
+    [
+        ({}, None, None),
+        (
+            {
+                "trainer.policy.megatron_config.moe_router_replay": True,
+                "generator.engine_init_kwargs.enable_return_routed_experts": True,
+            },
+            "router replay without the model expert count",
+            {"model_type": "qwen2"},
+        ),
+        ({"trainer.algorithm.use_kl_loss": True}, "DPO and reference-model objectives", None),
+        ({"trainer.algorithm.advantage_estimator": "reward"}, "the configured loss and estimator", None),
+        ({"trainer.algorithm.policy_loss_type": "clip_cov"}, "the configured loss and estimator", None),
+        ({"trainer.placement.colocate_all": True}, "colocated placement", None),
+        ({"trainer.algorithm.distillation": {}}, "distillation", None),
+        ({"trainer.trajectory_selector.type": "best_of_n"}, "trajectory selection", None),
+        ({"trainer.step_wise_training": True}, "step-wise training", None),
+        ({"trainer.algorithm.advantage_batch_normalize": True}, "advantage batch normalization", None),
+        (
+            {"trainer.policy.megatron_config.expert_tensor_parallel_size": 2},
+            "ETP greater than one",
+            {"model_type": "qwen2_moe", "num_experts": 4},
+        ),
+        (
+            {
+                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
+                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
+            },
+            "ETP greater than one",
+            {"model_type": "qwen2_moe", "num_experts": 4},
+        ),
+        (
+            {
+                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
+                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
+            },
+            "ETP greater than one",
+            {"model_type": "grug_moe", "num_experts": 8},
+        ),
+        (
+            {
+                "trainer.policy.megatron_config.expert_tensor_parallel_size": None,
+                "trainer.policy.megatron_config.tensor_model_parallel_size": 2,
+            },
+            None,
+            {"model_type": "qwen2"},
+        ),
+        (
+            {"trainer.train_batch_size": 3, "trainer.policy_mini_batch_size": 3, "generator.n_samples_per_prompt": 3},
+            "rows requiring DP padding",
+            None,
+        ),
+        (
+            {
+                "trainer.algorithm.policy_loss_type": "sft",
+                "trainer.algorithm.advantage_estimator": "uniform",
+                "trainer.placement.policy_num_gpus_per_node": 4,
+                "trainer.train_batch_size": 6,
+                "trainer.policy_mini_batch_size": 6,
+                "generator.n_samples_per_prompt": 2,
+            },
+            None,
+            None,
+        ),
+        (
+            {
+                "trainer.policy.megatron_config.moe_router_replay": True,
+                "generator.engine_init_kwargs.enable_return_routed_experts": True,
+            },
+            None,
+            {"model_type": "qwen2_moe", "num_experts": 4},
+        ),
+        ({"trainer.dump_data_batch": True}, "dense batch dumping", None),
+    ],
+)
+def test_worker_batch_config_validation(worker_config, tmp_path, overrides, reason, metadata, monkeypatch):
+    cfg = worker_config
+    if metadata is not None:
+        (tmp_path / "config.json").write_text(json.dumps(metadata))
+    monkeypatch.delitem(CONFIG_MAPPING._extra_content, "grug_moe", raising=False)
     for key, value in overrides.items():
-        if key.startswith("batch."):
-            batch[key.removeprefix("batch.")] = value
-        elif key not in {"rows", "model_experts", "model_type"}:
-            OmegaConf.update(cfg, key, value, merge=False, force_add=True)
-    if "rows" in overrides:
-        batch = {key: values[: overrides["rows"]] for key, values in batch.items()}
-
-    if metadata["model_type"] == "grug_moe":
-        monkeypatch.delitem(CONFIG_MAPPING._extra_content, "grug_moe", raising=False)
-
-    def check():
+        OmegaConf.update(cfg, key, value, merge=False, force_add=True)
+    assert worker_batch_refusal(cfg) == reason
+    if reason is None:
         validate_cfg(cfg)
-        group = AdmittedRollout(
-            0, "g0", 0, len(batch["response_ids"]), sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch)
-        )
+        assert cfg.trainer.batch_builder == "worker"
+    else:
+        cfg.trainer.batch_builder = "worker"
+        with pytest.raises(ValueError, match=reason):
+            validate_cfg(cfg)
+
+
+def test_auto_batch_builder_resolves_router_replay_after_planning(worker_config, tmp_path):
+    cfg = worker_config
+    cfg.trainer.policy.megatron_config.moe_router_replay = True
+    with open_dict(cfg.generator.engine_init_kwargs):
+        cfg.generator.engine_init_kwargs.enable_return_routed_experts = True
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "qwen2"}))
+    validate_cfg(cfg, check_runtime_resources=False)
+    assert cfg.trainer.batch_builder == "auto"
+    validate_cfg(cfg)
+    assert cfg.trainer.batch_builder == "driver"
+
+
+def test_unreadable_policy_config_falls_back_only_for_auto(worker_config):
+    cfg = worker_config
+    cfg.trainer.policy.megatron_config.tensor_model_parallel_size = 2
+    cfg.trainer.policy.megatron_config.expert_tensor_parallel_size = None
+    validate_cfg(cfg)
+    assert cfg.trainer.batch_builder == "driver"
+    cfg.trainer.batch_builder = "worker"
+    assert worker_batch_refusal(cfg, check_runtime_resources=False) is None
+    with pytest.raises(ValueError):
+        validate_cfg(cfg)
+
+
+@pytest.mark.parametrize(
+    ("fields", "rows", "reason"),
+    [
+        ({"teacher_evidence": [None] * 4}, 4, "teacher evidence"),
+        ({"distillation": [None] * 4}, 4, "teacher evidence"),
+        ({"student_topk_indices": [None] * 4}, 4, "teacher evidence"),
+        ({"behavior_topk_logprobs": [None] * 4}, 4, "teacher evidence"),
+        ({}, 3, "rows requiring DP padding"),
+        (
+            {"rollout_routed_experts": [np.zeros((2, 1, 1), dtype=np.uint8)] * 4},
+            4,
+            "route dtype without the model expert count",
+        ),
+    ],
+)
+def test_worker_batch_rejects_incompatible_rows(worker_config, fields, rows, reason):
+    cfg = worker_config
+    cfg.trainer.policy.megatron_config.moe_router_replay = True
+    batch = {
+        "prompt_token_ids": [[1]] * rows,
+        "response_ids": [[2, 3]] * rows,
+        "loss_masks": [[1, 1]] * rows,
+        "rewards": [[0.0, 1.0]] * rows,
+        **fields,
+    }
+    group = AdmittedRollout(0, "g0", 0, rows, sum(map(len, batch["response_ids"])), RowFacts.from_batch(batch))
+    match = rf"^Policy-worker batch assembly: .*g0.*{reason}.*trainer\.batch_builder=driver"
+    with pytest.raises(ValueError, match=match):
         plan_worker_batch(cfg, (group,), global_step=0, dp_size=2, max_staleness_steps=0, num_experts=None)
 
-    if message is None:
-        check()
-    else:
-        with pytest.raises(ValueError, match=message):
-            check()
 
-
-def test_worker_ratio_moments_match_known_finite_token_values():
-    metrics = mismatch_ratio_metrics(
-        torch.tensor([[-1.0, 0.0, 1.0, 2.0, float("nan")]]),
-        torch.zeros(1, 5),
-        torch.ones(1, 5),
-        torch.zeros(1, 5),
-        reduction=WorldReduction(lambda values, operation: values, True),
-    )
-    expected = {
-        "log_ratio_mean_squared": 1.5,
-        "lower_clip_pressure": 0.25,
-        "upper_clip_pressure": 0.5,
-        "log_ratio_abs_max": 2.0,
-    }
-    for scope in ("pooled", "staleness0"):
-        assert {key: metrics[f"policy/mismatch/{scope}/{key}"] for key in expected} == expected
-
-
-def test_worker_ratio_keys_match_driver_for_mixed_staleness():
-    learner = torch.tensor([[-1.0, 0.0], [1.0, 2.0]])
-    sampler = torch.zeros_like(learner)
+def test_mismatch_ratio_statistics_match_known_values_for_mixed_staleness():
+    learner = torch.tensor([[-21.0, 0.0, 1.0, 8.125, float("nan")]], dtype=torch.float32)
+    sampler = torch.tensor([[-1.0, 0.0, 0.0078125, 0.125, 0.0]], dtype=torch.float32)
     mask = torch.ones_like(learner)
-    staleness = torch.tensor([[0, 0], [1, 1]])
-    driver = mismatch_ratio_metrics(learner, sampler, mask, staleness)
-    worker = mismatch_ratio_metrics(
-        learner, sampler, mask, staleness, reduction=WorldReduction(lambda values, operation: values, True)
-    )
-    assert worker.keys() == driver.keys() - WORKER_OMITTED_METRICS
+    staleness = torch.tensor([[0, 0, 1, 2, 0]])
+    metrics = mismatch_ratio_metrics(learner, sampler, mask, staleness)
+    for key, value in (
+        ("ess_fraction", 0.250620275328),
+        ("kl_k3", 747.915720782),
+        ("chi2", 2221528.63255),
+        ("log_ratio_abs_p95", 18.2),
+        ("log_ratio_abs_p99", 19.64),
+        ("lower_clip_pressure", 0.25),
+        ("upper_clip_pressure", 0.5),
+        ("log_ratio_mean_squared", 116.246108949),
+    ):
+        assert metrics[f"policy/mismatch/pooled/{key}"] == pytest.approx(value)
+    assert metrics["policy/mismatch/staleness0/log_ratio_abs_p95"] == pytest.approx(19.0)

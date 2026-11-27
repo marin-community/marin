@@ -232,6 +232,20 @@ def _reasoning_span_evidence(
     return violations, violation_tokens, token_penalties
 
 
+def loop_credit_without_markers(output: TrajectoryBatch) -> list[list[float]]:
+    """Subtract marker charges for metrics, preserving floating-point residuals."""
+    rows = list(output.get("loop_advantages") or ())
+    if not rows:
+        return rows
+    _, tokens, penalties = _reasoning_span_evidence(output, len(rows))
+    for index, (positions, penalty) in enumerate(zip(tokens, penalties, strict=True)):
+        if positions and penalty:
+            row = rows[index] = list(rows[index])
+            for position in positions:
+                row[position] -= penalty / len(positions)
+    return rows
+
+
 def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     """Recompute shaping metrics after concatenation, filtering, or replacement."""
     components = output.get("reward_shaping_components")
@@ -244,7 +258,7 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     outcomes = output.get("unshaped_rewards")
     spans = output.get("reward_shaping_loop_spans")
     loop_advantages = output.get("loop_advantages")
-    violations, violation_tokens, token_penalties = _reasoning_span_evidence(output, batch_size)
+    violations, _, token_penalties = _reasoning_span_evidence(output, batch_size)
     if (
         outcomes is None
         or spans is None
@@ -254,42 +268,29 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
         or len(loop_advantages) != batch_size
     ):
         raise ValueError("shaped outputs must retain outcomes, loop spans, and loop advantages for every generated row")
-    # Exclude marker penalties from loop credit metrics.
-    loop_advantages = [list(row) for row in loop_advantages]
-    for index, penalty in enumerate(token_penalties):
-        for position in violation_tokens[index] if penalty else ():
-            loop_advantages[index][position] -= penalty / len(violation_tokens[index])
+    loop_advantages = loop_credit_without_markers(output)
 
     stop_reasons = output.get("stop_reasons")
     if stop_reasons is None:
         stop_reasons = [None] * batch_size
     groups = shaping_groups(output.get("is_last_step"), batch_size)
     response_lengths = [sum(bool(value) for value in loss_mask) for loss_mask in output["loss_masks"]]
-    trajectory_components = [aggregate_reward_shaping_components(components, group) for group in groups]
-    shaped_totals = [NormalizedReward.from_output(output["rewards"][group[-1]]).total for group in groups]
-    trajectory_lengths = [sum(response_lengths[index] for index in group) for group in groups]
-    trajectory_stops = [stop_reasons[group[-1]] for group in groups]
-    trajectory_outcomes = [float(outcomes[group[-1]]) for group in groups]
-    trajectory_loop_advantages = [sum(sum(loop_advantages[index]) for index in group) for group in groups]
-    trajectory_loop_token_counts = [
-        sum(sum(value < 0 for value in loop_advantages[index]) for index in group) for group in groups
-    ]
     charged_loop_advantages = [
         value for sample_advantages in loop_advantages for value in sample_advantages if value < 0
     ]
-    loop_incidence = [any(spans[index] for index in group) for group in groups]
     refreshed_metrics = reward_shaping_metrics(
-        trajectory_components=trajectory_components,
-        shaped_totals=shaped_totals,
-        trajectory_lengths=trajectory_lengths,
-        trajectory_stops=trajectory_stops,
-        trajectory_outcomes=trajectory_outcomes,
-        trajectory_loop_advantages=trajectory_loop_advantages,
-        trajectory_loop_token_counts=trajectory_loop_token_counts,
+        groups=groups,
+        row_components=components,
+        row_shaped_totals=[NormalizedReward.from_output(reward).total for reward in output["rewards"]],
+        row_lengths=response_lengths,
+        row_stops=stop_reasons,
+        row_outcomes=[float(outcome) for outcome in outcomes],
+        row_loop_advantages=[sum(row) for row in loop_advantages],
+        row_loop_token_counts=[sum(value < 0 for value in row) for row in loop_advantages],
         charged_loop_advantages=charged_loop_advantages,
-        loop_incidence=loop_incidence,
-        reasoning_span_token_penalties=[sum(token_penalties[index] for index in group) for group in groups],
-        reasoning_span_incidence=[any(violations[index] for index in group) for group in groups],
+        row_loop_incidence=[bool(row) for row in spans],
+        row_reasoning_span_penalties=token_penalties,
+        row_reasoning_span_violations=violations,
     )
     metrics = output.get("rollout_metrics") or {}
     stop_reason_prefix = f"{SHAPING_METRIC_PREFIX}/stop_reason/"
@@ -301,24 +302,34 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
 
 def reward_shaping_metrics(
     *,
-    trajectory_components: Sequence[RewardShapingComponents],
-    shaped_totals: Sequence[float],
-    trajectory_lengths: Sequence[float],
-    trajectory_stops: Sequence[str | None],
-    trajectory_outcomes: Sequence[float],
-    trajectory_loop_advantages: Sequence[float],
-    trajectory_loop_token_counts: Sequence[float],
-    charged_loop_advantages: Sequence[float],
-    loop_incidence: Sequence[bool],
-    reasoning_span_token_penalties: Sequence[float],
-    reasoning_span_incidence: Sequence[bool],
+    groups: Sequence[Sequence[int]],
+    row_components: Sequence[RewardShapingComponents],
+    row_shaped_totals: Sequence[float],
+    row_lengths: Sequence[int],
+    row_stops: Sequence[str | None],
+    row_outcomes: Sequence[float],
+    row_loop_advantages: Sequence[float],
+    row_loop_token_counts: Sequence[int],
+    charged_loop_advantages: Sequence[float] | np.ndarray,
+    row_loop_incidence: Sequence[bool],
+    row_reasoning_span_penalties: Sequence[float],
+    row_reasoning_span_violations: Sequence[int],
 ) -> dict[str, float]:
-    """Aggregate trajectory-level shaping scalars and charged token values."""
+    """Report trajectory shaping metrics and the pooled mean of charged tokens."""
+    trajectory_components = [aggregate_reward_shaping_components(row_components, group) for group in groups]
+    shaped_totals = [row_shaped_totals[group[-1]] for group in groups]
+    trajectory_lengths = [sum(row_lengths[index] for index in group) for group in groups]
+    trajectory_stops = [row_stops[group[-1]] for group in groups]
+    trajectory_outcomes = [row_outcomes[group[-1]] for group in groups]
     penalties = [sum(values.values()) for values in trajectory_components]
     reasoning_span_penalties = [
-        values.get("reasoning_span", 0.0) + penalty
-        for values, penalty in zip(trajectory_components, reasoning_span_token_penalties)
+        values.get("reasoning_span", 0.0) + sum(row_reasoning_span_penalties[index] for index in group)
+        for values, group in zip(trajectory_components, groups)
     ]
+    reasoning_span_incidence = [any(row_reasoning_span_violations[index] for index in group) for group in groups]
+    loop_incidence = [any(row_loop_incidence[index] for index in group) for group in groups]
+    trajectory_loop_advantages = [sum(row_loop_advantages[index] for index in group) for group in groups]
+    trajectory_loop_token_counts = [sum(row_loop_token_counts[index] for index in group) for group in groups]
     correct_loop_incidence = [
         incidence for incidence, outcome in zip(loop_incidence, trajectory_outcomes) if outcome > 0
     ]
@@ -348,7 +359,7 @@ def reward_shaping_metrics(
         ),
         f"{SHAPING_METRIC_PREFIX}/loop_advantage_mean": float(np.mean(trajectory_loop_advantages)),
         f"{SHAPING_METRIC_PREFIX}/loop_advantage_per_token_mean": float(
-            np.mean(charged_loop_advantages) if charged_loop_advantages else 0.0
+            np.mean(charged_loop_advantages) if len(charged_loop_advantages) else 0.0
         ),
         f"{SHAPING_METRIC_PREFIX}/loop_charged_tokens_mean": float(np.mean(trajectory_loop_token_counts)),
         f"{SHAPING_METRIC_PREFIX}/non_termination_incidence": float(
