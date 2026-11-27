@@ -602,14 +602,14 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
     assert [row.status for row in publications] == ["running"]
     publications.clear()
     assert snowball.main(table, argv=follower) == int(interrupted)
-    running, finished = publications
-    assert running.status == "running"
     if interrupted:
         stored = read_attempt(export, attempt)
         assert stored.result is None and stored.interruption == "coordinator_terminated"
-        assert finished.status == "failed" and finished.failed_facts == ["coordinator_interrupted"]
+        assert [row.status for row in publications] == ["running", "failed"]
+        assert publications[-1].failed_facts == ["coordinator_interrupted"]
         return
-    assert finished.status == "succeeded"
+    assert [row.status for row in publications] == ["running", "succeeded"]
+    finished = publications[-1]
     for row in publications:
         assert (row.attempt_id, row.run_id, row.pr_number) == (attempt, finished.run_id, 124)
         assert (row.base_preset_version, row.base_commit) == (base_version, tree)

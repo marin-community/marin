@@ -642,7 +642,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
         state="succeeded",
         coordinator=None,
         receipt=None,
-        metrics_started_at=None,
+        attempt_started_at=None,
         retry_attempt=None,
     ):
         table = table or snowball_model.SNOWBALL
@@ -699,13 +699,15 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
             source_revision="commit-one",
             dirty=False,
         )
+        started_at = attempt_started_at or result["started_at"]
         write_attempt(
             str(root / "exports"),
             AttemptRecord(
                 run_id=run_id,
                 attempt_id=attempt,
                 index=identity,
-                metrics_started_at=metrics_started_at or result["started_at"],
+                started_at=started_at,
+                metrics_started_at=started_at,
             ),
         )
         if retry_attempt:
