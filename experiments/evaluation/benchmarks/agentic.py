@@ -21,7 +21,9 @@ from experiments.evaluation.benchmark import EvaluationBenchmark, fixed_benchmar
 from experiments.evaluation.benchmarks.harbor import (
     IMAGE_LOCKS,
     PI_MAX_OUTPUT_TOKENS,
+    TMUX_INSTALL,
     HarborDataset,
+    PackageCopy,
     PackageEdit,
     github_packages,
     harbor_source,
@@ -41,6 +43,8 @@ VERSION = "2026.11.17.2"
 # The version of the datasets whose rule renders a judge spec into each task. Their recipe identity
 # does not cover the rendered judge, so a change to it bumps this version.
 JUDGED_VERSION = "2026.11.23"
+# SWE-bench Multilingual's version; a change to how its package edits run or grade the agent bumps it.
+SWEBENCH_MULTILINGUAL_VERSION = "2026.11.26"
 # Terminal-Bench's build-pov-ray allows its agent and its verifier 12,000 seconds each.
 TERMINAL_BENCH_ATTEMPT_TIMEOUT = 8 * 60 * 60
 
@@ -310,6 +314,58 @@ SWEBENCH_VERIFIED_MINI_SWE = HarborDataset(
     count=500,
     images=SWEBENCH_VERIFIED.recipe,
 )
+SWEBENCH_WORKSPACE = "/testbed"
+SWEBENCH_GIT = f"git -c safe.directory={SWEBENCH_WORKSPACE}"
+SWEBENCH_WORKSPACE_TREE = "/opt/marin/workspace-tree"
+"""The git tree of the image's workspace, untracked files included, that the agent's changes are diffed against."""
+SWEBENCH_ARTIFACTS = "/logs/artifacts"
+SWEBENCH_PATCH = f"{SWEBENCH_ARTIFACTS}/model.patch"
+SWEBENCH_ENVIRONMENT = "[environment]\nbuild_timeout_sec = 1800.0\ncpus = 4\nmemory = '8G'\nstorage = '10G'\n"
+SWEBENCH_LARGE_FILE_BYTES = 1024 * 1024
+"""New files above this size, such as core dumps and build output, stay out of the agent's patch."""
+SWEBENCH_COLLECT = (
+    f'set -e; cd {SWEBENCH_WORKSPACE}; git="{SWEBENCH_GIT} -c core.quotePath=false"; '
+    f"tree=$(cat {SWEBENCH_WORKSPACE_TREE}); $git add -A; "
+    '$git diff --cached --name-only --diff-filter=A "$tree" | while IFS= read -r file; do '
+    f'if [ -f "$file" ] && [ "$(wc -c < "$file")" -gt {SWEBENCH_LARGE_FILE_BYTES} ]; then '
+    '$git rm -q --cached -- "$file"; fi; '
+    "done; "
+    f'mkdir -p {SWEBENCH_ARTIFACTS}; $git diff --cached --binary "$tree" > {SWEBENCH_PATCH}'
+)
+# A patch taken against the verifier's own starting tree fails to apply only when grading itself fails, so the
+# script then exits without a reward, which records an infrastructure error rather than a zero.
+SWEBENCH_APPLY = (
+    f"if [ -s {SWEBENCH_PATCH} ]; then\n"
+    f'    echo "Applying the agent\'s patch, $(wc -c < {SWEBENCH_PATCH}) bytes"\n'
+    f"    {SWEBENCH_GIT} -C {SWEBENCH_WORKSPACE} apply --binary {SWEBENCH_PATCH} || exit 1\n"
+    "fi\n"
+)
+# The agent works offline, so it cannot fetch the upstream fix. Its tests run in Harbor's separate verifier: a fresh
+# machine from the same image, with the network they need to install their log parser, which receives the agent's
+# changes as a patch in /logs/artifacts. The patch is taken against the image's whole workspace, so files the image
+# leaves untracked apply to the verifier's identical copy of them.
+SWEBENCH_MULTILINGUAL_EDITS = (
+    PackageCopy("environment/Dockerfile", "tests/Dockerfile"),
+    PackageEdit(
+        "environment/Dockerfile",
+        "RUN mkdir -p /logs\n",
+        "RUN mkdir -p /logs\n"
+        f"RUN mkdir -p {SWEBENCH_WORKSPACE_TREE.rsplit('/', 1)[0]} && cd {SWEBENCH_WORKSPACE} && {SWEBENCH_GIT} add -A"
+        f" && {SWEBENCH_GIT} write-tree > {SWEBENCH_WORKSPACE_TREE} && {SWEBENCH_GIT} reset -q\n",
+    ),
+    PackageEdit(
+        "task.toml",
+        SWEBENCH_ENVIRONMENT,
+        SWEBENCH_ENVIRONMENT.replace("[environment]", "[verifier.environment]")
+        + "allow_internet = true\n\n"
+        + f"[[verifier.collect]]\ncommand = '{SWEBENCH_COLLECT}'\ntimeout_sec = 600\n\n"
+        + SWEBENCH_ENVIRONMENT
+        + "allow_internet = false\n",
+    ),
+    PackageEdit(
+        "tests/test.sh", 'exec > >(tee "$LOG_FILE") 2>&1\n', f'exec > >(tee "$LOG_FILE") 2>&1\n\n{SWEBENCH_APPLY}'
+    ),
+)
 SWEBENCH_MULTILINGUAL = HarborDataset(
     recipe="swebench-multilingual",
     benchmark="swebench-multilingual",
@@ -322,8 +378,9 @@ SWEBENCH_MULTILINGUAL = HarborDataset(
         "acf34269d8d282fc2fba779f973ef4cd0cf80c9745076294cbfc128601574325",
         root="datasets/swebench_multilingual",
     ),
-    version=VERSION,
+    version=SWEBENCH_MULTILINGUAL_VERSION,
     count=300,
+    edits=SWEBENCH_MULTILINGUAL_EDITS,
 )
 SWEBENCH_MULTILINGUAL_100_PACKAGES = frozenset(
     {
@@ -506,9 +563,15 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             job=CAMPAIGN_JOB,
             protocol=CAMPAIGN_PROTOCOL,
         ),
-        # Terminus 2 as Harbor ran it, with the 16,384-token replies of the Harbor runs this port reproduces.
+        # Terminus 2 as Harbor ran it, with the 16,384-token replies of the Harbor runs this port reproduces,
+        # and tmux in the image because the agent's machine is offline.
         *(
-            harbor_source(dataset, terminus, max_output_tokens=LONG_MAX_OUTPUT_TOKENS)
+            harbor_source(
+                dataset,
+                terminus,
+                max_output_tokens=LONG_MAX_OUTPUT_TOKENS,
+                job=JobSettings(agent_install=TMUX_INSTALL),
+            )
             for dataset in (SWEBENCH_MULTILINGUAL, SWEBENCH_MULTILINGUAL_100)
         ),
         harbor_source(DS_1000_MINI_200, terminus, max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS, job=CAMPAIGN_JOB),
