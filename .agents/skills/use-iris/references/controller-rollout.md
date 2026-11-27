@@ -21,7 +21,12 @@ uv run python scripts/iris/rollout_controllers.py verify --cluster <name> --base
 uv run python scripts/iris/rollout_controllers.py smoke --cluster <name>
 ```
 
-`preflight` checks the tree, credentials, Docker, SSH, Kubernetes context, and injected secrets. Stop on every failure. A dirty/ahead/behind tree requires approval for that exact tree before this rerun; never add the flag automatically:
+`preflight` checks the tree, credentials, Docker, SSH, Kubernetes context, and injected secrets.
+Production CoreWeave controller configs pin a Secret Manager version under
+`controller.coreweave.storage_credentials_ref`. Use Application Default Credentials
+with access to that version. To rotate the pair, add a version containing both
+`CW_KEY_ID` and `CW_KEY_SECRET`, point the cluster configs at it, then use the
+normal per-cluster rollout gates. Stop on every failure. A dirty/ahead/behind tree requires approval for that exact tree before this rerun; never add the flag automatically:
 
 ```bash
 uv run python scripts/iris/rollout_controllers.py preflight \

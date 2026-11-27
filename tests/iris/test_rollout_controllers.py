@@ -138,11 +138,16 @@ def test_deploy_candidates_drop_ci_owned_configs():
     assert set(deploy_candidates(configs)) == {"marin"}
 
 
-def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key():
+def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key(tmp_path, monkeypatch):
     config = coreweave_config(signing_key="gcp-secret://p/secrets/k/versions/1")
-    needs = requirements(config, s3_env=["CW_KEY_ID", "CW_KEY_SECRET"])
+    needs = requirements(config)
 
-    assert {n.target for n in needs if n.kind is Need.ENV} == {"CW_KEY_ID", "CW_KEY_SECRET"}
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    (tmp_path / "CW_KEY_ID").write_text("file-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "deploy-secret")
+    storage = [n for n in needs if n.kind is Need.STORAGE_SECRET]
+    (result,) = check_requirements(storage, environ={})
+    assert result.ok
     context_needs = [n for n in needs if n.kind is Need.KUBE_CONTEXT]
     assert [(n.target, n.source) for n in context_needs] == [("marin-gpu_US-EAST-02A", "~/.kube/coreweave-iris")]
     # The operator resolves the source; the rendered config points at its mounted file.
@@ -152,20 +157,20 @@ def test_kubernetes_requirements_cover_s3_keys_kubeconfig_and_signing_key():
 
 def test_env_only_signing_key_becomes_an_operator_env_requirement():
     # With no persistent source behind it, the deploy reads the key from this shell.
-    needs = requirements(coreweave_config(signing_key=["env:IRIS_SIGNING_KEY"]), s3_env=[])
+    needs = requirements(coreweave_config(signing_key=["env:IRIS_SIGNING_KEY"]))
     assert [n.target for n in needs if n.kind is Need.ENV] == ["IRIS_SIGNING_KEY"]
     assert not [n for n in needs if n.kind is Need.SECRET]
 
 
 def test_gcs_backed_kubernetes_cluster_needs_no_s3_keys():
-    needs = requirements(coreweave_config(state_dir="gs://bucket/state"), s3_env=["CW_KEY_ID", "CW_KEY_SECRET"])
-    assert not [n for n in needs if n.kind is Need.ENV]
+    needs = requirements(coreweave_config(state_dir="gs://bucket/state"))
+    assert not [n for n in needs if n.kind is Need.STORAGE_SECRET]
 
 
 def test_every_cluster_probes_a_working_docker_build_toolchain():
     # `docker` on PATH passes while the daemon is down, failing after the gate.
     for config in (coreweave_config(), gcp_config()):
-        probes = {n.target for n in requirements(config, s3_env=[]) if n.kind is Need.COMMAND_RUNS}
+        probes = {n.target for n in requirements(config) if n.kind is Need.COMMAND_RUNS}
         assert probes == {"docker info", "docker buildx version"}
 
 

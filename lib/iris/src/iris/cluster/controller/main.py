@@ -35,7 +35,7 @@ from iris.cluster.controller.checkpoint import (
 from iris.cluster.controller.controller import Controller, ControllerConfig
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.log_stack import build_log_stack
-from iris.cluster.controller.rollout import RolloutPhase, read_rollout_record, write_rollout_record
+from iris.cluster.controller.rollout import RolloutPhase, RolloutRecordStore
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, resolve_endpoint_uri
 from iris.cluster.provenance import provenance_from_env
 from iris.cluster.types import UserBudgetDefaults
@@ -56,7 +56,8 @@ def _apply_requested_rollback(db_dir: Path, remote_state_dir: str) -> bool:
     so a later restart reuses the restored DB instead of rewinding again. Returns
     whether a rollback was applied.
     """
-    record = read_rollout_record(remote_state_dir)
+    record_store = RolloutRecordStore(remote_state_dir)
+    record = record_store.read()
     if record is None or record.phase is not RolloutPhase.ROLLBACK_REQUESTED:
         return False
     checkpoint = record.rollback_checkpoint
@@ -71,8 +72,7 @@ def _apply_requested_rollback(db_dir: Path, remote_state_dir: str) -> bool:
     if not download_checkpoint_to_local(remote_state_dir, db_dir, checkpoint_dir=checkpoint):
         raise ValueError(f"Rollback checkpoint not found: {checkpoint}")
 
-    write_rollout_record(
-        remote_state_dir,
+    record_store.write(
         record.model_copy(
             update={
                 "phase": RolloutPhase.ROLLED_BACK,

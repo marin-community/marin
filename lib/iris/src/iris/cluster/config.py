@@ -520,6 +520,7 @@ class CoreweaveControllerConfig(_Config):
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
     hostname: str = ""  # pins node-local controller state across restarts
+    storage_credentials_ref: str | None = None  # deploy-only reference to the S3 key pair
     # IngressClass the operator-managed federation ingress binds to; see
     # scripts/install_cw_network.py and docs/coreweave.md.
     ingress_class: str = "traefik"

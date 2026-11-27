@@ -28,6 +28,7 @@ from rigging.secrets import (
     SECRETS_DIR_ENV,
     as_secret_spec,
     get_secret,
+    is_secret_reference,
     resolve_secret_spec,
     secret_file_contents,
 )
@@ -531,15 +532,39 @@ def build_egress_network_policy(namespace: str, network: TaskNetwork, service_ci
     }
 
 
-def _resolve_s3_credentials() -> dict[str, str]:
-    """Resolve operator storage keys for controller checkpoints and node probes."""
+def resolve_controller_storage_credentials(reference: str | None) -> tuple[str, str]:
+    """Read the controller S3 pair from its configured or operator source."""
+    if reference is None:
+        return _operator_storage_credentials()
+    if not is_secret_reference(reference):
+        raise InfraError("controller.coreweave.storage_credentials_ref must be a secret reference")
+    payload = resolve_secret_spec(reference).value
+    try:
+        credentials = json.loads(payload)
+    except ValueError:
+        raise InfraError("CoreWeave controller storage secret must contain a JSON key pair") from None
+    store = store_config(StoreType.COREWEAVE)
+    if isinstance(credentials, dict):
+        key_id = credentials.get(store.key_id_env)
+        key_secret = credentials.get(store.key_secret_env)
+        if isinstance(key_id, str) and isinstance(key_secret, str) and key_id.strip() and key_secret.strip():
+            return key_id.strip(), key_secret.strip()
+    raise InfraError(f"CoreWeave controller storage secret requires {store.key_id_env} and {store.key_secret_env}")
+
+
+def _operator_storage_credentials() -> tuple[str, str]:
     store = store_config(StoreType.COREWEAVE)
     key_id = get_secret(store.key_id_env)
     key_secret = get_secret(store.key_secret_env)
     if not key_id or not key_secret:
         raise InfraError(
-            f"{store.key_id_env} and {store.key_secret_env} secrets are required " "for S3-compatible object storage"
+            f"{store.key_id_env} and {store.key_secret_env} secrets are required for S3-compatible object storage"
         )
+    return key_id, key_secret
+
+
+def _storage_secret_files(key_id: str, key_secret: str) -> dict[str, str]:
+    store = store_config(StoreType.COREWEAVE)
     return secret_file_contents(
         {
             "AWS_ACCESS_KEY_ID": key_id,
@@ -547,6 +572,19 @@ def _resolve_s3_credentials() -> dict[str, str]:
             store.key_id_env: key_id,
             store.key_secret_env: key_secret,
         }
+    )
+
+
+def controller_state_uses_s3(config: IrisClusterConfig) -> bool:
+    """Whether controller state is stored in S3."""
+    return config.storage.remote_state_dir.startswith("s3://")
+
+
+def needs_controller_storage_credentials(config: IrisClusterConfig) -> bool:
+    """Whether the controller or node-health probes use CoreWeave object storage."""
+    provider = config.kubernetes_provider
+    return controller_state_uses_s3(config) or bool(
+        provider and provider.node_health and provider.node_health.storage is not None
     )
 
 
@@ -606,6 +644,8 @@ class K8sControllerProvider:
         self._s3_enabled = False
         self._controller_secret_specs: tuple[tuple[str, ...], ...] = ()
         self._prepared_controller_env: dict[str, str] | None = None
+        self._storage_credentials_ref: str | None = None
+        self._prepared_storage_credentials: tuple[str, str] | None = None
 
     @property
     def kubectl(self) -> K8sService:
@@ -627,8 +667,12 @@ class K8sControllerProvider:
         port = cw.port or 10000
         return f"{service_name}.{self._namespace}.svc.cluster.local:{port}"
 
-    def preflight_controller(self, config: IrisClusterConfig) -> None:
-        """Resolve controller-only secrets without changing Kubernetes resources."""
+    def preflight_controller(self, config: IrisClusterConfig) -> tuple[str, str] | None:
+        """Resolve deploy-side secrets without changing Kubernetes resources.
+
+        Returns the configured S3 key ID and secret when needed, so the caller
+        can use the same pair for rollout record I/O.
+        """
         env = resolve_controller_secrets(config)
         auth = (
             config.auth.model_copy(update={"principal_directory": env.get(PRINCIPAL_DIRECTORY_ENV_VAR, "")})
@@ -636,8 +680,30 @@ class K8sControllerProvider:
             else None
         )
         resolve_principal_references(config.model_copy(update={"auth": auth}))
+        cw = config.controller.coreweave
+        assert cw is not None
+        reference = cw.storage_credentials_ref
+        credentials = (
+            resolve_controller_storage_credentials(reference)
+            if reference and needs_controller_storage_credentials(config)
+            else None
+        )
+        self._prepared_storage_credentials = credentials
+        self._storage_credentials_ref = reference
         self._controller_secret_specs = _controller_secret_specs(config)
         self._prepared_controller_env = env
+        return credentials if controller_state_uses_s3(config) else None
+
+    def _prepare_controller_if_needed(
+        self, config: IrisClusterConfig, reference: str | None, needs_storage: bool
+    ) -> None:
+        if (
+            self._prepared_controller_env is None
+            or self._controller_secret_specs != _controller_secret_specs(config)
+            or self._storage_credentials_ref != reference
+            or (reference and (self._prepared_storage_credentials is not None) != needs_storage)
+        ):
+            self.preflight_controller(config)
 
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
@@ -657,8 +723,8 @@ class K8sControllerProvider:
                 f"{list(config.scale_groups.keys())}"
             )
 
-        if self._prepared_controller_env is None or self._controller_secret_specs != _controller_secret_specs(config):
-            self.preflight_controller(config)
+        needs_storage = needs_controller_storage_credentials(config)
+        self._prepare_controller_if_needed(config, cw.storage_credentials_ref, needs_storage)
         assert self._prepared_controller_env is not None
 
         # storage.local_state_dir set => mount it from node-local hostPath rather
@@ -670,11 +736,12 @@ class K8sControllerProvider:
 
         # Resolve values only in the deploy process; rendered config carries paths.
         assert_no_inlined_secrets(config)
-        self._s3_enabled = self.uses_s3_storage(config)
+        self._s3_enabled = controller_state_uses_s3(config)
         default_env = _build_s3_task_env(self._config.object_storage_endpoint) if self._s3_enabled else {}
         storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
-        if self._s3_enabled or storage_health is not None:
-            self.ensure_secret(STORAGE_SECRET_NAME, _resolve_s3_credentials())
+        if needs_storage:
+            credentials = self._prepared_storage_credentials or resolve_controller_storage_credentials(None)
+            self.ensure_secret(STORAGE_SECRET_NAME, _storage_secret_files(*credentials))
         storage_environment = {
             **default_env,
             **config.defaults.task_env,
@@ -739,7 +806,7 @@ class K8sControllerProvider:
         secret_names = [
             secret
             for secret, projected in (
-                (STORAGE_SECRET_NAME, self.uses_s3_storage(config)),
+                (STORAGE_SECRET_NAME, controller_state_uses_s3(config)),
                 (CONTROLLER_SECRET_NAME, _projects_controller_env_secret(config)),
             )
             if projected
@@ -852,7 +919,7 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
         self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
-        if self.uses_s3_storage(config):
+        if controller_state_uses_s3(config):
             self._kubectl.delete(K8sResource.SECRETS, STORAGE_SECRET_NAME)
         if _projects_controller_env_secret(config):
             self._kubectl.delete(K8sResource.SECRETS, CONTROLLER_SECRET_NAME)
@@ -1062,10 +1129,6 @@ class K8sControllerProvider:
 
     # -- Storage Detection ----------------------------------------------------
 
-    def uses_s3_storage(self, config: IrisClusterConfig) -> bool:
-        """Check if any storage URI uses S3."""
-        return config.storage.remote_state_dir.startswith("s3://")
-
     # -- Storage credential delivery ----------------------------------------
 
     def ensure_secret(self, name: str, values: dict[str, str]) -> None:
@@ -1269,6 +1332,8 @@ class K8sControllerProvider:
         # Controller auth references point to the controller-only Secret mount.
         assert_no_inlined_secrets(config)
         config_dict = config_to_dict(config)
+        # Keep deploy-only settings out of the runtime config, including on rollback.
+        config_dict["controller"].get("coreweave", {}).pop("storage_credentials_ref", None)
         if config.auth:
             for field, name in _CONTROLLER_SECRET_FIELDS:
                 if getattr(config.auth, field):

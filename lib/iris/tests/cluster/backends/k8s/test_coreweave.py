@@ -470,6 +470,29 @@ def test_start_controller_does_not_capture_application_credentials(monkeypatch):
     provider.shutdown()
 
 
+def test_start_projects_the_managed_storage_pair_resolved_during_preflight(tmp_path, monkeypatch):
+    source = tmp_path / "storage.json"
+    source.write_text(json.dumps({"CW_KEY_ID": "deploy-key", "CW_KEY_SECRET": "deploy-secret"}))
+    monkeypatch.setenv("CW_KEY_ID", "ambient-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "ambient-secret")
+    provider, k8s = _make_provider()
+    config = _make_cluster_config(remote_state_dir="s3://test-bucket/state")
+    config.controller.coreweave.storage_credentials_ref = f"file:{source}"
+    _seed_prerequisites(k8s, config)
+
+    assert provider.preflight_controller(config) == ("deploy-key", "deploy-secret")
+    assert k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets") is None
+    source.unlink()
+    provider.start_controller(config)
+
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-secrets")
+    assert base64.b64decode(secret["data"]["AWS_ACCESS_KEY_ID"]) == b"deploy-key"
+    assert base64.b64decode(secret["data"]["AWS_SECRET_ACCESS_KEY"]) == b"deploy-secret"
+    rendered = json.loads(k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config")["data"]["config.json"])
+    assert "storage_credentials_ref" not in rendered["controller"]["coreweave"]
+    provider.shutdown()
+
+
 def test_preflight_controller_caches_signing_key_without_mutating_kubernetes(monkeypatch):
     """The key validated before a rollout is the key projected after the image build."""
     monkeypatch.delenv("IRIS_SIGNING_KEY", raising=False)
