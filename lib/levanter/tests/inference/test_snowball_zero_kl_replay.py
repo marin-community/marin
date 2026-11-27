@@ -18,7 +18,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
-from levanter.policy import ClippedPolicyConfig
+from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
 from levanter.policy_model import PolicyBatch, pack_policy_batch, policy_model_loss, response_logprobs
 from levanter.tokenizers import load_tokenizer
 
@@ -140,9 +140,11 @@ def _rollout_batch(model, prompts, generations):
 
 def _score_error(actual, expected):
     delta = np.abs(actual - expected)
+    mismatch = np.flatnonzero(actual.view(np.uint32) != expected.view(np.uint32))
     return {
         "tokens": int(delta.size),
-        "mismatches": int(np.count_nonzero(actual.view(np.uint32) != expected.view(np.uint32))),
+        "mismatches": int(mismatch.size),
+        "mismatch_indices": mismatch.tolist(),
         "mean_abs": float(delta.mean()),
         "p95_abs": float(np.percentile(delta, 95)),
         "max_abs": float(delta.max()),
@@ -233,10 +235,23 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
         parity = {}
         for name, learner_batch in (("unpacked", batch), ("packed", packed)):
             mask = np.asarray(learner_batch.response_mask.array)
-            actual = np.asarray(score(model, learner_batch).array)[mask]
+            current_scores = score(model, learner_batch)
+            actual = np.asarray(current_scores.array)[mask]
             expected = np.asarray(learner_batch.old_logprobs.array)[mask]
             assert actual.size == _SLOTS * _NEW_TOKENS
-            _, metrics = objective(model, learner_batch)
+            if production_width:
+                _, metrics = clipped_policy_loss(
+                    current_scores,
+                    learner_batch.old_logprobs,
+                    learner_batch.reference_logprobs,
+                    learner_batch.advantages,
+                    learner_batch.policy_weights,
+                    learner_batch.kl_weights,
+                    config=ClippedPolicyConfig(0.2, 0.2, 0.1),
+                    accumulation_steps=1,
+                )
+            else:
+                _, metrics = objective(model, learner_batch)
             parity[name] = {
                 **_score_error(actual, expected),
                 "kl": float(metrics["policy_kl"].value()),
