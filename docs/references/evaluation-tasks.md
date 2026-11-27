@@ -225,7 +225,8 @@ A task machine's variables may read host values through whole-value `${NAME}` or
 run declares each name it supplies in `task_secrets`; `run_evaluation` rejects a task
 that reads any other name before its first attempt. A curated launch sets
 `run.task_secrets` to ordered secret references for each name, as `judge_api_key`
-does for the judge, and the worker receives the values as Iris secrets.
+does for the judge. The worker receives the values as Iris secrets, which arrive as
+files, and sets each declared name in its environment before its first attempt.
 `task_driver` reads each declared name with `require_secret` for an Iris worker;
 with `--local`, the names must be set in its environment. The run descriptor records
 the names, never the values.

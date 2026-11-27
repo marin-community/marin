@@ -4,6 +4,7 @@
 """Exercise driver recovery through HTTP, FineStore, and Iris RPC boundaries."""
 
 import json
+import os
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from inspect import signature
@@ -18,15 +19,39 @@ from finestore.reader import ReadView
 from fray.local_backend import LocalClient
 from iris.client.client import IrisClient, IrisContext, Job, iris_ctx_scope
 from iris.cluster.client import remote_client
+from iris.cluster.secrets import task_secret_values, write_task_secrets
 from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation import task_worker
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity
+from rigging.secrets import SECRETS_DIR_ENV
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
-from shellbox.machine import NetworkPolicy
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend, NetworkPolicy, PackageSpec
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.evaluation.corpus import chat_item
-from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
+from taskcompendium.evaluation.spec import (
+    AgentEpisode,
+    EpisodeInputs,
+    EpisodeLimits,
+    EvaluationProtocol,
+    Metric,
+    MetricKind,
+    OperationKind,
+    Sampling,
+    ShellAgent,
+    SummaryKind,
+    TrialPolicy,
+)
+from taskcompendium.models import (
+    AgentMachine,
+    CommandSemantics,
+    EnvironmentRequirements,
+    ExitCodeReward,
+    GraderMachine,
+    ScriptGrader,
+    TaskSpec,
+)
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
@@ -346,6 +371,148 @@ def test_cli_sends_the_responses_root_to_the_iris_worker(tmp_path, iris_submissi
     worker, arguments, options = Entrypoint.from_proto(request.entrypoint).resolve()
     assert worker is task_worker.run_worker
     assert signature(worker).bind(*arguments, **options).arguments["responses_from"] == "s3://fixture/results"
+
+
+TASK_TOKEN = "fixture-task-token"
+
+
+def secret_task(row, _context):
+    """The row names the machine that reads the run's task secret; its grader passes only when it holds the value."""
+    task = exact_answer_task(row, prompt=row.data["question"], answers=("red",), ignore_case=False)
+    shell = EnvironmentRequirements(
+        command_semantics=CommandSemantics.SHELL_SIMULATOR, package_spec=PackageSpec(), capabilities=("shell",)
+    )
+    reads_secret = shell.model_copy(update={"environment_variables": {"TASK_TOKEN": "${FIXTURE_TASK_TOKEN}"}})
+    if row.data["question"] == "task machine":
+        environment, placement = reads_secret, AgentMachine()
+    else:
+        environment, placement = shell, GraderMachine(environment=reads_secret)
+    grader = ScriptGrader(
+        argv=("sh", "-c", f'test "$TASK_TOKEN" = {TASK_TOKEN}'),
+        cwd=None,
+        placement=placement,
+        answer_path=None,
+        reward=ExitCodeReward(),
+    )
+    return TaskSpec.model_validate(
+        {**dict(task), "tags": ("eval",), "environment_requirements": environment, "grader": grader}
+    )
+
+
+def shell_episode(task):
+    limits = EpisodeLimits(
+        max_turns=1,
+        max_total_tokens=None,
+        model_turn_timeout=10,
+        total_turn_timeout=10,
+        verifier_timeout=10,
+        attempt_timeout=30,
+    )
+    return chat_item(task).model_copy(
+        update={
+            "operation": AgentEpisode(harness=ShellAgent(), limits=limits),
+            "episode": EpisodeInputs(network=NetworkPolicy.DENY),
+        }
+    )
+
+
+@pytest.fixture
+def secret_corpus(tmp_path):
+    """Agent episodes whose task machine, or whose fresh grader machine, reads the run's task secret."""
+    source = tmp_path / "secrets"
+    source.mkdir()
+    rows = ({"question": "task machine"}, {"question": "grader machine"})
+    (source / "rows.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    recipe = SourceRecipe(
+        name="secrets",
+        version="1",
+        source=SourceFiles("secrets", "pinned", ("rows.jsonl",), SourceFormat.JSONL),
+        convert=secret_task,
+        rubric=None,
+        controls=None,
+        intended_use=IntendedUse.EVAL,
+    )
+    protocol = EvaluationProtocol(
+        benchmark="secrets",
+        version="1",
+        operation=OperationKind.AGENT_EPISODE,
+        sampling=Sampling(temperature=0, top_p=None, top_k=None, max_tokens=8, stop=(), chat_template_kwargs={}),
+        trials=TrialPolicy(count=1, seed=None),
+        metrics=(Metric(name="accuracy", kind=MetricKind.BINARY, higher_is_better=True),),
+        primary_metric="accuracy",
+        summary=SummaryKind.MEAN,
+        expected_population=len(rows),
+    )
+    output = tmp_path / "secrets-published"
+    client = LocalClient()
+    try:
+        with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
+            publish_evaluation_corpus(recipe, protocol, shell_episode, context, str(source), str(output))
+    finally:
+        client.shutdown()
+    return str(output)
+
+
+def test_iris_worker_grades_tasks_whose_machines_read_the_run_task_secrets(
+    tmp_path, secret_corpus, recovery_endpoint, iris_submission, driver_config, monkeypatch
+):
+    client, requests = iris_submission
+    # ShellSim machines stand in for local ones, which need a host sandbox.
+    monkeypatch.setattr(task_worker, "LocalMachineFactory", ShellSimMachineFactory)
+    task_machine = MachineRuntimeSpec(
+        backend=Backend.LOCAL,
+        network=NetworkPolicy.DENY,
+        cpus=None,
+        memory_mb=None,
+        storage_mb=None,
+        gpus=0,
+        user=None,
+        startup_timeout=60,
+        cleanup_timeout=10,
+    )
+    config = driver_config.model_copy(update={"task_secrets": ("FIXTURE_TASK_TOKEN",), "task_machine": task_machine})
+    config_path = tmp_path / "run.json"
+    config_path.write_text(config.model_dump_json())
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-solver-key")
+    monkeypatch.setenv("FIXTURE_TASK_TOKEN", TASK_TOKEN)
+    monkeypatch.setattr(task_driver, "open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "task_driver",
+            "--config",
+            str(config_path),
+            "--endpoint",
+            "http://fixture.test/v1",
+            "--dataset",
+            "s3://fixture/corpus",
+            "--output",
+            "s3://fixture/results",
+            "--no-wait",
+        ],
+    )
+    task_driver.main()
+
+    (request,) = requests
+    assert TASK_TOKEN.encode() not in request.entrypoint.SerializeToString()
+    # An Iris worker receives the job's secrets only as files.
+    secrets = tmp_path / "worker-secrets"
+    write_task_secrets(task_secret_values(request.environment), secrets, uid=os.getuid(), gid=os.getgid())
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(secrets))
+    for name in request.environment.secrets:
+        monkeypatch.delenv(name, raising=False)
+    worker, arguments, options = Entrypoint.from_proto(request.entrypoint).resolve()
+    run = signature(worker).bind(*arguments, **options)
+    # Local directories stand in for the submitted object-storage roots.
+    output = str(tmp_path / "results")
+    run.arguments.update(datasets=(secret_corpus,), output=output)
+    worker(*run.args, **run.kwargs)
+
+    reader = ReadView(output)
+    terminal = [row for row in reader.iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
+    assert [row["outcome"] for row in terminal] == ["graded", "graded"]
+    # Each grader passed, so the machine it ran in held the secret's value.
+    assert [dict(row["metrics"])["accuracy"] for row in reader.iter_rows("samples")] == [1, 1]
 
 
 def test_served_cli_submits_through_task_client_with_private_judge_connection(
