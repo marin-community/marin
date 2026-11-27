@@ -17,12 +17,16 @@
     "financebench",
     "ifbench",
     "mrcr",
-    "nupa"
+    "nupa",
+    "ds-1000-local",
+    "ot-tblite-recovery",
+    "tb2-recovery",
+    "swebench-verified"
   ],
   "models": [
     {
       "name": "Nemotron 3.5 Super VL 120B-A12B",
-      "hf_repo": "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16",
+      "location": "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16",
       "url": "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16/tree/fb0ee0bc6b3f70342afd8d84cb80dbadbaa8a1fe",
       "cells": {
         "math500": {
@@ -153,7 +157,7 @@
             "url": "https://marina.oa.dev/evaldash/runs/20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27"
           },
           "run_id": "20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27",
-          "note": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
+          "suspect": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
         },
         "ifbench": {
           "score": 38.0,
@@ -181,12 +185,68 @@
             "url": "https://marina.oa.dev/evaldash/runs/20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-nupa-1011c7e39c0c5f9eb6507421dcaafb90"
           },
           "run_id": "20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-nupa-1011c7e39c0c5f9eb6507421dcaafb90"
+        },
+        "ds-1000-local": {
+          "score": 56.28,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-ds-1000-local-28dd8b4361b0508589af8e6c341b0120"
+          },
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 200,
+            "scored": 199,
+            "timeouts": 0
+          }
+        },
+        "ot-tblite-recovery": {
+          "score": 71.44,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-ot-tblite-recovery-6e8f669ad51456c08212ff626795765f"
+          },
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 300,
+            "scored": 293,
+            "timeouts": 16
+          }
+        },
+        "tb2-recovery": {
+          "score": 50.21,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-tb2-recovery-53256ed17046551eb5b355ea6011d771"
+          },
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 267,
+            "scored": 235,
+            "timeouts": 54
+          }
+        },
+        "swebench-verified": {
+          "score": 56.88,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-swebench-verified-ae707777601d5cc2a641f6fd80e276e7"
+          },
+          "run_id": "20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-swebench-verified-ae707777601d5cc2a641f6fd80e276e7",
+          "trials": {
+            "attempted": 500,
+            "scored": 494,
+            "timeouts": 56
+          }
         }
       }
     },
     {
       "name": "DeepSeek V4 Flash",
-      "hf_repo": "deepseek-ai/DeepSeek-V4-Flash",
+      "location": "deepseek-ai/DeepSeek-V4-Flash",
       "url": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/tree/60d8d70770c6776ff598c94bb586a859a38244f1",
       "cells": {
         "math500": {
@@ -319,7 +379,7 @@
             "url": "https://marina.oa.dev/evaldash/runs/20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a"
           },
           "run_id": "20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a",
-          "note": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
+          "suspect": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
         },
         "ifbench": {
           "score": 40.0,
@@ -341,12 +401,24 @@
             "url": "https://marina.oa.dev/evaldash/runs/20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-nupa-2fc3e046d79d535e87ebacff45c0d854"
           },
           "run_id": "20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-nupa-2fc3e046d79d535e87ebacff45c0d854"
+        },
+        "ds-1000-local": {
+          "missing": "Not run"
+        },
+        "ot-tblite-recovery": {
+          "missing": "Not run"
+        },
+        "tb2-recovery": {
+          "missing": "Not run"
+        },
+        "swebench-verified": {
+          "missing": "Not run"
         }
       }
     },
     {
       "name": "Muse Glimmer 30B",
-      "hf_repo": "meta-models/Muse-Glimmer-30B",
+      "location": "meta-models/Muse-Glimmer-30B",
       "url": "https://huggingface.co/meta-models/Muse-Glimmer-30B/tree/cec94fcfd6512f2cfe708138c32533b346ea4f69",
       "cells": {
         "math500": {
@@ -459,7 +531,7 @@
             "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-financebench-651c3b4fddbc530eba27f457620c4996"
           },
           "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-financebench-651c3b4fddbc530eba27f457620c4996",
-          "note": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
+          "suspect": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
         },
         "ifbench": {
           "missing": "Held back: Glimmer's reasoning text reaches the scorer with its answer, so this format-sensitive score is not meaningful"
@@ -475,12 +547,68 @@
             "url": "https://marina.oa.dev/evaldash/runs/20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-nupa-04b804e787e55b419dda140f1c17427f"
           },
           "run_id": "20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-nupa-04b804e787e55b419dda140f1c17427f"
+        },
+        "ds-1000-local": {
+          "score": 45.45,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-ds-1000-local-6a46863fb9f957fd83ff61c52c6b07d7"
+          },
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 200,
+            "scored": 198,
+            "timeouts": 0
+          }
+        },
+        "ot-tblite-recovery": {
+          "score": 64.76,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-ot-tblite-recovery-f7aca311c80556359e32249d235bb818"
+          },
+          "suspect": "Marin published no score because one trial hit a Daytona error missing from Harbor's error taxonomy; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 300,
+            "scored": 295,
+            "timeouts": 39
+          }
+        },
+        "tb2-recovery": {
+          "score": 43.25,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-tb2-recovery-0da1250e18bc543bb4dc3c2696ee19dc"
+          },
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 267,
+            "scored": 252,
+            "timeouts": 51
+          }
+        },
+        "swebench-verified": {
+          "score": 40.7,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-swebench-verified-353453dbdb125ad188238b0104644e89"
+          },
+          "run_id": "20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-swebench-verified-353453dbdb125ad188238b0104644e89",
+          "trials": {
+            "attempted": 500,
+            "scored": 489,
+            "timeouts": 87
+          }
         }
       }
     },
     {
       "name": "Qwen 3.6 35B-A3B",
-      "hf_repo": "Qwen/Qwen3.6-35B-A3B",
+      "location": "Qwen/Qwen3.6-35B-A3B",
       "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B/tree/995ad96eacd98c81ed38be0c5b274b04031597b0",
       "cells": {
         "math500": {
@@ -612,7 +740,7 @@
             "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-financebench-0f744332780f532381e8cbacc8caa681"
           },
           "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-financebench-0f744332780f532381e8cbacc8caa681",
-          "note": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
+          "suspect": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
         },
         "ifbench": {
           "score": 36.33,
@@ -640,8 +768,278 @@
             "url": "https://marina.oa.dev/evaldash/runs/20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-nupa-eeb49865a9e4540780dfada8705a1741"
           },
           "run_id": "20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-nupa-eeb49865a9e4540780dfada8705a1741"
+        },
+        "ds-1000-local": {
+          "score": 25.51,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-ds-1000-local-c57a1e710ad257b5b96509f62d7bd8b7"
+          },
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 200,
+            "scored": 196,
+            "timeouts": 0
+          }
+        },
+        "ot-tblite-recovery": {
+          "score": 63.21,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-ot-tblite-recovery-6cb1ec5cd90f5be2a90026dc67c891e0"
+          },
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 300,
+            "scored": 268,
+            "timeouts": 51
+          }
+        },
+        "tb2-recovery": {
+          "score": 38.78,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-tb2-recovery-fbcdd776a8ad5da98714f3f3c0b71228"
+          },
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 267,
+            "scored": 245,
+            "timeouts": 81
+          }
+        },
+        "swebench-verified": {
+          "score": 50.91,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-swebench-verified-0ce5d839d1395c9b8b8e6278cc69e58d"
+          },
+          "run_id": "20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-swebench-verified-0ce5d839d1395c9b8b8e6278cc69e58d",
+          "trials": {
+            "attempted": 500,
+            "scored": 497,
+            "timeouts": 81
+          }
+        }
+      }
+    },
+    {
+      "name": "Mochi SFT step 400407",
+      "location": "s3://marin-us-east-02a/marin/exports/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1",
+      "url": "https://filer.marina.oa.dev/#s3%3A%2F%2Fmarin-us-east-02a%2Fmarin%2Fexports%2Fmochi-sft%2Fhero-sft-fullab-step393k-v2%2Fstep-400407%2F2af3f828aa-cpu-a1",
+      "cells": {
+        "math500": {
+          "score": 97.4,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-math500-444e04cfeb7a57faa4b9616f79d54d1e"
+          },
+          "run_id": "20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-math500-444e04cfeb7a57faa4b9616f79d54d1e"
+        },
+        "humanevalplus": {
+          "score": 84.15,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-humanevalplus-9680955b87eb561b9d4d7319d4b0b07e"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-humanevalplus-9680955b87eb561b9d4d7319d4b0b07e"
+        },
+        "mbppplus": {
+          "score": 76.19,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-mbppplus-b06a1abfdd5951a78fec35e95c551d0c"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-mbppplus-b06a1abfdd5951a78fec35e95c551d0c"
+        },
+        "olympiadbench": {
+          "missing": "Pending: the Nov 16 run failed with an infrastructure error and has not been rerun"
+        },
+        "gsm8k-0shot": {
+          "score": 83.55,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-gsm8k-0shot-e5da3c26e0055be59b948a49433336ec"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-gsm8k-0shot-e5da3c26e0055be59b948a49433336ec"
+        },
+        "piqa": {
+          "score": 86.56,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-piqa-e37aa4e37a385fdd8cfc467c7ce0ddd3"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-piqa-e37aa4e37a385fdd8cfc467c7ce0ddd3"
+        },
+        "winogrande": {
+          "score": 76.09,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-winogrande-b15c5bea0d0d5bf796c2bba56d1a7312"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-winogrande-b15c5bea0d0d5bf796c2bba56d1a7312"
+        },
+        "boolq": {
+          "score": 90.61,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-boolq-7482bbce9e4a5aad81b1ca2a8bb2bd3e"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-boolq-7482bbce9e4a5aad81b1ca2a8bb2bd3e"
+        },
+        "truthfulqa": {
+          "score": 68.13,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-truthfulqa-985d26e1d79b5dc393feb510bc254459"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-truthfulqa-985d26e1d79b5dc393feb510bc254459"
+        },
+        "triviaqa": {
+          "score": 73.52,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-triviaqa-3675e13bf1c85e18be2d0fb2453dce8e"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-triviaqa-3675e13bf1c85e18be2d0fb2453dce8e"
+        },
+        "aime24": {
+          "score": 90.67,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-aime24-187adda7eb485e18aa1e17c83086bb86"
+          },
+          "run_id": "20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-aime24-187adda7eb485e18aa1e17c83086bb86"
+        },
+        "mmlu-pro": {
+          "score": 77.85,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-mmlu-pro-3a57d5f920d75abeada0b30d612806cc"
+          },
+          "run_id": "20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-mmlu-pro-3a57d5f920d75abeada0b30d612806cc"
+        },
+        "gpqa-diamond": {
+          "missing": "Pending: the gated GPQA dataset was not readable"
+        },
+        "cruxeval": {
+          "score": 79.62,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-cruxeval-3f771a45403556678eeb1c0c935a6fc3"
+          },
+          "run_id": "20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-cruxeval-3f771a45403556678eeb1c0c935a6fc3"
+        },
+        "financebench": {
+          "score": 62.0,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-143455-mochi-sft-step400407-857edecd45d541ffb8bd1b26626347e7-financebench-24f6e8be568d5a2f9050c5edddf4907e"
+          },
+          "run_id": "20261117-143455-mochi-sft-step400407-857edecd45d541ffb8bd1b26626347e7-financebench-24f6e8be568d5a2f9050c5edddf4907e",
+          "suspect": "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"
+        },
+        "ifbench": {
+          "score": 26.0,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-ifbench-188244b74b565415854d6f9cd6d023ef"
+          },
+          "run_id": "20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-ifbench-188244b74b565415854d6f9cd6d023ef"
+        },
+        "mrcr": {
+          "missing": "Pending: the policy MRCR run failed with an infrastructure error; only the 65K-context variant has scored (26.5)"
+        },
+        "nupa": {
+          "score": 12.14,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-nupa-1f4ec377c1d2522aac27157f160439b9"
+          },
+          "run_id": "20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-nupa-1f4ec377c1d2522aac27157f160439b9",
+          "suspect": "The policy leaves thinking to the model, and Mochi's chat template then sends no /think or /nothink switch; 49% of answers have no extractable number. With /nothink (off-policy) it scores 19.8 with 95% extractable"
+        },
+        "ds-1000-local": {
+          "score": 26.8,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-194829-mochi-sft-step400407-dp16-a5fef8e876cc459694c24a1896f4afc9-ds-1000-local-d4f17cc7dc1f5b68a16da4d14a999475"
+          },
+          "note": "Served with PIECEWISE CUDA graphs and no prefix cache, about 6 output tokens/s per agent; on a 60-trial TB2 sample, serving 2.7x faster raised solves from 5 to 7",
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 200,
+            "scored": 194,
+            "timeouts": 46
+          }
+        },
+        "ot-tblite-recovery": {
+          "score": 26.14,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-194829-mochi-sft-step400407-dp16-a5fef8e876cc459694c24a1896f4afc9-ot-tblite-recovery-8b798bfd5eae5c7ea4b497f8ec4cc655"
+          },
+          "note": "Served with PIECEWISE CUDA graphs and no prefix cache, about 6 output tokens/s per agent; on a 60-trial TB2 sample, serving 2.7x faster raised solves from 5 to 7",
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 300,
+            "scored": 241,
+            "timeouts": 129
+          }
+        },
+        "tb2-recovery": {
+          "score": 13.06,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-194829-mochi-sft-step400407-dp16-a5fef8e876cc459694c24a1896f4afc9-tb2-recovery-660e238875055d8aa2d5b1ac0699db58"
+          },
+          "note": "Served with PIECEWISE CUDA graphs and no prefix cache, about 6 output tokens/s per agent; on a 60-trial TB2 sample, serving 2.7x faster raised solves from 5 to 7",
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 267,
+            "scored": 222,
+            "timeouts": 147
+          }
+        },
+        "swebench-verified": {
+          "score": 43.61,
+          "label": "unofficial",
+          "link": {
+            "kind": "evaldash",
+            "url": "https://marina.oa.dev/evaldash/runs/20261117-194829-mochi-sft-step400407-dp16-a5fef8e876cc459694c24a1896f4afc9-swebench-verified-d0738b99bfbd534f997c52312c2e5000"
+          },
+          "note": "Served with PIECEWISE CUDA graphs and no prefix cache, about 6 output tokens/s per agent; on a 60-trial TB2 sample, serving 2.7x faster raised solves from 5 to 7",
+          "suspect": "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them",
+          "trials": {
+            "attempted": 500,
+            "scored": 454,
+            "timeouts": 204
+          }
         }
       }
     }
-  ]
+  ],
+  "min_completion": 0.9
 }

@@ -11,9 +11,9 @@
     <header>
       <h1>Model Scorecard</h1>
       <p>
-        Scores on the eval-policy chat benchmarks (<a href="https://github.com/marin-community/marin/issues/10197">#10197</a>),
-        0&ndash;100. Click a score to open the run behind it: EvalDash for eval runs, otherwise the raw files in Filer.
-        Model names link to the evaluated Hugging Face revision.
+        Scores on the eval-policy chat and agentic benchmarks
+        (<a href="https://github.com/marin-community/marin/issues/10197">#10197</a>), 0&ndash;100. Click a score to open the run behind it: EvalDash for eval runs, otherwise the raw files in Filer.
+        Model names link to the evaluated Hugging Face revision, or to the checkpoint in Filer for unreleased models.
       </p>
     </header>
     <main>
@@ -22,8 +22,10 @@
       </div>
       <section class="legend" aria-label="Legend">
         <span><span class="swatch official"></span>Official: run under the eval-policy pin</span>
-        <span><span class="swatch unofficial"></span>Unofficial: run from Marin main, outside the policy pin</span>
+        <span><span class="swatch unofficial"></span>Unofficial: run outside the eval-policy pin</span>
         <span><span class="note-mark">*</span> has a note</span>
+        <span><span class="suspect-mark">!</span> suspect: the score may not reflect the model; hover for why</span>
+        <span><span class="trials-sample">91% · 41% t/o</span> agentic trials scored · trials that hit the agent time limit (scored 0); red below Marin's 90% completion bar</span>
         <span>&ndash; no score; hover for the reason</span>
       </section>
       <p class="source">

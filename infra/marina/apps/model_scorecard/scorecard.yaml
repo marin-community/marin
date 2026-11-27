@@ -5,8 +5,14 @@
 #   {run_id: <eval run ID>, label: official|unofficial}   score read from the run's record.json
 #   {source: <s3:// URI>, score: <0-100>, label: ...}      a result that is not an eval run, e.g. a regrade
 #   {missing: <reason>}                                    no score yet
-# Any cell may add `note: <text>`. Evals without a cell render as missing with no reason.
-# Unofficial: run from Marin main, outside the eval-policy pin (#10197).
+# A scored cell may add `note: <text>` for context, or `suspect: <reason>` when a known grading or
+# protocol problem means the score may not reflect the model. An agentic cell may add
+# `trials: {attempted, scored, timeouts}` from its Harbor trials; agent timeouts score 0 and
+# infrastructure failures are unscored. Evals without a cell render as missing with no reason.
+#
+# A model is a Hugging Face `hf_repo` with a `revision`, or an unreleased checkpoint's object-store
+# `location`; every run in its row must evaluate exactly that.
+# Unofficial: run outside the eval-policy pin (#10197), from Marin main or a branch ahead of it.
 
 evals:
   - math500
@@ -27,6 +33,10 @@ evals:
   - ifbench
   - mrcr
   - nupa
+  - ds-1000-local
+  - ot-tblite-recovery
+  - tb2-recovery
+  - swebench-verified
 
 models:
   - name: Nemotron 3.5 Super VL 120B-A12B
@@ -47,10 +57,14 @@ models:
       mmlu-pro: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-mmlu-pro-fe310b5a1e325d61a2df788ddac59aaa, label: unofficial}
       gpqa-diamond: {missing: "Pending: the gated GPQA dataset was not readable"}
       cruxeval: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-cruxeval-b3ed5986f901513fabf4a367b7ad2390, label: unofficial}
-      financebench: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27, label: unofficial, note: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
+      financebench: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-financebench-15102163af7c5400b8acc671245f5b27, label: unofficial, suspect: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
       ifbench: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-ifbench-46228c701fa358689706496d3846d72b, label: unofficial}
       mrcr: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-mrcr-6ea7338c72a054f0be52c877c8baa96f, label: unofficial}
       nupa: {run_id: 20261111-225936-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-3eb22c543c054758874ec1ccac49cde5-nupa-1011c7e39c0c5f9eb6507421dcaafb90, label: unofficial}
+      ds-1000-local: {source: s3://marin-us-east-02a/marin/evals/20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-ds-1000-local-28dd8b4361b0508589af8e6c341b0120/results/harbor_jobs/harbor_ds-1000_667d92207e1e, score: 56.28, label: unofficial, trials: {attempted: 200, scored: 199, timeouts: 0}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them"}
+      ot-tblite-recovery: {source: s3://marin-us-east-02a/marin/evals/20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-ot-tblite-recovery-6e8f669ad51456c08212ff626795765f/results/harbor_jobs/harbor_openthoughts-tblite_69ebb18f96b7, score: 71.44, label: unofficial, trials: {attempted: 300, scored: 293, timeouts: 16}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them"}
+      tb2-recovery: {source: s3://marin-us-east-02a/marin/evals/20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-tb2-recovery-53256ed17046551eb5b355ea6011d771/results/harbor_jobs/harbor_terminal-bench_terminal-bench-2-_bd30a2e35ff1, score: 50.21, label: unofficial, trials: {attempted: 267, scored: 235, timeouts: 54}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them"}
+      swebench-verified: {run_id: 20261116-152850-nvidia-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16-28a2640ea4944437b2a12f6eeb1302b4-swebench-verified-ae707777601d5cc2a641f6fd80e276e7, label: unofficial, trials: {attempted: 500, scored: 494, timeouts: 56}}
 
   - name: DeepSeek V4 Flash
     hf_repo: deepseek-ai/DeepSeek-V4-Flash
@@ -70,10 +84,14 @@ models:
       mmlu-pro: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-mmlu-pro-ead7ab20db605f70992498ba18d40e48, label: unofficial}
       gpqa-diamond: {missing: "Pending: the gated GPQA dataset was not readable"}
       cruxeval: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-cruxeval-5afe8509bd94506ba1821bc7d070fe9a, label: unofficial}
-      financebench: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a, label: unofficial, note: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
+      financebench: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-financebench-aea3c2b0a3c8556b941b5157b46efd0a, label: unofficial, suspect: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
       ifbench: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-ifbench-35e10d60836e5898a34bceda51f4beeb, label: unofficial}
       mrcr: {missing: "Not scored: Evalchemy's MRCR applies a Hugging Face chat template locally, and this model ships none"}
       nupa: {run_id: 20261111-225948-deepseek-ai-DeepSeek-V4-Flash-a3e27da31d9f4808987f2a45854f9217-nupa-2fc3e046d79d535e87ebacff45c0d854, label: unofficial}
+      ds-1000-local: {missing: "Not run"}
+      ot-tblite-recovery: {missing: "Not run"}
+      tb2-recovery: {missing: "Not run"}
+      swebench-verified: {missing: "Not run"}
 
   - name: Muse Glimmer 30B
     hf_repo: meta-models/Muse-Glimmer-30B
@@ -93,10 +111,14 @@ models:
       triviaqa: {missing: "Held back: Glimmer's outputs often restate a question and a stray answer before the real one, and the exact-match extractor picks the wrong one"}
       mmlu-pro: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-mmlu-pro-113a0d61a3155890af5d74d5dd8ded53, label: unofficial}
       cruxeval: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-cruxeval-3f2b9963b88d52a18d9c7aafa4179b8b, label: unofficial}
-      financebench: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-financebench-651c3b4fddbc530eba27f457620c4996, label: unofficial, note: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
+      financebench: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-financebench-651c3b4fddbc530eba27f457620c4996, label: unofficial, suspect: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
       ifbench: {missing: "Held back: Glimmer's reasoning text reaches the scorer with its answer, so this format-sensitive score is not meaningful"}
       mrcr: {missing: "Held back: Glimmer's reasoning text reaches the scorer with its answer, so this format-sensitive score is not meaningful"}
       nupa: {run_id: 20261112-142550-meta-models-Muse-Glimmer-30B-e263ab4ba97f42fd98d138e1f156c49d-nupa-04b804e787e55b419dda140f1c17427f, label: unofficial}
+      ds-1000-local: {source: s3://marin-us-east-02a/marin/evals/20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-ds-1000-local-6a46863fb9f957fd83ff61c52c6b07d7/results/harbor_jobs/harbor_ds-1000_805b1552de23, score: 45.45, label: unofficial, trials: {attempted: 200, scored: 198, timeouts: 0}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them"}
+      ot-tblite-recovery: {source: s3://marin-us-east-02a/marin/evals/20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-ot-tblite-recovery-f7aca311c80556359e32249d235bb818/results/harbor_jobs/harbor_openthoughts-tblite_e5b7e2400edd, score: 64.76, label: unofficial, trials: {attempted: 300, scored: 295, timeouts: 39}, suspect: "Marin published no score because one trial hit a Daytona error missing from Harbor's error taxonomy; scored here from the trial files the way Marin aggregates them"}
+      tb2-recovery: {source: s3://marin-us-east-02a/marin/evals/20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-tb2-recovery-0da1250e18bc543bb4dc3c2696ee19dc/results/harbor_jobs/harbor_terminal-bench_terminal-bench-2-_fef97ff2b973, score: 43.25, label: unofficial, trials: {attempted: 267, scored: 252, timeouts: 51}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them"}
+      swebench-verified: {run_id: 20261116-152933-meta-models-Muse-Glimmer-30B-ca38ef6b34f147c4a47b998efb1fa234-swebench-verified-353453dbdb125ad188238b0104644e89, label: unofficial, trials: {attempted: 500, scored: 489, timeouts: 87}}
 
   - name: Qwen 3.6 35B-A3B
     hf_repo: Qwen/Qwen3.6-35B-A3B
@@ -116,7 +138,40 @@ models:
       mmlu-pro: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mmlu-pro-ae4ddcdd708751019588a5c91d0583a9, label: unofficial}
       gpqa-diamond: {missing: "Pending: the gated GPQA dataset was not readable"}
       cruxeval: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-cruxeval-36d2e3fd43535ce890a9be2b96bf4138, label: unofficial}
-      financebench: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-financebench-0f744332780f532381e8cbacc8caa681, label: unofficial, note: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
+      financebench: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-financebench-0f744332780f532381e8cbacc8caa681, label: unofficial, suspect: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
       ifbench: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-ifbench-d0cde4316c1959fba4a8599a89c9f8c0, label: unofficial}
       mrcr: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-mrcr-c1cfa24e65b9553694dbb06cdfa984c8, label: unofficial}
       nupa: {run_id: 20261112-192721-Qwen-Qwen3.6-35B-A3B-fc5a9337a8ce468b87f060beadfe5ac2-nupa-eeb49865a9e4540780dfada8705a1741, label: unofficial}
+      ds-1000-local: {source: s3://marin-us-east-02a/marin/evals/20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-ds-1000-local-c57a1e710ad257b5b96509f62d7bd8b7/results/harbor_jobs/harbor_ds-1000_a7dfa3fab887, score: 25.51, label: unofficial, trials: {attempted: 200, scored: 196, timeouts: 0}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them"}
+      ot-tblite-recovery: {source: s3://marin-us-east-02a/marin/evals/20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-ot-tblite-recovery-6cb1ec5cd90f5be2a90026dc67c891e0/results/harbor_jobs/harbor_openthoughts-tblite_c82d15aaa548, score: 63.21, label: unofficial, trials: {attempted: 300, scored: 268, timeouts: 51}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them"}
+      tb2-recovery: {source: s3://marin-us-east-02a/marin/evals/20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-tb2-recovery-fbcdd776a8ad5da98714f3f3c0b71228/results/harbor_jobs/harbor_terminal-bench_terminal-bench-2-_e4c3820d0ce4, score: 38.78, label: unofficial, trials: {attempted: 267, scored: 245, timeouts: 81}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them"}
+      swebench-verified: {run_id: 20261116-152807-Qwen-Qwen3.6-35B-A3B-ff852a88795645d99a78e2f3c26f7a79-swebench-verified-0ce5d839d1395c9b8b8e6278cc69e58d, label: unofficial, trials: {attempted: 500, scored: 497, timeouts: 81}}
+
+  - name: Mochi SFT step 400407
+    # Unreleased: the exported BF16 checkpoint. Runs came from a branch ahead of main with serving configs for this
+    # checkpoint: three-stage pipeline serving on H100, and for math500, aime24, mmlu-pro, cruxeval and nupa the
+    # four-host GB200 DP16 layout.
+    location: s3://marin-us-east-02a/marin/exports/mochi-sft/hero-sft-fullab-step393k-v2/step-400407/2af3f828aa-cpu-a1
+    cells:
+      math500: {run_id: 20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-math500-444e04cfeb7a57faa4b9616f79d54d1e, label: unofficial}
+      humanevalplus: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-humanevalplus-9680955b87eb561b9d4d7319d4b0b07e, label: unofficial}
+      mbppplus: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-mbppplus-b06a1abfdd5951a78fec35e95c551d0c, label: unofficial}
+      olympiadbench: {missing: "Pending: the Nov 16 run failed with an infrastructure error and has not been rerun"}
+      gsm8k-0shot: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-gsm8k-0shot-e5da3c26e0055be59b948a49433336ec, label: unofficial}
+      piqa: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-piqa-e37aa4e37a385fdd8cfc467c7ce0ddd3, label: unofficial}
+      winogrande: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-winogrande-b15c5bea0d0d5bf796c2bba56d1a7312, label: unofficial}
+      boolq: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-boolq-7482bbce9e4a5aad81b1ca2a8bb2bd3e, label: unofficial}
+      truthfulqa: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-truthfulqa-985d26e1d79b5dc393feb510bc254459, label: unofficial}
+      triviaqa: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-triviaqa-3675e13bf1c85e18be2d0fb2453dce8e, label: unofficial}
+      aime24: {run_id: 20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-aime24-187adda7eb485e18aa1e17c83086bb86, label: unofficial}
+      mmlu-pro: {run_id: 20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-mmlu-pro-3a57d5f920d75abeada0b30d612806cc, label: unofficial}
+      gpqa-diamond: {missing: "Pending: the gated GPQA dataset was not readable"}
+      cruxeval: {run_id: 20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-cruxeval-3f771a45403556678eeb1c0c935a6fc3, label: unofficial}
+      financebench: {run_id: 20261117-143455-mochi-sft-step400407-857edecd45d541ffb8bd1b26626347e7-financebench-24f6e8be568d5a2f9050c5edddf4907e, label: unofficial, suspect: "Graded by the MiniMax judge used on Marin main since Oct 30, not the policy pin's judge; Qwen 3.6 scores 42 here against 62-74 in its policy runs"}
+      ifbench: {run_id: 20261116-181858-mochi-sft-step400407-9d3ed4a95cb34fb387db50da6db74d59-ifbench-188244b74b565415854d6f9cd6d023ef, label: unofficial}
+      mrcr: {missing: "Pending: the policy MRCR run failed with an infrastructure error; only the 65K-context variant has scored (26.5)"}
+      nupa: {run_id: 20261117-205052-mochi-sft-step400407-dp16-6657e944d2d748229fa5efff212c85ab-nupa-1f4ec377c1d2522aac27157f160439b9, label: unofficial, suspect: "The policy leaves thinking to the model, and Mochi's chat template then sends no /think or /nothink switch; 49% of answers have no extractable number. With /nothink (off-policy) it scores 19.8 with 95% extractable"}
+      ds-1000-local: {source: s3://marin-us-east-02a/marin/evals/20261117-194829-mochi-sft-step400407-dp16-a5fef8e876cc459694c24a1896f4afc9-ds-1000-local-d4f17cc7dc1f5b68a16da4d14a999475/results/harbor_jobs/harbor_ds-1000_c85cef77b396, score: 26.80, label: unofficial, trials: {attempted: 200, scored: 194, timeouts: 46}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them", note: "Served with PIECEWISE CUDA graphs and no prefix cache, about 6 output tokens/s per agent; on a 60-trial TB2 sample, serving 2.7x faster raised solves from 5 to 7"}
+      ot-tblite-recovery: {source: s3://marin-us-east-02a/marin/evals/20261117-194829-mochi-sft-step400407-dp16-a5fef8e876cc459694c24a1896f4afc9-ot-tblite-recovery-8b798bfd5eae5c7ea4b497f8ec4cc655/results/harbor_jobs/harbor_openthoughts-tblite_aae214791e83, score: 26.14, label: unofficial, trials: {attempted: 300, scored: 241, timeouts: 129}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them", note: "Served with PIECEWISE CUDA graphs and no prefix cache, about 6 output tokens/s per agent; on a 60-trial TB2 sample, serving 2.7x faster raised solves from 5 to 7"}
+      tb2-recovery: {source: s3://marin-us-east-02a/marin/evals/20261117-194829-mochi-sft-step400407-dp16-a5fef8e876cc459694c24a1896f4afc9-tb2-recovery-660e238875055d8aa2d5b1ac0699db58/results/harbor_jobs/harbor_terminal-bench_terminal-bench-2-_293446384514, score: 13.06, label: unofficial, trials: {attempted: 267, scored: 222, timeouts: 147}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them", note: "Served with PIECEWISE CUDA graphs and no prefix cache, about 6 output tokens/s per agent; on a 60-trial TB2 sample, serving 2.7x faster raised solves from 5 to 7"}
+      swebench-verified: {source: s3://marin-us-east-02a/marin/evals/20261117-194829-mochi-sft-step400407-dp16-a5fef8e876cc459694c24a1896f4afc9-swebench-verified-d0738b99bfbd534f997c52312c2e5000/results/harbor_jobs/harbor_swebench-verified_5462a55c06a1, score: 43.61, label: unofficial, trials: {attempted: 500, scored: 454, timeouts: 204}, suspect: "Marin published no score because the Harbor job exited with an error after its trials ran; scored here from the trial files the way Marin aggregates them", note: "Served with PIECEWISE CUDA graphs and no prefix cache, about 6 output tokens/s per agent; on a 60-trial TB2 sample, serving 2.7x faster raised solves from 5 to 7"}
