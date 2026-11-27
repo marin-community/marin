@@ -449,7 +449,6 @@ class MegatronStrategy(DistributedStrategy):
                     validate_access_integrity=True,
                 )
 
-                # Only global rank 0 saves the replicated client state and tokenizer.
                 if self.is_rank_0():
                     hf_dir = os.path.join(work_dir, "huggingface")
                     self.save_hf_configs(self.hf_config, hf_dir, tokenizer)

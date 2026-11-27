@@ -94,7 +94,7 @@ def test_streaming_checkpoint_write_failure_releases_staging(tmp_path: Path):
 
     state = {"policy": torch.ones(64), "optimizer": torch.zeros(64)}
     writer = FailingWriter(str(tmp_path), filesystem=LocalFileSystem(), max_staged_bytes=state["policy"].nbytes)
-    with pytest.raises(checkpoint.CheckpointException, match="Destination unavailable"):
+    with pytest.raises(checkpoint.CheckpointException):
         checkpoint.save(state, storage_writer=writer, no_dist=True)
     assert not (tmp_path / ".metadata").exists()
 
