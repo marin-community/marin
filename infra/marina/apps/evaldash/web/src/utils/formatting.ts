@@ -35,7 +35,6 @@ export function formatValue(value: number | null | undefined): string {
   if (!Number.isFinite(value)) return String(value)
   if (value === 0) return '0'
   const text = VALUE_FORMATTER.format(value)
-  // Show one decimal when rounding produces a single-digit integer (0.996 → 1.0).
   return /^-?[1-9]$/.test(text) ? `${text}.0` : text
 }
 

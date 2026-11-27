@@ -15,7 +15,6 @@ test('rounding across a magnitude boundary never prints a third significant digi
   assert.equal(formatValue(0.996), '1.0')
   assert.equal(formatValue(0.0996), '0.1')
   assert.equal(formatValue(9.96), '10')
-  // trailing zeros after an upward round carry magnitude, not precision (like 12345 → 12000)
   assert.equal(formatValue(99.6), '100')
   assert.equal(formatValue(-0.999), '-1.0')
 })
