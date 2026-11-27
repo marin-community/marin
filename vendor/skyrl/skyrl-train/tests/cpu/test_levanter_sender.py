@@ -6,7 +6,7 @@
 import multiprocessing
 import traceback
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import timedelta
 
 import pytest
@@ -77,7 +77,13 @@ class _ChildChannel:
 
     def __call__(self, method, payload):
         if method == "inventory":
-            return {"version": self.version, "inventories": self.rows, "devices": dict(enumerate(range(4))), "device_type": "cpu"}
+            self("begin", {"version": self.version})
+            return {
+                "inventories": self.rows,
+                "devices": dict(enumerate(range(4))),
+                "device_type": "cpu",
+                "payload_order": tuple((item["root"], item["key"]) for item in self.payloads),
+            }
         if method == "begin":
             assert payload["version"] == self.version
             self.position = 0
@@ -153,12 +159,8 @@ def _receiver(ep, schedule, rendezvous, result):
         destroy_groups(groups)
 
 
-@pytest.mark.timeout(60)
-def test_levanter_sender_two_versions_install_and_replay_all_receiver_bytes():
-    child = _ChildChannel()
-    sender = LevanterExpertBlockSender(child)
-    rows = sender.inventory()
-    schedule = build_schedule(
+def _schedule(child, rows):
+    return build_schedule(
         [TrainerRank(**row["trainer"]) for row in rows],
         [ReceiverRank(0, 0, 0), ReceiverRank(1, 0, 1)],
         child.experts,
@@ -169,6 +171,22 @@ def test_levanter_sender_two_versions_install_and_replay_all_receiver_bytes():
         dense_holders={name: (0,) for name in child.dense_shapes},
         dense_numel={name: torch.Size(shape).numel() for name, shape in child.dense_shapes.items()},
     )
+
+
+def test_levanter_sender_rejects_out_of_order_schedule_before_creating_groups():
+    child = _ChildChannel()
+    sender = LevanterExpertBlockSender(child)
+    schedule = _schedule(child, sender.inventory())
+    reordered = replace(schedule, experts=tuple(reversed(schedule.experts)))
+    with pytest.raises(ValueError, match="payload order"):
+        sender.trainer_init({"schedule": to_wire(reordered)})
+
+
+@pytest.mark.timeout(60)
+def test_levanter_sender_two_versions_install_and_replay_all_receiver_bytes():
+    child = _ChildChannel()
+    sender = LevanterExpertBlockSender(child)
+    schedule = _schedule(child, sender.inventory())
     store = dist.TCPStore("127.0.0.1", 0, world_size=None, is_master=True, wait_for_workers=False, timeout=timedelta(seconds=25))
     rendezvous = Rendezvous("127.0.0.1", store.port, "levanter-publication-test", 25)
     context = multiprocessing.get_context("spawn")

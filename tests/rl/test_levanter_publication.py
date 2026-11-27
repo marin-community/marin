@@ -63,6 +63,7 @@ def test_snowball_publication_reconstructs_experts_dense_and_router_precision():
     with jax.set_mesh(mesh):
         payloads = _read(publication, model, 3)
     assert set(metadata["devices"]) == set(range(jax.device_count()))
+    assert metadata["payload_order"] == tuple((payload["root"], payload["key"]) for payload in payloads)
     assert len({payload["key"] for payload in payloads}) == len(payloads)
     assert all(payload["version"] == 3 and len(payload["data"]) <= MAX_PUBLICATION_BYTES for payload in payloads)
 

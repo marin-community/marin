@@ -51,6 +51,13 @@ class _Stage:
     owners: tuple[tuple[int, int, int], ...]
 
 
+@dataclass(frozen=True)
+class _SourceSlice:
+    rank: int
+    key: str
+    local_expert: int | None = None
+
+
 def _owner_spans(sharding: NamedSharding, shape: tuple[int, ...], devices: dict[int, jax.Device], ranks):
     indices = sharding.devices_indices_map(shape)
     spans = []
@@ -201,7 +208,7 @@ class SnowballPublication:
                     }
                 )
         self.inventories = inventories
-        self.stages = tuple(stages)
+        self.stages = tuple((stage, self._local_sources(stage)) for stage in stages)
         self.session: Generator[dict, None, None] | None = None
         self.version: int | None = None
         self.exhausted = False
@@ -212,6 +219,7 @@ class SnowballPublication:
             raise ValueError("SkyRL publication requires one local CPU or CUDA device platform")
         return {
             "version": version,
+            "payload_order": tuple((source.rank, source.key) for _, sources in self.stages for source in sources),
             "inventories": tuple(self.inventories[rank] for rank in sorted(self.local_devices)),
             "devices": dict(self.local_devices),
             "device_type": "cuda" if "gpu" in platforms else "cpu",
@@ -240,8 +248,32 @@ class SnowballPublication:
         self.session = None
         return {"version": self.version, "complete": self.exhausted}
 
+    def _local_sources(self, stage: _Stage) -> tuple[_SourceSlice, ...]:
+        if len(stage.shape) == 3:
+            return tuple(
+                sorted(
+                    (
+                        _SourceSlice(rank, expert_payload_key(f"{stage.key}.expert{expert}"), expert - start)
+                        for rank, start, stop in stage.owners
+                        if rank in self.local_devices
+                        for expert in range(start, stop)
+                    ),
+                    key=lambda source: source.key,
+                )
+            )
+
+        row_elements = math.prod(stage.shape[1:])
+        return tuple(
+            _SourceSlice(
+                rank,
+                dense_payload_key(stage.key, start * row_elements, (stop - start) * row_elements, stage.dtype),
+            )
+            for rank, start, stop in stage.owners
+            if rank in self.local_devices
+        )
+
     def _payloads(self, model: SnowballLMHeadModel, version: int) -> Generator[dict, None, None]:
-        for stage in self.stages:
+        for stage, sources in self.stages:
             names = stage.names
             module = model.transformer
             if stage.layer is not None:
@@ -252,34 +284,16 @@ class SnowballPublication:
                     module
                 ).block_until_ready()
             shards = {shard.device: shard.data for shard in array.addressable_shards}
-            if len(stage.shape) == 3:
-                sources = sorted(
-                    (
-                        (f"{stage.key}.expert{expert}", rank, expert - start)
-                        for rank, start, stop in stage.owners
-                        if rank in self.local_devices
-                        for expert in range(start, stop)
-                    ),
-                    key=lambda item: item[0],
-                )
-                for name, rank, local_expert in sources:
-                    # The Trainer's global mesh remains active across requests.
-                    # This is a single-device shard: slice it outside that mesh
-                    # before copying just one expert matrix to the host.
+            for source in sources:
+                shard = shards[self.devices[source.rank]]
+                if source.local_expert is None:
+                    value = np.asarray(shard).reshape(-1)
+                else:
+                    # Slice the single-device shard outside the learner's global mesh.
                     with jax.set_mesh(None):
-                        value = np.asarray(shards[self.devices[rank]][local_expert])
-                    yield self._payload(version, rank, expert_payload_key(name), stage.dtype, value)
-                    del value
-            else:
-                row_elements = math.prod(stage.shape[1:])
-                for rank, start, stop in stage.owners:
-                    if rank in self.local_devices:
-                        value = np.asarray(shards[self.devices[rank]]).reshape(-1)
-                        key = dense_payload_key(
-                            stage.key, start * row_elements, (stop - start) * row_elements, stage.dtype
-                        )
-                        yield self._payload(version, rank, key, stage.dtype, value)
-                        del value
+                        value = np.asarray(shard[source.local_expert])
+                yield self._payload(version, source.rank, source.key, stage.dtype, value)
+                del shard, value
             del shards, array
 
     @staticmethod

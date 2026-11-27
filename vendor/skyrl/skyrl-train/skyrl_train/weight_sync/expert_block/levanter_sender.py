@@ -52,6 +52,7 @@ class LevanterExpertBlockSender:
         self.publication = publication
         self.devices: dict[int, torch.device] = {}
         self.inventories: dict[int, dict] = {}
+        self.payload_order: tuple[tuple[int, str], ...] = ()
         self.schedule: Schedule | None = None
         self.groups: dict[int, dict[str, dist.ProcessGroup]] = {}
         self.group_order: list[tuple[int, str]] = []
@@ -67,10 +68,14 @@ class LevanterExpertBlockSender:
         devices = {int(rank): torch.device(device_type, int(local)) for rank, local in metadata["devices"].items()}
         if not inventories or set(inventories) != set(devices) or len(set(devices.values())) != len(devices):
             raise ValueError("Levanter source ranks must identify distinct local devices")
-        if self.schedule is not None and (inventories != self.inventories or devices != self.devices):
+        payload_order = tuple(metadata["payload_order"])
+        if self.schedule is not None and (
+            inventories != self.inventories or devices != self.devices or payload_order != self.payload_order
+        ):
             raise RuntimeError("Levanter publication topology changed after communicator setup")
         self.inventories = inventories
         self.devices = devices
+        self.payload_order = payload_order
         return tuple(inventories[rank] for rank in sorted(inventories))
 
     def trainer_init(self, init_info: dict) -> tuple[dict, ...]:
@@ -122,11 +127,17 @@ class LevanterExpertBlockSender:
                 key = _dense_payload_key(source["hf_name"], source["hf_offset"], source["numel"], dtype)
                 expected[(rank, key)] = source["numel"] * WIRE_DTYPE_BYTES[dtype]
         actual = {}
+        payload_order = []
         for item in (*schedule.experts, *schedule.dense):
             if item.root in self.devices:
-                actual[(item.root, _payload_key(item))] = _wire_bytes(item)
+                key = (item.root, _payload_key(item))
+                actual[key] = _wire_bytes(item)
+                if not payload_order or payload_order[-1] != key:
+                    payload_order.append(key)
         if actual != expected:
             raise ValueError("The expert-block schedule differs from the Levanter child source inventory")
+        if tuple(payload_order) != self.payload_order:
+            raise ValueError("The expert-block schedule differs from the Levanter child payload order")
         if any(size > MAX_PUBLICATION_BYTES for size in actual.values()):
             raise ValueError("A scheduled Levanter source exceeds the staging budget")
 
