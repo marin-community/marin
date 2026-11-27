@@ -1,5 +1,5 @@
 {
-  "revision": "3f1b06defcceaeb6e0ce7980554db8b3153c7f0b",
+  "revision": "48e438b6a61b685b0c0bcfa2e73578b13e2d2010",
   "sources": {
     "AI-MO:numina_math": {
       "input_sha256": "56b745a538dad1c11afd3f5f954f73c43605435b08d296a75836ae5b8a0b1849",
@@ -1153,8 +1153,8 @@
     },
     "SynthLabs:Big-Math-RL-Verified": {
       "input_sha256": "3311c4453660375787b8e87172fc1659585e315396adef6689cd9ed95931ba42",
-      "sha256": "eb7015d990e9a968a3f620732d53d1e14cf799fda215c51f6b8d10f950a58804",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/big-math/2026.11.27.2/overlap-disposition-v1/source-identities.json"
+      "sha256": "249dbcc56e18137ceb3ebf8442e959388171b806545c08a62e8d9508ad103548",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/bigmath-refresh-v1/overlap-v2/output/source-identities-content-nn-v4.json"
     },
     "TRL:kto_mix/argilla/distilabel-capybara-dpo-7k-binarized": {
       "input_sha256": "1f31f4a251af446d7403e3ff44cb0f4f1fc583402e0fc6d317f236ede9bbffa8",
@@ -1347,9 +1347,9 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-csharp-v4": {
-      "input_sha256": "6cfed68ea02650895ebb84b8b8a7bf181844a283d3daa8db3551fe112ba71797",
-      "sha256": "39b75240e04f3dc0ca54805b7b4e99107600e38071cbec6f2fe39e943e2af709",
-      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/projection-refresh/20261127-v1/crosscode-refresh-v1/source-identity-v2/source-identities-content-nn-v4.json"
+      "input_sha256": "f1e222f924ce1ad92478260025e68282b8e2cad6137a4f6edf7b3a862bedb3b9",
+      "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
+      "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-java-v3": {
       "input_sha256": "654c2d89ad8a648330cfb4dce4dc2726870133ac5364be080909c3ef2b95cda1",
@@ -1362,7 +1362,7 @@
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
     "TaskTrove:laion__exp_rpt_crosscodeeval-typescript-v2": {
-      "input_sha256": "9e20f73b56e4c266bf165a6be04fb12fe9fcc02a5943bc492e32940f7e706790",
+      "input_sha256": "ea5657a3e0f75fc5a1e11436877163348e7675a6008245cd09124a81a4d99d28",
       "sha256": "82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8",
       "uri": "s3://marin-us-east-02a/marin/rl-data/atlas/source-identity/20261115/settled-code-puzzles-v1/source-identities-82a96abbd2bd3760b0c5b30df078d159deaeb874bfebbb4009dccddff2e0bcd8.json"
     },
