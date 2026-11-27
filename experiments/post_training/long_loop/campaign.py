@@ -93,6 +93,19 @@ def deployed_judge_binding(reference: dict) -> dict:
     return binding
 
 
+def place_per_task_images(recipe: dict, mix: CampaignMix) -> None:
+    """Run per-task-image sources' actor and grader on LOCAL; other mixes keep .131's placements."""
+    per_task = [dataset for label, dataset in PER_TASK_IMAGE_DATASETS.items() if label in mix.sources]
+    if not per_task:
+        return
+    task_spec = recipe["environment"]["task_sessions"]["task_spec"]
+    for placement in ("task_machine_by_dataset", "verifier_machine_by_dataset"):
+        task_spec[placement] = {
+            **task_spec.get(placement, {}),
+            **{dataset: dict(PER_TASK_IMAGE_MACHINE) for dataset in per_task},
+        }
+
+
 def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> AdoptedRlRound:
     """Apply only the campaign's mix, step stop, identities and storage policy to .131."""
     if max_steps != 50:
@@ -110,15 +123,7 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
     # Stored TaskRolloutSpecs carry the catalog's per-task harness and machine sizing.
     recipe["environment"]["task_sessions"]["task_spec"]["harness_by_dataset"] = {}
-    # Only mixes with a per-task-image source change placement, so other mixes keep .131's recipe.
-    per_task = [dataset for label, dataset in PER_TASK_IMAGE_DATASETS.items() if label in mix.sources]
-    if per_task:
-        task_spec = recipe["environment"]["task_sessions"]["task_spec"]
-        for placement in ("task_machine_by_dataset", "verifier_machine_by_dataset"):
-            task_spec[placement] = {
-                **task_spec.get(placement, {}),
-                **{dataset: dict(PER_TASK_IMAGE_MACHINE) for dataset in per_task},
-            }
+    place_per_task_images(recipe, mix)
     # Retained lock-based verifiers declare LOCAL storage, which only the quota pool enforces.
     # LOCAL actors (Math-TIR) pull digest-pinned private GHCR images with the read-only pull credential.
     recipe["environment"]["task_sessions"]["local"] = {
@@ -181,7 +186,12 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
     # The existing .131 bindings validate model/role/optimizer controls without inventing
     # future holdout identities. Only the pool producer may supply the campaign holdout.
     reference = load_round(REFERENCE)
-    reference = dataclasses.replace(reference, rl=dataclasses.replace(reference.rl, execution=spec.rl.execution))
+    # Pool lowering bakes each row's machines, so per-task-image placement must reach this document too.
+    lowering_recipe = copy.deepcopy(reference.rl.recipe)
+    place_per_task_images(lowering_recipe, mix)
+    reference = dataclasses.replace(
+        reference, rl=dataclasses.replace(reference.rl, execution=spec.rl.execution, recipe=lowering_recipe)
+    )
     scaffold = adopted_round_rl(reference, verify_pool_at_runtime=True)
     native = materialized_config(scaffold, spec.storage.output_prefix)
     pools = apply(
