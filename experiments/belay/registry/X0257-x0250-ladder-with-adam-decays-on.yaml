@@ -4,7 +4,7 @@ name: X0250 ladder with Adam decays on lr*N rule
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: competitive-d512
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7121723382
@@ -31,6 +31,13 @@ trials:
   commit: 21ea54c96b
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.8525
+  delta:
+  - -0.0156
+  steps: 10767
+  baseline: s7n-d512 2.8681 (same commit, seed 0)
+  step_time_change: 0%
 - id: t002
   variant: X0250 ladder + Adam decays held at adam_lr*N of d512
   rung: competitive-d768
