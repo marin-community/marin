@@ -25,7 +25,7 @@ import math
 import threading
 import time
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import batched
@@ -760,8 +760,16 @@ def _replay_qc_panels_parallel(
         for _ in executor.map(prepare, range(len(panels))):
             pass
         counts = [{table: 0 for table, _rows, _columns in panel_row_groups(staged)} for staged in staged_panels]
-        for panel_index, table, count in executor.map(run_segment, segments):
-            counts[panel_index][table] += count
+        failures = []
+        futures = [executor.submit(run_segment, segment) for segment in segments]
+        for future in as_completed(futures):
+            try:
+                panel_index, table, count = future.result()
+                counts[panel_index][table] += count
+            except BaseException as error:
+                failures.append(error)
+        if failures:
+            raise BaseExceptionGroup("QC replay segments failed", failures)
         results: list[dict] = []
         for result in executor.map(finish, range(len(panels))):
             results.append(result)

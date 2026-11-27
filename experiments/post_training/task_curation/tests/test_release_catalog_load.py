@@ -622,6 +622,35 @@ def test_parallel_replay_matches_serial_byte_identical(tmp_path, monkeypatch):
     assert set(parallel_fake.tables) == set(serial_fake.tables)
 
 
+def test_parallel_replay_preserves_the_original_sql_failure(tmp_path, monkeypatch):
+    document, declaration = _replay_fixture(records=3)
+
+    class FailedAssessmentQuery(_ReplayQuery):
+        def _serve(self, text, parameters):
+            if text.startswith("INSERT INTO atlas_assessments"):
+                raise ValueError("assessment insert refused")
+            return super()._serve(text, parameters)
+
+    query = FailedAssessmentQuery({"Replay:fixture": declaration})
+    monkeypatch.setattr(load_reviews_module, "materialize_cohort_summaries", lambda *args, **kwargs: 0)
+    total = cl._replay_record_total([document])
+    with pytest.raises(ExceptionGroup) as failure:
+        cl._replay_qc_panels_parallel(
+            _inputs(tmp_path),
+            [{"source_id": "Replay:fixture", "reference": document["receipt"]["artifact"]}],
+            [document],
+            total,
+            cl._ReplayProgress(total),
+            query,
+            lambda: query,
+            cl.RetryControl(),
+        )
+    primary = failure.value.subgroup(ValueError)
+    assert primary is not None
+    assert any(str(error) == "assessment insert refused" for error in primary.exceptions)
+    assert "atlas_review_current" not in query.tables
+
+
 @pytest.mark.parametrize("changed_pointer", [False, True])
 def test_catalog_reviews_reuse_copied_payload_and_replay_new_panel(tmp_path, monkeypatch, changed_pointer):
     copied = _staged_panel_document("retained", records=2)
