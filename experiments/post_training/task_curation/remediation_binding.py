@@ -259,7 +259,14 @@ def release_lexical_evidence(publication: PublicationReceipt) -> LexicalContamin
     """Keep raw measurements and attach disjoint duplicate-first retention accounting."""
     plan = publication.plan
     if plan.lexical_use is not LexicalUse.TRAIN:
-        return publication.lexical
+        # Bind the benchmark measurement at the retained release pin: a zero-drop eval
+        # retention re-publishes the measured population, so the unchanged measurement is
+        # at the current pin (the oracle-filtration path binds the same way at its
+        # conversion release). The benchmark receipt stays measurement-only with no
+        # release: benchmarks retain every task and never remediate.
+        return publication.lexical.model_copy(
+            update={"input_dataset_id": publication.repo, "input_dataset_revision": publication.revision}
+        )
     receipt = LexicalReceipt(
         use=LexicalUse.TRAIN,
         status=DeconReceiptStatus.REMEDIATED if plan.raw_lexical_count else DeconReceiptStatus.CLEAN,

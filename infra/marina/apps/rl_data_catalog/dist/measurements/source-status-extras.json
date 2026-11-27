@@ -27,6 +27,7 @@
     "SynthLabs:Big-Math-RL-Verified": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Tiger-lab:AceCode-89K": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Newfacade:LeetCodeDataset": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+    "Tiger-lab:StructEval": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:tasktrove-code-contests-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
     "TaskTrove:tasktrove-taco-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
@@ -1756,6 +1757,24 @@
       "dataset_revision": null,
       "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
       "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Tiger-lab:StructEval",
+      "display_name": "Tiger-lab \u00b7 StructEval",
+      "status": "Pending",
+      "origin": "Tiger-lab",
+      "upstream_dataset": "StructEval",
+      "upstream_url": null,
+      "notes": "EVAL structured-output tasks under the coordinator's renderability ruling: only the 950 rendering=False rows (JSON 250, CSV 200, TOML 50, XML 200, YAML 250) convert, each with the verbatim native query plus the benchmark's own completion-envelope instruction recorded as a normalization; the 1,085 renderable rows (VQA/VLM-scored across 14 types) are the typed grader-missing exclusion. The grader is the official TIGER-AI-Lab/StructEval non-renderable evaluator shipped as a script: the official extraction priority, per-format parse, path grammar (csv:: header tokens, backtick segments, [N] indices, * wildcards on lists only, @attr fallback) and the official 0.2 parse + 0.8 path-fraction score, with the pinned pyyaml==6.0.2/xmltodict==0.14.2/toml==0.10.2 requirements compiled to a hash lock. Contract defects fail closed, including conversion-time tokenizer validation of every metric path. The conversion turned 2,035 input rows into 950 unique tasks with 1,085 typed grader-missing rejections and zero within-source duplicates; standard lexical retention removed zero rows (eval measurements retain every task by policy). Canonical static retention covers all 950 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 99/100 with 9 issues and 1 unavailable (within the 5% bound); Result good; findings remain verbatim and quality never vetoes admission. The content survey measured ten neighbors, all DISTINCT. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/950; global schema rejections 950/950, paths {'integrity_contract': 950} (the Formatting-precedent advisory class). This records loader and launch binding, not live grader execution. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/structeval/2026.11.26.1/final-pin-sample-v2/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/structeval/2026.11.26.1/admission-evidence-v4/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/structeval/2026.11.26.1/consumer-binding-v2/result.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+      "use": "eval",
       "method_tags": [
         "RL"
       ],

@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.datasets import (
     qa_abstention_admitted,
     repair_releases,
     s1_deepresearch_admitted,
+    structeval_admitted,
     structure_closure,
     tasktrove_structured_native,
     terminus_pivot,
@@ -262,6 +263,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *big_math_admitted.sources(),
     *acecode_89k_admitted.sources(),
     *leetcode_dataset_admitted.sources(),
+    *structeval_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -355,6 +357,7 @@ def configured_sources() -> list[RlDataSource]:
         *big_math_admitted.sources(),
         *acecode_89k_admitted.sources(),
         *leetcode_dataset_admitted.sources(),
+        *structeval_admitted.sources(),
         *nemotron_ultra_renames_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),
