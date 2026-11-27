@@ -848,6 +848,22 @@ def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokeniz
             with pytest.raises(ValueError):
                 prepare_rollout_policy_batch(model, batch, [RolloutChoice(response, 0)], policy_id="stale-policy")
 
+            # Preserve the exact token stream while moving its first token across a padding gap.
+            gapped_tokens = hax.named(padded.array.at[0, 1].set(padded.array[0, 2]), padded.axes)
+            gapped_mask = hax.named(attended.array.at[0, 1].set(1).at[0, 2].set(0), attended.axes)
+            gapped_batch = dataclasses.replace(
+                batch,
+                tokens=gapped_tokens,
+                attention_mask=gapped_mask,
+                position_ids=hax.maximum(hax.cumsum(gapped_mask, "position") - 1, 0),
+            )
+            shifted_batch = dataclasses.replace(batch, position_ids=batch.position_ids + 1)
+            for invalid_batch in (gapped_batch, shifted_batch):
+                with pytest.raises(ValueError, match="position IDs starting from zero"):
+                    prepare_rollout_policy_batch(
+                        model, invalid_batch, [RolloutChoice(response, 0)], policy_id="test-snowball-policy"
+                    )
+
     np.testing.assert_allclose(choice.policy_logprobs, -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0)
     wrong_inputs = inputs.copy()
     wrong_inputs[0] += 1
