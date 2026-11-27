@@ -112,6 +112,19 @@ def test_dockerfile_lines_skips_heredoc_bodies():
     assert dockerfile_lines(dockerfile) == ["FROM ubuntu:22.04", "RUN <<'EOF'", "RUN echo done always"]
 
 
+def test_dockerfile_lines_flushes_a_trailing_continuation():
+    """A continuation open at end of file flushes as the final line instead of raising.
+
+    Machine-authored recipes carry an ``ENV`` value ending in a backslash with
+    only comments after it; the scanner classifies recipe bytes, it does not
+    validate them.
+    """
+    dockerfile = (
+        "FROM ubuntu:22.04\n" "ENV EXCLUDE_CHARACTERS='/@\"'\\ \\\n" "# Note: a collection of Lambda templates\n"
+    )
+    assert dockerfile_lines(dockerfile) == ["FROM ubuntu:22.04", "ENV EXCLUDE_CHARACTERS='/@\"'\\"]
+
+
 @pytest.mark.parametrize("mutable_final_stage", [False, True])
 def test_image_inventory_ignores_nested_shell_quoting_in_run(mutable_final_stage):
     base = "ubuntu@sha256:" + "a" * 64

@@ -205,7 +205,10 @@ def dockerfile_lines(dockerfile: str) -> list[str]:
     Heredoc bodies are shell data: their bytes never join continuations or
     surface as instruction lines (machine-authored recipes embed
     instruction-looking lines — even backslash-continued ones — inside RUN
-    heredocs).
+    heredocs). A continuation still open at the end of file flushes as the
+    final logical line: the scanner classifies recipe bytes, it does not
+    validate them, and machine-authored recipes carry trailing-continuation
+    lines (an ``ENV`` value ending in a backslash with only comments after).
     """
     lines: list[str] = []
     buffer: str | None = None
@@ -229,7 +232,7 @@ def dockerfile_lines(dockerfile: str) -> list[str]:
         buffer = None
         heredoc_delimiter = _heredoc_delimiter(joined)
     if buffer:
-        raise ValueError("unterminated Dockerfile continuation")
+        lines.append(buffer.strip())
     return lines
 
 
