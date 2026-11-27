@@ -72,6 +72,45 @@ async def test_local_disk_verified_pool_is_shared_by_concurrent_host_requests(tm
     assert disk_state(first.root) == DiskState()
 
 
+async def test_local_disk_ext4_image_cache_releases_cache_and_sandbox_allocations(tmp_path, executable_oci_image):
+    cache_pool = LocalDiskPool(tmp_path / "cache-disks")
+    cache_disk = cache_pool.create(128)
+    root = tmp_path / "disks"
+    try:
+        factory = LocalMachineFactory(disk_root=root, image_cache=cache_disk.data / "images")
+        machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+        try:
+            assert (await machine.run(Command(("/bin/true",)))).exit_code == 0
+        finally:
+            await machine.close()
+    finally:
+        cache_disk.close()
+    assert disk_state(root) == DiskState()
+    assert disk_state(cache_pool.root) == DiskState()
+
+
+async def test_local_disk_overlay_image_cache_rejection_reclaims_unstarted_sandbox(tmp_path, executable_oci_image):
+    cache_pool = LocalDiskPool(tmp_path / "cache-disks")
+    cache_disk = cache_pool.create(128)
+    root = tmp_path / "disks"
+    try:
+        lower = tmp_path / "cache-lower"
+        lower.mkdir()
+        cache = cache_disk.overlay(lower)
+        factory = LocalMachineFactory(disk_root=root, image_cache=cache / "images")
+        try:
+            machine = await factory.create(MachineSpec(executable_oci_image, workdir="/app", storage_mb=64))
+        except UnsupportedMachineSpec:
+            pass
+        else:
+            await machine.close()
+            pytest.fail("LOCAL quotas accepted an OverlayFS image cache")
+        assert disk_state(root) == DiskState()
+    finally:
+        cache_disk.close()
+    assert disk_state(cache_pool.root) == DiskState()
+
+
 @pytest.mark.parametrize("image_kind", ["host", "oci"])
 async def test_local_disk_command_timeout_releases_spools_before_unmount(
     tmp_path, executable_oci_image, monkeypatch, image_kind

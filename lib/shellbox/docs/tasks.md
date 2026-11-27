@@ -235,6 +235,14 @@ worker process, mount namespace and root directory identity in a bounded cache.
 The filesystem charges writable image layers, scratch, workdirs, `/dev/shm` and
 command spools. Shared read-only image layers remain outside it.
 
+For quota-enabled OCI guests, put `image_cache` on a native worker filesystem,
+such as an ext4 volume. An OverlayFS cache, including a container's writable
+image layer, is rejected before guest startup: nested OverlayFS lowers can
+retain the quota loop after teardown. The disk pool itself may live on a
+different filesystem. The cache is shared outside each sandbox's storage limit.
+Pass `image_cache=Path("/cache/shellbox-images")` to the factory, or set
+`skyrl.environment.task_sessions.local.image_cache` to that absolute path.
+
 SkyRL requires an absolute `disk_root`. Its launcher provisions `e2fsprogs` when
 absent from the pinned task image, requiring package-mirror access during startup.
 Direct LOCAL workers install these host tools before creating a factory.

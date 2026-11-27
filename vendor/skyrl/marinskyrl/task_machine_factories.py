@@ -26,8 +26,10 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
     factories: dict[str, MachineFactory] = {"shellsim": ShellSimMachineFactory()}
     if task_sessions.get("local") is not None:
         root = task_sessions.local.get("disk_root")
+        image_cache = task_sessions.local.get("image_cache")
         factories[Backend.LOCAL] = LocalMachineFactory(
-            disk_root=None if root is None else Path(root)
+            disk_root=None if root is None else Path(root),
+            image_cache=None if image_cache is None else Path(image_cache),
         )
     daytona = task_sessions.get("daytona")
     if daytona is not None:

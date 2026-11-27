@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 from shellbox.image import OCI_TAG, PreparedImage, prepared_image_config
+from shellbox.machine import UnsupportedMachineSpec
 
 CACHE_METADATA_FILE = "defaults.json"
 
@@ -87,6 +88,15 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
 def cached_local_image(image: PreparedImage, cache: Path, *, umoci: Path) -> PreparedLocalImage:
     """Return the cached lower layer, unpacking a pinned image on a cache miss."""
     cache.mkdir(parents=True, exist_ok=True)
+    filesystem = subprocess.check_output(
+        ["findmnt", "--noheadings", "--output", "FSTYPE", "--target", str(cache)], text=True
+    ).strip()
+    if filesystem == "overlay":
+        # A nested OverlayFS lower can retain the quota loop after guest exit,
+        # even when all visible namespaces and descriptors have been released.
+        raise UnsupportedMachineSpec(
+            "LOCAL disk quotas require an image_cache outside OverlayFS; use a native worker filesystem"
+        )
     name = image.manifest_digest.replace(":", "-")
     directory = cache / name
     with (cache / f"{name}.lock").open("a") as lock:
