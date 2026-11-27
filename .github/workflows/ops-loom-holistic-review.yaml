@@ -11,6 +11,7 @@ concurrency:
 
 jobs:
   review:
+    # Loom rollout operator: remove this launcher after the webhook-only checks in infra/loom/README.md.
     if: >-
       vars.LOOM_WEBHOOK_REVIEWS != 'true' &&
       github.event.pull_request.draft == false &&

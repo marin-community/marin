@@ -322,6 +322,11 @@ to share run keys and the holistic channel with the Actions launchers.
 
    Delete the variable to restore Actions launches. To disable webhook launches
    as well, roll out an empty `githubPullRequestRules` list.
+4. With Actions launches disabled, verify the initial review launches, a
+   holistic review on a push, and agentic lint when its label is removed from
+   a head without an existing lint run. After those checks, the Loom rollout
+   operator removes the three Actions workflows and the cutover variable.
+   The rule targets keep the federation identities used by existing runs.
 
 ## VM permissions
 

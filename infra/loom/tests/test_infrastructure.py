@@ -280,7 +280,7 @@ def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
     assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
 
 
-def test_rollout_syncs_pull_request_rules_from_the_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_deployment_manifest_contains_stack_pull_request_rules(monkeypatch: pytest.MonkeyPatch) -> None:
     stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
     monkeypatch.setenv(
         "PULUMI_CONFIG",
