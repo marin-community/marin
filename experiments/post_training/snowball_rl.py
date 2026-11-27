@@ -431,6 +431,57 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     name="train-medium-tools",
 )
 
+_SPEED_MEDIUM = _snowball(
+    evaluations=(),
+    name="speed-medium",
+    checkpoints="none",
+    recipe=replace(
+        _RENO_P40,
+        fixed_reply_tokens=4096,
+        config=_RENO_P40.config.merge(
+            RecipePatch(trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False)))
+        ),
+    ),
+    updates=10,
+    measured=range(2, 11),
+    owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
+    guards=_SPEED_GUARDS,
+    objectives=_SPEED_OBJECTIVES,
+    gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
+    budget="20m12s and 13.5 H100-h in the four-proposal comparison",
+)
+
+_SPEED_MEDIUM_16X16 = replace(
+    _SPEED_MEDIUM,
+    name="speed-medium-16x16",
+    recipe=replace(
+        _SPEED_MEDIUM.recipe,
+        layout=replace(
+            _RENO_P40.layout,
+            name="p16-r16",
+            workload=Training(replace(_P40_PLAN, policy_num_nodes=2, num_inference_engines=2)),
+        ),
+        config=_SPEED_MEDIUM.recipe.config.merge(
+            RecipePatch(
+                trainer=sections.Trainer(
+                    policy=sections.Policy(
+                        megatron_config=sections.PolicyMegatronConfig(
+                            # Two learner nodes leave one expert replica. Keep the Adam states in host memory.
+                            optimizer_config_kwargs=sections.OptimizerConfigKwargs(
+                                optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
+                            )
+                        )
+                    )
+                )
+            )
+        ),
+    ),
+    guards=(),
+    objectives=_SPEED_GUARDS,
+    gaps=(*_GAPS, "mismatch-is-agreement"),
+    budget="32 H100s; wall time and cost are unmeasured",
+)
+
 _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
@@ -464,27 +515,8 @@ _PRESETS = (
         objectives=(Metric("screen_256x4/mixed_fraction", True),),
         budget="10-15 min; 2 H100-h",
     ),
-    _snowball(
-        evaluations=(),
-        name="speed-medium",
-        checkpoints="none",
-        recipe=replace(
-            _RENO_P40,
-            fixed_reply_tokens=4096,
-            config=_RENO_P40.config.merge(
-                RecipePatch(
-                    trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
-                )
-            ),
-        ),
-        updates=10,
-        measured=range(2, 11),
-        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-        guards=_SPEED_GUARDS,
-        objectives=_SPEED_OBJECTIVES,
-        gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
-        budget="20m12s and 13.5 H100-h in the four-proposal comparison",
-    ),
+    _SPEED_MEDIUM,
+    _SPEED_MEDIUM_16X16,
     _snowball(
         evaluations=(),
         name="speed-long",

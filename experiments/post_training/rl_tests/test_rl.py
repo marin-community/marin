@@ -122,6 +122,17 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
     for name in ("speed-short", "data-short", "eval-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
 
+    baseline = configs["speed-medium"]
+    candidate = configs["speed-medium-16x16"]
+    allocation = candidate["iris"]["allocation"]
+    assert (allocation["num_nodes"], allocation["gpus_per_node"]) == (4, 8)
+    candidate_trainer = candidate["skyrl"]["trainer"]
+    assert candidate_trainer["placement"]["policy_num_nodes"] == 2
+    assert candidate["skyrl"]["generator"]["num_inference_engines"] == 2
+    assert candidate_trainer["rollout_buffer"] == baseline["skyrl"]["trainer"]["rollout_buffer"]
+    optimizer = candidate_trainer["policy"]["megatron_config"]["optimizer_config_kwargs"]
+    assert optimizer["optimizer_cpu_offload"] and optimizer["optimizer_offload_fraction"] == 1.0
+
     # Published train-long controls still contain defaults removed by the TaskSpec migration.
     planned = configs["train-long"]
     trainer = planned["skyrl"]["trainer"]
