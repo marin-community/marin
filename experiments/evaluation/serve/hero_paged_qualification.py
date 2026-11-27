@@ -16,14 +16,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax import Axis
-from jax.sharding import NamedSharding, PartitionSpec as P
+from iris.jax.init import initialize_jax
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.hero import HeroConfig
 from levanter.models.hero_model import HeroLMHeadModel
-from iris.jax.init import initialize_iris_jax
 
 _PAGE_SIZE = 128
 _EXPERT_AXIS_SIZE = 4
@@ -117,7 +118,7 @@ def main() -> None:
     parser.add_argument("--max-logprob-delta", type=float, required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    initialize_iris_jax()
+    initialize_jax()
     devices = jax.devices()
     if len(devices) != _EXPERT_AXIS_SIZE * _MODEL_AXIS_SIZE or any("GB200" not in d.device_kind for d in devices):
         raise ValueError(f"Expected 16 GB200 devices, got {devices}")
@@ -160,7 +161,9 @@ def main() -> None:
         queued = _request(phrase + phrase, 1)
         local_device = jax.local_devices()[0]
         kv_cache_bytes = sum(
-            next(shard.data.nbytes for shard in layer.kv.kv_pages.array.addressable_shards if shard.device == local_device)
+            next(
+                shard.data.nbytes for shard in layer.kv.kv_pages.array.addressable_shards if shard.device == local_device
+            )
             for layer in engine.gen_state.cache.caches
         )
         _, short = _run(engine, model, mesh, [first, queued])

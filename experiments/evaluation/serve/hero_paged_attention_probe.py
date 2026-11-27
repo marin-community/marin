@@ -14,8 +14,8 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
-
+from jax.sharding import AxisType, Mesh, NamedSharding
+from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import ragged_paged_attention
 
 _PAGE_SIZE = 128
