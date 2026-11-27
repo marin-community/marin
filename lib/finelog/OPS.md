@@ -982,26 +982,3 @@ cursor writes in Finelog. Share this file only between processes on the same
 host; reader names on different hosts have independent positions. Keep the
 same state file when moving the coordinator. Global `--state` and
 `--deployment` options precede the subcommand.
-
-The two deployed Mac tools retain their alert files and notifications while
-a scheduled adapter delivers events with sources `job-watchdog` and
-`mac-resource-watch`. The watchdog adapter hashes entry names
-and keeps only the lifecycle state. The resource adapter keeps metric, transition,
-value, threshold, and direction; it excludes process and worktree details.
-Run this command every minute with launchd, using absolute paths for its
-working directory and inputs:
-
-```bash
-uv run --no-sync python scripts/ops/relay_mac_alerts.py \
-  --deployment marin \
-  --watchdog-alerts "$HOME/Documents/experiments/active/job-watchdog/alerts.jsonl" \
-  --resource-alerts "$HOME/.local/share/mac-resource-watch/state/alerts.jsonl"
-```
-
-The adapter limits each batch by row count and serialized bytes, below the
-Finelog client's queue limits. It saves content IDs after each confirmed batch.
-It rescans retained lines to tolerate the resource tool's rolling file,
-ignores an incomplete last line, and retries after delivery failure. Keep the
-adapter interval shorter than source-file rotation. Do not remove the original
-files or notifications when enabling it. The coordinator consumes only
-`ops-feed poll`; producer-local alert files are adapter inputs.
