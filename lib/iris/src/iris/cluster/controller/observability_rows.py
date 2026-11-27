@@ -39,7 +39,7 @@ from typing import NamedTuple, Protocol
 from finelog.client.log_client import Table as FinelogTable
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance
 from rigging.timing import RateLimiter, Timestamp
-from sqlalchemy import select, tuple_
+from sqlalchemy import Row, Select, select, tuple_
 from sqlalchemy.engine.cursor import CursorResult
 
 from iris.cluster.constraints import get_device_variant
@@ -303,171 +303,277 @@ def _snapshot_or_drop(cur: RowCursor, tables: ObservabilityRowTables, marked: _M
 
 def _snapshot(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked) -> None:
     ts = stats_timestamp()
-    _snapshot_jobs(cur, tables, marked, ts)
-    _snapshot_configs(cur, tables, marked, ts)
-    _snapshot_tasks(cur, tables, marked, ts)
-    _snapshot_attempts(cur, tables, marked, ts)
-
-
-def _snapshot_jobs(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, ts: datetime) -> None:
-    j = jobs_table.c
-    for chunk in batched(marked.jobs, _ID_CHUNK_SIZE):
-        for r in cur.execute(select(jobs_table).where(j.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)):
-            marked.job_rows.append(
-                IrisJob(
-                    cluster=tables.cluster,
-                    root_job_id=r.root_job_id,
-                    root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
-                    job_id=r.job_id.to_wire(),
-                    submitted_at_ms=r.submitted_at_ms.epoch_ms(),
-                    parent_job_id=r.parent_job_id.to_wire() if r.parent_job_id is not None else None,
-                    depth=r.depth,
-                    name=r.name,
-                    user_id=r.user_id,
-                    submitting_user=r.submitting_user,
-                    state=job_pb2.JobState.Name(r.state),
-                    started_at=_dt(r.started_at_ms),
-                    finished_at=_dt(r.finished_at_ms),
-                    exit_code=r.exit_code,
-                    error=_free_text(r.error),
-                    num_tasks=r.num_tasks,
-                    scheduling_deadline_at=(
-                        _dt(Timestamp.from_ms(r.scheduling_deadline_epoch_ms))
-                        if r.scheduling_deadline_epoch_ms is not None
-                        else None
-                    ),
-                    backend_id=r.backend_id,
-                    placement=r.cluster,
-                    ts=ts,
-                )
-            )
-
-
-def _snapshot_configs(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, ts: datetime) -> None:
-    """Config rows for the jobs submitted in this transaction."""
-    j, c = jobs_table.c, job_config_table.c
-    for chunk in batched(marked.submitted, _ID_CHUNK_SIZE):
-        query = (
-            select(job_config_table, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms)
-            .join(jobs_table, j.job_id == c.job_id)
-            .where(c.job_id.in_(chunk), j.cluster == LOCAL_CLUSTER)
-        )
-        for r in cur.execute(query):
-            accelerator = _accelerator(r.res_device_json)
-            provenance = _launch_provenance(r.job_id.to_wire(), r.environment_json)
-            marked.config_rows.append(
-                IrisJobConfig(
-                    cluster=tables.cluster,
-                    root_job_id=r.root_job_id,
-                    root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
-                    job_id=r.job_id.to_wire(),
-                    submitted_at_ms=r.submitted_at_ms.epoch_ms(),
-                    res_cpu_millicores=r.res_cpu_millicores,
-                    res_memory_bytes=r.res_memory_bytes,
-                    res_disk_bytes=r.res_disk_bytes,
-                    res_device_json=r.res_device_json,
-                    accelerator_kind=accelerator.kind,
-                    accelerator_type=accelerator.type,
-                    accelerators_per_task=accelerator.per_task,
-                    constraints_json=r.constraints_json,
-                    has_coscheduling=bool(r.has_coscheduling),
-                    coscheduling_group_by=r.coscheduling_group_by,
-                    coscheduling_group_sizes=json.dumps(list(r.coscheduling_group_sizes)),
-                    priority_band=job_pb2.PriorityBand.Name(r.priority_band),
-                    preemption_policy=job_pb2.JobPreemptionPolicy.Name(r.preemption_policy),
-                    existing_job_policy=job_pb2.ExistingJobPolicy.Name(r.existing_job_policy),
-                    max_retries_failure=r.max_retries_failure,
-                    max_retries_preemption=r.max_retries_preemption,
-                    max_task_failures=r.max_task_failures,
-                    timeout_ms=r.timeout_ms,
-                    scheduling_timeout_ms=r.scheduling_timeout_ms,
-                    termination_grace_ms=r.termination_grace_ms,
-                    task_image=r.task_image,
-                    fail_if_exists=bool(r.fail_if_exists),
-                    container_profile=job_pb2.ContainerProfile.Name(r.container_profile),
-                    egress_policy=job_pb2.EgressPolicy.Name(r.egress_policy),
-                    provenance_base_commit=provenance.base_commit if provenance else None,
-                    provenance_tree_hash=provenance.tree_hash if provenance else None,
-                    provenance_dirty=provenance.dirty if provenance else None,
-                    provenance_branch=_free_text(provenance.branch) if provenance else None,
-                    ts=ts,
-                )
-            )
-
-
-def _snapshot_tasks(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, ts: datetime) -> None:
-    j, t = jobs_table.c, tasks_table.c
-    for chunk in batched(marked.tasks, _ID_CHUNK_SIZE):
-        query = (
-            select(tasks_table, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms.label("job_submitted_at_ms"))
-            .join(jobs_table, j.job_id == t.job_id)
-            .where(t.task_id.in_(chunk), j.cluster == LOCAL_CLUSTER)
-        )
-        for r in cur.execute(query):
-            marked.task_rows.append(
-                IrisTask(
-                    cluster=tables.cluster,
-                    root_job_id=r.root_job_id,
-                    root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
-                    job_id=r.job_id.to_wire(),
-                    submitted_at_ms=r.job_submitted_at_ms.epoch_ms(),
-                    task_id=r.task_id.to_wire(),
-                    task_index=r.task_index,
-                    state=job_pb2.TaskState.Name(r.state),
-                    error=_free_text(r.error),
-                    exit_code=r.exit_code,
-                    task_submitted_at=r.submitted_at_ms.as_naive_utc(),
-                    started_at=_dt(r.started_at_ms),
-                    finished_at=_dt(r.finished_at_ms),
-                    max_retries_failure=r.max_retries_failure,
-                    max_retries_preemption=r.max_retries_preemption,
-                    current_attempt_id=r.current_attempt_id,
-                    priority_root_submitted_ms=r.priority_root_submitted_ms,
-                    priority_band=job_pb2.PriorityBand.Name(r.priority_band),
-                    container_id=r.container_id,
-                    status_message=_free_text(r.status_message),
-                    current_worker_id=str(r.current_worker_id) if r.current_worker_id is not None else None,
-                    backend_id=r.backend_id,
-                    placement=r.cluster,
-                    ts=ts,
-                )
-            )
-
-
-def _snapshot_attempts(cur: RowCursor, tables: ObservabilityRowTables, marked: _Marked, ts: datetime) -> None:
     j, a, t = jobs_table.c, task_attempts_table.c, tasks_table.c
+    for chunk in batched(marked.jobs, _ID_CHUNK_SIZE):
+        for r in cur.execute(job_rows_query().where(j.job_id.in_(chunk))):
+            marked.job_rows.append(job_row(r, tables.cluster, ts))
+    for chunk in batched(marked.submitted, _ID_CHUNK_SIZE):
+        for r in cur.execute(job_config_rows_query().where(job_config_table.c.job_id.in_(chunk))):
+            marked.config_rows.append(job_config_row(r, tables.cluster, ts))
+    for chunk in batched(marked.tasks, _ID_CHUNK_SIZE):
+        for r in cur.execute(task_rows_query().where(t.task_id.in_(chunk))):
+            marked.task_rows.append(task_row(r, tables.cluster, ts))
     for chunk in batched(marked.attempts, _ID_CHUNK_SIZE):
-        query = (
-            select(task_attempts_table, t.job_id, j.root_job_id, j.root_submitted_at_ms, j.submitted_at_ms)
-            .join(tasks_table, t.task_id == a.task_id)
-            .join(jobs_table, j.job_id == t.job_id)
-            .where(tuple_(a.task_id, a.attempt_id).in_(chunk), j.cluster == LOCAL_CLUSTER)
-        )
-        for r in cur.execute(query):
+        for r in cur.execute(attempt_rows_query().where(tuple_(a.task_id, a.attempt_id).in_(chunk))):
             worker_id = r.worker_id if r.worker_id is not None else marked.removed_workers.get((r.task_id, r.attempt_id))
-            marked.attempt_rows.append(
-                IrisTaskAttempt(
-                    cluster=tables.cluster,
-                    root_job_id=r.root_job_id,
-                    root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
-                    job_id=r.job_id.to_wire(),
-                    submitted_at_ms=r.submitted_at_ms.epoch_ms(),
-                    task_id=r.task_id.to_wire(),
-                    attempt_id=r.attempt_id,
-                    attempt_uid=r.attempt_uid,
-                    state=job_pb2.TaskState.Name(r.state),
-                    created_at=r.created_at_ms.as_naive_utc(),
-                    started_at=_dt(r.started_at_ms),
-                    finished_at=_dt(r.finished_at_ms),
-                    exit_code=r.exit_code,
-                    error=_free_text(r.error),
-                    terminal_reason=r.terminal_reason,
-                    worker_id=str(worker_id) if worker_id is not None else None,
-                    node_name=r.node_name,
-                    pod_name=r.pod_name,
-                    pod_uid=r.pod_uid,
-                    backend_id=r.backend_id,
-                    topology_json=json.dumps(r.topology_json, sort_keys=True),
-                    ts=ts,
-                )
-            )
+            marked.attempt_rows.append(attempt_row(r, tables.cluster, ts, worker_id))
+
+
+# The queries below read, by name, only the columns their row builders use: never
+# entrypoint_json, submit_argv_json or any other column the Finelog rows leave out
+# (environment_json is read for the provenance_* columns only). Each covers this
+# cluster's own work (``cluster == LOCAL_CLUSTER``); callers add the id filter.
+
+
+def job_rows_query() -> Select:
+    """The ``jobs`` columns :func:`job_row` reads."""
+    j = jobs_table.c
+    return select(
+        j.root_job_id,
+        j.root_submitted_at_ms,
+        j.job_id,
+        j.submitted_at_ms,
+        j.parent_job_id,
+        j.depth,
+        j.name,
+        j.user_id,
+        j.submitting_user,
+        j.state,
+        j.started_at_ms,
+        j.finished_at_ms,
+        j.exit_code,
+        j.error,
+        j.num_tasks,
+        j.scheduling_deadline_epoch_ms,
+        j.backend_id,
+        j.cluster,
+    ).where(j.cluster == LOCAL_CLUSTER)
+
+
+def job_row(r: Row, cluster: str, ts: datetime) -> IrisJob:
+    return IrisJob(
+        cluster=cluster,
+        root_job_id=r.root_job_id,
+        root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
+        job_id=r.job_id.to_wire(),
+        submitted_at_ms=r.submitted_at_ms.epoch_ms(),
+        parent_job_id=r.parent_job_id.to_wire() if r.parent_job_id is not None else None,
+        depth=r.depth,
+        name=r.name,
+        user_id=r.user_id,
+        submitting_user=r.submitting_user,
+        state=job_pb2.JobState.Name(r.state),
+        started_at=_dt(r.started_at_ms),
+        finished_at=_dt(r.finished_at_ms),
+        exit_code=r.exit_code,
+        error=_free_text(r.error),
+        num_tasks=r.num_tasks,
+        scheduling_deadline_at=(
+            _dt(Timestamp.from_ms(r.scheduling_deadline_epoch_ms))
+            if r.scheduling_deadline_epoch_ms is not None
+            else None
+        ),
+        backend_id=r.backend_id,
+        placement=r.cluster,
+        ts=ts,
+    )
+
+
+def job_config_rows_query() -> Select:
+    """The ``job_config`` columns, and their job's key, that :func:`job_config_row` reads."""
+    j, c = jobs_table.c, job_config_table.c
+    return (
+        select(
+            c.job_id,
+            c.res_cpu_millicores,
+            c.res_memory_bytes,
+            c.res_disk_bytes,
+            c.res_device_json,
+            c.constraints_json,
+            c.has_coscheduling,
+            c.coscheduling_group_by,
+            c.coscheduling_group_sizes,
+            c.priority_band,
+            c.preemption_policy,
+            c.existing_job_policy,
+            c.max_retries_failure,
+            c.max_retries_preemption,
+            c.max_task_failures,
+            c.timeout_ms,
+            c.scheduling_timeout_ms,
+            c.termination_grace_ms,
+            c.task_image,
+            c.fail_if_exists,
+            c.container_profile,
+            c.egress_policy,
+            c.environment_json,
+            j.root_job_id,
+            j.root_submitted_at_ms,
+            j.submitted_at_ms,
+        )
+        .join(jobs_table, j.job_id == c.job_id)
+        .where(j.cluster == LOCAL_CLUSTER)
+    )
+
+
+def job_config_row(r: Row, cluster: str, ts: datetime) -> IrisJobConfig:
+    accelerator = _accelerator(r.res_device_json)
+    provenance = _launch_provenance(r.job_id.to_wire(), r.environment_json)
+    return IrisJobConfig(
+        cluster=cluster,
+        root_job_id=r.root_job_id,
+        root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
+        job_id=r.job_id.to_wire(),
+        submitted_at_ms=r.submitted_at_ms.epoch_ms(),
+        res_cpu_millicores=r.res_cpu_millicores,
+        res_memory_bytes=r.res_memory_bytes,
+        res_disk_bytes=r.res_disk_bytes,
+        res_device_json=r.res_device_json,
+        accelerator_kind=accelerator.kind,
+        accelerator_type=accelerator.type,
+        accelerators_per_task=accelerator.per_task,
+        constraints_json=r.constraints_json,
+        has_coscheduling=bool(r.has_coscheduling),
+        coscheduling_group_by=r.coscheduling_group_by,
+        coscheduling_group_sizes=json.dumps(list(r.coscheduling_group_sizes)),
+        priority_band=job_pb2.PriorityBand.Name(r.priority_band),
+        preemption_policy=job_pb2.JobPreemptionPolicy.Name(r.preemption_policy),
+        existing_job_policy=job_pb2.ExistingJobPolicy.Name(r.existing_job_policy),
+        max_retries_failure=r.max_retries_failure,
+        max_retries_preemption=r.max_retries_preemption,
+        max_task_failures=r.max_task_failures,
+        timeout_ms=r.timeout_ms,
+        scheduling_timeout_ms=r.scheduling_timeout_ms,
+        termination_grace_ms=r.termination_grace_ms,
+        task_image=r.task_image,
+        fail_if_exists=bool(r.fail_if_exists),
+        container_profile=job_pb2.ContainerProfile.Name(r.container_profile),
+        egress_policy=job_pb2.EgressPolicy.Name(r.egress_policy),
+        provenance_base_commit=provenance.base_commit if provenance else None,
+        provenance_tree_hash=provenance.tree_hash if provenance else None,
+        provenance_dirty=provenance.dirty if provenance else None,
+        provenance_branch=_free_text(provenance.branch) if provenance else None,
+        ts=ts,
+    )
+
+
+def task_rows_query() -> Select:
+    """The ``tasks`` columns, and their job's key, that :func:`task_row` reads."""
+    j, t = jobs_table.c, tasks_table.c
+    return (
+        select(
+            t.task_id,
+            t.job_id,
+            t.task_index,
+            t.state,
+            t.error,
+            t.exit_code,
+            t.submitted_at_ms,
+            t.started_at_ms,
+            t.finished_at_ms,
+            t.max_retries_failure,
+            t.max_retries_preemption,
+            t.current_attempt_id,
+            t.priority_root_submitted_ms,
+            t.priority_band,
+            t.container_id,
+            t.status_message,
+            t.current_worker_id,
+            t.backend_id,
+            t.cluster,
+            j.root_job_id,
+            j.root_submitted_at_ms,
+            j.submitted_at_ms.label("job_submitted_at_ms"),
+        )
+        .join(jobs_table, j.job_id == t.job_id)
+        .where(j.cluster == LOCAL_CLUSTER)
+    )
+
+
+def task_row(r: Row, cluster: str, ts: datetime) -> IrisTask:
+    return IrisTask(
+        cluster=cluster,
+        root_job_id=r.root_job_id,
+        root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
+        job_id=r.job_id.to_wire(),
+        submitted_at_ms=r.job_submitted_at_ms.epoch_ms(),
+        task_id=r.task_id.to_wire(),
+        task_index=r.task_index,
+        state=job_pb2.TaskState.Name(r.state),
+        error=_free_text(r.error),
+        exit_code=r.exit_code,
+        task_submitted_at=r.submitted_at_ms.as_naive_utc(),
+        started_at=_dt(r.started_at_ms),
+        finished_at=_dt(r.finished_at_ms),
+        max_retries_failure=r.max_retries_failure,
+        max_retries_preemption=r.max_retries_preemption,
+        current_attempt_id=r.current_attempt_id,
+        priority_root_submitted_ms=r.priority_root_submitted_ms,
+        priority_band=job_pb2.PriorityBand.Name(r.priority_band),
+        container_id=r.container_id,
+        status_message=_free_text(r.status_message),
+        current_worker_id=str(r.current_worker_id) if r.current_worker_id is not None else None,
+        backend_id=r.backend_id,
+        placement=r.cluster,
+        ts=ts,
+    )
+
+
+def attempt_rows_query() -> Select:
+    """The ``task_attempts`` columns, and their job's key, that :func:`attempt_row` reads."""
+    j, a, t = jobs_table.c, task_attempts_table.c, tasks_table.c
+    return (
+        select(
+            a.task_id,
+            a.attempt_id,
+            a.attempt_uid,
+            a.state,
+            a.created_at_ms,
+            a.started_at_ms,
+            a.finished_at_ms,
+            a.exit_code,
+            a.error,
+            a.terminal_reason,
+            a.worker_id,
+            a.node_name,
+            a.pod_name,
+            a.pod_uid,
+            a.backend_id,
+            a.topology_json,
+            t.job_id,
+            j.root_job_id,
+            j.root_submitted_at_ms,
+            j.submitted_at_ms,
+        )
+        .join(tasks_table, t.task_id == a.task_id)
+        .join(jobs_table, j.job_id == t.job_id)
+        .where(j.cluster == LOCAL_CLUSTER)
+    )
+
+
+def attempt_row(r: Row, cluster: str, ts: datetime, worker_id: WorkerId | None) -> IrisTaskAttempt:
+    """``worker_id`` is passed separately: the live path restores one ``remove_worker`` cleared."""
+    return IrisTaskAttempt(
+        cluster=cluster,
+        root_job_id=r.root_job_id,
+        root_submitted_at_ms=r.root_submitted_at_ms.epoch_ms(),
+        job_id=r.job_id.to_wire(),
+        submitted_at_ms=r.submitted_at_ms.epoch_ms(),
+        task_id=r.task_id.to_wire(),
+        attempt_id=r.attempt_id,
+        attempt_uid=r.attempt_uid,
+        state=job_pb2.TaskState.Name(r.state),
+        created_at=r.created_at_ms.as_naive_utc(),
+        started_at=_dt(r.started_at_ms),
+        finished_at=_dt(r.finished_at_ms),
+        exit_code=r.exit_code,
+        error=_free_text(r.error),
+        terminal_reason=r.terminal_reason,
+        worker_id=str(worker_id) if worker_id is not None else None,
+        node_name=r.node_name,
+        pod_name=r.pod_name,
+        pod_uid=r.pod_uid,
+        backend_id=r.backend_id,
+        topology_json=json.dumps(r.topology_json, sort_keys=True),
+        ts=ts,
+    )

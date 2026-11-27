@@ -643,6 +643,35 @@ def test_every_controller_db_column_is_classified(tmp_path, table):
     )
 
 
+_ROW_QUERIES = {
+    "jobs": observability_rows.job_rows_query,
+    "job_config": observability_rows.job_config_rows_query,
+    "tasks": observability_rows.task_rows_query,
+    "task_attempts": observability_rows.attempt_rows_query,
+}
+_JOB_KEY_COLUMNS = {("jobs", "root_job_id"), ("jobs", "root_submitted_at_ms"), ("jobs", "submitted_at_ms")}
+# Read besides the table's COPIED columns: the job key, an attempt's job id, and
+# environment_json, which only MARIN_PROVENANCE's git identity is taken from.
+_ALSO_READ = {
+    "jobs": set(),
+    "job_config": _JOB_KEY_COLUMNS | {("job_config", "environment_json")},
+    "tasks": _JOB_KEY_COLUMNS,
+    "task_attempts": _JOB_KEY_COLUMNS | {("tasks", "job_id")},
+}
+
+
+@pytest.mark.parametrize("table", sorted(_COLUMNS))
+def test_row_queries_read_only_the_columns_their_rows_copy(table):
+    # Both the live rows and the backfill read through these queries, so no
+    # EXCLUDED column (entrypoint_json, submit_argv_json, ...) is ever loaded.
+    read = set()
+    for column in _ROW_QUERIES[table]().selected_columns:
+        base = getattr(column, "element", column)
+        read.add((base.table.name, base.name))
+
+    assert read == {(table, column) for column in _COLUMNS[table].copied} | _ALSO_READ[table]
+
+
 def test_task_rows_follow_state_and_placement_but_not_the_pending_reason(state):
     rows = _attach(state, "marin")
     worker_id = register_worker(state, "w1", "w1:1", make_worker_metadata())
