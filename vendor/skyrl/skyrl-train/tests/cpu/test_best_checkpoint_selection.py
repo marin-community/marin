@@ -228,9 +228,10 @@ async def test_periodic_checkpoint_can_be_selected_on_write_once_storage(tmp_pat
     assert (model / "rank_0.pt").read_bytes() == b"policy"
     assert json.loads((output / "exports/best_checkpoint.json").read_text()) == selected
 
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("writer_fails", [False, True])
-async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypatch, writer_fails):
+@pytest.mark.parametrize("failure", [None, "shard_write", "inference_restore"])
+async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypatch, failure):
     marker = tmp_path / LATEST_CHECKPOINT_FILE
     marker.write_text("1")
     loop = asyncio.get_running_loop()
@@ -239,6 +240,9 @@ async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypat
     saved_steps = []
 
     class PolicyStorage:
+        def backload_to_gpu(self, **_kwargs):
+            pass
+
         def async_run_ray_method(self, _dispatch, method, **kwargs):
             if method == "save_checkpoint":
                 self.path = Path(kwargs["ckpt_dir"]) / "rank_0.pt"
@@ -250,7 +254,7 @@ async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypat
                 return [done]
             assert method == "finish_checkpoint"
             assert write_done.is_set()
-            if writer_fails:
+            if failure == "shard_write":
                 raise OSError("checkpoint upload failed")
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_bytes(b"policy")
@@ -262,6 +266,12 @@ async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypat
 
     async def rollout_state():
         return TrainingContextState(PromptLoaderState({}, []), [], None)
+
+    async def sleep():
+        pass
+
+    async def restore_inference(*, reason):
+        raise OSError("inference restore failed")
 
     monkeypatch.setattr("skyrl_train.trainer.ray.get", lambda refs: refs)
     monkeypatch.setattr("skyrl_train.trainer.ray.wait", lambda refs, **_: (refs, []))
@@ -278,12 +288,20 @@ async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypat
     trainer._ftpo_stopped = False
     trainer._domain_balancer = None
     trainer.distillation_scored_tokens_total = 0
-    trainer.colocate_all = False
+    trainer.colocate_all = failure == "inference_restore"
+    if trainer.colocate_all:
+        trainer.inference_engine_client = SimpleNamespace(sleep=sleep)
+        monkeypatch.setattr(trainer, "_sync_policy_for_rollouts", restore_inference)
     trainer.callback_handler = CallbackHandler([RecordSave()])
     trainer._control = TrainerControl()
 
-    await trainer._save_intermediate_checkpoint(TrainerState(2, 0, 2, 2))
+    state = TrainerState(2, 0, 2, 2)
     try:
+        if trainer.colocate_all:
+            with pytest.raises(OSError):
+                await trainer._save_intermediate_checkpoint(state)
+        else:
+            await trainer._save_intermediate_checkpoint(state)
         await asyncio.wait_for(polled_pending_write.wait(), timeout=10)
         assert marker.read_text() == "1"
         assert saved_steps == []
@@ -292,7 +310,7 @@ async def test_checkpoint_publication_waits_for_policy_write(tmp_path, monkeypat
         published = await trainer._drain_checkpoint_upload()
 
     checkpoint = tmp_path / "global_step_2"
-    if writer_fails:
+    if failure == "shard_write":
         assert published is False
         assert marker.read_text() == "1"
         assert saved_steps == []

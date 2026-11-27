@@ -213,7 +213,15 @@ state on DP rank zero for each model slice before staging. That rank can
 dominate the save, and its gathered state consumes host memory in addition to
 the staging budget. Mochi uses `dp_reshardable`, which leaves optimizer shards
 on their owning ranks and supports changing DP geometry on restore. Changing
-TP, PP, CP, or EP geometry requires the fully reshardable format.
+TP, PP, CP, or EP geometry while preserving optimizer state requires a checkpoint
+saved in a compatible format.
+
+If a native resume fails after a layout change, restore the saved layout to
+recover training state. To use a new layout with a fresh optimizer, start a new
+run from the checkpoint's Hugging Face policy export with
+`trainer.resume_mode=none`. Mochi's MuonH loader uses the configured optimizer
+format to interpret the saved state. Changing that setting during resume does
+not convert a saved checkpoint.
 
 `timing/save_checkpoints` includes rollout-state collection, snapshot
 preparation, and the staging wait. `timing/checkpoint_upload_blocking`

@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 from dataclasses import replace
 import io as stdlib_io
 import json
@@ -694,16 +694,16 @@ class RayPPOTrainer:
             if self._control.should_save_hf_model:
                 await asyncio.to_thread(self.handle_hf_export)
 
-    async def _save_checkpoints_with_residency(self) -> CheckpointSnapshot:
-        """Save a checkpoint, swapping colocated training and inference residency when needed."""
-        rollout_state = await self._rollout_state()
+    @asynccontextmanager
+    async def _checkpoint_policy_residency(self):
         if not self.colocate_all:
-            return await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
+            yield
+            return
 
         await self.inference_engine_client.sleep()
         try:
             self.policy_model.backload_to_gpu(backload_optimizer=True, backload_model=True)
-            return await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
+            yield
         finally:
             await self._sync_policy_for_rollouts(reason="checkpoint_restore")
 
@@ -717,19 +717,21 @@ class RayPPOTrainer:
     async def _save_intermediate_checkpoint(self, state: TrainerState) -> None:
         """Save one requested step checkpoint without terminating training on storage failure."""
         await self._drain_checkpoint_upload()
-        try:
-            with Timer("save_checkpoints", self.all_timings):
-                snapshot = await self._save_checkpoints_with_residency()
-        except OSError:
-            self._record_checkpoint_save_failure(state)
-            return
-        except ray.exceptions.RayTaskError as error:
-            if not isinstance(error.as_instanceof_cause(), OSError):
-                raise
-            self._record_checkpoint_save_failure(state)
-            return
-
-        self._start_checkpoint_upload(snapshot, state)
+        with Timer("save_checkpoints", self.all_timings):
+            # Restore inference after handing the staged write to the publisher.
+            async with AsyncExitStack() as residency:
+                try:
+                    rollout_state = await self._rollout_state()
+                    await residency.enter_async_context(self._checkpoint_policy_residency())
+                    snapshot = await asyncio.to_thread(self._snapshot_checkpoint, rollout_state)
+                except OSError:
+                    self._record_checkpoint_save_failure(state)
+                except ray.exceptions.RayTaskError as error:
+                    if not isinstance(error.as_instanceof_cause(), OSError):
+                        raise
+                    self._record_checkpoint_save_failure(state)
+                else:
+                    self._start_checkpoint_upload(snapshot, state)
 
     def _start_checkpoint_upload(self, snapshot: CheckpointSnapshot, state: TrainerState) -> None:
         assert getattr(self, "_pending_checkpoint_upload", None) is None
