@@ -80,7 +80,6 @@ from marin.inference.vllm_release import (
 )
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
-    IsolatedTpuVllm,
     PreinstalledVllm,
     VllmType,
 )
@@ -560,10 +559,6 @@ def test_vllm_backend_falls_back_to_preinstalled_without_version():
     # No launcher (the TPU path, or a --task-image GPU path whose image ships its own vLLM) serves
     # from the vLLM already on PATH.
     assert vllm_launcher(VllmEngineConfig()) == PreinstalledVllm()
-
-
-def test_vllm_backend_returns_its_composed_launcher():
-    assert isinstance(vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU)), IsolatedTpuVllm)
 
 
 def test_levanter_max_seq_len_defaults_within_the_models_window():
