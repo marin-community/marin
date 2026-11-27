@@ -1271,3 +1271,27 @@ def test_snowball_init_preserves_weights_and_shardings_with_sharded_temporaries(
             assert weight.sharding == want, (name, weight.sharding, want)
 
         assert initialized.memory_analysis().temp_size_in_bytes < replicated.memory_analysis().temp_size_in_bytes / 3
+
+
+def test_snowball_learner_loss_replays_expert_routes():
+    cfg = _tiny_config(num_layers=2, initializer_std=0.1)
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(19))
+        tokens = hax.named(jnp.asarray([[3, 13, 7, 20, 21, 6]], dtype=jnp.int32), ("batch", "position"))
+        example = LmExample(tokens, hax.ones(tokens.axes, dtype=jnp.float32))
+        token_valid = hax.ones(tokens.axes, dtype=jnp.bool_)
+        _, stats = model.activations_with_stats(tokens, token_valid)
+        capture = model.prepare_route_replay(stats.routes, token_valid)
+        switched = model.prepare_route_replay((stats.routes + 1) % cfg.num_experts, token_valid)
+
+        def score(replay):
+            loss, _ = model.next_token_loss_and_metrics(example, route_replay=replay, reduction=None)
+            return loss.array
+
+        compiled = jax.jit(score)
+        expected = compiled(None)
+        replayed = compiled(capture)
+        other = compiled(switched)
+
+    np.testing.assert_allclose(replayed, expected, atol=1e-6, rtol=0)
+    assert np.max(np.abs(np.asarray(other - replayed))) > 1e-3
