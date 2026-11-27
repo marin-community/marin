@@ -4,7 +4,7 @@ name: ID Balancing router bias
 category: MoE and routing
 summary: 🤖 Posted on behalf of @WhenWen (drafted by a Claude Code session).
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7209715736
@@ -112,6 +112,13 @@ trials:
     id_balance_gain: '0.006'
   commit: aea6872f20
   priority: interactive
+  loss:
+  - 3.0464
+  delta:
+  - 0.0007
+  steps: 3039
+  baseline: belay-X0265v1-control 3.0457 (same commit, seed 0)
+  step_time_change: -1%
 potential:
   score: 4
   rationale: 'Equal-data noise: +0.0020/-0.0014/-0.0034 at gain 0.006/0.024/0.096, improving with gain; equal-time runs pending
