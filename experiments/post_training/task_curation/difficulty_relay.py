@@ -12,9 +12,11 @@ import socket
 from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, Thread
+from typing import Any
 
 import httpx
 from harbor.environments.model_relay import _upstream_error
@@ -22,6 +24,7 @@ from rolloutengine.chat import chat_template_messages
 from taskcompendium.request_budget import RequestBudget
 from transformers import AutoTokenizer
 
+from experiments.post_training.task_curation.difficulty_output_budget import DynamicOutputBudget
 from experiments.post_training.task_curation.difficulty_provider import (
     RETRYABLE_STATUS,
     ProviderGate,
@@ -49,6 +52,7 @@ def budget_relay(
     budget: RequestBudget | None,
     provider_limits: ProviderLimits,
     receipts: Path,
+    dynamic_output: DynamicOutputBudget | None = None,
 ):
     """Serve task-labelled, non-streaming chat and pinned CPU tokenization locally.
 
@@ -57,6 +61,8 @@ def budget_relay(
     """
     if re.fullmatch(r"[0-9a-f]{40}", tokenizer_revision) is None:
         raise ValueError("Difficulty tokenization requires an immutable Hugging Face revision")
+    if dynamic_output is not None and (budget is None or budget.context_tokens != dynamic_output.context_tokens):
+        raise ValueError("Dynamic output requires its unchanged served context budget")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_model, revision=tokenizer_revision)
     numbers = Counter()
     provider = ProviderGate(provider_limits)
@@ -74,7 +80,7 @@ def budget_relay(
                 super().setup()
                 self.connection.settimeout(REQUEST_TIMEOUT)
 
-            def log_message(self, _message_format, *args):
+            def log_message(self, *args, **kwargs):
                 pass
 
             def respond(self, status, payload):
@@ -122,7 +128,14 @@ def budget_relay(
                 body.update({key: value for key, value in parameters.items() if key != "extra_body"})
                 body.update(parameters.get("extra_body", {}))
                 body["model"] = model
-                if budget is not None and len(tokens) <= budget.input_tokens:
+                unserved = budget is not None and len(tokens) > budget.input_tokens
+                if dynamic_output is not None:
+                    try:
+                        body["max_tokens"] = dynamic_output.output_capacity(len(tokens))
+                        unserved = False
+                    except ValueError:
+                        unserved = True
+                elif budget is not None and not unserved:
                     body["max_tokens"] = min(
                         body.get("max_tokens", budget.output_tokens),
                         budget.output_tokens,
@@ -142,12 +155,13 @@ def budget_relay(
                             "prompt_tokens": len(tokens) if budget is not None else None,
                             "requested_body": requested_body,
                             "body": body,
+                            **({"dynamic_output": asdict(dynamic_output)} if dynamic_output is not None else {}),
                         }
                     )
                     + "\n"
                 )
-                if budget is not None and len(tokens) > budget.input_tokens:
-                    payload = {
+                if unserved:
+                    payload: dict = {
                         "error": {
                             "code": "input_budget_unserved",
                             "type": "ContextBudgetExceededError",
@@ -185,17 +199,31 @@ def budget_relay(
                         status, payload = 502, {
                             "error": {"type": type(error).__name__, "message": "Upstream model transport failed"}
                         }
-                usage = payload.get("usage")
-                if (
-                    budget is not None
-                    and status == 200
-                    and (
-                        usage is None
-                        or usage["prompt_tokens"] > budget.input_tokens
-                        or usage["completion_tokens"] > budget.output_tokens
-                        or usage["prompt_tokens"] + usage["completion_tokens"] > budget.context_tokens
+                usage: Any = payload.get("usage")
+                if dynamic_output is not None and status == 200:
+                    choices = payload.get("choices")
+                    valid_usage = (
+                        isinstance(usage, dict)
+                        and type(usage.get("prompt_tokens")) is int
+                        and type(usage.get("completion_tokens")) is int
+                        and usage["prompt_tokens"] == len(tokens)
+                        and 0 <= usage["completion_tokens"] <= body["max_tokens"]
+                        and isinstance(choices, list)
+                        and len(choices) == 1
+                        and isinstance(choices[0], dict)
+                        and (
+                            choices[0].get("finish_reason") != "length"
+                            or usage["completion_tokens"] == body["max_tokens"]
+                        )
                     )
-                ):
+                else:
+                    valid_usage = budget is None or (
+                        usage is not None
+                        and usage["prompt_tokens"] <= budget.input_tokens
+                        and usage["completion_tokens"] <= budget.output_tokens
+                        and usage["prompt_tokens"] + usage["completion_tokens"] <= budget.context_tokens
+                    )
+                if budget is not None and status == 200 and not valid_usage:
                     status, payload = 502, {
                         "error": {
                             "type": "ProtocolUsageViolation",
