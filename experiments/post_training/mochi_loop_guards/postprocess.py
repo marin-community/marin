@@ -17,7 +17,8 @@ terminal run needs; every step is also a standalone subcommand:
     … cpu-submit --cpu 16 --memory 64GB --disk 128GB --timeout 14400 \\
         --env MARIN_PREFIX=s3://marin-us-east-08a/marin -- \\
       python -m experiments.post_training.mochi_loop_guards postprocess \\
-      --run-output <run output> --output <audit prefix> --baseline <sealed audit> \\
+      --run-output <run output> --manifest <frozen manifest> \\
+      --output <audit prefix> --baseline <sealed audit> \\
       --retain-traces s3://…/traces/s1-stop --preset-name s1-stop
 
 Wait for terminal job state (and the final cohort dump) before launching: sequencing
@@ -136,6 +137,7 @@ def postprocess(argv: list[str] | None = None) -> None:
     """Audit one terminal run and apply the registered postprocessing chain."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-output", required=True)
+    parser.add_argument("--manifest", required=True, help="Frozen panel manifest available to the worker")
     parser.add_argument("--output", required=True)
     parser.add_argument("--baseline")
     parser.add_argument("--exclude-cohort", action="append", default=[], choices=tuple(audit.MANIFEST_COHORTS.values()))
@@ -154,6 +156,8 @@ def postprocess(argv: list[str] | None = None) -> None:
         [
             "--run-output",
             run_output,
+            "--manifest",
+            args.manifest,
             "--output",
             args.output,
             *(["--baseline", args.baseline] if args.baseline else []),
