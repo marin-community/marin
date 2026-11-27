@@ -1,0 +1,12 @@
+id: X0267
+slug: wn-learned-radius-muonh-fh0-2
+name: 'WN*: learned-radius MuonH, fh0.2, head logit mult'
+category: Optimizers
+summary: 🤖 Posted on behalf of @WhenWen.
+source: intake
+status: approved
+track: competitive-d512
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7224762997
+  author: WhenWen
+  approved_by: WhenWen (trusted)
