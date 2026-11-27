@@ -130,11 +130,11 @@ def is_equiv(candidate: str | None, reference: str | None) -> bool:
 
 def last_boxed_answer(response: str) -> str:
     """Extract using Hendrycks without reasoning or stop postprocessing."""
-    if r"\boxed " in response:
-        return response.split(r"\boxed ")[-1].split("$")[0]
     start = response.rfind(r"\boxed")
     if start < 0:
         return ""
+    if response.startswith(r"\boxed ", start):
+        return response[start + len(r"\boxed ") :].split("$")[0]
     depth = 0
     for index in range(start, len(response)):
         if response[index] == "{":

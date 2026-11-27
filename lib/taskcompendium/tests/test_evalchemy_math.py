@@ -158,11 +158,18 @@ BOXED_GRADERS = {
         "I'll put the result in \\boxed{} at the end. 6 * 7 = 42, so \\boxed{42}",
         "Maybe \\boxed{7}? No: 6 * 7 = 42.</think>The answer is \\boxed{42}.",
         "Maybe \\boxed{7}? No: 6 * 7 = 42.<|end_think|>The answer is \\boxed{42}.",
+        "First guess: \\boxed 7$. Checking, 6 * 7 = 42, so \\boxed{42}",
+        "First guess: \\boxed{7}. Checking, 6 * 7 = 42, so $\\boxed 42$",
     ],
 )
 @pytest.mark.parametrize("grade", BOXED_GRADERS.values(), ids=BOXED_GRADERS.keys())
 def test_boxed_answer_is_the_final_answers_last_box(grade, response):
     assert grade("42", response).reward == 1
+
+
+@pytest.mark.parametrize("grade", BOXED_GRADERS.values(), ids=BOXED_GRADERS.keys())
+def test_earlier_box_is_not_the_answer(grade):
+    assert grade("42", "Maybe \\boxed 42$ is it. No: 6 * 7 = 42 is wrong, so \\boxed{7}").reward == 0
 
 
 @pytest.mark.parametrize("grade", BOXED_GRADERS.values(), ids=BOXED_GRADERS.keys())
