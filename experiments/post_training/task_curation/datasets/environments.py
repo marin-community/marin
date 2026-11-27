@@ -10,6 +10,8 @@ hash lock, so changing a pin here changes the environment's identity and rebuild
 from dataclasses import replace
 from pathlib import Path
 
+from taskcompendium.importers.evalchemy.scorers.nltk_data import PUNKT_TAB_ENGLISH, PUNKT_TAB_SHA256, PUNKT_TAB_URL
+
 from experiments.post_training.task_curation.environment import Archive, Environment
 
 HERE = Path(__file__).resolve().parent
@@ -90,11 +92,7 @@ STACK_PYTEST_TASKS = (
     "xarray==2026.9.0",
 )
 
-PUNKT_TAB = Archive(
-    "https://raw.githubusercontent.com/nltk/nltk_data/4f15a3d89eefe9748ec1c05be495d91289197155/packages/tokenizers/punkt_tab.zip",
-    "e57f64187974277726a3417ca6f181ec5403676c717672eef6a748a7b20e0106",
-    "punkt_tab/english",
-)
+PUNKT_TAB = Archive(PUNKT_TAB_URL, PUNKT_TAB_SHA256, PUNKT_TAB_ENGLISH)
 """The English Punkt sentence tokenizer the instruction-following scorers load through NLTK."""
 
 GRADER_PACKAGES = Environment(

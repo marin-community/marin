@@ -1,17 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish instruction constraints without exposing private grader inputs, and grade IFBench responses.
+"""Publish instruction constraints without exposing private grader inputs, and grade IFBench responses."""
 
-The IFBench checkers need nltk, emoji, syllapy and NLTK's punkt_tab data, which IFBench's grading environment
-provides, so their cases skip without them.
-"""
-
+import hashlib
+import io
 import json
 import sys
+import urllib.request
+import zipfile
 from functools import partial
 from types import ModuleType, SimpleNamespace
 
+import nltk
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
@@ -24,11 +25,27 @@ from taskcompendium.evaluation.spec import EvaluationProtocol, Metrics, Operatio
 from taskcompendium.importers.evalchemy.instructions import convert_instructions, instruction_item
 from taskcompendium.importers.evalchemy.scorers.instruction_spec import InstructionProfile, InstructionSpec
 from taskcompendium.importers.evalchemy.scorers.instructions import grade_source_instructions
+from taskcompendium.importers.evalchemy.scorers.nltk_data import PUNKT_TAB_ENGLISH, PUNKT_TAB_SHA256, PUNKT_TAB_URL
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, TextMessage
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, SourceRecipe
 from taskcompendium.runtime.resources import resource_bytes
+
+
+@pytest.fixture(scope="session")
+def ifbench_nltk_data(tmp_path_factory):
+    with urllib.request.urlopen(PUNKT_TAB_URL, timeout=60) as response:
+        archive = response.read()
+    assert hashlib.sha256(archive).hexdigest() == PUNKT_TAB_SHA256
+    root = tmp_path_factory.mktemp("nltk_data")
+    tokenizers = root / "tokenizers"
+    with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+        zipped.extractall(tokenizers, [name for name in zipped.namelist() if name.startswith(f"{PUNKT_TAB_ENGLISH}/")])
+    nltk.data.path.insert(0, str(root))
+    yield
+    nltk.data.path.remove(str(root))
+
 
 EUROPEAN_CAPITALS_NORTH_OF_45 = (
     "Reykjavik",
@@ -62,6 +79,7 @@ EUROPEAN_CAPITALS_NORTH_OF_45 = (
 )
 
 
+@pytest.mark.usefixtures("ifbench_nltk_data")
 @pytest.mark.parametrize(
     ("capitals", "expected"),
     [
@@ -72,9 +90,6 @@ EUROPEAN_CAPITALS_NORTH_OF_45 = (
     ],
 )
 def test_ifbench_european_capitals_requires_complete_latitude_order(capitals, expected):
-    pytest.importorskip("nltk")
-    pytest.importorskip("emoji")
-    pytest.importorskip("syllapy")
     spec = InstructionSpec(
         constraints=(Constraint("custom:european_capitals_sort", {}),),
         profile=InstructionProfile.IFBENCH,
@@ -209,20 +224,15 @@ def test_harness_repeat_prompt_without_request_fails_closed():
 
 
 @pytest.mark.parametrize(
-    ("language", "response", "detected", "expected"),
+    ("language", "response", "expected"),
     [
-        ("de", "This is an English text about the band Die Antwoord.", "en", 0.0),
-        ("it", "Here is the a la carte menu in English.", "en", 0.0),
-        ("fr", "This is a cafe de Paris mention.", "en", 0.0),
-        ("de", "Das ist ein deutscher Satz mit mehreren Wörtern.", "de", 1.0),
+        ("de", "This is an English text about the band Die Antwoord.", 0.0),
+        ("it", "Here is the a la carte menu in English.", 0.0),
+        ("fr", "This is a cafe de Paris mention.", 0.0),
+        ("de", "Das ist ein deutscher Satz mit mehreren Wörtern.", 1.0),
     ],
 )
-def test_harness_response_language_uses_detector(language, response, detected, expected):
-    pytest.importorskip("langdetect")
-    from langdetect import DetectorFactory, detect  # noqa: PLC0415
-
-    DetectorFactory.seed = 0
-    assert detect(response) == detected
+def test_harness_response_language_uses_detector(language, response, expected):
     spec = InstructionSpec(
         (Constraint("language:response_language", {"language": language}),), InstructionProfile.HARNESS, ""
     )
@@ -308,18 +318,7 @@ IFBENCH_CASES = {
 }
 
 
-@pytest.fixture
-def ifbench_grading_environment():
-    pytest.importorskip("emoji", reason="Requires the IFBench grading environment")
-    pytest.importorskip("syllapy", reason="Requires the IFBench grading environment")
-    nltk = pytest.importorskip("nltk", reason="Requires the IFBench grading environment")
-    try:
-        nltk.data.find("tokenizers/punkt_tab/english/")
-    except LookupError:
-        pytest.skip("Requires the IFBench grading environment's punkt_tab data")
-
-
-@pytest.mark.usefixtures("ifbench_grading_environment")
+@pytest.mark.usefixtures("ifbench_nltk_data")
 @pytest.mark.parametrize(
     ("instruction_id", "kwargs", "response", "expected"), IFBENCH_CASES.values(), ids=IFBENCH_CASES.keys()
 )
