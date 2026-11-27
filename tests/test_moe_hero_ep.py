@@ -8,6 +8,7 @@ import math
 import os
 import tomllib
 from datetime import timedelta
+from functools import partial
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -1353,15 +1354,18 @@ def _fake_fa4_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, 
 # The hero mesh (11 racks x EP64) leaves `data` at length 1; the second shape partitions every batch axis.
 @pytest.mark.parametrize("axis_sizes", [(2, 1, 2, 1, 1), (1, 2, 2, 1, 1)])
 def test_fa4_attention_traces_through_hero_loss_and_gradient(monkeypatch, axis_sizes):
-    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    config = dataclasses.replace(_latent_config(), attention_implementation="gpu_fa4_cute")
+    kernel_config = fa4_cute.flash4_cute_kernel_config(config.head_dim, arch=100)
+    # Bypass FA4 hardware detection while tracing the real sharding and MoE paths on CPU.
+    monkeypatch.setattr(
+        fa4_cute, "gpu_fa4_cute_attention", partial(fa4_cute._gpu_fa4_cute_attention, kernel_config=kernel_config)
+    )
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_fa4_forward)
     mesh = AbstractMesh(
         axis_sizes=axis_sizes,
         axis_names=("replica_dcn", "data", "expert", "context", "model"),
         axis_types=(AxisType.Explicit,) * 5,
     )
-    config = dataclasses.replace(_latent_config(), attention_implementation="gpu_fa4_cute")
     batch_sharding = NamedSharding(mesh, P(model._BATCH_AXES, None))
     tokens = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.int32, sharding=batch_sharding)
     loss_weight = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.float32, sharding=batch_sharding)
