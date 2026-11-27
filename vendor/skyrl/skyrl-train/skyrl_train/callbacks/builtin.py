@@ -23,7 +23,6 @@ import contextlib
 import json
 import math
 import os
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
@@ -110,59 +109,6 @@ def _configured_distillation_token_budget(cfg: DictConfig) -> int | None:
     if cfg.trainer.algorithm.get("distillation") is None:
         raise ValueError("trainer.distillation_token_budget requires trainer.algorithm.distillation")
     return value
-
-
-TRAINING_BUDGET_RECEIPT = "training-budget.json"
-"""Wall-time budget receipt, written to the run's export root and read back by tests."""
-
-
-@register_callback("wall_time_budget")
-class WallTimeBudgetCallback(TrainerCallback):
-    """Stop at a completed-step boundary after a post-first-update budget."""
-
-    error_behavior = CallbackErrorBehavior.RAISE
-
-    def __init__(self, *, seconds: float, drain_margin: float, groups_per_step: int):
-        if seconds <= 0 or drain_margin < 0 or groups_per_step < 1:
-            raise ValueError("Invalid training wall-time budget")
-        self.seconds = seconds
-        self.drain_margin = drain_margin
-        self.groups_per_step = groups_per_step
-        self.initial_step: int | None = None
-
-    def on_train_begin(self, state, control, **kwargs):
-        self.initial_step = state.global_step
-        return control
-
-    def on_log(self, state, control, logs, *, trainer, **kwargs):
-        if self.initial_step is None:
-            raise RuntimeError("Training budget clock was not started")
-        if trainer.first_optimizer_step_time is None:
-            return control
-        completed = state.global_step - self.initial_step
-        if completed < 1:
-            return control
-        elapsed = time.monotonic() - trainer.first_optimizer_step_time
-        if elapsed <= 0:
-            return control
-        remaining = self.seconds - elapsed
-        report = {
-            "step": state.global_step,
-            "completed_steps": completed,
-            "elapsed_seconds": elapsed,
-            "budget_seconds": self.seconds,
-            "drain_margin_seconds": self.drain_margin,
-            "consumed_groups_per_hour": completed * self.groups_per_step * 3600 / elapsed,
-            "additional_updates_at_observed_rate": max(0, math.floor(remaining / (elapsed / completed))),
-            "semantics": "wall clock since first optimizer completion; includes subsequent validation/checkpoint work",
-        }
-        io.write_bytes_atomic(
-            join_resource_path(trainer.cfg.trainer.export_path, TRAINING_BUDGET_RECEIPT),
-            json.dumps(report).encode(),
-        )
-        if remaining <= 0:
-            control.should_training_stop = True
-        return control
 
 
 @register_callback(CHECKPOINT_CALLBACK_TYPE)

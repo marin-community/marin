@@ -255,7 +255,6 @@ class RayPPOTrainer:
 
     _training_metrics_enabled: bool = False
     _rollout_spans_enabled: bool = False
-    first_optimizer_step_time: float | None = None
 
     def __init__(
         self,
@@ -1202,8 +1201,6 @@ class RayPPOTrainer:
         summary: BatchSummary,
         duration_seconds: float,
     ) -> None:
-        if self.first_optimizer_step_time is None:
-            self.first_optimizer_step_time = time.monotonic()
         self.all_metrics.update(summary.stop_metrics)
         if self._training_metrics_enabled:
             record_consumed_work(summary.work, step=self.global_step)

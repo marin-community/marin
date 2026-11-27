@@ -13,7 +13,6 @@ from pathlib import Path
 import jmp
 import yaml
 from fray.types import ResourceConfig
-from iris.rpc.proto_display import priority_band_value
 from levanter.callbacks.profiler import XlaDumpUploadConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
@@ -189,7 +188,6 @@ EXP7_SPEC = replace(
             expert_weight_sharding=ExpertWeightSharding(expert=("expert", "context"), hidden=("data",)),
         ),
         eos_token_ids=(128001, 128009),
-        priority=priority_band_value("production"),
         failure_budget=FailureBudget(max_retries_failure=2, max_task_failures=64),
     ),
     prepared_data=None,

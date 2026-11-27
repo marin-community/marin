@@ -109,6 +109,7 @@ _DERIVED_RECIPE_KEYS = frozenset(
         "trainer.resume_mode",
         "trainer.dump_eval_results",
         "trainer.placement",
+        "trainer.callbacks",
         "trainer.ckpt_interval",
         "trainer.checkpoint_retention",
         "trainer.checkpoint_keep_every",
@@ -124,7 +125,6 @@ _DERIVED_RECIPE_KEYS = frozenset(
     }
 )
 RUNNER_KEYS = _DERIVED_RECIPE_KEYS | {
-    "trainer.callbacks",
     "generator.trajectory_retention",
     "generator.run_engines_locally",
 }
@@ -650,16 +650,12 @@ def run_spec(
     config = config.merge(
         RecipePatch(
             trainer=sections.Trainer(
-                callbacks=(
-                    config.trainer.callbacks
-                    if "callbacks" in authored.get("trainer", {})
-                    else workload.callbacks(
-                        preset,
-                        chosen[0] if chosen else None,
-                        profiles,
-                        expected_tasks,
-                        initial_model_uri,
-                    )
+                callbacks=workload.callbacks(
+                    preset,
+                    chosen[0] if chosen else None,
+                    profiles,
+                    expected_tasks,
+                    initial_model_uri,
                 ),
             )
         )

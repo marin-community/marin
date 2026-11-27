@@ -709,6 +709,9 @@ class SFTSpec:
         """Replace only the data input and give the changed run its own identity."""
         return replace(self, name=f"{self.name}-mix-{data.mix_fingerprint()}", datasets=(), prepared_data=data)
 
+    def mix_tokenizer(self) -> str:
+        return self.model.tokenizer_cache_key()
+
     def with_steps(self, steps: int, *, version: str) -> SFTSpec:
         """Set the update budget and run without a total task deadline.
 
@@ -754,6 +757,10 @@ class SFTRecipe(Protocol):
 
     def with_steps(self, steps: int, *, version: str) -> SFTRecipe: ...
 
+    def mix_tokenizer(self) -> str:
+        """The one tokenizer identity a bound data mix may declare."""
+        ...
+
 
 @dataclass(frozen=True)
 class SFTPreset[RecipeT: SFTRecipe]:
@@ -763,9 +770,23 @@ class SFTPreset[RecipeT: SFTRecipe]:
     recipe: RecipeT
     resources: ResourceConfig
 
-    def model(self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None) -> ArtifactHfModel:
-        """Build the model export using the preset's fixed allocation."""
-        return self.recipe.trained(
+    def model(
+        self,
+        *,
+        coordinator_cluster: str | None = None,
+        coordinator_prefix: str | None = None,
+        priority: int | None = None,
+    ) -> ArtifactHfModel:
+        """Build the model export using the preset's fixed allocation.
+
+        ``priority`` is the resolved Iris band for the training child. It applies to Levanter
+        specs, whose ``HFModel`` dispatch carries the band; other backends have no child-band
+        dispatch and leave it to the coordinator route.
+        """
+        recipe = self.recipe
+        if priority is not None and isinstance(recipe, SFTSpec) and isinstance(recipe.model, HFModel):
+            recipe = replace(recipe, model=replace(recipe.model, priority=priority))
+        return recipe.trained(
             self.resources, coordinator_cluster=coordinator_cluster, coordinator_prefix=coordinator_prefix
         )
 

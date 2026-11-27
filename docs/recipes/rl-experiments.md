@@ -74,8 +74,8 @@ campaign layout splits a 102,400-token request into 20,480 packed token position
 
 Use the existing model command's `--sft` path for a complete arm, selecting the
 model's curriculum preset with `--preset`. Add an
-immutable `--sft-data-mix NAME@VERSION`, its regional URI, relative JSON manifest
-file and tokenizer. `PreparedData` supplies an `LmDataConfig` to either SFT
+immutable `--sft-data-mix NAME@VERSION`, its regional URI and relative JSON manifest
+file; the preset supplies the tokenizer identity. `PreparedData` supplies an `LmDataConfig` to either SFT
 recipe while retaining optimizer settings, context, batch and allocation.
 The manifest owns component weights and data-validation splits. Packing also comes
 from the manifest unless a preset declares a prepared-data format view.
@@ -111,7 +111,7 @@ print a Mochi arm without submitting work:
 uv run python -m experiments.post_training.mochi_rl \
   --preset train-long-agentic-curriculum --sft mixture-262k-176node \
   --sft-data-mix "$MOCHI_MIX@$MOCHI_MIX_VERSION" --sft-data-uri "$MOCHI_MIX_URI" \
-  --sft-data-file mix.json --sft-data-tokenizer "$MIX_TOKENIZER" \
+  --sft-data-file mix.json \
   --sft-steps 524 --tasks "$MOCHI_TASKS" \
   --version 2026.11.25.2 --plan
 ```
@@ -122,7 +122,7 @@ The equivalent Snowball command is:
 uv run python -m experiments.post_training.snowball_rl \
   --preset train-long-agentic-curriculum --sft mixture-262k-32node \
   --sft-data-mix "$SNOWBALL_MIX@$SNOWBALL_MIX_VERSION" --sft-data-uri "$SNOWBALL_MIX_URI" \
-  --sft-data-file mix.json --sft-data-tokenizer "$MIX_TOKENIZER" \
+  --sft-data-file mix.json \
   --sft-steps 360 --tasks "$SNOWBALL_TASKS" \
   --version 2026.11.25.2 --plan
 ```
@@ -161,7 +161,7 @@ release and its epoch receipt:
 uv run python -m experiments.post_training.snowball_rl \
   --preset train-long-agentic --sft exp7-262k-32node --through sft \
   --sft-data-mix "$EXP7_MIX@$EXP7_MIX_VERSION" --sft-data-uri "$EXP7_MIX_URI" \
-  --sft-data-file data.json --sft-data-tokenizer "$MIX_TOKENIZER" \
+  --sft-data-file data.json \
   --sft-steps "$EXP7_EPOCH_UPDATES" --priority production \
   --version "$EXP7_RUN_VERSION" --plan
 ```

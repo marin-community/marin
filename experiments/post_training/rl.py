@@ -36,6 +36,7 @@ from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
+from iris.rpc.proto_display import priority_band_value
 from marin.execution.artifact import is_mutable_version, read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
@@ -1060,7 +1061,6 @@ def command(
         sft_data_mix: str | None = None,
         sft_data_uri: str | None = None,
         sft_data_file: str | None = None,
-        sft_data_tokenizer: str | None = None,
         sft_steps: int | None = None,
     ) -> tuple[ArtifactStep, ...]:
         context = click.get_current_context()
@@ -1092,7 +1092,7 @@ def command(
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
         initializer = init
-        mix_options = (sft_data_uri, sft_data_file, sft_data_tokenizer)
+        mix_options = (sft_data_uri, sft_data_file)
         if sft_name is None and (
             sft_data_mix is not None or sft_steps is not None or any(value is not None for value in mix_options)
         ):
@@ -1122,19 +1122,15 @@ def command(
             sft = by_name[sft_name]
             if sft_data_mix is not None:
                 name, separator, version = sft_data_mix.rpartition("@")
-                if (
-                    not name
-                    or not separator
-                    or any(value is None for value in (sft_data_uri, sft_data_file, sft_data_tokenizer))
-                ):
-                    raise click.BadParameter(
-                        "--sft-data-mix requires NAME@VERSION, --sft-data-uri, --sft-data-file and --sft-data-tokenizer"
-                    )
+                if not name or not separator or any(value is None for value in (sft_data_uri, sft_data_file)):
+                    raise click.BadParameter("--sft-data-mix requires NAME@VERSION, --sft-data-uri and --sft-data-file")
                 if sft_steps is None:
                     raise click.BadParameter("--sft-data-mix requires --sft-steps", param_hint="--sft-steps")
                 assert isinstance(sft, SFTPreset)
                 source_recipe = sft.recipe.with_data_mix(
-                    PreparedData(ArtifactStep.adopt(name, version, sft_data_uri), sft_data_file, sft_data_tokenizer)
+                    PreparedData(
+                        ArtifactStep.adopt(name, version, sft_data_uri), sft_data_file, sft.recipe.mix_tokenizer()
+                    )
                 )
                 sft = replace(
                     sft,
@@ -1161,6 +1157,7 @@ def command(
                     coordinator_prefix=(
                         recipe.run_prefix(preset) if preset.temporary_output or sft_data_mix is not None else None
                     ),
+                    priority=priority_band_value(preset.recipe.layout.priority),
                 )
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error
@@ -1293,7 +1290,6 @@ def command(
                 click.Option(["--sft-data-mix"], help="Immutable SFT data mix NAME@VERSION; binds the arm's SFT data."),
                 click.Option(["--sft-data-uri"], help="Regional directory of the published SFT mix."),
                 click.Option(["--sft-data-file"], help="LM data JSON manifest relative to the mix directory."),
-                click.Option(["--sft-data-tokenizer"], help="Tokenizer identity in the SFT data manifest."),
                 click.Option(
                     ["--sft-steps"],
                     type=click.IntRange(min=1),

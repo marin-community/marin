@@ -43,7 +43,6 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
 from rigging.timing import Duration
-from skyrlrecipe import RecipePatch, declared, sections
 from skyrlrecipe.documents import merge_mappings, set_path
 from taskcompendium.models import (
     AnswerType,
@@ -448,30 +447,6 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
     summary.write_text(json.dumps(content))
     with pytest.raises(click.BadParameter, match="AI-judge"):
         snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
-
-
-def test_authored_learning_budget_survives_composition_and_stops_after_optimizer_start(selection, tmp_path):
-    table = snowball_model.SNOWBALL
-    preset = table.by_name["train-long"]
-    callback = declared.WallTimeBudgetCallback(type="wall_time_budget", seconds=100, drain_margin=20, groups_per_step=64)
-    preset = replace(
-        preset,
-        recipe=replace(
-            preset.recipe,
-            config=preset.recipe.config.merge(RecipePatch(trainer=sections.Trainer(callbacks=(callback,)))),
-        ),
-    )
-    spec = recipe.run_spec(preset, name="learning-budget", model_name=table.model)
-    path = tmp_path / "budget.yaml"
-    path.write_text(spec.config_yaml)
-    result = run_native_test("cloud.iris.tests.native_learning_budget", [str(path)])
-    assert not result["startup_stop"]
-    assert not result["before_stop"]
-    assert result["expired_stop"]
-    assert result["receipt"]["elapsed_seconds"] == 105
-    assert result["receipt"]["completed_steps"] == 2
-    assert result["receipt"]["additional_updates_at_observed_rate"] == 0
-    assert result["receipt"]["consumed_groups_per_hour"] == pytest.approx(128 * 3600 / 105)
 
 
 @pytest.mark.parametrize("retry_budget", [None, 0, 3], ids=["default-retry", "disabled-retry", "custom-retry"])
@@ -1725,8 +1700,6 @@ def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
         str(root),
         "--sft-data-file",
         manifest,
-        "--sft-data-tokenizer",
-        tokenizer,
         "--sft-steps",
         str(sft_updates),
         "--version",
@@ -1804,8 +1777,6 @@ def test_sft_only_arm_exports_without_starting_rl(tmp_path, monkeypatch, selecti
         str(tmp_path),
         "--sft-data-file",
         "data.json",
-        "--sft-data-tokenizer",
-        tokenizer,
         "--sft-steps",
         "1679",
         "--through",
