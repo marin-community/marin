@@ -231,12 +231,19 @@ R41_PENDING_SOURCE_IDS = (
         "ScienceOne:S1-DeepResearch-15k",
         "Yatin:Edge-Agent-Reasoning-WebSearch-260K",
         "Nemotron:Nemotron-RL-knowledge-mcqa",
+        # Preserve deferred cohort provenance and receipts in pending intake.
+        "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124",
         # The native TaskTrove structured-output cohort qualified after the R40 freeze.
         "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
     }
 )
 
 PENDING_MEASUREMENT_SOURCES = (
+    *(
+        source
+        for source in repair_releases.sources()
+        if source.info.id == "SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124"
+    ),
     *(source for source in cascade.sources() if source.info.subset not in CASCADE_RETAINED_SUBSETS),
     *lean_proofs.sources(),
     *lean_numina.sources(),
