@@ -1,31 +1,22 @@
 #!/usr/bin/env python3
-"""Derive and submit an Iris GPU job from one validated Hydra launch config.
-
-The resolved document supplies allocation, routing, task environment, storage,
-and Ray settings. This module projects those values into the Iris SDK and sends
-the same document to every task; it has no user-facing option parser.
-"""
+"""Derive and submit an Iris GPU job from a validated Hydra launch config."""
 
 from __future__ import annotations
 
 import base64
 import contextlib
 import hashlib
-import json
 import os
 import shlex
 import signal
-import subprocess
 import sys
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from urllib.parse import unquote, urlparse
 
-import yaml
 from iris.client.client import Job
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import Constraint, infer_preemptible_constraint
@@ -36,6 +27,15 @@ from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
 from rigging.config_discovery import find_project_root
 
+from cloud.iris.resource_requests import _resource_request_is_automatic, resolve_node_resource_requests
+from cloud.iris.launch_environment import (
+    BundledLaunchConfig,
+    _is_checkpoint_export,
+    build_debug_launch_env,
+    config_task_environment,
+    _job_scope_fr_dump_path,
+    build_config_task_command,
+)
 from cloud.iris.launch_config import SubmissionMode, derive_launch_topology, load_launch_config
 from cloud.iris.launch import LaunchOutcome
 from cloud.iris.export_hf_checkpoint import export_terminal_policy
@@ -43,38 +43,15 @@ from cloud.iris.submission import submission_client
 from cloud.iris.ray_storage import (
     RaySpillBackend,
 )
-from cloud.iris.rl_config_translation import (
-    RL_CONFIG_PAYLOAD_ENV,
-    RL_CONFIG_TASK_DIR,
-)
+from cloud.iris.rl_config_translation import RL_CONFIG_TASK_DIR
 from marinskyrl.resource_locator import (
     is_cloud_uri,
     join_resource_path,
 )
 from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.ray_ports import RayPort
-from marinskyrl.environment_contract import (
-    DEBUG_ARTIFACT_DIR_ENV,
-    DEBUG_MODE_ENV,
-    DebugMode,
-    EnvVarManager,
-    EnvVarScope,
-    wandb_launch_environment,
-)
-from cloud.iris.runtime_environment import (
-    CHECKPOINT_EXPORT_ENTRYPOINT,
-    IRIS_TASK_IMAGE,
-    MARINSKYRL_TASK_ROOT,
-    RuntimeProfile,
-    task_setup_command,
-)
-
-AUTOMATIC_RESOURCE_REQUEST = "auto"
-MEMORY_RESOURCE = "memory"
-DISK_RESOURCE = "ephemeral-storage"
-# Leave the remainder of live allocatable RAM and disk to kubelet, daemonsets,
-# and filesystem overhead.
-NODE_RESOURCE_FRACTION = 0.80
+from marinskyrl.environment_contract import DEBUG_ARTIFACT_DIR_ENV, DEBUG_MODE_ENV, wandb_launch_environment
+from cloud.iris.runtime_environment import IRIS_TASK_IMAGE, RuntimeProfile, task_setup_command
 
 
 @dataclass(frozen=True)
@@ -86,67 +63,6 @@ class RLStoragePaths:
     trajectory_root: str
     ray_log_root: str
     resume_checkpoint_count: int
-
-
-def _is_checkpoint_export(args: SimpleNamespace) -> bool:
-    return getattr(args, "entrypoint", None) == CHECKPOINT_EXPORT_ENTRYPOINT
-
-
-def _parse_quantity_to_gib(q: str) -> float:
-    """Parse a Kubernetes or Iris byte quantity to GiB."""
-    q = q.strip()
-    for suf, mult in (("Ki", 2**10), ("Mi", 2**20), ("Gi", 2**30), ("Ti", 2**40), ("Pi", 2**50)):
-        if q.endswith(suf):
-            return float(q[: -len(suf)]) * mult / 2**30
-    for suf, mult in (
-        ("KB", 1e3),
-        ("MB", 1e6),
-        ("GB", 1e9),
-        ("TB", 1e12),
-        ("PB", 1e15),
-        ("k", 1e3),
-        ("M", 1e6),
-        ("G", 1e9),
-        ("T", 1e12),
-        ("P", 1e15),
-    ):
-        if q.endswith(suf):
-            return float(q[: -len(suf)]) * mult / 2**30
-    return float(q) / 2**30  # plain bytes
-
-
-@dataclass(frozen=True)
-class ResourceQuantities:
-    """Per-node memory and disk quantities in GiB."""
-
-    memory_gib: float
-    disk_gib: float
-
-
-@dataclass(frozen=True)
-class NodeResourceBudget:
-    """Live headroom and policy-capped automatic requests for one node."""
-
-    headroom: ResourceQuantities
-    automatic: ResourceQuantities
-
-
-@dataclass(frozen=True)
-class ClusterResourceSnapshot:
-    """Available matching nodes observed in one Kubernetes query."""
-
-    context: str
-    gpu_variant: str
-    gpus_per_node: int
-    nodes: tuple[NodeResourceBudget, ...]
-
-
-@dataclass(frozen=True)
-class ResolvedResourceRequests:
-    """Per-node memory and disk requests ready for Iris submission."""
-
-    memory: str
-    disk: str
 
 
 class _LauncherTermination(BaseException):
@@ -339,322 +255,6 @@ class IrisBackend:
 
     def export_terminal_policy(self, config_path: Path) -> None:
         export_terminal_policy(config_path, forward_env=self.forward_env)
-
-
-def _pod_resource_request_gib(pod: dict[str, Any], resource: str) -> float:
-    """Return the scheduler-effective request for one pod resource."""
-    spec = pod.get("spec", {})
-
-    def request(container: dict[str, Any]) -> float:
-        quantity = container.get("resources", {}).get("requests", {}).get(resource)
-        return _parse_quantity_to_gib(quantity) if isinstance(quantity, str) else 0.0
-
-    application_request = sum(request(container) for container in spec.get("containers", []))
-    init_request = max((request(container) for container in spec.get("initContainers", [])), default=0.0)
-    overhead = spec.get("overhead", {}).get(resource)
-    overhead_request = _parse_quantity_to_gib(overhead) if isinstance(overhead, str) else 0.0
-    return max(application_request, init_request) + overhead_request
-
-
-def _node_is_ready(node: dict[str, Any]) -> bool:
-    conditions = node.get("status", {}).get("conditions", [])
-    return any(condition.get("type") == "Ready" and condition.get("status") == "True" for condition in conditions)
-
-
-def _node_resource_budgets(
-    items: list[dict[str, Any]],
-    *,
-    gpu_variant: str,
-    gpus_per_node: int,
-) -> list[NodeResourceBudget]:
-    """Return live headroom and automatic request budgets for matching Ready nodes."""
-    pod_requests: dict[str, ResourceQuantities] = {}
-    for item in items:
-        if item.get("kind") != "Pod" or item.get("status", {}).get("phase") in {"Succeeded", "Failed"}:
-            continue
-        node_name = item.get("spec", {}).get("nodeName")
-        if not isinstance(node_name, str):
-            continue
-        requested = pod_requests.get(node_name, ResourceQuantities(memory_gib=0.0, disk_gib=0.0))
-        pod_requests[node_name] = ResourceQuantities(
-            memory_gib=requested.memory_gib + _pod_resource_request_gib(item, MEMORY_RESOURCE),
-            disk_gib=requested.disk_gib + _pod_resource_request_gib(item, DISK_RESOURCE),
-        )
-
-    available = []
-    for item in items:
-        if item.get("kind") != "Node" or item.get("spec", {}).get("unschedulable") or not _node_is_ready(item):
-            continue
-        metadata = item.get("metadata", {})
-        allocatable = item.get("status", {}).get("allocatable", {})
-        product = metadata.get("labels", {}).get("nvidia.com/gpu.product", "")
-        if allocatable.get("nvidia.com/gpu") != str(gpus_per_node) or gpu_variant.lower() not in product.lower():
-            continue
-        node_name = metadata.get("name")
-        if not isinstance(node_name, str):
-            continue
-        memory_allocatable = _parse_quantity_to_gib(allocatable[MEMORY_RESOURCE])
-        disk_allocatable = _parse_quantity_to_gib(allocatable[DISK_RESOURCE])
-        requested = pod_requests.get(node_name, ResourceQuantities(memory_gib=0.0, disk_gib=0.0))
-        headroom = ResourceQuantities(
-            memory_gib=memory_allocatable - requested.memory_gib,
-            disk_gib=disk_allocatable - requested.disk_gib,
-        )
-        available.append(
-            NodeResourceBudget(
-                headroom=headroom,
-                automatic=ResourceQuantities(
-                    memory_gib=min(memory_allocatable * NODE_RESOURCE_FRACTION, headroom.memory_gib),
-                    disk_gib=min(disk_allocatable * NODE_RESOURCE_FRACTION, headroom.disk_gib),
-                ),
-            )
-        )
-    return available
-
-
-def _inspect_cluster_resources(
-    cluster_config_path: str, *, gpu_variant: str, gpus_per_node: int
-) -> ClusterResourceSnapshot:
-    """Read one live node-and-pod resource snapshot from the selected cluster."""
-    cluster_config = _load_cluster_config(cluster_config_path)
-    platform = cluster_config.get("platform")
-    coreweave = platform.get("coreweave") if isinstance(platform, dict) else None
-    kubeconfig = coreweave.get("kubeconfig_path") if isinstance(coreweave, dict) else None
-    context = coreweave.get("kube_context") if isinstance(coreweave, dict) else None
-    if not isinstance(kubeconfig, str) or not isinstance(context, str):
-        raise SystemExit(
-            "The selected cluster config needs platform.coreweave.kubeconfig_path and kube_context "
-            "to derive automatic memory and disk requests; pass both explicitly."
-        )
-
-    try:
-        out = subprocess.run(
-            [
-                "kubectl",
-                "--kubeconfig",
-                str(Path(kubeconfig).expanduser()),
-                "--context",
-                context,
-                "get",
-                "nodes,pods",
-                "--all-namespaces",
-                "-o",
-                "json",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=True,
-        ).stdout
-    except Exception as exc:  # noqa: BLE001 - convert cluster/tool failures into launch guidance
-        raise SystemExit(
-            f"Could not inspect {gpus_per_node}x{gpu_variant} nodes in kube context {context!r}: {exc}. "
-            "Pass explicit --memory and --disk values."
-        ) from exc
-    items = json.loads(out)["items"]
-    if not isinstance(items, list):
-        raise ValueError("kubectl node-and-pod snapshot has a non-list items field")
-    nodes = _node_resource_budgets(items, gpu_variant=gpu_variant, gpus_per_node=gpus_per_node)
-    return ClusterResourceSnapshot(
-        context=context,
-        gpu_variant=gpu_variant,
-        gpus_per_node=gpus_per_node,
-        nodes=tuple(nodes),
-    )
-
-
-def _resource_request_is_automatic(request: str) -> bool:
-    return request.strip().lower() == AUTOMATIC_RESOURCE_REQUEST
-
-
-def _resolve_gang_resource_requests(
-    snapshot: ClusterResourceSnapshot,
-    *,
-    num_nodes: int,
-    memory_request: str,
-    disk_request: str,
-) -> ResolvedResourceRequests:
-    """Select one resource pair that fits the requested gang in a live snapshot."""
-    automatic_memory = _resource_request_is_automatic(memory_request)
-    automatic_disk = _resource_request_is_automatic(disk_request)
-    requested_memory_gib = None if automatic_memory else _parse_quantity_to_gib(memory_request)
-    requested_disk_gib = None if automatic_disk else _parse_quantity_to_gib(disk_request)
-    candidates = [
-        resources
-        for resources in snapshot.nodes
-        if (requested_memory_gib is None or resources.headroom.memory_gib >= requested_memory_gib)
-        and (requested_disk_gib is None or resources.headroom.disk_gib >= requested_disk_gib)
-    ]
-    if len(candidates) < num_nodes:
-        raise SystemExit(
-            f"Automatic resources need {num_nodes} Ready, schedulable "
-            f"{snapshot.gpus_per_node}x{snapshot.gpu_variant} nodes, "
-            f"but only {len(candidates)} of {len(snapshot.nodes)} matching nodes in kube context "
-            f"{snapshot.context!r} fit the constraints memory={memory_request}, disk={disk_request}; "
-            "adjust the resource requests."
-        )
-
-    if automatic_memory:
-        selected = sorted(candidates, key=lambda resources: resources.automatic.memory_gib, reverse=True)[:num_nodes]
-    else:
-        selected = sorted(candidates, key=lambda resources: resources.automatic.disk_gib, reverse=True)[:num_nodes]
-    memory_gib = int(min(resources.automatic.memory_gib for resources in selected))
-    disk_gib = int(min(resources.automatic.disk_gib for resources in selected))
-    if (automatic_memory and memory_gib < 1) or (automatic_disk and disk_gib < 1):
-        automatic_resources = " and ".join(
-            resource for resource, automatic in (("memory", automatic_memory), ("disk", automatic_disk)) if automatic
-        )
-        raise SystemExit(
-            f"No positive automatic {automatic_resources} request fits {num_nodes} "
-            f"{snapshot.gpus_per_node}x{snapshot.gpu_variant} nodes "
-            f"in kube context {snapshot.context!r}; pass explicit --memory and --disk values."
-        )
-    resolved_memory = f"{memory_gib}Gi" if automatic_memory else memory_request
-    resolved_disk = f"{disk_gib}Gi" if automatic_disk else disk_request
-    return ResolvedResourceRequests(memory=resolved_memory, disk=resolved_disk)
-
-
-def resolve_node_resource_requests(
-    cluster_config_path: str,
-    *,
-    gpu_variant: str,
-    gpus_per_node: int,
-    num_nodes: int,
-    memory_request: str,
-    disk_request: str,
-) -> ResolvedResourceRequests:
-    """Return live admission-aware resource requests for a GPU gang."""
-    snapshot = _inspect_cluster_resources(
-        cluster_config_path,
-        gpu_variant=gpu_variant,
-        gpus_per_node=gpus_per_node,
-    )
-    resolved = _resolve_gang_resource_requests(
-        snapshot,
-        num_nodes=num_nodes,
-        memory_request=memory_request,
-        disk_request=disk_request,
-    )
-    print(
-        f"[rl-iris] automatic node resources: largest requests with live headroom on {num_nodes} of "
-        f"{len(snapshot.nodes)} matching nodes, capped at {NODE_RESOURCE_FRACTION:.0%} allocatable = "
-        f"memory {resolved.memory}, disk {resolved.disk}",
-        flush=True,
-    )
-    return resolved
-
-
-@dataclass(frozen=True)
-class BundledLaunchConfig:
-    """Task path and environment payload for one resolved launch config."""
-
-    task_path: str
-    payload: str
-
-    def task_environment(self) -> dict[str, str]:
-        """Return the environment needed to materialize the config."""
-        return {RL_CONFIG_PAYLOAD_ENV: self.payload}
-
-
-def _load_cluster_config(cluster_config: str) -> dict[str, Any]:
-    """Load the selected Iris cluster configuration for launch-time defaults."""
-    try:
-        with open(cluster_config) as f:
-            loaded = yaml.safe_load(f)
-    except OSError as exc:
-        raise SystemExit(
-            f"Could not load --cluster-config {cluster_config!r} to resolve RL launch defaults: {exc}. "
-            "Pass an existing cluster config or explicit --cpu and --rendezvous-dir values."
-        ) from exc
-    if not isinstance(loaded, dict):
-        raise SystemExit(f"--cluster-config {cluster_config!r} must contain a YAML mapping.")
-    return loaded
-
-
-def build_debug_launch_env(args: SimpleNamespace) -> dict[str, str]:
-    """Resolve the effective debug preset after the job name and RL config exist."""
-    trainer = args.config.skyrl.get("trainer", {})
-    mode = str(trainer.get("debug_mode", DebugMode.LIGHT.value))
-    try:
-        resolved = DebugMode(mode)
-    except ValueError as error:
-        choices = ", ".join(item.value for item in DebugMode)
-        raise ValueError(f"trainer.debug_mode must be one of: {choices}; got {mode!r}") from error
-    if resolved is DebugMode.OFF:
-        return {}
-    phase_diagnostics = trainer.get("collective_phase_diagnostics") is not False
-    return EnvVarManager.for_debug_launch(
-        mode=resolved,
-        job_name=args.job_name,
-        collective_phase_diagnostics=phase_diagnostics,
-    ).environment_for(EnvVarScope.TASK_RUNTIME)
-
-
-def config_task_environment(config: DictConfig) -> dict[str, str]:
-    """Resolve task settings and explicitly named backend secrets at submission."""
-    extra = dict(config.runtime.task_env)
-    skyrl_controls = sorted(str(key) for key in extra if str(key).startswith("SKYRL_"))
-    if skyrl_controls:
-        raise ValueError(
-            "RL config extra_env may not define MarinSkyRL behavior; use typed Hydra settings instead: "
-            + ", ".join(skyrl_controls)
-        )
-    out: dict[str, str] = {}
-    for k, v in extra.items():
-        if v is None:
-            continue
-        if isinstance(v, bool):
-            v = int(v)
-        out[str(k)] = str(v)
-    if config.runtime.entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT:
-        for field in ("remote_judge.api_key_env", "daytona.api_key_env", "daytona.eval_api_key_env"):
-            key_env = OmegaConf.select(config, f"skyrl.environment.task_sessions.{field}")
-            if key_env is not None:
-                value = os.environ.get(key_env)
-                if not value:
-                    raise ValueError(f"Missing credential environment variable: {key_env}")
-                out[key_env] = value
-    return out
-
-
-def _job_scope_fr_dump_path(prefix: str, job_name: str) -> str:
-    """Rewrite a JOB-SCOPED NCCL flight-recorder dump path so its slug segment is the
-    ACTUAL job name, e.g. ``/tmp/fr_dumps/<slug>/nccl_fr_rank`` -> ``/tmp/fr_dumps/
-    <job_name>/nccl_fr_rank``.
-
-    WHY (2026-07-11 FR-slug bug): the 80B configs hardcode
-    ``TORCH_NCCL_DEBUG_INFO_TEMP_FILE: /tmp/fr_dumps/80b-next-cp1/nccl_fr_rank`` in
-    their ``extra_env:``, so a run launched under a DIFFERENT ``--job-name`` (e.g.
-    ``80b-next-cp1-r3d2``) still wrote its FR dumps under the stale ``80b-next-cp1``
-    slug (harmless there, but wrong — a future FR dump would land under the wrong
-    slug). Deriving the slug from the live job name keeps the dump under the right
-    per-job dir. The controller's ``ensure_fr_dump_dir`` mkdir -p's whatever dirname
-    the cvar carries, so overriding the cvar here is sufficient.
-
-    ONLY rewrites the job-scoped ``.../fr_dumps/<slug>/<file>`` pattern; a bare
-    generic path (``/tmp/nccl_fr_rank``, which every non-80B iris config uses) has no
-    slug segment and is returned UNCHANGED (byte-identical for those configs)."""
-    parent = os.path.dirname(prefix)  # e.g. /tmp/fr_dumps/<slug>
-    grandparent = os.path.dirname(parent)  # e.g. /tmp/fr_dumps
-    if os.path.basename(grandparent) != "fr_dumps":
-        return prefix  # not a job-scoped fr_dumps path; leave it
-    return os.path.join(grandparent, job_name, os.path.basename(prefix))
-
-
-def build_config_task_command(args: SimpleNamespace) -> list[str]:
-    """Build the replica-controller command for the resolved launch config."""
-    launch_config = args.launch_config_bundle
-    if not isinstance(launch_config, BundledLaunchConfig):
-        raise RuntimeError("resolved launch config payload is missing")
-    single_domain = args.role_topology is not None and args.role_topology.locality.group_sizes == (args.num_nodes,)
-    return [
-        "bash",
-        f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
-        launch_config.task_path,
-        f"{args.rendezvous_dir.rstrip('/')}/interconnect-gate",
-        *(["--pynccl-init"] if args.runtime_profile is RuntimeProfile.MEGATRON else []),
-        *(["--gate-single-nvlink-domain"] if single_domain else []),
-    ]
 
 
 def launch(args: SimpleNamespace, workspace: Path, *, forward_env: tuple[str, ...] = ()) -> LaunchOutcome:

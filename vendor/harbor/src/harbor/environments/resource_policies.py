@@ -23,13 +23,12 @@ def validate_local_resources(
         memory_enforcement_policy=memory_enforcement_policy,
     )
     if (
-        task.storage_mb is not None
-        or task.gpus
+        task.gpus
         or task.gpu_types
         or task.tpu is not None
     ):
         raise ValueError(
-            "Local prepared sandboxes do not enforce storage, GPU, or TPU allocations"
+            "Local GPU and TPU allocations are unsupported"
         )
 
 

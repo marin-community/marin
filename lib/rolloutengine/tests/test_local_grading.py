@@ -9,7 +9,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
-from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
+from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.sandbox import SandboxUnavailable
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineFactory, MachineSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome

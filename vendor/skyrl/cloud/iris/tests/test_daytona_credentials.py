@@ -8,7 +8,7 @@ from shellbox.backends.daytona.machine import DaytonaImageBuild, DaytonaMachineF
 from shellbox.machine import Backend
 from skyrlrecipe.declared import DAYTONA_EVAL_BACKEND
 
-import cloud.iris.iris_backend as launcher
+import cloud.iris.launch_environment as launcher
 
 
 def test_evaluation_provisioning_can_share_training_credentials(monkeypatch):

@@ -3,12 +3,18 @@
 
 """Prepare private writable OCI root filesystems before local guest execution."""
 
+import fcntl
 import json
+import os
 import subprocess
-from dataclasses import dataclass
+import tempfile
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
 from shellbox.image import OCI_TAG, PreparedImage, prepared_image_config
+from shellbox.machine import UnsupportedMachineSpec
+
+CACHE_METADATA_FILE = "defaults.json"
 
 
 @dataclass(frozen=True)
@@ -20,6 +26,15 @@ class PreparedLocalImage:
     workdir: str
     entrypoint: tuple[str, ...]
     arguments: tuple[str, ...]
+    user: str | None
+
+
+@dataclass(frozen=True)
+class LocalImageMetadata:
+    environment: dict[str, str]
+    workdir: str
+    entrypoint: list[str]
+    arguments: list[str]
     user: str | None
 
 
@@ -67,4 +82,45 @@ def prepare_local_image(image: PreparedImage, directory: Path, *, umoci: Path) -
         entrypoint=tuple(process.get("Entrypoint") or ()),
         arguments=tuple(process.get("Cmd") or ()),
         user=process.get("User") or None,
+    )
+
+
+def cached_local_image(image: PreparedImage, cache: Path, *, umoci: Path) -> PreparedLocalImage:
+    """Return the cached lower layer, unpacking a pinned image on a cache miss."""
+    cache.mkdir(parents=True, exist_ok=True)
+    filesystem = subprocess.check_output(
+        ["findmnt", "--noheadings", "--output", "FSTYPE", "--target", str(cache)], text=True
+    ).strip()
+    if filesystem == "overlay":
+        # A nested OverlayFS lower can retain the quota loop after guest exit,
+        # even when all visible namespaces and descriptors have been released.
+        raise UnsupportedMachineSpec(
+            "LOCAL disk quotas require an image_cache outside OverlayFS; use a native worker filesystem"
+        )
+    name = image.manifest_digest.replace(":", "-")
+    directory = cache / name
+    with (cache / f"{name}.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not directory.exists():
+            with tempfile.TemporaryDirectory(dir=cache) as staging:
+                prepared = prepare_local_image(image, Path(staging) / "bundle", umoci=umoci)
+                metadata = LocalImageMetadata(
+                    environment=prepared.environment,
+                    workdir=prepared.workdir,
+                    entrypoint=list(prepared.entrypoint),
+                    arguments=list(prepared.arguments),
+                    user=prepared.user,
+                )
+                (Path(staging) / CACHE_METADATA_FILE).write_text(json.dumps(asdict(metadata)))
+                # Move the complete unpack atomically; guests never bind this
+                # path writable and never receive a host descriptor to it.
+                os.rename(staging, directory)
+        metadata = LocalImageMetadata(**json.loads((directory / CACHE_METADATA_FILE).read_text()))
+    return PreparedLocalImage(
+        root=directory / "bundle/rootfs",
+        environment=metadata.environment,
+        workdir=metadata.workdir,
+        entrypoint=tuple(metadata.entrypoint),
+        arguments=tuple(metadata.arguments),
+        user=metadata.user,
     )

@@ -2,6 +2,7 @@
 
 import os
 import shutil
+from pathlib import Path
 
 from omegaconf import DictConfig
 from shellbox.backends.daytona.connection import DaytonaConnection
@@ -24,7 +25,12 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
     """Build the configured task backends, probing host capabilities immediately."""
     factories: dict[str, MachineFactory] = {"shellsim": ShellSimMachineFactory()}
     if task_sessions.get("local") is not None:
-        factories[Backend.LOCAL] = LocalMachineFactory()
+        root = task_sessions.local.get("disk_root")
+        image_cache = task_sessions.local.get("image_cache")
+        factories[Backend.LOCAL] = LocalMachineFactory(
+            disk_root=None if root is None else Path(root),
+            image_cache=None if image_cache is None else Path(image_cache),
+        )
     daytona = task_sessions.get("daytona")
     if daytona is not None:
         api_key = os.environ[daytona.api_key_env]

@@ -5,12 +5,13 @@ from pathlib import Path
 import pytest
 import yaml
 from omegaconf import OmegaConf
-from shellbox.backends.local.machine import SandboxUnavailable
+from shellbox.backends.local.sandbox import SandboxUnavailable
 from shellbox.machine import Backend
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_gym.rollout_specs import shell_harness
 from skyrl_train.dataset.tasks import source_row_task
 
+from cloud.iris.runtime_environment import local_disk_setup_script
 from cloud.iris.launch_config import LaunchTopology
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
 
@@ -29,7 +30,7 @@ def test_explicit_empty_local_settings_reach_the_host_capability_check(monkeypat
     assert OmegaConf.to_container(config.environment.task_sessions.local) == {}
     # A host without the supported local sandbox must reject admission. A dropped
     # empty mapping previously silently omitted this backend instead.
-    monkeypatch.setattr("shellbox.backends.local.machine.sys.platform", "darwin")
+    monkeypatch.setattr("shellbox.backends.local.sandbox.sys.platform", "darwin")
     with pytest.raises(SandboxUnavailable):
         task_machine_factories(config.environment.task_sessions)
 
@@ -80,3 +81,12 @@ def test_empty_session_settings_preserve_published_limits_and_shell_timeout():
 
     assert spec.limits.max_turns == 3
     assert shell_harness(spec.harness).command_timeout == 17
+
+
+def test_relative_disk_root_is_rejected_before_launcher_and_worker_cwds_diverge():
+    config = composed_config({"local": {"disk_root": "cache"}})
+    # Provisioning precedes node_entrypoint's cd; factories are created after it.
+    with pytest.raises(ValueError):
+        local_disk_setup_script(config.environment.task_sessions.local.disk_root)
+    with pytest.raises(ValueError):
+        task_machine_factories(config.environment.task_sessions)

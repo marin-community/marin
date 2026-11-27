@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Merge guest downloads into host destinations without following guest links."""
+"""Prepare upload archives and merge guest downloads without following guest links."""
 
 import io
 import os
@@ -11,6 +11,19 @@ import tarfile
 import tempfile
 import uuid
 from pathlib import Path, PurePosixPath
+
+EXTRACT_SCRIPT = 'mkdir -p -- "$1" && exec tar -xof - -C "$1"'
+
+
+ARCHIVE_SCRIPT = (
+    '[ -e "$1" ] || { echo "No such file or directory: $1" >&2; exit 2; }; '
+    'if [ -d "$1" ]; then exec tar -cf - -C "$1" .; fi; '
+    'exec tar -chf - -C "$(dirname -- "$1")" -- "$(basename -- "$1")"'
+)
+
+
+ARCHIVE_LIMIT_BYTES = 1 << 30
+
 
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -135,3 +148,14 @@ def unpack_local_archive(stream: bytes, target: Path, *, source_name: str) -> No
         if source.is_symlink() or not (source.is_dir() if directory else source.is_file()):
             raise ValueError("The machine's archive changed its selected root type")
         _merge_destination(source, target)
+
+
+def _archive(source: Path, name: str) -> bytes:
+    """A tar stream of ``source`` under ``name``; ``name`` "." takes a directory's contents.
+
+    A symlinked source contributes its target; symlinks inside a directory stay links.
+    """
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        archive.add(os.path.realpath(source), arcname=name)
+    return stream.getvalue()

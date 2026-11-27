@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from shellbox.backends.local import machine as local
+from shellbox.backends.local import sandbox
 from shellbox.machine import Command, HostImage, MachineSpec
 
 # Inject a failing kernel boundary in the separately executed launcher. Keeper
@@ -29,7 +30,7 @@ os.setns = denied_setns
 def factory() -> local.LocalMachineFactory:
     try:
         return local.LocalMachineFactory()
-    except local.SandboxUnavailable as error:
+    except sandbox.SandboxUnavailable as error:
         pytest.skip(str(error))
 
 
@@ -40,8 +41,8 @@ def test_factory_rejects_namespace_entry_failure_and_removes_probe_files(factory
         return original_mkdtemp(*args, **{**kwargs, "dir": tmp_path})
 
     monkeypatch.setattr(tempfile, "mkdtemp", probe_directory)
-    monkeypatch.setattr(local, "LAUNCH_SOURCE", DENIED_NAMESPACE_ENTRY + local.LAUNCH_SOURCE)
-    with pytest.raises(local.SandboxUnavailable):
+    monkeypatch.setattr(sandbox, "LAUNCH_SOURCE", DENIED_NAMESPACE_ENTRY + sandbox.LAUNCH_SOURCE)
+    with pytest.raises(sandbox.SandboxUnavailable):
         local.LocalMachineFactory(bwrap=factory.bwrap)
     assert list(tmp_path.iterdir()) == []
 
@@ -55,7 +56,7 @@ def test_factory_reports_keeper_exec_failure(factory, tmp_path):
         f"os.execv({str(factory.bwrap)!r}, [{str(factory.bwrap)!r}, *arguments])\n"
     )
     wrapper.chmod(0o755)
-    with pytest.raises(local.SandboxUnavailable, match="shellbox-missing-shell"):
+    with pytest.raises(sandbox.SandboxUnavailable, match="shellbox-missing-shell"):
         local.LocalMachineFactory(bwrap=wrapper)
 
 
@@ -64,7 +65,7 @@ def test_namespace_setup_failure_is_infrastructure_error_and_machine_remains_usa
         machine = await factory.create(MachineSpec(HostImage(), workdir="/"))
         try:
             with monkeypatch.context() as patch:
-                patch.setattr(local, "LAUNCH_SOURCE", DENIED_NAMESPACE_ENTRY + local.LAUNCH_SOURCE)
+                patch.setattr(sandbox, "LAUNCH_SOURCE", DENIED_NAMESPACE_ENTRY + sandbox.LAUNCH_SOURCE)
                 with pytest.raises(RuntimeError):
                     await machine.run(Command(("true",), timeout=5))
             result = await machine.run(Command(("/bin/sh", "-c", "exit 1")))

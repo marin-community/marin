@@ -14,7 +14,8 @@ from typing import cast
 import pytest
 import pytest_asyncio
 from shellbox.backends.local.cgroup import CGROUP_ROOT, delegated_cgroup_parent
-from shellbox.backends.local.machine import LocalMachine, LocalMachineFactory
+from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.runtime import LocalMachine
 from shellbox.http_service import HttpResponse, serve_http
 from shellbox.machine import Command, ExitReason, HostImage, MachineSpec, MachineTerminated
 from shellbox.task import ContainerSpec, ReadinessProbe, Task, TaskSpec, single_container_task
