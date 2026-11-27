@@ -16,6 +16,7 @@ from zephyr.context import ZephyrContext
 from taskcompendium.pipeline.lexical import (
     TASK_FLAGS_SCHEMA,
     DecontaminationEngine,
+    EngineIdentity,
     MarkedPopulation,
     TextPopulation,
     decontaminate_population,
@@ -47,16 +48,16 @@ class FixtureEngine:
         self.family = family
 
     @property
-    def identity(self) -> dict[str, Any]:
-        return {
-            "eval_corpus_version": "fixture-corpus-v1",
-            "eval_bloom_uri": "fixture://bloom",
-            "eval_hash_index_uri": "fixture://index",
-            "feature_filter_version": 4,
-            "ngram_length": 13,
-            "overlap_threshold": 0.5,
-            "min_matched_features": 2,
-        }
+    def identity(self) -> EngineIdentity:
+        return EngineIdentity(
+            eval_corpus_version="fixture-corpus-v1",
+            eval_bloom_uri="fixture://bloom",
+            eval_hash_index_uri="fixture://index",
+            feature_filter_version=4,
+            ngram_length=13,
+            overlap_threshold=0.5,
+            min_matched_features=2,
+        )
 
     def mark_population(self, population: TextPopulation, output_path: str, *, context: Any) -> MarkedPopulation:
         flags_dir = Path(output_path) / "flags"
@@ -79,7 +80,7 @@ class FixtureEngine:
         assert rows == population.task_count
         return MarkedPopulation(
             flags_dir=str(flags_dir),
-            attributes={"drop_set_uris": ["fixture://drops/local", "fixture://drops/global"]},
+            drop_set_uris=("fixture://drops/local", "fixture://drops/global"),
         )
 
 
@@ -250,7 +251,7 @@ def test_stage_refuses_a_mark_that_lost_population_rows(tmp_path):
                 dataset_id="fixture",
                 dataset_revision="1",
                 converter_revision="1",
-                train=True,
+                intended_use=IntendedUse.TRAIN,
                 engine=ShortFlagsEngine(),
                 context=context,
                 telemetry=StubTelemetry(),
@@ -288,7 +289,8 @@ def test_population_summary_counts_overlaps_and_families(tmp_path):
     ]
     pq.write_table(pa.Table.from_pylist(rows, schema=TASK_FLAGS_SCHEMA), flags_dir / "part-00000.parquet")
     summary = population_summary(str(flags_dir))
-    assert summary["measured_tasks"] == 3
-    assert summary["contaminated_tasks"] == 2
-    assert summary["max_overlap"] == 1.0
-    assert summary["matched_evals"] == {"math": 1, "code": 1}
+    assert summary.measured_tasks == 3
+    assert summary.contaminated_tasks == 2
+    assert summary.contaminated_fraction == 2 / 3
+    assert summary.max_overlap == 1.0
+    assert summary.matched_evals == {"math": 1, "code": 1}

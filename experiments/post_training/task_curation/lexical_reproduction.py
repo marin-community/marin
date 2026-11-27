@@ -17,6 +17,7 @@ population delta and compares the stage output per task over the shared populati
 ```bash
 REGISTRY=s3://marin-us-east-02a/marin/rl-data/atlas/lexical/scan/df7033bcf80e518f3684
 TEXT=s3://marin-us-east-02a/marin/rl-data/atlas/lexical/text/9d7386fb9abe0a4c659b/2026.11.12.2
+
 uv run python -m experiments.post_training.task_curation.lexical_reproduction \
     --source-id ASDiv:asdiv \
     --receipt receipts/part-000.json \
@@ -41,12 +42,10 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
-from fray.types import ResourceConfig
 from marin.execution.lazy import run
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -59,13 +58,17 @@ from taskcompendium.pipeline.lexical import (
     MarkedPopulation,
     TextPopulation,
     population_summary,
+    summarize_flags,
 )
 from taskcompendium.pipeline.models import ImportRejection, NormalizedTask
 from taskcompendium.pipeline.sources import conversion_context, source_shards, staged_raw_file_rows
 from zephyr.context import ZephyrContext
 
 from experiments.post_training.task_curation.campaign import CampaignRuntime
-from experiments.post_training.task_curation.lexical_engine import DatakitDecontamination
+from experiments.post_training.task_curation.lexical_engine import (
+    DEFAULT_WORKER_RESOURCES,
+    DatakitDecontamination,
+)
 from experiments.post_training.task_curation.local import artifact_prefix
 from experiments.post_training.task_curation.pipeline import download_step, source_recipe
 from experiments.post_training.task_curation.sources import all_sources
@@ -142,28 +145,6 @@ def text_digest(tasks: list[TaskSpec]) -> str:
     return digest.hexdigest()
 
 
-def read_population_record(path: str) -> dict[str, Any]:
-    """The sealed population artifact's record, with its digests and counts."""
-    with StoragePath(prefix_join(path, ".artifact.json")).open("rt") as stream:
-        record = json.load(stream)
-    result = record.get("result")
-    if not isinstance(result, dict) or "text_sha256" not in result:
-        raise ValueError(f"The artifact record is not a text population: {path}")
-    return result
-
-
-def read_dropped_ids(path: str) -> set[str]:
-    """The sealed release's dropped task IDs from its drop manifest."""
-    dropped = set()
-    for file in _parquet_files(prefix_join(path, "drop_manifest*.parquet")):
-        with StoragePath(file).open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(columns=["id"]):
-                dropped.update(batch.column("id").to_pylist())
-    if not dropped:
-        raise FileNotFoundError(f"The sealed drop manifest is empty: {path}")
-    return dropped
-
-
 def _parquet_files(pattern: str) -> list[str]:
     files = sorted(str(path) for path in StoragePath(pattern).glob())
     if not files:
@@ -201,24 +182,26 @@ def read_flags(path: str, pattern: str = "*.parquet") -> dict[str, dict[str, Any
     return flags
 
 
-def rows_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """The measurement summary of one set of flag rows, matching the stage's statistics."""
-    overlaps = [row["max_overlap"] for row in rows]
-    matched: Counter[str] = Counter()
-    contaminated = 0
-    for row in rows:
-        if row["contaminated"]:
-            contaminated += 1
-            matched.update(row["matched_eval_families"])
-    return {
-        "measured_tasks": len(rows),
-        "contaminated_tasks": contaminated,
-        "contaminated_fraction": contaminated / len(rows),
-        "max_overlap": max(overlaps),
-        "mean_max_overlap": float(np.mean(overlaps)),
-        "p95_max_overlap": float(np.quantile(overlaps, 0.95)),
-        "matched_evals": dict(matched),
-    }
+def read_population_record(path: str) -> dict[str, Any]:
+    """The sealed population artifact's record, with its digests and counts."""
+    with StoragePath(prefix_join(path, ".artifact.json")).open("rt") as stream:
+        record = json.load(stream)
+    result = record.get("result")
+    if not isinstance(result, dict) or "text_sha256" not in result:
+        raise ValueError(f"The artifact record is not a text population: {path}")
+    return result
+
+
+def read_dropped_ids(path: str) -> set[str]:
+    """The sealed release's dropped task IDs from its drop manifest."""
+    dropped = set()
+    for file in _parquet_files(prefix_join(path, "drop_manifest*.parquet")):
+        with StoragePath(file).open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(columns=["id"]):
+                dropped.update(batch.column("id").to_pylist())
+    if not dropped:
+        raise FileNotFoundError(f"The sealed drop manifest is empty: {path}")
+    return dropped
 
 
 def main() -> None:
@@ -256,6 +239,21 @@ def main() -> None:
         args.output.write_text(json.dumps({"source_id": args.source_id, "plan": "planned"}, indent=2) + "\n")
         return
 
+    marked, census = _measure(args, source, receipt)
+    result = _compare(marked, census, receipt, args)
+    args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    with StoragePath(prefix_join(args.artifact_root, "reproduction.json")).open("wt", auto_mkdir=True) as stream:
+        stream.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    logger.info(
+        "Reproduction result written to %s and %s: reproduced=%s",
+        args.output,
+        prefix_join(args.artifact_root, "reproduction.json"),
+        result["reproduced"],
+    )
+
+
+def _measure(args: argparse.Namespace, source: Any, receipt: dict[str, Any]) -> tuple[MarkedPopulation, dict[str, Any]]:
+    """Rebuild the census, adopt the frozen corpus, and mark it through the stage engine."""
     with ExitStack() as cleanup:
         client = LocalClient()
         cleanup.callback(client.shutdown)
@@ -263,7 +261,7 @@ def main() -> None:
         runtime = CampaignRuntime()
         with artifact_prefix(args.artifact_root):
             with ZephyrContext(
-                client=client, max_workers=args.max_workers, resources=ResourceConfig(cpu=2, ram="4g")
+                client=client, max_workers=args.max_workers, resources=DEFAULT_WORKER_RESOURCES
             ) as context:
                 with runtime.activate(context):
                     staged = run(download_step(source.config.source, runtime), max_concurrent=1)[0]
@@ -285,99 +283,101 @@ def main() -> None:
                     eval_corpus_version=receipt["measurement"]["eval_corpus_version"],
                     frozen_source_drop_sets={source.config.name: args.frozen_source_drop_set},
                 )
-                marked: MarkedPopulation = engine.mark_population(
-                    population, str(args.output.parent / "marks"), context=context
-                )
-        main_flags = read_flags(marked.flags_dir)
-        branch_population = read_branch_population(args.branch_population)
-        branch_flags = read_flags(args.branch_flags)
-        rendered = {task.id: format_conversation(task.context.events) for task in unique}
-        shared = sorted(set(rendered) & set(branch_flags))
-        mismatches = [
-            {"id": task_id, "field": field, "main": main_flags[task_id][field], "branch": branch_flags[task_id][field]}
-            for task_id in shared
-            for field in FLAG_FIELDS
-            if main_flags[task_id][field] != branch_flags[task_id][field]
-        ]
-        main_summary = rows_summary([main_flags[task_id] for task_id in shared])
-        branch_summary = rows_summary([branch_flags[task_id] for task_id in shared])
-
-        retained = {}
-        if args.branch_drop_manifest:
-            branch_dropped = read_dropped_ids(args.branch_drop_manifest)
-            main_dropped = {task_id for task_id in shared if main_flags[task_id]["contaminated"]}
-            retained = {
-                "branch_dropped_tasks": len(branch_dropped),
-                "main_dropped_shared_tasks": len(main_dropped),
-                "shared_dropped_ids_equal": {task_id for task_id in shared if task_id in branch_dropped} == main_dropped,
-                "shared_retained_tasks": len(shared) - len(main_dropped),
-            }
-
-        digests = {}
-        if args.branch_population_record:
-            record = read_population_record(args.branch_population_record)
-            shared_tasks = [task for task in unique if task.id in branch_population]
-            digests = {
-                "branch_text_sha256": record["text_sha256"],
-                "main_census_text_sha256": text_digest(unique),
-                "text_sha256_over_shared_tasks": text_digest(shared_tasks),
-                "branch_task_count": record["task_count"],
-                "main_census_task_count": len(unique),
-                "note": (
-                    "task_specs_sha256 is not comparable: the sealed digest pins schema-0.30 "
-                    "serializations, main's census is schema-0.31; the population is identified by the "
-                    "text digest and per-task text equality instead."
-                ),
-            }
-
-        full_summary = population_summary(marked.flags_dir)
-        full_summary["contaminated_fraction"] = full_summary["contaminated_tasks"] / full_summary["measured_tasks"]
-        fields = {
-            name: {
-                "receipt": receipt["measurement"][name],
-                "main_full_population": full_summary[name],
-                "main_shared_population": main_summary[name],
-                "branch_shared_population": branch_summary[name],
-            }
-            for name in RECEIPT_FIELDS
+                marked = engine.mark_population(population, str(args.output.parent / "marks"), context=context)
+        return marked, {
+            "tasks": tasks,
+            "unique": unique,
+            "converted_rows": len(tasks),
+            "exact_duplicates": duplicates,
+            "converter_rejections": rejections,
         }
-        result = {
-            "source_id": args.source_id,
-            "population": {
-                "converted_rows": len(tasks),
-                "exact_duplicates": duplicates,
-                "converter_rejections": rejections,
-                "main_census_tasks": len(unique),
-                "branch_population_tasks": len(branch_population),
-                "shared_tasks": len(shared),
-                "branch_only_tasks": sorted(set(branch_population) - set(rendered)),
-                "main_only_tasks": sorted(set(rendered) - set(branch_flags)),
-                "shared_texts_equal": all(rendered[task_id] == branch_population[task_id] for task_id in shared),
-            },
-            "shared_measurement_equal": main_summary == branch_summary,
-            "retained": retained,
-            "digests": digests,
-            "per_task_flag_mismatch_count": len(mismatches),
-            "per_task_flag_mismatches": mismatches[:20],
-            "measurement_fields": fields,
-            "renderer": TEXT_RENDERER_VERSION,
-            "reproduced": (
-                not mismatches
-                and not (set(rendered) - set(branch_flags))
-                and main_summary == branch_summary
-                and all(rendered[task_id] == branch_population[task_id] for task_id in shared)
-                and (not retained or retained["shared_dropped_ids_equal"])
+
+
+def _compare(
+    marked: MarkedPopulation, census: dict[str, Any], receipt: dict[str, Any], args: argparse.Namespace
+) -> dict[str, Any]:
+    """Compare main's marks with the sealed population, flags, drop manifest and digests."""
+    unique: list[TaskSpec] = census["unique"]
+    main_flags = read_flags(marked.flags_dir)
+    branch_population = read_branch_population(args.branch_population)
+    branch_flags = read_flags(args.branch_flags)
+    rendered = {task.id: format_conversation(task.context.events) for task in unique}
+    shared = sorted(set(rendered) & set(branch_flags))
+    mismatches = [
+        {"id": task_id, "field": field, "main": main_flags[task_id][field], "branch": branch_flags[task_id][field]}
+        for task_id in shared
+        for field in FLAG_FIELDS
+        if main_flags[task_id][field] != branch_flags[task_id][field]
+    ]
+    main_summary = summarize_flags([main_flags[task_id] for task_id in shared])
+    branch_summary = summarize_flags([branch_flags[task_id] for task_id in shared])
+
+    retained: dict[str, Any] = {}
+    if args.branch_drop_manifest:
+        branch_dropped = read_dropped_ids(args.branch_drop_manifest)
+        main_dropped = {task_id for task_id in shared if main_flags[task_id]["contaminated"]}
+        retained = {
+            "branch_dropped_tasks": len(branch_dropped),
+            "main_dropped_shared_tasks": len(main_dropped),
+            "shared_dropped_ids_equal": {task_id for task_id in shared if task_id in branch_dropped} == main_dropped,
+            "shared_retained_tasks": len(shared) - len(main_dropped),
+        }
+
+    digests: dict[str, Any] = {}
+    if args.branch_population_record:
+        record = read_population_record(args.branch_population_record)
+        shared_tasks = [task for task in unique if task.id in branch_population]
+        digests = {
+            "branch_text_sha256": record["text_sha256"],
+            "main_census_text_sha256": text_digest(unique),
+            "main_shared_text_sha256": text_digest(shared_tasks),
+            "branch_task_count": record["task_count"],
+            "main_census_task_count": len(unique),
+            "note": (
+                "task_specs_sha256 is not comparable: the sealed digest pins schema-0.30 "
+                "serializations, main's census is schema-0.31; the population is identified by the "
+                "text digest and per-task text equality instead."
             ),
         }
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-        with StoragePath(prefix_join(args.artifact_root, "reproduction.json")).open("wt", auto_mkdir=True) as stream:
-            stream.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
-        logger.info(
-            "Reproduction result written to %s and %s: reproduced=%s",
-            args.output,
-            prefix_join(args.artifact_root, "reproduction.json"),
-            result["reproduced"],
-        )
+
+    full_summary = population_summary(marked.flags_dir)
+    fields = {
+        name: {
+            "receipt": receipt["measurement"][name],
+            "main_full_population": getattr(full_summary, name),
+            "main_shared_population": getattr(main_summary, name),
+            "branch_shared_population": getattr(branch_summary, name),
+        }
+        for name in RECEIPT_FIELDS
+    }
+    return {
+        "source_id": args.source_id,
+        "population": {
+            "converted_rows": census["converted_rows"],
+            "exact_duplicates": census["exact_duplicates"],
+            "converter_rejections": dict(census["converter_rejections"]),
+            "main_census_tasks": len(unique),
+            "branch_population_tasks": len(branch_population),
+            "shared_tasks": len(shared),
+            "branch_only_tasks": sorted(set(branch_population) - set(rendered)),
+            "main_only_tasks": sorted(set(rendered) - set(branch_flags)),
+            "shared_texts_equal": all(rendered[task_id] == branch_population[task_id] for task_id in shared),
+        },
+        "shared_measurement_equal": main_summary == branch_summary,
+        "retained": retained,
+        "digests": digests,
+        "per_task_flag_mismatch_count": len(mismatches),
+        "per_task_flag_mismatches": mismatches[:20],
+        "measurement_fields": fields,
+        "renderer": TEXT_RENDERER_VERSION,
+        "reproduced": (
+            not mismatches
+            and not (set(rendered) - set(branch_flags))
+            and main_summary == branch_summary
+            and all(rendered[task_id] == branch_population[task_id] for task_id in shared)
+            and (not retained or retained["shared_dropped_ids_equal"])
+        ),
+    }
 
 
 if __name__ == "__main__":

@@ -11,8 +11,6 @@ into eval IDs and families, following the reference decontamination report.
 """
 
 import logging
-from collections.abc import Mapping
-from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,7 +24,12 @@ from marin.datakit.decon import (
 from marin.datakit.normalize import NormalizedData
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.pipeline.lexical import TASK_FLAGS_SCHEMA, MarkedPopulation, TextPopulation
+from taskcompendium.pipeline.lexical import (
+    TASK_FLAGS_SCHEMA,
+    EngineIdentity,
+    MarkedPopulation,
+    TextPopulation,
+)
 from zephyr.context import ZephyrContext
 
 from experiments.datakit.decontam.config import (
@@ -37,36 +40,12 @@ from experiments.datakit.decontam.config import (
     SOURCE_DF_COMMON_MIN_ABS,
     SOURCE_DF_SAMPLE_DOCS,
 )
-from experiments.datakit.decontam.prepare_eval_corpus import AA_EVALS
-from experiments.datakit.decontam.viewer.export_run import eval_id_to_family
+from experiments.datakit.decontam.viewer.export_reference_run import _eval_family, _hash_to_evals
 
 logger = logging.getLogger(__name__)
 
 NGRAM = NGramConfig(ngram_length=13, stride=0, overlap_threshold=0.5, min_matched_features=2)
 DEFAULT_WORKER_RESOURCES = ResourceConfig(cpu=2, ram="4g")
-AA_SUBDIR_TO_NAME = {config.subdir: config.name for config in AA_EVALS}
-INDEX_BATCH_ROWS = 131_072
-
-
-def eval_family(eval_id: str) -> str:
-    """Map one eval record ID to its benchmark family, matching the reference report."""
-    for subdir, name in AA_SUBDIR_TO_NAME.items():
-        if eval_id == subdir or eval_id.startswith(f"{subdir}-"):
-            return name
-    return eval_id_to_family(eval_id)
-
-
-def _hash_to_evals(index_path: str, needed_hashes: set[int]) -> dict[int, set[str]]:
-    """Read the eval hash index once, keeping only the marks' matched hashes."""
-    mapping: dict[int, set[str]] = {}
-    with StoragePath(index_path).open("rb") as stream:
-        for batch in pq.ParquetFile(stream).iter_batches(batch_size=INDEX_BATCH_ROWS, columns=["hash", "eval_id"]):
-            for feature_hash, eval_id in zip(
-                batch.column("hash").to_pylist(), batch.column("eval_id").to_pylist(), strict=True
-            ):
-                if feature_hash in needed_hashes:
-                    mapping.setdefault(feature_hash, set()).add(str(eval_id))
-    return mapping
 
 
 class DatakitDecontamination:
@@ -78,7 +57,7 @@ class DatakitDecontamination:
         bloom_dir: str,
         global_drop_set_dir: str,
         eval_corpus_version: str,
-        frozen_source_drop_sets: Mapping[str, str] | None = None,
+        frozen_source_drop_sets: dict[str, str] | None = None,
         worker_resources: ResourceConfig | None = None,
         max_workers: int | None = None,
     ) -> None:
@@ -91,16 +70,16 @@ class DatakitDecontamination:
         self._index_path = str(StoragePath(prefix_join(bloom_dir, "_bloom/eval_hash_index.parquet")))
 
     @property
-    def identity(self) -> dict[str, Any]:
-        return {
-            "eval_corpus_version": self.eval_corpus_version,
-            "eval_bloom_uri": self.bloom_dir,
-            "eval_hash_index_uri": self._index_path,
-            "feature_filter_version": FEATURE_FILTER_VERSION,
-            "ngram_length": NGRAM.ngram_length,
-            "overlap_threshold": NGRAM.overlap_threshold,
-            "min_matched_features": NGRAM.min_matched_features,
-        }
+    def identity(self) -> EngineIdentity:
+        return EngineIdentity(
+            eval_corpus_version=self.eval_corpus_version,
+            eval_bloom_uri=self.bloom_dir,
+            eval_hash_index_uri=self._index_path,
+            feature_filter_version=FEATURE_FILTER_VERSION,
+            ngram_length=NGRAM.ngram_length,
+            overlap_threshold=NGRAM.overlap_threshold,
+            min_matched_features=NGRAM.min_matched_features,
+        )
 
     def _source_drop_set(self, population: TextPopulation, output_path: str, context: ZephyrContext) -> str:
         frozen = self.frozen_source_drop_sets.get(population.source)
@@ -142,15 +121,21 @@ class DatakitDecontamination:
         )
         marked_dir = str(StoragePath(prefix_join(str(marks.main_output_dir), "*.parquet")))
         flags_dir = prefix_join(output_path, f"flags/{source_key}")
-        count = self._attribute(marked_dir, flags_dir, str(marks.eval_hash_index_path))
-        logger.info("%s: attributed %d marked tasks", population.source, count)
+        rows = self._attribute(marked_dir, flags_dir, str(marks.eval_hash_index_path))
+        logger.info("%s: attributed %d marked tasks", population.source, rows)
         return MarkedPopulation(
             flags_dir=flags_dir,
-            attributes={"drop_set_uris": [local_dir, self.global_drop_set_dir]},
+            drop_set_uris=(local_dir, self.global_drop_set_dir),
         )
 
     def _attribute(self, marked_glob: str, flags_dir: str, index_path: str) -> int:
-        """Attribute every mark's matched hashes through the eval index and write typed flags."""
+        """Attribute every mark's matched hashes through the eval index.
+
+        Reads the marked parquet under ``marked_glob``, resolves each matched
+        hash to its eval IDs and benchmark families through ``index_path``, and
+        writes one typed-flags parquet per mark file below ``flags_dir``.
+        Returns the number of flagged rows written.
+        """
         needed_hashes: set[int] = set()
         marks = sorted(str(path) for path in StoragePath(marked_glob).glob())
         StoragePath(flags_dir).mkdirs()
@@ -165,7 +150,6 @@ class DatakitDecontamination:
         for feature_hash, eval_ids in hash_evals.items():
             group = frozenset(eval_ids)
             hash_groups[feature_hash] = eval_groups.setdefault(group, group)
-        StoragePath(flags_dir).mkdirs()
         rows = 0
         for path in marks:
             target = str(StoragePath(prefix_join(flags_dir, StoragePath(path).name)))
@@ -184,7 +168,7 @@ class DatakitDecontamination:
                             sorted(set().union(*{hash_groups[h] for h in hashes if h in hash_groups}))
                             for hashes in columns["matched_hashes"]
                         ]
-                        families = [sorted({eval_family(eval_id) for eval_id in ids}) for ids in eval_ids]
+                        families = [sorted({_eval_family(eval_id) for eval_id in ids}) for ids in eval_ids]
                         table = pa.Table.from_pylist(
                             [
                                 {

@@ -18,7 +18,7 @@ ngram machinery that marks text against them.
 
 import json
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, NamedTuple, Protocol
@@ -28,10 +28,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.curation import LexicalContaminationEvidence
 from rigging.filesystem.storage_path import StoragePath
+from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset, ShardInfo
 
 from taskcompendium.models import TaskSpec, format_conversation
-from taskcompendium.pipeline.execution_telemetry import execute_phase
+from taskcompendium.pipeline.execution_telemetry import PhaseTelemetry, SourceTelemetry, execute_phase
+from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.pipeline.stages import combine_manifest_counts, write_filtered_shard
 
 TEXT_RENDERER_VERSION = "taskcompendium-format-conversation-v1"
@@ -57,36 +59,47 @@ DROP_SCHEMA = pa.schema(
 EVIDENCE_FILENAME = "measurement.json"
 
 
+@dataclass(frozen=True)
+class EngineIdentity:
+    """The frozen-corpus facts every mark depends on; the evidence schema validates their ranges."""
+
+    eval_corpus_version: str
+    eval_bloom_uri: str
+    eval_hash_index_uri: str
+    feature_filter_version: int
+    ngram_length: int
+    overlap_threshold: float
+    min_matched_features: int
+
+
 class MarkedPopulation(NamedTuple):
     """One engine mark of a text population.
 
     ``flags_dir`` holds parquet files in :data:`TASK_FLAGS_SCHEMA`, one per
-    population partition; ``attributes`` carries the engine's own provenance,
-    such as the drop-set directories it marked against.
+    population partition; ``drop_set_uris`` records the corpus-common mask
+    directories the engine marked against.
     """
 
     flags_dir: str
-    attributes: Mapping[str, Any]
+    drop_set_uris: tuple[str, ...]
 
 
 class DecontaminationEngine(Protocol):
     """Marks task text against one frozen eval corpus.
 
     ``identity`` names the corpus version and every frozen artifact the marks
-    depend on: the bloom and hash-index locations, the feature-filter version,
-    and the ngram shape. Its fields must satisfy
-    :class:`LexicalContaminationEvidence`; constructing the evidence validates
-    them. ``mark_population`` runs inside the caller's Zephyr context, builds
-    whatever source-local corpus-common mask it needs, attributes every match
-    through the corpus hash index, records the drop-set directories it marked
-    against under ``attributes["drop_set_uris"]``, and must not observe or
-    modify the audit.
+    depend on. ``mark_population`` runs inside the caller's Zephyr context,
+    builds whatever source-local corpus-common mask it needs, attributes every
+    match through the corpus hash index, and must not observe or modify the
+    audit.
     """
 
     @property
-    def identity(self) -> Mapping[str, Any]: ...
+    def identity(self) -> EngineIdentity: ...
 
-    def mark_population(self, population: "TextPopulation", output_path: str, *, context: Any) -> MarkedPopulation: ...
+    def mark_population(
+        self, population: "TextPopulation", output_path: str, *, context: ZephyrContext
+    ) -> MarkedPopulation: ...
 
 
 @dataclass(frozen=True)
@@ -132,37 +145,55 @@ def _flag_files(directory: str) -> list[StoragePath]:
     return [StoragePath(name) for name in sorted(str(path) for path in (StoragePath(directory) / "*.parquet").glob())]
 
 
-def population_summary(flags_dir: str) -> dict[str, Any]:
-    """Summarize marked population flags: counts, overlap statistics and matched eval families."""
+@dataclass(frozen=True)
+class PopulationSummary:
+    """The measurement statistics of one set of per-task flags."""
+
+    measured_tasks: int
+    contaminated_tasks: int
+    contaminated_fraction: float
+    max_overlap: float
+    mean_max_overlap: float
+    p95_max_overlap: float
+    matched_evals: dict[str, int]
+
+
+def summarize_flags(rows: Iterable[Mapping[str, Any]]) -> PopulationSummary:
+    """Summarize per-task flag rows: counts, overlap statistics and matched eval families."""
     overlaps: list[float] = []
     contaminated = 0
     matched_evals: Counter[str] = Counter()
-    for path in _flag_files(flags_dir):
-        with path.open("rb") as stream:
-            for batch in pq.ParquetFile(stream).iter_batches(
-                columns=["max_overlap", "contaminated", "matched_eval_families"]
-            ):
-                for overlap, flag, families in zip(
-                    batch.column("max_overlap").to_pylist(),
-                    batch.column("contaminated").to_pylist(),
-                    batch.column("matched_eval_families").to_pylist(),
-                    strict=True,
-                ):
-                    overlaps.append(overlap)
-                    if not flag:
-                        continue
-                    contaminated += 1
-                    matched_evals.update(families)
+    for row in rows:
+        overlaps.append(row["max_overlap"])
+        if not row["contaminated"]:
+            continue
+        contaminated += 1
+        matched_evals.update(row["matched_eval_families"])
     if not overlaps:
-        raise ValueError(f"The marked population has no flags: {flags_dir}")
-    return {
-        "measured_tasks": len(overlaps),
-        "contaminated_tasks": contaminated,
-        "max_overlap": max(overlaps),
-        "mean_max_overlap": float(np.mean(overlaps)),
-        "p95_max_overlap": float(np.quantile(overlaps, 0.95)),
-        "matched_evals": dict(matched_evals),
-    }
+        raise ValueError("The flags hold no rows")
+    return PopulationSummary(
+        measured_tasks=len(overlaps),
+        contaminated_tasks=contaminated,
+        contaminated_fraction=contaminated / len(overlaps),
+        max_overlap=max(overlaps),
+        mean_max_overlap=float(np.mean(overlaps)),
+        p95_max_overlap=float(np.quantile(overlaps, 0.95)),
+        matched_evals=dict(matched_evals),
+    )
+
+
+def population_summary(flags_dir: str) -> PopulationSummary:
+    """Summarize the per-task flags written below one directory."""
+
+    def rows() -> Iterator[dict[str, Any]]:
+        for path in _flag_files(flags_dir):
+            with path.open("rb") as stream:
+                for batch in pq.ParquetFile(stream).iter_batches(
+                    columns=["max_overlap", "contaminated", "matched_eval_families"]
+                ):
+                    yield from batch.to_pylist()
+
+    return summarize_flags(rows())
 
 
 def contaminated_ids(flags_dir: str) -> frozenset[str]:
@@ -213,8 +244,8 @@ def write_drop_manifest(flags_dir: str, view_path: str) -> None:
 
 
 def lexical_evidence(
-    summary: Mapping[str, Any],
-    identity: Mapping[str, Any],
+    summary: PopulationSummary,
+    identity: EngineIdentity,
     *,
     dataset_id: str,
     dataset_revision: str,
@@ -223,28 +254,27 @@ def lexical_evidence(
     task_flags_uri: str,
     evidence_url: str,
 ) -> LexicalContaminationEvidence:
-    """Build the typed contamination evidence; validates the engine identity against the schema."""
-    measured = summary["measured_tasks"]
+    """Build the typed contamination evidence; the evidence schema validates the identity's ranges."""
     return LexicalContaminationEvidence(
         version=1,
         input_dataset_id=dataset_id,
         input_dataset_revision=dataset_revision,
         converter_revision=converter_revision,
         text_renderer_version=TEXT_RENDERER_VERSION,
-        measured_tasks=measured,
-        contaminated_tasks=summary["contaminated_tasks"],
-        contaminated_fraction=summary["contaminated_tasks"] / measured,
-        max_overlap=summary["max_overlap"],
-        mean_max_overlap=summary["mean_max_overlap"],
-        p95_max_overlap=summary["p95_max_overlap"],
-        matched_evals=summary["matched_evals"],
-        eval_corpus_version=identity["eval_corpus_version"],
-        eval_bloom_uri=identity["eval_bloom_uri"],
-        eval_hash_index_uri=identity["eval_hash_index_uri"],
-        feature_filter_version=identity["feature_filter_version"],
-        ngram_length=identity["ngram_length"],
-        overlap_threshold=identity["overlap_threshold"],
-        min_matched_features=identity["min_matched_features"],
+        measured_tasks=summary.measured_tasks,
+        contaminated_tasks=summary.contaminated_tasks,
+        contaminated_fraction=summary.contaminated_fraction,
+        max_overlap=summary.max_overlap,
+        mean_max_overlap=summary.mean_max_overlap,
+        p95_max_overlap=summary.p95_max_overlap,
+        matched_evals=summary.matched_evals,
+        eval_corpus_version=identity.eval_corpus_version,
+        eval_bloom_uri=identity.eval_bloom_uri,
+        eval_hash_index_uri=identity.eval_hash_index_uri,
+        feature_filter_version=identity.feature_filter_version,
+        ngram_length=identity.ngram_length,
+        overlap_threshold=identity.overlap_threshold,
+        min_matched_features=identity.min_matched_features,
         drop_set_uris=drop_set_uris,
         task_flags_uri=task_flags_uri,
         evidence_url=evidence_url,
@@ -271,7 +301,7 @@ def _kept_row_count(audit_path: str) -> int:
 
 
 def _build_population(
-    audit_path: str, output_path: str, *, source_name: str, context: Any, telemetry: Any
+    audit_path: str, output_path: str, *, source_name: str, context: ZephyrContext, telemetry: PhaseTelemetry
 ) -> TextPopulation | None:
     """Render the kept rows of one checked audit into the engine's text population."""
     storage = StoragePath(output_path)
@@ -291,7 +321,12 @@ def _build_population(
 
 
 def _gate_contaminated(
-    audit_path: str, output_path: str, contaminated: frozenset[str], *, context: Any, telemetry: Any
+    audit_path: str,
+    output_path: str,
+    contaminated: frozenset[str],
+    *,
+    context: ZephyrContext,
+    telemetry: PhaseTelemetry,
 ) -> str:
     """Rewrite one checked audit with contaminated kept rows rejected; return the gated audit path."""
     storage = StoragePath(output_path)
@@ -321,10 +356,10 @@ def decontaminate_population(
     dataset_id: str,
     dataset_revision: str,
     converter_revision: str,
-    train: bool,
+    intended_use: IntendedUse,
     engine: DecontaminationEngine,
-    context: Any,
-    telemetry: Any,
+    context: ZephyrContext,
+    telemetry: SourceTelemetry,
 ) -> LexicalStageResult | None:
     """Run the lexical stage over one checked audit and return its result, or ``None`` with no kept rows.
 
@@ -346,10 +381,9 @@ def decontaminate_population(
     with telemetry.phase("lexical_mark") as phase:
         marked = engine.mark_population(population, str(scratch / "marks"), context=context)
     summary = population_summary(marked.flags_dir)
-    if summary["measured_tasks"] != population.task_count:
-        raise ValueError(f"The engine flagged {summary['measured_tasks']} of {population.task_count} population rows")
-    drop_set_uris = marked.attributes.get("drop_set_uris")
-    if not drop_set_uris:
+    if summary.measured_tasks != population.task_count:
+        raise ValueError(f"The engine flagged {summary.measured_tasks} of {population.task_count} population rows")
+    if not marked.drop_set_uris:
         raise ValueError("The engine recorded no drop-set directories for the marked population")
     flags_view = str(StoragePath(view_path) / "task_flags")
     copy_flags(marked.flags_dir, flags_view)
@@ -360,7 +394,7 @@ def decontaminate_population(
         dataset_id=dataset_id,
         dataset_revision=dataset_revision,
         converter_revision=converter_revision,
-        drop_set_uris=[str(uri) for uri in drop_set_uris],
+        drop_set_uris=list(marked.drop_set_uris),
         task_flags_uri=flags_view,
         evidence_url=str(StoragePath(view_path) / EVIDENCE_FILENAME),
     )
@@ -369,7 +403,7 @@ def decontaminate_population(
         stream.write("\n")
     contaminated = contaminated_ids(marked.flags_dir)
     checked = audit_path
-    if train and contaminated:
+    if intended_use is IntendedUse.TRAIN and contaminated:
         with telemetry.phase("lexical_gate") as phase:
             checked = _gate_contaminated(
                 audit_path, str(scratch / "audit"), contaminated, context=context, telemetry=phase

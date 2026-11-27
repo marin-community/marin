@@ -114,6 +114,9 @@ def _lexical_engine(
     global_drop_set_dir: str | None,
     corpus_version: str | None,
     frozen_drop_sets: Path | None,
+    *,
+    worker_resources: ResourceConfig,
+    max_workers: int | None,
 ) -> DatakitDecontamination | None:
     """Build the lexical stage's engine from the frozen eval-corpus flags, or ``None`` to skip it."""
     if bloom_dir is None and global_drop_set_dir is None and corpus_version is None:
@@ -130,6 +133,8 @@ def _lexical_engine(
         global_drop_set_dir=global_drop_set_dir,
         eval_corpus_version=corpus_version,
         frozen_source_drop_sets=frozen,
+        worker_resources=worker_resources,
+        max_workers=max_workers,
     )
 
 
@@ -775,7 +780,12 @@ def main(
         else None
     )
     decontamination = _lexical_engine(
-        lexical_bloom, lexical_global_drop_set, lexical_corpus_version, lexical_frozen_drop_sets
+        lexical_bloom,
+        lexical_global_drop_set,
+        lexical_corpus_version,
+        lexical_frozen_drop_sets,
+        worker_resources=worker_resources,
+        max_workers=max_workers,
     )
     recipe_settings = RecipeSettings(
         review=review,

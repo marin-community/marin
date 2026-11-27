@@ -59,7 +59,6 @@ from taskcompendium.pipeline.models import (
     Disposition,
     FilterPolicy,
     GraderReadiness,
-    IntendedUse,
     SourceRecipe,
     SourceStatus,
 )
@@ -641,7 +640,7 @@ def _decontaminate(run: _SourceRun) -> LexicalStageResult | None:
         dataset_id=run.recipe.source.dataset,
         dataset_revision=run.recipe.source.revision,
         converter_revision=run.recipe.version,
-        train=run.recipe.intended_use is IntendedUse.TRAIN,
+        intended_use=run.recipe.intended_use,
         engine=engine,
         context=run.context,
         telemetry=run.telemetry,
