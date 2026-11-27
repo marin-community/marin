@@ -1,6 +1,24 @@
 // Render flat SkyRL eval dumps and schema-v7 retention records as ATIF trajectories.
 import type { Trajectory, TrajectoryStep, TrajectoryToolCall } from '@/types/trajectory'
 
+const EVAL_DUMP_KIND = 'skyrl-eval-dump'
+const RETENTION_KIND = 'skyrl-turn-v7'
+
+interface VerificationOutcome {
+  status?: string
+  score?: number | string
+  reason?: string
+}
+
+function verificationOutcome(value: unknown): VerificationOutcome | null {
+  if (!isRecord(value)) return null
+  return {
+    status: typeof value.status === 'string' ? value.status : undefined,
+    score: typeof value.score === 'number' || typeof value.score === 'string' ? value.score : undefined,
+    reason: typeof value.reason === 'string' ? value.reason : undefined,
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -48,7 +66,8 @@ function toolCallsOf(value: unknown): TrajectoryToolCall[] | undefined {
       try {
         args = JSON.parse(raw) as Record<string, unknown>
       } catch {
-        args = { raw }
+        // A length-stopped dump can contain incomplete JSON; keep its arguments visible as unparsed text.
+        args = { unparsed_arguments: raw }
       }
     } else if (isRecord(raw)) {
       args = raw
@@ -63,15 +82,15 @@ function toolCallsOf(value: unknown): TrajectoryToolCall[] | undefined {
 }
 
 /** A record's outcome facts (stop reason, verification) as the string annotations a step carries. */
-function recordAnnotations(verification: Record<string, unknown> | null, stopReason: string | null, exception: unknown): Record<string, string> | undefined {
+function recordAnnotations(verification: VerificationOutcome | null, stopReason: string | null, exception: unknown): Record<string, string> | undefined {
   const annotations: Record<string, string> = {}
   if (stopReason) annotations['stop reason'] = stopReason
   if (typeof exception === 'string' && exception) annotations['exception'] = exception
-  if (isRecord(verification)) {
-    if (typeof verification.status === 'string' && verification.status) annotations['verification'] = verification.status
+  if (verification !== null) {
+    if (verification.status) annotations['verification'] = verification.status
     if (typeof verification.score === 'number') annotations['verifier score'] = String(verification.score)
     else if (typeof verification.score === 'string' && verification.score) annotations['verifier score'] = verification.score
-    if (typeof verification.reason === 'string' && verification.reason) annotations['verifier note'] = verification.reason
+    if (verification.reason) annotations['verifier note'] = verification.reason
   }
   return Object.keys(annotations).length ? annotations : undefined
 }
@@ -106,13 +125,13 @@ interface NormalizedTurn {
   uid: string
   trialKey: string | null
   step: number
-  kind: 'skyrl-eval-dump' | 'skyrl-turn-v7'
+  kind: typeof EVAL_DUMP_KIND | typeof RETENTION_KIND
   sessionId: string
   envClass: string
   promptText: string
   responseText: string
   messages: unknown[] | null
-  verification: Record<string, unknown> | null
+  verification: VerificationOutcome | null
   stopReason: string | null
   exception: unknown
   metrics: Record<string, number> | undefined
@@ -123,13 +142,13 @@ function normalizeEvalDumpRow(record: Record<string, unknown>): NormalizedTurn {
     uid: typeof record.uid === 'string' ? record.uid : '',
     trialKey: null,
     step: typeof record.ordinal === 'number' ? record.ordinal : typeof record.step === 'number' ? record.step : 0,
-    kind: 'skyrl-eval-dump',
+    kind: EVAL_DUMP_KIND,
     sessionId: typeof record.attempt_id === 'string' ? record.attempt_id : '',
     envClass: typeof record.env_class === 'string' ? record.env_class : '',
     promptText: typeof record.input_prompt === 'string' ? record.input_prompt : '',
     responseText: typeof record.output_response === 'string' ? record.output_response : '',
     messages: Array.isArray(record.messages) ? record.messages : null,
-    verification: isRecord(record.verification) ? record.verification : null,
+    verification: verificationOutcome(record.verification),
     stopReason: typeof record.stop_reason === 'string' ? record.stop_reason : null,
     exception: record.exception_type,
     metrics: numericMetrics(record.env_metrics),
@@ -151,16 +170,16 @@ function normalizeTurnRecord(record: Record<string, unknown>): NormalizedTurn {
   return {
     uid: instanceId || (typeof record.record_id === 'string' ? record.record_id : ''),
     trialKey: instanceId && Number.isInteger(trajectory.repetition_id)
-      ? JSON.stringify(['skyrl-turn-v7', record.run_id, instanceId, trajectory.repetition_id])
+      ? JSON.stringify([RETENTION_KIND, record.run_id, instanceId, trajectory.repetition_id])
       : null,
     step: boundary && typeof boundary.row_index === 'number' ? boundary.row_index : rows.length === 1 && typeof rows[0] === 'number' ? rows[0] : 0,
-    kind: 'skyrl-turn-v7',
+    kind: RETENTION_KIND,
     sessionId: typeof record.run_id === 'string' ? record.run_id : '',
     envClass: typeof trajectory.environment_class === 'string' ? trajectory.environment_class : '',
     promptText: '',
     responseText: typeof response.text === 'string' ? response.text : '',
     messages: includesPrompt ? responseMessages : [...promptMessages, ...responseMessages],
-    verification: isRecord(record.verification_result) ? record.verification_result : null,
+    verification: verificationOutcome(record.verification_result),
     stopReason: typeof response.stop_reason === 'string' ? response.stop_reason : null,
     exception: disposition.exception_type,
     metrics: numericMetrics(record.metrics),
@@ -191,7 +210,7 @@ function turnSteps(turn: NormalizedTurn, firstStepId: number, includePrompt: boo
       tool_calls: calls,
     })
   }
-  // The record's terminal step: the raw response with its think block, plus its outcome facts.
+  // Attach outcomes to an identical rendered answer; otherwise retain a separate raw response step.
   const annotations = recordAnnotations(turn.verification, turn.stopReason, turn.exception)
   const last = steps[steps.length - 1]
   if (turn.responseText && last?.source === 'agent' && last.message === turn.responseText) {
@@ -202,8 +221,7 @@ function turnSteps(turn: NormalizedTurn, firstStepId: number, includePrompt: boo
   return steps
 }
 
-/** Render one unambiguous writer-defined trial; unmatched or ambiguous lists return null. */
-export function skyrlTurnsToTrajectory(parsed: unknown, preferredUid?: string): Trajectory | null {
+function normalizedTurns(parsed: unknown): NormalizedTurn[] | null {
   const records = (Array.isArray(parsed) ? parsed : [parsed]) as unknown[]
   if (records.length === 0) return null
   const turns: NormalizedTurn[] = []
@@ -212,7 +230,11 @@ export function skyrlTurnsToTrajectory(parsed: unknown, preferredUid?: string): 
     if (turn === null) return null
     turns.push(turn)
   }
-  const selected = Array.isArray(parsed) && preferredUid !== undefined
+  return turns
+}
+
+function selectedTrial(turns: NormalizedTurn[], preferredUid?: string): NormalizedTurn[] | null {
+  const selected = preferredUid !== undefined
     ? turns.filter((turn) => turn.uid === preferredUid)
     : turns
   if (selected.length === 0) return null
@@ -222,6 +244,10 @@ export function skyrlTurnsToTrajectory(parsed: unknown, preferredUid?: string): 
     if (key === null || selected.some((turn) => turn.trialKey !== key)) return null
   }
   selected.sort((left, right) => left.step - right.step)
+  return selected
+}
+
+function trajectoryFromTurns(selected: NormalizedTurn[]): Trajectory {
   const steps: TrajectoryStep[] = []
   let previous: unknown[] = []
   for (const [index, turn] of selected.entries()) {
@@ -236,4 +262,12 @@ export function skyrlTurnsToTrajectory(parsed: unknown, preferredUid?: string): 
     steps,
     final_metrics: selected[selected.length - 1].metrics,
   }
+}
+
+/** Render one unambiguous writer-defined trial; unmatched or ambiguous lists return null. */
+export function skyrlTurnsToTrajectory(parsed: unknown, preferredUid?: string): Trajectory | null {
+  const turns = normalizedTurns(parsed)
+  if (turns === null) return null
+  const selected = selectedTrial(turns, Array.isArray(parsed) ? preferredUid : undefined)
+  return selected === null ? null : trajectoryFromTurns(selected)
 }

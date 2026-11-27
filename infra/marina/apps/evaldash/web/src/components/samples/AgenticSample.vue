@@ -42,9 +42,9 @@ async function load(runId: string, uri: string | null, docId: string) {
     else if (typeof parsed === 'object' && parsed !== null && 'steps' in parsed && Array.isArray(parsed.steps)) {
       trajectory.value = parsed as Trajectory
     } else {
-      const turns = skyrlTurnsToTrajectory(parsed, docId)
-      if (turns === null) throw new Error('Unsupported sample artifact format.')
-      trajectory.value = turns
+      const selectedTrajectory = skyrlTurnsToTrajectory(parsed, docId)
+      if (selectedTrajectory === null) throw new Error('Unsupported sample artifact format.')
+      trajectory.value = selectedTrajectory
     }
   } catch (e) {
     if (currentGeneration !== generation) return

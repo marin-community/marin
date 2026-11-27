@@ -26,7 +26,7 @@ test('an eval-dump row renders tool-carrying assistant turns, the tool reply, an
 test('a null-messages eval-dump row still renders its prompt and outcome', () => {
   const trajectory = skyrlTurnsToTrajectory(EVAL_DUMP_ROW_NULL_MESSAGES)
   assert.equal(trajectory.steps.length, 2)
-  assert.equal(trajectory.steps[0].annotations['content'], 'raw input prompt')
+  assert.equal(trajectory.steps[0].message, EVAL_DUMP_ROW_NULL_MESSAGES.input_prompt)
   assert.equal(trajectory.steps[1].annotations['verification'], 'verified')
 })
 
@@ -53,9 +53,7 @@ test('a length-stopped schema_v7 record shows its stop_reason', () => {
 })
 
 test('a list spanning uids requires an unambiguous viewed sample', () => {
-  const stopUid = SCHEMA_V7_STOP.trajectory.instance_id
   const lengthUid = SCHEMA_V7_LENGTH.trajectory.instance_id
-  assert.notEqual(stopUid, lengthUid)
   assert.equal(skyrlTurnsToTrajectory([SCHEMA_V7_STOP, SCHEMA_V7_LENGTH]), null)
   assert.equal(skyrlTurnsToTrajectory([SCHEMA_V7_STOP, SCHEMA_V7_LENGTH], 'missing'), null)
   const viewed = skyrlTurnsToTrajectory([SCHEMA_V7_STOP, SCHEMA_V7_LENGTH], lengthUid)
@@ -140,4 +138,19 @@ test('cumulative records from one complete retention identity do not duplicate e
     prompt.content, 'Reading the task.', '7808931378968545',
   ])
   assert.equal(trajectory.steps.filter((step) => step.annotations?.['stop reason']).length, 2)
+})
+
+test('incomplete tool argument JSON stays visible as unparsed text', () => {
+  const argumentsText = '{"command": "unfinished'
+  const record = {
+    ...EVAL_DUMP_ROW,
+    messages: [{ role: 'assistant', content: null, tool_calls: [{
+      id: 'truncated', function: { name: 'bash', arguments: argumentsText },
+    }] }],
+  }
+  const trajectory = skyrlTurnsToTrajectory(record)
+  const call = trajectory.steps.find((step) => step.tool_calls)?.tool_calls[0]
+  assert.equal(call.function_name, 'bash')
+  assert.equal(call.arguments.unparsed_arguments, argumentsText)
+  assert.equal(trajectory.steps.at(-1).message, record.output_response)
 })

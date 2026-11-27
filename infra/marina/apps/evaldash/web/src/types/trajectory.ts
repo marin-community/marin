@@ -1,6 +1,4 @@
-// Agent Trajectory Interchange Format (ATIF): one agentic run's steps. A step is either a user
-// turn (the task/observation feed) or an agent turn carrying its message, tool calls, the resulting
-// observation, and per-step token metrics. Fields are optional because ATIF minor versions add them.
+// ATIF messages from users, agents, systems and tools, with observations and outcome annotations.
 export interface TrajectoryToolCall {
   tool_call_id?: string
   function_name: string
