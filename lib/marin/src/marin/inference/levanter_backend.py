@@ -16,7 +16,9 @@ import jmp
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef, load_tokenizer
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.inference.snowball_loading import load_snowball_serving_model
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.snowball import SnowballConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from transformers import PreTrainedTokenizerBase
@@ -177,13 +179,24 @@ class LevanterBackend:
         )
 
         with trainer.use_device_mesh():
-            model = converter.load_pretrained(
-                model_config.model_type,
-                ref=checkpoint_ref,
-                config=model_config,
-                dtype=trainer.mp.compute_dtype,
-                axis_mapping=trainer.parameter_axis_mapping,
-            )
+            if self.config.checkpoint_load_mode == "snowball_layerwise":
+                if not isinstance(model_config, SnowballConfig):
+                    raise ValueError("Layerwise serving load requires a Snowball checkpoint")
+                model = load_snowball_serving_model(
+                    converter,
+                    checkpoint_ref,
+                    model_config,
+                    dtype=trainer.mp.compute_dtype,
+                    axis_mapping=trainer.parameter_axis_mapping,
+                )
+            else:
+                model = converter.load_pretrained(
+                    model_config.model_type,
+                    ref=checkpoint_ref,
+                    config=model_config,
+                    dtype=trainer.mp.compute_dtype,
+                    axis_mapping=trainer.parameter_axis_mapping,
+                )
             yield LoadedLevanterModel(
                 model=model,
                 trainer=trainer,

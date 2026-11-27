@@ -39,6 +39,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from levanter.checkpoint import CheckpointerConfig, load_checkpoint
+from levanter.compat.hf_checkpoints import RepoRef
 from levanter.field_dtype_overrides import with_field_dtype_overrides
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
@@ -48,6 +49,7 @@ from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.snowball_loading import load_snowball_serving_model
 from levanter.layers.attention import AttentionMask
 from levanter.main.export_hf_to_lm import ImportHfConfig, main as import_hf
 from levanter.main.train_lm import TrainLmConfig, main, preserve_hf_runtime_settings
@@ -296,6 +298,29 @@ def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output
         (tmp_path / filename).write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
         converter.save_pretrained(model, str(tmp_path), **options)
         assert (tmp_path / filename).read_bytes() == original
+
+
+def test_snowball_layerwise_serving_load_preserves_sharded_snapshot(tmp_path):
+    cfg = _tiny_config(num_layers=2)
+    converter = cfg.hf_checkpoint_converter()
+    with use_cpu_devices(2), jax.set_mesh(compact_grug_mesh(expert_axis_size=2)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(17))
+        converter.save_pretrained(
+            model,
+            str(tmp_path),
+            save_tokenizer=False,
+            save_reference_code=False,
+            max_shard_size=4096,
+            dtype=jnp.bfloat16,
+        )
+        loaded = load_snowball_serving_model(
+            converter, RepoRef(str(tmp_path)), cfg, dtype=jnp.bfloat16, axis_mapping={}
+        )
+        expected, actual = list(jax.tree.leaves(model)), list(jax.tree.leaves(loaded))
+        for original, restored in zip(expected, actual, strict=True):
+            np.testing.assert_array_equal(np.asarray(original.astype(jnp.bfloat16)), np.asarray(restored))
+        for original, restored in zip(model.transformer.blocks, loaded.transformer.blocks, strict=True):
+            assert original.mlp.expert_mlp.w_gate.sharding == restored.mlp.expert_mlp.w_gate.sharding
 
 
 def test_snowball_requires_explicit_mesh_axes():
