@@ -477,6 +477,7 @@ TOOLCALL_SCHEMA_RECIPE_VERSION = "7"
 EXECUTABLE_GRADER_RECIPE_VERSION = "7"
 REASONING_GYM_RECIPE_VERSION = "9"
 REASONING_MARKUP_RECIPE_VERSION = "8"
+UNGRADABLE_STATEMENT_RECIPE_VERSION = "9"
 RECIPE_VERSIONS = {
     "ultra_sft_step3200_nvarc_transductive": REPAIRED_RECIPE_VERSION,
     "ultra_sft_step3200_structured_outputs_v2": REPAIRED_RECIPE_VERSION,
@@ -484,7 +485,7 @@ RECIPE_VERSIONS = {
     "ultra_v3_agentic_rl_step73_structured_outputs_v2": REPAIRED_RECIPE_VERSION,
     "ultra_sft_step3200_toolcall_schema": TOOLCALL_SCHEMA_RECIPE_VERSION,
     "ultra_sft_step3200_calendar_v2": REASONING_MARKUP_RECIPE_VERSION,
-    "ultra_sft_step3200_comp_coding": REASONING_MARKUP_RECIPE_VERSION,
+    "ultra_sft_step3200_comp_coding": UNGRADABLE_STATEMENT_RECIPE_VERSION,
     "ultra_sft_step3200_lean": EXECUTABLE_GRADER_RECIPE_VERSION,
     "ultra_sft_step3200_reasoning_gym": REASONING_GYM_RECIPE_VERSION,
 }

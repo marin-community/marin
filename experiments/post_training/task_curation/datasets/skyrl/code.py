@@ -19,7 +19,13 @@ from typing import Any
 
 from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
-from taskcompendium.convert.code import CODE_GRADER_MEMORY_MB, THREAD_ENVIRONMENT, python_reply
+from taskcompendium.convert.code import (
+    CODE_GRADER_MEMORY_MB,
+    THREAD_ENVIRONMENT,
+    CodeTestMode,
+    python_reply,
+    ungradable_statement,
+)
 from taskcompendium.convert.script_grader import grade_script, script_package, shipped_files
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import grader_config
@@ -181,6 +187,10 @@ def _lcb_task(
         return source_defect("invalid_test_cases", f"Functional test case is not JSON: {error}")
     except (ValueError, TypeError) as error:
         return unsupported("unsupported_test_cases", str(error))
+    statement = "\n".join(event.content for event in events)
+    rejection = ungradable_statement(statement, CodeTestMode(cases[0]["testtype"]))
+    if rejection is not None:
+        return rejection
     return scored_task(
         row,
         context,
@@ -342,7 +352,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     select=is_code_row,
                 ),
                 convert=convert_eurus2_code,
-                version="1",
+                version="2",
                 intended_use=IntendedUse.TRAIN,
                 rubric=EURUS2_CODE_RUBRIC,
                 controls=CONTROLS,
@@ -370,7 +380,7 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     SourceFormat.PARQUET,
                 ),
                 convert=convert_verifiable_code,
-                version="2",
+                version="3",
                 intended_use=IntendedUse.TRAIN,
                 rubric=VERIFIABLE_CODE_RUBRIC,
                 controls=CONTROLS,

@@ -23,8 +23,9 @@ from taskcompendium.convert.answers import math_type, source_defect, unsupported
 from taskcompendium.convert.code import (
     CODE_GRADER_MEMORY_MB,
     THREAD_ENVIRONMENT,
+    code_case_mode,
     python_reply,
-    validate_code_cases,
+    ungradable_statement,
 )
 from taskcompendium.convert.nemotron_ultra import (
     PLACEHOLDER_FIELD,
@@ -50,6 +51,7 @@ from taskcompendium.models import (
     ResourceGroups,
     TaskResource,
     TaskSpec,
+    TextMessage,
 )
 from taskcompendium.pipeline.controls import answer_reply, reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
@@ -618,9 +620,13 @@ def convert_code(row: RawRow, context: ConversionContext) -> NormalizedTask | Im
     if isinstance(request, ImportRejection):
         return request
     try:
-        validate_code_cases(row.data["verifier_metadata"]["unit_tests"])
+        mode = code_case_mode(row.data["verifier_metadata"]["unit_tests"])
     except (KeyError, TypeError, ValueError) as error:
         return source_defect("invalid_code_tests", str(error))
+    statement = "\n".join(event.content for event in request.context.events if isinstance(event, TextMessage))
+    rejection = ungradable_statement(statement, mode)
+    if rejection is not None:
+        return rejection
     return _scored(
         row,
         request,

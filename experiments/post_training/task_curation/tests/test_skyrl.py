@@ -309,6 +309,87 @@ def test_eurus2_code_selects_code_rows_and_keeps_every_prompt_message():
     assert grader_config(task)["test_cases"] == [{"input": "1 2\n", "output": "3\n", "testtype": "stdin"}]
 
 
+def eurus2_stdin_row(statement: str) -> dict:
+    return {**ROWS["eurus2_code"], "prompt": [{"role": "user", "content": statement}]}
+
+
+@pytest.mark.parametrize(
+    ("statement", "reason"),
+    [
+        ("Build a tree. If there are multiple answers, print any of them.", "any_valid_output"),
+        ("Find the path with the minimum cost. If there are multiple answers, print any.", "any_valid_output"),
+        ("If there are multiple answers, print any of them with the smallest first element.", "any_valid_output"),
+        (
+            "If there are multiple answers, print any of them. String a is lexicographically less than string b if a "
+            "is a proper prefix of b.",
+            "any_valid_output",
+        ),
+        ("Print the picture. It may not be unique. Any correct output will be accepted.", "any_valid_output"),
+        (
+            "Print the meetings. A solution exists for any valid input, and any correct output has at most 10^7 "
+            "characters.",
+            "any_valid_output",
+        ),
+        ("Print the distance. It is considered correct if its absolute error is below 1e-6.", "float_tolerance"),
+        ("Your answer is considered correct if |a - b| <= 10^{-6}, where b is the jury's answer.", "float_tolerance"),
+        (
+            "Your answer will be considered correct if you output any suitable m such that 1 <= m <= 1000.",
+            "any_valid_output",
+        ),
+        (
+            "The answer will be considered correct if:\n\n* each line is a command;\n* there are at most 50 commands.",
+            "any_valid_output",
+        ),
+        ("This is an interactive problem. Query the judge.", "interactive_problem"),
+        (
+            "This is an interactive problem. Unlike a non-interactive problem, flush after each query.",
+            "interactive_problem",
+        ),
+        ("If there are several optimal solutions, he is fine with any of them.", "any_valid_output"),
+        ("Your answer will be accepted if the absolute error is less than 10^\u22126.", "float_tolerance"),
+        ("You don't need to read input. Complete the function sum2().", "function_template_with_example_tests"),
+        (
+            "You don't have to take any input. Just complete the provided function findExtra() that takes array A[], "
+            "B[] and size of A[] and return the valid index (0 based indexing).",
+            "function_template_with_example_tests",
+        ),
+        (
+            "Example 1:\nInput:\nN = 5\nOutput:\n25\nYour Task:\nComplete the function square() which returns N * N.",
+            "function_template_with_example_tests",
+        ),
+    ],
+)
+def test_eurus2_row_that_one_stored_output_cannot_check_is_rejected(statement, reason):
+    result = convert_row(RECIPES["eurus2_code"], eurus2_stdin_row(statement))
+    assert isinstance(result, ImportRejection)
+    assert (result.kind, result.reason) == (ImportFailureKind.SOURCE_DEFECT, reason)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "Read two integers and print their sum. Do not print any extra spaces.",
+        "If the answer is not unique, print the lexicographically smallest one.",
+        "Complete the function add in the editor below.\n\nInput Format\n\nTwo integers.",
+        "This is NOT an interactive problem. Read both integers and print their sum.",
+        "Solve it as you would solve the usual, non-interactive problem: read the whole input, then print the sum.",
+        "A bracket sequence is considered correct if inserting '1' and '+' makes it an expression. Print YES or NO.",
+        "Read n and print n*n. Your answer will be considered correct if it equals n*n.",
+        "Print YES if there is any valid solution, otherwise print NO.",
+        "Print a/b with two digits after the point. Your answer is considered correct if it equals a/b.\n\n"
+        "Example output: 0.50",
+        "Complete the function solve() to read an integer and print its square.\n\n### Input\n\nOne integer n.",
+        "Print YES if there are multiple edges between any pair of vertices, otherwise print NO.",
+        "But if there are multiple cities in the sequence, then for any pair of adjacent cities c_i and c_{i + 1}, the "
+        "condition c_{i + 1} - c_i = b_{c_{i + 1}} - b_{c_i} must hold. Print the maximum beauty value of a journey.",
+        "Read two integers a and b. Print the absolute error |a-b| as an integer.",
+        "You don't need to read input. Print 42.",
+    ],
+)
+def test_eurus2_row_with_one_right_output_stays(statement):
+    assert isinstance(convert_row(RECIPES["eurus2_code"], eurus2_stdin_row(statement)), TaskSpec)
+
+
 def test_rlvr_ifeval_task_gives_verifyit_normalized_constraints():
     task = converted_task(RECIPES["rlvr_ifeval"], ROWS["rlvr_ifeval"])
     assert isinstance(task.grader, ScriptGrader)
