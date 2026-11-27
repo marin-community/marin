@@ -28,3 +28,17 @@ trials:
   commit: d792d926eb
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t002
+  variant: nonsi + sqrt8 start + fh0.2 + closed-form head logit mult
+  rung: competitive-d768
+  protocol: equal_steps
+  batch: X0267
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0267
+  wandb: []
+  settings:
+    muonh_nonsi_anneal: 'true'
+    muonh_wn_star: 'true'
+  commit: cba09645af
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
