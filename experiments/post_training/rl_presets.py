@@ -38,6 +38,7 @@ from skyrlrecipe.declared import (
     PooledCheckpointEvaluation,
 )
 from skyrlrecipe.locality import RoleTopologyMode
+from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training.rl_checkpoint_eval import (
     CHECKPOINT_EVALUATION_TIMEOUT,
@@ -51,6 +52,12 @@ UPDATE_SECONDS_METRIC = "speed/update_seconds"
 GENERATE_WALL_SECONDS_METRIC = "generate/wall_seconds"
 MINIMUM_TASK_COVERAGE = 0.99
 
+EVAL_LITE_PROFILE = EvaluationProfile(
+    n_samples_per_prompt=1,
+    sampling_params=EvalSamplingParams(
+        temperature=0.0, top_p=1.0, logprobs=None, ignore_eos=False, max_generate_length=8192
+    ),
+)
 CHECKPOINT_EVALUATION = checkpoint_cohorts()
 STOP_TOKEN_IDS = (128001, 128009)
 SAMPLED_TRAJECTORIES = sections.TrajectoryRetention(

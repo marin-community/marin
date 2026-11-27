@@ -488,8 +488,9 @@ under the preset's output root.
 ## Tasks and evaluation
 
 [EvalLite](../references/task-curation.md#evallite) is the held-out selection evaluated by speed-short,
-learning-medium and data-medium; train-long uses the 100-task active set. EvalLite evaluations request one
-greedy answer per task with natural replies up to 8,192 tokens. Data-short evaluates a sample of 256
+learning-medium and data-medium; train-long uses the 100-task active set. EvalLite uses temperature 0
+and requests one answer per task with natural replies up to 8,192 tokens on both Snowball and Mochi.
+Mochi training rollouts use temperature 0.7. Data-short evaluates a sample of 256
 candidate training tasks with four sampled answers each; it does not evaluate EvalLite.
 
 Speed-short measures 512 training tasks with four 4,096-token answers before its separate EvalLite pass.
@@ -637,8 +638,9 @@ records prefix, and result paths. Each run writes a record and an archive with p
 An RL policy record includes `rl_attempt` when both the training run ID and attempt ID are available.
 
 Use `evaluate --evals eval-lite` to score published weights with the same EvalLite protocol as the
-trainer, in a generation-only job. Use trainer evaluation to track policy scores at the run's
-scheduled training steps. Snowball scores the full EvalLite pool on one node with eight H100s.
+trainer, in a generation-only job. Both entry points use temperature 0, one answer per task, and an
+8,192-token reply budget. Trainer evaluation tracks policy scores at the run's scheduled training
+steps. Snowball scores the full EvalLite pool on one node with eight H100s.
 A recorded run used 1.1 H100-hours.
 Mochi scores the same pool on four GB200 hosts in one NVLink domain.
 

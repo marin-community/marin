@@ -188,6 +188,10 @@ def test_snowball_held_out_evaluations_use_full_eval_lite(selection, tmp_path):
     callbacks = [row["type"] for row in learning_config["skyrl"]["trainer"]["callbacks"]]
     evaluation = callbacks.index("evaluation")
     assert evaluation < callbacks.index("best_checkpoint") < callbacks.index("hf_model_save")
+    generator = learning_config["skyrl"]["generator"]
+    assert generator["eval_sampling_params"]["temperature"] == 0.0
+    assert generator["eval_sampling_params"]["max_generate_length"] == 8192
+    assert generator["eval_n_samples_per_prompt"] == 1
 
 
 @pytest.mark.parametrize(("mode", "exit_code"), [("--plan", 0), ("--run", 4)])
@@ -543,7 +547,12 @@ def test_mochi_three_rack_launch_configures_evaluation_without_model_exports(sel
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
 
     (config,) = gate.compose_configs([str(path)], validate_driver=True)
-    assert config["skyrl"]["generator"].get("speculative_decoding") is None
+    generator = config["skyrl"]["generator"]
+    assert generator.get("speculative_decoding") is None
+    assert generator["sampling_params"]["temperature"] == 0.7
+    assert generator["eval_sampling_params"]["temperature"] == 0.0
+    assert generator["eval_sampling_params"]["max_generate_length"] == 8192
+    assert generator["eval_n_samples_per_prompt"] == 1
     model = config["inputs"]["model"]
     assert model["uri"] == MOCHI_STEP_400407_EXPORT
     assert model["tokenizer_uri"] == MOCHI_TOKENIZER_URI

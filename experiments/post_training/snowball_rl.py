@@ -35,6 +35,7 @@ from experiments.post_training.rl_compose import BATCH_SETTINGS
 from experiments.post_training.rl_evallite import EvalLite
 from experiments.post_training.rl_presets import (
     CHECKPOINT_EVALUATION,
+    EVAL_LITE_PROFILE,
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
@@ -63,7 +64,6 @@ MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT
 DEFAULT_SELECTION_VERSION = "2026.11.25.1"
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
 DEFAULT_EVAL_LITE_VERSION = "2026.11.25.1"
-EVAL_REPLY_TOKENS = 8192
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
@@ -129,13 +129,6 @@ _MODE_KEYS = (
     "trainer.algorithm.off_policy_correction",
 )
 
-_HELD_OUT_SAMPLING = EvaluationProfile(
-    n_samples_per_prompt=1,
-    sampling_params=EvalSamplingParams(
-        temperature=0.0, top_p=1.0, logprobs=None, ignore_eos=False, max_generate_length=EVAL_REPLY_TOKENS
-    ),
-)
-
 _THROUGHPUT_SAMPLING = EvaluationProfile(
     n_samples_per_prompt=4,
     sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=True),
@@ -150,8 +143,8 @@ EVALUATIONS = MappingProxyType(
     {
         evaluation.name: evaluation
         for evaluation in (
-            Evaluation("eval_lite", Path(FULL_VALIDATION_FILENAME).stem, _HELD_OUT_SAMPLING, source="held_out"),
-            Evaluation("eval_lite_100", Path(VALIDATION_FILENAME).stem, _HELD_OUT_SAMPLING, source="held_out"),
+            Evaluation("eval_lite", Path(FULL_VALIDATION_FILENAME).stem, EVAL_LITE_PROFILE, source="held_out"),
+            Evaluation("eval_lite_100", Path(VALIDATION_FILENAME).stem, EVAL_LITE_PROFILE, source="held_out"),
             Evaluation("speed_512x4", Path(TRAIN_FILENAME).stem, _THROUGHPUT_SAMPLING, sample=512),
             Evaluation("screen_256x4", Path(TRAIN_FILENAME).stem, _SCREENING_SAMPLING, source="tasks", sample=256),
         )

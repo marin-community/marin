@@ -238,14 +238,12 @@ def test_micro210_graph_accepts_an_sft_export_that_has_yet_to_run(selection, tmp
 
 
 @pytest.mark.parametrize(
-    ("table", "temperature", "version", "scored"),
-    [("snowball", 0.0, "2026.11.27", True), ("mochi", 0.7, "dev", True), ("snowball", 0.0, "2026.11.27", False)],
+    ("table", "version", "scored"),
+    [("snowball", "2026.11.27", True), ("mochi", "dev", True), ("snowball", "2026.11.27", False)],
     ids=["snowball-retry", "mochi-dev", "unscored"],
     indirect=["table"],
 )
-def test_standalone_eval_lite_publishes_its_native_record(
-    selection, table, temperature, version, scored, tmp_path, monkeypatch
-):
+def test_standalone_eval_lite_publishes_its_native_record(selection, table, version, scored, tmp_path, monkeypatch):
     monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: str(tmp_path))
     monkeypatch.setattr("experiments.post_training.rl_evaluation_records.CW_RECORDS_PREFIX", str(tmp_path / "records"))
     monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
@@ -269,7 +267,8 @@ def test_standalone_eval_lite_publishes_its_native_record(
         assert launch["inputs"]["train_data"] == []
         assert launch["inputs"]["validation_data"][0]["relative_path"] == FULL_VALIDATION_FILENAME
         generator = launch["skyrl"]["generator"]
-        assert generator["eval_sampling_params"]["temperature"] == temperature
+        sampling = generator["eval_sampling_params"]
+        assert (sampling["temperature"], sampling["top_p"], sampling["max_generate_length"]) == (0.0, 1.0, 8192)
         assert generator["eval_n_samples_per_prompt"] == 1
         if table is SNOWBALL:
             assert generator.get("speculative_decoding") is None

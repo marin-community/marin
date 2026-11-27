@@ -11,9 +11,7 @@ from marin.evaluation.model_config import AgentConfig, ModelConfig, ResourceHint
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLGenerationPlan, SkyRLRetentionPolicy, SkyRLRolePlan
 from skyrlrecipe import ContextBudget, RecipePatch, sections
-from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.locality import RoleTopologyMode
-from skyrlrecipe.sampling import EvalSamplingParams
 
 from experiments.post_training import rl
 from experiments.post_training.mochi_assets import (
@@ -24,6 +22,7 @@ from experiments.post_training.mochi_assets import (
 from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
 from experiments.post_training.rl_evallite import EvalLite
 from experiments.post_training.rl_presets import (
+    EVAL_LITE_PROFILE,
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
@@ -246,12 +245,7 @@ _EVALUATION = Evaluation(
     name="eval_lite_100",
     file=Path(VALIDATION_FILENAME).stem,
     source="held_out",
-    profile=EvaluationProfile(
-        sampling_params=EvalSamplingParams(
-            temperature=0.7, top_p=1.0, stop_token_ids=STOP_TOKEN_IDS, skip_special_tokens=False
-        ),
-        n_samples_per_prompt=1,
-    ),
+    profile=EVAL_LITE_PROFILE,
     every=2,
 )
 
