@@ -74,6 +74,7 @@
     "TaskTrove:laion__nemotron-gym-structured-outputs-v4",
     "TaskTrove:laion__r2egym-patched-full-oracle-v3",
     "TaskTrove:laion__swegym-tasks-patched-validated-v5",
+    "TaskTrove:GAIR__OpenSWE__openswe_oss",
     "TaskTrove:SWE-Gym__SWE-Gym",
     "TaskTrove:swesmith-verifier-repaired-v5",
     "TerminalWorld:TerminalWorld",
