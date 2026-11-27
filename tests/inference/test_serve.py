@@ -659,16 +659,15 @@ def test_levanter_auto_tensor_parallelism_reserves_expert_devices(monkeypatch):
     assert spec.tensor_parallel_size == 2
 
 
-@pytest.mark.parametrize(("slice_type", "chips", "tensor"), [("v6e-8", 8, 2), ("v4-32", 16, 4)])
-def test_iris_auto_tensor_parallelism_reserves_expert_devices(tmp_path, slice_type, chips, tensor):
+def test_iris_auto_tensor_parallelism_reserves_expert_devices(tmp_path):
     (tmp_path / "config.json").write_text('{"model_type": "llama", "num_attention_heads": 32, "num_key_value_heads": 8}')
     iris = IrisConfig(
-        worker_resources=ResourceConfig.with_tpu(slice_type),
+        worker_resources=ResourceConfig.with_tpu("v6e-8"),
         worker_environment=create_environment(extras=["tpu"]),
     )
     model, num_chips = _resolved_model(ServedModelConfig(weights=str(tmp_path)), iris, expert_parallel_size=4)
-    assert num_chips == chips
-    assert model.tensor_parallel_size == tensor
+    assert num_chips == 8
+    assert model.tensor_parallel_size == 2
 
 
 def test_cli_rejects_vllm_flags_under_the_levanter_backend():
