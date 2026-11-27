@@ -31,10 +31,10 @@ def test_pinned_primary_license_excerpts(case):
     assert (result.verdict.value, result.rule_id.value) == (case["verdict"], case["rule"])
     assert result.evidence_url in {doc["url"] for doc in case["documents"]}
     if result.verdict is LicenseCheckVerdict.PASS:
-        require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train", ban=None)
+        require_license(receipt, receipt.source_id, "train", ban=None)
     else:
         with pytest.raises(ValueError, match="blocks ingest and admission"):
-            require_license(receipt, receipt.source_id, receipt.dataset_id, receipt.revision, "train", ban=None)
+            require_license(receipt, receipt.source_id, "train", ban=None)
 
 
 def test_openmdw_license_text_and_card_id_are_recognized():
@@ -82,7 +82,7 @@ def test_conflicting_custom_terms_and_unidentified_third_party_terms_escalate():
     uncertain = receipt.model_copy(update={"evidence": [*receipt.evidence, notice]})
     assert check_license(uncertain).rule_id.value == "E3"
     with pytest.raises(ValueError, match="ESCALATE E3"):
-        require_license(uncertain, uncertain.source_id, uncertain.dataset_id, uncertain.revision, "train", ban=None)
+        require_license(uncertain, uncertain.source_id, "train", ban=None)
 
 
 def test_ban_wins_and_retains_the_underlying_evidence_verdict(monkeypatch):
@@ -197,7 +197,7 @@ def test_our_wrapper_checks_its_one_declared_source_and_preserves_both_pins(pinn
     row = license_check.check_target(target, None)
     assert (row["verdict"], row["rule_id"]) == ("PASS", "P1")
     receipt = license_check.LicenseReceipt.model_validate(row["receipt"])
-    require_license(receipt, target.source_id, wrapper, wrapper_pin, "train", ban=None)
+    require_license(receipt, target.source_id, "train", ban=None)
     assert (receipt.dataset_id, receipt.revision) == (wrapper, wrapper_pin)
     assert receipt.resolved_source is not None
     assert (receipt.resolved_source.dataset_id, receipt.resolved_source.revision) == (parent, parent_pin)
@@ -228,8 +228,8 @@ def test_first_party_openmdw_publication_passes_from_its_own_card(pinned_dataset
     assert (receipt.dataset_id, receipt.revision) == (wrapper, wrapper_pin)
     assert receipt.resolved_source is None
     assert {repository for repository, _, _ in fetched} == {wrapper}
-    require_license(receipt, "OpenAthena:fixture", wrapper, wrapper_pin, "train", ban=None)
-    require_license(receipt, "OpenAthena:fixture", wrapper, wrapper_pin, "eval", ban=None)
+    require_license(receipt, "OpenAthena:fixture", "train", ban=None)
+    require_license(receipt, "OpenAthena:fixture", "eval", ban=None)
 
 
 def test_own_wrappers_normalize_to_first_dataset_without_following_its_lineage(pinned_dataset_metadata):

@@ -131,15 +131,18 @@ class TestModelLicense:
         receipt = validate_model_license()
         assert receipt.classification.value == "permissive"
         assert receipt.license_ids == ("apache-2.0",)
-        require_license(receipt, EMBEDDING_MODEL, EMBEDDING_MODEL, EMBEDDING_MODEL_REVISION, "train", ban=None)
+        require_license(receipt, EMBEDDING_MODEL, "train", ban=None)
 
-    def test_tampered_evidence_fails_closed(self, tmp_path: Path):
+    def test_tampered_source_identity_fails_closed(self, tmp_path: Path):
         receipt_path = Path(__file__).parents[1] / "datasets" / "openresearcher" / "embedding_model_license.json"
         payload = json.loads(receipt_path.read_text())
+        # A revision bump no longer refuses (revisions inherit the ingest record, ruling
+        # 2026-11-27); a receipt that belongs to another source does.
         payload["revision"] = "f" * 40
-        receipt = LicenseReceipt.model_validate(payload)
-        with pytest.raises(ValueError, match="another source revision"):
-            require_license(receipt, EMBEDDING_MODEL, EMBEDDING_MODEL, EMBEDDING_MODEL_REVISION, "train", ban=None)
+        require_license(LicenseReceipt.model_validate(payload), EMBEDDING_MODEL, "train", ban=None)
+        payload["source_id"] = "OpenResearcher:Other-Model"
+        with pytest.raises(ValueError, match="belongs to another source"):
+            require_license(LicenseReceipt.model_validate(payload), EMBEDDING_MODEL, "train", ban=None)
 
 
 class TestPilotSamplingSemantics:

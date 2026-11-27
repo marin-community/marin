@@ -336,7 +336,12 @@ class RlDataSource[ConfigT: CatalogConfig]:
     pipeline: "CurationPipeline[ConfigT] | None" = None
 
     def require_license(self) -> None:
-        """Require stage-0 permission at the current pin before constructing any work."""
+        """Require the source's ingest licence record before constructing any work.
+
+        The record is looked up by source_id and governs every revision of the source
+        (ruling 2026-11-27), so this evaluates the record itself — never the declaration's
+        pin — while bans still apply at every revision.
+        """
         dataset = self.dataset
         require_unbanned(
             self.info.id,
@@ -347,8 +352,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
         require_license(
             self.info.license_receipt,
             self.info.id,
-            dataset.name if dataset else None,
-            dataset.revision if dataset else None,
             self.intended_use.value,
             ban=None,
         )

@@ -5,6 +5,7 @@
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -246,21 +247,6 @@ def test_canary_text_fields():
         private_canary_text("answer_key")
 
 
-class FakeHub:
-    def __init__(self):
-        self.calls = []
-
-    def create_repo(self, **_kwargs):
-        self.calls.append("create_repo")
-
-    def repo_info(self, *_args, **_kwargs):
-        return type("Info", (), {"private": True})()
-
-    def upload_folder(self, **_kwargs):
-        self.calls.append("upload_folder")
-        return type("Commit", (), {"oid": "f" * 40})()
-
-
 def test_reviewer_packet_freeze_refuses_a_private_source(tmp_path):
     """Reviewer packets quote exact task text, so the freeze refuses a private source."""
     output = tmp_path / "packet"
@@ -359,15 +345,6 @@ def test_staged_private_plan_and_snapshot_are_refused(tmp_path):
 
 def test_publish_helper_refuses_a_private_payload_before_any_upload(tmp_path, monkeypatch):
     """The shared HF publish helper refuses a private payload; nothing leaves for the hub."""
-    hub = FakeHub()
-    monkeypatch.setattr(calibforge_publish, "HfApi", lambda *args, **kwargs: hub)
-    monkeypatch.setattr(
-        calibforge_publish,
-        "hf_hub_download",
-        lambda repo_id, repo_type, filename, revision: str(
-            tmp_path / ("tasks.parquet" if filename == "tasks.parquet" else "README.md")
-        ),
-    )
     tasks = tmp_path / "tasks.parquet"
     serialized = json.dumps(json.loads(prebuilt_task("public-control")["lowered_task_spec"])["task"])
     pq.write_table(
@@ -376,19 +353,32 @@ def test_publish_helper_refuses_a_private_payload_before_any_upload(tmp_path, mo
     private_card = tmp_path / "README.md"
     private_card.write_text(f"card quoting {PRIVATE_CANARY}")
 
+    def refuse_any_publication(*args, **kwargs):
+        raise AssertionError("a PRIVATE_ALWAYS payload must refuse before any publication")
+
+    monkeypatch.setattr(calibforge_publish, "publish_licensed_population", refuse_any_publication)
+
+    publish_kwargs = {
+        "source_id": "Test:fixture",
+        "use": "train",
+        "pretty_name": "Fixture cohort",
+    }
     with pytest.raises(ValueError, match="PRIVATE_ALWAYS"):
         calibforge_publish.publish(
-            tasks, private_card, "open-athena/private", data_restriction=DataRestriction.PRIVATE_ALWAYS
+            tasks, private_card, "open-athena/private", data_restriction=DataRestriction.PRIVATE_ALWAYS, **publish_kwargs
         )
-    assert hub.calls == []
 
+    # An open payload routes through the licensed publication chokepoint.
     open_card = tmp_path / "open-card.md"
     open_card.write_text("An open conversion card without restricted content.")
-    uploads_by_name = {"tasks.parquet": tasks, "README.md": open_card}
-    monkeypatch.setattr(
-        calibforge_publish,
-        "hf_hub_download",
-        lambda repo_id, repo_type, filename, revision: str(uploads_by_name[filename]),
+    delegated = {}
+
+    def fake_chokepoint(source_id, repo, folder, files, **kwargs):
+        delegated["call"] = (repo, tuple(files), kwargs["body"])
+        return SimpleNamespace(revision="d" * 40)
+
+    monkeypatch.setattr(calibforge_publish, "publish_licensed_population", fake_chokepoint)
+    calibforge_publish.publish(
+        tasks, open_card, "open-athena/open", data_restriction=DataRestriction.OPEN, **publish_kwargs
     )
-    calibforge_publish.publish(tasks, open_card, "open-athena/open", data_restriction=DataRestriction.OPEN)
-    assert hub.calls == ["create_repo", "upload_folder"]
+    assert delegated["call"] == ("open-athena/open", ("tasks.parquet",), open_card.read_text())

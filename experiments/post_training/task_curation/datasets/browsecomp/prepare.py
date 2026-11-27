@@ -82,7 +82,7 @@ def query_file_hashes(root: Path) -> dict[str, str]:
 
 def prepare(run: PrepareRun) -> CampaignArtifact:
     receipt = run.license_receipt
-    require_license(receipt, SOURCE_ID, QUERY_REPO, QUERY_REVISION, "eval", ban=None)
+    require_license(receipt, SOURCE_ID, "eval", ban=None)
     input_sha256 = query_file_hashes(Path(run.input_root))
     if run.input_sha256 and input_sha256 != run.input_sha256:
         raise ValueError("BrowseComp query inputs changed after artifact planning")

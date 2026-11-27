@@ -344,36 +344,3 @@ def test_read_receipt_shards_rejects_duplicate_identities(tmp_path: Path):
         read_receipt_shards(
             directory, LicenseReceipt, "license receipt", load_json=lambda shard: json.loads(shard.read_text())
         )
-
-
-def test_adopt_license_receipt_selects_a_complete_namespace(tmp_path: Path, hub: dict):
-    """Ingest B's design (coordinator ruling 2026-11-26): a re-pinned receipt lands as
-    a NEW complete immutable selection namespace — the selected union with only the
-    owned source's row replaced — and the index atomically selects that family.
-    Shared shards keep their exact bytes and the strict duplicate rejection holds."""
-    index_path = tmp_path / "index.json"
-    seeded = json.dumps(
-        {
-            "fixture:source": _receipt("fixture:source", "fixture/dataset", "a" * 40).model_dump(mode="json"),
-            "fixture:other": _receipt("fixture:other", "fixture/dataset", "b" * 40).model_dump(mode="json"),
-        },
-        indent=2,
-    ).encode()
-    reference_data.create_reference_index(
-        index_path,
-        license_binding.LICENSE_RECEIPT_REPO,
-        {"part-000.json": seeded},
-        message="Seed",
-    )
-    adopted = _receipt("fixture:source", "fixture/dataset", "c" * 40)
-    revision = license_binding.adopt_license_receipt(
-        index_path, adopted, message="Adopt the bind receipt", namespace="binds-20261126-a-v1"
-    )
-    assert revision == hub["head"]
-    assert hub["files"]["part-000.json"] == seeded  # the shared shard is untouched
-    receipts = license_binding.read_license_receipts(index_path)
-    assert set(receipts) == {"fixture:source", "fixture:other"}
-    assert receipts["fixture:source"].revision == "c" * 40
-    assert receipts["fixture:other"].revision == "b" * 40
-    index = reference_data.read_reference_index(index_path)
-    assert [reference.path for reference in index.references] == ["binds-20261126-a-v1/part-000.json"]

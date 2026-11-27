@@ -48,7 +48,7 @@ class NativeQuickImport:
 def run_native_import(invocation: NativeQuickImport) -> CampaignArtifact:
     config = invocation.cohort
     receipt = invocation.license_receipt
-    require_license(receipt, receipt.source_id, config.repo, config.revision, config.intended_use.value, ban=None)
+    require_license(receipt, receipt.source_id, config.intended_use.value, ban=None)
     (StoragePath(invocation.output_path) / "license.json").write_text(receipt.model_dump_json(indent=2))
     local = Path(hf_hub_download(config.repo, "tasks.parquet", repo_type="dataset", revision=config.revision))
     provenance = hf_hub_download(config.repo, "manifest.json", repo_type="dataset", revision=config.revision)
