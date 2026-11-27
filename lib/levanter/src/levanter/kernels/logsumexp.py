@@ -121,7 +121,7 @@ def batch_invariant_logsumexp(logits: jax.Array) -> jax.Array:
 
 
 def selected_token_logits(logits: jax.Array, token_ids: jax.Array) -> jax.Array:
-    """Gather one logit per row along the final vocabulary axis."""
+    """Gather final-axis logits at token IDs shaped like the leading axes."""
     return jnp.take_along_axis(logits, token_ids[..., None], axis=-1).squeeze(-1)
 
 
@@ -130,7 +130,7 @@ def batch_invariant_selected_logprobs(logits: jax.Array, token_ids: jax.Array) -
     logits = logits.astype(jnp.float32)
     spec = partition_spec_of(logits)
     if spec is not None and len(spec) == logits.ndim and spec[-1] is not None:
-        # The lookup needs the same vocabulary shards as the row normalization.
+        # The lookup and normalization both need the full vocabulary on each row shard.
         logits = reshard(logits, P(*spec[:-1], None))
     pivot_index, pivot, correction = _batch_invariant_shifted_normalizer(logits)
     selected = selected_token_logits(logits, token_ids)

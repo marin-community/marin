@@ -69,11 +69,16 @@ def test_stop_logprobs_match_across_row_counts_and_positions():
 def test_log_normalizer_values_and_gradients_match_reference(vocab, dtype):
     logits = jax.random.normal(jax.random.key(vocab), (2, 9, vocab)).astype(dtype)
     actual, grad = jax.jit(jax.value_and_grad(lambda x: batch_invariant_logsumexp(x).sum()))(logits)
-    expected, reference_grad = jax.jit(
-        jax.value_and_grad(lambda x: jax.nn.logsumexp(x.astype(jnp.float32), -1).sum())
-    )(logits)
+    # Evaluate before rounding to BF16. A TPU FP32 softmax can land on the
+    # other side of a BF16 rounding boundary even if its FP32 error is small.
+    values = np.asarray(logits, dtype=np.float64)
+    maximum = values.max(axis=-1, keepdims=True)
+    exponentials = np.exp(values - maximum)
+    totals = exponentials.sum(axis=-1, keepdims=True)
+    expected = (maximum + np.log(totals)).sum()
+    reference_grad = (exponentials / totals).astype(logits.dtype)
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(grad.astype(jnp.float32), reference_grad.astype(jnp.float32), rtol=1e-4, atol=1e-5)
+    np.testing.assert_allclose(grad.astype(jnp.float32), reference_grad.astype(np.float32), rtol=1e-4, atol=1e-5)
 
 
 @pytest.mark.multidevice
