@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.sampler import LogprobMode
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.models.lm_model import LmExample
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
@@ -671,6 +672,43 @@ def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
                 timeout=30,
             )
         assert unsupported.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+
+
+def test_grpc_generation_returns_unwarped_policy_logprobs(inference_server_config, generated_model_and_tokenizer):
+    model, tokenizer = generated_model_and_tokenizer
+    config = dataclasses.replace(
+        inference_server_config,
+        service=dataclasses.replace(inference_server_config.service, logprob_mode=LogprobMode.POLICY),
+    )
+    model = jax.tree.map(jnp.zeros_like, model)
+    server = InferenceServer.create(config, model, tokenizer)
+    request = inference_pb2.GenerateRequest(
+        prompt_token_ids=[18, 7, 3, 18],
+        max_new_tokens=1,
+        temperature=0.7,
+        top_p=0.05,
+        seed=17,
+        expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+    )
+    try:
+        with (
+            TestClient(server.app),
+            grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel,
+        ):
+            stub = inference_pb2_grpc.InferenceStub(channel)
+            response = stub.Generate(request, timeout=30)
+            assert response.logprob_mode == inference_pb2.LOGPROB_MODE_POLICY
+            assert not response.choices[0].behavior_logprobs
+            np.testing.assert_allclose(
+                response.choices[0].policy_logprobs, [-np.log(model.Vocab.size)], atol=1e-5, rtol=0
+            )
+
+            request.expected_logprob_mode = inference_pb2.LOGPROB_MODE_BEHAVIOR
+            with pytest.raises(grpc.RpcError) as mismatch:
+                stub.Generate(request, timeout=30)
+            assert mismatch.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+    finally:
+        server.shutdown()
 
 
 def test_grpc_generation_fences_rollouts_by_installed_policy(inference_server_config, generated_model_and_tokenizer):

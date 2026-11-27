@@ -65,7 +65,7 @@ The inference server is built around a `GenerationService` that encapsulates:
 Set `InferenceServerConfig.grpc_port` to enable a plaintext gRPC listener on the
 configured serving host. The unary `levanter.inference.v1.Inference/Generate`
 RPC takes prompt token IDs and returns each choice's generated token IDs and
-behavior log probabilities. Exact-token requests default to temperature 1 and
+log probabilities. Exact-token requests default to temperature 1 and
 top-p 1, and draw a seed when the caller omits it. Both listeners submit to the
 same inference queue.
 Run the gRPC listener on the private rollout network.
@@ -82,6 +82,9 @@ uvx --from grpcio-tools==1.76.0 python -m grpc_tools.protoc \
 Set `expected_policy_id` to require the installed policy to match when the
 request enters generation. A mismatch returns `FAILED_PRECONDITION`. Each
 choice reports the actual `policy_id` and `model_version` used to generate it.
+
+Set `expected_logprob_mode` to require behavior or raw policy log probabilities.
+The response identifies the mode and fills the matching per-choice score field.
 
 To capture Snowball router replay, set `capture_router_replay`. Each choice then
 includes `router_replay`. Both fields use tag 50001 in their respective messages.

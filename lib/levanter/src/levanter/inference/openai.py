@@ -50,6 +50,7 @@ from levanter.inference.engine import (
     TokenSequenceLogprobs,
 )
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.layers.sampler import LogprobMode
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -903,6 +904,13 @@ class _GrpcInference:
             await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "Router replay requires a Snowball model")
 
         config = ctx.engine.config
+        score_mode = (
+            inference_pb2.LOGPROB_MODE_POLICY
+            if config.logprob_mode == LogprobMode.POLICY
+            else inference_pb2.LOGPROB_MODE_BEHAVIOR
+        )
+        if request.expected_logprob_mode not in (inference_pb2.LOGPROB_MODE_UNSPECIFIED, score_mode):
+            await context.abort(grpc.StatusCode.FAILED_PRECONDITION, "The server uses a different logprob mode")
         max_prefill_size = config.max_prefill_size or ctx.model.Pos.size
         if (
             not prompt
@@ -945,19 +953,25 @@ class _GrpcInference:
         if capture_routes:
             if any(output.expert_routes is None for output in outputs):
                 await context.abort(grpc.StatusCode.INTERNAL, "Generation did not capture the requested routes")
-            return await asyncio.to_thread(_grpc_generate_response, prompt, outputs)
-        return _grpc_generate_response(prompt, outputs)
+            return await asyncio.to_thread(_grpc_generate_response, prompt, outputs, score_mode)
+        return _grpc_generate_response(prompt, outputs, score_mode)
 
 
-def _grpc_generate_response(prompt: list[int], outputs: list[InferenceResponse]) -> inference_pb2.GenerateResponse:
-    response = inference_pb2.GenerateResponse(prompt_token_ids=prompt)
+def _grpc_generate_response(
+    prompt: list[int], outputs: list[InferenceResponse], score_mode: inference_pb2.LogprobMode
+) -> inference_pb2.GenerateResponse:
+    response = inference_pb2.GenerateResponse(prompt_token_ids=prompt, logprob_mode=score_mode)
     for output in outputs:
         choice = response.choices.add(
             token_ids=output.tokens,
-            behavior_logprobs=output.logprobs,
             model_version=output.model_version,
             policy_id=output.policy_id,
         )
+        if output.logprobs is not None:
+            scores = (
+                choice.policy_logprobs if score_mode == inference_pb2.LOGPROB_MODE_POLICY else choice.behavior_logprobs
+            )
+            scores.extend(output.logprobs)
         if output.expert_routes is not None:
             write_router_replay(choice.router_replay, output.expert_routes.expert_ids, output.expert_routes.valid)
     return response
