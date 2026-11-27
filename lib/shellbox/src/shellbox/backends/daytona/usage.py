@@ -217,14 +217,8 @@ def _region_usage(
     )
 
 
-async def account_usage_from_client(client: AsyncDaytona, limits: AccountLimits) -> AccountUsage:
-    """Aggregate allocations per region using provider compute and disk quota rules.
-
-    The provider enforces each region's quota separately, so usage is grouped by
-    the inventory's ``target`` and never summed across regions. A region without
-    recorded limits fails the reading instead of reporting free capacity.
-    """
-    sandboxes = await _inventory_sandboxes(client)
+def _checked_inventory(sandboxes: list[AsyncSandbox], limits: AccountLimits) -> str | None:
+    """Reject inventories that cannot be accounted for; return the single organization ID."""
     organization_ids = {sandbox.organization_id for sandbox in sandboxes}
     if len(organization_ids) > 1 or (sandboxes and not all(organization_ids)):
         raise ValueError("Sandbox inventory must identify exactly one organization")
@@ -241,6 +235,17 @@ async def account_usage_from_client(client: AsyncDaytona, limits: AccountLimits)
     unrecorded = sorted({sandbox.target for sandbox in sandboxes} - set(limits.regions))
     if unrecorded:
         raise ValueError(f"No recorded limits for region(s) {', '.join(unrecorded)}; add them to ACCOUNT_LIMITS")
+    return next(iter(organization_ids), None)
+
+
+async def account_usage_from_client(client: AsyncDaytona, limits: AccountLimits) -> AccountUsage:
+    """Aggregate allocations per region using provider compute and disk quota rules.
+
+    The provider enforces each region's quota separately, so usage is grouped by
+    the inventory's ``target`` and never summed across regions.
+    """
+    sandboxes = await _inventory_sandboxes(client)
+    organization_id = _checked_inventory(sandboxes, limits)
     compute = [
         sandbox
         for sandbox in sandboxes
@@ -257,7 +262,7 @@ async def account_usage_from_client(client: AsyncDaytona, limits: AccountLimits)
     )
     states = Counter(sandbox.state.value for sandbox in sandboxes)
     return AccountUsage(
-        organization_id=next(iter(organization_ids), None),
+        organization_id=organization_id,
         limits=limits,
         regions=regions,
         sandbox_states=tuple(sorted(states.items())),
@@ -274,7 +279,6 @@ async def account_usage(connection: DaytonaConnection, limits: AccountLimits) ->
 def _region_report(
     usage: RegionUsage,
     limits: RegionLimits,
-    per_sandbox: dict[str, int],
     profile: dict[str, int] | None,
     exceeded: list[str] | None,
     headroom: float,
@@ -331,9 +335,7 @@ def usage_report(
         "disk_charged_states": sorted(state.value for state in DISK_CHARGED_STATES),
         "uncharged_states": sorted(state.value for state in UNCHARGED_STATES),
         "regions": {
-            region.region: _region_report(
-                region, usage.limits.regions[region.region], maxima, requested, exceeded, headroom
-            )
+            region.region: _region_report(region, usage.limits.regions[region.region], requested, exceeded, headroom)
             for region in usage.regions
         },
         "sandboxes": {

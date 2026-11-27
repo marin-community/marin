@@ -12,7 +12,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TypedDict
 
-from shellbox.backends.daytona.connection import DaytonaConnection
+from shellbox.backends.daytona.connection import DAYTONA_TARGET, DaytonaConnection
 from shellbox.backends.daytona.usage import (
     DEFAULT_HEADROOM,
     AccountLimits,
@@ -32,9 +32,9 @@ class Account(StrEnum):
 
 
 # Single quota source of record. Owner-supplied organization limits (2026-11-19)
-# recorded for the accounts' us region, the one Daytona region Marin launches in
-# (DAYTONA_TARGET). Update these presets when the account owner changes the
-# limits, and add regions when the owner supplies their rows.
+# recorded for the accounts' production region, the one Daytona region Marin
+# launches in. Update these presets when the account owner changes the limits,
+# and add regions when the owner supplies their rows.
 QUOTA_SOURCE = (
     "account-owner limits (2026-11-19), ACCOUNT_LIMITS in lib/shellbox/src/shellbox/backends/daytona/usage_cli.py"
 )
@@ -42,15 +42,15 @@ PER_SANDBOX_MAXIMUM = SandboxProfile(cpu=4, memory_gib=8, disk_gib=10)
 ACCOUNT_LIMITS = MappingProxyType(
     {
         Account.EVAL: AccountLimits(
-            regions=MappingProxyType({"us": RegionLimits(2500, 7500, 25000)}),
+            regions=MappingProxyType({DAYTONA_TARGET: RegionLimits(2500, 7500, 25000)}),
             per_sandbox=PER_SANDBOX_MAXIMUM,
         ),
         Account.RL: AccountLimits(
-            regions=MappingProxyType({"us": RegionLimits(6000, 12000, 20000)}),
+            regions=MappingProxyType({DAYTONA_TARGET: RegionLimits(6000, 12000, 20000)}),
             per_sandbox=PER_SANDBOX_MAXIMUM,
         ),
         Account.DATA: AccountLimits(
-            regions=MappingProxyType({"us": RegionLimits(2000, 4000, 10000)}),
+            regions=MappingProxyType({DAYTONA_TARGET: RegionLimits(2000, 4000, 10000)}),
             per_sandbox=PER_SANDBOX_MAXIMUM,
         ),
     }
