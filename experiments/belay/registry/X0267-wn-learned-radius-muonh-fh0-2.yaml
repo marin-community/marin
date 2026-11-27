@@ -4,7 +4,7 @@ name: 'WN*: learned-radius MuonH, fh0.2, head logit mult'
 category: Optimizers
 summary: 🤖 Posted on behalf of @WhenWen.
 source: intake
-status: running
+status: done
 track: competitive-d512
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7224762997
@@ -28,6 +28,13 @@ trials:
   commit: d792d926eb
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+  loss:
+  - 2.8489
+  delta:
+  - -0.0192
+  steps: 10767
+  baseline: s7n-d512 2.8681 (same commit, seed 0)
+  step_time_change: +2%
 - id: t002
   variant: nonsi + sqrt8 start + fh0.2 + closed-form head logit mult
   rung: competitive-d768
