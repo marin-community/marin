@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lexical admission checks over published-release evidence, shared by curation and the catalog app.
-
-Every dependency is a lib type: the checks import nothing from ``experiments/``.
-"""
+"""Atlas admission policy for retained-release curation."""
 
 from finestore.rl.curation import (
     DeconReceiptStatus,

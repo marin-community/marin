@@ -31,16 +31,16 @@ from finestore.rl.pinned_file import PinnedHfFile, read_pinned_hf_file
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation.retained_admission import (
+    PRIVATE_RELEASE_NAMESPACE,
+    require_lexical_qualification,
+)
 from experiments.post_training.task_curation.retained_release import (
     RETAINED_IMPORT_VERSION,
     RetainedCohort,
     import_retained,
 )
 from experiments.post_training.task_curation.source import RlDataSource, SourceReference
-from infra.marina.apps.rl_data_catalog.server.admission import (
-    PRIVATE_RELEASE_NAMESPACE,
-    require_lexical_qualification,
-)
 
 PINS_REPO = "open-athena/atlas-source-pins"
 PINS_REVISION = "5ab081a1db11de1f5a3fa07563b8944b86d15541"

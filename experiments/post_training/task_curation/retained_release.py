@@ -31,8 +31,8 @@ from taskcompendium.pipeline.source_processing import SourceProcessingMode
 from experiments.post_training.task_curation.campaign import CampaignArtifact, PipelineResult
 from experiments.post_training.task_curation.config import PipelineOptions
 from experiments.post_training.task_curation.prebuilt import require_runnable_grader
+from experiments.post_training.task_curation.retained_admission import require_lexical_qualification
 from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceReference
-from infra.marina.apps.rl_data_catalog.server.admission import require_lexical_qualification
 
 RETAINED_TASKS_FILE = "tasks.parquet"
 """The published cohort file the reader downloads and every view derives from."""
