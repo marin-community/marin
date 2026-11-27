@@ -73,6 +73,8 @@ DEFAULT_SANDBOX_TTL_MINUTES = 360
 DEFAULT_AUTO_STOP_MINUTES = 30
 DEFAULT_OUTPUT_COLLECTION_TIMEOUT = 60
 logger = logging.getLogger(__name__)
+# Daytona's total-quota rejection: apps/api/src/sandbox/services/sandbox.service.ts at daytonaio/daytona@b5a5d9e.
+QUOTA_EXHAUSTED_PATTERN = re.compile(r"Total (CPU|memory|disk|GPU) limit exceeded")
 CONTROL_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 CONTROL_CWD = "/"
 COUNT_PREFIX = "SHELLBOX_COUNT="
@@ -107,10 +109,21 @@ def _control_command(script: str) -> str:
     )
 
 
+def _quota_exhausted(error: DaytonaError) -> bool:
+    """Whether Daytona rejected a creation because the region's total quota is in use.
+
+    A request above a per-sandbox maximum is also a 400 but cannot succeed later.
+    """
+    return error.status_code == HTTPStatus.BAD_REQUEST and QUOTA_EXHAUSTED_PATTERN.search(str(error)) is not None
+
+
 async def _create_sandbox(
     client: AsyncDaytona, params: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams, timeout: float
 ) -> AsyncSandbox:
-    """Retry throttling using a caller-owned name to recover an accepted creation.
+    """Retry throttling and exhausted quota, using a caller-owned name to recover an accepted creation.
+
+    Daytona checks and reserves quota inside the create request, so a rejected
+    creation left no sandbox behind. The caller's timeout bounds the retries.
 
     Raises:
         MachineUnavailable: Daytona removed the sandbox before it started.
@@ -138,6 +151,12 @@ async def _create_sandbox(
             )
             delay = max(retry_after, backoff.next_interval())
             logger.warning("Retrying throttled Daytona creation: delay=%.3f", delay)
+            await sleep(delay)
+        except DaytonaError as error:
+            if not _quota_exhausted(error):
+                raise
+            delay = backoff.next_interval()
+            logger.warning("Retrying Daytona creation after exhausted quota: delay=%.3f: %s", delay, error)
             await sleep(delay)
 
 

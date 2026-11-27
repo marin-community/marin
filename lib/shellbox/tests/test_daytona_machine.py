@@ -194,6 +194,48 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("message", "retried"),
+    [
+        ("Total CPU limit exceeded. Maximum allowed: 6000.", True),
+        ("CPU request 5 exceeds maximum allowed per sandbox (4).", False),
+    ],
+)
+def test_daytona_creation_waits_for_exhausted_quota_and_rejects_oversized_requests(monkeypatch, message, retried):
+    async def scenario():
+        posts = []
+
+        async def wait(delay):
+            pass
+
+        monkeypatch.setattr("shellbox.backends.daytona.machine.sleep", wait)
+
+        async def endpoint(request):
+            if request.method == "POST":
+                posts.append(request.path)
+                if len(posts) < 3:
+                    return web.json_response({"message": message, "statusCode": 400}, status=400)
+            return web.json_response(sandbox_json("created", "started", "https://fixture.invalid/toolbox"))
+
+        app = web.Application()
+        app.router.add_route("*", "/{path:.*}", endpoint)
+        async with TestServer(app) as server:
+            async with AsyncDaytona(
+                DaytonaConfig(api_key="fixture", api_url=str(server.make_url("")).rstrip("/"))
+            ) as client:
+                params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
+                if retried:
+                    sandbox = await _create_sandbox(client, params, 60)
+                    assert sandbox.id == "created"
+                    assert len(posts) == 3
+                else:
+                    with pytest.raises(DaytonaError, match="per sandbox"):
+                        await _create_sandbox(client, params, 60)
+                    assert len(posts) == 1
+
+    asyncio.run(scenario())
+
+
 def test_daytona_creation_reports_a_sandbox_removed_while_starting_as_unavailable():
     async def scenario():
         async def endpoint(request):
