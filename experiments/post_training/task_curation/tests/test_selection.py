@@ -175,9 +175,17 @@ def recipe(tmp_path: Path) -> SelectionRecipe:
 def schema_030_json(task: TaskSpec) -> str:
     """``task`` as an admitted schema 0.30 row, whose script grader names its machine's environment directly."""
     document = {**task.model_dump(mode="json"), "schema_version": UPGRADABLE_SCHEMA_VERSION}
-    placement = document["grader"].pop("placement")
-    document["grader"].update({key: placement[key] for key in ("environment", "collect", "artifacts")})
+    placement = document["grader"].pop("placement", None)
+    if placement is not None:
+        document["grader"].update({key: placement[key] for key in ("environment", "collect", "artifacts")})
     return json.dumps(document)
+
+
+def released_agentic_json(task: TaskSpec, task_json: Callable[[TaskSpec], str] = schema_030_json) -> str:
+    """A released row as a selection stores it for an agentic source."""
+    document = json.loads(task_json(task))
+    tags = document["tags"]
+    return json.dumps({**document, "tags": tags if "agentic" in tags else [*tags, "agentic"]})
 
 
 def admitted_source(
@@ -405,8 +413,10 @@ def test_selection_imports_image_graders_from_admitted_components(tmp_path):
     }
 
 
-def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
-    source = task_file(path, list(tasks))
+def released_training(
+    path: Path, *tasks: TaskSpec, task_json: Callable[[TaskSpec], str] = TaskSpec.model_dump_json
+) -> ReleasedSource:
+    source = task_file(path, list(tasks), task_json)
     return ReleasedSource(
         **source.model_dump(),
         family="agentic",
@@ -416,7 +426,8 @@ def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
     )
 
 
-def released_probe(root, release, tasks, *, graded, pin=True):
+def released_probe(root, release, tasks, *, graded, pin=True, task_json=TaskSpec.model_dump_json):
+    """Attempts whose digests a trainer recorded from the probe selection's stored rows."""
     name, version = "probe", "2026.11.18.1"
     selection = root / selection_module.SELECTION_PREFIX / name / version
     selection.mkdir(parents=True)
@@ -425,13 +436,11 @@ def released_probe(root, release, tasks, *, graded, pin=True):
     )
     rows = []
     for index, task in enumerate(tasks):
-        tags = task.tags if "agentic" in task.tags else (*task.tags, "agentic")
-        task = task.model_copy(update={"tags": tags})
         rows.append(
             {
                 "selection": f"{name}@{version}",
                 "task_id": task.id,
-                "task_digest": canonical_sha256(task.model_dump(mode="json")),
+                "task_digest": canonical_sha256(json.loads(released_agentic_json(task, task_json))),
                 "outcome": Outcome.GRADED if index < graded else Outcome.INFRA_ERROR,
             }
         )
@@ -534,11 +543,10 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
     )
     skipped = source_task("skip-exact-task")
     tasks = (repaired, repeated, alias, skipped)
-    release = released_training(tmp_path / "release.parquet", *tasks)
-    release = release.model_copy(update={"admission": released_probe(tmp_path, release, tasks, graded=len(tasks))})
-    skip_list = task_file(
-        tmp_path / "skip.parquet", [selection_module.with_agentic_tag(task) for task in (old_task, skipped)]
-    )
+    release = released_training(tmp_path / "release.parquet", *tasks, task_json=schema_030_json)
+    probe = released_probe(tmp_path, release, tasks, graded=len(tasks), task_json=schema_030_json)
+    release = release.model_copy(update={"admission": probe})
+    skip_list = task_file(tmp_path / "skip.parquet", [old_task, skipped], task_json=released_agentic_json)
     skipped_admitted = source_task("skip-admitted-task")
     admitted_skip = task_file(tmp_path / "admitted-skip.parquet", [skipped_admitted], task_json=schema_030_json)
     heldout = source_task("validation", dataset="structure-closure")
@@ -563,7 +571,9 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
     changed = settings.model_copy(update={"released": (release.model_copy(update={"sha256": "0" * 64}),)})
     assert step.fingerprint() != task_selection_step(curated, changed).fingerprint()
 
-    replacement = task_file(tmp_path / "replacement.parquet", [repeated, alias, skipped, source_task("replaced")])
+    replacement = task_file(
+        tmp_path / "replacement.parquet", [repeated, alias, skipped, source_task("replaced")], task_json=schema_030_json
+    )
     open_path = StoragePath.open
     release_read = False
 
@@ -590,6 +600,8 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
         "duplicate": 1,
     }
     rows = pq.read_table(root / TRAIN_FILENAME).to_pylist()
+    released_row = next(row["task_spec"] for row in rows if row["agentic"])
+    assert json.loads(released_row) == json.loads(released_agentic_json(repaired))
     labels = {}
     for row in rows:
         task = TaskSpec.model_validate_json(row["task_spec"])

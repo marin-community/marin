@@ -514,9 +514,13 @@ def _released_records(source: ReleasedSource, attempts: list[dict[str, Any]]) ->
             task = TaskSpec.model_validate_json(raw)
             if "agentic" in task.tags and not source.agentic:
                 raise ValueError(f"Released task {task.id} contradicts the source's agentic declaration")
-            published = with_agentic_tag(task) if source.agentic else task
-            released.add((published.id, canonical_sha256(published.model_dump(mode="json"))))
-            yield task, published.model_dump_json()
+            task_json = raw
+            if source.agentic and "agentic" not in task.tags:
+                # The released text with the agentic tag; every other field keeps its released value.
+                document = {**json.loads(raw), "tags": [*task.tags, "agentic"]}
+                task_json = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
+            released.add((task.id, canonical_sha256(json.loads(task_json))))
+            yield task, task_json
     _check_release_admission(source, released, attempts)
 
 
