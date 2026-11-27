@@ -197,54 +197,22 @@ WITH engine_rows AS (
                     'num_requests_waiting', 'kv_cache_usage_perc', 'prefix_cache_hits_total',
                     'prefix_cache_queries_total', 'num_preemptions_total', 'request_success_total')
            OR name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
-), sampled AS (
-    -- One row per series and bucket, carrying the bucket's ordered first and last
-    -- samples beside its spread. Grouping here keeps LAG off the millions of scrape
-    -- rows the filters select: a per-sample window over them spills and misses the
-    -- bridge query deadline.
-    SELECT {bucket} AS t,
-           service, execution_uid, node_name, process_index,
-           name, resource_key, attribute_key, finished_reason, is_engine,
-           SUM(value) AS sum_value,
-           COUNT(value) AS sample_count,
-           first_value(value ORDER BY timestamp_ms, seq) AS counter_start,
-           last_value(value ORDER BY timestamp_ms, seq) AS counter_end,
-           MIN(value) AS counter_min,
-           MAX(value) AS counter_max
-    FROM filtered
-    GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
-    -- An aggregate predicate, so the planner cannot push the is_engine check
-    -- back under the scan and evaluate its json_get per scanned row.
-    HAVING MIN(is_engine) = 1
-), lagged AS (
-    SELECT *, LAG(counter_end) OVER (
+), deltas AS (
+    SELECT *, value - LAG(value) OVER (
                PARTITION BY service, execution_uid, node_name, process_index,
                             name, resource_key, attribute_key
-               ORDER BY t
-           ) AS previous_end
-    FROM sampled
-), growth AS (
-    SELECT *,
-           -- Combine the cross-bucket step with the bucket's ordered endpoints.
-           -- For an in-bucket drop, the extrema approximate growth on each side.
-           -- Overlapping pre- and post-reset values or multiple resets can inflate it.
-           CASE
-               WHEN previous_end IS NULL AND sample_count = 1 THEN NULL
-               WHEN counter_start > counter_min OR counter_end < counter_max
-                    THEN COALESCE(GREATEST(counter_start - previous_end, 0), 0)
-                     + (counter_max - counter_start) + (counter_end - counter_min)
-               ELSE COALESCE(GREATEST(counter_start - previous_end, 0), 0)
-                    + (counter_end - counter_start)
-           END AS growth
-    FROM lagged
+               ORDER BY timestamp_ms, seq
+           ) AS delta
+    FROM filtered
 )
-SELECT t, name,
+SELECT {bucket} AS t, name,
        finished_reason,
-       SUM(sum_value) AS sum_value,
-       SUM(sample_count) AS sample_count,
-       SUM(growth) AS delta_sum
-FROM growth
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       SUM(CASE WHEN delta IS NULL THEN NULL ELSE GREATEST(delta, 0) END) AS delta_sum
+FROM deltas
 GROUP BY 1, 2, 3
+HAVING MIN(is_engine) = 1
 ORDER BY t, name, finished_reason
 LIMIT {RL_MAX_ENGINE_ROWS + 1}
 """.strip()

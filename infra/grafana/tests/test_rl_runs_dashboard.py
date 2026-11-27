@@ -799,7 +799,17 @@ def test_engine_rates_keep_two_actors_that_both_report_engine_zero_apart(store) 
     assert len(rates) == 5
 
 
-def test_engine_growth_counts_a_reset_inside_its_bucket() -> None:
+@pytest.mark.parametrize(
+    ("values", "growth"),
+    [
+        ((1000.0, 1010.0, 0.0, 10.0), 20),
+        ((0.0, 100.0, 0.0, 200.0), 300),
+        ((100.0, 200.0, 0.0, 300.0), 400),
+        ((10.0, 100.0, 20.0, 30.0), 100),
+        ((0.0, 100.0, 0.0, 50.0, 0.0, 200.0), 350),
+    ],
+)
+def test_engine_growth_counts_resets_inside_its_bucket(values, growth) -> None:
     database = _fresh_store()
     _seed_rows(
         database,
@@ -815,14 +825,14 @@ def test_engine_growth_counts_a_reset_inside_its_bucket() -> None:
                 role="inference",
                 attributes={"metric_source": "vllm", "engine": "0"},
             )
-            for index, value in enumerate((1000.0, 1010.0, 0.0, 10.0))
+            for index, value in enumerate(values)
         ],
     )
 
     (row,) = _overview_rows(database, "engine_tokens")
 
     assert row["t"] == _WINDOW_START_MS
-    assert row["generation"] == pytest.approx(20 / 300)
+    assert row["generation"] == pytest.approx(growth / 300)
 
 
 def test_engine_rates_keep_two_actors_that_differ_only_by_resource() -> None:
