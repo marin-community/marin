@@ -3,6 +3,7 @@
 
 import itertools
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -23,7 +24,7 @@ from levanter.grug.attention import (
     reference_attention,
 )
 from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds, fa4_cute_segment_bounds
-from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM
+from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM, flash4_cute_kernel_config
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.devices import use_test_devices
 
@@ -550,7 +551,7 @@ def test_real_gpu_fa4_cute_sm100_attention_matches_reference():
     )
 
 
-@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128)])
+@pytest.mark.parametrize(("q_heads", "kv_heads", "head_dim"), [(4, 1, 64), (2, 2, 64), (4, 1, 128), (2, 2, 128)])
 def test_real_gpu_fa4_cute_attention_matches_reference_for_valid_dynamic_packed_segments(q_heads, kv_heads, head_dim):
     if jax.default_backend() != "gpu":
         pytest.skip("FA4/CuTe correctness requires a GPU backend.")
@@ -601,6 +602,52 @@ _SEQUENCE_SHARDED_CASES = [("gpu_fa4_cute", *layout) for layout in _SEQUENCE_SHA
     for q_heads, kv_heads, head_dim in _SEQUENCE_SHARDED_LAYOUTS
     if head_dim == SM100_HEAD_DIM and q_heads // kv_heads in SM100_GQA_RATIOS
 ]
+
+
+@pytest.mark.timeout(180)
+def test_real_gpu_fa4_cute_d64_backward_stays_finite_after_nan_cotangent():
+    if jax.default_backend() != "gpu" or "H100" not in jax.local_devices()[0].device_kind:
+        pytest.skip("The saved D64 backward regression uses the pinned Hopper schedule.")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("cutlass.cute")
+    pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
+
+    # Saved Q/K/V and forward residuals reproduce stale shared-memory values
+    # in the D64/MHA backward path. Recomputing OUT or LSE changes the inputs.
+    fixture = Path(__file__).with_name("fixtures") / "fa4_d64_backward_history.npz"
+    with np.load(fixture, allow_pickle=False) as packet:
+        q, k, v, out, dout = (jnp.asarray(packet[name].view(jnp.bfloat16)) for name in ("q", "k", "v", "out", "dout"))
+        lse, bounds, valid, q_offset = (jnp.asarray(packet[name]) for name in ("lse", "bounds", "valid", "q_offset"))
+        healthy = tuple(packet[name] for name in ("dq", "dk", "dv"))
+    config = flash4_cute_kernel_config(q.shape[-1], arch=90)
+
+    def backward(q, k, v, out, dout, lse, bounds, valid, q_offset):
+        return fa4_cute_backend.segmented_flash_attention_backward(
+            q,
+            k,
+            v,
+            out,
+            dout,
+            lse,
+            bounds,
+            valid,
+            softmax_scale=q.shape[-1] ** -0.5,
+            kernel_config=config,
+            q_offset=q_offset,
+        )
+
+    finite_args = (q, k, v, out, dout, lse, bounds, valid, q_offset)
+    poison_args = (q, k, v, out, jnp.full_like(dout, jnp.nan), lse, bounds, valid, q_offset)
+    jax.block_until_ready((finite_args, poison_args))
+    compiled = jax.jit(backward).lower(*finite_args).compile()
+    outputs = []
+    # Keep device outputs alive and reuse the exact arguments. Reference or
+    # forward allocations between these calls can disturb the memory history.
+    for args in (finite_args, finite_args, poison_args, finite_args, finite_args):
+        outputs.append(jax.block_until_ready(compiled(*args)))
+    for index in (0, 1, 3, 4):
+        for gradient, expected in zip(outputs[index], healthy, strict=True):
+            np.testing.assert_array_equal(np.asarray(gradient).view(np.uint16), expected)
 
 
 @pytest.mark.parametrize(("implementation", "q_heads", "kv_heads", "head_dim"), _SEQUENCE_SHARDED_CASES)
