@@ -125,7 +125,7 @@ def test_ownership_sentinels_distinguish_launch_writers_context_writers_and_auth
 def test_code_default_declarations_match_native_dataclasses_and_canonical_choices():
     for prefix, config in (
         ("trainer.algorithm.ftpo", FTPOConfig),
-        ("generator.speculative_decoding.training", speculative_decoding.SpeculatorTrainingConfig),
+        ("generator.speculative_decoding.training", speculative_decoding.DraftTrainingConfig),
     ):
         declared = {path.removeprefix(prefix + ".") for path in UNDECLARED if path.startswith(prefix + ".")}
         assert declared == {field.name for field in fields(config)}

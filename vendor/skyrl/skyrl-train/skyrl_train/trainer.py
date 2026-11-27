@@ -334,21 +334,21 @@ class RayPPOTrainer:
             if raw_speculative_decoding is None
             else SpeculativeDecodingConfig.from_mapping(raw_speculative_decoding)
         )
-        self._speculator_capture_active = False
-        self._speculator_revision = (
+        self._draft_capture_active = False
+        self._draft_revision = (
             None if self.speculative_decoding is None else self.speculative_decoding.model.source_identity
         )
-        self._sealed_speculator_capture_uri: str | None = None
-        self._speculator_checkpoint_root = join_resource_path(self.cfg.trainer.ckpt_path, "drafts")
+        self._sealed_draft_capture_uri: str | None = None
+        self._draft_checkpoint_root = join_resource_path(self.cfg.trainer.ckpt_path, "drafts")
         self._draft_trainer = None
         self._draft_trainer_update_ref: ObjectRef | None = None
         self._draft_trainer_submitted_at: float | None = None
-        self._speculator_refresh_task: asyncio.Task | None = None
-        self._speculator_requested_revision: str | None = None
-        self._speculator_update_failures = 0
-        self._speculator_install_count = 0
-        self._speculator_install_failures = 0
-        self._speculator_checkpoint_poll_failures = 0
+        self._draft_refresh_task: asyncio.Task | None = None
+        self._draft_requested_revision: str | None = None
+        self._draft_update_failures = 0
+        self._draft_install_count = 0
+        self._draft_install_failures = 0
+        self._draft_checkpoint_poll_failures = 0
 
         # initialized in `build_models`
         self.policy_model: PPORayActorGroup = None
@@ -565,13 +565,13 @@ class RayPPOTrainer:
         if self.eval_trajectory_sink is not self.trajectory_sink:
             self._guarded_sync(self.eval_trajectory_sink.close, label="Evaluation retention shutdown")
         self._draft_trainer_update_ref = None
-        if self._speculator_refresh_task is not None:
+        if self._draft_refresh_task is not None:
             await self._guarded_async(
-                self._speculator_refresh_task,
+                self._draft_refresh_task,
                 timeout=30,
                 label="Draft refresh completion",
             )
-            self._speculator_refresh_task = None
+            self._draft_refresh_task = None
         await self._guarded_async(
             self.inference_engine_client.teardown(),
             timeout=30,
@@ -811,16 +811,16 @@ class RayPPOTrainer:
         config = self.speculative_decoding
         if config is None or config.training is None or self._draft_trainer is not None:
             return
-        if not is_cloud_uri(self._speculator_checkpoint_root):
+        if not is_cloud_uri(self._draft_checkpoint_root):
             raise ValueError("Online EAGLE training requires trainer.ckpt_path to use s3://, gs://, or gcs://")
         self._draft_trainer = create_draft_trainer(
             initial_model=config.model,
-            checkpoint_root=self._speculator_checkpoint_root,
+            checkpoint_root=self._draft_checkpoint_root,
         )
         logger.info("DraftTrainer ready: {}", await self._draft_trainer.status.remote())
-        await self._refresh_latest_speculator(wait=True)
+        await self._refresh_latest_draft(wait=True)
 
-    def _should_update_speculator(self, step: int) -> bool:
+    def _should_update_draft(self, step: int) -> bool:
         config = self.speculative_decoding
         return (
             config is not None
@@ -829,40 +829,40 @@ class RayPPOTrainer:
             and step % config.training.interval_steps == 0
         )
 
-    def _speculator_capture_uri(self, step: int) -> str:
-        return join_resource_path(self._speculator_checkpoint_root, "captures", f"step-{step}")
+    def _draft_capture_uri(self, step: int) -> str:
+        return join_resource_path(self._draft_checkpoint_root, "captures", f"step-{step}")
 
-    async def _begin_speculator_capture(self, step: int) -> None:
+    async def _begin_draft_capture(self, step: int) -> None:
         """Capture rollouts generated for training step ``step`` without making draft failures fatal."""
-        await self._poll_speculator_lifecycle()
-        if self._speculator_capture_active or not self._should_update_speculator(step):
+        await self._poll_draft_lifecycle()
+        if self._draft_capture_active or not self._should_update_draft(step):
             return
         assert self.speculative_decoding is not None
         training = self.speculative_decoding.training
         assert training is not None
-        assert self._speculator_revision is not None
+        assert self._draft_revision is not None
         capture_config = OnlineEagleCaptureConfig(
             step=step,
             max_tokens=training.max_tokens_per_update,
             max_window_tokens=training.max_window_tokens,
             target_revision=_policy_revision(step - 1),
-            draft_revision=self._speculator_revision,
+            draft_revision=self._draft_revision,
             reserved_gpu_memory_gib=training.reserved_gpu_memory_gib,
         )
-        capture_uri = self._speculator_capture_uri(step)
+        capture_uri = self._draft_capture_uri(step)
         try:
             if await asyncio.to_thread(io.exists, capture_uri):
                 await asyncio.to_thread(io.remove, capture_uri)
             results = await self.inference_engine_client.begin_online_eagle_capture(capture_config.to_mapping())
         except Exception as error:
             logger.warning("Online EAGLE capture skipped at step {}: {}", step, error)
-            self.all_metrics["speculator/capture_failures"] = 1.0
+            self.all_metrics["online_draft/capture_failures"] = 1.0
             return
         active = _active_online_eagle_results(results)
         if not active:
             logger.warning("Online EAGLE capture had no active ranks at step {}", step)
             return
-        self._speculator_capture_active = True
+        self._draft_capture_active = True
         logger.info(
             "Online EAGLE capture started: step={} ranks={} target_revision={} draft_revision={}",
             step,
@@ -871,29 +871,29 @@ class RayPPOTrainer:
             capture_config.draft_revision,
         )
 
-    async def _seal_speculator_capture(self) -> None:
+    async def _seal_draft_capture(self) -> None:
         """Publish the active capture and retain only its cloud URI."""
-        if not self._speculator_capture_active:
+        if not self._draft_capture_active:
             return
-        capture_uri = self._speculator_capture_uri(self.global_step)
-        self._speculator_capture_active = False
+        capture_uri = self._draft_capture_uri(self.global_step)
+        self._draft_capture_active = False
         try:
             manifests = await self.inference_engine_client.seal_online_eagle_capture(capture_uri)
         except Exception as error:
             logger.warning("Online EAGLE capture publication failed at step {}: {}", self.global_step, error)
-            self.all_metrics["speculator/capture_failures"] = 1.0
+            self.all_metrics["online_draft/capture_failures"] = 1.0
             return
         active = _active_online_eagle_results(manifests)
         if not active:
             logger.warning("Online EAGLE capture published no rank manifests at step {}", self.global_step)
-            self.all_metrics["speculator/capture_failures"] = 1.0
+            self.all_metrics["online_draft/capture_failures"] = 1.0
             return
-        self._sealed_speculator_capture_uri = capture_uri
+        self._sealed_draft_capture_uri = capture_uri
         self.all_metrics.update(
             {
-                "speculator/sealed_rows": float(sum(item.get("captured_rows", 0) for item in active)),
-                "speculator/sealed_windows": float(sum(len(item.get("windows", ())) for item in active)),
-                "speculator/capture_dropped_windows": float(sum(item.get("dropped_windows", 0) for item in active)),
+                "online_draft/sealed_rows": float(sum(item.get("captured_rows", 0) for item in active)),
+                "online_draft/sealed_windows": float(sum(len(item.get("windows", ())) for item in active)),
+                "online_draft/capture_dropped_windows": float(sum(item.get("dropped_windows", 0) for item in active)),
             }
         )
         logger.info(
@@ -903,9 +903,9 @@ class RayPPOTrainer:
             capture_uri,
         )
 
-    async def _start_speculator_update(self) -> None:
+    async def _start_draft_update(self) -> None:
         """Hand the published capture URI to the independent DraftTrainer actor."""
-        capture_uri = self._sealed_speculator_capture_uri
+        capture_uri = self._sealed_draft_capture_uri
         if capture_uri is None or self._draft_trainer_update_ref is not None:
             return
         if self._draft_trainer is None or self.speculative_decoding is None:
@@ -922,72 +922,72 @@ class RayPPOTrainer:
         )
         self._draft_trainer_update_ref = self._draft_trainer.update.remote(request)
         self._draft_trainer_submitted_at = time.monotonic()
-        self._sealed_speculator_capture_uri = None
-        self.all_metrics["speculator/update_pending"] = 1.0
+        self._sealed_draft_capture_uri = None
+        self.all_metrics["online_draft/update_pending"] = 1.0
         logger.info(
             "DraftTrainer update submitted: step={} capture_uri={}",
             self.global_step,
             capture_uri,
         )
 
-    async def _start_latest_speculator_refresh(self) -> None:
+    async def _start_latest_draft_refresh(self) -> None:
         if (
             self.speculative_decoding is None
             or self.speculative_decoding.training is None
-            or self._speculator_refresh_task is not None
+            or self._draft_refresh_task is not None
         ):
             return
         try:
             checkpoint = await asyncio.to_thread(
                 read_latest_draft_checkpoint,
-                self._speculator_checkpoint_root,
+                self._draft_checkpoint_root,
                 source_identity=self.speculative_decoding.model.source_identity,
             )
         except Exception as error:
-            self._speculator_checkpoint_poll_failures += 1
-            self.all_metrics["speculator/checkpoint_poll_failures"] = float(self._speculator_checkpoint_poll_failures)
+            self._draft_checkpoint_poll_failures += 1
+            self.all_metrics["online_draft/checkpoint_poll_failures"] = float(self._draft_checkpoint_poll_failures)
             logger.warning("Draft checkpoint poll failed: {}", error)
             return
         if (
             checkpoint is None
-            or checkpoint.revision == self._speculator_revision
-            or checkpoint.revision == self._speculator_requested_revision
+            or checkpoint.revision == self._draft_revision
+            or checkpoint.revision == self._draft_requested_revision
         ):
             return
-        self._speculator_requested_revision = checkpoint.revision
-        self._speculator_refresh_task = asyncio.create_task(
+        self._draft_requested_revision = checkpoint.revision
+        self._draft_refresh_task = asyncio.create_task(
             self.inference_engine_client.update_draft_weights(
                 runai_model_uri(checkpoint.weights_uri),
             )
         )
         await asyncio.sleep(0)
 
-    async def _finish_speculator_refresh(self) -> None:
-        task = self._speculator_refresh_task
+    async def _finish_draft_refresh(self) -> None:
+        task = self._draft_refresh_task
         if task is None or not task.done():
             return
-        requested_revision = self._speculator_requested_revision
-        self._speculator_refresh_task = None
+        requested_revision = self._draft_requested_revision
+        self._draft_refresh_task = None
         try:
             coverage = task.result()
         except Exception as error:
             logger.warning("Draft refresh failed for revision {}: {}", requested_revision, error)
-            self._speculator_requested_revision = None
-            self._speculator_install_failures += 1
+            self._draft_requested_revision = None
+            self._draft_install_failures += 1
             return
         successful = [entry for entry in coverage if entry.get("active", False)]
         failed = [entry for entry in coverage if not entry.get("active", False)]
-        self._speculator_install_failures += len(failed)
+        self._draft_install_failures += len(failed)
         if len(successful) == len(coverage) and coverage:
-            self._speculator_revision = requested_revision
-            self._speculator_install_count += 1
+            self._draft_revision = requested_revision
+            self._draft_install_count += 1
             logger.info(
                 "Draft revision refreshed: revision={} engines={}",
                 requested_revision,
                 len(successful),
             )
         else:
-            self._speculator_requested_revision = None
+            self._draft_requested_revision = None
             logger.warning(
                 "Draft revision refresh was partial: revision={} successful_engines={} failed_engines={}",
                 requested_revision,
@@ -996,21 +996,21 @@ class RayPPOTrainer:
             )
         self.all_metrics.update(
             {
-                "speculator/install_count": float(self._speculator_install_count),
-                "speculator/install_failures": float(self._speculator_install_failures),
-                "speculator/install_successful_engines": float(len(successful)),
-                "speculator/install_failed_engines": float(len(failed)),
+                "online_draft/install_count": float(self._draft_install_count),
+                "online_draft/install_failures": float(self._draft_install_failures),
+                "online_draft/install_successful_engines": float(len(successful)),
+                "online_draft/install_failed_engines": float(len(failed)),
             }
         )
 
-    async def _refresh_latest_speculator(self, *, wait: bool = False) -> None:
-        await self._finish_speculator_refresh()
-        await self._start_latest_speculator_refresh()
-        if wait and self._speculator_refresh_task is not None:
-            await self._speculator_refresh_task
-            await self._finish_speculator_refresh()
+    async def _refresh_latest_draft(self, *, wait: bool = False) -> None:
+        await self._finish_draft_refresh()
+        await self._start_latest_draft_refresh()
+        if wait and self._draft_refresh_task is not None:
+            await self._draft_refresh_task
+            await self._finish_draft_refresh()
 
-    async def _poll_speculator_lifecycle(self) -> None:
+    async def _poll_draft_lifecycle(self) -> None:
         """Poll independent draft work and start any newly published refresh."""
         if self.speculative_decoding is None or self.speculative_decoding.training is None:
             return
@@ -1021,52 +1021,52 @@ class RayPPOTrainer:
             except Exception as error:
                 self._draft_trainer_update_ref = None
                 self._draft_trainer_submitted_at = None
-                self._speculator_update_failures += 1
-                self.all_metrics["speculator/update_pending"] = 0.0
-                self.all_metrics["speculator/update_failures"] = float(self._speculator_update_failures)
+                self._draft_update_failures += 1
+                self.all_metrics["online_draft/update_pending"] = 0.0
+                self.all_metrics["online_draft/update_failures"] = float(self._draft_update_failures)
                 logger.warning("DraftTrainer actor update failed: {}", error)
-                await self._refresh_latest_speculator()
+                await self._refresh_latest_draft()
                 return
             if ready:
                 self._draft_trainer_update_ref = None
                 if not isinstance(payload, OnlineEagleUpdateResult):
                     self._draft_trainer_submitted_at = None
-                    self._speculator_update_failures += 1
-                    self.all_metrics["speculator/update_pending"] = 0.0
-                    self.all_metrics["speculator/update_failures"] = float(self._speculator_update_failures)
+                    self._draft_update_failures += 1
+                    self.all_metrics["online_draft/update_pending"] = 0.0
+                    self.all_metrics["online_draft/update_failures"] = float(self._draft_update_failures)
                     logger.warning(
                         "DraftTrainer returned {}, expected OnlineEagleUpdateResult",
                         type(payload).__name__,
                     )
-                    await self._refresh_latest_speculator()
+                    await self._refresh_latest_draft()
                     return
                 result = payload
                 submitted_at = self._draft_trainer_submitted_at
                 self._draft_trainer_submitted_at = None
                 if submitted_at is not None:
-                    self.all_metrics["speculator/update_wall_seconds"] = time.monotonic() - submitted_at
+                    self.all_metrics["online_draft/update_wall_seconds"] = time.monotonic() - submitted_at
                 self.all_metrics.update(
                     {
-                        "speculator/update_pending": 0.0,
-                        "speculator/candidate_accepted": float(result.accepted),
-                        "speculator/train_loss": float(
+                        "online_draft/update_pending": 0.0,
+                        "online_draft/candidate_accepted": float(result.accepted),
+                        "online_draft/train_loss": float(
                             result.train_loss if result.train_loss is not None else float("nan")
                         ),
-                        "speculator/candidate_holdout_loss": float(
+                        "online_draft/candidate_holdout_loss": float(
                             result.candidate_holdout_loss if result.candidate_holdout_loss is not None else float("nan")
                         ),
-                        "speculator/candidate_holdout_agreement": float(
+                        "online_draft/candidate_holdout_agreement": float(
                             result.candidate_holdout_agreement
                             if result.candidate_holdout_agreement is not None
                             else float("nan")
                         ),
-                        "speculator/train_duration_seconds": float(
+                        "online_draft/train_duration_seconds": float(
                             result.duration_seconds if result.duration_seconds is not None else float("nan")
                         ),
                     }
                 )
                 if result.error is not None:
-                    self._speculator_update_failures += 1
+                    self._draft_update_failures += 1
                     logger.warning(
                         "DraftTrainer update failed: step={} error={}",
                         result.step,
@@ -1081,9 +1081,9 @@ class RayPPOTrainer:
                         result.candidate_uri,
                     )
             else:
-                self.all_metrics["speculator/update_pending"] = 1.0
-        self.all_metrics["speculator/update_failures"] = float(self._speculator_update_failures)
-        await self._refresh_latest_speculator()
+                self.all_metrics["online_draft/update_pending"] = 1.0
+        self.all_metrics["online_draft/update_failures"] = float(self._draft_update_failures)
+        await self._refresh_latest_draft()
 
     async def _sync_policy_for_rollouts(self, *, reason: str) -> None:
         """Load the policy's current weights into the inference engines.
@@ -1428,7 +1428,7 @@ class RayPPOTrainer:
 
     async def _publish(self, step: int) -> None:
         """Open rollout leases for training step ``step``, whose policy weights the engines now hold."""
-        await self._begin_speculator_capture(step)
+        await self._begin_draft_capture(step)
         await self.context.publish(step)
 
     @asynccontextmanager
@@ -1443,8 +1443,8 @@ class RayPPOTrainer:
             async_phase_window("rollout_wait", step=self.global_step, enabled=self._rollout_spans_enabled),
         ):
             yield
-        await self._seal_speculator_capture()
-        await self._start_speculator_update()
+        await self._seal_draft_capture()
+        await self._start_draft_update()
 
     @asynccontextmanager
     async def _training_window(self, step_wall: StepWallTime):
@@ -1585,7 +1585,7 @@ class RayPPOTrainer:
             duration_seconds=self.all_timings["train_critic_and_policy"],
         )
 
-        await self._poll_speculator_lifecycle()
+        await self._poll_draft_lifecycle()
         step_wall.start("weight_sync")
         with async_phase_window("weight_sync", step=self.global_step, enabled=self._rollout_spans_enabled):
             await self._sync_policy_for_rollouts(reason="training_step")

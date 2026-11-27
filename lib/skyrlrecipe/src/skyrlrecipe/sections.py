@@ -629,12 +629,12 @@ class ChatTemplate(Section):
     name_or_path: str | None = field(None)
 
 
-class SpeculatorModel(Section):
+class DraftModel(Section):
     source_uri: str = unset_field()
     source_identity: str = unset_field()
 
 
-class SpeculatorTraining(Section):
+class DraftTraining(Section):
     interval_steps: PositiveInt = unset_field()
     max_tokens_per_update: PositiveInt = unset_field()
     max_window_tokens: PositiveInt = unset_field()
@@ -652,9 +652,9 @@ class SpeculatorTraining(Section):
 
 class SpeculativeDecoding(Section):
     method: Literal["eagle3", "dspark"] = unset_field()
-    model: SpeculatorModel = unset_field()
+    model: DraftModel = unset_field()
     num_speculative_tokens: PositiveInt = unset_field()
-    training: SpeculatorTraining | None = field(None)
+    training: DraftTraining | None = field(None)
 
 
 class SamplingParams(Section):

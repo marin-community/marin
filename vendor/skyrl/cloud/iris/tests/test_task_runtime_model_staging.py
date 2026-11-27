@@ -31,7 +31,7 @@ from cloud.iris.task_runtime import (
 from cloud.iris.launch_config import load_launch_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from cloud.iris.tests.model_snapshot_fixtures import memory_model_snapshot
-from marinskyrl.speculative_decoding import SpeculatorModelConfig
+from marinskyrl.speculative_decoding import DraftModelConfig
 from skyrlrecipe.model_staging import HuggingFaceModelCache
 from marinskyrl.resource_locator import RolloutModelLoading
 
@@ -191,7 +191,7 @@ def test_staged_models_are_written_as_structured_config(tmp_path, monkeypatch) -
     identity = "sha256:" + "a" * 64
     policy = task_runtime.PreparedPolicyModel("s3://models/policy", identity, "/tmp/policy-metadata")
     tokenizer = task_runtime.PreparedPolicyTokenizer("/tmp/tokenizer-metadata")
-    draft = SpeculatorModelConfig(
+    draft = DraftModelConfig(
         source_uri="s3://models/tmp/ttl=14d/draft",
         source_identity=identity,
     )
@@ -409,12 +409,12 @@ def test_cpu_draft_mirror_avoids_the_hub_until_any_mirror_file_expires(tmp_path,
     monkeypatch.setattr(hf_model_cache, "_open_hugging_face_snapshot", open_snapshot)
     cache = HuggingFaceModelCache("org/draft", "d" * 40, str(mirror), manifest.identity, manifest.revision)
     prepared = prepare_draft_model(
-        SpeculatorModelConfig(str(mirror), manifest.identity),
+        DraftModelConfig(str(mirror), manifest.identity),
         cache_ttl_days=14,
         cache_source_prefix="s3://region/run",
         model_caches=(cache,),
     )
-    assert prepared == SpeculatorModelConfig(str(mirror), manifest.identity)
+    assert prepared == DraftModelConfig(str(mirror), manifest.identity)
     assert (mirror / "model.safetensors").is_file()
     assert hf_model_cache.load_model_manifest(str(mirror)).identity == manifest.identity
     assert opened == ([("org/draft", "d" * 40)] if missing else [])
@@ -498,12 +498,12 @@ def test_artifact_draft_staging_requires_matching_manifest_identity(tmp_path, mo
     monkeypatch.setattr(task_runtime, "load_model_manifest", lambda _uri: manifest)
     artifact_uri = "s3://draft/artifact"
     artifact = prepare_draft_model(
-        SpeculatorModelConfig(source_uri=artifact_uri, source_identity=manifest.identity),
+        DraftModelConfig(source_uri=artifact_uri, source_identity=manifest.identity),
         cache_ttl_days=14,
         cache_source_prefix="s3://region/run",
     )
     assert artifact.source_uri == artifact_uri and artifact.source_identity == manifest.identity
-    mismatched = SpeculatorModelConfig(
+    mismatched = DraftModelConfig(
         source_uri=artifact_uri, source_identity="sha256:" + ("1" if manifest.identity[-1] != "1" else "2") * 64
     )
     with pytest.raises(ValueError, match="identity mismatch"):

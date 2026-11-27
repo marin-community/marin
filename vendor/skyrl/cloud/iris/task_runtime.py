@@ -94,7 +94,7 @@ from marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 from marinskyrl.model_manifest import ModelManifest
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
-from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind, is_hugging_face_commit
+from marinskyrl.speculative_decoding import DraftModelConfig, DraftModelSourceKind, is_hugging_face_commit
 from marinskyrl.process_diagnostics import (
     ProcessOutcomeKind,
     initialize_process_diagnostics,
@@ -492,12 +492,12 @@ def _draft_mirror_manifest(model: HuggingFaceModelCache) -> ModelManifest:
 
 
 def prepare_draft_model(
-    model: SpeculatorModelConfig,
+    model: DraftModelConfig,
     *,
     cache_ttl_days: int,
     cache_source_prefix: str,
     model_caches: tuple[HuggingFaceModelCache, ...] = (),
-) -> SpeculatorModelConfig:
+) -> DraftModelConfig:
     """Resolve a draft locator, mirroring a Hub revision once when needed."""
     cached = next((cache for cache in model_caches if cache.uri == model.source_uri), None)
     if cached is not None:
@@ -528,15 +528,15 @@ def prepare_draft_model(
                 source_prefix=cache_source_prefix,
                 tokenizer_mode="policy",
             )
-            return SpeculatorModelConfig(source_uri=source_uri, source_identity=manifest.identity)
-        return SpeculatorModelConfig(source_uri=cached.uri, source_identity=manifest.identity)
-    if model.source_kind is SpeculatorModelSourceKind.LOCAL:
+            return DraftModelConfig(source_uri=source_uri, source_identity=manifest.identity)
+        return DraftModelConfig(source_uri=cached.uri, source_identity=manifest.identity)
+    if model.source_kind is DraftModelSourceKind.LOCAL:
         assert model.local_source_path is not None
         filesystem, root = fs_and_path(model.local_source_path)
         names = {entry.path for _, entry in file_inventory(filesystem, root)}
         validate_hf_model_weights(names, model.local_source_path)
         return model
-    if model.source_kind is SpeculatorModelSourceKind.HUGGING_FACE:
+    if model.source_kind is DraftModelSourceKind.HUGGING_FACE:
         if cache_ttl_days <= 0:
             raise ValueError("--draft-model-cache-ttl-days must be positive for a Hugging Face draft model")
         if not cache_source_prefix:
@@ -557,7 +557,7 @@ def prepare_draft_model(
                 f"Draft manifest identity mismatch: requested {model.source_identity}, "
                 f"found {manifest.identity} at {source_uri}"
             )
-    return SpeculatorModelConfig(source_uri=source_uri, source_identity=manifest.identity)
+    return DraftModelConfig(source_uri=source_uri, source_identity=manifest.identity)
 
 
 def materialize_data_sources(data_sources_json: str) -> None:
@@ -2157,7 +2157,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     draft_mapping = speculative.get("model") if isinstance(speculative, DictConfig) and not checkpoint_export else None
     draft_model = None
     if draft_mapping:
-        draft_model = SpeculatorModelConfig.from_mapping(
+        draft_model = DraftModelConfig.from_mapping(
             _container(draft_mapping), context="generator.speculative_decoding.model"
         )
     offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
@@ -2206,7 +2206,7 @@ def _write_final_config(
     *,
     policy_model: PreparedPolicyModel | None,
     policy_tokenizer: PreparedPolicyTokenizer | None,
-    draft_model: SpeculatorModelConfig | None,
+    draft_model: DraftModelConfig | None,
 ) -> Path:
     """Persist the post-staging root document consumed by the training subprocess."""
     root = OmegaConf.create(OmegaConf.to_container(config, resolve=False))

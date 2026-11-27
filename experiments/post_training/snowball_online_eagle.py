@@ -92,7 +92,7 @@ ROLE_PLAN = SkyRLRolePlan(
     micro_train_batch_size_per_gpu=1,
     n_samples_per_prompt=4,
 )
-TRAINING = sections.SpeculatorTraining(
+TRAINING = sections.DraftTraining(
     interval_steps=4,
     max_tokens_per_update=131072,
     max_window_tokens=16384,
@@ -147,9 +147,7 @@ def training_recipe(preset: _OnlineEaglePreset) -> SkyRLRecipe:
             engine_init_kwargs={"async_scheduling": False},
             speculative_decoding=sections.SpeculativeDecoding(
                 method="eagle3",
-                model=sections.SpeculatorModel(
-                    source_uri=str(INITIAL_DRAFT_URI), source_identity=INITIAL_DRAFT_REVISION
-                ),
+                model=sections.DraftModel(source_uri=str(INITIAL_DRAFT_URI), source_identity=INITIAL_DRAFT_REVISION),
                 num_speculative_tokens=3,
                 training=TRAINING,
             ),

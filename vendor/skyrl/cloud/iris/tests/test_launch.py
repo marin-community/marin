@@ -23,7 +23,7 @@ from skyrl_train.hf_export_schema import ExportFailed
 from cloud.iris import export_hf_checkpoint, hf_model_cache, launch, task_runtime
 from cloud.iris.artifacts import CHECKPOINT_MARKER_FILENAME
 from cloud.iris.task_runtime import prepare_draft_model
-from marinskyrl.speculative_decoding import SpeculatorModelConfig
+from marinskyrl.speculative_decoding import DraftModelConfig
 from cloud.iris.hf_model_cache import HuggingFaceSnapshot, load_model_manifest
 from cloud.iris.launch import LaunchOutcome, LaunchState, execute_launch
 from cloud.iris.launch_config import load_launch_config
@@ -617,7 +617,7 @@ def test_hub_draft_is_mirrored_and_rewritten_before_gpu_submission(tmp_path, mon
     class DraftBackend(RecordingBackend):
         def launch(self, config_path):
             resolved = yaml.safe_load(config_path.read_text())
-            draft = SpeculatorModelConfig.from_mapping(
+            draft = DraftModelConfig.from_mapping(
                 resolved["skyrl"]["generator"]["speculative_decoding"]["model"], context="draft"
             )
             manifest = load_model_manifest(draft.source_uri)
