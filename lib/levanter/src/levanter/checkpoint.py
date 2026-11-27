@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
-from typing import Any, Callable, List, Optional, ParamSpec, Sequence, TypeVar, Union
+from typing import Any, Callable, List, Optional, ParamSpec, Protocol, Sequence, TypeVar, Union, runtime_checkable
 
 import equinox
 import fsspec
@@ -369,6 +369,14 @@ class CheckpointCandidate:
     metadata: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class ResolvedCheckpoint:
+    """The path returned by checkpoint resolution and any available metadata."""
+
+    path: str
+    metadata: Mapping[str, Any]
+
+
 @dataclass
 class CheckpointDebugConfig:
     enabled: bool = False
@@ -429,6 +437,13 @@ class CheckpointRetention(StrEnum):
 
     TEMPORARY = "temporary"
     PERMANENT = "permanent"
+
+
+@runtime_checkable
+class CheckpointMetadataProvider(Protocol):
+    """A model that records application metadata with its training checkpoint."""
+
+    def checkpoint_metadata(self) -> Mapping[str, Any]: ...
 
 
 class Checkpointer:
@@ -565,7 +580,14 @@ class Checkpointer:
         ret_dict = self.load_checkpoint({"model": model}, checkpoint_path, axis_mapping=axis_mapping, mesh=mesh)
         return ret_dict["model"]
 
-    def on_step(self, *, tree: PyTree, step: int, force: bool = False):
+    def on_step(
+        self,
+        *,
+        tree: PyTree,
+        step: int,
+        force: bool = False,
+        metadata_provider: CheckpointMetadataProvider | None = None,
+    ):
         step = int(step)
 
         if step == 0:
@@ -591,15 +613,7 @@ class Checkpointer:
             self._manager.wait_until_finished()
             return
         if force and step == self._last_save_step and self.temporary_base_path is None:
-            # Promote the committed temporary save without rewriting its arrays or manifest.
-            self._manager.wait_until_finished()
-            # Match save_checkpoint's path so the temporary retention entry can be removed.
-            checkpoint_path = os.path.join(self.base_path, f"step-{step}")
-            _save_metadata(checkpoint_path, step, is_temporary=False, extra_metadata=self.metadata)
-            if jax.process_index() == 0:
-                self._temporary_checkpoints = [r for r in self._temporary_checkpoints if r.path != checkpoint_path]
-                self._prune_temporary_checkpoints(0)
-            self._last_save_permanent = True
+            self._promote_temporary_checkpoint(step)
             return
 
         my_should_save = force or requested_retention is not None
@@ -654,7 +668,19 @@ class Checkpointer:
                 commit_callback=callback,
                 is_temporary=not save_permanent_ckpt,
                 base_path_override=save_base_path,
+                metadata=metadata_provider.checkpoint_metadata() if metadata_provider is not None else None,
             )
+
+    def _promote_temporary_checkpoint(self, step: int) -> None:
+        self._manager.wait_until_finished()
+        if jax.process_index() == 0:
+            # Match save_checkpoint's path so the temporary retention entry can be removed.
+            checkpoint_path = os.path.join(self.base_path, f"step-{step}")
+            metadata = load_checkpoint_metadata(checkpoint_path)
+            _save_metadata(checkpoint_path, step, is_temporary=False, extra_metadata=metadata)
+            self._temporary_checkpoints = [r for r in self._temporary_checkpoints if r.path != checkpoint_path]
+            self._prune_temporary_checkpoints(0)
+        self._last_save_permanent = True
 
     def request_checkpoint(self, retention: CheckpointRetention) -> None:
         """Request a checkpoint on the next step.
@@ -791,6 +817,7 @@ class Checkpointer:
         *,
         is_temporary: bool = False,
         base_path_override: Optional[str] = None,
+        metadata: Mapping[str, Any] | None = None,
     ):
         base = base_path_override if base_path_override is not None else self.base_path
         path = os.path.join(base, destination)
@@ -805,7 +832,7 @@ class Checkpointer:
             is_temporary=is_temporary,
             debug=self.debug,
             write_config=self.write_config,
-            metadata=self.metadata,
+            metadata={**(self.metadata or {}), **(metadata or {})} or None,
         )
         self._last_save_step = step
         self._last_save_permanent = not is_temporary
@@ -850,6 +877,8 @@ def save_checkpoint(
         write_config: how the save divides work across the processes holding the state
     """
     _check_application_metadata(metadata)
+    if metadata is not None:
+        metadata = json.loads(json.dumps(dict(metadata), allow_nan=False))
     step = int(step)
     checkpoint_path = str(checkpoint_path)
     checkpoint_debug = debug or CheckpointDebugConfig()
@@ -1126,7 +1155,7 @@ def load_checkpoint_or_initialize(
 def load_checkpoint_metadata(checkpoint_path, fs=None) -> dict[str, Any]:
     """Read a concrete checkpoint's ``metadata.json``: step, timestamp, retention, and application metadata."""
     if fs is None:
-        fs, _, _ = fsspec.get_fs_token_paths(str(checkpoint_path))
+        return json.loads(StoragePath(prefix_join(str(checkpoint_path), CHECKPOINT_METADATA_FILENAME)).read_text())
     with fs.open(os.path.join(checkpoint_path, CHECKPOINT_METADATA_FILENAME)) as metadata_in:
         metadata = json.load(metadata_in)
     return metadata
@@ -1163,6 +1192,21 @@ def discover_checkpoint_candidates(
             candidates_by_path[candidate.path] = candidate
 
     return sorted(candidates_by_path.values(), key=_checkpoint_candidate_sort_key)
+
+
+def resolve_checkpoint(checkpoint_path: PathLike) -> ResolvedCheckpoint:
+    """Return the latest candidate or the input path with available metadata.
+
+    If no candidate or metadata is found, return the input path with empty metadata.
+    """
+    checkpoint_path = str(checkpoint_path)
+    candidates = discover_checkpoint_candidates(checkpoint_path)
+    if candidates:
+        candidate = candidates[-1]
+        return ResolvedCheckpoint(path=candidate.path, metadata=candidate.metadata)
+    if StoragePath(prefix_join(checkpoint_path, CHECKPOINT_METADATA_FILENAME)).exists():
+        return ResolvedCheckpoint(path=checkpoint_path, metadata=load_checkpoint_metadata(checkpoint_path))
+    return ResolvedCheckpoint(path=checkpoint_path, metadata={})
 
 
 def _checkpoint_candidate_sort_key(candidate: CheckpointCandidate) -> tuple[int, datetime.datetime, str]:
