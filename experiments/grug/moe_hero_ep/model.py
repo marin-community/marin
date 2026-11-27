@@ -719,7 +719,7 @@ class CausalSelfAttention(eqx.Module):
                 projection = reshard(projection, kv_spec)
                 if num_kv_heads == stored_kv_heads:
                     return projection
-                return align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
+                return reshard(align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads), kv_spec)
 
             k, v = jax.lax.cond(
                 jnp.asarray(is_global, dtype=jnp.bool_),

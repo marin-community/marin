@@ -15,7 +15,7 @@ import tempfile
 import time
 import urllib.parse
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
@@ -291,6 +291,11 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
     @abc.abstractmethod
     def from_hf_config(cls, hf_config: HfConfig) -> Self:
         pass
+
+    @classmethod
+    def matches_hf_config(cls, hf_config: HfConfig) -> bool | None:
+        """Recognize an explicit checkpoint recipe, or defer to the converter when returning None."""
+        return None
 
     @abc.abstractmethod
     def hf_checkpoint_converter(cls) -> "HFCheckpointConverter":
@@ -581,45 +586,47 @@ class HFCheckpointConverter(Generic[LevConfig]):
     @staticmethod
     def from_hf(model_name_or_path: Union[RepoRef, str], trust_remote_code: bool = False) -> "HFCheckpointConverter":
         ref = _coerce_to_rr(model_name_or_path)
-        # Trigger LmConfig plugin discovery (imports every `levanter.models` module) before resolving
-        # the HF config. Models with a custom HF config not built into transformers — e.g. snowball's
-        # `grug_moe` — register it with `AutoConfig` at import time, so `AutoConfig.from_pretrained`
-        # inside `_infer_config_class` needs those imports to have already run.
-        LmConfig.get_known_choices()
-        config_class = HFCheckpointConverter._infer_config_class(None, ref, trust_remote_code)
-        tokenizer = HFCheckpointConverter._infer_tokenizer(None, ref, trust_remote_code)
+        # Model plugins register custom Transformers config classes at import time.
+        known_configs = LmConfig.get_known_choices()
+        hf_config = _load_hf_config(ref.model_name_or_path, ref.revision, trust_remote_code)
 
-        # TODO: this is very hacky, we should add another registry or something
-        # attempt to find the Levanter config class by checking the registry
-        # TODO: hacky hacky
-        for k, v in LmConfig.get_known_choices().items():
-            if issubclass(v, HFCompatConfig):
-                # `v` is typed as the abstract LmConfig base (registry value), whose __init__
-                # requires max_seq_len; at runtime every registered choice is a concrete config
-                # that supplies a default, so the no-arg construction is safe.
-                instance = v()  # pyrefly: ignore[missing-argument]
-                # Building a candidate converter loads that model's default reference tokenizer, and
-                # some defaults are gated (e.g. gemma -> google/gemma-2b) so they 401 on nodes without
-                # access. A candidate whose converter cannot even be built is not the target model, so
-                # skip it rather than abort resolution of an unrelated model (e.g. grug_moe).
-                try:
-                    candidate_hf_config_name = instance.hf_checkpoint_converter().HfConfigClass.__name__
-                except Exception:
-                    logger.debug("Skipping %s during HF config resolution", v.__name__, exc_info=True)
-                    continue
-                if candidate_hf_config_name == config_class.__name__:
-                    LevConfigClass = v
-                    break
+        deferred = []
+        for candidate in known_configs.values():
+            if not issubclass(candidate, HFCompatConfig):
+                continue
+            matches = candidate.matches_hf_config(hf_config)
+            if matches:
+                config_class = candidate
+                break
+            if matches is None:
+                deferred.append(candidate)
         else:
-            raise ValueError(f"No Levanter config found for {config_class}")
+            config_class = HFCheckpointConverter._match_converter_config(hf_config, deferred)
 
         return HFCheckpointConverter(
-            LevConfigClass=LevConfigClass,
+            LevConfigClass=config_class,
             reference_checkpoint=ref,
-            HfConfigClass=config_class,
-            tokenizer=tokenizer,
+            HfConfigClass=type(hf_config),
             trust_remote_code=trust_remote_code,
         )
+
+    @staticmethod
+    def _match_converter_config(
+        hf_config: HfConfig, candidates: Sequence[type[HFCompatConfig]]
+    ) -> type[HFCompatConfig]:
+        """Find a converter for this Transformers config or raise ValueError."""
+        config_name = type(hf_config).__name__
+        for candidate in candidates:
+            instance = candidate()  # pyrefly: ignore[missing-argument]
+            try:
+                candidate_config = instance.hf_checkpoint_converter().HfConfigClass
+            except OSError:
+                # A default reference tokenizer can be gated or unavailable offline.
+                logger.debug("Skipping %s during HF config resolution", candidate.__name__, exc_info=True)
+                continue
+            if candidate_config.__name__ == config_name:
+                return candidate
+        raise ValueError(f"No Levanter config found for {type(hf_config)}")
 
     def replaced(
         self,
@@ -704,9 +711,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if ref is None:
                 raise ValueError("Must provide either config class or reference_checkpoint")
             path, rev = ref.model_name_or_path, ref.revision
-            with _patch_hf_hub_download():
-                config = AutoConfig.from_pretrained(path, revision=rev, trust_remote_code=trust_remote_code)
-            clss = type(config)
+            clss = type(_load_hf_config(path, rev, trust_remote_code))
         elif isinstance(hf_config_class, str):
             if ref is None:
                 raise ValueError("Must provide either config class or reference_checkpoint")
@@ -766,9 +771,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def hf_config_from_hf_checkpoint(self, ref: Optional[Union[str, RepoRef]] = None) -> HfConfig:
         path, rev = self._get_ref(ref)
 
-        with _patch_hf_hub_download():
-            config = AutoConfig.from_pretrained(path, revision=rev, trust_remote_code=self.trust_remote_code)
-        return config
+        return _load_hf_config(path, rev, self.trust_remote_code)
 
     def _get_ref(self, ref) -> Tuple[str, Optional[str]]:
         if ref is None:
@@ -1724,6 +1727,11 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
         return arr
 
     return jax.make_array_from_callback(tuple(shape), sharding, get_slice)
+
+
+def _load_hf_config(path: str, revision: str | None, trust_remote_code: bool) -> HfConfig:
+    with _patch_hf_hub_download():
+        return AutoConfig.from_pretrained(path, revision=revision, trust_remote_code=trust_remote_code)
 
 
 @contextlib.contextmanager
