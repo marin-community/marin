@@ -1,0 +1,12 @@
+id: X0260
+slug: middle-loop-transformer-with-attnres
+name: Middle-loop transformer with AttnRes
+category: Depth connections
+summary: 'Track: speedrun'
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7204920047
+  author: ykyaol7
+  approved_by: ClassicLarry
