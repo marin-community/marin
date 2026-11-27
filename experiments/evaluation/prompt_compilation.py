@@ -47,6 +47,12 @@ from experiments.post_training.task_curation.pipeline import CurationRecipe, HfS
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 EXPLICIT_TEMPLATE_VERSION = "2026.11.05.3"
+LIKELIHOOD_CONTEXT_REVISION = "bos-2026.11.24"
+
+
+def likelihood_protocol_version(version: str) -> str:
+    """Mark a likelihood protocol so results scored before contexts started with BOS are not reused."""
+    return version + "-" + LIKELIHOOD_CONTEXT_REVISION
 
 
 def evaluation_source(
@@ -132,7 +138,7 @@ def multiple_choice_evaluation(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version=EXPLICIT_TEMPLATE_VERSION,
+                version=likelihood_protocol_version(EXPLICIT_TEMPLATE_VERSION),
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),
@@ -205,7 +211,7 @@ def lm_eval_multiple_choice(
             recipe=recipe,
             protocol=EvaluationProtocol(
                 benchmark=benchmark,
-                version=version,
+                version=likelihood_protocol_version(version),
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),
