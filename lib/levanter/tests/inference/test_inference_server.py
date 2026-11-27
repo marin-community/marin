@@ -774,7 +774,7 @@ def _assert_grpc_policy_fence(stub, server):
     first = generate("policy-a")
     assert (first.policy_id, first.model_version) == ("policy-a", 1)
 
-    def fail_load(model):
+    def fail_load(_model):
         raise RuntimeError("invalid replacement")
 
     with pytest.raises(RuntimeError):
