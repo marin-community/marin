@@ -1,6 +1,6 @@
 {
-  "path": "experiments/post_training/task_curation/datasets/within_source_dedup_s1_deepresearch_20261126_b_v1.json",
-  "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "c9a2943cea89282e3db9628926741846c08030a4",
-  "sha256": "d9b6f06f1a5d6f02e377b08336af71a20a418595d53ce66c6a6d981c386ba1cc"
+ "repo": "open-athena/marin-rl-data-atlas-registry",
+ "revision": "3a86ec6baa34446968deacec6744b4fb677c3206",
+ "path": "experiments/post_training/task_curation/datasets/within_source_dedup_s1_deepresearch_20261126_b_v1.json",
+ "sha256": "c680ec439b160537398699c7c1940bfc4a9a2814c25907e1fba74f0ec8b6dc0c"
 }
