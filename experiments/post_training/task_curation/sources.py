@@ -10,6 +10,10 @@ from finestore.rl.curation import OversightLevel
 
 from experiments.post_training.task_curation.census_binding import bind_actor_census
 from experiments.post_training.task_curation.content_identity import read_content_identity_receipts
+from experiments.post_training.task_curation.conversion_admission import (
+    bind_conversion_admission,
+    conversion_admission_receipts,
+)
 from experiments.post_training.task_curation.datasets import (
     backfill_releases,
     campaign_releases,
@@ -455,6 +459,12 @@ def all_sources() -> dict[str, RlDataSource]:
             continue  # the R40 freeze routes sources admitted after the cut to R41
         sources[source_id] = bind_oracle_admitted_release(sources[source_id], receipt)
     sources = {source_id: crosscode_python_repair.bind_source(source) for source_id, source in sources.items()}
+    # The oracle-flow conversion admissions (the 2026-11-26 base-pinned conversions):
+    # a registered receipt re-binds its configured original declaration to the
+    # conversion release as an executable TaskSpec population.
+    for source_id, admission in conversion_admission_receipts().items():
+        if source_id in sources:
+            sources[source_id] = bind_conversion_admission(sources[source_id], admission)
     samples, full_content = sample_qc_receipts(), full_content_result_bindings()
     content_identities = read_content_identity_receipts()
     retained_records = dict(retained_release_receipts())

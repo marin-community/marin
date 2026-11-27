@@ -68,6 +68,7 @@ uv run --frozen --prerelease=allow --with-editable ./lib/taskcompendium[pipeline
   --acceptance-job "$ACCEPTANCE_JOB" \
   "${POPULATION_ARGS[@]+"${POPULATION_ARGS[@]}"}" \
   --output "$CENSUS_OUT" \
+  --published-artifact "$CENSUS_ROOT/$SLUG" \
   --receipts-output "$CENSUS_OUT-receipts" \
   --report "$CENSUS_OUT/census-result.json"
 
