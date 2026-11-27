@@ -45,3 +45,18 @@ trials:
   commit: 633e2f6b6d
   priority: batch
   note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
+- id: t003
+  variant: softcap 2 + sqrt8 start + AIR angle + head law + embed LR x4
+  rung: competitive-d1024
+  protocol: equal_steps
+  batch: X0268
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0268
+  wandb: []
+  settings:
+    muonh_radial_softcap: '2'
+    muonh_air: 'true'
+    embed_lr_mult: '4'
+  commit: bbf3c4957e
+  priority: batch
+  note: 'equal steps, no hero-mfu result: needs hero-mfu before inclusion'
