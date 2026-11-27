@@ -16,7 +16,6 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.harbor.root_delivery import TEST_EXIT, TEST_OUTPUT, native_file_reward_grader
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
 from taskcompendium.models import (
-    Backend,
     ResourceGroups,
     TaskSpec,
     VerifierCommand,
@@ -38,7 +37,7 @@ from experiments.post_training.task_curation.datasets.native_harbor import nativ
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, process_rows
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
-VERSION = "2026.11.27.local-routing.1"
+VERSION = "2026.11.17.1"
 PREFIX = "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/fweindel-facet/2026.11.17.1"
 IMAGE_INDEX = ContentEvidenceReference(
     uri=PREFIX + "/inputs/verified-sif-image-index-v1.json",
@@ -147,13 +146,6 @@ def convert_facet(row: RawRow, context: ConversionContext) -> TaskSpec | ImportR
             "docker_build": None,
             "working_directory": WORKDIR,
             "capabilities": ("shell",),
-            # The snapshot-budget repair routes the cohort's actor and grader to LOCAL
-            # (the per-task required_backend mechanism, 0f612f8c81; coordinator ruling
-            # 2026-11-27): each task's pristine SIF image is a distinct snapshot on
-            # Daytona, and the shared LOCAL tier carries the pinned images without
-            # consuming the shared snapshot budget. The root-delivery grader
-            # transports this same environment, so both roles route together.
-            "required_backend": Backend.LOCAL,
         }
     )
     execute = VerifierCommand(
@@ -218,14 +210,10 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                 subset=folder,
                 count=count,
                 family="terminal",
-                build_path="Pristine SIF filesystem preserved as pinned OCI image; original-root verifier delivery; "
-                "actor and grader routed to LOCAL through required_backend (snapshot-budget repair "
-                "2026.11.27.local-routing.1)",
+                build_path="Pristine SIF filesystem preserved as pinned OCI image; original-root verifier delivery",
                 task_format=TaskFormat.TASKSPEC,
                 tags=("license:apache-2.0", "facet"),
-                notes="Original native task and verifier contents; LOCAL-routed snapshot-budget repair "
-                "(2026.11.27.local-routing.1: required_backend=local on the agent environment, inherited by the "
-                "root-delivery grader transport per 0f612f8c81); pending the re-census and current-pin admission.",
+                notes="Original native task and verifier contents; pending current-pin controls and admission.",
             ),
             config=CurationRecipe(
                 name="facet-" + folder.removeprefix("facet_"),

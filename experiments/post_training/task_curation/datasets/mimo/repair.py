@@ -47,10 +47,10 @@ from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.harbor.root_delivery import TEST_EXIT, TEST_OUTPUT, native_file_reward_grader
 from taskcompendium.identity import canonical_sha256
 from taskcompendium.integrity import DeliveredVerifierFile, RootDeliveryContract, SharedDependencyState
-from taskcompendium.models import Backend, TaskSpec, VerifierCommand, require_resolved_environment
+from taskcompendium.models import TaskSpec, VerifierCommand, require_resolved_environment
 from taskcompendium.runtime.resources import resource_bytes
 
-REPAIR_VERSION = "2026.11.27.local-routing.1"
+REPAIR_VERSION = "2026.11.23.pinned-images.1"
 
 BASE_IMAGE_PATTERN = re.compile(r"^FROM docker\.io/xiaomimimo/mimo-v2\.6-rl-oss@(sha256:[0-9a-f]{64})$", re.MULTILINE)
 WORKDIR_PATTERN = re.compile(r"^WORKDIR (/[A-Za-z0-9._/-]+)$", re.MULTILINE)
@@ -286,11 +286,6 @@ def repair_task(row: dict, binding: ImageBinding) -> tuple[TaskSpec, dict]:
             "docker_build": None,
             "working_directory": recipe.workdir,
             "setup_commands": (setup,),
-            # The LOCAL-routed repair variant (coordinator 2026-11-27): the cohort's
-            # 2,501 distinct prepared images exceed the 10-snapshot Daytona budget,
-            # so the per-task required_backend mechanism routes the actor and the
-            # inherited grader transport to the LOCAL tier (0f612f8c81).
-            "required_backend": Backend.LOCAL,
         }
     )
     grader = native_file_reward_grader(pinned_environment, private, verifier_reward_execute(), timeout)
