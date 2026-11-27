@@ -4,7 +4,7 @@ name: X0271 with front-heavy MuonC matrix LR
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7229587642
@@ -12,3 +12,20 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 73df3256c9c8263ebb98e4359ad0450c44a6108c
+trials:
+- id: t001
+  variant: X0271 + front-heavy MuonC matrix LR (hold 0.2, q solved)
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0274
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0274
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_anneal_embed_row_adamh: 'True'
+    muonc_anneal_front_heavy: 'True'
+  commit: ea82bd9d5b
+  priority: interactive
