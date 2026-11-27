@@ -215,7 +215,7 @@ conflicts = [[
 ]]
 
 [options]
-prerelease-mode = "allow"
+prerelease-mode = "explicit"
 fork-strategy = "fewest"
 
 [manifest]

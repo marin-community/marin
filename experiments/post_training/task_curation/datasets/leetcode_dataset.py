@@ -28,9 +28,8 @@ REVISION = "215604aeed660029df7de2fea5a4d7b6ed476a08"
 SOURCE_ID = "Newfacade:LeetCodeDataset"
 VERSION = "leetcode-harness-grader-v2"
 TRAIN_COUNT = 2641
-GRADER_IMAGE = (
-    "ghcr.io/marin-community/iris-task@sha256:c646ef8b571571edfc96c75fd9c8cc712ad286b61b33781070bdc29ab9f9a6ab"
-)
+GRADER_REQUIREMENTS = ("sortedcontainers==2.4.0",)
+"""The source's own eval environment provides sortedcontainers; the grader pins it hash-locked."""
 GRADER_TIMEOUT = 330.0
 QUALIFICATION_TIMEOUT = 120.0
 COMPLETION_INSTRUCTION = "\nReturn the complete Python solution in this format:\n```python\n# solution\n```"
@@ -200,7 +199,8 @@ def source(files: tuple[str, ...]) -> RlDataSource:
                 "never executed), the candidate's block, and the shipped harness verbatim. Every task passes a "
                 "conversion-time CPU qualification: the source's own reference solution must pass the shipped "
                 "harness; failures are typed per-task source-defect exclusions with sealed evidence, never "
-                "grader edits. Reward 1 when every harness assertion passes, 0 on any candidate-code "
+                "grader edits. The grader environment pins sortedcontainers==2.4.0 (the source's own eval "
+                "environment provides it) compiled to a hash lock. Reward 1 when every harness assertion passes, "
                 "failure; harness defects exit nonzero as infrastructure errors. The reference completion stays "
                 "private provenance, never judge gold. The train split (2,641 rows) is the population; the test "
                 "split (228 rows) stays held out as shipped. The completion format instruction is recorded as a "
@@ -211,7 +211,7 @@ def source(files: tuple[str, ...]) -> RlDataSource:
             name="leetcode-harness-grader",
             version=VERSION,
             source=HfSource(REPO, REVISION, files, SourceFormat.JSONL),
-            grader=Environment(image=GRADER_IMAGE),
+            grader=Environment(requirements=GRADER_REQUIREMENTS),
             convert=convert_problem,
             intended_use=IntendedUse.TRAIN,
         ),

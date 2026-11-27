@@ -24,10 +24,13 @@ def converted(native):
     )
     result = leetcode_dataset.convert_problem(
         row,
+        # The census compiles the recipe's pinned requirements to a hash lock and supplies its URL;
+        # the test needs a structurally valid requirements-only grading environment.
         ConversionContext(
             {},
             EnvironmentRequirements(
-                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=leetcode_dataset.GRADER_IMAGE
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                packages_lock="s3://test/leetcode-requirements.lock",
             ),
         ),
     )
@@ -48,7 +51,8 @@ def rejected(native):
         ConversionContext(
             {},
             EnvironmentRequirements(
-                command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=leetcode_dataset.GRADER_IMAGE
+                command_semantics=CommandSemantics.LINUX_PROCESS,
+                packages_lock="s3://test/leetcode-requirements.lock",
             ),
         ),
     )
@@ -131,4 +135,5 @@ def test_source_module_binds_the_train_split():
     assert source.info.count == 2641
     assert source.info.origin.value == "Newfacade"
     assert source.config.source.revision == leetcode_dataset.REVISION
+    assert source.config.grader.requirements == leetcode_dataset.GRADER_REQUIREMENTS
     assert "harness" in source.info.notes and "private provenance" in source.info.notes
