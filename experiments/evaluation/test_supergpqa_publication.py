@@ -6,6 +6,7 @@
 import json
 
 from fray.local_backend import LocalClient
+from taskcompendium.convert.answers import source_evidence
 from taskcompendium.evaluation.corpus import evaluation_cases
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, GraderMachine, verifyit_spec
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -31,22 +32,21 @@ def row(uuid, question, options, letter, discipline, difficulty):
     }
 
 
-def test_publication_renders_reference_prompt_with_discipline_and_difficulty_groups(tmp_path):
-    [source] = evaluation_benchmarks()["supergpqa"].resolve()
+ENVIRONMENT = EnvironmentRequirements(
+    command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="fixture@sha256:" + "0" * 64
+)
+
+
+def publish(tmp_path, benchmark, rows, population):
+    """Publish ``rows`` through ``benchmark``'s recipe and return its ``population`` cases in source order."""
+    [source] = evaluation_benchmarks()[benchmark].resolve()
     dataset = source.config
-    rows = [
-        row("a", "Which number is prime?", ["4", "6", "7", "9"], "C", "Science", "easy"),
-        row("b", "Which number is even?", ["8", "3", "5", "7", "9"], "A", "Engineering", "hard"),
-    ]
     source_root = tmp_path / "source"
     primary = source_root / dataset.recipe.files[0]
     primary.parent.mkdir(parents=True)
     primary.write_text("".join(json.dumps(item) + "\n" for item in rows))
-    environment = EnvironmentRequirements(
-        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image="fixture@sha256:" + "0" * 64
-    )
-    recipe = source_recipe(dataset.recipe, {}, environment)
-    protocol = dataset.protocol.model_copy(update={"expected_population": len(rows)})
+    recipe = source_recipe(dataset.recipe, {}, ENVIRONMENT)
+    protocol = dataset.protocol.model_copy(update={"expected_population": population})
     output = tmp_path / "output"
     client = LocalClient()
     try:
@@ -54,7 +54,15 @@ def test_publication_renders_reference_prompt_with_discipline_and_difficulty_gro
             publish_evaluation_corpus(recipe, protocol, dataset.item_builder, context, str(source_root), str(output))
     finally:
         client.shutdown()
-    cases = sorted(evaluation_cases(str(output)), key=lambda case: case.item.source_ordinal)
+    return sorted(evaluation_cases(str(output)), key=lambda case: case.item.source_ordinal)
+
+
+def test_publication_renders_reference_prompt_with_discipline_and_difficulty_groups(tmp_path):
+    rows = [
+        row("a", "Which number is prime?", ["4", "6", "7", "9"], "C", "Science", "easy"),
+        row("b", "Which number is even?", ["8", "3", "5", "7", "9"], "A", "Engineering", "hard"),
+    ]
+    cases = publish(tmp_path, "supergpqa", rows, 2)
     assert [case.item.groups for case in cases] == [
         {"discipline": "Science", "difficulty": "easy"},
         {"discipline": "Engineering", "difficulty": "hard"},
@@ -67,4 +75,14 @@ def test_publication_renders_reference_prompt_with_discipline_and_difficulty_gro
         McqSpec("C", options=4, extraction=reference, option_texts=("4", "6", "7", "9")),
         McqSpec("A", options=5, extraction=reference, option_texts=("8", "3", "5", "7", "9")),
     ]
-    assert all(case.task.grader.placement == GraderMachine(environment=environment) for case in cases)
+    assert all(case.task.grader.placement == GraderMachine(environment=ENVIRONMENT) for case in cases)
+
+
+def test_the_fixed_sample_publishes_only_questions_whose_uuid_hash_is_in_it(tmp_path):
+    # sha256("q4") starts 112f..., inside the sample; sha256("a") starts ca97..., outside it.
+    rows = [
+        row("a", "Which number is prime?", ["4", "6", "7", "9"], "C", "Science", "easy"),
+        row("q4", "Which number is even?", ["8", "3", "5", "7", "9"], "A", "Engineering", "hard"),
+    ]
+    [case] = publish(tmp_path, "supergpqa-2500", rows, 1)
+    assert source_evidence(case.task)["uuid"] == "q4"
