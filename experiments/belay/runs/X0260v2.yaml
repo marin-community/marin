@@ -1,0 +1,14 @@
+experiment: X0260v2
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: 2+2 looped middle+2 layers, middle_loop=cross_x3
+    flags:
+    - --model-set
+    - middle_loop=cross_x3
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0260v1-control
