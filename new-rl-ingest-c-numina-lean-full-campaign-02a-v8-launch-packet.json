@@ -1,0 +1,17 @@
+{
+  "job_id": "/benfeuer/new-rl-ingest-c-numina-lean-full-campaign-02a-v8",
+  "cluster": "cw-us-east-02a",
+  "source_revision": "f44b35a39d194bc363db2529cc5780cb0b1d0fcf",
+  "decontamination_receipt": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-c/numina-lean/2026.11.26.1/decontamination-receipt.json",
+  "campaign_root": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-c/numina-lean/2026.11.26.1/full-campaign-02a",
+  "resources": {
+    "cpu": 64,
+    "memory": "256g",
+    "disk": "500g",
+    "priority": "interactive",
+    "timeout": 259200
+  },
+  "image_backend": "iris",
+  "provider_actions": "iris machines for the golden-control replays; the pinned Lean image builds in-region",
+  "submitted_at": "2026-11-27T08:36:46.340514+00:00"
+}
