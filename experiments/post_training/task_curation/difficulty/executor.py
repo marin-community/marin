@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Protocol
 
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
 from iris.resources.state import JobState, is_job_finished
 from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
@@ -158,6 +158,7 @@ def action_rows(
             timestamp,
             action_id=key,
             job_id=job_id,
+            solver_protocol_id=action.solver_protocol_id if isinstance(action, AttemptBatch) else PROTOCOL_ID,
         )
         for source_id, solver in action_cells(action)
     ]
@@ -365,6 +366,7 @@ def collect_finished(
                 timestamp,
                 action_id=row.action_id,
                 job_id=row.job_id,
+                solver_protocol_id=row.solver_protocol_id,
             )
         )
         target = StoragePath(ledger) / LEDGER_VERSION / RESULTS_DIRECTORY / f"{row.action_id}.json"
@@ -393,6 +395,7 @@ def collect_finished(
                         judge_model=repaired.judge_model,
                         judge_temperature=repaired.judge_temperature,
                         evidence_uri=str(target),
+                        solver_protocol_id=row.solver_protocol_id,
                     )
                 )
                 continue
@@ -437,6 +440,7 @@ def collect_finished(
                 capability=detail,
                 evidence_uri=str(target),
                 error_identity=error_identity,
+                solver_protocol_id=row.solver_protocol_id,
             )
         )
     append_rows(ledger, additions)

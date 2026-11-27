@@ -62,9 +62,17 @@ def status_report(
             and (since is None or datetime.fromisoformat(row.recorded_at).astimezone(UTC) >= since)
         ]
         solvers[solver.value] = {
+            "solver_protocol_id": policy.solver_protocol_id(solver),
             "cells": dict(Counter(cell.state for cell in selected)),
             "missing_attempts": sum(cell.n_missing for cell in selected),
-            "scored_attempts_since": sum(row.outcome == Outcome.SCORED for row in recent),
+            "scored_attempts_since": sum(
+                row.outcome == Outcome.SCORED and row.solver_protocol_id == policy.solver_protocol_id(solver)
+                for row in recent
+            ),
+            "historical_scored_attempts_since": sum(
+                row.outcome == Outcome.SCORED and row.solver_protocol_id != policy.solver_protocol_id(solver)
+                for row in recent
+            ),
             "gpu_hours_since": round(sum(row.gpu_hours for row in recent), 6),
             "cost_basis": (
                 "candidate reservation windows; startup, teardown, judge serving and interrupted windows excluded"
@@ -77,6 +85,7 @@ def status_report(
             {
                 "source_id": cell.source.source_id,
                 "solver": cell.solver,
+                "solver_protocol_id": cell.solver_protocol_id,
                 "state": cell.state,
                 "n_missing": cell.n_missing,
                 "gaps": [asdict(gap) for gap in cell.gaps],

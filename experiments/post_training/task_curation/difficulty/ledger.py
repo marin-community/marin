@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from functools import lru_cache
 
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
 from pydantic import TypeAdapter
 from rigging.filesystem.storage_path import StoragePath
 
@@ -70,10 +70,14 @@ def repair_verification_sources(ledger: str) -> frozenset[str]:
 
 
 def row_payload(row: LedgerRow) -> dict:
-    """Preserve the original wire bytes when an optional resource deviation is absent."""
+    """Keep historical wire bytes unchanged when optional conditions are absent."""
     payload = asdict(row)
     if payload["resource_deviation"] is None:
         del payload["resource_deviation"]
+    if payload["solver_protocol_id"] == PROTOCOL_ID:
+        del payload["solver_protocol_id"]
+    if payload["supersedes_attempt_id"] is None:
+        del payload["supersedes_attempt_id"]
     return payload
 
 

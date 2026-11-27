@@ -5,10 +5,20 @@
 
 from dataclasses import dataclass
 
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
+
+LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID = "large-context-minus-prompt-20261127-v2"
+
+
+def require_solver_protocol(solver: Solver, protocol_id: str) -> None:
+    """Accept the frozen protocol or its authorized Large-only replacement."""
+    if protocol_id != PROTOCOL_ID and (solver != Solver.LARGE or protocol_id != LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID):
+        raise ValueError(f"Unknown solver protocol: {solver}/{protocol_id}")
+
 
 @dataclass(frozen=True)
 class DynamicOutputBudget:
-    protocol_id: str = "large-context-minus-prompt-20261127-v2"
+    protocol_id: str = LARGE_DYNAMIC_OUTPUT_PROTOCOL_ID
     context_tokens: int = 65536
     safety_margin_tokens: int = 64
     minimum_output_tokens: int = 16384

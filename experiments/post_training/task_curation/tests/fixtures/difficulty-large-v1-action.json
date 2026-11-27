@@ -1,0 +1,1 @@
+{"kind": "AttemptBatch", "max_gpu_hours": 40.0, "n_attempts": 1, "solver": "large", "sources": [{"evidence_ids": [], "queue_sha256": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq", "queue_uri": "queue", "registry_revision": "population", "source_id": "source", "tasks": [["a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1]]}]}

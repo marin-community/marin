@@ -13,7 +13,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from finestore.rl.difficulty import PROTOCOL_ID
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     Outcome,
 )
 from experiments.post_training.task_curation.difficulty_config import JUDGE_ROUTE_REPAIRS
+from experiments.post_training.task_curation.difficulty_output_budget import require_solver_protocol
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 
 SCHEMA_VERSION = 1
@@ -66,13 +67,19 @@ def snapshot_cells(rows: list[LedgerRow], catalog: list[CatalogSource], provenan
     for row in rows:
         grouped[(row.source_id, row.registry_revision, row.solver)].append(row)
     output = []
-    for cell in cells_for_catalog(rows, catalog, CoveragePolicy()):
+    versions = provenance.get("solver_protocols", {})
+    for solver, protocol_id in versions.items():
+        require_solver_protocol(Solver(solver), protocol_id)
+    policy = CoveragePolicy(large_protocol_id=versions.get(Solver.LARGE.value, PROTOCOL_ID))
+    for cell in cells_for_catalog(rows, catalog, policy):
         source = cell.source
         selected = set(source.tasks)
         attempts = [
             row
             for row in grouped[(source.source_id, source.registry_revision, cell.solver)]
-            if (row.task_id, row.task_sha256) in selected and row.outcome == Outcome.SCORED
+            if (row.task_id, row.task_sha256) in selected
+            and row.outcome == Outcome.SCORED
+            and row.solver_protocol_id == cell.solver_protocol_id
         ]
         tasks = {(row.task_id, row.task_sha256) for row in attempts}
         invalid = [row.attempt_id for row in attempts if row.reward is None or not 0 <= row.reward <= 1]
@@ -105,7 +112,9 @@ def snapshot_cells(rows: list[LedgerRow], catalog: list[CatalogSource], provenan
                 "source_id": source.source_id,
                 "registry_revision": source.registry_revision,
                 "solver": cell.solver.value,
-                "protocol_id": provenance.get("solver_protocol", {}).get("id", PROTOCOL_ID),
+                "protocol_id": versions.get(
+                    cell.solver.value, provenance.get("solver_protocol", {}).get("id", PROTOCOL_ID)
+                ),
                 "state": cell.state.value if hold is None and not invalid else CellStatus.BLOCKED.value,
                 "measured": covered,
                 "difficulty": 1 - rate if covered and rate is not None else None,

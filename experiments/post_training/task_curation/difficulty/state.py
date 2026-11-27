@@ -4,13 +4,14 @@
 """Pure coverage state and the closed ledger vocabulary."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from finestore.rl.curation import SourceUse
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
 
 from experiments.post_training.task_curation.difficulty.resource_deviations import ResourceDeviation
+from experiments.post_training.task_curation.difficulty_output_budget import require_solver_protocol
 
 REPAIR_BLOCKED = "blocked"
 
@@ -53,6 +54,7 @@ class Outcome(StrEnum):
     FINISHED = "finished"
     ESCALATED = "escalated"
     REPAIRED = "repaired"
+    PROTOCOL_SUPERSEDED = "protocol_superseded"
 
 
 class ArtifactKind(StrEnum):
@@ -109,8 +111,11 @@ class LedgerRow:
     secondary_gaps: tuple[Gap, ...] = ()
     queue_sha256: str | None = None
     resource_deviation: ResourceDeviation | None = None
+    solver_protocol_id: str = PROTOCOL_ID
+    supersedes_attempt_id: str | None = None
 
     def __post_init__(self) -> None:
+        require_solver_protocol(self.solver, self.solver_protocol_id)
         deviation = self.resource_deviation
         if deviation is not None and (self.source_id, self.task_id, self.task_sha256) != (
             deviation.source_id,
@@ -167,6 +172,13 @@ class TerminalRuling:
 class CoveragePolicy:
     attempts_per_task: int = 1
     terminal_rulings: tuple[TerminalRuling, ...] = ()
+    large_protocol_id: str = PROTOCOL_ID
+
+    def __post_init__(self) -> None:
+        require_solver_protocol(Solver.LARGE, self.large_protocol_id)
+
+    def solver_protocol_id(self, solver: Solver) -> str:
+        return self.large_protocol_id if solver == Solver.LARGE else PROTOCOL_ID
 
 
 class CellStatus(StrEnum):
@@ -186,10 +198,51 @@ class CellState:
     evidence_ids: tuple[str, ...]
     job_ids: tuple[str, ...] = ()
     resource_deviations: tuple[ResourceDeviation, ...] = ()
+    solver_protocol_id: str = PROTOCOL_ID
 
     @property
     def n_missing(self) -> int:
         return sum(count for _, _, count in self.missing)
+
+
+PROTOCOL_DEPENDENT_GAPS = frozenset(
+    {
+        GapReason.PROTOCOL_INPUT_BUDGET_EXCEEDED,
+        GapReason.PROVIDER_CAPACITY_WAIT,
+        GapReason.SERVING_RELEASE_MISMATCH,
+        GapReason.SERVING_PROBE_MISMATCH,
+        GapReason.CONTROLLER_ACTION_CANCELLED,
+        GapReason.CONTROLLER_ACTION_FAILED,
+    }
+)
+
+
+def coverage_evidence(row: LedgerRow, protocol_id: str) -> LedgerRow | None:
+    """Carry source conditions and in-flight holds across protocols, never old scores."""
+    if row.solver_protocol_id == protocol_id:
+        return row
+    original = ((row.gap,) if row.gap else ()) + row.secondary_gaps
+    shared = tuple(gap for gap in original if gap.reason not in PROTOCOL_DEPENDENT_GAPS)
+    if row.outcome == Outcome.SCORED:
+        if not shared:
+            return None
+        row = replace(row, outcome=Outcome.OBSERVATION, reward=None)
+    if not original or shared == original:
+        return row
+    if not shared:
+        return None
+    first = shared[0]
+    return replace(
+        row,
+        reason=first.reason,
+        artifact_uri=first.artifact_uri,
+        judge_model=first.judge_model,
+        capability=first.capability,
+        artifact_kind=first.artifact_kind,
+        judge_temperature=first.judge_temperature,
+        error_identity=first.error_identity,
+        secondary_gaps=shared[1:],
+    )
 
 
 def cell_state(ledger: Sequence[LedgerRow], source: CatalogSource, solver: Solver, policy: CoveragePolicy) -> CellState:
@@ -199,9 +252,11 @@ def cell_state(ledger: Sequence[LedgerRow], source: CatalogSource, solver: Solve
     measurement unless its identity has an explicit carry-forward upstream.
     Provider waits never contribute to the scored count.
     """
+    protocol_id = policy.solver_protocol_id(solver)
     rows = {
         row.attempt_id: row
-        for row in ledger
+        for original in ledger
+        if (row := coverage_evidence(original, protocol_id)) is not None
         if row.source_id == source.source_id
         and row.solver == solver
         and row.registry_revision == source.registry_revision
@@ -331,4 +386,5 @@ def cell_state(ledger: Sequence[LedgerRow], source: CatalogSource, solver: Solve
                 key=lambda deviation: (deviation.version, deviation.task_id),
             )
         ),
+        protocol_id,
     )

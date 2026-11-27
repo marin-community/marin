@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Protocol
 
 from finestore.rl.curation import SourceUse
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import Backend
 
@@ -24,6 +24,7 @@ from experiments.post_training.task_curation.difficulty.state import (
     LedgerRow,
 )
 from experiments.post_training.task_curation.difficulty_config import DATA_ACCOUNT, SNOWBALL_VLLM_RELEASE_TAG
+from experiments.post_training.task_curation.difficulty_output_budget import require_solver_protocol
 
 MAX_TASKS_PER_JOB = 20
 MAX_GPU_HOURS_PER_JOB = 40.0
@@ -49,6 +50,10 @@ class AttemptBatch:
     max_gpu_hours: float = MAX_GPU_HOURS_PER_JOB
     vllm_release_tag: str | None = None
     daytona_account: str | None = None
+    solver_protocol_id: str = PROTOCOL_ID
+
+    def __post_init__(self) -> None:
+        require_solver_protocol(self.solver, self.solver_protocol_id)
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,8 @@ def action_payload(action: Action) -> dict:
         del payload["vllm_release_tag"]
     if isinstance(action, AttemptBatch) and action.daytona_account is None:
         del payload["daytona_account"]
+    if isinstance(action, AttemptBatch) and action.solver_protocol_id == PROTOCOL_ID:
+        del payload["solver_protocol_id"]
     if isinstance(action, FreezeSamplePanel) and action.inventory_revision is None:
         del payload["inventory_revision"]
     return payload
@@ -200,6 +207,7 @@ class AttemptRemediation:
                         sum(n for _, _, n in tasks),
                         vllm_release_tag=release,
                         daytona_account=DATA_ACCOUNT if cell.source.backend == Backend.DAYTONA else None,
+                        solver_protocol_id=cell.solver_protocol_id,
                     )
                 )
         return actions
@@ -477,6 +485,7 @@ def action_from_payload(payload: dict) -> Action:
             payload["max_gpu_hours"],
             payload.get("vllm_release_tag"),
             payload.get("daytona_account"),
+            payload.get("solver_protocol_id", PROTOCOL_ID),
         )
     if kind == "RebuildEnvironmentArtifact":
         return RebuildEnvironmentArtifact(
