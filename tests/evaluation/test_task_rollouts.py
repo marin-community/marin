@@ -64,6 +64,7 @@ from taskcompendium.evaluation.spec import (
     LikelihoodMetric,
     LikelihoodNormalization,
     LikelihoodRequest,
+    MachineResources,
     Metric,
     MetricKind,
     MiniSweAgent,
@@ -904,7 +905,21 @@ def test_grader_machines_have_the_network_their_environment_requires(capabilitie
         capabilities=capabilities,
     )
     run_default = machine_runtime(backend="daytona", network=NetworkPolicy.DENY)
-    assert grader_machine(run_default, environment) == run_default.model_copy(update={"network": network})
+    inputs = EpisodeInputs(network=NetworkPolicy.DENY)
+    assert grader_machine(run_default, environment, inputs) == run_default.model_copy(update={"network": network})
+
+
+def test_grader_machines_have_the_resources_their_task_sets():
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=f"grader@sha256:{'a' * 64}"
+    )
+    run_default = machine_runtime(backend="daytona", network=NetworkPolicy.DENY, storage_mb=4096)
+    inputs = EpisodeInputs(
+        cpus=1, network=NetworkPolicy.DENY, verifier_resources=MachineResources(cpus=4, memory_mb=8192)
+    )
+    grader = grader_machine(run_default, environment, inputs)
+    assert grader is not None
+    assert (grader.cpus, grader.memory_mb, grader.storage_mb) == (4, 8192, 4096)
 
 
 @dataclass
