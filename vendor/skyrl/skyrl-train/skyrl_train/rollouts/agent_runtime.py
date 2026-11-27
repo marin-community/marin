@@ -37,6 +37,7 @@ from rigging.inference_clock import remote_execution_watchdog, current_inference
 from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
+from taskcompendium.models import TaskSpec
 from taskcompendium.submission import conversation_messages
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -61,6 +62,25 @@ async def publish_attempt(evidence: Path, destination: str) -> None:
         await asyncio.to_thread(shutil.copytree, evidence, destination)
     shutil.rmtree(evidence)
 
+
+
+def package_config(task: TaskSpec) -> PackageTaskConfig:
+    """The original Harbor package configuration carried in the task's verifier resources."""
+    return PackageTaskConfig.model_validate_toml(
+        resource_bytes(next(resource for resource in task.resources.verifier if resource.path == "task.toml")).decode()
+    )
+
+
+def trial_setup_commands(task: TaskSpec) -> tuple[str, ...]:
+    """Setup the engine runs after Harbor's own: none when the package declares the identical setup.
+
+    Harbor runs a package's ``[environment.setup]`` before ENVIRONMENT_READY, so repeating the
+    same TaskSpec setup would run it twice (SWE-rebench shared-source packages re-clone and
+    re-bootstrap their protected root). Any other TaskSpec setup still runs.
+    """
+    declared = task.environment_requirements.setup_commands
+    setup = package_config(task).environment.setup
+    return () if setup is not None and declared == (setup.command,) else declared
 
 class InstalledAgentSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -211,11 +231,7 @@ class InstalledAgentRuntime:
                 kwargs["image_build"] = settings.environment.eval_image_build
             if settings.environment.eval_override_storage_mb is not None:
                 environment_fields["override_storage_mb"] = settings.environment.eval_override_storage_mb
-        package = PackageTaskConfig.model_validate_toml(
-            resource_bytes(
-                next(resource for resource in lowered.task.resources.verifier if resource.path == "task.toml")
-            ).decode()
-        )
+        package = package_config(lowered.task)
         verifier_environment = {**package.verifier.env, **verifier_environment}
         authentication = {}
         protected = self.protected_values
@@ -345,7 +361,7 @@ class InstalledAgentRuntime:
                     self.backend,
                     complete,
                     evidence / "engine",
-                    setup_commands=lowered.task.environment_requirements.setup_commands,
+                    setup_commands=trial_setup_commands(lowered.task),
                     setup_cwd=lowered.task.environment_requirements.working_directory,
                     setup_timeout=self.settings.setup_timeout,
                 )

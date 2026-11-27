@@ -6,6 +6,7 @@
 import hashlib
 
 import pytest
+import tomlkit
 
 from taskcompendium.integrity import (
     DeliveredVerifierFile,
@@ -13,6 +14,8 @@ from taskcompendium.integrity import (
     RootDeliveryContract,
     SharedDependencyState,
     SharedIntegrityContract,
+    SharedSourceFamily,
+    SourceSharedRunner,
 )
 from taskcompendium.models import (
     AnswerType,
@@ -21,6 +24,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     FileReward,
+    NoGrader,
     PlainText,
     ResourceGroups,
     RewardFile,
@@ -135,3 +139,54 @@ def test_unported_protections_fail_closed():
         require_integrity_contract(delivery_task(shared))
     with pytest.raises(NotImplementedError, match="image user"):
         require_integrity_contract(delivery_task(root_delivery(agent_user="agent")))
+
+
+CONTROLLER = b"print('control')\n"
+SOURCE_RUNNER = b"print('shared pytest')\n"
+
+
+def shared_source(**overrides) -> SharedIntegrityContract:
+    fields = {
+        "id": "shared-source",
+        "dependency_state": SharedDependencyState.AGENT_MUTABLE,
+        "reference_sha256": "a" * 64,
+        "harness_sha256": hashlib.sha256(CONTROLLER).hexdigest(),
+        "native": SourceSharedRunner(
+            family=SharedSourceFamily.SWE_REBENCH, shared_controller_sha256=hashlib.sha256(SOURCE_RUNNER).hexdigest()
+        ),
+    }
+    return SharedIntegrityContract(**{**fields, **overrides})
+
+
+def harbor_shared_task(contract, *, package_contract=None, controller=CONTROLLER) -> TaskSpec:
+    """A SWE-rebench-shaped Harbor package whose own pinned controller grades the trial."""
+    declared = (contract if package_contract is None else package_contract).model_dump(mode="json", exclude_none=True)
+    toml = tomlkit.dumps({"metadata": {"integrity_contract": declared}, "verifier": {"environment_mode": "shared"}})
+    test = f"#!/bin/bash\nexec python -I {contract.harness} grade --contract /opt/contract.json\n".encode()
+    return TaskSpec(
+        id="fixture:harbor-shared",
+        context=ConversationInput(events=(TextMessage(role="user", content="Fix the bug."),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.WORKSPACE_STATE,
+        answer_format=PlainText(),
+        grader=NoGrader(reason="Harbor grades the completed trial"),
+        resources=ResourceGroups(
+            verifier=(
+                inline_resource("task.toml", toml.encode()),
+                inline_resource("tests/test.sh", test),
+                inline_resource("environment/taskcompendium-shared/control.py", controller),
+                inline_resource("environment/taskcompendium-shared/shared_pytest.py", SOURCE_RUNNER),
+            )
+        ),
+        source=Source(dataset="fixture/harbor-shared", revision="r", row="0", importer_revision="fixture"),
+        tags=("harbor",),
+        integrity_contract=contract,
+    )
+
+
+def test_harbor_shared_source_package_is_accepted_only_with_its_pinned_controller():
+    require_integrity_contract(harbor_shared_task(shared_source()))
+    with pytest.raises(ValueError, match="pinned controller"):
+        require_integrity_contract(harbor_shared_task(shared_source(), controller=b"print('tampered')\n"))
+    with pytest.raises(ValueError, match="does not declare"):
+        require_integrity_contract(harbor_shared_task(shared_source(), package_contract=shared_source(agent_uid=0)))

@@ -10,15 +10,27 @@ copied artifacts carry the reward to the separate grading machine. The consumer
 verifies that the task actually carries that delivery path and that the private
 material is absent from every actor-visible resource. The SHARED enforcement
 classes need protected-root runtime support this consumer does not have, so
-those tasks fail closed.
+those tasks fail closed, except a ``shared-source`` task that Harbor grades from
+its own package: the package's pinned controller enforces the UID boundary and
+the protected root inside the trial, so the consumer only verifies that the
+package carries exactly the declared contract and controller.
 """
 
+import tomllib
 from collections.abc import Sequence
 from hashlib import sha256
 
-from taskcompendium.integrity import MultiSweDeliveryContract, RootDeliveryContract, SharedIntegrityContract
-from taskcompendium.models import ScriptGrader, TaskResource, TaskSpec
+from taskcompendium.integrity import (
+    MultiSweDeliveryContract,
+    RootDeliveryContract,
+    SharedIntegrityContract,
+    SourceSharedRunner,
+)
+from taskcompendium.models import NoGrader, ScriptGrader, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
+
+SHARED_PACKAGE_CONTROLLER = "environment/taskcompendium-shared/control.py"
+SHARED_PACKAGE_SOURCE_RUNNER = "environment/taskcompendium-shared/shared_pytest.py"
 
 
 def _digests(resources: Sequence[TaskResource]) -> set[tuple[str, int]]:
@@ -34,10 +46,8 @@ def require_integrity_contract(task: TaskSpec) -> None:
     if contract is None:
         return
     if isinstance(contract, SharedIntegrityContract):
-        raise NotImplementedError(
-            f"Task {task.id} declares a {contract.id} v{contract.version} integrity contract; the consumer "
-            "runtime does not enforce shared grading protections, so it refuses the task"
-        )
+        require_harbor_shared_package(task, contract)
+        return
     if contract.agent_user is not None:
         raise NotImplementedError(
             f"Task {task.id} demotes its actor to {contract.agent_user!r}; the consumer keeps the image user"
@@ -68,3 +78,34 @@ def require_integrity_contract(task: TaskSpec) -> None:
         raise ValueError(
             f"Task {task.id} exposes {len(leaked)} contract-delivered verifier file(s) in actor-visible resources"
         )
+
+
+def require_harbor_shared_package(task: TaskSpec, contract: SharedIntegrityContract) -> None:
+    """Raise unless Harbor grades ``task`` with a package that carries ``contract`` and its pinned controller."""
+    if not (
+        isinstance(task.grader, NoGrader) and "harbor" in task.tags and isinstance(contract.native, SourceSharedRunner)
+    ):
+        raise NotImplementedError(
+            f"Task {task.id} declares a {contract.id} v{contract.version} integrity contract; the consumer "
+            "runtime enforces shared grading protections only through a Harbor-graded shared-source package"
+        )
+    files = {resource.path: resource for resource in task.resources.verifier}
+    missing = {"task.toml", "tests/test.sh", SHARED_PACKAGE_CONTROLLER, SHARED_PACKAGE_SOURCE_RUNNER} - set(files)
+    if missing:
+        raise ValueError(f"Task {task.id} shared-source package lacks {sorted(missing)}")
+    package = tomllib.loads(resource_bytes(files["task.toml"]).decode())
+    declared = package.get("metadata", {}).get("integrity_contract")
+    if declared is None or SharedIntegrityContract.model_validate(declared) != contract:
+        raise ValueError(f"Task {task.id} package does not declare the task's {contract.id} contract")
+    pins = {
+        SHARED_PACKAGE_CONTROLLER: contract.harness_sha256,
+        SHARED_PACKAGE_SOURCE_RUNNER: contract.native.shared_controller_sha256,
+    }
+    for path, digest in pins.items():
+        if sha256(resource_bytes(files[path])).hexdigest() != digest:
+            raise ValueError(f"Task {task.id} package {path} differs from its pinned controller")
+    if f"{contract.harness} grade" not in resource_bytes(files["tests/test.sh"]).decode():
+        raise ValueError(f"Task {task.id} package verifier does not run the pinned shared controller")
+    actor = {digest for digest, _ in _digests(task.resources.all + task.resources.worker)}
+    if actor & set(pins.values()):
+        raise ValueError(f"Task {task.id} exposes its shared controller in actor-visible resources")

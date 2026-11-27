@@ -779,3 +779,16 @@ async def test_bixbench_verifier_grades_through_host_judge_relay(harbor_package,
     assert machine.requests[0][0] == f"Bearer {HOST_JUDGE_KEY}"
     assert machine.requests[0][1] == "/v1/chat/completions"
     assert json.loads(machine.requests[0][2])["model"] == "fixture-judge"
+
+
+def test_package_declared_setup_is_not_repeated_by_the_engine(harbor_package):
+    with (harbor_package / "task.toml").open("a") as config_file:
+        config_file.write('\n[environment.setup]\ncommand = "git clone fixture /testbed"\ntimeout_sec = 60\n')
+    task = harbor_trial_task(harbor_package, source=Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
+
+    def with_setup(*commands):
+        requirements = task.environment_requirements.model_copy(update={"setup_commands": commands})
+        return task.model_copy(update={"environment_requirements": requirements})
+
+    assert agent_runtime.trial_setup_commands(with_setup("git clone fixture /testbed")) == ()
+    assert agent_runtime.trial_setup_commands(with_setup("exit 23")) == ("exit 23",)
