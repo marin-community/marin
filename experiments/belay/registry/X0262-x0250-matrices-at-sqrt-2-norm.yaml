@@ -4,7 +4,7 @@ name: X0250 matrices at sqrt(2) norm, same rotation
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7208904313
@@ -12,3 +12,19 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 0179496c2e2e08e2d9399b4c58354bc444ec7c90
+trials:
+- id: t001
+  variant: X0250, matrix LR x sqrt(2), lambda 0.2 -> 0.141421
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0262
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0262
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.141421'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_matrix_lr_mult: '1.414214'
+  commit: c43f574bd9
+  priority: interactive
