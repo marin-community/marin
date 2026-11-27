@@ -15,9 +15,12 @@ from unittest.mock import MagicMock
 import click
 import pytest
 from click.testing import CliRunner
+from fray.current_client import set_current_client
+from fray.types import ResourceConfig
 from iris.client.client import IrisClient
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
+from marin.execution.remote import remote
 from marin.rl.cli import _coordinator_request, rl_build_options
 from marin.rl.skyrl import IrisSkyRLExecution
 from rigging.timing import Duration
@@ -83,6 +86,59 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
 def test_coordinator_request_requires_a_skyrl_step() -> None:
     with pytest.raises(ValueError, match="did not construct a SkyRL artifact step"):
         _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
+
+
+@pytest.mark.parametrize("preemption,expected", [(None, 100), (0, 0), (2, 2)])
+def test_coordinator_request_bounds_preemption_without_changing_failure_or_priority(preemption, expected) -> None:
+    execution = dataclasses.replace(_execution(), priority="batch", max_retries=0, max_retries_preemption=preemption)
+    _, request = _coordinator_request([_step(execution)], "experiments.test_rl", (), 1, Path("/workspace"), {})
+    assert request.max_retries_preemption == expected
+    assert request.max_retries_failure == request.max_task_failures == 0
+    assert request.priority == 3
+
+
+def test_coordinator_rejects_mixed_preemption_policies_before_submission() -> None:
+    other = dataclasses.replace(_step(dataclasses.replace(_execution(), max_retries_preemption=0)), name="other")
+    with pytest.raises(ValueError, match="multiple preemption retry policies"):
+        _coordinator_request([_step(_execution()), other], "experiments.test_rl", (), 1, Path("/workspace"), {})
+
+
+def test_execution_rejects_negative_preemption_budget() -> None:
+    with pytest.raises(ValueError, match="max_retries_preemption cannot be negative"):
+        dataclasses.replace(_execution(), max_retries_preemption=-1)
+
+
+@pytest.mark.parametrize("preemption,expected", [(None, 100), (0, 0)])
+def test_in_task_rl_run_applies_retry_policy_to_materialized_jobs(monkeypatch, fray_client, preemption, expected):
+    requests = []
+
+    class RecordingClient:
+        def submit(self, request, adopt_existing=True):
+            requests.append(request)
+            return fray_client.submit(request, adopt_existing=adopt_existing)
+
+    monkeypatch.setattr("marin.rl.cli.get_job_info", lambda: object())
+
+    @click.command()
+    @rl_build_options
+    def main():
+        execution = dataclasses.replace(_execution(), max_retries_preemption=preemption)
+        return ArtifactStep(
+            name="checkpoints/retry-policy",
+            version="2026.09.21",
+            artifact_type=Artifact,
+            run=remote(lambda config: Artifact(path=config["output"]), resources=ResourceConfig.with_cpu(cpu=1)),
+            build_config=lambda ctx: {"output": ctx.output_path},
+            runtime_args={"skyrl_execution": execution},
+        )
+
+    with set_current_client(RecordingClient()):
+        result = CliRunner().invoke(main, ["--version", "2026.09.21", "--run"])
+    assert result.exit_code == 0, result.output
+    assert len(requests) == 1
+    assert requests[0].max_retries_preemption == expected
+    assert requests[0].max_retries_failure == requests[0].max_task_failures == 0
+    assert requests[0].priority == 0  # Fray children continue to inherit the parent's BATCH band.
 
 
 @pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])

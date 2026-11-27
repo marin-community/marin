@@ -1032,6 +1032,11 @@ class NativePolicyRuntime:
 
     def runtime_identity(self) -> dict:
         return {
+            "compiler_environment": {
+                "XLA_FLAGS": os.environ.get("XLA_FLAGS", ""),
+                "normalized_xla_flags": scientific_xla_flags(self.settings),
+                "JAX_PLATFORMS": os.environ.get("JAX_PLATFORMS"),
+            },
             "pid": os.getpid(),
             "jax_version": jax.__version__,
             "jaxlib_version": jaxlib.__version__,

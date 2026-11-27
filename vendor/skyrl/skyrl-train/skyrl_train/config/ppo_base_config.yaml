@@ -139,6 +139,7 @@ trainer:
       initialization_timeout_seconds: 1800
       validate_checkpoint_roundtrip: false
       diagnostic_shutdown_observer: false
+      deterministic_gpu_ops: false
       coordinator_port: 29590
       device_memory_fraction: 0.90
       allocator: bfc

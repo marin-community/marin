@@ -11,25 +11,15 @@ from iris.rpc import controller_pb2, job_pb2
 from omegaconf import OmegaConf
 from skyrlrecipe.locality import LocalityPlan
 
-from cloud.iris.iris_backend import BundledLaunchConfig, RLStoragePaths, launch
+from cloud.iris.iris_backend import BundledLaunchConfig, IrisBackend, RLStoragePaths, launch
 from cloud.iris.ray_storage import RaySpillBackend
 from cloud.iris.runtime_environment import RuntimeProfile
 from cloud.iris.role_topology import RoleTopology
+from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 
 
-@pytest.mark.parametrize(
-    "target_cluster,parent_cluster_config,interface,groups",
-    [
-        ("cw-rno2a", "marin.yaml", None, ()),
-        (None, "marin.yaml", None, ()),
-        (None, None, None, ()),
-        ("cw-rno2a", "marin.yaml", "eth0", ()),
-        ("cw-us-east-08a", "marin.yaml", None, (8, 16)),
-    ],
-)
-def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
-    tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface, groups
-):
+@pytest.fixture
+def launched_requests(monkeypatch):
     requests = []
 
     class ControllerStub:
@@ -43,10 +33,27 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         def close(self):
             pass
 
-    # Replace only the controller RPC transport; launch and both Iris client
-    # layers still construct the real child submission and environment.
+    # Keep both real client layers; replace only their controller RPC transport.
     monkeypatch.setattr("iris.cluster.client.remote_client.ControllerServiceClientSync", ControllerStub)
     monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://parent-controller:8080")
+    return requests
+
+
+@pytest.mark.parametrize(
+    "target_cluster,parent_cluster_config,interface,groups",
+    [
+        ("cw-rno2a", "marin.yaml", None, ()),
+        (None, "marin.yaml", None, ()),
+        (None, None, None, ()),
+        ("cw-rno2a", "marin.yaml", "eth0", ()),
+        ("cw-us-east-08a", "marin.yaml", None, (8, 16)),
+    ],
+)
+@pytest.mark.parametrize("preemption", [None, 0, -1])
+def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
+    tmp_path, monkeypatch, target_cluster, parent_cluster_config, interface, groups, preemption, launched_requests
+):
+    requests = launched_requests
     config = OmegaConf.create(
         {
             "runtime": {
@@ -74,7 +81,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         memory="512GB",
         disk="512GB",
         runtime_profile=RuntimeProfile.MEGATRON,
-        priority="interactive",
+        priority="batch",
         storage_paths=RLStoragePaths("checkpoints", "exports", "trajectories", "logs", 2),
         ray_spill_backend=RaySpillBackend.LOCAL,
         ray_spill_dir="/tmp/ray-spill",
@@ -84,11 +91,17 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         wandb_entity=None,
         container_profile=job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         max_retries=0,
+        max_retries_preemption=preemption,
         timeout=600,
     )
     previous = get_job_info()
     set_job_info(JobInfo(task_id=JobName.from_wire("/alice/coordinator/0")))
     try:
+        if preemption == -1:
+            with pytest.raises(ValueError, match="max_retries_preemption cannot be negative"):
+                launch(args, tmp_path)
+            assert requests == []
+            return
         result = launch(args, tmp_path)
     finally:
         set_job_info(previous)
@@ -97,11 +110,42 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     [(address, request)] = requests
     assert address == "http://parent-controller:8080"
     assert request.name == result.job_id
+    assert request.max_retries_preemption == (1000 if preemption is None else preemption)
+    assert request.max_retries_failure == request.max_task_failures == 0
+    assert request.priority_band == job_pb2.PRIORITY_BAND_BATCH
     assert tuple(request.coscheduling.group_sizes) == groups
     assert request.coscheduling.group_by == ("nvlink.domain" if groups else "leafgroup")
     assert all(constraint.key != CLUSTER_CONSTRAINT_KEY for constraint in request.constraints)
     expected_interface = interface or ("^ibs,ibp,lo,docker,veth,cilium,lxc" if args.cluster == "cw-rno2a" else None)
     assert request.environment.env_vars.get("NCCL_SOCKET_IFNAME") == expected_interface
+
+
+@pytest.mark.parametrize("preemption", [None, 0, -1])
+def test_typed_preemption_budget_reaches_real_submission_or_fails_before_rpc(tmp_path, launched_requests, preemption):
+    raw = raw_launch_config()
+    raw["run"]["submission"] = "detach"
+    raw["iris"].update(priority="batch", max_retries=0)
+    raw["skyrl"]["trainer"]["debug_mode"] = "off"
+    if preemption is not None:
+        raw["iris"]["max_retries_preemption"] = preemption
+    path = tmp_path / "launch.yaml"
+    OmegaConf.save(OmegaConf.create(raw), path)
+    previous = get_job_info()
+    set_job_info(JobInfo(task_id=JobName.from_wire("/alice/coordinator/0")))
+    try:
+        if preemption == -1:
+            with pytest.raises(ValueError, match="iris.max_retries_preemption cannot be negative"):
+                IrisBackend().launch(path)
+            assert launched_requests == []
+            return
+        result = IrisBackend().launch(path)
+    finally:
+        set_job_info(previous)
+    [(_, request)] = launched_requests
+    assert result.job_id == request.name
+    assert request.max_retries_preemption == (1000 if preemption is None else preemption)
+    assert request.max_retries_failure == request.max_task_failures == 0
+    assert request.priority_band == job_pb2.PRIORITY_BAND_BATCH
 
 
 def test_task_shell_runs_the_interconnect_gate():

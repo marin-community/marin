@@ -18,6 +18,63 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 safety = importlib.import_module("stack_safety")
+_MAX_READY_BYTES = 65536
+
+
+def wait_for_debugger(config, expected, descriptor, owner_descriptor, started, result, *, now=time.monotonic):
+    """Keep readiness startup separate from LLDB's ten-second ACK wait.
+
+    GNU timeout still caps the complete debugger lifetime at fifteen seconds;
+    these phase deadlines do not extend that outer process limit.
+    """
+    deadline = started + 9
+    result.update(deadline_phase="startup_readiness", startup_deadline_monotonic=deadline)
+    bound_ready = False
+    ack = None
+    marker_identity = {"pid": expected.pid, "starttime": expected.starttime, "nonce": config["nonce"]}
+    while True:
+        if owner_descriptor is not None and select.select([owner_descriptor], [], [], 0)[0]:
+            raise RuntimeError("Observer owner exited")
+        if config.get("cancel_path") and Path(config["cancel_path"]).exists():
+            raise RuntimeError("Observer cancelled before completion")
+        exited, _, _ = select.select([descriptor], [], [], 0.005)
+        if exited:
+            return
+        observed = now()
+        if observed > deadline:
+            raise TimeoutError("Persistent tracer deadline exceeded")
+        ready_path = Path(config["ready_path"])
+        if not bound_ready and ready_path.exists():
+            if ready_path.stat().st_size > _MAX_READY_BYTES:
+                raise RuntimeError("Oversize observer readiness marker")
+            ready = json.loads(ready_path.read_text())
+            if ready != dict(marker_identity, running=True) or ready.get("running") is not True:
+                raise RuntimeError("Observer readiness identity mismatch")
+            observed = now()
+            if observed > deadline:
+                raise TimeoutError("Persistent tracer deadline exceeded")
+            bound_ready = True
+            deadline = observed + 10
+            result.update(
+                deadline_phase="await_ack",
+                ready_observed_monotonic=observed,
+                ack_wait_deadline_monotonic=deadline,
+            )
+        if bound_ready and ack is None and Path(config["ack_path"]).exists():
+            ack = json.loads(Path(config["ack_path"]).read_text())
+            if any(ack.get(key) != value for key, value in marker_identity.items()):
+                raise RuntimeError("ACK identity mismatch")
+            observed = now()
+            if observed > deadline:
+                raise TimeoutError("Persistent tracer deadline exceeded")
+            deadline = ack["monotonic_ns"] / 1e9 + 2.95
+            result.update(
+                deadline_phase="post_ack",
+                ack_observed_monotonic=observed,
+                post_ack_deadline_monotonic=deadline,
+            )
+        if now() > deadline:
+            raise TimeoutError("Persistent tracer deadline exceeded")
 
 
 def main():
@@ -88,23 +145,7 @@ def main():
         descriptor = os.pidfd_open(debugger.pid, 0)
         reader = threading.Thread(target=drain, daemon=True)
         reader.start()
-        deadline = started + 8
-        ack = None
-        while True:
-            if owner_descriptor is not None and select.select([owner_descriptor], [], [], 0)[0]:
-                raise RuntimeError("Observer owner exited")
-            if config.get("cancel_path") and Path(config["cancel_path"]).exists():
-                raise RuntimeError("Observer cancelled before completion")
-            ready, _, _ = select.select([descriptor], [], [], 0.005)
-            if ready:
-                break
-            if ack is None and Path(config["ack_path"]).exists():
-                ack = json.loads(Path(config["ack_path"]).read_text())
-                if ack["pid"] != expected.pid or ack["nonce"] != config["nonce"]:
-                    raise RuntimeError("ACK identity mismatch")
-                deadline = ack["monotonic_ns"] / 1e9 + 2.95
-            if time.monotonic() > deadline:
-                raise TimeoutError("Persistent tracer deadline exceeded")
+        wait_for_debugger(config, expected, descriptor, owner_descriptor, started, result)
     except Exception as error:
         result["errors"].append({"type": type(error).__name__, "message": str(error)[:400]})
     finally:

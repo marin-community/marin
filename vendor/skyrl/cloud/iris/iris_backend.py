@@ -295,6 +295,7 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         job_name=iris["job_name"],
         priority=iris["priority"],
         max_retries=int(iris["max_retries"]),
+        max_retries_preemption=iris["max_retries_preemption"],
         timeout=int(iris["timeout"]),
         no_wait=submission == SubmissionMode.DETACH,
         dry_run=submission == SubmissionMode.PREPARE,
@@ -778,6 +779,8 @@ def build_config_task_command(args: SimpleNamespace) -> list[str]:
 
 def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     """Submit a resolved launch config and, unless detached, wait for its terminal state."""
+    if args.max_retries_preemption is not None and args.max_retries_preemption < 0:
+        raise ValueError("max_retries_preemption cannot be negative")
     if get_job_info() is not None and (args.target_cluster or args.parent_cluster_config):
         print(
             f"[rl-iris] In-task launch: ignoring target_cluster={args.target_cluster!r} and "
@@ -1058,6 +1061,8 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             ports=[port.value for port in RayPort],
             max_retries_failure=args.max_retries,
             max_task_failures=args.max_retries,
+            **({"max_retries_preemption": args.max_retries_preemption}
+               if args.max_retries_preemption is not None else {}),
             priority_band=priority_band,
             timeout=None if args.timeout == 0 else _seconds_to_duration(args.timeout),
         )

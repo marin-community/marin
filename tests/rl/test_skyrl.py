@@ -14,6 +14,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import IO
+from uuid import UUID
 
 import pytest
 import yaml
@@ -275,6 +276,26 @@ def _execution(cluster: str = "cw-us-east-08a") -> IrisSkyRLExecution:
         coordinator_timeout_hours=12,
         job_timeout_seconds=1800,
     )
+
+
+@pytest.mark.parametrize("preemption", [None, 0, 2])
+def test_preemption_policy_renders_only_when_explicit_without_changing_recipe_identity(preemption, monkeypatch) -> None:
+    monkeypatch.setattr("marin.rl.skyrl.uuid.uuid4", lambda: UUID(int=0))
+    baseline = skyrl_step(_spec(), _execution())
+    bounded = skyrl_step(_spec(), dataclasses.replace(_execution(), max_retries_preemption=preemption))
+
+    def rendered(step):
+        context = StepContext.for_run("/tmp/retry-render", "/tmp", runtime_args=step.runtime_args, deps=step.deps)
+        return yaml.safe_load(step.build_config(context).launch_config_yaml)
+
+    original = rendered(baseline)
+    actual = rendered(bounded)
+    assert bounded.fingerprint() == baseline.fingerprint()
+    if preemption is None:
+        assert "max_retries_preemption" not in actual["iris"]
+    else:
+        assert actual["iris"].pop("max_retries_preemption") == preemption
+    assert actual == original
 
 
 @pytest.mark.parametrize("key", ["use_conversation_multi_turn", "require_exact_chat_transport"])

@@ -2,15 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextvars
+import dataclasses
 import json
 import os
 from pathlib import Path
 from threading import Event
 
+import cloudpickle
 import marin.execution.step_runner as step_runner_module
 import pytest
 from fray.current_client import current_client, set_current_client
-from fray.types import ResourceConfig
+from fray.types import Entrypoint, ResourceConfig
 from marin.execution.artifact import (
     FINGERPRINT_KEY,
     VERSION_KEY,
@@ -757,6 +759,69 @@ def _call_remote_with_submit_spy(fn, fray_client) -> _SubmitSpy:
 def _assert_single_submit_extras(spy: _SubmitSpy, expected: list[str]) -> None:
     assert len(spy.requests) == 1
     assert spy.requests[0].environment.extras == expected
+
+
+@pytest.mark.parametrize("preemption,expected", [(None, 100), (0, 0), (2, 2)])
+def test_retry_policy_survives_threads_and_serialized_nested_jobs(tmp_path, fray_client, preemption, expected):
+    class SerializedClient:
+        def __init__(self):
+            self.requests = []
+
+        def submit(self, request, adopt_existing=True):
+            self.requests.append(request)
+            entry = request.entrypoint.callable_entrypoint
+            assert entry is not None
+            # A remote process has no caller ContextVars. Only the serialized
+            # callable and its explicit captured scalar can carry the policy.
+            loaded = cloudpickle.loads(cloudpickle.dumps(entry))
+
+            def execute():
+                with set_current_client(self):
+                    loaded.callable(*loaded.args, **loaded.kwargs)
+
+            remote_request = dataclasses.replace(request, entrypoint=Entrypoint.from_callable(execute))
+            return contextvars.Context().run(fray_client.submit, remote_request, adopt_existing=adopt_existing)
+
+    resources = ResourceConfig.with_cpu(cpu=1)
+
+    def outer(output_path):
+        child = StepSpec(
+            name="nested",
+            override_output_path=str(tmp_path / "nested"),
+            fn=lambda path: Artifact(path=path),
+            resources=resources,
+        )
+        StepRunner().run([child])
+        return Artifact(path=output_path)
+
+    parent = StepSpec(name="outer", override_output_path=str(tmp_path / "outer"), fn=outer, resources=resources)
+    after = StepSpec(
+        name="after",
+        override_output_path=str(tmp_path / "after"),
+        fn=lambda path: Artifact(path=path),
+        resources=resources,
+    )
+    client = SerializedClient()
+    with set_current_client(client):
+        StepRunner().run([parent], max_retries_preemption=preemption)
+        StepRunner().run([after])
+    assert [request.max_retries_preemption for request in client.requests] == [expected, expected, 100]
+    assert all(request.max_retries_failure == request.max_task_failures == 0 for request in client.requests)
+    assert read_artifact(str(tmp_path / "nested"), Artifact).path == str(tmp_path / "nested")
+
+
+def test_negative_retry_policy_fails_before_submitting_steps(tmp_path, fray_client):
+    spy = _SubmitSpy(fray_client)
+    step = StepSpec(
+        name="invalid",
+        override_output_path=str(tmp_path / "invalid"),
+        fn=lambda path: Artifact(path=path),
+        resources=ResourceConfig.with_cpu(cpu=1),
+    )
+    with set_current_client(spy), pytest.raises(ValueError, match="max_retries_preemption cannot be negative"):
+        StepRunner().run([step], max_retries_preemption=-1)
+    assert spy.requests == []
+    assert not (tmp_path / "invalid").exists()
 
 
 def test_step_resources_dispatches_via_fray(tmp_path: Path, fray_client):

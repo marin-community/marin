@@ -31,10 +31,17 @@ def _child_environment(
     preallocate: bool = False,
     allocator: str = "bfc",
     numpy_madvise_hugepage: bool | None = None,
+    deterministic_gpu_ops: bool = False,
 ) -> dict[str, str]:
     if allocator not in ("bfc", "vmm") or (allocator == "vmm" and preallocate):
         raise ValueError("Native learner requires bfc, or vmm with preallocate=false")
     environment = dict(os.environ)
+    if deterministic_gpu_ops:
+        deterministic_flag = "--xla_gpu_deterministic_ops=true"
+        inherited_flags = shlex.split(environment.get("XLA_FLAGS", ""))
+        if inherited_flags not in ([], [deterministic_flag]):
+            raise ValueError("Native deterministic GPU profile requires empty XLA_FLAGS or its exact deterministic flag")
+        environment["XLA_FLAGS"] = deterministic_flag
     if numpy_madvise_hugepage is not None:
         environment["NUMPY_MADVISE_HUGEPAGE"] = str(int(numpy_madvise_hugepage))
     for name in (
@@ -160,6 +167,7 @@ class LevanterHostWorker:
             preallocate=runtime.preallocate,
             allocator=runtime.allocator,
             numpy_madvise_hugepage=runtime.numpy_madvise_hugepage,
+            deterministic_gpu_ops=runtime.deterministic_gpu_ops,
         )
         if runtime.validate_checkpoint_roundtrip:
             self.initialization_config["compiler_dump_dir"] = shlex.split(environment["XLA_FLAGS"])[-3].split("=", 1)[1]

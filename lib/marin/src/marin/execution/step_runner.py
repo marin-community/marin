@@ -16,8 +16,9 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any
 
@@ -47,6 +48,19 @@ from marin.training.run_environment import dependency_groups_for_resources
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
+_max_retries_preemption: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "max_retries_preemption", default=None
+)
+
+
+@contextmanager
+def _preemption_retry_policy(value: int | None) -> Iterator[None]:
+    # Remote closures capture this function and a scalar, never a ContextVar.
+    token = _max_retries_preemption.set(value)
+    try:
+        yield
+    finally:
+        _max_retries_preemption.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +197,7 @@ class StepRunner:
         dry_run: bool = False,
         force_run_failed: bool = True,
         max_concurrent: int | None = None,
+        max_retries_preemption: int | None = None,
     ) -> None:
         """Eagerly run steps, launching each as soon as its deps are satisfied.
 
@@ -193,6 +208,11 @@ class StepRunner:
         Submit at most ``max_concurrent`` steps (default 8). Keep other ready
         steps in graph order so newly ready dependents can use the next slot.
         """
+        if max_retries_preemption is None:
+            max_retries_preemption = _max_retries_preemption.get()
+        if max_retries_preemption is not None and max_retries_preemption < 0:
+            raise ValueError("max_retries_preemption cannot be negative")
+
         # Make step progress visible by default. Idempotent and non-clobbering:
         # skipped when the driver (or a wrapping app) already installed handlers.
         if not logging.getLogger().handlers:
@@ -284,6 +304,7 @@ class StepRunner:
                 dry_run=dry_run,
                 local_pool=local_pool,
                 fray_client=caller_fray_client,
+                max_retries_preemption=max_retries_preemption,
             )
             if handle is not None:
                 running[path] = handle
@@ -346,6 +367,7 @@ class StepRunner:
         dry_run: bool,
         local_pool: ThreadPoolExecutor,
         fray_client: object | None = None,
+        max_retries_preemption: int | None = None,
     ) -> JobHandle | None:
         """Launch a single step. Returns None if skipped."""
         output_path = step.output_path
@@ -377,11 +399,12 @@ class StepRunner:
         captured_client = fray_client
 
         def worker_fn():
-            if captured_client is not None:
-                with set_current_client(captured_client):
+            with _preemption_retry_policy(max_retries_preemption):
+                if captured_client is not None:
+                    with set_current_client(captured_client):
+                        run_step(step)
+                else:
                     run_step(step)
-            else:
-                run_step(step)
 
         worker_fn.__qualname__ = step_name
         worker_fn.__name__ = step_name
@@ -482,11 +505,13 @@ def _submit_iris_job(
     record (``writes_record``) skip that write.
     """
     identity = _step_record_identity(step)
+    max_retries_preemption = _max_retries_preemption.get()
 
     def _fn_with_artifact_save() -> None:
-        result = raw_fn(output_path)
-        if not step.writes_record:
-            write_step_record(identity, output_path=output_path, result=result)
+        with _preemption_retry_policy(max_retries_preemption):
+            result = raw_fn(output_path)
+            if not step.writes_record:
+                write_step_record(identity, output_path=output_path, result=result)
 
     job_name = sanitize_job_name(f"{step.name_with_hash}-{uuid.uuid4().hex[:8]}")
     dependency_groups = dependency_groups_for_resources(resources, pip_dependency_groups)
@@ -499,6 +524,7 @@ def _submit_iris_job(
             pip_packages=pip_packages,
             env_vars=env_vars,
         ),
+        **({"max_retries_preemption": max_retries_preemption} if max_retries_preemption is not None else {}),
     )
     handle = current_client().submit(request)
     handle.wait(raise_on_failure=True)

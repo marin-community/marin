@@ -576,6 +576,108 @@ print(json.dumps(receipt))
         assert receipt["initialized"] and receipt["backend"] == "cpu"
 
 
+@pytest.mark.parametrize("inherited", [None, "--xla_gpu_deterministic_ops=true"])
+@pytest.mark.parametrize("compiler_diagnostics", [False, True])
+def test_native_deterministic_profile_reaches_child_and_reports_actual_environment(
+    inherited, compiler_diagnostics, monkeypatch
+):
+    host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+    if inherited is None:
+        monkeypatch.delenv("XLA_FLAGS", raising=False)
+    else:
+        monkeypatch.setenv("XLA_FLAGS", inherited)
+    monkeypatch.setenv("UNRELATED_NATIVE_ENVIRONMENT", "not-part-of-the-receipt")
+    environment = host._child_environment(
+        sys.executable,
+        0.9,
+        require_accelerator=False,
+        compiler_diagnostics=compiler_diagnostics,
+        deterministic_gpu_ops=True,
+    )
+    flags = shlex.split(environment["XLA_FLAGS"])
+    dump = flags[-3].split("=", 1)[1] if compiler_diagnostics else None
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import json, sys
+from types import SimpleNamespace
+# The child environment deliberately drops PYTHONPATH; select this checkout.
+sys.path.insert(0, sys.argv[2])
+import jax.numpy as jnp
+from marin.rl.levanter_worker_runtime import NativePolicyRuntime
+runtime = NativePolicyRuntime()
+# A tiny real array suffices for this identity-only query; no model is loaded.
+runtime.state = SimpleNamespace(model={'weight': jnp.ones(3)})
+runtime.settings = {'runtime': {'deterministic_gpu_ops': False}}
+if sys.argv[1]:
+    runtime.settings['compiler_dump_dir'] = sys.argv[1]
+print(json.dumps(runtime.dispatch('runtime_identity', {})))
+""",
+                dump or "",
+                str(Path(__file__).resolve().parents[2] / "lib/marin/src"),
+            ],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        receipt = json.loads(result.stdout)
+        expected = ["--xla_gpu_deterministic_ops=true"]
+        normalized = expected.copy()
+        if compiler_diagnostics:
+            assert Path(dump).is_dir()
+            expected += [f"--xla_dump_to={dump}", "--xla_dump_hlo_as_text", "--xla_dump_hlo_module_re=train_step"]
+            normalized += [
+                "--xla_dump_to=<native-compiler-diagnostics>",
+                "--xla_dump_hlo_as_text",
+                "--xla_dump_hlo_module_re=train_step",
+            ]
+        assert flags == expected
+        assert receipt["compiler_environment"] == {
+            "XLA_FLAGS": shlex.join(expected),
+            "normalized_xla_flags": normalized,
+            "JAX_PLATFORMS": "cpu",
+        }
+        assert receipt["global_model_parameters"] == 3 and receipt["backend"] == "cpu"
+        assert "not-part-of-the-receipt" not in result.stdout
+        # The child reports its actual environment even when intent differs.
+        assert os.environ.get("XLA_FLAGS") == inherited
+    finally:
+        if dump is not None:
+            shutil.rmtree(dump)
+
+
+@pytest.mark.parametrize(
+    "inherited",
+    [
+        "--xla_gpu_deterministic_ops=false",
+        "--xla_gpu_deterministic_ops=true --xla_gpu_deterministic_ops=true",
+        "--xla_gpu_deterministic_ops=true --xla_gpu_enable_latency_hiding_scheduler=false",
+        "--xla_dump_to=/tmp/unowned",
+    ],
+)
+def test_native_deterministic_profile_rejects_unreviewed_inherited_compiler_settings(inherited, monkeypatch):
+    host = pytest.importorskip("skyrl_train.workers.levanter.levanter_worker")
+    monkeypatch.setenv("XLA_FLAGS", inherited)
+    with pytest.raises(ValueError, match="Native deterministic GPU profile"):
+        host._child_environment(sys.executable, 0.9, require_accelerator=True, deterministic_gpu_ops=True)
+    # Legacy runs still receive exactly their existing ambient settings.
+    legacy = host._child_environment(sys.executable, 0.9, require_accelerator=False)
+    result = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.environ['XLA_FLAGS'], end='')"],
+        env=legacy,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    assert result.stdout == inherited
+
+
 @pytest.mark.parametrize(
     "preallocate,flags,unified,expected,allocator",
     [
@@ -892,7 +994,12 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                     {
                         "trainer": {
                             "placement": {"policy_num_gpus_per_node": local_count},
-                            "policy": {"levanter_config": {"validate_checkpoint_roundtrip": True}},
+                            "policy": {
+                                "levanter_config": {
+                                    "validate_checkpoint_roundtrip": True,
+                                    "deterministic_gpu_ops": False,
+                                }
+                            },
                         }
                     }
                 ),
@@ -948,6 +1055,7 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(
                                 "command_timeout_seconds": 60,
                                 "initialization_timeout_seconds": 60,
                                 "validate_checkpoint_roundtrip": True,
+                                "deterministic_gpu_ops": False,
                             }
                         },
                     },

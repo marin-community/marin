@@ -126,6 +126,7 @@ class IrisConfig:
     allocation: IrisAllocationConfig = field(default_factory=IrisAllocationConfig)
     priority: str = "interactive"
     max_retries: int = 3
+    max_retries_preemption: int | None = None
     timeout: int = 0
     target_cluster: str | None = None
     parent_cluster_config: str | None = None
@@ -357,6 +358,8 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError(f"unsupported inputs.data_kind: {raw['inputs']['data_kind']!r}")
     if raw["iris"]["timeout"] < 0:
         raise ValueError("iris.timeout cannot be negative")
+    if raw["iris"]["max_retries_preemption"] is not None and raw["iris"]["max_retries_preemption"] < 0:
+        raise ValueError("iris.max_retries_preemption cannot be negative")
     _validate_inputs(raw["inputs"])
     ray = raw["ray"]
     if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:

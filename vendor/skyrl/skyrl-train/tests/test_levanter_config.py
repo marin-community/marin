@@ -51,6 +51,7 @@ def test_authored_native_recipe_round_trip_preserves_runtime_precision_and_mesh(
                     numpy_madvise_hugepage=False,
                     preallocate=False,
                     validate_checkpoint_roundtrip=True,
+                    deterministic_gpu_ops=True,
                     head_gate_fp32=True,
                     xsa_fp32=True,
                     fp32_activations=False,

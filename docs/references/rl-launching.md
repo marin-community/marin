@@ -50,6 +50,12 @@ Iris forwards available HF/W&B/CoreWeave credentials and the current application
 bundle as read-only files; ordinary child jobs inherit that bundle by default.
 See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
 
+`IrisSkyRLExecution.max_retries` controls GPU-job failure retries.
+`max_retries_preemption` separately overrides preemption retries for the
+coordinator, GPU job, and materialized descendant steps. Set it to `0` for a
+single-attempt acceptance run. Leaving it unset preserves the backend defaults.
+All executions in one RL graph must agree on the preemption policy.
+
 ## One Hydra launch document
 
 Marin and MarinSkyRL share one `SkyRLLaunchConfig` YAML document. There is no parallel request
