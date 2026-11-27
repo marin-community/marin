@@ -16,7 +16,7 @@ Implementation overview:
 
 from collections.abc import Callable
 from functools import partial
-from typing import NamedTuple, cast
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -74,7 +74,6 @@ from levanter.grug.sharding import (
     replicate_keeping_reduced,
 )
 from levanter.kernels.pallas.radix_select import radix_select
-from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.utils.activation import ActivationFunctionEnum
 
 MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
@@ -93,70 +92,12 @@ def _expert_assignment_counts(
     return jnp.sum(one_hot * token_valid.astype(jnp.int32)[:, None, None], axis=(0, 1))
 
 
-class MoERouteCapture(NamedTuple):
-    """The discrete routing policy and validity mask for one MoE layer.
-
-    ``selected_experts`` remains in flattened token order, so callers can
-    retain one capture per layer without losing packed-document alignment.
-    Invalid rows are preserved in the static shape but excluded by
-    ``token_valid``. ``qb_alpha`` is captured only to preserve the QB
-    threshold reference; replay never uses captured combine weights.
-    """
-
-    selected_experts: Int[Array, "T K"]
-    token_valid: Bool[Array, "T"]
-    qb_alpha: Float[Array, "T 1"]
-
-
 def validate_captured_experts(expert_ids: np.ndarray, num_experts: int) -> None:
     """Validate the range and uniqueness of the expert IDs for each token."""
     if np.any((expert_ids < 0) | (expert_ids >= num_experts)):
         raise ValueError("captured expert IDs must be in [0, num_experts)")
     if np.any(np.diff(np.sort(expert_ids, axis=-1), axis=-1) == 0):
         raise ValueError("captured routes must not contain duplicate experts for a token")
-
-
-def prepare_moe_route_capture(
-    capture: MoERouteCapture,
-    token_valid: Bool[Array, "T"],
-    *,
-    num_experts: int,
-    num_experts_per_token: int,
-) -> MoERouteCapture:
-    """Validate and canonicalize route data before entering a JIT forward.
-
-    This is deliberately a host boundary. It validates concrete arrays once,
-    checks that the replay batch has the same validity mask, and returns only
-    int32/bool/float32 leaves to the traced forward. Callers must prepare a
-    capture against the actual batch mask rather than replacing that mask in
-    the model.
-    """
-    selected = np.asarray(capture.selected_experts)
-    captured_valid = np.asarray(capture.token_valid)
-    actual_valid = np.asarray(token_valid)
-    qb_alpha = np.asarray(capture.qb_alpha)
-    if selected.ndim != 2 or selected.shape[1] != num_experts_per_token:
-        raise ValueError("selected_experts must have shape [T, num_experts_per_token]")
-    if captured_valid.shape != (selected.shape[0],) or actual_valid.shape != captured_valid.shape:
-        raise ValueError("token_valid must align with selected_experts")
-    if selected.dtype.kind not in "iu":
-        raise TypeError("selected_experts must have an integer dtype")
-    if captured_valid.dtype != np.bool_ or actual_valid.dtype != np.bool_:
-        raise TypeError("token_valid must have boolean dtype")
-    if qb_alpha.shape != (selected.shape[0], 1) or qb_alpha.dtype.kind != "f":
-        raise TypeError("qb_alpha must have floating dtype and shape [T, 1]")
-    if not np.array_equal(captured_valid, actual_valid):
-        raise ValueError("captured token_valid does not match the actual replay batch mask")
-    validate_captured_experts(selected[actual_valid], num_experts)
-    if not np.all(np.isfinite(qb_alpha[actual_valid])):
-        raise ValueError("qb_alpha must contain finite values on valid rows")
-    return MoERouteCapture(
-        selected_experts=jnp.asarray(
-            np.where(actual_valid[:, None], selected, np.arange(num_experts_per_token)), dtype=jnp.int32
-        ),
-        token_valid=jnp.asarray(actual_valid, dtype=jnp.bool_),
-        qb_alpha=jnp.asarray(np.where(actual_valid[:, None], qb_alpha, 0), dtype=jnp.float32),
-    )
 
 
 def moe_routing_stats(
@@ -336,10 +277,6 @@ def estimate_qb_beta_topk(
     )(s_minus_alpha, token_valid)
 
 
-def _qb_router_logits(x: Float[Array, "T D"], router: Float[Array, "D E"]) -> Float[Array, "T E"]:
-    return jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
-
-
 class QBRoutedMoE(eqx.Module):
     """QB router and expert MLP composition for flat token batches.
 
@@ -355,36 +292,6 @@ class QBRoutedMoE(eqx.Module):
     # model hyperparameter: selected sigmoid weights are normalized to this sum.
     routing_renorm_sum: float = eqx.field(static=True, default=2.5)
 
-    def _selected_experts_and_threshold(self, router_logits, router_bias):
-        biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
-        topk_logits, expert_ids = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
-        return expert_ids[:, :-1], topk_logits[:, -1:]
-
-    def capture_routes(
-        self,
-        x: Float[Array, "T D"],
-        token_valid: Bool[Array, "T"],
-        *,
-        router: Float[Array, "D E"],
-        router_bias: Float[Array, "E"],
-    ) -> MoERouteCapture:
-        """Capture discrete routes without capturing differentiable gate weights.
-
-        The returned arrays are suitable for a later training forward. The
-        capture is intentionally policy data: callers should store one value
-        per layer and ensure that its flattened token order matches the later
-        packed batch.
-        """
-        if x.ndim != 2 or token_valid.shape != (x.shape[0],):
-            raise ValueError("x and token_valid must have shapes [T, D] and [T]")
-        router_logits = _qb_router_logits(x, router)
-        selected_experts, qb_alpha = self._selected_experts_and_threshold(router_logits, router_bias)
-        return MoERouteCapture(
-            selected_experts=jax.lax.stop_gradient(selected_experts.astype(jnp.int32)),
-            token_valid=jax.lax.stop_gradient(token_valid.astype(jnp.bool_)),
-            qb_alpha=jax.lax.stop_gradient(qb_alpha),
-        )
-
     @named_call
     def __call__(
         self,
@@ -396,7 +303,6 @@ class QBRoutedMoE(eqx.Module):
         expert_mlp: "MoEExpertMlp",
         mesh: jax.sharding.AbstractMesh,
         report_capacity_overflow: bool = True,
-        route_capture: MoERouteCapture | None = None,
     ) -> tuple[Float[Array, "T D"], dict[str, jax.Array]]:
         """Route tokens and return their expert output plus router metrics.
 
@@ -412,34 +318,12 @@ class QBRoutedMoE(eqx.Module):
             raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
 
         with jax.named_scope("moe_route"):
-            router_logits = _qb_router_logits(x, router)
+            router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
+            biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
-            if route_capture is None:
-                selected_experts, qb_alpha = self._selected_experts_and_threshold(router_logits, router_bias)
-            else:
-                if (
-                    route_capture.selected_experts.shape != (x.shape[0], self.num_experts_per_token)
-                    or route_capture.qb_alpha.shape != (x.shape[0], 1)
-                    or route_capture.token_valid.shape != token_valid.shape
-                ):
-                    raise ValueError("Route capture must align with learner tokens and router K")
-                sharding = named_sharding_of(router_logits)
-                router_token_spec = (
-                    sharding.spec if sharding is not None and sharding.spec else P(self.batch_axes, None)
-                )
-                # Serving captures can arrive as dynamically sharded arguments. Align all
-                # replay leaves with the router-logit token layout before gather and QB
-                # arithmetic; implicit binary/gather sharding otherwise gives AD a
-                # cotangent layout different from the unsharded router operand.
-                selected_experts = reshard(route_capture.selected_experts, P(router_token_spec[0], None))
-                qb_alpha = reshard(route_capture.qb_alpha, router_token_spec)
-                expected_token_valid = reshard(token_valid, P(router_token_spec[0]))
-                captured_token_valid = reshard(route_capture.token_valid, P(router_token_spec[0]))
-                token_valid = eqx.error_if(
-                    expected_token_valid,
-                    jnp.any(captured_token_valid != expected_token_valid),
-                    "route capture token_valid does not match the learner validity mask",
-                )
+            topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
+            qb_alpha = topk_logits[:, -1:]
+            selected_experts = selected_experts[:, :-1]
             selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
             combine_weights = jax.nn.sigmoid(selected_logits)
             # Keep sigmoid rounding consistent when AD fuses expert-weight renormalization.
