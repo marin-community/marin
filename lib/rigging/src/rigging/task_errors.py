@@ -154,7 +154,7 @@ SHARED_RETRYABLE_ERROR_TYPES = frozenset(
 )
 
 
-def record_retry_disposition(
+def retry_disposition_from_record(
     exception_type: str,
     cause_type: str | None,
     provider_status_code: int | None,
@@ -183,7 +183,7 @@ class ErrorIdentity(BaseModel):
     operation: str | None = None
     provider_status_code: int | None = None
     retry_disposition: RetryDisposition = Field(
-        default_factory=lambda data: record_retry_disposition(
+        default_factory=lambda data: retry_disposition_from_record(
             data["exception_type"], data["cause_type"], data["provider_status_code"]
         )
     )
@@ -198,7 +198,7 @@ class HttpStatusError(Protocol):
 
 
 @runtime_checkable
-class RetryDispositions(Protocol):
+class RetryDispositionSource(Protocol):
     """An exception whose producer classifies its own retry disposition."""
 
     def retry_disposition(self) -> RetryDisposition: ...
@@ -255,13 +255,13 @@ def exception_identity(
         and disposition is not RetryDisposition.PERMANENT
     )
     if named_timeout or disposition is RetryDisposition.UNKNOWN:
-        disposition = record_retry_disposition(
+        disposition = retry_disposition_from_record(
             exception_type,
             None if named_timeout else cause_type,
             status_code,
             retryable_error_types=retryable_error_types,
         )
-    if isinstance(error, RetryDispositions):
+    if isinstance(error, RetryDispositionSource):
         # The exception's producer owns its disposition; keep it unless provider
         # status or a permanent cause already decided.
         if status_code is None and disposition is not RetryDisposition.PERMANENT:

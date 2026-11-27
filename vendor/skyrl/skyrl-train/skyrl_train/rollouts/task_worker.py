@@ -31,7 +31,7 @@ from rigging.task_errors import (
     RetrySettings,
     error_category,
     exception_identity,
-    record_retry_disposition,
+    retry_disposition_from_record,
     retry_delay,
 )
 from shellbox.backends.daytona.errors import daytona_error_identity, daytona_error_diagnostics
@@ -275,7 +275,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
     exception_type, diagnostics = _failure_diagnostics(error, interruption)
     disposition = provider_disposition if provider_disposition is not None else failure.retry_disposition
     if disposition is not RetryDisposition.PERMANENT and isinstance(error, TimeoutError):
-        disposition = record_retry_disposition(exception_type, None, provider_status or failure.provider_status_code)
+        disposition = retry_disposition_from_record(exception_type, None, provider_status or failure.provider_status_code)
     status = provider_status if provider_status is not None else failure.provider_status_code
     return failure.model_copy(
         update={

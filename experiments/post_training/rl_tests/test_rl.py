@@ -435,7 +435,8 @@ def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path
     path = tmp_path / "checkpoint-evaluation.yaml"
     path.write_text(materialized_config(step, str(tmp_path)).launch_config_yaml)
     results = run_native_test(
-        "cloud.iris.tests.native_checkpoint_coverage", [str(path), str(1 if retry_budget is None else retry_budget)]
+        "cloud.iris.tests.native_checkpoint_coverage",
+        [str(path), str(recipe.CHECKPOINT_RETRY_BUDGET if retry_budget is None else retry_budget)],
     )
     chosen, *rejected = results
     assert chosen["attempted"] == 190

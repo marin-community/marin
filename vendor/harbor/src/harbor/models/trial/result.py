@@ -15,7 +15,7 @@ from rigging.task_errors import (
     RetryDisposition,
     error_category,
     exception_identity,
-    record_retry_disposition,
+    retry_disposition_from_record,
 )
 from upath import UPath
 
@@ -36,7 +36,7 @@ class ExceptionInfo(ErrorIdentity):
         )
     )
     retry_disposition: RetryDisposition = Field(
-        default_factory=lambda data: record_retry_disposition(
+        default_factory=lambda data: retry_disposition_from_record(
             data["exception_type"],
             data["cause_type"],
             data["provider_status_code"],
