@@ -12,8 +12,8 @@ from collections.abc import Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from evalrecords.policy_release import PolicyRelease, ReleasedRun, release_path, release_tag
-from evalrecords.records import EvalRunRecord, record_path
+from evalrecords.policy_release import PolicyRelease, ReleasedRun, record_sha256, release_path, release_tag
+from evalrecords.records import EvalRunRecord
 from finestore.reader import ReadView
 from rigging.filesystem.conditional_object import ConditionalWriteError, conditional_object
 from rigging.filesystem.factory import open_url
@@ -74,7 +74,6 @@ def carried_runs(policy: Policy, model: PolicyModel, plan: ModelEvaluations, roo
 
 
 def without(plan: ModelEvaluations, names: Collection[str]) -> ModelEvaluations:
-    """The plan without the named evaluations."""
     return replace(
         plan, evaluations=tuple(evaluation for evaluation in plan.evaluations if evaluation.name not in names)
     )
@@ -94,8 +93,6 @@ class ReleaseCandidate:
 
 def _released_run(model: str, expected: ExpectedRun, record: EvalRunRecord, scored: EvalRunRecord) -> ReleasedRun:
     """Pin a run: ``record`` as stored, ``scored`` with the metrics its archive gives."""
-    with open_url(record_path(expected.batch.records_prefix, record.run_id), "rb") as handle:
-        record_bytes = handle.read()
     token = ReadView(record.results_path).token
     assert token is not None, "a compliant run has an archive"
     return ReleasedRun(
@@ -104,7 +101,7 @@ def _released_run(model: str, expected: ExpectedRun, record: EvalRunRecord, scor
         run_id=record.run_id,
         records_prefix=expected.batch.records_prefix,
         commit=record.provenance.git_sha,
-        record_sha256=hashlib.sha256(record_bytes).hexdigest(),
+        record_sha256=record_sha256(expected.batch.records_prefix, record.run_id),
         archive_version=token.version,
         scores=scored.metrics,
     )

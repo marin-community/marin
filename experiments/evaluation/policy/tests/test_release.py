@@ -8,12 +8,12 @@ import subprocess
 from dataclasses import replace
 
 import pytest
-from evalrecords.policy_release import PolicyRelease, ReleasedRun, release_tag
+from evalrecords.policy_release import PolicyRelease, ReleasedRun, Verdict, release_tag
 from rigging.config_discovery import find_project_root
 
 from experiments.evaluation.policy import release
 from experiments.evaluation.policy.launch import model_evaluations
-from experiments.evaluation.policy.runs import RunCheck, RunState
+from experiments.evaluation.policy.runs import RunCheck
 from experiments.evaluation.policy.tests.test_runs import POLICY, QWEN_NAME, _archive, _runs, _write
 
 TWO = replace(
@@ -32,7 +32,7 @@ def archived(monkeypatch):
         if not finished:
             return None
         run = finished[-1]
-        return run, RunCheck(record=run.record, state=RunState.VALID, problems=(), warnings=())
+        return run, RunCheck(record=run.record, state=Verdict.VALID, problems=(), warnings=())
 
     monkeypatch.setattr(release, "compliant_run", compliant)
 

@@ -3,15 +3,21 @@
 
 """Show, launch and check eval policies."""
 
-import hashlib
 import logging
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import click
-from evalrecords.policy_release import ReleasedRun, RunCompliance, Verdict, compliance_path, release_tag
-from evalrecords.records import EvalRunRecord, EvaluationSelection, RunStatus, record_path
+from evalrecords.policy_release import (
+    ReleasedRun,
+    RunCompliance,
+    Verdict,
+    compliance_path,
+    record_sha256,
+    release_tag,
+)
+from evalrecords.records import EvalRunRecord, EvaluationSelection, RunStatus
 from iris.cli.connect import open_iris_client
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.model_config import load_model_config, prompt_format
@@ -47,7 +53,6 @@ from experiments.evaluation.policy.runs import (
     ExpectedRun,
     FoundRun,
     RunCheck,
-    RunState,
     check_found,
     check_run,
     compliant_run,
@@ -250,7 +255,7 @@ def _decide(runs: tuple[FoundRun, ...], expected: ExpectedRun, checkout: str, re
         check = check_found(target, expected)
         if check is None:
             raise ValueError(f"{target.run_id} has not finished")
-        if check.state is RunState.VALID and not check.warnings:
+        if check.state is Verdict.VALID and not check.warnings:
             raise ValueError(f"{target.run_id} is valid; only an invalid or flagged run is run again")
         return _Decision(attempt=here[-1].attempt + 1 if here else 1, replaces=target.run_id)
     if (hit := compliant_run(runs, expected)) is not None:
@@ -551,15 +556,13 @@ def _write_compliance(policy: Policy, check: RunCheck, records_prefix: str) -> N
     """Write the verdict beside the run's record, where EvalDash admits a checked run from."""
     record = check.record
     assert record.evaluation.curated is not None
-    with open_url(record_path(records_prefix, record.run_id), "rb") as handle:
-        record_sha256 = hashlib.sha256(handle.read()).hexdigest()
     compliance = RunCompliance(
         version=policy.version,
         run_id=record.run_id,
         commit=record.provenance.git_sha,
         full=record.evaluation.curated.settings.source_limit is None,
-        record_sha256=record_sha256,
-        verdict=Verdict.VALID if check.state is RunState.VALID else Verdict.INVALID,
+        record_sha256=record_sha256(records_prefix, record.run_id),
+        verdict=check.state,
         problems=check.problems,
         warnings=check.warnings,
     )
@@ -591,7 +594,7 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
             click.echo(f"  {problem}")
         for warning in check.warnings:
             click.echo(f"  warning: {warning}")
-        invalid |= check.state is not RunState.VALID
+        invalid |= check.state is not Verdict.VALID
     if invalid:
         raise SystemExit(1)
 

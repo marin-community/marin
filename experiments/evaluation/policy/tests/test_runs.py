@@ -8,6 +8,7 @@ import subprocess
 from dataclasses import replace
 
 import pytest
+from evalrecords.policy_release import Verdict
 from evalrecords.records import PromptFormat, RunStatus, TaskCoverage, read_record
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE, RUN_OBJECT, Attempt, AttemptPhase
 from finestore.schema import arrow_schema
@@ -27,7 +28,6 @@ from experiments.evaluation.policy.runs import (
     RunCheck,
     RunEvidence,
     RunName,
-    RunState,
     expected_runs,
     found_runs,
     record_model,
@@ -208,7 +208,7 @@ class _FakeRecord:
 @pytest.fixture
 def verdicts(monkeypatch):
     """Stand in for archive checks: each found run's verdict by run ID."""
-    table: dict[str, tuple[RunState, tuple[str, ...]]] = {}
+    table: dict[str, tuple[Verdict, tuple[str, ...]]] = {}
 
     def check(run, _expected):
         if run.record is None:
@@ -217,7 +217,7 @@ def verdicts(monkeypatch):
         return RunCheck(record=run.record, state=state, problems=(), warnings=warnings)
 
     def compliant(runs, expected):
-        valid = [run for run in runs if run.record is not None and table[run.run_id][0] is RunState.VALID]
+        valid = [run for run in runs if run.record is not None and table[run.run_id][0] is Verdict.VALID]
         return (valid[-1], check(valid[-1], expected)) if valid else None
 
     monkeypatch.setattr(cli, "check_found", check)
@@ -227,30 +227,30 @@ def verdicts(monkeypatch):
 
 def test_a_compliant_run_at_an_older_commit_leaves_the_evaluation_out(verdicts):
     old = _found(OLD, 1, RunStatus.SUCCEEDED)
-    verdicts[old.run_id] = (RunState.VALID, ())
+    verdicts[old.run_id] = (Verdict.VALID, ())
     assert cli._decide((old,), None, HEAD, ()) == cli._Decision(attempt=None, run=old, compliant=True)
 
 
 def test_a_finished_run_here_that_doesnt_comply_waits_for_rerun_and_a_failed_one_resumes(verdicts):
     invalid, failed = _found(HEAD, 1, RunStatus.SUCCEEDED), _found(HEAD, 1, RunStatus.INFRA_FAILED)
-    verdicts[invalid.run_id] = (RunState.INVALID, ())
+    verdicts[invalid.run_id] = (Verdict.INVALID, ())
     assert cli._decide((invalid,), None, HEAD, ()) == cli._Decision(attempt=None, run=invalid)
-    verdicts[failed.run_id] = (RunState.INVALID, ())
+    verdicts[failed.run_id] = (Verdict.INVALID, ())
     assert cli._decide((failed,), None, HEAD, ()) == cli._Decision(attempt=1)
     assert cli._decide((), None, HEAD, ()) == cli._Decision(attempt=1)
 
 
 def test_rerun_writes_the_next_attempt_for_an_invalid_or_flagged_run_only(verdicts):
     invalid = _found(HEAD, 1, RunStatus.SUCCEEDED)
-    verdicts[invalid.run_id] = (RunState.INVALID, ())
+    verdicts[invalid.run_id] = (Verdict.INVALID, ())
     assert cli._decide((invalid,), None, HEAD, {invalid.run_id}) == cli._Decision(attempt=2, replaces=invalid.run_id)
 
     flagged = _found(OLD, 1, RunStatus.SUCCEEDED)
-    verdicts[flagged.run_id] = (RunState.VALID, ("4/30 replies hit their output cap",))
+    verdicts[flagged.run_id] = (Verdict.VALID, ("4/30 replies hit their output cap",))
     assert cli._decide((flagged,), None, HEAD, {flagged.run_id}).attempt == 1
 
     valid = _found(OLD, 1, RunStatus.SUCCEEDED)
-    verdicts[valid.run_id] = (RunState.VALID, ())
+    verdicts[valid.run_id] = (Verdict.VALID, ())
     with pytest.raises(ValueError, match="valid"):
         cli._decide((valid,), None, HEAD, {valid.run_id})
     running = _found(HEAD, 1, None)

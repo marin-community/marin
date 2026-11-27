@@ -13,9 +13,10 @@ import hashlib
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
+from rigging.filesystem.factory import open_url
 from rigging.filesystem.storage_path import prefix_join
 
-from evalrecords.records import CW_RECORDS_PREFIX
+from evalrecords.records import CW_RECORDS_PREFIX, record_path
 
 RELEASES_PREFIX = prefix_join(CW_RECORDS_PREFIX, "policy-releases")
 RELEASE_TAG_PREFIX = "eval-policy-"
@@ -90,5 +91,7 @@ def compliance_path(records_prefix: str, run_id: str) -> str:
     return prefix_join(prefix_join(records_prefix, run_id), COMPLIANCE_FILE)
 
 
-def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+def record_sha256(records_prefix: str, run_id: str) -> str:
+    """The digest of a run's ``record.json`` bytes, as a release or compliance file pins it."""
+    with open_url(record_path(records_prefix, run_id), "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()

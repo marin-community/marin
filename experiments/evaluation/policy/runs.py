@@ -12,9 +12,9 @@ import re
 from collections import Counter
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 
 import draccus
+from evalrecords.policy_release import Verdict
 from evalrecords.records import EvalRunRecord, RunStatus, TaskCoverage, read_record, record_path
 from evalrecords.rollout_attempts import RUN_OBJECT
 from evalrecords.rollout_results import score_curated_record, terminal_attempts
@@ -23,8 +23,7 @@ from iris.rpc import job_pb2
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.runner import Evaluation, EvaluationBatch
 from marin.execution.step_runner import check_cache
-from rigging.filesystem.factory import url_to_fs
-from rigging.filesystem.storage_path import prefix_join
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE, SelectionStatus
 from taskcompendium.evaluation.spec import EvaluationProtocol, OperationKind
 
@@ -51,11 +50,6 @@ SCORED_WARNING = 0.95
 def run_suffix(checkout: str, attempt: int) -> str:
     """The run-ID part naming the checkout a run was launched from and its attempt there."""
     return f"{checkout}-a{attempt}"
-
-
-class RunState(StrEnum):
-    VALID = "valid"
-    INVALID = "invalid"
 
 
 @dataclass(frozen=True)
@@ -112,7 +106,7 @@ class RunCheck:
     """A record, scored from its archive, and how it compares with the policy."""
 
     record: EvalRunRecord
-    state: RunState
+    state: Verdict
     problems: tuple[str, ...]
     warnings: tuple[str, ...]
 
@@ -151,10 +145,9 @@ def expected_runs(
 
 def found_runs(expected: ExpectedRun) -> tuple[FoundRun, ...]:
     """Every run of the expected run's inputs, at every commit and attempt, oldest attempt first."""
-    fs, root = url_to_fs(expected.batch.records_prefix)
     runs = []
-    for path in fs.glob(f"{root}/{expected.base}-*"):
-        run_id = path.rsplit("/", 1)[-1]
+    for path in StoragePath(prefix_join(expected.batch.records_prefix, f"{expected.base}-*")).glob():
+        run_id = str(path).rsplit("/", 1)[-1]
         if (match := _SUFFIX.fullmatch(run_id.removeprefix(f"{expected.base}-"))) is None:
             continue
         try:
@@ -326,12 +319,12 @@ def check_run(record: EvalRunRecord, expected: ExpectedRun, *, step_succeeded: b
     """Score a record from its archive and compare it with the run the policy expects."""
     if record.status is not RunStatus.SUCCEEDED:
         problems = run_problems(record, None, expected, step_succeeded=step_succeeded)
-        return RunCheck(record=record, state=RunState.INVALID, problems=problems, warnings=())
+        return RunCheck(record=record, state=Verdict.INVALID, problems=problems, warnings=())
     scored = score_curated_record(record)
     evidence = run_evidence(record, scored.coverage)
     problems = run_problems(record, evidence, expected, step_succeeded=step_succeeded)
     warnings = () if evidence is None else run_warnings(evidence)
-    state = RunState.INVALID if problems else RunState.VALID
+    state = Verdict.INVALID if problems else Verdict.VALID
     return RunCheck(record=scored, state=state, problems=problems, warnings=warnings)
 
 
@@ -350,7 +343,7 @@ def compliant_run(runs: Collection[FoundRun], expected: ExpectedRun) -> tuple[Fo
             newest[run.checkout] = run
     for run in sorted(newest.values(), key=lambda run: run.record.created_at, reverse=True):
         check = check_found(run, expected)
-        if check is not None and check.state is RunState.VALID:
+        if check is not None and check.state is Verdict.VALID:
             return run, check
     return None
 
