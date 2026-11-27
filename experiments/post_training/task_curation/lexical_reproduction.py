@@ -44,6 +44,7 @@ import logging
 from collections.abc import Iterable
 from contextlib import ExitStack
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -192,9 +193,18 @@ def main() -> None:
     parser.add_argument("--branch-population-record", help="The sealed population artifact root (.artifact.json)")
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Key for this run's artifacts below the artifact root; defaults to the UTC start time.",
+    )
     parser.add_argument("--max-workers", type=int, default=4)
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
+    # Stage artifacts key by source and run, never by a shared version string:
+    # two lanes over the same root must not overwrite each other's reports.
+    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_root = prefix_join(args.artifact_root, f"runs/{args.source_id.replace(':', '-')}/{run_id}")
 
     configure_coreweave_s3()
     receipt = json.loads(args.receipt.read_text())
@@ -213,20 +223,24 @@ def main() -> None:
         args.output.write_text(json.dumps({"source_id": args.source_id, "plan": "planned"}, indent=2) + "\n")
         return
 
-    result = _run_stage(args, source, receipt)
+    result = _run_stage(args, source, receipt, run_root)
     comparison = _compare(result, receipt, args)
     args.output.write_text(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
+    per_run = prefix_join(run_root, "reproduction.json")
+    with StoragePath(per_run).open("wt", auto_mkdir=True) as stream:
+        stream.write(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
     with StoragePath(prefix_join(args.artifact_root, "reproduction.json")).open("wt", auto_mkdir=True) as stream:
         stream.write(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
     logger.info(
-        "Reproduction result written to %s and %s: reproduced=%s",
+        "Reproduction result written to %s, %s and %s: reproduced=%s",
         args.output,
+        per_run,
         prefix_join(args.artifact_root, "reproduction.json"),
         comparison["reproduced"],
     )
 
 
-def _run_stage(args: argparse.Namespace, source: Any, receipt: dict[str, Any]) -> SourcePipelineResult:
+def _run_stage(args: argparse.Namespace, source: Any, receipt: dict[str, Any], run_root: str) -> SourcePipelineResult:
     """Run the FULL source pipeline on the staged source with the frozen corpus engine."""
     with ExitStack() as cleanup:
         client = LocalClient()
@@ -261,7 +275,7 @@ def _run_stage(args: argparse.Namespace, source: Any, receipt: dict[str, Any]) -
                     machines=None,
                     decontamination=engine,
                 )
-                output = prefix_join(args.artifact_root, "pipeline")
+                output = prefix_join(run_root, "pipeline")
                 return run_source_pipeline(
                     recipe,
                     context,
