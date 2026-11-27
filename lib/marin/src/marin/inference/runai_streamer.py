@@ -6,6 +6,8 @@
 import json
 from collections.abc import Mapping, Sequence
 
+from marin.inference.config import normalize_vllm_option
+
 RUNAI_STREAMER_LOADER_FLAG = "--model-loader-extra-config"
 _DISTRIBUTED_DEFAULTS = (
     ("concurrency", "RUNAI_STREAMER_CONCURRENCY", "4"),
@@ -18,7 +20,7 @@ def distributed_streamer_environment(extra_args: Sequence[str], environment: Map
     value = None
     for position, token in enumerate(extra_args):
         flag, separator, inline_value = token.partition("=")
-        if flag != RUNAI_STREAMER_LOADER_FLAG:
+        if normalize_vllm_option(flag) != RUNAI_STREAMER_LOADER_FLAG:
             continue
         if separator:
             value = inline_value

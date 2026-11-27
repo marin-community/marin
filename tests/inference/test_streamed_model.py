@@ -102,6 +102,14 @@ def _export_spec(weights: str) -> ModelSpec:
             id="non-distributed",
         ),
         pytest.param(
+            ("--model_loader_extra_config", '{"distributed":false}'),
+            {},
+            {},
+            '{"distributed":false}',
+            {_CONCURRENCY: None, _MEMORY_LIMIT: None},
+            id="underscore-non-distributed",
+        ),
+        pytest.param(
             ("--model-loader-extra-config", '{"distributed":true}', '--model-loader-extra-config={"distributed":false}'),
             {},
             {},
@@ -129,7 +137,7 @@ def test_streamed_export_child_preserves_explicit_settings(
         env.wait_until_ready(poll_interval_seconds=0.05)
         observed = json.loads(vllm_launch_record.read_text())
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--model-loader-extra-config")
+    parser.add_argument("--model-loader-extra-config", "--model_loader_extra_config")
     native, _ = parser.parse_known_args(observed["argv"])
     assert native.model_loader_extra_config == expected_config
     assert observed["environment"] == expected_environment
