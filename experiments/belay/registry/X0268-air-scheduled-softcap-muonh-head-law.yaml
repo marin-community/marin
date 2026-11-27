@@ -1,0 +1,12 @@
+id: X0268
+slug: air-scheduled-softcap-muonh-head-law
+name: AIR-scheduled softcap MuonH, head law, 4x embed LR
+category: Optimizers
+summary: 🤖 Posted on behalf of @WhenWen.
+source: intake
+status: approved
+track: competitive-d512
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7224764268
+  author: WhenWen
+  approved_by: WhenWen (trusted)
