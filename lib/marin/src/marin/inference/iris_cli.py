@@ -57,6 +57,8 @@ from iris.cluster.types import (
     EnvironmentSpec,
     is_job_finished,
 )
+from iris.rpc import job_pb2
+from iris.rpc.proto_display import priority_band_value
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.secrets import resolve_secret_spec
@@ -253,6 +255,8 @@ def _prepared_direct_service(
     environment = create_environment(
         workspace=str(workspace_dir or Path.cwd()),
         setup_scripts=setup_scripts,
+        # Xet transfers can hang indefinitely on TPU-host CPU workers; plain HTTP downloads do not.
+        env_vars={"HF_HUB_DISABLE_XET": "1"},
         secrets={name: value for name, value in secrets.items() if name == "HF_TOKEN"},
     )
     click.echo("Preparing Hugging Face weights on CPU before reserving accelerators...")
@@ -452,6 +456,17 @@ def _wait_and_report_endpoint(
 @click.option("--memory", default="64g")
 @click.option("--disk", default="100g")
 @click.option("--max-retries-preemption", type=int, default=10)
+@click.option(
+    "--priority",
+    type=click.Choice(["production", "interactive", "batch"]),
+    default=None,
+    help="Iris priority band for the serve job (default: inherit, normally interactive). production needs admin rights.",
+)
+@click.option(
+    "--preemptible/--no-preemptible",
+    default=True,
+    help="Direct mode only: --no-preemptible requires non-preemptible capacity (on marin, the reserved v4 pool).",
+)
 @click.option("--instances", type=click.IntRange(min=1), default=1, help="Number of Iris inference instances.")
 @click.option(
     "--broker",
@@ -540,6 +555,8 @@ def main(
     memory: str,
     disk: str,
     max_retries_preemption: int,
+    preemptible: bool,
+    priority: str | None,
     instances: int,
     broker: bool,
     vllm_args: tuple[str, ...],
@@ -729,6 +746,7 @@ def main(
             worker_resources,
             regions=submission_regions,
             target_cluster=target_cluster,
+            preemptible=preemptible,
         )
     constraints = convert_constraints(submission_resources)
     replicas = submission_resources.replicas
@@ -760,6 +778,7 @@ def main(
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
                 task_image=None if brokered else task_image,
+                priority_band=job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority),
             )
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
