@@ -222,6 +222,7 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
 
     trainer = values.get("trainer", {})
     generator = values.get("generator", {})
+    decoding = generator.get("speculative_decoding", {})
     workload = preset.recipe.layout.workload
     setting_sections = workload.setting_sections
     derived = workload.plan.config_values().keys() - BATCH_SETTINGS.keys()
@@ -234,6 +235,10 @@ def apply_settings(config: RecipePatch, settings: tuple[str, ...], preset: Prese
             key.startswith("NCCL_") for key in values.get("extra_env", {})
         ),
         "evaluation requests are fixed by the preset": any(key.startswith("eval_") for key in (*trainer, *generator)),
+        "select a draft with --draft; --draft none decodes plain": (
+            config.generator.speculative_decoding is not None
+            and (not isinstance(decoding, dict) or bool(decoding.keys() - {"num_speculative_tokens"}))
+        ),
         "select curated data with --tasks": has("data") and bool(values["data"].keys() - preset.data_settings),
         "use the preset's permitted setting sections": (
             setting_sections is not None and (bool(values.keys() - setting_sections) or has("generator.sampling_params"))
@@ -413,27 +418,32 @@ def utc_millis(value: str) -> int:
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
 
 
-def _recipe_config_for_model(preset: presets.Preset, model: SkyRLModelSource | ResolvedModelLocator) -> RecipePatch:
+def _recipe_config_for_model(
+    preset: presets.Preset, model: SkyRLModelSource | ResolvedModelLocator, requested: str | None
+) -> RecipePatch:
     workload = preset.recipe.layout.workload
-    if isinstance(workload, presets.Training) and workload.plan.colocate_all:
+    colocated = isinstance(workload, presets.Training) and workload.plan.colocate_all
+    drafts = {draft.name: draft for draft in (preset.default_draft, *preset.optional_drafts) if draft}
+    if requested not in (None, presets.NO_DRAFT, *drafts):
+        raise click.BadParameter(f"choose from {[*drafts, presets.NO_DRAFT]}", param_hint="--draft")
+    draft = drafts.get(requested) if requested else (None if colocated else preset.default_draft)
+    identity = model.identity if isinstance(model, ResolvedModelLocator) else artifact_identity(model.step)
+    if draft is None or (requested is None and identity != artifact_identity(draft.target)):
         return preset.recipe.config
-    draft = preset.speculative_decoding_model
-    if draft is not None and (
-        model == preset.model
-        or (isinstance(model, ResolvedModelLocator) and model.identity == artifact_identity(preset.model.step))
-    ):
-        decoding = sections.SpeculativeDecoding(method="dspark", model=draft, num_speculative_tokens=_DSPARK_PROPOSALS)
-        return preset.recipe.config.merge(RecipePatch(generator=sections.Generator(speculative_decoding=decoding)))
-    return preset.recipe.config
+    if identity != artifact_identity(draft.target):
+        raise click.BadParameter(f"draft {requested!r} was trained for other initial weights", param_hint="--draft")
+    decoding = sections.SpeculativeDecoding(method="dspark", model=draft.model, num_speculative_tokens=_DSPARK_PROPOSALS)
+    return preset.recipe.config.merge(RecipePatch(generator=sections.Generator(speculative_decoding=decoding)))
 
 
 def _training_config(
     preset: presets.Preset,
     settings: tuple[str, ...],
     model: SkyRLModelSource | ResolvedModelLocator,
+    draft: str | None,
 ) -> RecipePatch:
     recipe = preset.recipe
-    recipe_config = _recipe_config_for_model(preset, model)
+    recipe_config = _recipe_config_for_model(preset, model, draft)
     authored = recipe_config.to_skyrl()
     if owned := sorted(key for key in _DERIVED_RECIPE_KEYS if get_path(authored, key) is not MISSING):
         raise ValueError(f"recipe settings are derived by the runner: {', '.join(owned)}")
@@ -532,11 +542,12 @@ def run_spec(
     init: SkyRLModelSource | None = None,
     resume: presets.StoredResume | None = None,
     settings: tuple[str, ...] = (),
+    draft: str | None = None,
     model_name: str | None = None,
 ) -> SkyRLSpec:
     """Build the complete default recipe with explicit candidate inputs and settings."""
     model = (resume.model if resume is not None else None) or init or preset.model
-    config = _training_config(preset, settings, model)
+    config = _training_config(preset, settings, model, draft)
     if config.environment.env_class != "preference_pair" or config.trainer.evaluation_runner != "training":
         workers = config.trajectory_runner.rollout_workers
         required_cpus = workers.num_workers * workers.cpus_per_worker

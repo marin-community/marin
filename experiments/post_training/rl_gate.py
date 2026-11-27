@@ -720,8 +720,9 @@ def preset_launch_yaml(
     init: SkyRLModelSource | ResolvedModelLocator | None = None,
     resume: presets.StoredResume | None = None,
     settings: tuple[str, ...] = (),
+    draft: str | None = None,
 ) -> str:
-    spec = recipe.run_spec(preset, name=name, tasks=tasks, init=init, resume=resume, settings=settings)
+    spec = recipe.run_spec(preset, name=name, tasks=tasks, init=init, resume=resume, settings=settings, draft=draft)
     if isinstance(spec.model, ArtifactHfModel) and spec.model.relative_path is None:
         spec = replace(spec, model=replace(spec.model, relative_path="<terminal-hf-export>"))
     step = recipe.run_step(preset, spec)
@@ -750,6 +751,7 @@ def _compose_plans(
                         init=recipe.model_from_reference(candidate.init, resolved=model) if candidate.init else None,
                         resume=candidate.resume,
                         settings=candidate.settings,
+                        draft=candidate.draft,
                     )
                 )
                 paths.append(str(path))

@@ -246,6 +246,7 @@ class RunInputs(BaseModel, frozen=True):
     options: RunOptions | None = None
     sft_preset: str | None = None
     evaluation_profiles: tuple[StoredEvaluation, ...] | None = None
+    draft: str | None = None
 
 
 def run_inputs(
@@ -259,6 +260,7 @@ def run_inputs(
     options: RunOptions | None = None,
     sft_preset: str | None = None,
     preset: presets.Preset | None = None,
+    draft: str | None = None,
 ) -> RunInputs:
     values = recipe.override_document(tuple(settings))
     return RunInputs(
@@ -271,6 +273,7 @@ def run_inputs(
         options=options,
         sft_preset=sft_preset,
         evaluation_profiles=_declared_evaluations(preset) if preset is not None else None,
+        draft=draft,
     )
 
 

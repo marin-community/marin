@@ -488,6 +488,7 @@ def recorded_runs(selection, tmp_path, monkeypatch, request):
                 init=recipe.model_from_reference(inputs.init) if inputs.init else None,
                 settings=inputs.settings,
                 model_name=model,
+                draft=inputs.draft,
             )
             step = recipe.run_step(preset, spec)
             source_root = Path(step.path(str(source_prefix)))
