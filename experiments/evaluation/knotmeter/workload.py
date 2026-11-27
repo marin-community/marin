@@ -82,6 +82,8 @@ def restore_workload(receipt: dict, bundle: Path, *, series: dict) -> None:
     expected_inputs = preparation_recipe(series)["inputs"]
     if any(receipt["recipe"]["inputs"].get(key) != expected for key, expected in expected_inputs.items()):
         raise ValueError("Prepared workload inputs differ from the profiling recipe")
+    if not series.get("unsafe_override") and receipt["lineage"]["filtered_sessions"]:
+        raise ValueError("Strict workload restore cannot reuse a corpus with filtered sessions")
     bundle.mkdir(parents=True, exist_ok=False)
     archive = bundle.parent / "workload.tar.zst"
     copy_file(receipt["archive_uri"], str(archive))
