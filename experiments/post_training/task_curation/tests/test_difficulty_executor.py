@@ -355,6 +355,82 @@ def test_tpu_batches_fill_shared_pools_without_exceeding_attempt_or_repair_slots
     assert restarted["active_job_slots"] == 136
 
 
+@pytest.mark.parametrize(
+    ("ready", "expected", "recovering"),
+    [
+        (
+            frozenset({Solver.SMALL, Solver.SNOWBALL, Solver.HOSTED}),
+            {Solver.SMALL: 14, Solver.SNOWBALL: 14, Solver.HOSTED: 4},
+            Solver.LARGE,
+        ),
+        (frozenset({Solver.SMALL, Solver.HOSTED}), {Solver.SMALL: 28, Solver.HOSTED: 4}, Solver.LARGE),
+        (
+            frozenset({Solver.LARGE, Solver.SMALL, Solver.HOSTED}),
+            {Solver.LARGE: 19, Solver.SMALL: 9, Solver.HOSTED: 4},
+            Solver.SNOWBALL,
+        ),
+    ],
+)
+def test_tpu_reconcile_lends_unavailable_pool_slots_without_changing_grader_ceiling(
+    tmp_path, ready, expected, recovering
+):
+    ledger = str(tmp_path / "ledger")
+    version = tmp_path / "ledger/v1"
+    (version / "imports").mkdir(parents=True)
+    (version / "imports/fixture.json").write_text("{}")
+    identity = identity_bundle()
+    (version / "campaign.json").write_text(json.dumps({"identity": identity, "campaign_id": digest(identity)}))
+    pools = tmp_path / "pools"
+    pools.mkdir()
+    for solver in ready - {Solver.HOSTED}:
+        (pools / (solver.value + ".json")).write_text(
+            json.dumps(
+                {
+                    "platform": "tpu",
+                    "chip_count": 128 if solver == Solver.LARGE else 64,
+                    "gpu_count": 0,
+                    "revision": "revision",
+                    "ready_at": "2026-01-01T00:00:00+00:00",
+                }
+            )
+        )
+    sources = [replace(SOURCE, source_id=f"source-{i}") for i in range(30)]
+    backend = JobStore(str(tmp_path / "jobs"))
+    result = reconcile_once(
+        ledger, sources, CoveragePolicy(), backend, EscalationLog(ledger), ready, frozenset(), None, str(pools)
+    )
+    assert {solver: sum(job.solver == solver for job in backend.jobs()) for solver in ready} == expected
+    assert all(job.solver in ready for job in backend.jobs())
+    assert sum(job.slots for job in backend.jobs()) == 128
+    assert result["active_attempt_slots"] == 128
+    # Readiness recovery changes admission, while existing borrowed batches keep running.
+    (pools / (recovering.value + ".json")).write_text(
+        json.dumps(
+            {
+                "platform": "tpu",
+                "chip_count": 128 if recovering == Solver.LARGE else 64,
+                "gpu_count": 0,
+                "revision": "revision",
+                "ready_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    active = list(backend.existing)
+    recovered = ready | {recovering}
+    result = reconcile_once(
+        ledger, sources, CoveragePolicy(), backend, EscalationLog(ledger), recovered, frozenset(), None, str(pools)
+    )
+    assert result["submitted"] == [] and backend.existing == active
+    exited = next(i for i, job in enumerate(backend.existing) if job.solver == Solver.SMALL)
+    backend.existing[exited] = replace(backend.existing[exited], state=JobState.FAILED)
+    result = reconcile_once(
+        ledger, sources, CoveragePolicy(), backend, EscalationLog(ledger), recovered, frozenset(), None, str(pools)
+    )
+    assert len(result["submitted"]) == 1
+    assert backend.existing[-1].solver == recovering
+    assert sum(job.slots for job in backend.jobs() if job.active) == 128
+
+
 def test_rolling_controllers_share_the_lease_without_duplicate_submission(tmp_path):
     ledger = str(tmp_path / "ledger")
     imports = tmp_path / "ledger/v1/imports"

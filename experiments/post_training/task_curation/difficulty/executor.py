@@ -72,8 +72,28 @@ ATTEMPT_JOBS_PER_SOLVER = MappingProxyType(
 )
 # Reserve 16 provider workers; split the remaining 112 in the 128/64/64-chip ratio.
 TPU_ATTEMPT_JOBS_PER_SOLVER = MappingProxyType({Solver.SMALL: 7, Solver.LARGE: 14, Solver.SNOWBALL: 7, Solver.HOSTED: 4})
-TPU_CONCURRENT_JOB_CAP = sum(TPU_ATTEMPT_JOBS_PER_SOLVER.values()) * ATTEMPT_JOB_SLOTS + REPAIR_JOB_SLOT_CAP
+TPU_ATTEMPT_SLOT_CAP = sum(TPU_ATTEMPT_JOBS_PER_SOLVER.values()) * ATTEMPT_JOB_SLOTS
+TPU_CONCURRENT_JOB_CAP = TPU_ATTEMPT_SLOT_CAP + REPAIR_JOB_SLOT_CAP
 LOGGER = logging.getLogger(__name__)
+
+
+def tpu_attempt_job_caps(ready_solvers: frozenset[Solver]) -> dict[Solver, int]:
+    """Share TPU grader admission among ready pools without consuming the provider reserve."""
+    caps = {solver: 0 for solver in Solver}
+    if Solver.HOSTED in ready_solvers:
+        caps[Solver.HOSTED] = TPU_ATTEMPT_JOBS_PER_SOLVER[Solver.HOSTED]
+    ready = [solver for solver in ready_solvers if solver != Solver.HOSTED]
+    if not ready:
+        return caps
+    total = sum(count for solver, count in TPU_ATTEMPT_JOBS_PER_SOLVER.items() if solver != Solver.HOSTED)
+    weight = sum(TPU_ATTEMPT_JOBS_PER_SOLVER[solver] for solver in ready)
+    for solver in ready:
+        caps[solver] = total * TPU_ATTEMPT_JOBS_PER_SOLVER[solver] // weight
+    remaining = total - sum(caps[solver] for solver in ready)
+    order = sorted(ready, key=lambda solver: (-(total * TPU_ATTEMPT_JOBS_PER_SOLVER[solver] % weight), solver.value))
+    for solver in order[:remaining]:
+        caps[solver] += 1
+    return caps
 
 
 @dataclass(frozen=True)
@@ -151,11 +171,14 @@ def execute_plan(
     backend: JobBackend,
     notifications: NotificationSink,
     budget: GpuBudget | None = None,
+    *,
+    ready_solvers: frozenset[Solver] = frozenset(Solver),
 ) -> dict:
     """Persist submissions after successful submit; a lost reply is recovered by job name."""
     jobs = list(backend.jobs())
     slots = sum(job.slots for job in jobs if job.active)
     repair_slots = sum(job.slots for job in jobs if job.active and job.solver is None)
+    attempt_slots = sum(job.slots for job in jobs if job.active and job.solver is not None)
     recorded = {row.action_id for row in rows if row.action_id}
     submitted, escalated, deferred = [], [], []
     ended = {row.action_id for row in rows if row.outcome == Outcome.FINISHED}
@@ -168,6 +191,7 @@ def execute_plan(
     reserved = budget.reserved_gpu_hours(rows, ledger) if budget else 0.0
     tpu_campaign = campaign_record(ledger) is not None
     concurrent_job_cap = TPU_CONCURRENT_JOB_CAP if tpu_campaign else CONCURRENT_JOB_CAP
+    solver_caps = tpu_attempt_job_caps(ready_solvers) if tpu_campaign else ATTEMPT_JOBS_PER_SOLVER
     for action in actions:
         key = action_id(action)
         if key in recorded:
@@ -192,8 +216,11 @@ def execute_plan(
             deferred.append(key)
             continue
         if isinstance(action, AttemptBatch):
-            solver_cap = (TPU_ATTEMPT_JOBS_PER_SOLVER if tpu_campaign else ATTEMPT_JOBS_PER_SOLVER)[action.solver]
+            solver_cap = solver_caps[action.solver]
             if sum(job.active and job.solver == action.solver for job in jobs) >= solver_cap:
+                deferred.append(key)
+                continue
+            if tpu_campaign and attempt_slots + required_slots > TPU_ATTEMPT_SLOT_CAP:
                 deferred.append(key)
                 continue
             cells = {(source.source_id, action.solver.value) for source in action.sources}
@@ -239,6 +266,7 @@ def execute_plan(
         LOGGER.info("DIFFICULTY_SUBMITTED %s", json.dumps({"action_id": key, "job_id": job_id}))
         submitted.append(job_id)
         if isinstance(action, AttemptBatch):
+            attempt_slots += required_slots
             jobs.append(Job(job_id, JobState.PENDING, action.solver, required_slots))
         else:
             repair_slots += required_slots
@@ -249,6 +277,8 @@ def execute_plan(
         "escalated": escalated,
         "deferred": deferred,
         "active_job_slots": slots,
+        "active_attempt_slots": attempt_slots,
+        "solver_job_caps": {solver.value: cap for solver, cap in solver_caps.items()},
         "concurrent_job_cap": concurrent_job_cap,
         "recorded_gpu_hours": spent,
         "reserved_gpu_hours": reserved,
@@ -300,7 +330,9 @@ def reconcile_once(
                     if tpu_campaign and action.solver != Solver.HOSTED:
                         release = TPU_SERVING_ID
                     actions[index] = replace(action, max_gpu_hours=0.0, vllm_release_tag=release)
-            return execute_plan(actions, rows, catalog, ledger, backend, notifications, budget)
+            return execute_plan(
+                actions, rows, catalog, ledger, backend, notifications, budget, ready_solvers=available_providers
+            )
     finally:
         lease.release()
 
