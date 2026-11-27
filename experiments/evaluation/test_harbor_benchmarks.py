@@ -16,7 +16,7 @@ from marin.execution.lazy import run
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import NetworkPolicy
 from taskcompendium.evaluation.corpus import evaluation_cases, evaluation_protocol
-from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, PiAgent, TerminusAgent
+from taskcompendium.evaluation.spec import AgentEpisode, EpisodeInputs, MachineResources, PiAgent, TerminusAgent
 from taskcompendium.importers.harbor.package import JobSettings
 from taskcompendium.models import AgentMachine, GraderMachine, ScriptGrader, Source, TaskSpec, VerifyitGrader
 from taskcompendium.pipeline.inputs import ConversionContext
@@ -237,6 +237,7 @@ def test_swebench_multilingual_agents_work_offline_and_their_patch_grades_on_a_n
 
     [case] = evaluation_cases(artifact.path)
     assert case.item.episode is not None and case.item.episode.network == NetworkPolicy.DENY
+    assert case.item.episode.verifier_resources == MachineResources(cpus=4, memory_mb=8192, storage_mb=10240)
     assert "network" not in case.task.environment_requirements.capabilities
     grader = case.task.grader
     assert isinstance(grader, ScriptGrader) and isinstance(grader.placement, GraderMachine)

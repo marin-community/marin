@@ -44,7 +44,7 @@ VERSION = "2026.11.17.2"
 # does not cover the rendered judge, so a change to it bumps this version.
 JUDGED_VERSION = "2026.11.23"
 # SWE-bench Multilingual's version; a change to how its package edits run or grade the agent bumps it.
-SWEBENCH_MULTILINGUAL_VERSION = "2026.11.26"
+SWEBENCH_MULTILINGUAL_VERSION = "2026.11.27"
 # Terminal-Bench's build-pov-ray allows its agent and its verifier 12,000 seconds each.
 TERMINAL_BENCH_ATTEMPT_TIMEOUT = 8 * 60 * 60
 
