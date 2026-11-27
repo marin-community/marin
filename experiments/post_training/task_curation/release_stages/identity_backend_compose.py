@@ -46,7 +46,7 @@ from experiments.post_training.task_curation.catalog_identity import (
 from experiments.post_training.task_curation.registry import RegistryReference, read_registry_document
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from infra.marina.apps.rl_data_catalog.server.duplicate_folding import SourceStanding, fold_groups
-from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
+from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id, canonical_source_map
 
 STAGE = "identity_backend_compose"
 RegistryReader = Callable[[RegistryReference], dict[str, Any]]
@@ -163,7 +163,10 @@ def fetch_target_fingerprints(
         document = _registry_document(entry, reader)
         # Registry entries point at full identity surveys; a bare fingerprint map is also accepted.
         rows = document["fingerprints"] if "fingerprints" in document else document
-        if not isinstance(rows, dict) or rows.get(target) is None:
+        if not isinstance(rows, dict):
+            raise ValueError(f"registry identity document for {target!r} carries no fingerprint mapping")
+        rows = canonical_source_map(rows)
+        if rows.get(target) is None:
             raise ValueError(f"registry identity document for {target!r} carries no fingerprint for it")
         fingerprint = SourceFingerprint.model_validate(rows[target])
         if fingerprint.task_count <= 0:
@@ -324,7 +327,6 @@ def _compose(
     }
     if dry_run:
         return proof
-    configure_coreweave_s3()
     backend_ref = seal(f"{inputs.output_root}/backend-map.json", backend_survey.model_dump(mode="json"))
     backend_receipt = seal(
         f"{inputs.output_root}/backend-composition-receipt.json",
@@ -376,6 +378,7 @@ def run_identity_backend_compose(
     alerts.stage_started(inputs.release_id, STAGE, {"mode": mode}, alert_feeds)
     try:
         inputs.validate()
+        configure_coreweave_s3()
         targets = tuple(sorted({canonical_source_id(target) for target in inputs.targets}))
         if len(targets) != len(inputs.targets):
             raise ValueError("targets repeat or alias one canonical source id")

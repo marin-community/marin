@@ -448,6 +448,29 @@ def test_refuses_registry_index_missing_a_target(tmp_path):
         compose_stage.run_identity_backend_compose(inputs, dry_run=True, registry_reader=reader, feeds=_feeds(tmp_path))
 
 
+@pytest.mark.parametrize("duplicate_alias", [False, True])
+def test_storage_fingerprint_uses_canonical_source_identity(tmp_path, duplicate_alias):
+    canonical = "TaskTrove:SWE-Gym__SWE-Gym"
+    original = "Task Trove:SWE-Gym__SWE-Gym"
+    inputs, _ = _build(tmp_path, targets=(canonical,))
+    fingerprint = _fingerprint(canonical)
+    rows = {original: fingerprint.model_dump(mode="json")}
+    if duplicate_alias:
+        rows[canonical] = fingerprint.model_dump(mode="json")
+    survey_ref = _write_json(tmp_path, "storage-survey.json", {"fingerprints": rows})
+    index = {"revision": REGISTRY_REVISION, "sources": {canonical: survey_ref.model_dump(mode="json")}}
+    inputs = dataclasses.replace(inputs, registry_index=_write_json(tmp_path, "storage-index.json", index))
+    if duplicate_alias:
+        with pytest.raises(ValueError, match="Duplicate aliased source identity"):
+            compose_stage.run_identity_backend_compose(inputs, dry_run=False, feeds=_feeds(tmp_path))
+        assert not (tmp_path / "release" / "source-identities.json").exists()
+        return
+    compose_stage.run_identity_backend_compose(inputs, dry_run=False, feeds=_feeds(tmp_path))
+    composed = json.loads((tmp_path / "release" / "source-identities.json").read_text())
+    assert composed["fingerprints"][canonical] == fingerprint.model_dump(mode="json")
+    assert original not in composed["fingerprints"]
+
+
 def test_failing_run_emits_a_fail_row(tmp_path):
     fresh = _backend_survey([_measured_source(source_id) for source_id in TARGETS], schema_sha256="f" * 64)
     inputs, reader = _build(tmp_path, fresh_backend=fresh)
