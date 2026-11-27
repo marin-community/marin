@@ -127,6 +127,13 @@ def reclaim(directory: Path) -> None:
         # this exact backing file, including a crash between loop setup and mount.
         for row in run("losetup", "--associated", str(image), "--noheadings", "--output", "NAME").splitlines():
             run("losetup", "--detach", row.strip())
+        # LOOP_CLR_FD may return before the kernel releases its last reference.
+        # Keep the backing file identifiable until detachment actually finishes;
+        # otherwise a successful close can leave a deleted image consuming disk.
+        while run("losetup", "--associated", str(image), "--noheadings", "--output", "NAME"):
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"Cannot reclaim local disk loop for {image}")
+            time.sleep(0.05)
     shutil.rmtree(directory)
 
 
