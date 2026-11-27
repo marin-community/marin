@@ -1,10 +1,20 @@
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+
+class FinishReason(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    FINISH_REASON_UNSPECIFIED: _ClassVar[FinishReason]
+    FINISH_REASON_STOP: _ClassVar[FinishReason]
+    FINISH_REASON_LENGTH: _ClassVar[FinishReason]
+FINISH_REASON_UNSPECIFIED: FinishReason
+FINISH_REASON_STOP: FinishReason
+FINISH_REASON_LENGTH: FinishReason
 
 class GenerateRequest(_message.Message):
     __slots__ = ("prompt_token_ids", "max_new_tokens", "temperature", "top_p", "seed", "stop_sequences", "num_choices")
@@ -39,9 +49,11 @@ class GenerateResponse(_message.Message):
     def __init__(self, prompt_token_ids: _Optional[_Iterable[int]] = ..., choices: _Optional[_Iterable[_Union[Choice, _Mapping]]] = ...) -> None: ...
 
 class Choice(_message.Message):
-    __slots__ = ("token_ids", "behavior_logprobs")
+    __slots__ = ("token_ids", "behavior_logprobs", "finish_reason")
     TOKEN_IDS_FIELD_NUMBER: _ClassVar[int]
     BEHAVIOR_LOGPROBS_FIELD_NUMBER: _ClassVar[int]
+    FINISH_REASON_FIELD_NUMBER: _ClassVar[int]
     token_ids: _containers.RepeatedScalarFieldContainer[int]
     behavior_logprobs: _containers.RepeatedScalarFieldContainer[float]
-    def __init__(self, token_ids: _Optional[_Iterable[int]] = ..., behavior_logprobs: _Optional[_Iterable[float]] = ...) -> None: ...
+    finish_reason: FinishReason
+    def __init__(self, token_ids: _Optional[_Iterable[int]] = ..., behavior_logprobs: _Optional[_Iterable[float]] = ..., finish_reason: _Optional[_Union[FinishReason, str]] = ...) -> None: ...

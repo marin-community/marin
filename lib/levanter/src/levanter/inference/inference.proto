@@ -31,4 +31,11 @@ message GenerateResponse {
 message Choice {
   repeated uint32 token_ids = 1;
   repeated float behavior_logprobs = 2;
+  FinishReason finish_reason = 3;
+}
+
+enum FinishReason {
+  FINISH_REASON_UNSPECIFIED = 0;
+  FINISH_REASON_STOP = 1;
+  FINISH_REASON_LENGTH = 2;
 }

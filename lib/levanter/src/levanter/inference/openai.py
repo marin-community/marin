@@ -20,6 +20,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import List, Optional, Union
 
 import grpc
@@ -47,7 +48,7 @@ from levanter.inference.engine import (
     Request,
     TokenSequenceLogprobs,
 )
-from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.jit_scheduler import FinishReason, SeqDecodingParams, format_finish_reason
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -118,6 +119,7 @@ class InferenceResponse:
     tokens: List[int]
     prompt_tokens: int
     completion_tokens: int
+    finish_reason: FinishReason
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
@@ -399,6 +401,7 @@ class InferenceContext:
                                 logprobs=result_logprobs,
                                 prompt_tokens=len(req.prompt_tokens),
                                 completion_tokens=len(generated_tokens),
+                                finish_reason=result.finish_reasons[output_idx],
                                 request_id=req.request_id,
                                 echo_token_ids=echo_token_ids,
                                 echo_logprobs=echo_logprobs,
@@ -406,17 +409,7 @@ class InferenceContext:
                         )
                         output_idx += 1
                     else:
-                        logger.error(f"Missing output for request {req.request_id}")
-                        req_outputs.append(
-                            InferenceResponse(
-                                text="<error while generating>",
-                                tokens=[],
-                                logprobs=None,
-                                prompt_tokens=0,
-                                completion_tokens=0,
-                                request_id=req.request_id,
-                            )
-                        )
+                        raise RuntimeError(f"Missing output for request {req.request_id}")
 
                 # Set the future result
                 req.future.get_loop().call_soon_threadsafe(req.future.set_result, req_outputs)
@@ -651,7 +644,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     CompletionChoice(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason="stop",
+                        finish_reason=format_finish_reason(generation.finish_reason),
                         logprobs=logprobs,
                     )
                 )
@@ -797,7 +790,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 ChatCompletionChoice(
                     index=i,
                     message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason="stop",
+                    finish_reason=format_finish_reason(generation.finish_reason),
                     logprobs=logprobs,
                 )
             )
@@ -822,6 +815,14 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
     except Exception as e:
         logger.error(f"Error in chat completion: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_GRPC_FINISH_REASONS = MappingProxyType(
+    {
+        FinishReason.STOP: inference_pb2.FINISH_REASON_STOP,
+        FinishReason.LENGTH: inference_pb2.FINISH_REASON_LENGTH,
+    }
+)
 
 
 class _GrpcInference:
@@ -872,7 +873,12 @@ class _GrpcInference:
         return inference_pb2.GenerateResponse(
             prompt_token_ids=prompt,
             choices=[
-                inference_pb2.Choice(token_ids=output.tokens, behavior_logprobs=output.logprobs) for output in outputs
+                inference_pb2.Choice(
+                    token_ids=output.tokens,
+                    behavior_logprobs=output.logprobs,
+                    finish_reason=_GRPC_FINISH_REASONS[output.finish_reason],
+                )
+                for output in outputs
             ],
         )
 

@@ -15,6 +15,8 @@ import pytest
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
+from levanter.testing.tokenizer import llama3_style_chat_tokenizer
+from levanter.tokenizers import load_tokenizer
 from levanter.trainer import TrainerConfig
 
 try:
@@ -28,6 +30,7 @@ try:
         InferenceEngineConfig,
         score_token_sequence_logprobs,
     )
+    from levanter.inference.jit_scheduler import FinishReason
     from levanter.inference.openai import (
         InferenceResponse,
         InferenceServer,
@@ -367,6 +370,7 @@ class _FakeCompletionContext:
                     tokens=[3],
                     prompt_tokens=len(prompt_tokens),
                     completion_tokens=1,
+                    finish_reason=FinishReason.LENGTH,
                     logprobs=[-123.0],
                     echo_token_ids=echo_token_ids,
                     echo_logprobs=score_token_sequence_logprobs(self.model, echo_token_ids, echo_logprobs_top_k),
@@ -635,6 +639,7 @@ def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
         for choice in result.choices:
             assert len(choice.token_ids) == len(choice.behavior_logprobs) == 2
             assert np.isfinite(choice.behavior_logprobs).all()
+            assert choice.finish_reason == inference_pb2.FINISH_REASON_LENGTH
 
         stop = result.choices[0].token_ids[0]
         other = (stop + 1) % server.inference_context.model.Vocab.size
@@ -660,6 +665,98 @@ def test_grpc_generation_returns_exact_token_ids_and_scores(test_client):
                 timeout=30,
             )
         assert invalid.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
+@pytest.fixture
+def greedy_client(inference_server_config, local_gpt2_tokenizer, fixed_token_model):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
+    token_ids = tokenizer.encode("a", add_special_tokens=False)
+    assert len(token_ids) == 1
+    model = fixed_token_model(len(tokenizer), token_ids[0])
+    service = dataclasses.replace(inference_server_config.service, max_pages=32)
+    config = dataclasses.replace(inference_server_config, service=service)
+    with config.trainer.use_device_mesh(), hax.axis_mapping(config.trainer.compute_axis_mapping):
+        server = InferenceServer.create(config, model, tokenizer)  # type: ignore[arg-type]
+    try:
+        with TestClient(server.app) as client:
+            yield client, server
+    finally:
+        server.shutdown()
+
+
+@pytest.mark.parametrize("chat", [False, True])
+def test_openai_generation_reports_stop_at_the_token_limit(greedy_client, chat):
+    client, _ = greedy_client
+    path = "/v1/chat/completions" if chat else "/v1/completions"
+    payload = {
+        "model": TEST_MODEL_NAME,
+        "max_tokens": 1,
+        "temperature": 0,
+        "seed": 17,
+        "n": 2,
+    }
+    if chat:
+        payload["messages"] = [{"role": "user", "content": "Hello, my name is"}]
+    else:
+        payload["prompt"] = "Hello, my name is"
+
+    response = client.post(path, json=payload)
+    assert response.status_code == 200, response.text
+    assert [choice["finish_reason"] for choice in response.json()["choices"]] == ["length", "length"]
+
+    stopped = client.post(path, json={**payload, "stop": ["A B", "a"]})
+    assert stopped.status_code == 200, stopped.text
+    assert [choice["finish_reason"] for choice in stopped.json()["choices"]] == ["stop", "stop"]
+
+
+def test_grpc_multi_choice_generation_reports_stop_at_the_token_limit(greedy_client):
+    _, server = greedy_client
+    request = inference_pb2.GenerateRequest(
+        prompt_token_ids=[18, 7, 3, 18], max_new_tokens=1, temperature=0, seed=17, num_choices=2
+    )
+    with grpc.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
+        stub = inference_pb2_grpc.InferenceStub(channel)
+        limited = stub.Generate(request, timeout=30)
+        token = limited.choices[0].token_ids[0]
+        other = (token + 1) % 19
+        request.stop_sequences.add(token_ids=[other, other])
+        request.stop_sequences.add(token_ids=[token])
+        stopped = stub.Generate(request, timeout=30)
+
+    assert len(limited.choices) == len(stopped.choices) == 2
+    for limited_choice, stopped_choice in zip(limited.choices, stopped.choices, strict=True):
+        assert limited_choice.finish_reason == inference_pb2.FINISH_REASON_LENGTH
+        assert stopped_choice.finish_reason == inference_pb2.FINISH_REASON_STOP
+        assert stopped_choice.token_ids == limited_choice.token_ids
+        assert stopped_choice.behavior_logprobs == limited_choice.behavior_logprobs
+
+
+def test_chat_generation_reports_stop_on_an_end_of_turn_token(tmp_path, inference_server_config, fixed_token_model):
+    llama3_style_chat_tokenizer().save_pretrained(tmp_path)
+    tokenizer = load_tokenizer(str(tmp_path))
+    model = fixed_token_model(len(tokenizer), tokenizer.get_vocab()["<|eot_id|>"])
+    options = dataclasses.replace(
+        inference_server_config,
+        service=dataclasses.replace(inference_server_config.service, max_pages=32),
+    )
+    with options.trainer.use_device_mesh(), hax.axis_mapping(options.trainer.compute_axis_mapping):
+        server = InferenceServer.create(options, model, tokenizer)  # type: ignore[arg-type]
+    try:
+        with TestClient(server.app) as client:
+            response = client.post(
+                "/v1/chat/completions",
+                json={
+                    "model": TEST_MODEL_NAME,
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "temperature": 0,
+                    "max_tokens": 1,
+                },
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["finish_reason"] == "stop"
+        assert response.json()["usage"]["completion_tokens"] == 1
+    finally:
+        server.shutdown()
 
 
 def test_openai_rejects_stop_sequences_that_exceed_engine_capacity(test_client):
