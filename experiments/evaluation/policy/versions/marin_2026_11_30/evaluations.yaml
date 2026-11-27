@@ -262,3 +262,44 @@ evaluations:
       concurrency: 32
       task_machine:
         image_build: declarative
+  # The same agent benchmarks with Pi, at the context each gives its other harness.
+  tb2-pi:
+    benchmark: terminal-bench-2.1
+    protocol: pi
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  ot-tblite-pi:
+    benchmark: ot-tblite
+    protocol: pi
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  ds-1000-pi:
+    benchmark: ds-1000
+    protocol: pi
+    run:
+      concurrency: 32
+  swebench-multilingual-pi:
+    benchmark: swebench-multilingual-100
+    protocol: pi
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro-200-pi:
+    benchmark: swebench-pro-200
+    protocol: pi
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro-hard-pi:
+    benchmark: swebench-pro-hard
+    protocol: pi
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative

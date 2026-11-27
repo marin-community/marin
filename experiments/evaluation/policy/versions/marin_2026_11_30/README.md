@@ -47,7 +47,10 @@ Models whose templates cannot turn reasoning off run thinking-off benchmarks at 
 | Code | HumanEval+, MBPP+, CRUXEval, LiveCodeBench (release v6, and the subset absent from hero training data), LiveCodeBench Pro |
 | Instruction following and professional | IFBench, MultiChallenge, EconEvals (synthetic occupations, sampled, against o3) |
 | Long context | MRCR (default, 32k and 65k), LongBench v2 (thinking), GraphWalks |
-| Agentic | Terminal-Bench 2.1, OT-TBLite, DS-1000, BFCL (Pi), BixBench (Pi), SWE-bench Multilingual (100), SWE-bench Pro (stratified 200 and HARD-51), SWE-bench Science |
+| Agentic | Terminal-Bench 2.1, OT-TBLite, DS-1000, SWE-bench Multilingual (100) and SWE-bench Pro (stratified 200 and HARD-51), each with its Terminus 2 or mini-swe-agent harness and again with Pi; BFCL (Pi), BixBench (Pi), SWE-bench Science (Pi) |
+
+Pi runs at the context the benchmark's other harness gets, with BixBench's Pi profile for that context (65,536 or
+32,768 tokens), 16,384-token replies, and Python 3 and Pi installed over each task's image.
 
 Judged evaluations use Together's `openai/gpt-oss-120b`, except IMO-ProofBench and PHYSICS-Verified, which use
 Together's `zai-org/GLM-5.3-Flash`. GLM-5.3-Flash is also a baseline, so its scores on those two are graded by
