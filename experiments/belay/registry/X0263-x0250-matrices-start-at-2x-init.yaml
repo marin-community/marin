@@ -4,7 +4,7 @@ name: X0250 matrices start at 2x init norm
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7208904984
@@ -12,3 +12,19 @@ intake:
   approved_by: armorfaye (trusted)
 code_commits:
 - 7d87a68268ff5453c3a82f3240c8f3b57d648c70
+trials:
+- id: t001
+  variant: X0250, MuonC-group matrices start at 2x init
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0263
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0263
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_init_mult: '2.0'
+  commit: c2ef08f0a6
+  priority: interactive
