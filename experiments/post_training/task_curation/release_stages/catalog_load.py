@@ -719,11 +719,16 @@ def _replay_qc_panels_parallel(
             raise
         return index
 
+    batch_segments: list[tuple[int, str, str, list[dict]]] = []
     segments: list[tuple[int, str, str, list[dict]]] = []
     for index, staged in enumerate(staged_panels):
         for table, rows, columns in panel_row_groups(staged):
             for piece in _segment_rows(rows):
-                segments.append((index, table, columns, piece))
+                segment = (index, table, columns, piece)
+                if table == "atlas_review_batches":
+                    batch_segments.append(segment)
+                else:
+                    segments.append(segment)
 
     def run_segment(segment: tuple[int, str, str, list[dict]]) -> tuple[int, str, int]:
         panel_index, table, columns, rows = segment
@@ -760,16 +765,18 @@ def _replay_qc_panels_parallel(
         for _ in executor.map(prepare, range(len(panels))):
             pass
         counts = [{table: 0 for table, _rows, _columns in panel_row_groups(staged)} for staged in staged_panels]
-        failures = []
-        futures = [executor.submit(run_segment, segment) for segment in segments]
-        for future in as_completed(futures):
-            try:
-                panel_index, table, count = future.result()
-                counts[panel_index][table] += count
-            except BaseException as error:
-                failures.append(error)
-        if failures:
-            raise BaseExceptionGroup("QC replay segments failed", failures)
+        # Batch chunks and task links have foreign keys to the committed batch rows.
+        for phase in (batch_segments, segments):
+            failures = []
+            futures = [executor.submit(run_segment, segment) for segment in phase]
+            for future in as_completed(futures):
+                try:
+                    panel_index, table, count = future.result()
+                    counts[panel_index][table] += count
+                except BaseException as error:
+                    failures.append(error)
+            if failures:
+                raise BaseExceptionGroup("QC replay segments failed", failures)
         results: list[dict] = []
         for result in executor.map(finish, range(len(panels))):
             results.append(result)

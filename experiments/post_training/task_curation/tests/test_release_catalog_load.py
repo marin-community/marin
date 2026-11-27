@@ -651,6 +651,73 @@ def test_parallel_replay_preserves_the_original_sql_failure(tmp_path, monkeypatc
     assert "atlas_review_current" not in query.tables
 
 
+def test_catalog_replay_commits_parent_batches_before_child_links(tmp_path, monkeypatch):
+    documents = [_staged_panel_document(name, records=3) for name in ("slow", "fast")]
+    declarations = {
+        name: _declaration_for(name, document["receipt"]["artifact"]["sha256"])
+        for name, document in zip(("slow", "fast"), documents, strict=True)
+    }
+    release_parent = threading.Event()
+    parent_started = threading.Event()
+    slow_key = documents[0]["assessment"]["pipeline_key"]
+    fast_key = documents[1]["assessment"]["pipeline_key"]
+
+    class ForeignKeyQuery(_ReplayQuery):
+        def __call__(self, sql, parameters):
+            if sql.startswith("INSERT INTO atlas_review_batches"):
+                key = json.loads(parameters["rows"])[0]["pipeline_key"]
+                if key == slow_key:
+                    parent_started.set()
+                    assert release_parent.wait(10), "independent panel never reached the SQL boundary"
+                if key == fast_key:
+                    assert parent_started.wait(10)
+                    result = super().__call__(sql, parameters)
+                    release_parent.set()
+                    return result
+            if sql.startswith("INSERT INTO atlas_review_batch_tasks"):
+                rows = json.loads(parameters["rows"])
+                stored = self.tables.get("atlas_review_batches", [])
+                if any(
+                    not any(
+                        parent["pipeline_key"] == row["pipeline_key"] and parent["batch_key"] == row["batch_key"]
+                        for parent in stored
+                    )
+                    for row in rows
+                ):
+                    release_parent.set()
+                    raise ValueError("review batch foreign key violation")
+            return super().__call__(sql, parameters)
+
+    query = ForeignKeyQuery(declarations)
+    monkeypatch.setattr(load_reviews_module, "materialize_cohort_summaries", lambda *args, **kwargs: 0)
+    panels = []
+    for source_id, document in zip(("slow", "fast"), documents, strict=True):
+        raw = gzip.compress(json.dumps(document).encode())
+        path = tmp_path / f"{source_id}.json.gz"
+        path.write_bytes(raw)
+        panels.append(
+            {
+                "source_id": source_id,
+                "status": "complete",
+                "records": 3,
+                "reference": {"uri": str(path), "sha256": hashlib.sha256(raw).hexdigest()},
+            }
+        )
+    results = cl.replay_catalog_reviews(
+        _inputs(tmp_path),
+        panels,
+        {"results": []},
+        declarations,
+        query,
+        lambda: query,
+        cl.RetryControl(),
+    )
+    assert {result["source_id"] for result in results} == {"slow", "fast"}
+    assert len(query.tables["atlas_review_batches"]) == 2
+    assert len(query.tables["atlas_review_batch_tasks"]) == 6
+    assert {row["source_id"] for row in query.tables["atlas_review_current"]} == {"slow", "fast"}
+
+
 @pytest.mark.parametrize("changed_pointer", [False, True])
 def test_catalog_reviews_reuse_copied_payload_and_replay_new_panel(tmp_path, monkeypatch, changed_pointer):
     copied = _staged_panel_document("retained", records=2)

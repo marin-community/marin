@@ -371,6 +371,11 @@ flag must agree with whether the reviewed population matches the declared
 population. It then checks the target SQL presentation pointers in bounded
 batches. A changed pointer or failed binding check stops catalog loading. Only new or replaced panels download and replay staged review payloads;
 copied task, reviewer and QA identities remain unchanged.
+The parallel loader commits every reviewer-batch segment and compares all
+expected rows and fields against the sealed staged panel before dispatching
+chunks and task links, which reference those batches through SQL foreign keys.
+Segments run in parallel within each phase. The SQL pointer selecting the served
+review panel updates only after both phases succeed.
 
 To refresh an already staged index after a declaration changes, supply its
 digest-bound `prior_index` reference to `fresh_qc_index` and put replacement
