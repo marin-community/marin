@@ -7,11 +7,17 @@ import dataclasses
 import gzip
 import hashlib
 import json
+import sys
 import threading
 
 import pytest
+from finestore.rl.difficulty import Solver
+from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.backend_requirements import BackendFit, BackendSourceMap, BackendSurvey, FitSupport
 
+from experiments.post_training.task_curation.difficulty.ledger import append_rows
+from experiments.post_training.task_curation.difficulty.seal import seal_ledger
+from experiments.post_training.task_curation.difficulty.state import CatalogSource, LedgerRow, Outcome
 from experiments.post_training.task_curation.release_stages import catalog_load as cl
 from experiments.post_training.task_curation.release_stages import sizing
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
@@ -173,6 +179,50 @@ def test_dry_run_passes_with_aligned_state(tmp_path, monkeypatch):
     # The dry run sweeps every source through the admission review (coordinator
     # design input): the real sweep is behavior-tested in test_release_admission_check.
     assert sorted(reviewed) == ["s1", "s2"]
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_cli_verifies_json_difficulty_snapshot_before_loading(tmp_path, monkeypatch, capsys, corrupt):
+    inputs, _ = _aligned_state(tmp_path, monkeypatch)
+    ledger = str(tmp_path / "ledger")
+    append_rows(
+        ledger,
+        [
+            LedgerRow(
+                "population",
+                "s1",
+                "a" * 64,
+                Solver.SMALL,
+                "attempt",
+                Outcome.SCORED,
+                None,
+                "run",
+                0.0,
+                "2026-11-27T11:59:00+00:00",
+                task_id="task",
+                reward=1.0,
+            )
+        ],
+    )
+    source = CatalogSource("s1", "population", (("task", "a" * 64),), "queue", "digest")
+    reference = seal_ledger(ledger, [source], str(tmp_path / "sealed"), {}, "2026-11-27T12:00:00+00:00")
+    if corrupt:
+        (StoragePath(reference.uri).parent / "cells.jsonl").write_bytes(b"changed")
+    document = dataclasses.asdict(inputs)
+    document["publication"] = inputs.publication.model_dump(mode="json")
+    document["staging"] = {name: ref.model_dump(mode="json") for name, ref in inputs.staging.items()}
+    document["difficulty_snapshot"] = reference.model_dump(mode="json")
+    path = tmp_path / "inputs.json"
+    path.write_text(json.dumps(document))
+    monkeypatch.setattr(sys, "argv", ["catalog_load", "--inputs", str(path), "--mode", "dry-run"])
+    if corrupt:
+        with pytest.raises(ValueError, match="Sealed snapshot file differs"):
+            cl.main()
+        return
+    cl.main()
+    proof = json.loads(capsys.readouterr().out.split("CATALOG-LOAD-DRY-RUN ", 1)[1])
+    assert proof["sql_writes"] == 0 and proof["source_count"] == 2
+    assert proof["target_load_id"] == TARGET
 
 
 def test_dry_run_refuses_a_blocked_admission(tmp_path, monkeypatch):

@@ -705,6 +705,8 @@ def main() -> None:
     document = json.loads(args.inputs.read_text(encoding="utf-8"))
     document["publication"] = ArtifactRef(**document["publication"])
     document["staging"] = {name: ArtifactRef(**ref) for name, ref in document["staging"].items()}
+    if document.get("difficulty_snapshot") is not None:
+        document["difficulty_snapshot"] = ArtifactRef(**document["difficulty_snapshot"])
     inputs = CatalogLoadInputs(**document)
     proof = run_catalog_load(inputs, dry_run=args.mode == "dry-run")
     label = "CATALOG-LOAD-DRY-RUN" if args.mode == "dry-run" else "CATALOG-LOAD-SEALED"
