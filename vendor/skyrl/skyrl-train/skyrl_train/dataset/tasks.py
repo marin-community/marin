@@ -221,6 +221,14 @@ def _source_task_prompt(row: dict, index: int, *, source_name: str, environment_
     return {**session_parameters(lowered.task).extras, **task_prompt(lowered)}
 
 
+def required_backend_machine(config: Mapping[str, Any], backend: str) -> Mapping[str, Any]:
+    """The configured machine template for a task that declares its required backend."""
+    machine = config.get("task_machine_by_backend", {}).get(backend)
+    if machine is None or machine["backend"] != backend:
+        raise ValueError(f"No task_machine_by_backend template serves the required {backend} backend")
+    return machine
+
+
 def canonical_task_spec(task: TaskSpec, config: Mapping[str, Any]) -> TaskRolloutSpec:
     """Bind the configured harness and machines to a canonical task without allocating them."""
     final_event = task.context.events[-1]
@@ -234,7 +242,12 @@ def canonical_task_spec(task: TaskSpec, config: Mapping[str, Any]) -> TaskRollou
     session = {**config["session"], "task_session": harness}
     if task.source.dataset in config["max_turns_by_dataset"]:
         session["max_turns"] = config["max_turns_by_dataset"][task.source.dataset]
-    machine = config["task_machine_by_dataset"].get(task.source.dataset)
+    required = task.environment_requirements.required_backend
+    machine = (
+        config["task_machine_by_dataset"].get(task.source.dataset)
+        if required is None
+        else required_backend_machine(config, required)
+    )
     if machine is None:
         # A dataset mixing shell-simulator and Linux tasks binds machines by command semantics. The binding has
         # no default-config entry, so it appears in a native configuration only when a launch sets it.

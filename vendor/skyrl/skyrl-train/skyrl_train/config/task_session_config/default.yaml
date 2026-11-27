@@ -24,6 +24,18 @@ task_spec:
   harness_by_dataset: {}
   max_turns_by_dataset: {}
   task_machine_by_dataset: {}
+  # Machines for tasks that declare environment_requirements.required_backend.
+  task_machine_by_backend:
+    local:
+      backend: local
+      cpus: 1
+      memory_mb: 8192
+      storage_mb: null
+      gpus: 0
+      network: deny
+      user: null
+      startup_timeout: 600
+      cleanup_timeout: 60
   session:
     max_turns: 1
     max_total_tokens: null

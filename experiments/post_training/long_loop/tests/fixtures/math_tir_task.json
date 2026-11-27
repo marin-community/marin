@@ -1,0 +1,116 @@
+{
+ "id": "nemotron_ultra_mopd_ultra_sft_step3200_math_tir-0013901f080cc5c38b7ad0fa767326bcb7f6149e98603b31049c4374e1ffdb1f",
+ "context": {
+  "events": [
+   {
+    "type": "message",
+    "role": "user",
+    "content": "# Problem 5. II variant.\n\nTwo different natural numbers are written on the board, the larger of which is 1580. It is allowed to replace one of the numbers with their arithmetic mean (if it is an integer). It is known that such an operation was performed 10 times. Find what numbers were originally written on the board.\n\nPresent your answer inside \\boxed{}."
+   }
+  ]
+ },
+ "environment_requirements": {
+  "capabilities": [],
+  "required_backend": "local",
+  "command_semantics": "linux_process",
+  "docker_image": "us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104",
+  "docker_build": null,
+  "working_directory": "/workspace",
+  "setup_commands": [],
+  "environment_variables": {},
+  "tool_providers": {
+   "nemotron_agent": {
+    "action_interface": "nemotron-agent:ns_tools_simple_agent",
+    "initial_state": {
+     "tools": [
+      {
+       "name": "stateful_python_code_exec",
+       "parameters": {
+        "properties": {
+         "code": {
+          "description": "Code to execute",
+          "type": "string"
+         }
+        },
+        "required": [
+         "code"
+        ],
+        "type": "object"
+       },
+       "description": "Call this function to execute Python code in a stateful Jupyter notebook environment. Python will respond with the output of the execution or time out after 10.0 seconds.",
+       "strict": true
+      }
+     ]
+    }
+   }
+  },
+  "packages_lock": null,
+  "package_spec": null
+ },
+ "final_tools": [],
+ "interaction_tools": [
+  {
+   "name": "stateful_python_code_exec",
+   "parameters": {
+    "properties": {
+     "code": {
+      "description": "Code to execute",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code"
+    ],
+    "type": "object"
+   },
+   "description": "Call this function to execute Python code in a stateful Jupyter notebook environment. Python will respond with the output of the execution or time out after 10.0 seconds.",
+   "strict": true
+  }
+ ],
+ "tool_bindings": {},
+ "output_paths": [],
+ "answer_type": "text",
+ "answer_format": {
+  "kind": "plain_text"
+ },
+ "grader": {
+  "kind": "verifyit",
+  "mode": "math",
+  "parameters": {
+   "expected": "556",
+   "math_type": "scalar",
+   "output": "/app/answer.txt",
+   "empty_output": "zero",
+   "profile": "anchored",
+   "allow_additive_constant": false
+  },
+  "environment": null
+ },
+ "reasoning_markup": "grade",
+ "source": {
+  "dataset": "nvidia/Nemotron-RL-Ultra-Training-Blends",
+  "revision": "482392c14c6418e26804ea2e5d10359df9877df4",
+  "row": "mopd.jsonl:32386",
+  "importer_revision": "8"
+ },
+ "schema_version": "0.30",
+ "resources": {
+  "all": [],
+  "worker": [],
+  "oracle": [],
+  "verifier": [
+   {
+    "path": "config.json",
+    "source": {
+     "kind": "inline_file",
+     "content_base64": "eyJjb250cmFjdCI6IHsiYWdlbnRfcmVmIjogeyJuYW1lIjogIm5zX3Rvb2xzX3NpbXBsZV9hZ2VudCIsICJ0eXBlIjogInJlc3BvbnNlc19hcGlfYWdlbnRzIn0sICJkYXRhc2V0IjogInVsdHJhX3NmdF9zdGVwMzIwMF9tYXRoX3RpciIsICJleHBlY3RlZF9hbnN3ZXIiOiAiNTU2IiwgIm1hdGNoZWRfc291cmNlcyI6IFt7ImV4cGVjdGVkX2Fuc3dlciI6ICI1NTYiLCAibGluZV9udW1iZXIiOiA0MjY0NywgInBhc3NfcmF0ZSI6IDAuMTI1LCAicGFzc19yYXRlX3Bhc3NlZCI6IDEsICJwYXNzX3JhdGVfdG90YWwiOiA4LCAic291cmNlX2ZpbGUiOiAibWF0aF90aXJfc2t5d29yay9wcm9maWxlZF9tYXRoX3Rpcl9za3l3b3JrLmpzb25sIn1dLCAicGFzc19yYXRlIjogMC4xMjUsICJwYXNzX3JhdGVfcGFzc2VkIjogMSwgInBhc3NfcmF0ZV90b3RhbCI6IDgsICJwbGFjZWhvbGRlcl9wcm92ZW5hbmNlIjogeyJkYXRhc2V0IjogIlNreXdvcmsvU2t5d29yay1PUjEtUkwtRGF0YSIsICJyZWNvcmRfc2hhMjU2IjogImM1NTE5M2UxYTVjZTEwODBkMWM4YzBkYzdjMTYwMGQ4MzA3MWYxNzY5NzJiZDJiY2FiMDczZThjZTM1ZjA3ZjgiLCAicmV2aXNpb24iOiAiMWNkZWRjNTJlMGUyZGI4NWZkZjI1MmY5YmU2ODJlNjNhNWEzOGMzMyIsICJyb3dfaW5kZXgiOiA4MDg1OCwgInNwbGl0IjogIm1hdGgifSwgInF1ZXN0aW9uIjogIiMgUHJvYmxlbSA1LiBJSSB2YXJpYW50LlxuXG5Ud28gZGlmZmVyZW50IG5hdHVyYWwgbnVtYmVycyBhcmUgd3JpdHRlbiBvbiB0aGUgYm9hcmQsIHRoZSBsYXJnZXIgb2Ygd2hpY2ggaXMgMTU4MC4gSXQgaXMgYWxsb3dlZCB0byByZXBsYWNlIG9uZSBvZiB0aGUgbnVtYmVycyB3aXRoIHRoZWlyIGFyaXRobWV0aWMgbWVhbiAoaWYgaXQgaXMgYW4gaW50ZWdlcikuIEl0IGlzIGtub3duIHRoYXQgc3VjaCBhbiBvcGVyYXRpb24gd2FzIHBlcmZvcm1lZCAxMCB0aW1lcy4gRmluZCB3aGF0IG51bWJlcnMgd2VyZSBvcmlnaW5hbGx5IHdyaXR0ZW4gb24gdGhlIGJvYXJkLlxuXG5QcmVzZW50IHlvdXIgYW5zd2VyIGluc2lkZSBcXGJveGVke30uIiwgInJlZmVyZW5jZV9maWxlIjogInN1cGVyX3JsX2dvb2RfdHJ1ZV9vbHltcGlhZF9hbGxfYXZhaWxhYmxlX3BsdXNfZ3B0X2NsZWFuZWRfZml4ZWRfcHJvZmlsaW5nLWFsbC5qc29ubCIsICJyZXF1ZXN0X29wdGlvbnMiOiB7fSwgInNvdXJjZXMiOiBbeyJhZ2VudF9uYW1lIjogIm1hdGhfd2l0aF9qdWRnZV9zaW1wbGVfYWdlbnQiLCAibGluZV9udW1iZXIiOiAxMTIwMiwgInNvdXJjZV9maWxlIjogIm1hdGhfY290L3NreXdvcmtzX291dC5qc29ubCJ9XSwgInV1aWQiOiAiMGVjYTc1ODYtMTNjNC00YjExLWIxNTQtMjI5MGNhMjE2Y2Y2IiwgInZlcmlmaWVyX3R5cGUiOiAibWF0aF93aXRoX2p1ZGdlIn0sICJldmFsdWF0b3IiOiAibnNfdG9vbHNfc2ltcGxlX2FnZW50IiwgInNvdXJjZV9yZXZpc2lvbiI6ICJkOGI2ZThjMTYzZGVmMzY2MGU5ZDMwNzJjMWMxNzQyMjZhMTcwOWZhIn0="
+    },
+    "mode": null,
+    "mtime_ns": null
+   }
+  ]
+ },
+ "tags": [],
+ "labels": {},
+ "integrity_contract": null
+}

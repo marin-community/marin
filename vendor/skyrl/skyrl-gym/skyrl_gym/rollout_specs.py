@@ -15,6 +15,8 @@ from taskcompendium.fetch import FETCH_ACTION_INTERFACE
 from taskcompendium.models import TaskSpec, ExecutionRequirements, EXECUTION_RESOURCE_FIELDS
 from taskcompendium.runtime.shell import ShellToolConfig
 
+from skyrl_gym.nemotron_python_tools import NEMOTRON_PYTHON_ACTION_INTERFACE, NemotronPythonProvider
+
 SHELLBOX_HARNESS = "shellbox"
 _SHELLBOX_PREFIX = SHELLBOX_HARNESS + ":"
 
@@ -71,7 +73,9 @@ def _declared_machine(
     )
 
 
-TOOL_PROVIDERS: Mapping[str, ToolProvider] = MappingProxyType({FETCH_ACTION_INTERFACE: FetchProvider()})
+TOOL_PROVIDERS: Mapping[str, ToolProvider] = MappingProxyType(
+    {FETCH_ACTION_INTERFACE: FetchProvider(), NEMOTRON_PYTHON_ACTION_INTERFACE: NemotronPythonProvider()}
+)
 """Host tools every Shellbox harness serves, by action interface."""
 
 
