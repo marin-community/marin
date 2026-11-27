@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
+from shellbox.backends.daytona import snapshot as snapshot_module
 from shellbox.backends.daytona import usage as daytona_usage
 from shellbox.backends.daytona.usage import AccountUsage, ResourceCapacity
 
@@ -159,8 +160,6 @@ def test_usage_failure_falls_back_to_inventory_and_the_purge_still_completes(tmp
 
 def test_failed_purge_still_refuses_blind_retry(tmp_path, account_clients, monkeypatch):
     """A purge that cannot complete keeps its started receipt and blocks the retry."""
-    from shellbox.backends.daytona import snapshot as snapshot_module
-
     real_purge = snapshot_module.purge_stale_snapshots
 
     calls = {"count": 0}
