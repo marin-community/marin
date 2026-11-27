@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -235,6 +236,15 @@ def _infer_max_pages_from_hbm(
     )
 
     return max_pages
+
+
+@dataclass(frozen=True)
+class _KvPageReservation:
+    shared: int
+    per_choice: int
+
+    def total(self, choices: int) -> int:
+        return self.shared + choices * self.per_choice
 
 
 @dataclass(frozen=True)
@@ -913,7 +923,9 @@ class InferenceEngine:
         """Score a token sequence under this engine's model."""
         return score_token_sequence_logprobs(self.model, token_ids, top_k)
 
-    def _prefill_batch(self, batch: Sequence[Request], page_requirements: dict[int, int]) -> _DecodeOutputs | None:
+    def _prefill_batch(
+        self, batch: Sequence[Request], page_requirements: dict[int, _KvPageReservation]
+    ) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
@@ -930,23 +942,26 @@ class InferenceEngine:
         self.gen_state, outputs = new_state
         return outputs
 
-    def _required_kv_pages(self, request: Request) -> int:
+    def _kv_page_reservation(self, request: Request) -> _KvPageReservation:
         page_size = self.config.page_size
         shared_pages = len(request.prompt_tokens) // page_size
         # The final sampled token is returned without being written to the KV cache.
         max_tokens = min(int(request.decode_params.max_num_tokens), self.config.max_seq_len)
         kv_token_count = max(len(request.prompt_tokens), max_tokens - 1)
         pages_per_choice = (kv_token_count + page_size - 1) // page_size
-        return shared_pages + request.n_generations * (pages_per_choice - shared_pages)
+        return _KvPageReservation(shared_pages, pages_per_choice - shared_pages)
 
-    def _prefill_prompts(self, requests: Sequence[Request], page_requirements: dict[int, int]) -> PrefillWork | None:
+    def _prefill_prompts(
+        self, requests: Sequence[Request], page_requirements: dict[int, _KvPageReservation]
+    ) -> PrefillWork | None:
         decode_state = self.gen_state.decode_state
         max_seqs_in_prefill = self.config.max_seqs_in_prefill
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
-        active_ids = {request_id for request_id, _ in self.local_map.values()}
-        available_pages = decode_state.page_table.num_pages - sum(page_requirements[rid] for rid in active_ids)
+        active_choices = Counter(request_id for request_id, _ in self.local_map.values())
+        reserved_pages = sum(page_requirements[rid].total(choices) for rid, choices in active_choices.items())
+        available_pages = decode_state.page_table.num_pages - reserved_pages
 
         queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
         queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
@@ -986,7 +1001,7 @@ class InferenceEngine:
             if len(seq_tokens) + offset > queue_tokens.shape[0] or num_primary >= max_seqs_in_prefill:
                 break
 
-            required_pages = page_requirements[request.request_id]
+            required_pages = page_requirements[request.request_id].total(request.n_generations)
             if len(self.free_slots) < request.n_generations or required_pages > available_pages:
                 break
             available_pages -= required_pages
@@ -1121,8 +1136,9 @@ class InferenceEngine:
         if not requests:
             return GenerationResult(tokens=[], logprobs=[], total_generated=0)
         self._validate_generation_requests(requests)
-        page_requirements = {request.request_id: self._required_kv_pages(request) for request in requests}
-        if max(page_requirements.values()) > self.gen_state.decode_state.page_table.num_pages:
+        page_requirements = {request.request_id: self._kv_page_reservation(request) for request in requests}
+        num_pages = self.gen_state.decode_state.page_table.num_pages
+        if any(page_requirements[req.request_id].total(req.n_generations) > num_pages for req in requests):
             raise ValueError("A request and its choices must fit within the KV page table")
 
         # for now, reset the engine state between each batch - the engine cannot be called with
