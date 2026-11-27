@@ -1153,6 +1153,7 @@ class IrisClient:
         *,
         state: JobState | None = None,
         prefix: str | None = None,
+        name: str | None = None,
         limit: int | None = None,
     ) -> list[JobStatus]:
         """List jobs with optional filtering.
@@ -1167,6 +1168,7 @@ class IrisClient:
             state: If provided, only return jobs in this state.
             prefix: If provided, only return jobs whose ``job_id`` (wire form,
                 e.g. ``"/alice/foo"``) starts with this string.
+            name: If provided, filter by a substring of the local job name.
             limit: If provided, return at most this many jobs (the most recent,
                 since the server sorts by submission date descending). ``None``
                 walks every matching job, which requires a filter narrow enough
@@ -1180,6 +1182,8 @@ class IrisClient:
             query.state_filter = state.value
         if prefix:
             query.job_id_prefix = prefix
+        if name:
+            query.name_filter = name
 
         return [job_status_from_proto(job) for job in self._cluster_client.list_jobs(query=query, limit=limit)]
 

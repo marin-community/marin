@@ -27,6 +27,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     action_from_payload,
     action_id,
 )
+from experiments.post_training.task_curation.difficulty.state import Outcome
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 
 JOB_COMPONENT = "difficulty-reconcile-"
@@ -44,10 +45,24 @@ class IrisBackend:
 
     def jobs(self) -> list[Job]:
         prefix = f"/{self.controller_job.user}/{JOB_NAMESPACE}"
-        raw = self.client.list_jobs(prefix=prefix)
+        rows = read_rows(self.ledger)
+        ended = {row.action_id for row in rows if row.outcome == Outcome.FINISHED}
+        unfinished = {
+            row.job_id for row in rows if row.outcome == Outcome.SUBMITTED and row.job_id and row.action_id not in ended
+        }
+        # Historical jobs can exceed Iris's deep-offset limit. Discover live
+        # work by state, and collect terminal evidence only for open actions.
+        raw = {
+            str(status.job_id): status
+            for state in (JobState.PENDING, JobState.BUILDING, JobState.RUNNING)
+            for status in self.client.list_jobs(prefix=prefix, state=state)
+        }
+        for root in sorted(unfinished):
+            for status in self.client.list_jobs(prefix=root):
+                raw[str(status.job_id)] = status
         jobs = []
         grouped: dict[str, list[Job]] = {}
-        for status in raw:
+        for status in raw.values():
             wire = str(status.job_id)
             if "atlas-difficulty-engines-" in wire or (
                 "atlas-difficulty-reconciler-controller-" in wire and "/" + JOB_COMPONENT not in wire
@@ -81,7 +96,7 @@ class IrisBackend:
     def submit(self, action: Action, manifest_uri: str) -> str:
         key = action_id(action)
         name = JOB_COMPONENT + key[:24]
-        existing = self.client.list_jobs(prefix=f"/{self.controller_job.user}/{JOB_NAMESPACE}")
+        existing = self.client.list_jobs(prefix=f"/{self.controller_job.user}/{JOB_NAMESPACE}", name=name)
         for job in existing:
             if str(job.job_id).endswith("/" + name):
                 return str(job.job_id)
