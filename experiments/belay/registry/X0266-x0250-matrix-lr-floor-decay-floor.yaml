@@ -4,9 +4,26 @@ name: X0250 + matrix LR floor + decay floor f=0.05
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: approved
+status: running
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7212009445
   author: armorfaye
   approved_by: armorfaye (trusted)
+trials:
+- id: t001
+  variant: X0250 + matrix LR clamp (X0256) + decay floor f=0.05 (X0259)
+  rung: speedrun
+  protocol: equal_steps
+  batch: X0266
+  date: '2026-11-27'
+  comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0266
+  wandb: []
+  settings:
+    muonc_anneal_decay: '0.2'
+    muonc_anneal_adamc: '12.5'
+    adamc_adam_decay: '0.3'
+    muonc_anneal_lr_floor: 'true'
+    muonc_anneal_decay_floor_frac: '0.05'
+  commit: 1678f8516b
+  priority: interactive
