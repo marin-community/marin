@@ -27,6 +27,7 @@ from collections import defaultdict, deque
 
 import numpy as np
 from skyrl_train.dataset import PromptDataset
+from skyrl_train.distributed.strategy import CheckpointWriteStatus
 from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
@@ -2859,14 +2860,13 @@ class RayPPOTrainer:
             "pass_through", "save_checkpoint", ckpt_dir=policy_save_dir, tokenizer=self.tokenizer
         )
         try:
-            has_pending_policy_write = any(ray.get(refs))
+            has_pending_policy_write = CheckpointWriteStatus.DEFERRED in ray.get(refs)
         except ray.exceptions.RayTaskError as error:
-            if policy_save_dir.startswith("s3://"):
-                # A rank can fail writing its control files after other ranks hand off staging.
-                try:
-                    ray.get(self.policy_model.async_run_ray_method("pass_through", "discard_checkpoint"))
-                except ray.exceptions.RayError as cleanup_error:
-                    error.add_note(f"Could not discard pending policy writes: {cleanup_error}")
+            # A rank can fail writing its control files after other ranks hand off staging.
+            try:
+                ray.get(self.policy_model.async_run_ray_method("pass_through", "discard_checkpoint"))
+            except ray.exceptions.RayError as cleanup_error:
+                error.add_note(f"Could not discard pending policy writes: {cleanup_error}")
             raise
         latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
         return CheckpointSnapshot(

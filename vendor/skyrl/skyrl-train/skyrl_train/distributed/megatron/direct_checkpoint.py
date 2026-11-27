@@ -1,4 +1,4 @@
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -16,13 +16,25 @@ from megatron.core.dist_checkpointing.strategies.torch import (
     mcore_to_pyt_state_dict,
 )
 import torch
+from torch import distributed as dist
 from torch.distributed import ProcessGroup, checkpoint
 from torch.distributed.checkpoint._fsspec_filesystem import FileSystem as FsspecFileSystem
+from torch.distributed.checkpoint import CheckpointException
 from torch.distributed.checkpoint.metadata import Metadata
 
 from marinskyrl.remote_io import create_s3_filesystem
 from skyrl_train.distributed.megatron.checkpoint_writer import StagedMasterWeightsWriter
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
+
+
+def finish_checkpoint_write(write: Future[Metadata]) -> None:
+    """Report rank failures as ordinary exceptions that can cross the Ray boundary."""
+    try:
+        write.result()
+    except CheckpointException as error:
+        if all(isinstance(failure, OSError) for failure, _ in error.failures.values()):
+            raise OSError(str(error)) from error
+        raise RuntimeError(str(error)) from error
 
 
 # MCore 0.18 does not expose a storage-writer hook. Keep the adapter narrow: it
@@ -58,20 +70,22 @@ class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
         )
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="checkpoint")
         self.pending_write = executor.submit(
-            checkpoint.save,
+            staged_writer.save,
             pytorch_state_dict,
-            storage_writer=staged_writer,
             planner=planner,
             process_group=self.checkpoint_group,
         )
 
-        def on_finished(_):
-            # A failed plan or copy can finish without reaching the staging handoff.
-            staged_writer.staged.set()
-            executor.shutdown(wait=False)
+        self.pending_write.add_done_callback(lambda _: executor.shutdown(wait=False))
+        wait((staged_writer.staged, self.pending_write), return_when=FIRST_COMPLETED)
 
-        self.pending_write.add_done_callback(on_finished)
-        staged_writer.staged.wait()
+        # Planning or copying can fail before a rank hands off. Agree on that
+        # outcome on the training group before MCore enters its metadata barrier.
+        device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
+        staged = torch.tensor(int(staged_writer.staged.done()), device=device)
+        dist.all_reduce(staged, op=dist.ReduceOp.MIN)
+        if not staged.item():
+            finish_checkpoint_write(self.pending_write)
 
 
 class DirectS3TorchDistLoadShardedStrategy(TorchDistLoadShardedStrategy):

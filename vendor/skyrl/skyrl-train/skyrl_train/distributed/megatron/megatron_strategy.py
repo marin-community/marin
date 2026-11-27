@@ -18,7 +18,7 @@ from torch import distributed as dist
 from torch.distributed.checkpoint import CheckpointException
 from torch.distributed.checkpoint.metadata import Metadata
 
-from skyrl_train.distributed.strategy import DistributedStrategy
+from skyrl_train.distributed.strategy import CheckpointWriteStatus, DistributedStrategy
 from skyrl_train.distributed.utils import ModelOrModelOptimPair
 from skyrl_train.io import io
 from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
@@ -37,6 +37,7 @@ from skyrl_train.distributed.megatron.megatron_utils import (
 from skyrl_train.distributed.megatron.direct_checkpoint import (
     DirectS3TorchDistLoadShardedStrategy,
     DirectS3TorchDistSaveShardedStrategy,
+    finish_checkpoint_write,
 )
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
 from skyrl_train.distributed.megatron.checkpoint_restore import (
@@ -180,13 +181,7 @@ class _PendingCheckpoint:
 
     def finish(self) -> None:
         with self.controls:
-            try:
-                self.write.result()
-            except CheckpointException as error:
-                # DCP reports errors from any rank on every rank as a BaseException.
-                if all(isinstance(failure, OSError) for failure, _ in error.failures.values()):
-                    raise OSError(str(error)) from error
-                raise RuntimeError(str(error)) from error
+            finish_checkpoint_write(self.write)
             io.upload_directory(self.work_dir, self.destination)
 
     def discard(self) -> None:
@@ -233,6 +228,7 @@ class MegatronStrategy(DistributedStrategy):
             tensor_parallel.model_parallel_cuda_manual_seed(seed)
 
     def setup_distributed(self, timeout=timedelta(minutes=30)) -> None:
+        self._collective_timeout = timeout
         local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
         if local_rank != -1:
             torch.cuda.set_device(local_rank)
@@ -368,7 +364,7 @@ class MegatronStrategy(DistributedStrategy):
         dist.barrier()
         if self._checkpoint_group is None:
             # DCP's background collectives must not interleave with training collectives.
-            self._checkpoint_group = dist.new_group(backend="gloo", timeout=timedelta(minutes=30))
+            self._checkpoint_group = dist.new_group(backend="gloo", timeout=self._collective_timeout)
         return DirectS3TorchDistSaveShardedStrategy(
             ckpt_dir, staging_bytes=self._checkpoint_max_staged_host_bytes, checkpoint_group=self._checkpoint_group
         )
@@ -383,8 +379,8 @@ class MegatronStrategy(DistributedStrategy):
         client_state: dict = {},
         tag=None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
-    ) -> bool:
-        """Capture the checkpoint and return whether a write is pending."""
+    ) -> CheckpointWriteStatus:
+        """Capture checkpoint data and report whether publication requires a separate join."""
         if self._pending_checkpoint is not None:
             raise RuntimeError("The previous checkpoint has not finished")
         # Extract base model.
@@ -449,13 +445,8 @@ class MegatronStrategy(DistributedStrategy):
                     validate_access_integrity=True,
                 )
 
-                # Only global rank 0 saves the replicated client state and tokenizer.
                 if self.is_rank_0():
-                    hf_dir = os.path.join(work_dir, "huggingface")
-                    self.save_hf_configs(self.hf_config, hf_dir, tokenizer)
-                    extra_state_path = os.path.join(work_dir, "extra_state.pt")
-                    with io.open_file(extra_state_path, "wb") as f:
-                        torch.save({"client_state": client_state, "tag": tag}, f)
+                    self._write_checkpoint_control_files(work_dir, tokenizer, client_state, tag)
             except BaseException:
                 if direct_save is not None and direct_save.pending_write is not None:
                     _join_discarded_write(direct_save.pending_write)
@@ -466,13 +457,18 @@ class MegatronStrategy(DistributedStrategy):
                 self._pending_checkpoint = _PendingCheckpoint(
                     direct_save.pending_write, controls.pop_all(), work_dir, ckpt_dir
                 )
-                return True
+                return CheckpointWriteStatus.DEFERRED
 
         dist.barrier()
         ckpt_base.async_calls.close()
         ckpt_base.async_calls = AsyncCallsQueue(persistent=True)
         self.log(f"Checkpoint successfully saved to {ckpt_dir}")
-        return False
+        return CheckpointWriteStatus.COMMITTED
+
+    def _write_checkpoint_control_files(self, work_dir, tokenizer, client_state, tag) -> None:
+        self.save_hf_configs(self.hf_config, os.path.join(work_dir, "huggingface"), tokenizer)
+        with io.open_file(os.path.join(work_dir, "extra_state.pt"), "wb") as output:
+            torch.save({"client_state": client_state, "tag": tag}, output)
 
     def checkpoint_write_done(self) -> bool:
         """Return whether the rank is idle or its write has settled, even on failure."""

@@ -33,7 +33,7 @@ from skyrl_train.io import io
 from skyrl_train.utils.numa import physical_gpu_id_for_worker, set_numa_affinity_for_gpu
 from skyrl_train.distributed.dispatch import ActorInfo, Dispatch, DispatchRegistry, DispatchSettings, MeshRank
 from skyrl_train.distributed import collective_phase_diagnostics as _phase_diagnostics
-from skyrl_train.distributed.strategy import DistributedStrategy
+from skyrl_train.distributed.strategy import CheckpointWriteStatus, DistributedStrategy
 from loguru import logger
 from skyrl_train.distributed.utils import init_custom_process_group, init_worker_process_group_with_device
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
@@ -1342,7 +1342,8 @@ class PolicyWorkerBase(Worker):
         _phase_diagnostics.log_phase(_phase_diagnostics.CollectivePhase.TRAINING_STEP_EXIT)
         return status
 
-    def save_checkpoint(self, ckpt_dir: Path, tokenizer=None) -> bool:
+    def save_checkpoint(self, ckpt_dir: Path, tokenizer=None) -> CheckpointWriteStatus:
+        """Capture checkpoint data and report whether the trainer must join the write."""
         return self.strategy.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,

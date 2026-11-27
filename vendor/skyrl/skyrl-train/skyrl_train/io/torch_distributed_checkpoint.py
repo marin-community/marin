@@ -7,16 +7,13 @@ from typing import cast
 from fsspec import AbstractFileSystem
 from loguru import logger
 import torch
-from torch.distributed.checkpoint import FileSystemWriter, SavePlan, SavePlanner
+from torch.distributed.checkpoint import FileSystemWriter, SavePlan
 from torch.distributed.checkpoint._fsspec_filesystem import FileSystem as FsspecFileSystem
 from torch.distributed.checkpoint.filesystem import (
     DEFAULT_SUFFIX,
-    _item_size,
-    _OverlappingCpuLoader,
-    _SerialCpuLoader,
     _write_item,
 )
-from torch.distributed.checkpoint.planner import WriteItem, WriteItemType
+from torch.distributed.checkpoint.planner import WriteItem
 from torch.distributed.checkpoint.storage import WriteResult
 from torch.futures import Future
 
@@ -29,9 +26,6 @@ from marinskyrl.remote_io import (
     create_output_stream,
     manage_output_stream,
 )
-
-
-DEFAULT_TENSOR_COPY_AHEAD_BYTES = 2**30
 
 
 class _DeferredWriteErrorStream(CommittableStream):
@@ -122,64 +116,39 @@ class _AbortableFsspecFileSystem(FsspecFileSystem):
 
 
 class StreamingFsspecWriter(FileSystemWriter):
-    """Stream one aggregated DCP object per rank with bounded tensor copy-ahead."""
+    """Stream assigned records to one aggregated DCP object per rank."""
 
     def __init__(
         self,
         path: str,
         *,
         filesystem: AbstractFileSystem,
-        tensor_copy_ahead_bytes: int = DEFAULT_TENSOR_COPY_AHEAD_BYTES,
+        max_staged_bytes: int,
     ) -> None:
-        if tensor_copy_ahead_bytes <= 0:
-            raise ValueError("tensor_copy_ahead_bytes must be positive")
+        if max_staged_bytes <= 0:
+            raise ValueError("max_staged_bytes must be positive")
         super().__init__(
             path,
             single_file_per_rank=True,
             sync_files=False,
             thread_count=1,
-            per_thread_copy_ahead=tensor_copy_ahead_bytes,
         )
         self.fs = _AbortableFsspecFileSystem(filesystem)
         self.path = self.fs.init_path(path)
-        self.tensor_copy_ahead_bytes = tensor_copy_ahead_bytes
+        self.max_staged_bytes = max_staged_bytes
 
     def prepare_local_plan(self, plan: SavePlan) -> SavePlan:
         plan = super().prepare_local_plan(plan)
         logger.info(
-            "DCP direct-write plan rank={} items={} files=1 copy_ahead_bytes={} multipart_part_bytes={} "
-            "multipart_concurrency={} max_staged_bytes={}",
+            "DCP direct-write plan rank={} items={} host_staging_budget_bytes={} multipart_part_bytes={} "
+            "multipart_concurrency={}",
             self.rank,
             len(plan.items),
-            self.tensor_copy_ahead_bytes,
+            self.max_staged_bytes,
             S3_MULTIPART_PART_BYTES,
             S3_MULTIPART_CONCURRENCY,
-            self.tensor_copy_ahead_bytes + S3_MULTIPART_PART_BYTES * (S3_MULTIPART_CONCURRENCY + 1),
         )
         return plan
-
-    def write_data(self, plan: SavePlan, planner: SavePlanner) -> Future[list[WriteResult]]:
-        """Write a rank shard without retaining serialized tensors until close."""
-        tensor_items = [item for item in plan.items if item.type != WriteItemType.BYTE_IO]
-        if torch.cuda.is_available():
-            loader = _OverlappingCpuLoader(
-                planner.resolve_data,
-                inflight_threshhold=self.tensor_copy_ahead_bytes,
-            )
-        else:
-            loader = _SerialCpuLoader(planner.resolve_data)
-        for item in tensor_items:
-            loader.add(_item_size(item), item)
-        loader.start_loading()
-
-        def items() -> Generator[tuple[WriteItem, torch.Tensor | io.BytesIO], None, None]:
-            for item in plan.items:
-                if item.type == WriteItemType.BYTE_IO:
-                    yield item, planner.resolve_data(item)
-            for tensor, item in loader.values():
-                yield cast(WriteItem, item), tensor
-
-        return self._write_items(plan, items())
 
     def _write_items(
         self, plan: SavePlan, items: Iterable[tuple[WriteItem, torch.Tensor | io.BytesIO]]

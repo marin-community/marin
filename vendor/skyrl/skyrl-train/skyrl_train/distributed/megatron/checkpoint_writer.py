@@ -6,18 +6,21 @@ from concurrent.futures import Future as ThreadFuture, ThreadPoolExecutor
 from dataclasses import replace
 from io import BytesIO
 import re
-from threading import Condition, Event
+from threading import Condition
+from typing import Any
 
 from fsspec import AbstractFileSystem
 from loguru import logger
 import torch
-from torch.distributed.checkpoint import SavePlan, SavePlanner
+from torch.distributed import ProcessGroup, is_initialized
+from torch.distributed.checkpoint import DefaultSavePlanner, SavePlan, SavePlanner
 from torch.distributed.checkpoint.metadata import Metadata, TensorStorageMetadata
 from torch.distributed.checkpoint.planner import WriteItem, WriteItemType
+from torch.distributed.checkpoint.state_dict_saver import _save_state_dict
 from torch.distributed.checkpoint.storage import WriteResult
 from torch.futures import Future
 
-from skyrl_train.io.torch_distributed_checkpoint import DEFAULT_TENSOR_COPY_AHEAD_BYTES, StreamingFsspecWriter
+from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
 
 
 _MASTER_WEIGHT_KEY = re.compile(r"(?:chained_\d+\.)?optimizer\.state\.(?:param|fp32_param)\.(.+)")
@@ -46,8 +49,8 @@ def _master_weight_aliases(plans: list[SavePlan]) -> dict[str, str]:
     return aliases
 
 
-class MasterWeightsWriter(StreamingFsspecWriter):
-    """Share Megatron BF16 model records with their synchronized FP32 masters.
+class StagedMasterWeightsWriter(StreamingFsspecWriter):
+    """Stream staged Megatron records and share BF16 weights with their FP32 masters.
 
     DCP readers cast the FP32 record into each destination's dtype. Keeping the
     BF16 logical entries also supports model-only loads without an optimizer.
@@ -59,10 +62,12 @@ class MasterWeightsWriter(StreamingFsspecWriter):
         path: str,
         *,
         filesystem: AbstractFileSystem,
-        tensor_copy_ahead_bytes: int = DEFAULT_TENSOR_COPY_AHEAD_BYTES,
+        max_staged_bytes: int,
     ) -> None:
-        super().__init__(path, filesystem=filesystem, tensor_copy_ahead_bytes=tensor_copy_ahead_bytes)
+        super().__init__(path, filesystem=filesystem, max_staged_bytes=max_staged_bytes)
         self._model_aliases: dict[str, str] = {}
+        self.staged: ThreadFuture[None] = ThreadFuture()
+        self._source_state: dict[str, Any] = {}
 
     def prepare_global_plan(self, plans: list[SavePlan]) -> list[SavePlan]:
         # Fully parallel saving can assign a model tensor and its master to
@@ -94,12 +99,26 @@ class MasterWeightsWriter(StreamingFsspecWriter):
         super().finish(metadata, [*results, alias_results])
 
 
-class StagedMasterWeightsWriter(MasterWeightsWriter):
-    """Stream a rank's assigned records while copying the remaining records to host memory."""
-
-    def __init__(self, path: str, *, filesystem: AbstractFileSystem, max_staged_bytes: int) -> None:
-        super().__init__(path, filesystem=filesystem, tensor_copy_ahead_bytes=max_staged_bytes)
-        self.staged = Event()
+    def save(
+        self,
+        state: dict[str, Any],
+        *,
+        planner: DefaultSavePlanner,
+        process_group: ProcessGroup | None = None,
+    ) -> Metadata:
+        """Take ownership of the rank's checkpoint state and write its records."""
+        if planner.flatten_state_dict or planner.flatten_sharded_tensors:
+            raise ValueError("Checkpoint staging requires a planner that keeps the original state dictionary")
+        # DCP's public save() makes a shallow copy before it calls the planner.
+        # Use its storage path directly so staging owns the only state dictionary.
+        self._source_state = state
+        try:
+            self.reset()
+            return _save_state_dict(
+                state, storage_writer=self, planner=planner, process_group=process_group, no_dist=not is_initialized()
+            )
+        finally:
+            state.clear()
 
     def write_data(self, plan: SavePlan, planner: SavePlanner) -> Future[list[WriteResult]]:
         # The global plan has already removed replicas and aliased BF16 records.
@@ -116,9 +135,7 @@ class StagedMasterWeightsWriter(MasterWeightsWriter):
                 size = data.nbytes if isinstance(data, torch.Tensor) else data.getbuffer().nbytes
                 with condition:
                     # A DCP record is indivisible. An oversized record takes the buffer alone.
-                    condition.wait_for(
-                        lambda: stopped or not in_flight or in_flight + size <= self.tensor_copy_ahead_bytes
-                    )
+                    condition.wait_for(lambda: stopped or not in_flight or in_flight + size <= self.max_staged_bytes)
                     if stopped:
                         return
                     in_flight += size
@@ -132,7 +149,10 @@ class StagedMasterWeightsWriter(MasterWeightsWriter):
                     del data
                     condition.notify_all()
                 total += size
-            self.staged.set()
+            # The writer only needs CPU copies from here. Release the checkpoint's
+            # original tensors before training offloads or mutates its state.
+            self._source_state.clear()
+            self.staged.set_result(None)
             logger.info("Checkpoint staged {} bytes on rank {}, peak {} bytes", total, self.rank, peak)
 
         def items(staging: ThreadFuture[None]) -> Iterator[tuple[WriteItem, torch.Tensor | BytesIO]]:

@@ -14,7 +14,7 @@ from typing import Any
 import torch
 import torch.distributed as dist
 from skyrl_train.distributed.dispatch import MeshRank
-from skyrl_train.distributed.strategy import DistributedStrategy
+from skyrl_train.distributed.strategy import CheckpointWriteStatus, DistributedStrategy
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
     SESSION_ID_HEADER,
@@ -116,7 +116,7 @@ class CPUStrategy(DistributedStrategy):
 
     def save_checkpoint(
         self, model, ckpt_dir, node_local_rank, optimizer, scheduler, client_state=None, tokenizer=None
-    ) -> bool:
+    ) -> CheckpointWriteStatus:
         io.makedirs(ckpt_dir, exist_ok=True)
         states = {
             "model": model.state_dict(),
@@ -127,7 +127,7 @@ class CPUStrategy(DistributedStrategy):
         }
         torch.save(states, os.path.join(ckpt_dir, CHECKPOINT_FILE_TEMPLATE.format(rank=dist.get_rank())))
         dist.barrier()
-        return False
+        return CheckpointWriteStatus.COMMITTED
 
     def load_checkpoint(
         self, model, ckpt_dir, optimizer=None, scheduler=None, load_module_strict=True, load_training_state=True
