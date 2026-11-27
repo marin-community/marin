@@ -669,6 +669,7 @@ def test_evaluation_records_effective_levanter_mesh(tmp_path, monkeypatch, exper
     batch = _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "mesh", _successful_evaluation),))
     model = replace(
         batch.model,
+        resource_hint=replace(batch.model.resource_hint, memory="128g"),
         serve=ServeConfig(
             backend=ServeBackend.LEVANTER,
             tensor_parallel_size=2,
