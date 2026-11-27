@@ -26,7 +26,6 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from functools import partial, wraps
 from pathlib import Path
-from types import MappingProxyType
 from typing import Protocol
 
 import click
@@ -99,8 +98,6 @@ from experiments.post_training.rl_measurements import (
 )
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
-    VALIDATION_FILENAME,
-    TrainingHoldout,
 )
 
 _WANDB_ENTITY_ENV = "WANDB_ENTITY"
@@ -110,57 +107,6 @@ _FAILED_RUN_STATES = {JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, 
 logger = logging.getLogger(__name__)
 _SUBMITTED_INDEX = TypeAdapter(dict[str, RunIndexIdentity])
 _CACHED_ATTEMPTS = TypeAdapter(dict[str, str])
-
-
-@dataclass(frozen=True)
-class ArmSteps:
-    sft: int
-    rl: int
-
-
-ARM_STEPS = MappingProxyType({"mochi": ArmSteps(sft=524, rl=72), "snowball": ArmSteps(sft=360, rl=36)})
-CURRICULUM_HOLDOUT_COUNT = 200
-VALIDATION_EVERY = 3
-BEST_WINDOW = 3
-
-
-def _curriculum_arm(
-    preset: presets.Preset, *, version: str, holdout: int, seed: int, every: int, window: int, updates: int
-) -> presets.Preset:
-    if updates is None or updates < 1:
-        raise click.BadParameter("SFT mix arms require a positive trainer.max_steps update budget")
-    if not preset.evaluations:
-        raise click.BadParameter("SFT mix arms require a preset with held-out evaluation")
-    if is_mutable_version(version):
-        raise click.BadParameter("SFT mix arms require an immutable run version")
-    evaluation = replace(
-        preset.evaluations[0],
-        name="curriculum",
-        file=Path(VALIDATION_FILENAME).stem,
-        source="tasks",
-        sample=None,
-        every=every,
-        at_start=False,
-        training_holdout=TrainingHoldout(holdout, seed),
-        profile=preset.evaluations[0].profile.replace(n_samples_per_prompt=1),
-    )
-    layout = replace(preset.recipe.layout, coordinator_timeout_hours=0, job_timeout_seconds=0)
-    return replace(
-        preset.with_updates(updates),
-        revision=version,
-        recipe=replace(preset.recipe, layout=layout),
-        evaluations=(evaluation,),
-        held_out_tasks=None,
-        checkpoint_evaluation=(),
-        checkpoints="best",
-        export="best",
-        checkpoint_every=every,
-        keep_every=every,
-        best_window=window,
-        temporary_output=False,
-        retention=replace(preset.retention, checkpoints_in_run_output=True),
-        budget=f"{updates} RL updates",
-    )
 
 
 class SFTModelPreset(Protocol):
@@ -1120,10 +1066,6 @@ def command(
         sft_data_file: str | None = None,
         sft_data_tokenizer: str | None = None,
         sft_steps: int | None = None,
-        holdout: int | None = None,
-        holdout_seed: int | None = None,
-        val_every: int | None = None,
-        best_window: int | None = None,
     ) -> tuple[ArtifactStep, ...]:
         context = click.get_current_context()
         do_run = context.params["do_run"]
@@ -1145,16 +1087,22 @@ def command(
             export=export,
             priority=priority,
         )
+        if (
+            preset.evaluations
+            and preset.evaluations[0].training_holdout is not None
+            and any(value is not None for value in (checkpoints, checkpoint_every, export))
+        ):
+            raise click.BadParameter(f"{preset.name} owns best-checkpoint retention and export")
         if init is not None and init_name is not None:
             raise click.UsageError("Python init and --init cannot be used together")
         initializer = init
-        mix_options = (sft_data_uri, sft_data_file, sft_data_tokenizer, holdout, holdout_seed, val_every, best_window)
+        mix_options = (sft_data_uri, sft_data_file, sft_data_tokenizer)
         if sft_name is None and (
             sft_data_mix is not None or sft_steps is not None or any(value is not None for value in mix_options)
         ):
-            raise click.UsageError("SFT data, step, and validation options require --sft")
+            raise click.UsageError("SFT data and step options require --sft")
         if sft_data_mix is None and any(value is not None for value in mix_options):
-            raise click.UsageError("SFT data and validation options require --sft-data-mix")
+            raise click.UsageError("SFT data options require --sft-data-mix")
         if sft_name is not None:
             if init is not None or init_name is not None or resume_name is not None or control:
                 raise click.UsageError("--sft requires a fresh candidate without --init or --resume")
@@ -1186,31 +1134,29 @@ def command(
                     raise click.BadParameter(
                         "--sft-data-mix requires NAME@VERSION, --sft-data-uri, --sft-data-file and --sft-data-tokenizer"
                     )
-                if any(value is not None for value in (checkpoints, checkpoint_every, export)):
-                    raise click.BadParameter("SFT mix arms own best-checkpoint retention and export")
-                budget = ARM_STEPS[table.model]
-                preset = _curriculum_arm(
-                    preset,
-                    version=resolve_version("sft-rl-arm", None),
-                    holdout=holdout if holdout is not None else CURRICULUM_HOLDOUT_COUNT,
-                    seed=holdout_seed if holdout_seed is not None else preset.seed,
-                    every=val_every if val_every is not None else VALIDATION_EVERY,
-                    window=best_window if best_window is not None else BEST_WINDOW,
-                    updates=recipe.override_document(settings).get("trainer", {}).get("max_steps", budget.rl),
-                )
+                if sft_steps is None:
+                    raise click.BadParameter("--sft-data-mix requires --sft-steps", param_hint="--sft-steps")
                 assert isinstance(sft, SFTPreset)
                 source_recipe = sft.recipe.with_data_mix(
                     PreparedData(ArtifactStep.adopt(name, version, sft_data_uri), sft_data_file, sft_data_tokenizer)
                 )
-                sft_steps = budget.sft if sft_steps is None else sft_steps
                 sft = replace(
                     sft,
                     recipe=source_recipe,
                     resources=replace(sft.resources, target_cluster=preset.recipe.layout.cluster, regions=()),
                 )
+            elif (
+                sft_steps is None
+                and isinstance(sft.recipe, SFTSpec)
+                and (sft.recipe.num_train_steps is None and sft.recipe.num_train_epochs is None)
+            ):
+                raise click.BadParameter(
+                    f"--sft-steps is required: SFT preset {sft_name!r} does not pin a step count",
+                    param_hint="--sft-steps",
+                )
             if sft_steps is not None:
                 assert isinstance(sft, SFTPreset)
-                version = preset.revision if sft_data_mix is not None else resolve_version("sft-steps", None)
+                version = resolve_version("sft-rl-arm" if sft_data_mix is not None else "sft-steps", None)
                 source_recipe = sft.recipe.with_steps(sft_steps, version=version)
                 sft = replace(sft, recipe=source_recipe)
             try:
@@ -1342,35 +1288,14 @@ def command(
                 click.Option(
                     ["--sft", "sft_name"], metavar="PRESET", help="Build an SFT preset and start RL from its export."
                 ),
-                click.Option(
-                    ["--sft-data-mix"], help="Immutable SFT data mix NAME@VERSION; enables a curriculum validation arm."
-                ),
+                click.Option(["--sft-data-mix"], help="Immutable SFT data mix NAME@VERSION; binds the arm's SFT data."),
                 click.Option(["--sft-data-uri"], help="Regional directory of the published SFT mix."),
                 click.Option(["--sft-data-file"], help="LM data JSON manifest relative to the mix directory."),
                 click.Option(["--sft-data-tokenizer"], help="Tokenizer identity in the SFT data manifest."),
                 click.Option(
                     ["--sft-steps"],
                     type=click.IntRange(min=1),
-                    help=(
-                        f"SFT updates; mix arms default to Mochi {ARM_STEPS['mochi'].sft} / "
-                        f"Snowball {ARM_STEPS['snowball'].sft}."
-                    ),
-                ),
-                click.Option(
-                    ["--holdout"],
-                    type=click.IntRange(min=1),
-                    help=f"Random prompts removed from the curriculum; mix arms default to {CURRICULUM_HOLDOUT_COUNT}.",
-                ),
-                click.Option(["--holdout-seed"], type=int, help="Holdout seed; defaults to the RL preset seed."),
-                click.Option(
-                    ["--val-every"],
-                    type=click.IntRange(min=1),
-                    help=f"Validation cadence; mix arms default to {VALIDATION_EVERY} updates.",
-                ),
-                click.Option(
-                    ["--best-window"],
-                    type=click.IntRange(min=1),
-                    help=f"Best-policy score window; mix arms average {BEST_WINDOW} evaluations.",
+                    help="SFT updates; required for --sft-data-mix and for SFT presets that pin no step count.",
                 ),
             ]
         )

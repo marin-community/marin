@@ -86,13 +86,10 @@ class TrainLmConfig:
 
     z_loss_weight: float = 0.0
     global_gradient_clip: float | None = field(default=None, metadata={"fingerprint_omit_value": None})
-    optimizer_num_train_steps: int | None = field(default=None, metadata={"fingerprint_omit_value": None})
-    """Optimizer schedule horizon, independent of the trainer's stopping step."""
     snowball_sft: SnowballSftConfig | None = field(default=None, metadata={"fingerprint_omit_value": None})
     token_weighted_accumulation: bool = field(default=False, metadata={"fingerprint_omit_value": False})
     tensorstore_cache_bytes: int | None = field(default=None, metadata={"fingerprint_omit_value": None})
     """Per-process jagged-cache limit, applied before loading data or model weights."""
-    evaluation_data: LmDataConfig | None = field(default=None, metadata={"fingerprint_omit_value": None})
     initial_eval_match: InitialEvalMatchConfig | None = field(default=None, metadata={"fingerprint_omit_value": None})
 
     hf_save_path: Optional[str] = None
@@ -169,11 +166,15 @@ def check_initial_evaluation(
     model: LmHeadModel,
     gate: InitialEvalMatchConfig,
     trainer: Trainer,
-    reference_path: str,
+    reference_path: str | None,
     output_root: StoragePath | None,
     stage: str,
 ) -> dict:
-    """Compare audited initial loss, writing evidence when an output root is supplied."""
+    """Compare audited initial loss, writing evidence when an output root is supplied.
+
+    A ``None`` reference records the audited loss without gating on one — the post-reseed stage
+    uses it to log the intentional reseed shift next to the raw gate's evidence.
+    """
     batch = trainer.config.EvalBatch
     evaluator = TaggedEvaluator(
         EvalBatch=batch,
@@ -188,11 +189,16 @@ def check_initial_evaluation(
     audit = evaluation_input_audit(evaluator, gate.special_token_ids)
     if output_root is not None:
         write_evaluation_result(str(output_root / f"{stage}-result.json"), metrics, audit)
-    reference = json.loads(StoragePath(reference_path).read_text())
-    match = initial_eval_match(reference, metrics, audit, gate.absolute_tolerance)
-    match["reference_path"] = reference_path
+    match: dict = {"initial_loss": metrics["eval/loss"], "audit": audit}
+    if reference_path is not None:
+        reference = json.loads(StoragePath(reference_path).read_text())
+        match = initial_eval_match(reference, metrics, audit, gate.absolute_tolerance)
+        match["reference_path"] = reference_path
     prefix = stage.replace("-", "_")
-    levanter.tracker.log({f"{prefix}/loss": match["initial_loss"], f"{prefix}/delta": match["delta"]}, step=0)
+    logged = {f"{prefix}/loss": match["initial_loss"]}
+    if "delta" in match:
+        logged[f"{prefix}/delta"] = match["delta"]
+    levanter.tracker.log(logged, step=0)
     if gate.pre_reseed_reference_path is not None and stage == "initial-eval" and output_root is not None:
         raw_match = json.loads((output_root / "initial-eval-raw-match.json").read_text())
         match["raw_match"] = raw_match
@@ -326,7 +332,7 @@ def main(config: TrainLmConfig):
         converter = None
 
     levanter.trainer.initialize(config)
-    optimizer = config.optimizer.build(config.optimizer_num_train_steps or config.trainer.num_train_steps)
+    optimizer = config.optimizer.build(config.trainer.num_train_steps)
     if config.global_gradient_clip is not None:
         optimizer = optax.chain(optax.clip_by_global_norm(config.global_gradient_clip), optimizer)
     if config.snowball_sft is not None:
@@ -416,8 +422,7 @@ def main(config: TrainLmConfig):
         install_tensorstore_metrics_hook_if_enabled(trainer)
 
         # Get the tagged evaluation datasets
-        evaluation_data = config.evaluation_data or config.data
-        tagged_eval_datasets = [] if config.trainer.max_eval_batches == 0 else evaluation_data.tagged_eval_sets(Pos)
+        tagged_eval_datasets = [] if config.trainer.max_eval_batches == 0 else config.data.tagged_eval_sets(Pos)
 
         adapter_key = jrandom.fold_in(model_key, ord("a"))
         load_source_model = functools.partial(

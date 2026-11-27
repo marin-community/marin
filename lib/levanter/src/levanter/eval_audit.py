@@ -25,12 +25,13 @@ EVAL_LOSS_METRIC = "eval/loss"
 @dataclass(frozen=True)
 class InitialEvalMatchConfig:
     data: LmDataConfig
-    reference_path: str
     sequence_length: int
     max_examples_per_dataset: int
     special_token_ids: tuple[int, ...]
     absolute_tolerance: float = 1e-3
     pre_reseed_reference_path: str | None = None
+    reference_path: str | None = None
+    """Post-reseed comparison reference; ``None`` records the reseed shift without gating on it."""
 
 
 def evaluation_input_audit(evaluator: TaggedEvaluator, special_token_ids: tuple[int, ...]) -> dict:

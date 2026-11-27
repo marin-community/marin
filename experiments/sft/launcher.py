@@ -250,12 +250,10 @@ def _levanter_train_config(
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=spec.z_loss_weight,
         global_gradient_clip=spec.global_gradient_clip,
-        optimizer_num_train_steps=spec.optimizer_num_train_steps,
         snowball_sft=spec.snowball_sft,
         token_weighted_accumulation=spec.token_weighted_accumulation,
         data_seed=spec.data_seed,
         tensorstore_cache_bytes=spec.tensorstore_cache_bytes,
-        evaluation_data=spec.evaluation_data,
         initial_eval_match=spec.initial_eval_match,
     )
 
@@ -640,12 +638,10 @@ class SFTSpec:
     z_loss_weight: float = 0.0
     global_gradient_clip: float | None = None
     initial_eval_match: InitialEvalMatchConfig | None = None
-    optimizer_num_train_steps: int | None = None
     snowball_sft: SnowballSftConfig | None = None
     token_weighted_accumulation: bool = False
     data_seed: int | None = None
     tensorstore_cache_bytes: int | None = None
-    evaluation_data: LmDataConfig | None = None
     mesh: MeshConfig | None = None
     seq_len: int = 4096
     pack: bool | int = True  # chat packs by default; an integer caps the number of conversations per example
@@ -682,7 +678,14 @@ class SFTSpec:
     def __post_init__(self) -> None:
         if self.per_device_parallelism != -1 and self.per_device_parallelism <= 0:
             raise ValueError("per_device_parallelism must be -1 or positive")
-        if (self.num_train_steps is None) == (self.num_train_epochs is None):
+        if self.num_train_steps is None and self.num_train_epochs is None:
+            # A spec may defer its length to ``with_steps``: an SFT preset whose mix and step count
+            # arrive at launch, or one that binds prepared data before the count. ``sft_step``
+            # refuses such a spec until ``with_steps`` sets the count. A spec with its own datasets
+            # has no deferred form -- it must pin its length up front.
+            if self.datasets:
+                raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
+        elif self.num_train_steps is not None and self.num_train_epochs is not None:
             raise ValueError("Set exactly one of num_train_steps or num_train_epochs.")
         if self.prepared_data is not None and self.num_train_epochs is not None:
             raise ValueError("prepared_data requires num_train_steps")
@@ -702,9 +705,21 @@ class SFTSpec:
         return replace(self, name=f"{self.name}-mix-{data.mix_fingerprint()}", datasets=(), prepared_data=data)
 
     def with_steps(self, steps: int, *, version: str) -> SFTSpec:
-        """Set the update budget and run without a total task deadline."""
+        """Set the update budget and run without a total task deadline.
+
+        The step count joins the run name so two budgets on one mix at one ``--version`` never
+        share an output path.
+        """
         model = replace(self.model, task_timeout_seconds=None) if isinstance(self.model, HFModel) else self.model
-        return replace(self, num_train_steps=steps, num_train_epochs=None, version=version, timeout=None, model=model)
+        return replace(
+            self,
+            name=f"{self.name}-{steps}-steps",
+            num_train_steps=steps,
+            num_train_epochs=None,
+            version=version,
+            timeout=None,
+            model=model,
+        )
 
     def trained(
         self, resources: ResourceConfig, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None

@@ -838,11 +838,6 @@ class Trainer:
                 mbs,
                 self.parameter_axis_mapping,
                 self.compute_axis_mapping,
-                accum_dtype=(
-                    jnp.dtype(self.config.gradient_accumulation_dtype)
-                    if self.config.gradient_accumulation_dtype is not None
-                    else None
-                ),
             )
 
         with hax.axis_mapping(self.compute_axis_mapping):
@@ -921,7 +916,6 @@ class TrainerConfig:
         default=_DEFAULT_LOADER_MAX_BUFFERED_BATCHES,
         metadata={"fingerprint_omit_value": _DEFAULT_LOADER_MAX_BUFFERED_BATCHES},
     )
-    gradient_accumulation_dtype: str | None = field(default=None, metadata={"fingerprint_omit_value": None})
 
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None

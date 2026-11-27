@@ -47,6 +47,7 @@ from experiments.post_training.rl_presets import (
     Recipe,
     Training,
     WindowStatistic,
+    curriculum_preset,
 )
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
@@ -511,6 +512,14 @@ _PRESETS = (
     replace(_TRAIN_LONG, recipe=_PACKED_TRAIN_LONG_RECIPE),
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
+    # 36 updates match the Exp4 RL reference: 36 * 64 * 8 prompt groups.
+    curriculum_preset(
+        _TRAIN_LONG_AGENTIC.with_updates(36),
+        name="train-long-agentic-curriculum",
+        holdout=200,
+        every=3,
+        window=3,
+    ),
     _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,

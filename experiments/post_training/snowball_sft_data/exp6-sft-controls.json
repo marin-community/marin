@@ -113,7 +113,6 @@
   "train_seq_len": 262144,
   "trainer": {
     "field_dtype_overrides": {},
-    "gradient_accumulation_dtype": null,
     "jax_compilation_cache_dir": "s3://marin-us-east-08a/tmp/ttl=30d/compilation-cache",
     "jax_config": {
       "jax_explain_cache_misses": "True",

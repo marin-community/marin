@@ -121,11 +121,11 @@ def test_raw_gate_precedes_reseed_and_post_gate_records_the_intentional_shift(tm
             write_evaluation_result(str(tmp_path / f"{name}.json"), metrics, audit)
         gate = InitialEvalMatchConfig(
             data,
-            str(tmp_path / "reseeded.json"),
             8,
             1,
             controls.special_token_ids,
             pre_reseed_reference_path=str(tmp_path / "raw.json"),
+            reference_path=str(tmp_path / "reseeded.json"),
         )
         config = TrainLmConfig(
             data=data,

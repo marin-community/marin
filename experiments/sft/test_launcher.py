@@ -150,7 +150,12 @@ def test_prepared_full_token_loss_ignores_assistant_weights_and_preserves_paddin
     with SerialCacheWriter(str(tmp_path / "cache"), rows[0]) as writer:
         writer.write_batch(rows)
     dataset = dataset_for_component(
-        component, Axis("position", 12), writer.result(), eos_id=None, block_cross_document_attention=True
+        component,
+        Axis("position", 12),
+        writer.result(),
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="pad",
     )
     [example] = blocking_wait(dataset.get_batch([0]))
     np.testing.assert_array_equal(example.tokens, [11, 12, 13, 14, 15, 21, 22, 23, 0, 0, 0, 0])
@@ -212,9 +217,7 @@ def test_exp7_resolves_exp6_sft_controls_at_the_native_boundary(tmp_path):
         ]
         for group in ("learning_rate", "adam_lr"):
             peak = reference["optimizer"][group]
-            curve = native.optimizer.lr_scheduler(
-                native.optimizer_num_train_steps or native.trainer.num_train_steps, override_lr=peak
-            )
+            curve = native.optimizer.lr_scheduler(native.trainer.num_train_steps, override_lr=peak)
             np.testing.assert_allclose([curve(point) for point in points], np.asarray(scales) * peak, rtol=1e-6)
     requests = []
     with set_current_client(

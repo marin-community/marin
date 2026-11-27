@@ -72,7 +72,8 @@ campaign layout splits a 102,400-token request into 20,480 packed token position
 
 ### Compose a versioned SFT data mix with RL
 
-Use the existing model command's `--sft` path for a complete arm. Add an
+Use the existing model command's `--sft` path for a complete arm, selecting the
+model's curriculum preset with `--preset`. Add an
 immutable `--sft-data-mix NAME@VERSION`, its regional URI, relative JSON manifest
 file and tokenizer. `PreparedData` supplies an `LmDataConfig` to either SFT
 recipe while retaining optimizer settings, context, batch and allocation.
@@ -81,14 +82,19 @@ from the manifest unless a preset declares a prepared-data format view.
 Leave the manifest's `mixture_start_step` unset so the same mix serves both models;
 Mochi binds it to its native initializer step and rejects conflicting clocks.
 
-Mix arms default explicitly to 524 SFT / 72 RL updates for Mochi and 360 SFT /
-36 RL updates for Snowball. `--sft-steps` sets SFT updates; the existing
-`--set trainer.max_steps=N` sets RL updates. Both models size their SFT schedule to the explicit update budget; Mochi keeps
-its preset decay fraction and starts the mixture at the restored step. Total SFT task,
-RL worker and coordinator deadlines are disabled for mix arms. Failure
-watchdogs and agent-attempt timeouts still detect failed work.
+Each model's table declares a curriculum preset — `train-long-agentic-curriculum`
+for Mochi (72 RL updates) and for Snowball (36 RL updates) — so `--preset` selects
+the whole arm policy: the update counts, the 200-prompt holdout, the 3-update
+validation cadence and the 3-evaluation best-checkpoint window. Arms train on the
+post-holdout remainder without the agentic family-balanced batch mix, whose
+rollout pools the remainder's per-family counts cannot guarantee. `--sft-steps` is
+required and sets the SFT updates. Both models size their SFT schedule to that
+explicit budget; Mochi keeps its preset decay fraction and starts the mixture at
+the restored step. Arms inherit their layout's coordinator and job deadlines and
+resume from committed checkpoints. Failure watchdogs and agent-attempt timeouts
+still detect failed work.
 
-A mix arm samples 200 prompts uniformly from its own admitted RL train pool
+An arm samples 200 prompts uniformly from its own admitted RL train pool
 with a fixed seed and removes them from train by task and prompt identity.
 The derived selection records its parent, seed, count, population and held-out
 IDs. Both train and validation consume that same artifact. Validation runs
@@ -98,17 +104,15 @@ and eligibility requirements. The score window restores after restart. Main's 99
 coverage requirement remains (198/200 scored and all 200 attempted).
 
 Every validation-step checkpoint is saved and retained. The selected best
-and final SFT artifact remain in durable storage. `--holdout`, `--holdout-seed`,
-`--val-every`, and `--best-window` expose this policy explicitly. For example,
+and final SFT artifact remain in durable storage. For example,
 print a Mochi arm without submitting work:
 
 ```bash
 uv run python -m experiments.post_training.mochi_rl \
-  --preset train-long-agentic --sft mixture-262k-176node \
+  --preset train-long-agentic-curriculum --sft mixture-262k-176node \
   --sft-data-mix "$MOCHI_MIX@$MOCHI_MIX_VERSION" --sft-data-uri "$MOCHI_MIX_URI" \
   --sft-data-file mix.json --sft-data-tokenizer "$MIX_TOKENIZER" \
-  --sft-steps 524 --set trainer.max_steps=72 --tasks "$MOCHI_TASKS" \
-  --holdout 200 --holdout-seed 20261020 --val-every 3 --best-window 3 \
+  --sft-steps 524 --tasks "$MOCHI_TASKS" \
   --version 2026.11.25.2 --plan
 ```
 
@@ -116,11 +120,10 @@ The equivalent Snowball command is:
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl \
-  --preset train-long-agentic --sft mixture-262k-32node \
+  --preset train-long-agentic-curriculum --sft mixture-262k-32node \
   --sft-data-mix "$SNOWBALL_MIX@$SNOWBALL_MIX_VERSION" --sft-data-uri "$SNOWBALL_MIX_URI" \
   --sft-data-file mix.json --sft-data-tokenizer "$MIX_TOKENIZER" \
-  --sft-steps 360 --set trainer.max_steps=36 --tasks "$SNOWBALL_TASKS" \
-  --holdout 200 --holdout-seed 20261020 --val-every 3 --best-window 3 \
+  --sft-steps 360 --tasks "$SNOWBALL_TASKS" \
   --version 2026.11.25.2 --plan
 ```
 
@@ -135,7 +138,9 @@ parallelism 32 across nodes, batch 256 at 262,144 positions, MuonH with a
 constant learning rate after 30 warmup updates, then linear cooldown over the
 final 15% of updates to a 0.1× floor, FP32 parameters with BF16
 compute, token-weighted accumulation, special-token initialization and update
-scaling, and the initial C4 reference check. The preset also binds Exp6's GPU
+scaling, and the initial C4 reference check: the raw initializer state gates
+against Exp6's recorded C4 loss before reseeding, and the post-reseed evaluation
+records the intentional shift without gating. The preset also binds Exp6's GPU
 launch environment from SFT157's consumed configuration, including both
 600-second collective termination settings and the shared compilation cache. Training allows two retries per task and 64 cumulative task failures;
 these separate Fray gates prevent a single failed startup from ending the gang.
@@ -146,8 +151,8 @@ base and tokenizer bindings. Its all-position view reads existing cached
 The source caches and release manifest are unchanged.
 
 For an Exp7 launch, use the approved V10.1 release and set `--sft-steps` to its
-sealed one-epoch receipt's update count. The preset's inherited Exp6 count and
-the generic mix-arm default are not the V10.1 epoch count. V10 can be used for
+sealed one-epoch receipt's update count; the preset pins no data or step count
+of its own, so it cannot lower until both bind. V10 can be used for
 a no-run preflight with its receipt's 1,679 updates; it is not the launch mix.
 Once V10.1 is approved and sealed, bind every `EXP7_*` value below to that
 release and its epoch receipt:

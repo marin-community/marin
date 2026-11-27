@@ -42,6 +42,7 @@ from marin.rl.skyrl import ArtifactHfModel, SkyRLRun
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 from rigging.provenance import Provenance
+from rigging.timing import Duration
 from skyrlrecipe import RecipePatch, declared, sections
 from skyrlrecipe.documents import merge_mappings, set_path
 from taskcompendium.models import (
@@ -86,12 +87,7 @@ from experiments.post_training.rl_tests.fixtures import (
     write_skyrl_run_record,
 )
 from experiments.post_training.rl_tests.fixtures import write_json as _json
-from experiments.post_training.skyrl_test_support import (
-    native_json,
-    read_skyrl_metrics,
-    run_native_test,
-    selection_summary,
-)
+from experiments.post_training.skyrl_test_support import read_skyrl_metrics, run_native_test, selection_summary
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE, OPENTHOUGHTS_32K_4NODE
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
@@ -468,41 +464,7 @@ def test_authored_learning_budget_survives_composition_and_stops_after_optimizer
     spec = recipe.run_spec(preset, name="learning-budget", model_name=table.model)
     path = tmp_path / "budget.yaml"
     path.write_text(spec.config_yaml)
-    result = native_json()(
-        """
-import asyncio, json, sys
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
-from omegaconf import OmegaConf
-from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
-from skyrl_train.callbacks.builtin import create_callback_from_config
-
-path = Path(sys.argv[1])
-config = OmegaConf.load(path)
-config.trainer.export_path = str(path.parent)
-handler = CallbackHandler([create_callback_from_config(row) for row in config.trainer.callbacks])
-trainer = SimpleNamespace(cfg=config, first_optimizer_step_time=None)
-control = TrainerControl()
-async def event(name, step, **kwargs):
-    await handler.call_event_async(name, TrainerState(step, 0, 100, 100), control, trainer=trainer, **kwargs)
-asyncio.run(event("on_train_begin", 7))
-with patch("skyrl_train.callbacks.builtin.time.monotonic", return_value=100000):
-    asyncio.run(event("on_log", 7, logs={}))
-startup = control.should_training_stop
-assert not (path.parent / "training-budget.json").exists()
-trainer.first_optimizer_step_time = 1000.0
-with patch("skyrl_train.callbacks.builtin.time.monotonic", return_value=1099):
-    asyncio.run(event("on_log", 8, logs={}))
-before = control.should_training_stop
-with patch("skyrl_train.callbacks.builtin.time.monotonic", return_value=1105):
-    asyncio.run(event("on_log", 9, logs={}))
-print(json.dumps({"startup_stop": startup, "before_stop": before,
-                  "expired_stop": control.should_training_stop,
-                  "receipt": json.loads((path.parent / "training-budget.json").read_text())}))
-""",
-        [str(path)],
-    )
+    result = run_native_test("cloud.iris.tests.native_learning_budget", [str(path)])
     assert not result["startup_stop"]
     assert not result["before_stop"]
     assert result["expired_stop"]
@@ -1725,14 +1687,15 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     assert result.exit_code == 3 and published[-1].status == "failed", (result.output, result.exception)
 
 
-@pytest.mark.parametrize("model,sft_updates,rl_updates", [("mochi", 524, 72), ("snowball", 360, 36)])
+@pytest.mark.parametrize(
+    "model,sft_updates,rl_updates,coordinator_hours", [("mochi", 524, 72, 96), ("snowball", 360, 36, 72)]
+)
 def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
-    model, sft_updates, rl_updates, tmp_path, monkeypatch, selection, mochi_sft_presets
+    model, sft_updates, rl_updates, coordinator_hours, tmp_path, monkeypatch, selection, mochi_sft_presets
 ):
     monkeypatch.setenv("MARIN_PREFIX", SFT_ARM_TEST_PREFIX)
     fake_s3_checkpoint(monkeypatch, SFT_ARM_TEST_PREFIX, tmp_path / "cloud")
     monkeypatch.setattr(snowball, "read_skyrl_attempt", lambda _path: None)
-    monkeypatch.setattr(snowball, "read_skyrl_metrics", lambda _path: {})
     monkeypatch.setattr(recipe, "artifact_prefix", lambda _cluster: SFT_ARM_TEST_PREFIX)
     sft = mochi_sft_presets["periodic"] if model == "mochi" else MIXTURE_262K_32NODE
     table = MOCHI if model == "mochi" else snowball_model.SNOWBALL
@@ -1751,7 +1714,9 @@ def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
     monkeypatch.setattr("marin.experiment.cli._print_plan", plans.extend)
     arguments = [
         "--preset",
-        "train-long",
+        "train-long-agentic-curriculum",
+        "--tasks",
+        SELECTION_IDENTITY,
         "--sft",
         sft.name,
         "--sft-data-mix",
@@ -1762,13 +1727,17 @@ def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
         manifest,
         "--sft-data-tokenizer",
         tokenizer,
+        "--sft-steps",
+        str(sft_updates),
         "--version",
         "2026.11.25.2",
         "--plan",
     ]
     result = CliRunner().invoke(snowball.command(table, argv=tuple(arguments), sft_presets=lambda: (sft,)), arguments)
     assert result.exit_code == 0, (result.output, result.exception)
-    [run] = plans
+    # The arm keeps the agentic preset's post-run task-health follow-up; the run plans first.
+    [run, health] = plans
+    assert health.name.startswith("rl-data/task-health/")
     handles = graph_handles([run])
     [training] = [
         step
@@ -1802,26 +1771,15 @@ def test_sft_mix_arm_uses_curriculum_validation_and_step_budget(
         == launch["inputs"]["validation_data"][0]["uri"].rsplit("/", 1)[0]
     )
     execution = skyrl_api.skyrl_execution(run)
-    assert execution.coordinator_timeout_hours == execution.job_timeout_seconds == 0
+    layout = table.by_name["train-long-agentic-curriculum"].recipe.layout
+    assert execution.coordinator_timeout_hours == coordinator_hours
+    assert execution.job_timeout_seconds == layout.job_timeout_seconds
     environment = {key: "fixture" for key in execution.required_env_vars}
     _, request = _coordinator_request([run], "experiments.post_training.snowball_rl", (), Path.cwd(), environment)
-    assert request.timeout is None
+    assert request.timeout == Duration.from_seconds(coordinator_hours * 3600)
     path = tmp_path / "launch.json"
     path.write_text(json.dumps(launch))
-    native = native_json()(
-        """
-import json,sys
-from omegaconf import OmegaConf
-from skyrl_train.trainer import RayPPOTrainer
-config = json.load(open(sys.argv[1]))['skyrl']
-trainer = RayPPOTrainer.__new__(RayPPOTrainer)
-trainer.cfg = OmegaConf.create(config)
-trainer.train_dataset = range(100000)
-trainer._configure_training_schedule()
-print(json.dumps({'stop':trainer.total_training_steps,'available':trainer.available_training_steps}))
-""",
-        [str(path)],
-    )
+    native = run_native_test("cloud.iris.tests.native_training_schedule", [str(path)])
     assert native["stop"] == rl_updates < native["available"]
 
 
@@ -1830,7 +1788,6 @@ def test_sft_only_arm_exports_without_starting_rl(tmp_path, monkeypatch, selecti
     fake_s3_checkpoint(monkeypatch, SFT_ARM_TEST_PREFIX, tmp_path / "cloud")
     monkeypatch.setattr(snowball, "read_skyrl_attempt", lambda _path: None)
     monkeypatch.setattr(snowball, "read_stored_skyrl_attempt", lambda _path: None)
-    monkeypatch.setattr(snowball, "read_skyrl_metrics", lambda _path: {})
     monkeypatch.setattr(recipe, "artifact_prefix", lambda _cluster: SFT_ARM_TEST_PREFIX)
     tokenizer = MIXTURE_262K_32NODE.recipe.model.tokenizer_cache_key()
     (tmp_path / "data.json").write_text(json.dumps(draccus.encode(LmDataConfig(tokenizer=tokenizer))))
@@ -1956,34 +1913,7 @@ def test_curriculum_holdout_is_seeded_disjoint_and_records_its_population(tmp_pa
 
 
 def test_best_checkpoint_uses_three_evaluation_mean_and_restores_window(tmp_path):
-    result = native_json()(
-        """
-import asyncio,json,sys
-from pathlib import Path
-from types import SimpleNamespace
-from skyrl_train.callbacks.base import TrainerControl,TrainerState
-from skyrl_train.callbacks.builtin import BestCheckpointCallback
-root=Path(sys.argv[1])
-saved=[]
-step=0
-async def save_checkpoints(): saved.append(step)
-trainer=SimpleNamespace(cfg=SimpleNamespace(trainer=SimpleNamespace(ckpt_path=str(root),export_path=str(root/'exports'))),save_checkpoints=save_checkpoints)
-params=dict(initial_model_uri='sft-final',expected_tasks=200,minimum_scored_tasks=198,selection_window=3)
-callback=BestCheckpointCallback(**params)
-async def main():
- global callback,step
- windows=[]
- for step,score in zip((3,6,9,12,15,18),(.9,.1,.2,.8,.8,.1)):
-  if step==15: callback=BestCheckpointCallback(**params)
-  metrics={'eval/all/num_attempted':200,'eval/all/num_scored':200,'eval/all/avg_verifier_score':score}
-  await callback.on_evaluate_async(TrainerState(step,0,18,18),TrainerControl(),trainer=trainer,metrics=metrics)
-  windows.append(metrics.get('eval/selection_score'))
- selected=json.loads((root/'best_checkpoint.json').read_text())
- print(json.dumps({'selected':selected,'saved':saved,'windows':windows,'export':json.loads((root/'exports/best_checkpoint.json').read_text())}))
-asyncio.run(main())
-""",
-        [str(tmp_path)],
-    )
+    result = run_native_test("cloud.iris.tests.native_best_checkpoint_window", [str(tmp_path)])
     assert result["selected"]["step"] == 15
     assert result["selected"]["accuracy"] == pytest.approx(0.6)
     assert result["windows"][:2] == [None, None]

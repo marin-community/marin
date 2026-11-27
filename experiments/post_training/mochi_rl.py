@@ -33,6 +33,7 @@ from experiments.post_training.rl_presets import (
     Recipe,
     Training,
     WindowStatistic,
+    curriculum_preset,
 )
 from experiments.post_training.task_curation.selection import VALIDATION_FILENAME
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
@@ -279,6 +280,14 @@ MOCHI = ModelPresets(
         agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
         _TRAIN_LONG_AGENTIC,
         agentic_preset(_TRAIN_LONG_3RACK, name="train-long-agentic-3rack", limits=_AGENTIC_LIMITS),
+        # 72 updates match the Exp4 RL reference: 72 * 32 * 8 prompt groups.
+        curriculum_preset(
+            _TRAIN_LONG_AGENTIC.with_updates(72),
+            name="train-long-agentic-curriculum",
+            holdout=200,
+            every=3,
+            window=3,
+        ),
     ),
     namespace="mochi-rl",
     default_export_marker=MODEL_MANIFEST_FILENAME,

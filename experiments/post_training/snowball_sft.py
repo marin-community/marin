@@ -27,7 +27,7 @@ from levanter.optim.config import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
-from marin.execution.lazy import OUT, ArtifactStep, apply
+from marin.execution.lazy import OUT, apply
 from marin.execution.remote import FailureBudget
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rolloutengine.chat_template import MARIN_CHAT_TEMPLATE
@@ -162,9 +162,9 @@ MIXTURE_SPEC = replace(
 )
 MIXTURE_262K_32NODE = SFTPreset(_MIXTURE_NAME, MIXTURE_SPEC, MIXTURE_RESOURCES)
 EXP7_TOKENIZER = MIXTURE_TOKENIZER
-_EXP7_RELEASE = (
-    "s3://marin-us-east-08a/marin/users/benfeuer/nemotron-overthinking/2026.11.25-v10.1-balanced-toolconv/release-v10.1"
-)
+# The V10.1 release mix, its URI and its sealed one-epoch update count bind at launch through
+# --sft-data-mix and --sft-steps; the preset itself carries neither, so it cannot lower until
+# the launch binds them.
 _EXP7_SPECIAL_TOKENS = (128006, 128007, 128002, 128003, 128005, 128011, 128009)
 _EXP7_ANCHORS = (3560, 1984, 1781, 4320, 5507, 842, 128001)
 _EXP6_C4_ROOT = "s3://marin-us-east-08a/marin/users/benfeuer/long-loop-exp3"
@@ -192,11 +192,7 @@ EXP7_SPEC = replace(
         priority=priority_band_value("production"),
         failure_budget=FailureBudget(max_retries_failure=2, max_task_failures=64),
     ),
-    prepared_data=PreparedData(
-        ArtifactStep.adopt("sft-mixes/exp3-v10-1/release", "2026.11.25", _EXP7_RELEASE),
-        "data.json",
-        EXP7_TOKENIZER,
-    ),
+    prepared_data=None,
     prepared_data_format=TextLmDatasetFormat(),
     pack=256,
     pack_lookahead_window=128,
@@ -265,15 +261,16 @@ EXP7_SPEC = replace(
             train_weights={"c4_en": 1.0},
             auto_build_caches=False,
         ),
-        reference_path=_EXP6_C4_RESULT,
+        # The raw initializer state gates against Exp6's recorded C4 reference before reseeding;
+        # the post-reseed comparison only records the intentional shift (see eval_audit.py).
+        reference_path=None,
         pre_reseed_reference_path=_EXP6_C4_RESULT,
         sequence_length=MIXTURE_SEQ_LEN,
         max_examples_per_dataset=1,
         special_token_ids=_EXP7_SPECIAL_TOKENS,
-        absolute_tolerance=0.5,
     ),
     checkpointer=_EXP7_CHECKPOINTER,
-    num_train_steps=1893,
+    num_train_steps=None,
     hf_save_dtype="bfloat16",
     wandb_project="marin-long-loop",
     env_vars={
