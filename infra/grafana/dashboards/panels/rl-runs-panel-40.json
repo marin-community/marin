@@ -1,0 +1,53 @@
+{
+  "type": "timeseries",
+  "title": "Length stops and coverage in trained groups",
+  "description": "Fraction of consumed responses stopped by a length limit, alongside stop-reason coverage. A rising fraction can mean truncation is discarding useful response tails. The fraction is blank unless coverage is complete; requires trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "percentunit",
+      "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "max": 1,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "length_stops"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

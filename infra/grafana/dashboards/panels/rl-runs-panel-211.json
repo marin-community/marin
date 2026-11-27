@@ -1,0 +1,129 @@
+{
+  "type": "row",
+  "title": "Is Ray spilling or filling its object store? (run-wide)",
+  "collapsed": true,
+  "panels": [
+    {
+      "id": 106,
+      "type": "timeseries",
+      "title": "Ray object store occupancy",
+      "description": "Used share of the Ray object store across attributed nodes. Values approaching one indicate limited space and can precede spills or admission delays. The denominator is used plus free bytes, distinct from vLLM KV cache; requires Ray metric collection. Run-wide: this panel ignores the Job and Execution pickers.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 99,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "unit": "percentunit",
+          "max": 1,
+          "noValue": "No Ray rows for this run. Non-Ray deployment, or the Ray metric bridge is off."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/overview",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "object_store_used_fraction",
+              "text": "object store used",
+              "type": "number"
+            }
+          ],
+          "targetRef": "rl_run",
+          "view": "ray_object_store"
+        }
+      ],
+      "interval": "1m",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 107,
+      "type": "timeseries",
+      "title": "Ray spill bytes",
+      "description": "Ray spill-manager bytes by state, averaged across attributed nodes. Persistent pending spill or restore suggests a stalled storage path. Pinned and pending values describe occupancy; spilled and restored values are lifetime totals. Requires Ray metric collection. Run-wide: this panel ignores the Job and Execution pickers.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 99,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0,
+          "unit": "bytes",
+          "noValue": "No Ray rows for this run. Non-Ray deployment, or the Ray metric bridge is off.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/overview",
+          "targetRef": "rl_run",
+          "view": "ray_spill"
+        }
+      ],
+      "interval": "1m",
+      "maxDataPoints": 360
+    }
+  ]
+}

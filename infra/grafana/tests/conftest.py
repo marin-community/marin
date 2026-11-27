@@ -10,6 +10,8 @@ from config import BridgeConfig, K8sClusterTarget
 from finelog.errors import StatsError
 from k8s_source import K8sSource
 
+pytest_plugins = ("rl_run_fixtures", "rl_execution_fixtures")
+
 KUEUE_DEPLOY = "/apis/apps/v1/namespaces/kueue-system/deployments/kueue-controller-manager"
 IRIS_DEPLOY = "/apis/apps/v1/namespaces/iris/deployments/iris-controller"
 TRAEFIK_DEPLOY = "/apis/apps/v1/namespaces/traefik/deployments/traefik"
@@ -36,8 +38,7 @@ def install_finelog_dialect_macros(database) -> None:
 
 def finelog_sql_for_duckdb(sql: str) -> str:
     """Translate Finelog's ordered aggregate names to DuckDB's names."""
-    sql = re.sub(r"first_value\(", "first(", sql, flags=re.IGNORECASE)
-    return re.sub(r"last_value\(", "last(", sql, flags=re.IGNORECASE)
+    return re.sub(r"first_value\(", "first(", sql, flags=re.IGNORECASE)
 
 
 def bridge_config(cache_ttl: float = 20.0) -> BridgeConfig:

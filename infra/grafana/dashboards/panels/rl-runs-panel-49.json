@@ -1,0 +1,80 @@
+{
+  "type": "timeseries",
+  "title": "Evaluation response length and stop coverage",
+  "description": "Mean/maximum evaluation response length and stop-class fractions. Rising length-stop fractions can explain score changes caused by truncation; compare fractions only at complete stop-reason coverage. Evaluations are sparse and incomplete fractions stay blank; requires trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "noValue": "No supplemental evaluation observations",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byRegexp",
+          "options": ".*(fraction|coverage).*"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "percentunit"
+          },
+          {
+            "id": "min",
+            "value": 0
+          },
+          {
+            "id": "max",
+            "value": 1
+          },
+          {
+            "id": "custom.axisPlacement",
+            "value": "right"
+          },
+          {
+            "id": "custom.axisLabel",
+            "value": "Fraction"
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "evaluation_lengths"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

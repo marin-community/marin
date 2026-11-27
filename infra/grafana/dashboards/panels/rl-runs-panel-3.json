@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Generated and consumed response tokens / s",
+  "description": "Generated response tokens and consumed response/loss tokens per second. Sustained generation below consumption drains the buffer; generation above consumption fills it. Rates use display buckets and completions, so short bursts need a longer window; consumed-token series require trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "tps",
+      "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "token_rates"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

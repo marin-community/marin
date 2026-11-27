@@ -1,0 +1,58 @@
+{
+  "type": "stat",
+  "title": "Steps / hour",
+  "description": "Observed step progress per hour for the latest step-reporting execution in the selected window. A falling rate means updates are slowing. The rate needs two different observation times and includes pauses between them.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "noValue": "No matching execution observations in this window.",
+      "color": {
+        "mode": "thresholds"
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "text",
+            "value": null
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "targetRef": "rl_execution",
+      "url": "/v1/rl/execution",
+      "view": "status",
+      "format": "table",
+      "columns": [
+        {
+          "selector": "steps_per_hour",
+          "text": "Steps / hour",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

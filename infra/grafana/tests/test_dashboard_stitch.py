@@ -41,12 +41,18 @@ def test_stitch_dashboard_expands_target_refs_in_fragments_and_collapsed_rows(pa
             {
                 "id": 2,
                 "type": "row",
-                "panels": [{"id": 3, "targets": [{**short, "format": "table", "columns": columns[:1]}]}],
+                "panels": [{"panelGroupRef": "nested"}],
             },
         ]
     }
 
-    first, row = stitch_dashboard(source, {"shared": fragment})["panels"]
+    first, row = stitch_dashboard(
+        source,
+        {
+            "shared": fragment,
+            "nested": {"panels": [{"id": 3, "targets": [{**short, "format": "table", "columns": columns[:1]}]}]},
+        },
+    )["panels"]
 
     params = [
         {"key": "clusters", "value": "${cluster:csv}"},
@@ -125,7 +131,10 @@ def test_stitch_all_processes_every_dashboard_in_a_directory(tmp_path):
     panels_dir = tmp_path / "panels"
     panels_dir.mkdir()
     (panels_dir / "shared.json").write_text(json.dumps(FRAGMENT))
-    (tmp_path / "a.json").write_text(json.dumps({"panels": [{"id": 1, "gridPos": {"h": 1}, "panelRef": "shared"}]}))
+    (panels_dir / "group.json").write_text(
+        json.dumps({"panels": [{"id": 1, "gridPos": {"h": 1}, "panelRef": "shared"}]})
+    )
+    (tmp_path / "a.json").write_text(json.dumps({"panels": [{"panelGroupRef": "group"}]}))
     (tmp_path / "b.json").write_text(json.dumps({"panels": []}))
 
     dashboards = stitch_all(tmp_path, panels_dir)

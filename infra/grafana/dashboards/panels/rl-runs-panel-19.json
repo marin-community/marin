@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Group dispositions / bucket",
+  "description": "Groups reaching each terminal disposition per display bucket. More consumed groups mean useful admission; rising rejected or stale-enqueue counts mean completed work is discarded. Each group is counted at disposition; requires trainer.rollout_spans.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "group_dispositions"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

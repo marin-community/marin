@@ -1,0 +1,53 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Exact per-series counter growth for the RL run-wide engine panels."""
+
+
+def rl_engine_query(bucket: str, clusters_sql: str, run_sql: str, start_ms: int, end_ms: int, max_rows: int) -> str:
+    """Return engine sums, counts and clamped consecutive-sample growth."""
+    return f"""
+WITH engine_rows AS (
+    SELECT * FROM "telemetry_v1.vllm" WHERE service = 'vllm'
+    UNION ALL
+    SELECT * FROM "telemetry_v1.marinskyrl" WHERE service = 'marinskyrl'
+), filtered AS (
+    -- Reduce the scan to the narrow per-series facts the deltas need before any
+    -- JSON work: the metric-name predicate prunes ordinary trainer rows, while
+    -- embedded vLLM rows retain these names. The resource and
+    -- attribute hashes stand in for the old query's per-row JSON partition keys
+    -- so one engine actor per registry stays its own series.
+    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
+           service, execution_uid, node_name, process_index, name, timestamp_ms, seq, value,
+           md5(resource_attributes_json) AS resource_key,
+           md5(attributes_json) AS attribute_key,
+           json_get(attributes_json, 'finished_reason') AS finished_reason,
+           CASE WHEN service = 'vllm' OR json_get(attributes_json, 'metric_source') = 'vllm'
+                THEN 1 ELSE 0 END AS is_engine
+    FROM engine_rows
+    WHERE run_id = {run_sql}
+      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
+      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
+      AND (name IN ('generation_tokens_total', 'prompt_tokens_total', 'num_requests_running',
+                    'num_requests_waiting', 'kv_cache_usage_perc', 'prefix_cache_hits_total',
+                    'prefix_cache_queries_total', 'num_preemptions_total', 'request_success_total')
+           OR name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
+), deltas AS (
+    SELECT *, value - LAG(value) OVER (
+               PARTITION BY origin_cluster, service, execution_uid, node_name, process_index,
+                            name, resource_key, attribute_key
+               ORDER BY timestamp_ms, seq
+           ) AS delta
+    FROM filtered
+)
+SELECT {bucket} AS t, name,
+       finished_reason,
+       SUM(value) AS sum_value,
+       COUNT(value) AS sample_count,
+       SUM(CASE WHEN delta IS NULL THEN NULL ELSE GREATEST(delta, 0) END) AS delta_sum
+FROM deltas
+GROUP BY 1, 2, 3
+HAVING MIN(is_engine) = 1
+ORDER BY t, name, finished_reason
+LIMIT {max_rows + 1}
+""".strip()

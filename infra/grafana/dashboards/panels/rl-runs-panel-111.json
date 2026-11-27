@@ -1,0 +1,49 @@
+{
+  "type": "timeseries",
+  "title": "vLLM request latency (mean by stage)",
+  "description": "Mean queue, prefill, decode, first-token and end-to-end latency per finished request. Rising queue time means requests wait to start; rising decode time can reflect longer responses or slower decoding. Means hide tails, and first-token/end-to-end stages overlap the other stages; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 8,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "mean seconds per request"
+      },
+      "min": 0,
+      "unit": "s",
+      "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults.",
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/overview",
+      "targetRef": "rl_run",
+      "view": "engine_latency"
+    }
+  ],
+  "interval": "1m",
+  "maxDataPoints": 360
+}

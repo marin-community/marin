@@ -1,0 +1,58 @@
+{
+  "type": "stat",
+  "title": "Staleness p95",
+  "description": "Policy-staleness p95 in the newest bucket from the newest reporting execution. Zero means current-policy data; rising values approach the configured staleness allowance. Sync observations yield zero, and absent observations remain empty; rejected groups are excluded.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "noValue": "No matching execution observations in this window.",
+      "color": {
+        "mode": "thresholds"
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "text",
+            "value": null
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "targetRef": "rl_execution",
+      "url": "/v1/rl/execution",
+      "view": "status",
+      "format": "table",
+      "columns": [
+        {
+          "selector": "staleness_p95",
+          "text": "Staleness p95",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

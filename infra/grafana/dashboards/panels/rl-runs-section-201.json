@@ -1,0 +1,44 @@
+{
+  "panels": [
+    {
+      "id": 201,
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 1
+      },
+      "panelRef": "rl-runs-panel-201"
+    },
+    {
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-2"
+    },
+    {
+      "id": 3,
+      "gridPos": {
+        "x": 8,
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-3"
+    },
+    {
+      "id": 104,
+      "gridPos": {
+        "x": 16,
+        "y": 9,
+        "w": 8,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-104"
+    }
+  ]
+}

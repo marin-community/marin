@@ -1,0 +1,61 @@
+{
+  "type": "timeseries",
+  "title": "Optimizer loss and KL",
+  "description": "Policy loss, final loss and policy KL by optimizer step. Sudden changes can reveal an unstable update; compare KL with the configured target and loss with its recent range. Each series uses the sign and scale of its objective; requires trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "optimizer"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360,
+  "transformations": [
+    {
+      "id": "filterFieldsByName",
+      "options": {
+        "include": {
+          "pattern": "/(^time$|policy\\/(policy_loss|final_loss|policy_kl))/"
+        }
+      }
+    }
+  ]
+}

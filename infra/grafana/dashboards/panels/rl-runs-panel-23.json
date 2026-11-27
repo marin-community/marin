@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Evaluation scores",
+  "description": "Held-out evaluation scores by metric and execution. Use repeated evaluations to check whether training reward improvements generalize. Evaluations are sparse and task scales differ; requires trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "evaluation"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

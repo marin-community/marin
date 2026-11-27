@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Successful rollout-call latency",
+  "description": "Median, p95 and maximum wall time of successful rollout calls. A widening tail means a few calls are holding up generation; compare worker waits to distinguish serving from environment time. Failed calls are excluded; requires trainer.rollout_spans.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "s",
+      "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "rollout_latency"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

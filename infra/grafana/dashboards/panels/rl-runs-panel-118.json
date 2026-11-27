@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Why vLLM requests finished",
+  "description": "Completed engine requests by finish reason per bucket. A growing length-limited share can explain changes in reward or response coverage. Finish reasons depend on the engine version and one rollout can create several requests; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 60,
+        "showPoints": "never",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "normal",
+          "group": "A"
+        },
+        "axisLabel": "finished requests per time bucket"
+      },
+      "min": 0,
+      "unit": "short",
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/overview",
+      "targetRef": "rl_run",
+      "view": "engine_finish"
+    }
+  ],
+  "interval": "1m",
+  "maxDataPoints": 360
+}

@@ -1,0 +1,195 @@
+{
+  "type": "row",
+  "title": "How much useful work do the configured resources produce?",
+  "collapsed": true,
+  "panels": [
+    {
+      "id": 35,
+      "type": "stat",
+      "title": "Loss tokens trained per second",
+      "description": "Latest useful loss-token throughput using core and full-cycle denominators. Higher is better at comparable workloads; a wide gap shows work outside the core reducing overall throughput. Each series shows its latest observed step; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 98,
+        "w": 6,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "loss_token_rates"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 38,
+      "type": "stat",
+      "title": "Useful tokens per configured role GPU-second",
+      "description": "Latest useful tokens per configured policy or inference GPU-second. Compare like workloads to spot declining resource efficiency. Denominators use GPU counts from the placement config; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 98,
+        "w": 6,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "role_gpu_tokens"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 39,
+      "type": "stat",
+      "title": "Configured role GPU counts",
+      "description": "Configured policy and inference GPU counts from the placement config, for the latest observed step. Use them to interpret per-GPU rates and check placement assumptions. Requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 98,
+        "w": 6,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "role_gpus"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 43,
+      "type": "stat",
+      "title": "Cumulative core GPU-hours in selected window",
+      "description": "Cumulative configured GPU-hours in complete core-step observations inside the selected window, per execution. Compare useful work against this cost at matched configurations. Coverage is limited to complete core steps; requires trainer.training_metrics.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 98,
+        "w": 6,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No training-metric observations. Check trainer.training_metrics and the selected Job/Execution.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "core_gpu_hours"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    }
+  ]
+}

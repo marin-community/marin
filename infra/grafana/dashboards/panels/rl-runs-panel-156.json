@@ -1,0 +1,67 @@
+{
+  "type": "stat",
+  "title": "Services reporting (run-wide)",
+  "description": "Distinct services reporting this run in the selected clusters and window. A lower count can explain blank panels; inspect the service table in Diagnostics to see which exporter is absent. Run-wide: this count uses the Run and Cluster pickers.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "noValue": "No services reporting this run."
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "distinctCount"
+      ],
+      "fields": "/^service$/",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "type": "json",
+      "source": "url",
+      "format": "table",
+      "parser": "backend",
+      "url": "/v1/rl/producers",
+      "url_options": {
+        "method": "GET",
+        "params": [
+          {
+            "key": "run",
+            "value": "${run}"
+          },
+          {
+            "key": "clusters",
+            "value": "${cluster:csv}"
+          },
+          {
+            "key": "from",
+            "value": "${__from}"
+          },
+          {
+            "key": "to",
+            "value": "${__to}"
+          }
+        ]
+      },
+      "columns": [
+        {
+          "selector": "producer",
+          "text": "service",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "maxDataPoints": 360
+}

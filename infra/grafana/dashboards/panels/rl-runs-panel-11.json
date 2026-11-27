@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Policy staleness at training",
+  "description": "Optimizer steps between generation and consumption of admitted groups. Zero means current-policy data; a rising tail approaches the configured staleness limit. Rejected groups are excluded, and a sync run shows zero only; telemetry export enables these observations.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "policy_staleness"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

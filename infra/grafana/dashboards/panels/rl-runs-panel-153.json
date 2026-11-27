@@ -1,0 +1,58 @@
+{
+  "type": "stat",
+  "title": "Generated tokens / s",
+  "description": "Generated response tokens per second in the latest display bucket. Falling throughput with an empty buffer suggests generation pressure. Bucket width grows with the selected range, and bursty completions or a partial final bucket affect this rate.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "tps",
+      "noValue": "No matching execution observations in this window.",
+      "color": {
+        "mode": "thresholds"
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "text",
+            "value": null
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "targetRef": "rl_execution",
+      "url": "/v1/rl/execution",
+      "view": "status",
+      "format": "table",
+      "columns": [
+        {
+          "selector": "generated_tokens_per_second",
+          "text": "Generated tokens / s",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

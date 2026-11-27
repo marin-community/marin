@@ -1,0 +1,52 @@
+{
+  "type": "timeseries",
+  "title": "Weight sync and policy offload walls",
+  "description": "Weight synchronization and related policy walls by outcome and execution. Growth here reduces time available for useful training or generation. The elapsed walls include optimizer offload inside sync_weights and startup-only synchronization-state initialization.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "s",
+      "noValue": "No matching execution observations. Check the window, Job/Execution and Services reporting.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        }
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "sync_walls"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

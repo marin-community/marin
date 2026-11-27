@@ -1,0 +1,123 @@
+{
+  "type": "barchart",
+  "title": "Rollouts completing during policy training",
+  "description": "Successful rollout calls finishing during the newest 50 observed execution/step training windows. More completed calls show generation overlapping the update; zero with complete coverage means no calls finished then. Window finish time selects the newest steps, including restarts; clipped intervals or missing rollout records leave counts empty. Requires trainer.rollout_spans.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "short",
+      "noValue": "No rollout-span observations. Check trainer.rollout_spans and the selected Job/Execution.",
+      "custom": {
+        "fillOpacity": 80,
+        "axisPlacement": "auto"
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "orientation": "vertical",
+    "xField": "step",
+    "showValue": "auto",
+    "stacking": "none",
+    "legend": {
+      "showLegend": true,
+      "placement": "bottom"
+    },
+    "tooltip": {
+      "mode": "multi"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "table",
+      "url": "/v1/rl/execution",
+      "columns": [
+        {
+          "selector": "execution_uid",
+          "text": "execution_uid",
+          "type": "string"
+        },
+        {
+          "selector": "step",
+          "text": "step",
+          "type": "number"
+        },
+        {
+          "selector": "coverage",
+          "text": "coverage",
+          "type": "string"
+        },
+        {
+          "selector": "completed_calls",
+          "text": "completed_calls",
+          "type": "number"
+        },
+        {
+          "selector": "returned_tokens",
+          "text": "returned_tokens",
+          "type": "number"
+        }
+      ],
+      "targetRef": "rl_execution",
+      "view": "training_overlap"
+    }
+  ],
+  "maxDataPoints": 360,
+  "interval": "30s",
+  "transformations": [
+    {
+      "id": "filterFieldsByName",
+      "options": {
+        "include": {
+          "names": [
+            "step",
+            "execution_uid",
+            "completed_calls"
+          ]
+        }
+      }
+    },
+    {
+      "id": "partitionByValues",
+      "options": {
+        "fields": [
+          "execution_uid"
+        ],
+        "keepFields": false
+      }
+    },
+    {
+      "id": "joinByField",
+      "options": {
+        "byField": "step",
+        "mode": "outerTabular"
+      }
+    },
+    {
+      "id": "sortBy",
+      "options": {
+        "sort": [
+          {
+            "field": "step",
+            "desc": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "convertFieldType",
+      "options": {
+        "conversions": [
+          {
+            "targetField": "step",
+            "destinationType": "string"
+          }
+        ]
+      }
+    }
+  ]
+}

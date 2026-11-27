@@ -16,6 +16,10 @@ copy-pasted panel bodies that drift out of sync with the bridge's actual schema.
 Dashboard links use ``{"linkRef": "<fragment-name>"}`` markers resolved from
 ``SHARED_LINKS`` for the same reason.
 
+A ``panelGroupRef`` expands an ordered array from a fragment's ``panels`` field,
+including groups inside collapsed rows. Templating SQL expands the canonical RL
+producer eligibility list at build time, leaving Grafana macros intact.
+
 Targets with ``targetRef`` share endpoint parameters. Time-series targets default to
 time/series/value columns; each target specifies its view, format and other columns.
 """
@@ -24,9 +28,13 @@ import argparse
 import json
 from pathlib import Path
 
+from rl_producer_policy import RL_PRODUCER_ROW_NAMES_SQL
+
 PANEL_REF_KEY = "panelRef"
 LINK_REF_KEY = "linkRef"
 TARGET_REF_KEY = "targetRef"
+PANEL_GROUP_REF_KEY = "panelGroupRef"
+RL_PRODUCER_ROWS_TOKEN = "{{rl_producer_row_names}}"
 
 _TIMESERIES_COLUMNS = [
     {"selector": "t", "text": "time", "type": "timestamp_epoch"},
@@ -130,6 +138,10 @@ def _stitch_panels(panels: list[dict], fragments: dict[str, dict]) -> list[dict]
     """
     resolved = []
     for panel in panels:
+        group_ref = panel.get(PANEL_GROUP_REF_KEY)
+        if group_ref is not None:
+            resolved.extend(_stitch_panels(fragments[group_ref]["panels"], fragments))
+            continue
         ref = panel.get(PANEL_REF_KEY)
         if ref is not None:
             if ref not in fragments:
@@ -156,13 +168,25 @@ def _stitch_links(links: list[dict]) -> list[dict]:
     return resolved
 
 
+def _stitch_sql_fragments(value):
+    if isinstance(value, str):
+        return value.replace(RL_PRODUCER_ROWS_TOKEN, RL_PRODUCER_ROW_NAMES_SQL)
+    if isinstance(value, list):
+        return [_stitch_sql_fragments(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _stitch_sql_fragments(item) for key, item in value.items()}
+    return value
+
+
 def stitch_dashboard(source: dict, fragments: dict[str, dict]) -> dict:
-    """Resolve panelRef, linkRef and targetRef in a dashboard.
+    """Resolve panel groups, shared panels, links, targets and picker SQL.
 
     Raises:
         KeyError: A panel, link or target references an unknown fragment.
     """
     dashboard = {**source, "panels": _stitch_panels(source["panels"], fragments)}
+    if "templating" in source:
+        dashboard["templating"] = _stitch_sql_fragments(source["templating"])
     if "links" in source:
         dashboard["links"] = _stitch_links(source["links"])
     return dashboard

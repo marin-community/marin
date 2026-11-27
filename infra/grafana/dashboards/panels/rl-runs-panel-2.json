@@ -1,0 +1,53 @@
+{
+  "type": "timeseries",
+  "title": "Optimizer step, synced and producing policy",
+  "description": "Completed optimizer steps, synchronized model versions and the policy version producing new work. A widening gap means generation is using older weights; a flat optimizer line means progress stopped. Series stay separate by execution; synced versions require trainer.training_metrics.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "noValue": "No policy_step rows in this window. Check the selected Job and Execution, then Services reporting.",
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 5,
+        "showPoints": "auto",
+        "spanNulls": false,
+        "stacking": {
+          "mode": "none",
+          "group": "A"
+        },
+        "axisLabel": "step number"
+      },
+      "min": 0,
+      "displayName": "${__field.labels.series}"
+    },
+    "overrides": []
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/execution",
+      "targetRef": "rl_execution",
+      "view": "policy_step"
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

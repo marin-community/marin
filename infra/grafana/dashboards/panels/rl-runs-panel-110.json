@@ -1,0 +1,95 @@
+{
+  "type": "timeseries",
+  "title": "vLLM queue and KV-cache usage",
+  "description": "Running/queued engine requests, with mean KV-cache occupancy on the right axis. A persistent queue with high occupancy and preemptions supports cache pressure; low occupancy can suggest scheduling or compute limits. Queue draining can be an intentional rollout boundary, and values are engine means; requires engine telemetry. Run-wide: this panel ignores the Job and Execution pickers.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineWidth": 1,
+        "fillOpacity": 8,
+        "showPoints": "never",
+        "spanNulls": false,
+        "axisLabel": "requests"
+      },
+      "min": 0,
+      "unit": "short",
+      "noValue": "No vLLM rows for this run. If the whole rank is blank, the engine exporter is down rather than six separate faults."
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "kv_cache"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "percentunit"
+          },
+          {
+            "id": "max",
+            "value": 1
+          },
+          {
+            "id": "custom.axisPlacement",
+            "value": "right"
+          },
+          {
+            "id": "custom.axisLabel",
+            "value": "KV cache"
+          }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "legend": {
+      "showLegend": true,
+      "displayMode": "list",
+      "placement": "bottom",
+      "calcs": []
+    },
+    "tooltip": {
+      "mode": "multi",
+      "sort": "desc"
+    }
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "format": "timeseries",
+      "url": "/v1/rl/overview",
+      "columns": [
+        {
+          "selector": "t",
+          "text": "time",
+          "type": "timestamp_epoch"
+        },
+        {
+          "selector": "running",
+          "text": "requests running",
+          "type": "number"
+        },
+        {
+          "selector": "waiting",
+          "text": "requests queued",
+          "type": "number"
+        },
+        {
+          "selector": "kv_cache",
+          "text": "kv_cache",
+          "type": "number"
+        }
+      ],
+      "targetRef": "rl_run",
+      "view": "engine_queue"
+    }
+  ],
+  "interval": "1m",
+  "maxDataPoints": 360
+}

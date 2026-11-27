@@ -1,0 +1,58 @@
+{
+  "type": "stat",
+  "title": "Current step",
+  "description": "Most recently observed completed optimizer step in the selected executions. A flat value can mean progress stopped; compare the step and record ages. The newest reporting execution wins after a restart, even if its step number is lower.",
+  "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "finelog-marin"
+  },
+  "fieldConfig": {
+    "defaults": {
+      "unit": "none",
+      "noValue": "No matching execution observations in this window.",
+      "color": {
+        "mode": "thresholds"
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "text",
+            "value": null
+          }
+        ]
+      }
+    },
+    "overrides": []
+  },
+  "options": {
+    "reduceOptions": {
+      "calcs": [
+        "lastNotNull"
+      ],
+      "fields": "",
+      "values": false
+    },
+    "colorMode": "value",
+    "graphMode": "none",
+    "textMode": "value"
+  },
+  "targets": [
+    {
+      "refId": "A",
+      "targetRef": "rl_execution",
+      "url": "/v1/rl/execution",
+      "view": "status",
+      "format": "table",
+      "columns": [
+        {
+          "selector": "current_step",
+          "text": "Current step",
+          "type": "number"
+        }
+      ]
+    }
+  ],
+  "interval": "30s",
+  "maxDataPoints": 360
+}

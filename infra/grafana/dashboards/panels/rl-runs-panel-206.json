@@ -1,0 +1,254 @@
+{
+  "type": "row",
+  "title": "What are this run’s GPUs doing? (run-wide)",
+  "collapsed": true,
+  "panels": [
+    {
+      "id": 122,
+      "type": "timeseries",
+      "title": "SM and tensor-pipe activity on this run's nodes",
+      "description": "SM-active and tensor-active fractions on this run’s attributed nodes. High SM activity with low tensor activity suggests kernels doing little matrix work. Node-level values include other workloads and ranks; requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 96,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "active"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/gpu",
+          "view": "sm_activity",
+          "format": "timeseries"
+        }
+      ],
+      "interval": "1m",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 123,
+      "type": "timeseries",
+      "title": "GPU memory in use on this run's nodes",
+      "description": "Mean and peak framebuffer bytes across attributed GPUs. Peaks near capacity mean little device-memory headroom. The node-level values include every process on each card; requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 96,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "framebuffer in use"
+          },
+          "unit": "bytes",
+          "min": 0,
+          "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster."
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/gpu",
+          "view": "gpu_memory",
+          "format": "timeseries",
+          "columns": [
+            {
+              "selector": "t",
+              "text": "time",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "mean_used_bytes",
+              "text": "mean_used_bytes",
+              "type": "number"
+            },
+            {
+              "selector": "peak_used_bytes",
+              "text": "peak_used_bytes",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "interval": "1m",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 124,
+      "type": "timeseries",
+      "title": "NVLink against PCIe receive traffic",
+      "description": "NVLink and PCIe receive throughput summed across attributed GPUs. Compare changes with synchronization and step wall to identify transfer pressure. Counters cover links within the host; missing counters remain absent. Requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 96,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "throughput"
+          },
+          "unit": "Bps",
+          "min": 0,
+          "noValue": "No GPU data. Over 7h: zoom to 7h or less. Otherwise no node join: trainer rows carry no node_name, or the node agent is not reporting this cluster. Or no NVLink or PCIe counters from this cluster's node agent.",
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/gpu",
+          "view": "fabric_receive",
+          "format": "timeseries"
+        }
+      ],
+      "interval": "1m",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 125,
+      "type": "table",
+      "title": "PCIe replay errors and power on this run's GPUs",
+      "description": "GPUs with a positive PCIe replay-counter increase, alongside peak board power. Replays can identify link faults worth checking against host diagnostics. A counter reset contributes its new value; use the utilization panel to check GPU activity. Requires node-agent DCGM reporting. Run-wide: this panel ignores the Job and Execution pickers. GPU detail is available for ranges of 7h or less; longer ranges show a zoom message.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 96,
+        "w": 6,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No positive PCIe replay increase on this run's attributed GPUs in this window."
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "refId": "A",
+          "targetRef": "rl_run",
+          "url": "/v1/rl/gpu",
+          "view": "pcie_faults",
+          "format": "table",
+          "columns": [
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "gpu",
+              "text": "gpu",
+              "type": "string"
+            },
+            {
+              "selector": "peak_power_watts",
+              "text": "peak power (W)",
+              "type": "number"
+            },
+            {
+              "selector": "pcie_replay_increase",
+              "text": "PCIe replays in window",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "maxDataPoints": 360,
+      "interval": "1m"
+    }
+  ]
+}

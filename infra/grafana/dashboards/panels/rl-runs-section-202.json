@@ -1,0 +1,94 @@
+{
+  "panels": [
+    {
+      "id": 202,
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 24,
+        "h": 1
+      },
+      "panelRef": "rl-runs-panel-202"
+    },
+    {
+      "id": 102,
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-102"
+    },
+    {
+      "id": 108,
+      "gridPos": {
+        "x": 6,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-108"
+    },
+    {
+      "id": 121,
+      "gridPos": {
+        "x": 12,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-121"
+    },
+    {
+      "id": 6,
+      "gridPos": {
+        "x": 18,
+        "y": 35,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-6"
+    },
+    {
+      "id": 14,
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-14"
+    },
+    {
+      "id": 53,
+      "gridPos": {
+        "x": 6,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-53"
+    },
+    {
+      "id": 34,
+      "gridPos": {
+        "x": 12,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-34"
+    },
+    {
+      "id": 36,
+      "gridPos": {
+        "x": 18,
+        "y": 43,
+        "w": 6,
+        "h": 8
+      },
+      "panelRef": "rl-runs-panel-36"
+    }
+  ]
+}

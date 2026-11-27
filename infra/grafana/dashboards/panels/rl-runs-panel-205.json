@@ -1,0 +1,298 @@
+{
+  "type": "row",
+  "title": "Where does Megatron policy-update time go?",
+  "collapsed": true,
+  "panels": [
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Megatron policy wall across ranks",
+      "description": "Minimum, mean and maximum policy-update wall across observed rank-steps. A growing maximum above the mean suggests rank imbalance. Megatron phases are CPU wall time around asynchronous CUDA launches (clock_domain=cpu_dispatch_wall), so a phase can end before its GPU work does; requires trainer.policy_train_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 95,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No learner phase observations. Check trainer.policy_train_spans and the selected Job/Execution.",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 5,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0,
+          "displayName": "${__field.labels.series}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "timeseries",
+          "url": "/v1/rl/execution",
+          "targetRef": "rl_execution",
+          "view": "megatron_policy_wall"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360
+    },
+    {
+      "id": 41,
+      "type": "barchart",
+      "title": "Learner memory by phase",
+      "description": "Largest observed allocated and reserved learner-memory peaks per phase, with maximum device capacity as a reference. Peaks near capacity leave little headroom; a widening reserved/allocated gap can indicate allocator pressure. Maxima can come from different selected ranks, executions and times; values are GiB. Requires trainer.policy_train_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 95,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "gbytes",
+          "noValue": "No learner phase observations. Check trainer.policy_train_spans and the selected Job/Execution.",
+          "custom": {
+            "fillOpacity": 80,
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/^device_total_gib/"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Maximum device capacity"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "gray"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "phase",
+        "showValue": "auto",
+        "stacking": "none",
+        "legend": {
+          "showLegend": true,
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "url": "/v1/rl/execution",
+          "columns": [
+            {
+              "selector": "execution",
+              "text": "execution",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "rank",
+              "text": "rank",
+              "type": "string"
+            },
+            {
+              "selector": "gpu",
+              "text": "gpu",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "observations",
+              "text": "observations",
+              "type": "number"
+            },
+            {
+              "selector": "peak_allocated_gib",
+              "text": "peak_allocated_gib",
+              "type": "number"
+            },
+            {
+              "selector": "peak_reserved_gib",
+              "text": "peak_reserved_gib",
+              "type": "number"
+            },
+            {
+              "selector": "sampled_allocated_gib",
+              "text": "sampled_allocated_gib",
+              "type": "number"
+            },
+            {
+              "selector": "sampled_free_gib",
+              "text": "sampled_free_gib",
+              "type": "number"
+            },
+            {
+              "selector": "device_total_gib",
+              "text": "device_total_gib",
+              "type": "number"
+            }
+          ],
+          "targetRef": "rl_execution",
+          "view": "learner_memory"
+        }
+      ],
+      "interval": "30s",
+      "maxDataPoints": 360,
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "phase": {
+                "operation": "groupby",
+                "aggregations": []
+              },
+              "peak_allocated_gib": {
+                "operation": "aggregate",
+                "aggregations": [
+                  "max"
+                ]
+              },
+              "peak_reserved_gib": {
+                "operation": "aggregate",
+                "aggregations": [
+                  "max"
+                ]
+              },
+              "device_total_gib": {
+                "operation": "aggregate",
+                "aggregations": [
+                  "max"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "type": "table",
+      "title": "Megatron phase detail (newest 8 steps)",
+      "description": "Phase walls for each rank’s newest eight observed optimizer steps. Compare the same phase across ranks to find dispatch or synchronization outliers. At most 5,000 phase rows are shown. Megatron phases are CPU wall time around asynchronous CUDA launches (clock_domain=cpu_dispatch_wall), so a phase can end before its GPU work does; requires trainer.policy_train_spans.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 95,
+        "w": 8,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "No learner phase observations. Check trainer.policy_train_spans and the selected Job/Execution."
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "url": "/v1/rl/execution",
+          "columns": [
+            {
+              "selector": "execution_uid",
+              "text": "execution_uid",
+              "type": "string"
+            },
+            {
+              "selector": "step",
+              "text": "step",
+              "type": "number"
+            },
+            {
+              "selector": "rank",
+              "text": "rank",
+              "type": "string"
+            },
+            {
+              "selector": "phase",
+              "text": "phase",
+              "type": "string"
+            },
+            {
+              "selector": "outcome",
+              "text": "outcome",
+              "type": "string"
+            },
+            {
+              "selector": "seconds",
+              "text": "seconds",
+              "type": "number"
+            }
+          ],
+          "targetRef": "rl_execution",
+          "view": "megatron_phases"
+        }
+      ],
+      "maxDataPoints": 360,
+      "interval": "30s"
+    }
+  ]
+}

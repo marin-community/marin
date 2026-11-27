@@ -11,6 +11,8 @@ from dashboard_dataset import (
     validate_value,
     validate_values,
 )
+from rl_engine_observability import rl_engine_query
+from rl_producer_policy import RL_PRODUCER_ROW_NAMES_SQL
 from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, sql_string, sql_values
 
 RL_MAX_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
@@ -28,9 +30,6 @@ RL_MAX_RESULT_ROWS = 100_000
 RL_RECENT_MAX_ROWS = 20
 RL_RECENT_WINDOW_PADDING_MS = 60_000
 RL_GPU_ZOOM_MESSAGE = "Zoom to 7h or less for GPU detail."
-# The rows an RL run's trainer and rollout workers report directly; the pickers
-# and the recent-runs list scan only these instead of every telemetry row.
-RL_PRODUCER_ROW_NAMES = ("lifecycle", "policy_step", "rollout_call")
 
 _CORE_NAMES = (
     "phase_duration_seconds",
@@ -172,51 +171,7 @@ UNION ALL SELECT * FROM phase_percentiles
 ORDER BY t, name, execution_uid
 LIMIT {RL_MAX_CORE_ROWS + 1}
 """.strip()
-    engine_sql = f"""
-WITH engine_rows AS (
-    SELECT * FROM "telemetry_v1.vllm" WHERE service = 'vllm'
-    UNION ALL
-    SELECT * FROM "telemetry_v1.marinskyrl" WHERE service = 'marinskyrl'
-), filtered AS (
-    -- Reduce the scan to the narrow per-series facts the deltas need before any
-    -- JSON work: the metric-name predicate prunes ordinary trainer rows, while
-    -- embedded vLLM rows retain these names. The resource and
-    -- attribute hashes stand in for the old query's per-row JSON partition keys
-    -- so one engine actor per registry stays its own series.
-    SELECT COALESCE(NULLIF(cluster, ''), 'marin') AS origin_cluster,
-           service, execution_uid, node_name, process_index, name, timestamp_ms, seq, value,
-           md5(resource_attributes_json) AS resource_key,
-           md5(attributes_json) AS attribute_key,
-           json_get(attributes_json, 'finished_reason') AS finished_reason,
-           CASE WHEN service = 'vllm' OR json_get(attributes_json, 'metric_source') = 'vllm'
-                THEN 1 ELSE 0 END AS is_engine
-    FROM engine_rows
-    WHERE run_id = {run_sql}
-      AND COALESCE(NULLIF(cluster, ''), 'marin') IN ({clusters_sql})
-      AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
-      AND (name IN ('generation_tokens_total', 'prompt_tokens_total', 'num_requests_running',
-                    'num_requests_waiting', 'kv_cache_usage_perc', 'prefix_cache_hits_total',
-                    'prefix_cache_queries_total', 'num_preemptions_total', 'request_success_total')
-           OR name LIKE '%_seconds_sum' OR name LIKE '%_seconds_count')
-), deltas AS (
-    SELECT *, value - LAG(value) OVER (
-               PARTITION BY origin_cluster, service, execution_uid, node_name, process_index,
-                            name, resource_key, attribute_key
-               ORDER BY timestamp_ms, seq
-           ) AS delta
-    FROM filtered
-)
-SELECT {bucket} AS t, name,
-       finished_reason,
-       SUM(value) AS sum_value,
-       COUNT(value) AS sample_count,
-       SUM(CASE WHEN delta IS NULL THEN NULL ELSE GREATEST(delta, 0) END) AS delta_sum
-FROM deltas
-GROUP BY 1, 2, 3
-HAVING MIN(is_engine) = 1
-ORDER BY t, name, finished_reason
-LIMIT {RL_MAX_ENGINE_ROWS + 1}
-""".strip()
+    engine_sql = rl_engine_query(bucket, clusters_sql, run_sql, start_ms, end_ms, RL_MAX_ENGINE_ROWS)
     views = {
         "critical_path": (
             """
@@ -517,7 +472,7 @@ SELECT run_id AS run,
        MAX(timestamp_ms) FILTER (WHERE name = 'policy_step') AS last_seen,
        MAX(CASE WHEN json_get(resource_attributes_json, 'training_type') = 'async' THEN 1 ELSE 0 END) AS is_async
 FROM "telemetry_v1.marinskyrl"
-WHERE service = 'marinskyrl' AND name IN ({sql_values(RL_PRODUCER_ROW_NAMES)}) AND run_id IS NOT NULL
+WHERE service = 'marinskyrl' AND name IN ({RL_PRODUCER_ROW_NAMES_SQL}) AND run_id IS NOT NULL
   AND timestamp_ms >= {start_ms} AND timestamp_ms < {end_ms}
 GROUP BY 1, 2 HAVING COUNT(*) FILTER (WHERE name = 'policy_step') > 0 ORDER BY last_seen DESC
 LIMIT {RL_RECENT_MAX_ROWS}
