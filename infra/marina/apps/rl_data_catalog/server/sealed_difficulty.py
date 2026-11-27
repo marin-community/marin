@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .content_access import content_is_withheld, content_marker
+from .difficulty import difficulty_interval
 from .json_digest import json_sha256
 from .source_identity import canonical_source_id
 
@@ -79,7 +80,11 @@ def sealed_difficulty_models(declaration: dict, models: list[dict], record: dict
                 "solved": cell["solved_attempts"],
                 "solve_rate": cell["pass_rate"],
                 "difficulty": cell["difficulty"],
-                "wilson_95": None,
+                "wilson_95": (
+                    difficulty_interval(cell["solved_attempts"], cell["scored_attempts"])
+                    if cell["measured"] and cell["scored_attempts"] > 0
+                    else None
+                ),
                 "measurement_id": record["snapshot_id"] + ":" + model["solver"],
                 "sealed_snapshot_id": record["snapshot_id"],
             }

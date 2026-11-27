@@ -28,6 +28,7 @@ from infra.marina.apps.rl_data_catalog.load_difficulty import (
     load_measurements,
     publish_coverage,
 )
+from infra.marina.apps.rl_data_catalog.server.difficulty import difficulty_table_summary
 from infra.marina.apps.rl_data_catalog.server.difficulty_coverage import (
     CoverageStatus,
     DifficultyCoverage,
@@ -167,6 +168,13 @@ def observation(
 
 def full_measurements(**kwargs) -> list[DifficultyObservation]:
     return [observation(solver, **kwargs) for solver in Solver]
+
+
+def test_measured_observation_without_interval_serves_computed_wilson_bounds():
+    record = observation(Solver.SMALL).model_copy(update={"wilson_95": None})
+    row = difficulty_table_summary(declaration(), [record])["models"][0]
+    assert row["solve_rate"] == 0.05
+    assert row["wilson_95"] == pytest.approx({"low": 0.02154336145631356, "high": 0.11175196527208817})
 
 
 def test_a_source_measured_on_its_current_pin_is_measured_with_measurement_ids():

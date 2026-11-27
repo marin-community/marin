@@ -14,7 +14,7 @@ import pytest
 from marina.applets import applet_schema
 from marina.db import DatabaseSpec, engine_for
 from marina.journeys import Journey
-from playwright.sync_api import expect
+from playwright.sync_api import Page, expect
 from sqlalchemy import text
 from taskcompendium.pipeline.models import Confidence, Defect, Quality, ReferenceStatus, ReviewRecord, ReviewVerdict
 
@@ -46,6 +46,24 @@ def served_source_ids(journey: Journey) -> list[str]:
     response = journey.page.request.get(f"{journey.origin}/a/{CATALOG_APP}/api/sources")
     assert response.ok, f"{response.status}: {response.text()[:200]}"
     return [source["id"] for source in response.json()["sources"]]
+
+
+@pytest.mark.parametrize("interval", [None, {"low": 0.2, "high": 0.8}])
+def test_partial_measured_difficulty_row_renders_without_optional_provenance(page: Page, interval: dict | None) -> None:
+    page.set_content("<main></main>")
+    page.add_script_tag(path=str(Path(__file__).parents[1] / "dist" / "difficulty.js"))
+    page.evaluate(
+        """interval => document.querySelector('main').append(AtlasDifficulty.comparison({models: [{
+            solver: 'small', status: 'measured', solved: 1, n: 2, solve_rate: 0.5,
+            wilson_95: interval, model: null, sample: null
+        }]}))""",
+        interval,
+    )
+    expect(page.locator(".difficulty-model")).to_have_count(4)
+    title = page.locator(".difficulty-small").get_attribute("title")
+    assert title is not None and "50.0% solved" in title
+    assert ("Wilson 95% CI" in title) is (interval is not None)
+    assert "undefined" not in title
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])

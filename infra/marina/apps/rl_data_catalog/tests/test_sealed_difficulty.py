@@ -53,7 +53,9 @@ def test_sealed_partial_and_stale_cells_never_gain_difficulty_values():
     coverage = difficulty_coverage({source["id"]: source}, {}, {source["id"]: record})
     assert coverage.counts["blocked"] == 1 and coverage.counts["solvers_measured"] == 0
     cell.update(measured=True, difficulty=0.25, pass_rate=0.75, gaps=[])
-    assert sealed_difficulty_summary(summary, source, record)["models"][0]["solve_rate"] == 0.75
+    measured = table_difficulty(sealed_difficulty_summary(summary, source, record))["models"][0]
+    assert measured["solve_rate"] == 0.75
+    assert measured["wilson_95"] == pytest.approx({"low": 0.48686549668097016, "high": 0.9743203756552564})
     cell["registry_revision"] = "stale-population"
     assert sealed_difficulty_summary(summary, source, record)["models"][0]["solve_rate"] is None
 
