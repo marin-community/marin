@@ -17,3 +17,11 @@ runs:
     seed: 0
     variant: speedrun control
     control: true
+launched:
+  control: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --seed 0 --run-id
+    belay-X0271-control --output-path tmp/ttl=30d/belay/runs/belay-X0271-control --submit --target-cluster cw-us-east-02a
+    --priority interactive
+  seed0: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --opt-set muonc_anneal_decay=0.2
+    --opt-set muonc_anneal_adamc=12.5 --opt-set adamc_adam_decay=0.3 --opt-set muonc_anneal_embed_row_adamh=True --seed 0
+    --run-id belay-X0271-seed0 --output-path tmp/ttl=30d/belay/runs/belay-X0271-seed0 --submit --target-cluster cw-us-east-02a
+    --priority interactive
