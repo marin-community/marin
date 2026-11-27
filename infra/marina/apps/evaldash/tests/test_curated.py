@@ -289,7 +289,7 @@ def test_raw_ingestion_and_browser_choose_terminal_trials_without_counting_retri
     )
     write_record(raw_run, str(tmp_path))
     store = MemoryRecordStore()
-    assert asyncio.run(Ingestor(store, (str(tmp_path),), 1).run_once()) == ()
+    assert asyncio.run(Ingestor(store, (str(tmp_path),), 1, str(tmp_path / "policy-releases")).run_once()) == ()
     imported = store.get_record("run")
     assert imported is not None
     assert imported["metrics"]["colors"]["accuracy"] == 0.5

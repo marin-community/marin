@@ -16,6 +16,8 @@ from evaldash import fixtures, ingest, results_db
 from evaldash.db_migrations import apply_migrations
 from evaldash.metrics import record_headline
 from evaldash.playground_reports import fetch_report_summaries
+from evaldash.policy_admission import ingest_policy_admission
+from evalrecords.policy_release import PolicyRelease, RunCompliance, Verdict, compliance_path
 from evalrecords.records import EvalRunRecord, TaskCoverage, list_records, write_record
 from rigging.filesystem.step_status import STATUS_RUNNING, STATUS_SUCCESS, get_status_path
 from sqlalchemy.pool import StaticPool
@@ -542,6 +544,7 @@ def test_scheduled_ingest_publishes_multiple_batches_without_loading_a_serving_s
     )
     monkeypatch.setenv("RECORDS_PREFIXES", str(prefix))
     monkeypatch.setenv("PLAYGROUND_REPORT_PREFIXES", str(tmp_path / "model-feedback"))
+    monkeypatch.setenv("POLICY_RELEASES_PREFIX", str(tmp_path / "policy-releases"))
     monkeypatch.setenv("MARINA_DATABASE_URL", str(engine.url))
     monkeypatch.setenv("EVALDASH_STORE", "postgres")
     monkeypatch.setattr(ingest, "job_engine", lambda: engine)
@@ -568,3 +571,41 @@ def test_scheduled_ingest_publishes_multiple_batches_without_loading_a_serving_s
     assert max(materialized_sizes) < len(expected)
     assert results_db.prefix_statuses(engine)[0].error is None
     assert [row["report_id"] for row in fetch_report_summaries(engine)["reports"]] == ["2026-11-18-090000-bbbb"]
+
+
+def test_ingest_publishes_released_manifests_and_the_compliance_files_of_their_versions_runs(tmp_path):
+    engine = _engine()
+    migrate_schema(engine)
+    prefix, releases = tmp_path / "records", tmp_path / "policy-releases"
+    fixture = _record(tmp_path)
+    record = fixture.model_copy(
+        update={"version": "marin-2026-12-01", "results_path": str(prefix / fixture.run_id / "results")}
+    )
+    write_record(record, str(prefix))
+    asyncio.run(evaldash_app.PostgresIngestor(engine, (str(prefix),), 600, 86400, now=Clock()).run_once())
+    releases.mkdir()
+    release = PolicyRelease(version="marin-2026-12-01", commit=record.provenance.git_sha, base=None, runs=())
+    (releases / "marin-2026-12-01.json").write_text(release.model_dump_json())
+    compliance = RunCompliance(
+        version="marin-2026-12-01",
+        run_id=record.run_id,
+        commit=record.provenance.git_sha,
+        full=True,
+        record_sha256="0" * 64,
+        verdict=Verdict.VALID,
+        problems=(),
+        warnings=(),
+    )
+    Path(compliance_path(str(prefix), record.run_id)).write_text(compliance.model_dump_json())
+    store = _store(engine)
+    generation = store.store_info().catalog_generation
+    assert generation is not None
+
+    assert ingest_policy_admission(engine, str(releases))
+    store.reload_if_changed()
+    assert store.admission().releases == {"marin-2026-12-01": release}
+    assert store.admission().compliance == {record.run_id: compliance}
+    assert store.store_info().catalog_generation == generation + 1
+
+    assert ingest_policy_admission(engine, str(releases))
+    assert results_db.catalog_generation(engine) == generation + 1

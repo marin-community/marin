@@ -14,6 +14,7 @@ import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
 from evalrecords.eval_measurements import measurement_from_record
+from evalrecords.policy_release import NO_RELEASES
 from evalrecords.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
@@ -23,7 +24,7 @@ from starlette.testclient import TestClient
 def store(tmp_path) -> evaldash_app.MemoryRecordStore:
     fixtures.build_fixtures(str(tmp_path))
     store = evaldash_app.MemoryRecordStore()
-    store.refresh(list_records(str(tmp_path)))
+    store.refresh(list_records(str(tmp_path)), NO_RELEASES)
     return store
 
 
@@ -50,7 +51,7 @@ def test_metadata_tracks_replaced_snapshots_and_keeps_returned_root_request_owne
     assert store.meta()["models"] == []
     fixtures.build_fixtures(str(tmp_path))
     records = list_records(str(tmp_path))
-    store.refresh(records)
+    store.refresh(records, NO_RELEASES)
     metadata = store.meta()
     assert "snowball" in metadata["models"]
     metadata["current_user"] = "previous-viewer"
@@ -67,7 +68,7 @@ def test_metadata_tracks_replaced_snapshots_and_keeps_returned_root_request_owne
             "hardware": records[0].hardware.model_copy(update={"accelerator": "replacement-accelerator"}),
         }
     )
-    store.refresh([record])
+    store.refresh([record], NO_RELEASES)
     replaced = store.meta()
     assert replaced["models"] == ["replacement-model"]
     assert replaced["run_facets"]["version"] == ["replacement-cohort"]
@@ -101,7 +102,7 @@ def test_running_step_does_not_publish_its_recorded_score(store, tmp_path):
     )
     running = newest.model_copy(update={"step_status": "RUNNING"})
     assert measurement_from_record(running) is not None
-    store.refresh([running if record.run_id == newest.run_id else record for record in records])
+    store.refresh([running if record.run_id == newest.run_id else record for record in records], NO_RELEASES)
 
     qwen = next(row for row in _panel(store)["rows"] if row["model"] == "qwen3-8b")
     assert qwen["cells"]["mmlu"]["run_id"] != newest.run_id
@@ -289,7 +290,7 @@ def test_unverified_policy_run_has_no_headline_in_detail_or_group(store, client)
     record = store.get_record("snowball-2026.07.20-mmlu")
     assert record is not None
     invalid = EvalRunRecord.model_validate(record).model_copy(update={"version": "eval-policy-2026-09-24-verified"})
-    store.refresh([invalid])
+    store.refresh([invalid], NO_RELEASES)
 
     detail = client.get(f"/runs/{invalid.run_id}").json()
     assert detail["headline"] is None
@@ -308,7 +309,7 @@ def comparison_client(client, store):
         for model, version in (("snowball", "2026.07.20"), ("qwen3-8b", "2026.07.21"))
         for benchmark in ("mmlu", "arc-challenge")
     ]
-    store.refresh(records)
+    store.refresh(records, NO_RELEASES)
     return client
 
 
@@ -393,7 +394,9 @@ def test_ingestor_surfaces_parse_failures(tmp_path):
     # the bad one on its prefix probe rather than dropping it silently -- what the Debug view shows.
     fixtures.build_fixtures(str(tmp_path))
     store = evaldash_app.MemoryRecordStore()
-    ingestor = evaldash_app.Ingestor(store, (str(tmp_path),), interval=999)
+    ingestor = evaldash_app.Ingestor(
+        store, (str(tmp_path),), interval=999, releases_prefix=str(tmp_path / "policy-releases")
+    )
 
     asyncio.run(ingestor.run_once())
 
@@ -414,7 +417,7 @@ def test_memory_store_deduplicates_migrated_runs_with_canonical_precedence(tmp_p
     write_record(record.model_copy(update={"description": "canonical"}), str(canonical))
     write_record(record.model_copy(update={"description": "legacy"}), str(legacy))
     store = evaldash_app.MemoryRecordStore()
-    store.refresh(list_records(str(canonical)) + list_records(str(legacy)))
+    store.refresh(list_records(str(canonical)) + list_records(str(legacy)), NO_RELEASES)
 
     assert len(store.fetch_runs()) == 1
     stored = store.get_record(record.run_id)

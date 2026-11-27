@@ -41,13 +41,13 @@ from enum import StrEnum
 from typing import Protocol
 
 import google.auth
-from evalrecords.eval_policy import record_policy_violations
 from evalrecords.eval_stats import (
     DEFAULT_MIN_COVERAGE,
     Completeness,
     MissingPolicy,
     SelectionRequest,
 )
+from evalrecords.policy_release import NO_RELEASES, RELEASES_PREFIX, ReleaseAdmission
 from evalrecords.records import (
     DEFAULT_SCAN_PREFIXES,
     EvalRunRecord,
@@ -85,6 +85,7 @@ from .metrics import (
     record_headline,
     run_metric_rows,
 )
+from .policy_admission import read_admission, read_releases
 from .record_reconciliation import VerificationSchedule, inspect_record_paths, step_status_for_record
 from .results_db import (
     catalog_generation,
@@ -122,6 +123,7 @@ DEFAULT_REVIEW_MODEL = "claude-haiku-4-5-20251001"
 
 PREFIXES_ENV = "RECORDS_PREFIXES"
 REPORT_PREFIXES_ENV = "PLAYGROUND_REPORT_PREFIXES"
+RELEASES_PREFIX_ENV = "POLICY_RELEASES_PREFIX"
 STORE_ENV = "EVALDASH_STORE"
 INGEST_INTERVAL_ENV = "EVALDASH_INGEST_INTERVAL"
 REVALIDATE_AFTER_ENV = "EVALDASH_REVALIDATE_AFTER"
@@ -288,6 +290,7 @@ class EvaldashConfig:
 
     prefixes: tuple[str, ...]
     report_prefixes: tuple[str, ...]
+    releases_prefix: str
     store: StoreMode
     ingest_interval: float
     revalidate_after: float
@@ -311,6 +314,7 @@ class EvaldashConfig:
         return cls(
             prefixes=tuple(part.strip() for part in raw_prefixes.split(",") if part.strip()),
             report_prefixes=tuple(part.strip() for part in raw_report_prefixes.split(",") if part.strip()),
+            releases_prefix=environ.get(RELEASES_PREFIX_ENV, RELEASES_PREFIX),
             store=mode,
             ingest_interval=float(environ.get(INGEST_INTERVAL_ENV, DEFAULT_INGEST_INTERVAL)),
             revalidate_after=float(environ.get(REVALIDATE_AFTER_ENV, DEFAULT_REVALIDATE_AFTER)),
@@ -408,20 +412,27 @@ class RecordStore:
         self._records: list[EvalRunRecord] = []
         self._by_id: dict[str, EvalRunRecord] = {}
         self._metadata = build_meta([])
+        self._admission = NO_RELEASES
         self._archived: set[str] = set()
         self._lock = threading.Lock()
 
-    def _set_snapshot(self, records: list[EvalRunRecord]) -> None:
+    def _set_snapshot(self, records: list[EvalRunRecord], admission: ReleaseAdmission) -> None:
         by_id = {record.run_id: record for record in records}
-        metadata = build_meta(records)
+        metadata = build_meta(records, admission=admission)
         with self._lock:
             self._records = records
             self._by_id = by_id
             self._metadata = metadata
+            self._admission = admission
 
     def _snapshot(self) -> tuple[list[EvalRunRecord], dict[str, EvalRunRecord]]:
         with self._lock:
             return self._records, self._by_id
+
+    def admission(self) -> ReleaseAdmission:
+        """The released policy manifests and compliance files the snapshot admits runs by."""
+        with self._lock:
+            return self._admission
 
     def store_info(self) -> StoreInfo:
         records, _by_id = self._snapshot()
@@ -435,10 +446,10 @@ class RecordStore:
             catalog_error=None,
         )
 
-    def refresh(self, records: list[EvalRunRecord]) -> None:
+    def refresh(self, records: list[EvalRunRecord], admission: ReleaseAdmission) -> None:
         """Replace the direct-scan snapshot used by the local store."""
         records = [normalize_repeat_record(record) for record in _deduplicate_records(records)]
-        self._set_snapshot(records)
+        self._set_snapshot(records, admission)
         logger.info("memory store refreshed: %d records", len(records))
 
     def archived_models(self) -> set[str]:
@@ -497,10 +508,12 @@ class RecordStore:
         ``archived: true`` so the UI can style them apart.
         """
         records, _by_id = self._snapshot()
+        admission = self.admission()
         archived = self.archived_models()
         if archived and not include_archived:
             records = [record for record in records if record.model.name not in archived]
-        return build_panel(records, request, frozenset(archived), aggregate)
+        records = admission.view(records, request.cohort_version)
+        return build_panel(records, request, frozenset(archived), aggregate, admission)
 
     def comparison(self, request: SelectionRequest, models: tuple[str, ...]) -> dict:
         """Head-to-head difference intervals between named models, over the snapshot.
@@ -508,7 +521,8 @@ class RecordStore:
         Archived models are always in scope: naming a model is an explicit request for it.
         """
         records, _by_id = self._snapshot()
-        return build_comparison(records, request, models)
+        admission = self.admission()
+        return build_comparison(admission.view(records, request.cohort_version), request, models, admission)
 
     def meta(self) -> dict:
         self._snapshot()
@@ -557,7 +571,7 @@ class RecordStore:
                     "status": _status_rollup(statuses),
                     "n_evals": len(members),
                     "n_succeeded": sum(1 for record in members if display_status(record) == "succeeded"),
-                    "evals": [_group_member(record) for record in ordered],
+                    "evals": [_group_member(record, self.admission()) for record in ordered],
                 }
             )
         groups = [
@@ -578,7 +592,8 @@ class RecordStore:
         matching the column's protocol, with its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
-        return build_history(records, model, task, request)
+        admission = self.admission()
+        return build_history(admission.view(records, request.cohort_version), model, task, request, admission)
 
     def model_detail(self, model: str, request: SelectionRequest) -> dict | None:
         """One model's aggregated detail view: cohorts, per-eval history, and every run.
@@ -586,7 +601,7 @@ class RecordStore:
         ``None`` when the model has no records, so the route can answer 404.
         """
         records, _by_id = self._snapshot()
-        return build_model_detail(records, model, request)
+        return build_model_detail(records, model, request, self.admission())
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         records, _by_id = self._snapshot()
@@ -630,7 +645,7 @@ class PgRecordStore(RecordStore):
         self._catalog_generation = snapshot.generation
         self._snapshot_updated_at = snapshot.updated_at
         self._catalog_error: str | None = None
-        self._set_snapshot(snapshot.records)
+        self._set_snapshot(snapshot.records, snapshot.admission)
 
     def store_info(self) -> StoreInfo:
         self.refresh_if_due()
@@ -653,13 +668,14 @@ class PgRecordStore(RecordStore):
             return
         snapshot = fetch_snapshot(self._engine)
         by_id = {record.run_id: record for record in snapshot.records}
-        metadata = build_meta(snapshot.records)
+        metadata = build_meta(snapshot.records, admission=snapshot.admission)
         with self._lock:
             if snapshot.generation <= self._catalog_generation:
                 return
             self._records = snapshot.records
             self._by_id = by_id
             self._metadata = metadata
+            self._admission = snapshot.admission
             self._catalog_generation = snapshot.generation
             self._snapshot_updated_at = snapshot.updated_at
         logger.info("postgres store loaded generation %d with %d records", snapshot.generation, len(snapshot.records))
@@ -788,10 +804,11 @@ class Ingestor:
     concurrently — whichever arrives second waits for the first to finish, then runs its own pass.
     """
 
-    def __init__(self, store: RecordStore, prefixes: tuple[str, ...], interval: float) -> None:
+    def __init__(self, store: RecordStore, prefixes: tuple[str, ...], interval: float, releases_prefix: str) -> None:
         """Create an ingestor whose prefixes are ordered from highest to lowest precedence."""
         self._store = store
         self._prefixes = prefixes
+        self._releases_prefix = releases_prefix
         self.interval = interval
         self._lock = asyncio.Lock()
         self._probes = {prefix: PrefixProbe(prefix=prefix) for prefix in prefixes}
@@ -836,9 +853,23 @@ class Ingestor:
                 self._last_good[prefix] = found
                 self._record_cache[prefix] = scan.records_by_path
                 records.extend(found)
-            await asyncio.to_thread(self._store.refresh, records)
+            admission = await asyncio.to_thread(self._read_admission, records)
+            await asyncio.to_thread(self._store.refresh, records, admission)
             self.last_pass_time = _utcnow_iso()
             return tuple(failed_prefixes)
+
+    def _read_admission(self, records: list[EvalRunRecord]) -> ReleaseAdmission:
+        """Read released policy manifests and compliance files; keep the last admission if that fails."""
+        try:
+            return read_admission(
+                read_releases(self._releases_prefix),
+                lambda versions: [
+                    record for record in records if record.version is not None and record.version in versions
+                ],
+            )
+        except Exception:
+            logger.exception("ingest: reading policy releases failed; keeping the last admission")
+            return self._store.admission()
 
     async def run_loop(self) -> None:
         if not self._prefixes:
@@ -1076,14 +1107,14 @@ def _status_rollup(statuses: set[str]) -> str:
     return "mixed"
 
 
-def _run_headline(record: EvalRunRecord) -> dict | None:
+def _run_headline(record: EvalRunRecord, admission: ReleaseAdmission) -> dict | None:
     """Return an admitted run's primary grade, or None when it scored nothing or violates policy."""
-    if record_policy_violations(record):
+    if admission.violations(record):
         return None
     return record_headline(record)
 
 
-def _group_member(record: EvalRunRecord) -> dict:
+def _group_member(record: EvalRunRecord, admission: ReleaseAdmission) -> dict:
     """One eval within a launch: its identity, status, and headline score for the expanded group row."""
     return {
         "run_id": record.run_id,
@@ -1091,7 +1122,7 @@ def _group_member(record: EvalRunRecord) -> dict:
         "status": display_status(record),
         "step_status": record.step_status,
         "created_at": record.created_at,
-        "headline": _run_headline(record),
+        "headline": _run_headline(record, admission),
     }
 
 
@@ -1121,7 +1152,7 @@ def _ingestor_and_loop(
     if isinstance(store, PgRecordStore):
         ingestor = PostgresIngestor(store.engine, config.prefixes, config.ingest_interval, config.revalidate_after)
         return ingestor, None
-    local_ingestor = Ingestor(store, config.prefixes, config.ingest_interval)
+    local_ingestor = Ingestor(store, config.prefixes, config.ingest_interval, config.releases_prefix)
     return local_ingestor, local_ingestor.run_loop
 
 
@@ -1160,8 +1191,8 @@ def _run_router(store: RecordStore, gateway: ClusterGatewayLike, config: Evaldas
         return RunDetailResponse.model_validate(
             {
                 **record,
-                "headline": _run_headline(parsed),
-                "policy_violations": list(record_policy_violations(parsed)),
+                "headline": _run_headline(parsed, store.admission()),
+                "policy_violations": list(store.admission().violations(parsed)),
                 "metric_rows": run_metric_rows(parsed),
             }
         )

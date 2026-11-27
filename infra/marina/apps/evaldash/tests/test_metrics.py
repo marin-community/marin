@@ -21,6 +21,14 @@ from evalrecords.eval_policy import EVALCHEMY_COMMIT
 from evalrecords.eval_policy_sources import POLICY_SOURCE_DIGESTS, SEPTEMBER_24_VERSION
 from evalrecords.eval_stats import Completeness, MissingPolicy
 from evalrecords.model_identity import model_config_digest
+from evalrecords.policy_release import (
+    NO_RELEASES,
+    PolicyRelease,
+    ReleaseAdmission,
+    ReleasedRun,
+    RunCompliance,
+    Verdict,
+)
 from evalrecords.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -886,7 +894,7 @@ def test_policy_violations_only_exclude_runs_in_a_named_cohort():
     assert {item["run_id"] for item in named_comparison["policy_rejections"]} == set(newest.values())
 
     store = MemoryRecordStore()
-    store.refresh(records)
+    store.refresh(records, NO_RELEASES)
     config = evaldash_app.EvaldashConfig.from_env({"EVALDASH_STORE": "local", "RECORDS_PREFIXES": " "})
     api = evaldash_app.build_api(store, evaldash_app.NullClusterGateway(), config)
     with TestClient(api.app) as client:
@@ -945,7 +953,7 @@ def test_panel_groups_tau_context_override_with_other_evals_despite_archived_con
             )
         )
     store = MemoryRecordStore()
-    store.refresh(records)
+    store.refresh(records, NO_RELEASES)
     tau_model = records[1].model
     assert tau_model.config is not None
     store.set_model_archived(f"grug@{model_config_digest(tau_model.config)[:12]}", True, None)
@@ -1133,3 +1141,100 @@ def test_historical_harbor_and_curated_agent_scores_share_a_family_and_the_rewar
         "tb2": ("reward", 0.3),
         column: ("reward", 0.4),
     }
+
+
+RELEASE_COMMIT = "c" * 40
+
+
+def _policy_run(model: str, version: str, value: float, *, commit: str = RELEASE_COMMIT) -> EvalRunRecord:
+    record = _record(model, "mmlu", version, "2026-11-28T00:00:00+00:00", value)
+    return record.model_copy(update={"provenance": record.provenance.model_copy(update={"git_sha": commit})})
+
+
+def _pin(record: EvalRunRecord, value: float, *, carried_from: str | None = None) -> ReleasedRun:
+    return ReleasedRun(
+        model=record.model.name,
+        evaluation="mmlu",
+        run_id=record.run_id,
+        records_prefix="s3://records",
+        commit=record.provenance.git_sha,
+        record_sha256="0" * 64,
+        archive_version="1",
+        scores={"mmlu": {"acc,none": value, "acc_stderr,none": 0.01, "sample_len": float(ITEMS)}},
+        carried_from=carried_from,
+    )
+
+
+def _verified(record: EvalRunRecord, *, full: bool = True, problems: tuple[str, ...] = ()) -> RunCompliance:
+    return RunCompliance(
+        version=record.version,
+        run_id=record.run_id,
+        commit=record.provenance.git_sha,
+        full=full,
+        record_sha256="0" * 64,
+        verdict=Verdict.INVALID if problems else Verdict.VALID,
+        problems=problems,
+        warnings=(),
+    )
+
+
+def test_a_released_cohort_holds_its_pinned_runs_at_the_manifests_scores_and_verified_runs_at_its_commit():
+    version = "marin-2026-12-01"
+    pinned = _policy_run("baseline", version, 0.5)
+    checkpoint = _policy_run("checkpoint", version, 0.6)
+    smoke = _policy_run("smoke", version, 0.7)
+    elsewhere = _policy_run("elsewhere", version, 0.8, commit="d" * 40)
+    invalid = _policy_run("invalid", version, 0.9)
+    unverified = _policy_run("unverified", version, 0.4)
+    admission = ReleaseAdmission(
+        releases={version: PolicyRelease(version=version, commit=RELEASE_COMMIT, base=None, runs=(_pin(pinned, 0.55),))},
+        compliance={
+            record.run_id: compliance
+            for record, compliance in (
+                (checkpoint, _verified(checkpoint)),
+                (smoke, _verified(smoke, full=False)),
+                (elsewhere, _verified(elsewhere)),
+                (invalid, _verified(invalid, problems=("server window 32768, policy gives 73728",))),
+            )
+        },
+    )
+    store = MemoryRecordStore()
+    store.refresh([pinned, checkpoint, smoke, elsewhere, invalid, unverified], admission)
+    panel = store.panel(panel_request(cohort=version), None, include_archived=True)
+
+    assert {row["model"]: row["cells"]["mmlu"]["value"] for row in panel["rows"]} == {
+        "baseline": 0.55,
+        "checkpoint": 0.6,
+    }
+    reasons = {item["run_id"]: item["reasons"] for item in panel["policy_rejections"]}
+    assert reasons == {
+        smoke.run_id: ["a smoke run"],
+        elsewhere.run_id: [f"ran at {'d' * 12}, not the release commit {'c' * 12}"],
+        invalid.run_id: ["verify: server window 32768, policy gives 73728"],
+        unverified.run_id: ["not pinned by the release and not verified"],
+    }
+    assert version in store.meta()["verified_cohorts"]
+
+
+def test_a_patch_cohort_holds_the_runs_it_carries_from_its_base_release():
+    base, patch = "marin-2026-12-01", "marin-2026-12-08"
+    carried = _policy_run("baseline", base, 0.5)
+    rerun = _record("baseline", "gsm8k", patch, "2026-12-08T00:00:00+00:00", 0.7).model_copy(
+        update={"provenance": carried.provenance.model_copy(update={"git_sha": "e" * 40})}
+    )
+    rerun_pin = _pin(rerun, 0.7).model_copy(update={"evaluation": "gsm8k", "scores": rerun.metrics})
+    admission = ReleaseAdmission(
+        releases={
+            base: PolicyRelease(version=base, commit=RELEASE_COMMIT, base=None, runs=(_pin(carried, 0.5),)),
+            patch: PolicyRelease(
+                version=patch, commit="e" * 40, base=base, runs=(_pin(carried, 0.5, carried_from=base), rerun_pin)
+            ),
+        }
+    )
+    store = MemoryRecordStore()
+    store.refresh([carried, rerun], admission)
+
+    patched = store.panel(panel_request(cohort=patch), None, include_archived=True)
+    assert set(patched["rows"][0]["cells"]) == {"mmlu", "gsm8k"}
+    original = store.panel(panel_request(cohort=base), None, include_archived=True)
+    assert set(original["rows"][0]["cells"]) == {"mmlu"}
