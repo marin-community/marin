@@ -2,7 +2,7 @@
   "kind": "atlas-release-config",
   "release_id": "atlas-2026.11.27",
   "cluster": "cw-us-east-02a",
-  "freeze_source_revision": "1319a4aa9c7170a6fb61f794f0742274808582e5",
+  "freeze_source_revision": "4575c6990764595891d0ea1cb513f9268152170b",
   "prior_release": {
     "release_id": "r40",
     "declarations": {
