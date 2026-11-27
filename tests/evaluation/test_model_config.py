@@ -222,6 +222,25 @@ def test_gpu_lowering_sets_catalog_owned_runai_request_timeout():
     assert lowered.iris.worker_environment.env_vars["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] == "60000"
 
 
+def test_gpu_lowering_sets_pipeline_layer_partition():
+    model = ModelConfig(
+        name="shared-kv-model",
+        location="s3://models/shared-kv",
+        resource_hint=ResourceHint(gpu={"GB200": 4}, memory="768g"),
+        serve=ServeConfig(
+            tensor_parallel_size=4,
+            pipeline_parallel_size=2,
+            pipeline_layer_partition=(35, 37),
+            auto_overrides=False,
+        ),
+    )
+    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="GB200", gpu_count=4)
+
+    lowered = inference_config_for_model(model, choice, env_vars={}, priority=job_pb2.PRIORITY_BAND_INHERIT)
+
+    assert lowered.iris.worker_environment.env_vars["VLLM_PP_LAYER_PARTITION"] == "35,37"
+
+
 @pytest.mark.parametrize(("setting", "expected"), [(True, "1"), (False, "0"), (None, "inherited")])
 def test_gpu_lowering_sets_nccl_symmetric_memory(setting, expected):
     model = ModelConfig(
