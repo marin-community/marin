@@ -1,0 +1,12 @@
+id: X0271
+slug: x0250-with-row-adamh-token-embed
+name: X0250 with row-AdamH token_embed
+category: Embeddings and inputs
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7228104107
+  author: armorfaye
+  approved_by: armorfaye (trusted)
