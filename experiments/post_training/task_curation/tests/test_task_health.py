@@ -165,15 +165,21 @@ def test_native_receipts_match_stored_task_documents(tmp_path, selection_file, t
         (receipt.task_digest, 1),
         (selection_digest(killed), 137),
     }
+    selected_source = "selected-fixture" if digest_matches else "fixture"
     pq.write_table(
         pa.table(
             {
-                TASK_SPEC_COLUMN: [json.dumps(stored_task), json.dumps(stored_task), killed.model_dump_json()],
-                "source": ["fixture", "selected-fixture", "fixture"],
+                TASK_SPEC_COLUMN: [json.dumps(stored_task), killed.model_dump_json()],
+                "source": [selected_source, "fixture"],
             }
         ),
         tmp_path / selection_file,
     )
+    if not evaluating:
+        pq.write_table(
+            pa.table({TASK_SPEC_COLUMN: [json.dumps(stored_task)], "source": ["fixture"]}),
+            tmp_path / VALIDATION_FILENAME,
+        )
     selection = StoragePath(str(tmp_path))
     skip = StoragePath(str(tmp_path / "skip"))
     if not digest_matches:
@@ -183,10 +189,10 @@ def test_native_receipts_match_stored_task_documents(tmp_path, selection_file, t
     publish_skip_list(selection, [snapshot], skip, "fixture")
     listed = pq.read_table(str(skip / SKIP_FILENAME)).to_pylist()
     assert {(row["task_id"], row["task_digest"]) for row in listed} == {(task.id, canonical_sha256(stored_task))}
-    assert {tuple(row["task_key"]) for row in listed} == {
-        ("fixture", "fixture-swe", "release", "example"),
-        ("selected-fixture", "fixture-swe", "release", "example"),
-    }
+    keys = {("selected-fixture", "fixture-swe", "release", "example")}
+    if not evaluating:
+        keys.add(("fixture", "fixture-swe", "release", "example"))
+    assert {tuple(row["task_key"]) for row in listed} == keys
 
 
 def write_tasks(path: Path, tasks: list[TaskSpec]) -> Path:
