@@ -4,7 +4,7 @@ name: X0250 + token_embed per-row hyperball step
 category: Embeddings and inputs
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7208905691
@@ -29,3 +29,10 @@ trials:
     embed_row_hyperball: '0.012'
   commit: 3021c1eef9
   priority: interactive
+  loss:
+  - 3.0436
+  delta:
+  - -0.0027
+  steps: 3030
+  baseline: belay-X0264-control 3.0463 (same commit, seed 0)
+  step_time_change: -1%
