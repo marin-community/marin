@@ -93,22 +93,42 @@ type PackageSource = HarborRepoSource | HarborArchiveSource | HarborHubSource
 class PackageEdit:
     """Replace the one occurrence of ``old`` with ``new`` in the package file at relative ``path``.
 
-    A dataset edits its packages to remove software that Marin runs must not install.
+    A dataset edits its packages to remove software that Marin runs must not install, or to change how they grade.
     """
 
     path: str
     old: str
     new: str
 
-
-def edit_package(directory: Path, edits: tuple[PackageEdit, ...]) -> None:
-    """Apply ``edits`` to the package at ``directory``; an edit whose text the file lacks, or repeats, fails."""
-    for edit in edits:
-        file = directory / edit.path
+    def apply(self, directory: Path) -> None:
+        file = directory / self.path
         text = file.read_text()
-        if text.count(edit.old) != 1:
-            raise ValueError(f"{edit.path} must contain the edited text exactly once")
-        file.write_text(text.replace(edit.old, edit.new))
+        if text.count(self.old) != 1:
+            raise ValueError(f"{self.path} must contain the edited text exactly once")
+        file.write_text(text.replace(self.old, self.new))
+
+
+@dataclass(frozen=True)
+class PackageCopy:
+    """Copy the package file at relative ``source`` to relative ``target``, which must not exist."""
+
+    source: str
+    target: str
+
+    def apply(self, directory: Path) -> None:
+        target = directory / self.target
+        if target.exists():
+            raise ValueError(f"{self.target} already exists")
+        shutil.copyfile(directory / self.source, target)
+
+
+type PackageChange = PackageEdit | PackageCopy
+
+
+def edit_package(directory: Path, edits: tuple[PackageChange, ...]) -> None:
+    """Apply ``edits`` to the package at ``directory`` in order."""
+    for edit in edits:
+        edit.apply(directory)
 
 
 def package_tests(_directory: Path) -> GradingRule:
@@ -128,7 +148,7 @@ class HarborConversion:
         row: RawRow,
         _context: ConversionContext,
         job: JobSettings = JobSettings(),
-        edits: tuple[PackageEdit, ...] = (),
+        edits: tuple[PackageChange, ...] = (),
     ) -> TaskSpec | ImportRejection:
         with TemporaryDirectory(prefix="harbor-package-") as root:
             directory = Path(root) / row.data["name"]
@@ -212,7 +232,7 @@ class HarborDataset:
     requires_judge: bool = False
     attempt_timeout: float = ATTEMPT_TIMEOUT
     images: str | None = None
-    edits: tuple[PackageEdit, ...] = ()
+    edits: tuple[PackageChange, ...] = ()
 
     @property
     def image_lock_name(self) -> str:
@@ -308,6 +328,14 @@ def harbor_source(
         ),
         pipeline=prepare_evaluation,
     )
+
+
+TMUX_INSTALL = (
+    "RUN if ! command -v tmux >/dev/null; then apt-get update"
+    " && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux"
+    " && rm -rf /var/lib/apt/lists/*; fi\n"
+)
+"""Dockerfile instructions that install tmux, which Terminus 2 otherwise installs at startup, needing the network."""
 
 
 def pi_install(agent: PiAgent) -> str:
