@@ -1133,40 +1133,14 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         kv_cache: ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
+        *,
+        logit_positions: NamedArray | None = None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
-        """Prefill or decode packed sequences using absolute positions and paged KV state.
+        """Update paged KV state and return logits for the requested input rows.
 
-        Tokens occupy a flat position axis, with a valid prefix described by batch_info.
-        Expert assignments are independent of other requests and padding.
+        When supplied, logit_positions indexes the flat input array. Its axes
+        replace the input position axis in the returned logits.
         """
-        hidden, caches = self._decode_hidden(input_ids, kv_cache, batch_info, pos_ids)
-        logits = jnp.einsum(
-            "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
-        )
-        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
-
-    @named_call
-    def decode_for_sampling(
-        self,
-        input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
-        batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
-        sample_indices: NamedArray,
-    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
-        """Return logits in sample_indices order and update KV state for valid tokens."""
-        hidden, caches = self._decode_hidden(input_ids, kv_cache, batch_info, pos_ids)
-        sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
-        logits = jnp.einsum("pd,dv->pv", sampled, self.transformer.output_proj, out_sharding=P())
-        return hax.named(logits, (*sample_indices.axes, self.Vocab)), caches
-
-    def _decode_hidden(
-        self,
-        input_ids: NamedArray,
-        kv_cache: ListCache[KvPageCache],
-        batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
-    ) -> tuple[jax.Array, ListCache[KvPageCache]]:
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
         if len(kv_cache) != len(self.transformer.blocks):
@@ -1189,7 +1163,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         hidden, cache_pages = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
-        return hidden, caches
+        if logit_positions is not None:
+            rows = hidden[:, 0].at[logit_positions.array].get(out_sharding=P())
+            logits = jnp.einsum("pd,dv->pv", rows, self.transformer.output_proj, out_sharding=P())
+            return hax.named(logits, (*logit_positions.axes, self.Vocab)), caches
+
+        logits = jnp.einsum(
+            "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
+        )
+        return hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches
 
     def _stacked_inference_blocks(self) -> SnowballBlock:
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)

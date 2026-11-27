@@ -45,17 +45,11 @@ LEVANTER_DTYPES = ("bfloat16", "float16", "float32")
 
 @runtime_checkable
 class SupportsPagedGeneration(Protocol):
-    """A Levanter model the paged-decode inference engine can drive.
-
-    :meth:`LevanterBackend.serve` builds an ``InferenceEngine`` that calls ``initial_cache`` and
-    ``decode``. A model that implements only the full-forward ``LmHeadModel`` interface -- e.g.
-    Snowball, which has no paged decode for grug attention yet -- cannot be served through it, so
-    ``serve`` rejects it up front rather than after the (large) weight load.
-    """
+    """Model with a paged KV cache and support for projecting selected input rows."""
 
     def initial_cache(self, spec, *, dtype): ...
 
-    def decode(self, tokens, cache, binfo, pos_ids): ...
+    def decode(self, tokens, cache, binfo, pos_ids, *, logit_positions=None): ...
 
 
 @dataclass(frozen=True)

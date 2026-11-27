@@ -7,7 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Protocol, Sequence, runtime_checkable
+from typing import Optional, Sequence
 
 import equinox as eqx
 import haliax as hax
@@ -407,18 +407,6 @@ def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
     return hax.named(values, (*indices.axes, *logits.axes[1:]))
 
 
-@runtime_checkable
-class _SelectedRowDecoder(Protocol):
-    def decode_for_sampling(
-        self,
-        input_ids: NamedArray,
-        kv_cache: PageCache,
-        batch_info: PageBatchInfo,
-        pos_ids: NamedArray,
-        sample_indices: NamedArray,
-    ) -> tuple[NamedArray, PageCache]: ...
-
-
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -446,13 +434,10 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    if isinstance(model, _SelectedRowDecoder):
-        logits_at_samples, cache = model.decode_for_sampling(
-            tokens, gen_state.cache, batch_info, pos_ids, sample_indices
-        )
-    else:
-        logits, cache = model.decode(tokens, gen_state.cache, batch_info, pos_ids)
-        logits_at_samples = _gather_logits(logits, sample_indices)
+    logits_at_samples, cache = model.decode(
+        tokens, gen_state.cache, batch_info, pos_ids, logit_positions=sample_indices
+    )
+    logits_at_samples = hax.shard(logits_at_samples, {})
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(
@@ -717,8 +702,10 @@ def _run_generation_loop(
         sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
-        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = _gather_logits(logits, sample_indices)
+        logits_at_samples, cache = model.decode(
+            tokens, gen_state.cache, binfo, pos_ids, logit_positions=sample_indices
+        )
+        logits_at_samples = hax.shard(logits_at_samples, {})
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]

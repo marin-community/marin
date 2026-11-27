@@ -472,11 +472,15 @@ class ApertusLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[ApertusCo
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        logit_positions: NamedArray | None = None,
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        """Update paged KV state and project all rows or the selected input positions."""
         x = self.embeddings.embed(input_ids)
         k_t = maybe_rng_split(key, 1)[0] if key is not None else None
         x, kv_cache = self.transformer.decode(kv_cache, x, batch_info, pos_ids=pos_ids, key=k_t)
+        if logit_positions is not None:
+            x = x.take(input_ids.axes[-1], logit_positions)
         if self.lm_head:
             lm_logits = self.lm_head(x, key=None)
         else:
