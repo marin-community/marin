@@ -86,6 +86,13 @@ trials:
     id_balance_gain: '0.096'
   commit: f779655e2f
   priority: interactive
+  loss:
+  - 3.0406
+  delta:
+  - -0.0051
+  steps: 3072
+  baseline: belay-X0265v1-control 3.0457 (same commit, seed 0)
+  step_time_change: -1%
 - id: t005
   variant: ID Balancing bias in place of QB, id_balance_gain=0.024
   rung: speedrun
