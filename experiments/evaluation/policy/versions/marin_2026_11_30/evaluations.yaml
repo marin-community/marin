@@ -1,0 +1,225 @@
+# The November 2026 policy's evaluations: the in-distribution benchmarks of #12156, without SWE-bench Verified
+# and FinanceBench (contaminated), τ³-bench and SOTOPIA-hard (no runnable implementation) and ScienceAgentBench
+# (not planned). README.md lists the differences from October.
+
+# The Together GPT-OSS-120B judge.
+together_judge: &together_judge
+  deployment: together
+  models:
+    openai/gpt-oss-120b: provider-managed:openai/gpt-oss-120b
+  default_model: openai/gpt-oss-120b
+# The Together GLM-5.3-Flash judge of IMO-ProofBench and PHYSICS-Verified. GLM-5.3-Flash is also a baseline, so
+# it grades its own replies on these two.
+glm_judge: &glm_judge
+  deployment: together
+  models:
+    zai-org/GLM-5.3-Flash: provider-managed:zai-org/GLM-5.3-Flash
+  default_model: zai-org/GLM-5.3-Flash
+together_key: &together_key
+- env:TOGETHER_API_KEY
+- gcp-secret://projects/hai-gcp-models/secrets/TOGETHER_API_KEY/versions/latest
+
+evaluations:
+  # Knowledge and reasoning.
+  gpqa-diamond:
+    benchmark: gpqa-diamond
+  mmlu-pro:
+    benchmark: mmlu-pro
+  supergpqa-2500:
+    benchmark: supergpqa-2500
+  arc-agi-2:
+    benchmark: arc-agi-2
+  winogrande:
+    benchmark: winogrande
+  boolq:
+    benchmark: boolq
+  piqa:
+    benchmark: piqa
+  truthfulqa:
+    benchmark: truthfulqa
+  truthfulqa-binary:
+    benchmark: truthfulqa-binary
+    protocol: chat
+  # Factuality.
+  simpleqa-verified:
+    benchmark: simpleqa-verified
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  facts-parametric:
+    benchmark: facts-parametric
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  facts-grounding-v2:
+    benchmark: facts-grounding-v2
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  # Math.
+  aime24:
+    benchmark: aime24
+    run:
+      seed: 42
+  math500:
+    benchmark: math500
+  gsm8k-0shot:
+    benchmark: gsm8k
+    num_fewshot: 0
+    prompt_format: chat
+  nupa:
+    benchmark: nupa5k-loose
+  olympiadbench:
+    benchmark: olympiadbench
+    run:
+      seed: 42
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  imo-answerbench:
+    benchmark: imo-answerbench
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  imo-proofbench:
+    benchmark: imo-proofbench
+    run:
+      judge: *glm_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  # Science.
+  chembench:
+    benchmark: chembench
+  genomeqa:
+    benchmark: genomeqa
+  pdbthink:
+    benchmark: pdbthink
+  physics-verified:
+    benchmark: physics-verified
+    run:
+      judge: *glm_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  frontierscience-olympiad:
+    benchmark: frontierscience-olympiad
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  frontierscience-research:
+    benchmark: frontierscience-research
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  # Code.
+  humanevalplus:
+    benchmark: humanevalplus
+  mbppplus:
+    benchmark: mbppplus
+  cruxeval:
+    benchmark: cruxeval
+  livecodebench:
+    benchmark: livecodebench
+  livecodebench-hero-clean:
+    benchmark: livecodebench-hero-clean
+  # Each grade stages a test archive of up to 203 MiB in the grader job; more at once runs out of memory (#12217).
+  livecodebench-pro:
+    benchmark: livecodebench-pro
+    run:
+      concurrency: 16
+  # Instruction following and professional.
+  ifbench:
+    benchmark: ifbench
+  multichallenge:
+    benchmark: multichallenge
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  econevals-occupation-sampled-o3:
+    benchmark: econevals-synthetic-occupation-sampled-o3
+    run:
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  # Long context.
+  mrcr:
+    benchmark: mrcr
+  mrcr-32k:
+    benchmark: mrcr
+    protocol: 32k
+  mrcr-65k:
+    benchmark: mrcr
+    protocol: 65k
+  longbench-v2:
+    benchmark: longbench-v2
+    protocol: thinking
+  graphwalks:
+    benchmark: graphwalks
+  # Agent benchmarks. Terminal-Bench, TBLite and the SWE-bench sets have one image per task; snapshots of them all
+  # would exceed the Daytona account's quota, so their machines build images declaratively.
+  tb2:
+    benchmark: terminal-bench-2.1
+    protocol: package-timeouts
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  ot-tblite:
+    benchmark: ot-tblite
+    protocol: package-timeouts
+    run:
+      concurrency: 16
+      task_machine:
+        image_build: declarative
+  ds-1000:
+    benchmark: ds-1000
+    protocol: terminus-2
+    run:
+      concurrency: 32
+  bfcl-pi:
+    benchmark: bfcl-parity
+    protocol: pi
+    run:
+      concurrency: 32
+  bixbench-pi:
+    benchmark: bixbench
+    protocol: package-timeouts
+    run:
+      concurrency: 32
+      judge: *together_judge
+      judge_endpoint: https://api.together.xyz/v1
+      judge_api_key: *together_key
+  swebench-multilingual:
+    benchmark: swebench-multilingual-100
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro-200:
+    benchmark: swebench-pro-200
+    protocol: mini-swe-agent
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-pro-hard:
+    benchmark: swebench-pro-hard
+    protocol: mini-swe-agent
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-science:
+    benchmark: swebench-science
+    protocol: pi-xhigh
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
