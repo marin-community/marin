@@ -40,7 +40,12 @@ def grade(config, test_log):
     pass_to_pass = config["PASS_TO_PASS"]
     results = parse_test_log(test_log)
     expected = {"PASSED": set(fail_to_pass) | set(pass_to_pass)}
-    unscorable = not fail_to_pass and not pass_to_pass and not any(results.values())
+    # Package build failures and parser placeholders identify no test.
+    unscorable = not any(
+        not name.endswith(BUILD_ERROR_SUFFIX) and not _is_placeholder_test_name(_normalize_test_name_for_compare(name))
+        for names in results.values()
+        for name in names
+    )
     actual_passed = _actual_passed_aliases(_normalized_passed_names(results["PASSED"]))
 
     def status(names):
@@ -55,7 +60,7 @@ def grade(config, test_log):
     return {
         "log_parser": LOG_PARSER,
         "unscorable": unscorable,
-        "resolved": normalized_passed_subset(results, expected),
+        "resolved": not results["ERROR"] and normalized_passed_subset(results, expected),
         "parsed_counts": {key: len(value) for key, value in results.items()},
         "fail_to_pass": status(fail_to_pass),
         "pass_to_pass": status(pass_to_pass),
@@ -80,7 +85,7 @@ def main():
     print("parser=%s parsed=%s" % (LOG_PARSER, report["parsed_counts"]))
     print("F2P %d/%d P2P %d/%d" % (f2p_ok, len(report["fail_to_pass"]), p2p_ok, len(report["pass_to_pass"])))
     if report["unscorable"]:
-        print("UNSCORABLE: no FAIL_TO_PASS/PASS_TO_PASS ids and an empty parsed log")
+        print("UNSCORABLE: no named test results were parsed from the test log")
     print("RESOLVED" if report["resolved"] else "UNRESOLVED")
     sys.exit(0 if report["resolved"] else 1)
 

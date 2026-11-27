@@ -14,7 +14,7 @@ from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
 from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
-from levanter.kernels.logsumexp import batch_invariant_logsumexp
+from levanter.kernels.logsumexp import batch_invariant_log_softmax_and_logsumexp
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
@@ -150,7 +150,8 @@ def next_token_loss(
         reduction: reduction function or None to disable reduction
         reduction_axis: axis to apply reduction. None means all axes
         logsumexp_weight: weight for the logsumexp penalty
-        normalization: BATCH_INVARIANT keeps each row's reduction order independent of the batch.
+        normalization: BATCH_INVARIANT fixes each row's reduction order on explicit meshes.
+            Auto meshes delegate partitioning to JAX.
     Returns:
         NamedArray: computed loss
     """
@@ -189,9 +190,12 @@ def cross_entropy_and_logsumexp_penalty(
     if normalization == CrossEntropyNormalization.BATCH_INVARIANT:
         vocab = pred_y.resolve_axis(Vocab)
         axis = pred_y.axes.index(vocab)
-        normalizers = batch_invariant_logsumexp(jnp.moveaxis(pred_y.array, axis, -1))
+        log_probs, normalizers = batch_invariant_log_softmax_and_logsumexp(jnp.moveaxis(pred_y.array, axis, -1))
         log_normalizers = hax.named(normalizers, tuple(a for a in pred_y.axes if a != vocab))
-        loss = hax.dot(target_y, log_normalizers - pred_y.astype(jnp.float32), axis=vocab)
+        named_log_probs = hax.named(jnp.moveaxis(log_probs, -1, axis), pred_y.axes)
+        # A masked vocabulary entry with zero target mass contributes zero loss.
+        named_log_probs = hax.where((target_y == 0) & hax.isneginf(named_log_probs), 0, named_log_probs)
+        loss = -hax.sum(target_y * named_log_probs, axis=vocab)
     elif normalization == CrossEntropyNormalization.DEFAULT:
         loss, log_normalizers = cross_entropy_loss_and_log_normalizers(pred_y, Vocab, target_y)
     else:

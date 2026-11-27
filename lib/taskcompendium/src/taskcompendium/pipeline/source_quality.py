@@ -13,7 +13,7 @@ from functools import partial
 from pydantic import BaseModel, ConfigDict
 
 from taskcompendium.identity import canonical_sha256
-from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader
+from taskcompendium.models import NoGrader, ScriptGrader, VerifyitGrader, grader_environment
 from taskcompendium.pipeline.models import (
     REJECTING_CHECK_STATUSES,
     Confidence,
@@ -23,7 +23,7 @@ from taskcompendium.pipeline.models import (
     ReviewStatus,
     TaskAudit,
 )
-from taskcompendium.pipeline.sampling import merge_sample_rows, seeded_order, seeded_sample
+from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from taskcompendium.runtime.resources import resource_bytes
 
 SOURCE_QUALITY_REVISION = "8"
@@ -121,7 +121,7 @@ def contract_signature(audit: TaskAudit) -> str:
     execution_contract = None
     entrypoint_digest = None
     if isinstance(grader, ScriptGrader):
-        execution_contract = grader.model_dump(mode="json", exclude={"environment"})
+        execution_contract = grader.model_dump(mode="json", exclude={"placement": {"environment"}})
     elif isinstance(grader, VerifyitGrader) and grader.mode in {"script", "stdio", "pytest", "junit", "gotest"}:
         execution_contract = dict(grader.parameters)
         if grader.mode == "script":
@@ -137,7 +137,8 @@ def contract_signature(audit: TaskAudit) -> str:
                 if key in grader.contract
             },
         }
-    environment = grader.environment if isinstance(grader, VerifyitGrader | ScriptGrader) else None
+    environment = grader_environment(grader)
+    placement = grader.placement if isinstance(grader, VerifyitGrader | ScriptGrader) else None
     return canonical_sha256(
         {
             "grader_kind": grader.kind,
@@ -147,6 +148,7 @@ def contract_signature(audit: TaskAudit) -> str:
             "answer_type": task.answer_type,
             "answer_format": task.answer_format.model_dump(mode="json"),
             "environment": task.environment_requirements.model_dump(mode="json"),
+            "grader_placement": None if placement is None else placement.kind,
             "grader_environment": None if environment is None else environment.model_dump(mode="json"),
             "output_paths": task.output_paths,
         }
@@ -172,25 +174,6 @@ def sample_quality_rows(records: Iterator[dict], *, policy: SourceQualityPolicy)
 
     eligible, selected = seeded_sample(
         eligible_ids(), size=policy.sample_size, key=partial(seeded_order, seed=policy.seed)
-    )
-    return QualitySample(inputs, eligible, dict(exclusions), dict(contracts), tuple(selected))
-
-
-def merge_quality_samples(samples: Iterator[QualitySample], *, policy: SourceQualityPolicy) -> QualitySample:
-    inputs = 0
-    exclusions: Counter[str] = Counter()
-    contracts: Counter[str] = Counter()
-
-    def shard_samples() -> Iterator[tuple[int, tuple[str, ...]]]:
-        nonlocal inputs
-        for sample in samples:
-            inputs += sample.input_count
-            exclusions.update(sample.exclusions)
-            contracts.update(sample.contracts)
-            yield sample.eligible_count, sample.task_ids
-
-    eligible, selected = merge_sample_rows(
-        shard_samples(), size=policy.sample_size, key=partial(seeded_order, seed=policy.seed)
     )
     return QualitySample(inputs, eligible, dict(exclusions), dict(contracts), tuple(selected))
 

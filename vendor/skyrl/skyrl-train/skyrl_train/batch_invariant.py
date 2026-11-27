@@ -9,7 +9,7 @@ from skyrl_train.env_vars import VLLM_BATCH_INVARIANT_ENV
 
 logger = logging.getLogger(__name__)
 
-# Mirror pinned vLLM except NCCL_ALGO; Megatron uses AllGather before training.
+# Mirror the pinned vLLM's batch-invariant NCCL settings.
 BATCH_INVARIANT_NCCL_ENV = {
     "NCCL_LAUNCH_MODE": "GROUP",  # Match vLLM's kernel launch mode.
     "NCCL_COLLNET_ENABLE": "0",  # Avoid CollNet reduction offload.
@@ -18,7 +18,7 @@ BATCH_INVARIANT_NCCL_ENV = {
     "NCCL_MIN_NCHANNELS": "1",  # Match vLLM's channel lower bound.
     "NCCL_MAX_NCHANNELS": "1",  # Prevent a multiple-channel split.
     "NCCL_PROTO": "Simple",  # Keep LL and LL128 out of collectives.
-    "NCCL_ALGO": "ring;allreduce:tree",  # Keep all-reduce on Tree; use Ring for other collectives.
+    "NCCL_ALGO": "ring,tree;allreduce:tree",  # Match upstream vLLM; keep all-reduce on Tree.
     "NCCL_NTHREADS": "1",  # Match vLLM; NCCL does not document 1 as valid.
     "NCCL_SOCKET_NTHREADS": "1",  # Avoid platform-dependent socket thread counts.
 }
@@ -47,8 +47,6 @@ def enable_trainer_batch_invariance(enabled: bool) -> None:
         ) from error
 
     batch_invariant.init_batch_invariance()
-    # The pinned vLLM initializer resets NCCL_ALGO to allreduce:tree, which disables AllGather.
-    os.environ["NCCL_ALGO"] = BATCH_INVARIANT_NCCL_ENV["NCCL_ALGO"]
     try:
         registered_ops = sorted(batch_invariant._batch_invariant_LIB._op_impls)
     except AttributeError as error:

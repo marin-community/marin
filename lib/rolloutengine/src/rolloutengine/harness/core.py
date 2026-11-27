@@ -28,13 +28,20 @@ def reply_options_match(previous: dict[str, Any], current: dict[str, Any]) -> bo
 
 
 class HarnessCleanup(Protocol):
-    """The attempt's cleanup scope: it closes resources after the record is committed and graded."""
+    """The attempt's cleanup scope: it stops the agent before grading and releases what grading may use after it.
+
+    Each close runs within ``RolloutLimits.cleanup_timeout``. A failure does not change the recorded turns or the
+    grade. ``Rollout.metrics`` counts it, and ``run_task`` also adds it to the grade diagnostics.
+    """
 
     def push(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
-        """Run ``close`` when the attempt ends, within ``RolloutLimits.cleanup_timeout``.
+        """Run ``close`` when the harness ends, before grading; for example, to stop the agent."""
+        ...
 
-        A failure does not change the recorded turns or the grade. ``Rollout.metrics`` counts it, and
-        ``run_task`` also adds it to the grade diagnostics.
+    def push_after_grading(self, name: str, close: Callable[[], Coroutine[Any, Any, None]]) -> None:
+        """Run ``close`` after grading, before the machines close.
+
+        This is for state that a grader may check, such as the terminal in which the agent left a service running.
         """
         ...
 
@@ -55,6 +62,8 @@ class HarnessContext:
     events: EventSink
     cleanup: HarnessCleanup
     run_id: str
+    begin_turn_budget: Callable[[], None]
+    """Start the total turn deadline after explicit agent setup. By default the first model request starts it."""
 
 
 class ModelSession(Protocol):

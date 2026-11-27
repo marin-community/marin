@@ -160,11 +160,18 @@ class SourceOrigin(StrEnum):
     FWEINDEL = "FWeindel"
     GPQA = "GPQA"
     GRETEL = "Gretel"
+    HARBOR = "Harbor"
     HARBOR_HUB = "Harbor Hub"
     HUGGINGFACEH4 = "HuggingFaceH4"
+    IMOBENCH = "IMOBench"
+    LEGO_X = "Lego-X"
+    LITE_CODER = "Lite-Coder"
     LM_EVAL = "lm-eval"
+    LIVECODEBENCH = "LiveCodeBench"
+    LIVECODEBENCH_PRO = "LiveCodeBench-Pro"
     MARCUSM117 = "marcusm117"
     MARIN = "Marin"
+    MARIN_COMMUNITY = "marin-community"
     NEMOTRON = "Nemotron"
     OPEN_R1 = "Open-R1"
     OPENAI = "OpenAI"
@@ -176,18 +183,26 @@ class SourceOrigin(StrEnum):
     PROJECT_NUMINA = "project-numina"
     REASONING_GYM = "Reasoning Gym"
     RST = "RST"
+    SCALE_AI = "ScaleAI"
     TRL = "TRL"
     TASKTROVE = "TaskTrove"
     TEVATRON = "Tevatron"
+    TERMINALWORLD = "TerminalWorld"
     AGENTICA_ORG = "agentica-org"
     CYBENCH = "CyBench"
     DI_ZHANG_FDU = "di-zhang-fdu"
+    ECONEVALS = "EconEvals"
     GPUMODE = "GPUMODE"
     HAL = "HAL"
     MAI_GYM = "MAI-Gym"
     MIROVERSE = "MiroVerse"
     OPENGCUA = "OpenGCUA"
     PAFITIS = "pafitis"
+
+
+def huggingface_dataset_url(repo: str, revision: str) -> str:
+    """The canonical tree URL of one pinned Hugging Face dataset revision."""
+    return f"https://huggingface.co/datasets/{repo}/tree/{revision}"
 
 
 class DatasetRelease(CatalogRecord):
@@ -203,7 +218,7 @@ class DatasetRelease(CatalogRecord):
         if host == "huggingface.co" or self.repo.startswith("open-athena/"):
             if re.fullmatch(r"[0-9a-f]{40}", self.revision) is None:
                 raise ValueError("Hugging Face current_release requires an immutable commit")
-            if self.url != f"https://huggingface.co/datasets/{self.repo}/tree/{self.revision}":
+            if self.url != huggingface_dataset_url(self.repo, self.revision):
                 raise ValueError("Hugging Face current_release URL must match its repository and revision")
         return self
 

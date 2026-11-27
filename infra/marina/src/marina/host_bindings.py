@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Hostname validation and the one-time import of revision-configured applet hosts."""
+"""Hostname validation, applet host access, DNS zone resolution and applet-host import."""
 
 import re
+from collections.abc import Iterable
 from enum import StrEnum
 
 from sqlalchemy import text
@@ -19,6 +20,25 @@ def normalize_hostname(hostname: str) -> str:
     if HOSTNAME_PATTERN.fullmatch(hostname) is None:
         raise ValueError("hostname must be a DNS name without a scheme, port, or path")
     return hostname
+
+
+def dns_zone_name(hostname: str, zone_names: Iterable[str]) -> str:
+    """Return the most specific configured DNS zone that contains ``hostname``."""
+    matches = [zone for zone in zone_names if hostname == zone or hostname.endswith(f".{zone}")]
+    if not matches:
+        raise ValueError(f"no DNS zone is configured for {hostname}")
+    return max(matches, key=len)
+
+
+def host_resource_slug(hostname: str, zone_name: str, primary_zone_name: str) -> str:
+    """Name a host's Pulumi resources by its first label, qualified outside the primary zone.
+
+    Hosts in the primary zone keep their first label so existing resource names do not change.
+    """
+    label = hostname.split(".")[0]
+    if zone_name == primary_zone_name:
+        return label
+    return f"{label}-{zone_name.replace('.', '-')}"
 
 
 class AppletHostAccess(StrEnum):
@@ -50,14 +70,13 @@ def applet_domains_env(hosts: dict[str, AppletHostAccess]) -> dict[AppletHostAcc
     }
 
 
-def domain_mapping_name(host: str, access: AppletHostAccess) -> str:
-    """Pulumi logical name of a host's Cloud Run domain mapping.
+def domain_mapping_name(slug: str, access: AppletHostAccess) -> str:
+    """Pulumi logical name of a host's Cloud Run domain mapping, from the host's resource slug.
 
     The name carries the surface. Moving a host between surfaces in one deploy therefore creates a
     second mapping for the same hostname, which Cloud Run rejects, instead of silently keeping the
     old route (the route itself is ignored on update).
     """
-    slug = host.split(".")[0]
     return f"{slug}-domain" if access is AppletHostAccess.AUTHENTICATED else f"{slug}-public-domain"
 
 

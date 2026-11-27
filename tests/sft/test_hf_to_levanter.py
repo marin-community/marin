@@ -12,12 +12,15 @@ draccus round-trip that carries the ``LmConfig`` from construction to the worker
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import draccus
 from fray.types import ResourceConfig
 from levanter.adaptor import AdaptorExportConfig
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim.config import AdamConfig
 from levanter.trainer import Trainer, TrainerHooks
@@ -25,6 +28,7 @@ from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
 from marin.experiment.checkpoints import (
     HfToLevanterCheckpoint,
     HfToLevanterConfig,
+    hf_to_levanter,
 )
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.training.training import DEFAULT_HF_CHECKPOINTS_PATH, LevanterCheckpoint
@@ -164,6 +168,26 @@ def test_lm_config_draccus_round_trip_selects_subclass_by_model_type():
     assert decoded == arch
 
 
+def test_conversion_transports_nested_values_omitted_from_fingerprint(monkeypatch):
+    factor = next(field for field in dataclasses.fields(DefaultRotaryEmbeddingsConfig) if field.name == "factor")
+    monkeypatch.setattr(factor, "metadata", {"fingerprint_omit_value": 1.0})
+    default = LlamaConfig()
+    modified = dataclasses.replace(default, rope=DefaultRotaryEmbeddingsConfig(factor=2.0))
+    for architecture in (default, modified):
+        monkeypatch.setattr(
+            "marin.experiment.checkpoints.resolve_lm_config", lambda *_, architecture=architecture: architecture
+        )
+        handle = hf_to_levanter("fixture/llama", model_type="llama", hf_revision="fixture", version="test-dev")
+        encoded = materialized_config(handle.step, _PREFIX).model_config_json
+        assert encoded["rope"]["factor"] == architecture.rope.factor
+        assert draccus.decode(LlamaConfig, encoded) == architecture
+        fingerprint_rope = json.loads(handle.step.fingerprint_payload())["model_config_json"]["rope"]
+        if architecture is default:
+            assert "factor" not in fingerprint_rope
+        else:
+            assert fingerprint_rope["factor"] == 2.0
+
+
 class _ExportTrainer:
     add_hook = Trainer.add_hook
     run_id = "export-regression"
@@ -206,12 +230,27 @@ def test_sft_exports_once_at_the_final_update(tmp_path):
     trainer.hooks.run_hooks(info, force=True)
     assert {path.name: (path / "policy.txt").read_text() for path in export_path.iterdir()} == {"step-2": "2"}
     assert (export_path / "step-2" / "chat_template.jinja").read_text() == spec.chat_template
+
+
+def test_sft_model_resolves_to_the_final_update_export(tmp_path):
+    spec = dataclasses.replace(_spec(ConvertedCheckpointModel(conversion=_fake_conversion())), num_train_steps=3)
+    model = SFTPreset("converted", spec, ResourceConfig.with_cpu()).model()
+    export_path = Path(model.step.path(str(tmp_path))) / DEFAULT_HF_CHECKPOINTS_PATH
     context = StepContext.for_run(str(tmp_path / "rl"), str(tmp_path), deps=model.deps())
     locator = model.resolve(context)
     assert (locator.uri, locator.tokenizer_uri) == (str(export_path / "step-2"), None)
-    epoch_spec = dataclasses.replace(spec, version="2026.07.18-dev", num_train_steps=None, num_train_epochs=1)
-    epoch_model = SFTPreset("converted-epochs", epoch_spec, resources).model()
-    assert epoch_model.relative_path is None
+
+
+def test_epoch_sft_model_leaves_the_export_path_to_runtime():
+    # RL substitutes the run's terminal export only when the model has no fixed export path (rl_gate.py).
+    spec = dataclasses.replace(
+        _spec(ConvertedCheckpointModel(conversion=_fake_conversion())),
+        version="2026.07.18-dev",
+        num_train_steps=None,
+        num_train_epochs=1,
+    )
+    model = SFTPreset("converted-epochs", spec, ResourceConfig.with_cpu()).model()
+    assert model.relative_path is None
 
 
 def test_sft_artifacts_with_the_same_version_do_not_share_tracker_history():
