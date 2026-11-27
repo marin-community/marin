@@ -32,13 +32,14 @@ from experiments.post_training.rl_agentic_recipe import (
     shell_tool_preset,
 )
 from experiments.post_training.rl_compose import BATCH_SETTINGS
+from experiments.post_training.rl_evallite import EvalLite
 from experiments.post_training.rl_presets import (
     CHECKPOINT_EVALUATION,
+    EVAL_LITE_PROFILE,
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
     STOP_TOKEN_IDS,
     UPDATE_SECONDS_METRIC,
-    ControlPin,
     Evaluation,
     Generation,
     Layout,
@@ -49,6 +50,7 @@ from experiments.post_training.rl_presets import (
     Training,
     WindowStatistic,
 )
+from experiments.post_training.skyrl_evaluation import EvaluationPreset, ExportEvaluationPreset, catalog_evaluation
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TRAIN_FILENAME,
@@ -59,20 +61,15 @@ SEED = 20261020
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-DEFAULT_SELECTION_VERSION = "2026.11.19.1"
+DEFAULT_SELECTION_VERSION = "2026.11.25.1"
 DEFAULT_EVAL_LITE_NAME = "eval-lite"
-DEFAULT_EVAL_LITE_VERSION = "2026.11.17.1"
-EVAL_REPLY_TOKENS = 8192
+DEFAULT_EVAL_LITE_VERSION = "2026.11.25.1"
 _DEFAULT_TASKS = f"snowball-100k@{DEFAULT_SELECTION_VERSION}"
 _DEFAULT_EVAL_LITE = f"{DEFAULT_EVAL_LITE_NAME}@{DEFAULT_EVAL_LITE_VERSION}"
 
-_DSPARK = sections.SpeculativeDecoding(
-    method="dspark",
-    model=sections.SpeculatorModel(
-        source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
-        source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
-    ),
-    num_speculative_tokens=4,
+_DSPARK = sections.SpeculatorModel(
+    source_uri="hf://atutej/dspark_grug-67b-a2b-datakit-sft-dr-doom_datakit-sft-mix_targetgen-warm80k-20261020",
+    source_identity="d22f4f21ce5cc0968dfd8e2c0d06aaf4adacbbf2",
 )
 
 _DEFAULT_MODEL = ArtifactHfModel(
@@ -132,13 +129,6 @@ _MODE_KEYS = (
     "trainer.algorithm.off_policy_correction",
 )
 
-_HELD_OUT_SAMPLING = EvaluationProfile(
-    n_samples_per_prompt=1,
-    sampling_params=EvalSamplingParams(
-        temperature=0.0, top_p=1.0, logprobs=None, ignore_eos=False, max_generate_length=EVAL_REPLY_TOKENS
-    ),
-)
-
 _THROUGHPUT_SAMPLING = EvaluationProfile(
     n_samples_per_prompt=4,
     sampling_params=EvalSamplingParams(temperature=1.0, top_p=1.0, logprobs=None, ignore_eos=True),
@@ -153,8 +143,8 @@ EVALUATIONS = MappingProxyType(
     {
         evaluation.name: evaluation
         for evaluation in (
-            Evaluation("eval_lite", Path(FULL_VALIDATION_FILENAME).stem, _HELD_OUT_SAMPLING, source="held_out"),
-            Evaluation("eval_lite_100", Path(VALIDATION_FILENAME).stem, _HELD_OUT_SAMPLING, source="held_out"),
+            Evaluation("eval_lite", Path(FULL_VALIDATION_FILENAME).stem, EVAL_LITE_PROFILE, source="held_out"),
+            Evaluation("eval_lite_100", Path(VALIDATION_FILENAME).stem, EVAL_LITE_PROFILE, source="held_out"),
             Evaluation("speed_512x4", Path(TRAIN_FILENAME).stem, _THROUGHPUT_SAMPLING, sample=512),
             Evaluation("screen_256x4", Path(TRAIN_FILENAME).stem, _SCREENING_SAMPLING, source="tasks", sample=256),
         )
@@ -232,6 +222,10 @@ _REPORTING_P40 = replace(
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
+# The nightly Iris principal can submit H100 workloads in Reno.
+_RENO_P40 = replace(_ASYNC_P40, layout=replace(P40, cluster="cw-rno2a"))
+_RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_P40.layout.cluster))
+
 _GAPS = ("aaii-coverage", NO_AGENTIC_TASKS, NO_IMAGE_SANDBOX)
 
 _TASK_SET = EVALUATIONS["eval_lite_100"]
@@ -252,10 +246,9 @@ _SPEED_GUARDS = (
 
 _snowball = partial(
     Preset,
-    revision="2026.11.24.1",
     tasks=_DEFAULT_TASKS,
     model=_DEFAULT_MODEL,
-    default_speculative_decoding=_DSPARK,
+    speculative_decoding_model=_DSPARK,
     seed=SEED,
     sample_namespace="datasets/snowball-rl",
     wandb_entity="marin-community",
@@ -269,26 +262,51 @@ _LEARNING_MEDIUM = _snowball(
     checkpoints="best",
     export="best",
     name="learning-medium",
-    recipe=_REPORTING_P40,
+    recipe=replace(_REPORTING_P40, layout=_RENO_P40.layout),
     owned_keys=_OWNED_KEYS,
     updates=25,
     measured=range(21, 26),
     checkpoint_every=26,
     accepts_init=True,
-    publishes=True,
-    control_preset="learning-medium",
     data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(EVALUATIONS["eval_lite"], at_start=True),),
     guards=(Metric("eval_lite/family_mean", True),),
     objectives=(
         Metric("eval_lite/family_mean", True),
-        Metric("eval_lite/family_mean/gain_per_gpu_hour", True, WindowStatistic.GAIN_PER_GPU_HOUR),
+        Metric(
+            "eval_lite/family_mean/gain_per_gpu_hour",
+            True,
+            WindowStatistic.GAIN_PER_GPU_HOUR,
+            source="eval_lite/family_mean/gain",
+        ),
     ),
     budget="asynchronous runtime unmeasured",
 )
 
 
+# KV all-gather supports packed sliding windows with Grug's five KV heads.
+_TRAIN_LONG_MEGATRON_KWARGS = {"cp_comm_type": "all_gather"}
+
+_PACKED_TRAIN_LONG_RECIPE = replace(
+    _REPORTING_P40,
+    layout=replace(P40, megatron=replace(P40.megatron, context_parallel_size=2)),
+    config=_REPORTING_P40.config.merge(
+        RecipePatch(
+            trainer=sections.Trainer(
+                use_sample_packing=True,
+                policy=sections.Policy(
+                    megatron_config=sections.PolicyMegatronConfig(transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS)
+                ),
+                ref=sections.Ref(
+                    megatron_config=sections.RefMegatronConfig(transformer_config_kwargs=_TRAIN_LONG_MEGATRON_KWARGS)
+                ),
+            ),
+        ),
+    ),
+)
+
 _TRAIN_LONG = _snowball(
+    tasks=_DEFAULT_TASKS,
     held_out_tasks=_DEFAULT_EVAL_LITE,
     retention=SkyRLRetentionPolicy(resume_checkpoint_count=5),
     checkpoints="best",
@@ -300,7 +318,6 @@ _TRAIN_LONG = _snowball(
     measured=range(1, 101),
     tasks_input="optional",
     accepts_init=True,
-    publishes=True,
     checkpoint_every=10,
     data_settings=frozenset({"shuffle", "sampling"}),
     evaluations=(replace(_TASK_SET, every=10, at_start=True),),
@@ -409,19 +426,31 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     name="train-medium-tools",
 )
 
+_TRAIN_LONG_MICRO210 = replace(
+    _TRAIN_LONG_AGENTIC,
+    name="train-long-agentic-micro210",
+    checkpoints="best_and_final",
+    export="best_and_final",
+    temporary_output=False,
+    retention=replace(_TRAIN_LONG_AGENTIC.retention, checkpoints_in_run_output=True),
+    recipe=replace(
+        _TRAIN_LONG_AGENTIC.recipe, layout=replace(_TRAIN_LONG_AGENTIC.recipe.layout, coordinator_timeout_hours=146)
+    ),
+    after_run=("micro210",),
+)
+
 _PRESETS = (
     _snowball(
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="speed-short",
         checkpoints="none",
         recipe=replace(
-            _GENERATING,
+            _RENO_GENERATING,
             fixed_reply_tokens=4096,
-            config=_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
+            config=_RENO_GENERATING.config.merge(RecipePatch(generator=sections.Generator(gpu_memory_utilization=0.80))),
         ),
         updates=0,
         measured=range(1),
-        control_preset="speed-short",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         evaluations=(EVALUATIONS["speed_512x4"], EVALUATIONS["eval_lite"]),
         guards=(Metric("generate/tokens_per_second_per_gpu", True), Metric("eval_lite/family_mean", True)),
@@ -432,12 +461,11 @@ _PRESETS = (
         held_out_tasks=_DEFAULT_EVAL_LITE,
         name="data-short",
         checkpoints="none",
-        recipe=_GENERATING,
+        recipe=_RENO_GENERATING,
         updates=0,
         measured=range(1),
         tasks_input="required",
         accepts_settings=False,
-        control_preset="data-short",
         owned_keys=_OWNED_KEYS | _BATCH_KEYS,
         evaluations=(EVALUATIONS["screen_256x4"],),
         guards=(Metric("screen_256x4/mixed_fraction", True),),
@@ -449,9 +477,9 @@ _PRESETS = (
         name="speed-medium",
         checkpoints="none",
         recipe=replace(
-            _ASYNC_P40,
+            _RENO_P40,
             fixed_reply_tokens=4096,
-            config=_ASYNC_P40.config.merge(
+            config=_RENO_P40.config.merge(
                 RecipePatch(
                     trainer=sections.Trainer(algorithm=sections.Algorithm(rloo_n_filter_zero_reward_groups=False))
                 )
@@ -459,7 +487,6 @@ _PRESETS = (
         ),
         updates=10,
         measured=range(2, 11),
-        control_preset="speed-medium",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
@@ -470,10 +497,9 @@ _PRESETS = (
         evaluations=(),
         name="speed-long",
         checkpoints="none",
-        recipe=_ASYNC_P40,
+        recipe=_RENO_P40,
         updates=20,
         measured=range(3, 21),
-        control_preset="speed-long",
         owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
         guards=_SPEED_GUARDS,
         objectives=_SPEED_OBJECTIVES,
@@ -484,15 +510,16 @@ _PRESETS = (
     replace(
         _LEARNING_MEDIUM,
         name="data-medium",
+        guards=(),
         tasks_input="required",
         accepts_settings=False,
         accepts_init=False,
-        control_preset=_LEARNING_MEDIUM.name,
         data_settings=frozenset(),
     ),
-    _TRAIN_LONG,
+    replace(_TRAIN_LONG, recipe=_PACKED_TRAIN_LONG_RECIPE),
     _TRAIN_MEDIUM_AGENTIC,
     _TRAIN_LONG_AGENTIC,
+    _TRAIN_LONG_MICRO210,
     _TRAIN_MEDIUM_TOOLS,
     replace(
         _TRAIN_LONG,
@@ -500,42 +527,55 @@ _PRESETS = (
         checkpoint_evaluation=CHECKPOINT_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),
-    _snowball(
-        held_out_tasks=_DEFAULT_EVAL_LITE,
-        name="eval-short",
-        checkpoints="none",
-        recipe=_GENERATING,
-        updates=0,
-        measured=range(1),
-        accepts_init=True,
-        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-        evaluations=(EVALUATIONS["eval_lite"],),
-        budget="8 min; 1.1 H100-h",
-    ),
+)
+
+_EVAL_LITE = _snowball(
+    tasks=_DEFAULT_TASKS,
+    held_out_tasks=_DEFAULT_EVAL_LITE,
+    name="eval-lite",
+    checkpoints="none",
+    recipe=_GENERATING,
+    updates=0,
+    measured=range(1),
+    accepts_init=True,
+    evaluations=(EVALUATIONS["eval_lite"],),
 )
 
 SNOWBALL = ModelPresets(
     model="snowball",
     presets=_PRESETS,
     namespace="snowball-rl",
-    control_pins={
-        name: ControlPin(name, "648b5687f0", "2026.11.06.1", count)
-        for name, count in (
-            ("speed-short", 5),
-            ("data-short", 4),
-            ("speed-medium", 4),
-            ("learning-medium", 4),
-            ("speed-long", 4),
-        )
-    },
 )
 
-if __name__ == "__main__":
 
+def evaluation_preset(name: str) -> ExportEvaluationPreset:
+    if name == "eval-lite":
+        return EvaluationPreset(name, EvalLite(_EVAL_LITE, SNOWBALL.model))
+    from experiments.evaluation.models import models  # noqa: PLC0415
+
+    grug = models()["grug-67b-a2b-datakit-sft-262k-2026-09-21"]
+    serving = replace(grug, name="snowball", location="", revision=None, tokenizer=None, tokenizer_revision=None)
+    if name == "micro210":
+        serving = replace(serving, serve=replace(serving.serve, max_num_seqs=8, gpu_memory_utilization=0.85))
+    return catalog_evaluation(
+        name, serving, accelerator="H100x8", cluster=E8.cluster, instances=16 if name == "micro210" else 1
+    )
+
+
+def main() -> int:
     def sft_presets():
         # Load the SFT training dependencies only for --sft.
         from experiments.post_training.snowball_sft import SNOWBALL_SFT  # noqa: PLC0415
 
         return SNOWBALL_SFT
 
-    raise SystemExit(rl.main(SNOWBALL, sft_presets=sft_presets))
+    return rl.main(
+        SNOWBALL,
+        sft_presets=sft_presets,
+        evaluation_preset=evaluation_preset,
+        entry_module="experiments.post_training.snowball_rl",
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

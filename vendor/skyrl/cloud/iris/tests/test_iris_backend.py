@@ -1,7 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from iris.client.client import IrisContext, iris_ctx_scope
@@ -14,20 +17,22 @@ from omegaconf import OmegaConf
 from cloud.iris import launch
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch_config import load_launch_config
+from cloud.iris.rl_config_translation import RL_CONFIG_PAYLOAD_ENV, RL_CONFIG_TASK_DIR
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
-from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
+from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT, MARINSKYRL_TASK_ROOT
 from skyrl_train.hf_export_schema import HFExportRequest
 
 
 @pytest.mark.parametrize(
-    "target_cluster,parent_cluster_config,interface,logger,entrypoint,preemption_retries,groups",
+    "target_cluster,parent_cluster_config,interface,logger,entrypoint,preemption_retries,groups,spill_backend",
     [
-        ("cw-rno2a", "marin.yaml", None, "records", "skyrl_train.entrypoints.main_base", 0, ()),
-        (None, "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
-        (None, None, None, "console", "skyrl_train.entrypoints.main_base", 1000, ()),
-        ("cw-rno2a", "marin.yaml", "eth0", "records", "skyrl_train.entrypoints.main_base", 0, ()),
-        (None, "marin.yaml", None, "records", CHECKPOINT_EXPORT_ENTRYPOINT, 1000, ()),
-        ("cw-us-east-08a", "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (16, 8)),
+        ("cw-rno2a", "marin.yaml", None, "records", "skyrl_train.entrypoints.main_base", 0, (), "local"),
+        (None, "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (), "local"),
+        (None, None, None, "console", "skyrl_train.entrypoints.main_base", 1000, (), "r2"),
+        ("cw-rno2a", "marin.yaml", "eth0", "records", "skyrl_train.entrypoints.main_base", 0, (), "local"),
+        (None, "marin.yaml", None, "records", CHECKPOINT_EXPORT_ENTRYPOINT, 1000, (), "local"),
+        ("cw-us-east-08a", "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (16, 8), "local"),
+        ("cw-us-east-08a", "marin.yaml", None, "console", "skyrl_train.entrypoints.main_base", 1000, (15,), "local"),
     ],
 )
 def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
@@ -41,6 +46,7 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     entrypoint,
     preemption_retries,
     groups,
+    spill_backend,
 ):
     requests = []
     monkeypatch.setenv("HF_TEST_KEY", "test-extra-credential")
@@ -62,6 +68,10 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     monkeypatch.setattr("iris.cluster.client.remote_client.ControllerServiceClientSync", ControllerStub)
     monkeypatch.setenv("IRIS_CONTROLLER_URL", "http://parent-controller:8080")
     document = raw_launch_config()
+    spill = tmp_path / "spill path '$literal'"
+    document["ray"]["spill_backend"] = spill_backend
+    if spill_backend == "local":
+        document["ray"]["spill_dir"] = str(spill)
     document["run"].update(submission="detach", export_hf=False)
     document["runtime"]["task_env"] = {} if interface is None else {"NCCL_SOCKET_IFNAME": interface}
     document["iris"].update(
@@ -82,13 +92,16 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     if groups:
         document["iris"]["role_topology"] = "nvlink.domain"
         document["iris"]["excluded_nvlink_domains"] = ["DH1-136-US-EAST-08A"]
-        document["iris"]["allocation"].update(num_nodes=24, gpus_per_node=4, gpu_variant="GB200")
+        document["iris"]["allocation"].update(num_nodes=sum(groups), gpus_per_node=4, gpu_variant="GB200")
         document["skyrl"]["trainer"].update(train_batch_size=64, policy_mini_batch_size=64)
+        policy_nodes, inference_gpus = (12, 12) if len(groups) == 1 else (16, 32)
         document["skyrl"]["trainer"]["placement"].update(
-            colocate_all=False, policy_num_nodes=16, policy_num_gpus_per_node=4
+            colocate_all=False, policy_num_nodes=policy_nodes, policy_num_gpus_per_node=4
         )
         document["skyrl"]["generator"].update(
-            num_inference_engines=1, inference_engine_data_parallel_size=32, inference_engine_expert_parallel_size=32
+            num_inference_engines=1,
+            inference_engine_data_parallel_size=inference_gpus,
+            inference_engine_expert_parallel_size=inference_gpus,
         )
     for field in document["artifacts"]:
         document["artifacts"][field] = str(tmp_path / field)
@@ -156,7 +169,18 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
     )
     assert request.environment.env_vars.get("NCCL_SOCKET_IFNAME") == expected_interface
 
-    shell = request.entrypoint.run_command.argv[-1]
-    assert "nccl_transport_probe.py --mode gate --gate-coverage all-gpus" in shell
-    assert "/interconnect-gate; " in shell
-    assert ("--pynccl-init" in shell) == (entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT)
+    assert not spill.exists()
+    payload = base64.b64decode(request.environment.env_vars[RL_CONFIG_PAYLOAD_ENV])
+    digest = hashlib.sha256(payload).hexdigest()[:16]
+    expected_profile = "megatron-export" if entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT else "megatron"
+    assert request.environment.setup_scripts == [
+        f"bash {MARINSKYRL_TASK_ROOT}/cloud/iris/setup_task_runtime.sh {expected_profile}"
+    ]
+    assert request.entrypoint.run_command.argv == [
+        "bash",
+        f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
+        str(Path(RL_CONFIG_TASK_DIR) / f"{digest}.yaml"),
+        f"{config.ray.rendezvous_dir}/interconnect-gate",
+        *(["--pynccl-init"] if entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT else []),
+        *(["--gate-single-nvlink-domain"] if len(groups) == 1 else []),
+    ]

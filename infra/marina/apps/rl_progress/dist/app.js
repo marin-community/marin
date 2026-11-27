@@ -1,3 +1,5 @@
+import { controlHistory, hasProgress, isCleanMain, showProgress } from './progress.js';
+
 const $ = (id) => document.getElementById(id);
 let runs = [];
 const selectedAttempts = new Map();
@@ -31,12 +33,40 @@ function visibleRuns(groups) {
 function route(run) { return '#' + new URLSearchParams({ run: run.run_id, attempt: run.attempt_id }); }
 function selectedFromHash() {
   const params = new URLSearchParams(location.hash.slice(1));
-  const attempts = groupedRuns().get(params.get('run')) ?? [];
-  return params.has('attempt') ? attempts.find((run) => run.attempt_id === params.get('attempt')) ?? null : attempts[0] ?? null;
+  const runId = params.get('run');
+  if (!runId) return null;
+  const attempts = groupedRuns().get(runId) ?? [];
+  const aliases = runs.filter((run) => run.native_run_id === runId);
+  const attemptId = params.get('attempt');
+  if (attemptId != null) return [...attempts, ...aliases].find((run) => run.attempt_id === attemptId) ?? null;
+  return attempts[0] ?? aliases.sort((a, b) => attemptTime(b) - attemptTime(a))[0] ?? null;
 }
 
 function addField(list, title, value) {
   list.append(element('dt', title), element('dd', value ?? 'Not recorded'));
+}
+function configuration(run) {
+  const details = element('details');
+  const content = element('pre');
+  details.append(element('summary', 'Composed launch configuration'), content);
+  details.addEventListener('toggle', async () => {
+    if (!details.open || content.textContent) return;
+    content.textContent = 'Loading configuration…';
+    const query = new URLSearchParams({ run_id: run.run_id, attempt_id: run.attempt_id });
+    try {
+      const response = await fetch(`./api/configuration?${query}`);
+      if (response.status === 404) {
+        content.textContent = 'No configuration recorded for this attempt.';
+      } else if (response.ok) {
+        content.textContent = JSON.stringify(await response.json(), null, 2);
+      } else {
+        throw new Error(`Could not load configuration (${response.status}).`);
+      }
+    } catch (error) {
+      content.textContent = error.message;
+    }
+  });
+  return details;
 }
 function showDetails(run) {
   $('detail-title').textContent = run.label;
@@ -48,27 +78,33 @@ function showDetails(run) {
   const grafana = grafanaLink(run);
   if (grafana) links.append(grafana);
   if (typeof run.issue === 'number') links.append(element('a', `Experiment #${run.issue} ↗`, { href: `https://github.com/marin-community/marin/issues/${run.issue}`, target: '_blank', rel: 'noopener noreferrer' }));
-  for (const id of run.evaldash_run_ids ?? []) {
+  for (const id of run.evaluation_run_ids ?? []) {
     links.append(element('a', `EvalDash ${id} ↗`, { href: `https://marina.oa.dev/evaldash/runs/${encodeURIComponent(id)}`, target: '_blank', rel: 'noopener noreferrer' }));
   }
+  if (isCleanMain(run)) links.append(element('a', 'Source commit ↗', { href: `https://github.com/marin-community/marin/commit/${run.commit}`, target: '_blank', rel: 'noopener noreferrer' }));
   if (run.has_grader_report) links.append(element('a', 'Grader stats', { href: './graders.html?' + route(run).slice(1) }));
   links.append(element('a', 'Link to this run', { href: route(run) }));
   body.append(links);
   const fields = element('dl', null, { class: 'detail-grid' });
   const facts = [
-    ['Model', run.model], ['Issue', run.issue],
-    ['Series', series(run)], ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
+    ['Model', run.model], ['Preset', series(run)], ['Preset version', run.preset_version],
+    ['Base version', run.base_preset_version], ['Main base', run.base_commit], ['Evaluation set', run.evaluation_data_identity],
+    ['User', run.user], ['Branch', run.branch], ['Commit', run.commit], ['Uncommitted changes', run.dirty == null ? null : run.dirty ? 'Yes' : 'No'],
+    ['PR', run.pr_number], ['Cluster', run.cluster], ['Issue', run.issue],
+    ['Run ID', run.run_id], ['Attempt ID', run.attempt_id], ['Iris job', run.iris_job_id],
     ['Verdict', run.gate_result?.verdict], ['Effect', run.gate_result?.effect], ['Gate', run.gate], ['Failed invariants', (run.failed_facts ?? []).join(', ') || null],
     ['Status', `${run.status} · ${run.optimizer_steps ?? 'Unknown'} optimizer updates`],
     ['Planned updates', run.planned_updates], ['Measured updates', run.measured_updates?.join(', ')],
     ['Elapsed', `${number(hours(run), 2)} hours (${number(run.elapsed_seconds, 1)} seconds)`],
+    ['Elapsed excluding evaluation', run.elapsed_excluding_eval_seconds == null ? null : `${number(run.elapsed_excluding_eval_seconds, 1)} seconds`],
     ['Timing scope', run.timing_scope], ['Run date', run.run_date], ['Started', run.started_at], ['Completed', run.completed_at],
     ['Source', run.source_revision], ['Training data', run.data_identity], ['Initializer', run.initializer_identity],
     ['Artifact location', run.artifact_uri],
+    ['Explicit settings', run.settings?.join(', ') || 'None recorded'],
     ['Engine facts', run.engine == null ? null : JSON.stringify(run.engine)],
   ];
   for (const [title, value] of facts) addField(fields, title, value);
-  body.append(fields);
+  body.append(fields, configuration(run));
   if (run.gate_result) {
     body.append(element('h3', `Gate report · ${run.gate_result.replicates} replicate(s)`));
     for (const row of run.gate_result.comparisons) body.append(element('p', comparison(row)));
@@ -84,6 +120,7 @@ function showDetails(run) {
   for (const text of run.evidence ?? []) evidence.append(element('li', text));
   body.append(evidence);
   if (!$('run-detail').open) $('run-detail').showModal();
+  $('run-detail').querySelector('.dialog-scroll').scrollTop = 0;
 }
 function followHash() {
   const run = selectedFromHash();
@@ -97,6 +134,25 @@ function render() {
   const model = $('model-filter').value;
   const matching = model ? runs.filter((run) => run.model === model) : runs;
   const groups = groupedRuns(matching), selected = visibleRuns(groups);
+  const preset = $('progress-preset'), previous = preset.value;
+  const choices = new Map(matching.filter((run) => run.model && run.series && hasProgress(run))
+    .map((run) => [JSON.stringify([run.model, run.series]), `${run.model} · ${run.series}`]));
+  preset.replaceChildren(...[...choices].sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([value, label]) => element('option', label, { value })));
+  if (choices.has(previous)) preset.value = previous;
+  $('progress-panel').hidden = !choices.size;
+  const history = matching.filter((run) => JSON.stringify([run.model, run.series]) === preset.value);
+  const controls = controlHistory(history);
+  const branch = $('control-branch'), selectedBranch = branch.value;
+  const availableBranches = ['main', ...[...controls.keys()].filter((name) => name !== 'main').sort()];
+  branch.replaceChildren(...availableBranches.map((value) => element('option', value, { value })));
+  if (availableBranches.includes(selectedBranch)) branch.value = selectedBranch;
+  $('control-branch-label').hidden = availableBranches.length === 1;
+  const hasControls = showProgress($('progress-charts'), history, controls.get(branch.value) ?? [],
+    $('show-branches').checked, route);
+  const empty = $('progress-empty');
+  empty.hidden = hasControls;
+  empty.textContent = `No completed controls with measurements for ${branch.value} on this preset.`;
   $('count').textContent = `${selected.length} runs · ${matching.length} recorded attempts`;
   $('attempts').replaceChildren(...[...selected].sort((a, b) => attemptTime(b) - attemptTime(a)).map((run) => {
     const tr = element('tr');
@@ -115,6 +171,7 @@ function render() {
     const objectives = element('td'), constraints = element('td'), verdict = element('td');
     if (report) {
       for (const row of report.comparisons) {
+        if (row.role === 'slice') continue;
         const cell = row.role === 'objective' ? objectives : constraints;
         cell.append(element('p', comparison(row), { class: row.passes === false ? 'warning' : '' }));
       }
@@ -149,6 +206,9 @@ async function refresh() {
 }
 $('refresh').onclick = refresh;
 $('model-filter').onchange = render;
+$('progress-preset').onchange = render;
+$('control-branch').onchange = render;
+$('show-branches').onchange = render;
 function closeDetails() {
   if (location.hash.startsWith('#run=')) history.replaceState(null, '', location.pathname + location.search);
   $('run-detail').close();

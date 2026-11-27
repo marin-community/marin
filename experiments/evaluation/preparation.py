@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import partial
 
-from evalrecords.records import TaskEvidence
+from evalrecords.records import EvaluationOverrides, TaskEvidence, TaskMachineBackend
 from marin.execution.lazy import ArtifactStep, StepContext
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.evaluation.corpus import MANIFEST_FILENAME, ItemBuilder, chat_variant_item
@@ -60,6 +60,10 @@ class EvaluationCorpusRecipe:
     """What attempt evidence keeps of each task when the launch does not choose."""
     agent: AgentEpisode | None = None
     """The operation of every item in an agent-episode corpus, which launchers plan and record."""
+    run_defaults: EvaluationOverrides | None = None
+    """Run settings from the benchmark protocol that a selection may override."""
+    required_task_machine_backend: TaskMachineBackend | None = None
+    """The backend required by the corpus's grader transport, when it has one."""
 
     def __post_init__(self) -> None:
         for source in (self.recipe.source, *self.recipe.inputs.values()):

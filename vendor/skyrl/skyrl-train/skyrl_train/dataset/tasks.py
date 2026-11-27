@@ -116,6 +116,13 @@ class TaskDataset(PromptDataset):
                 if ultra is not None and "blend" in ultra and "agent" in ultra
                 else ()
             )
+            stored_identity = extras.get(TASK_EVALUATION_IDENTITY)
+            identity = TaskEvaluationIdentity.model_validate_json(stored_identity) if stored_identity else None
+            subset = (
+                identity.strata.source
+                if identity is not None and identity.panel_name is not None
+                else task_subset(lowered.task)
+            )
             inputs.append(
                 {
                     "uid": uid,
@@ -128,12 +135,8 @@ class TaskDataset(PromptDataset):
                             teacher_route=extras.get("teacher_route"),
                             metric_tags=metric_tags,
                             task_id=lowered.task.id,
-                            subset_id=task_subset(lowered.task),
-                            evaluation_identity=(
-                                TaskEvaluationIdentity.model_validate_json(extras[TASK_EVALUATION_IDENTITY])
-                                if extras.get(TASK_EVALUATION_IDENTITY) is not None
-                                else None
-                            ),
+                            subset_id=subset,
+                            evaluation_identity=identity,
                         ),
                         group_grader=task_group_grader(lowered),
                     ),
@@ -318,7 +321,7 @@ class SourceTaskDataset(TaskDataset):
                 task_id = task["id"]
                 identity = task_evaluation_identity(task, selection)
                 if selection is not None and TASK_SPEC_COLUMN in row:
-                    carried = {key: row[key] for key in TaskStrata.model_fields if key in row}
+                    carried = {key: row[key] for key in TaskStrata.model_fields if row.get(key) is not None}
                     if carried != identity.strata.model_dump(include=set(carried)):
                         raise ValueError(f"training row strata differ from selection manifest: {task_id}")
                 if task_id in identities and identities[task_id] != identity:

@@ -8,28 +8,50 @@ from copy import deepcopy
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 
 import click
 import pytest
 import yaml
 from click.testing import CliRunner
+from evalrecords.records import RLAttemptRef, RunStatus, list_records, read_record, record_path
+from finestore.reader import ReadView
+from finestore.rl.run_records import write_evaluations
 from fray.types import ANY_REGION
 from iris.cluster.types import JobName
+from marin.evaluation.runner import _record
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materialized_config
-from marin.rl.skyrl import IrisSkyRLExecution, skyrl_execution
+from marin.execution.lazy import ArtifactStep, StepContext, apply, artifact_identity, materialized_config
+from marin.rl.cli import _coordinator_request
+from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution, SkyRLPolicyModel, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 
+from experiments.evaluation import launch as eval_launch
+from experiments.evaluation import pipeline as eval_pipeline
 from experiments.post_training import rl, rl_compose, rl_gate
 from experiments.post_training.mochi_rl import MOCHI
+from experiments.post_training.mochi_rl import evaluation_preset as mochi_evaluations
 from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
-from experiments.post_training.rl_tests.fixtures import SELECTION_IDENTITY, write_published_artifact
+from experiments.post_training.rl_tests.fixtures import (
+    SELECTION_IDENTITY,
+    answer,
+    append_metrics,
+    evaluation_task_rows,
+    fake_s3,
+    printed_status,
+    write_published_artifact,
+    write_receipt,
+    write_skyrl_run_record,
+)
 from experiments.post_training.snowball_rl import SNOWBALL
+from experiments.post_training.snowball_rl import evaluation_preset as snowball_evaluations
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
+from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 
 @pytest.fixture
@@ -39,11 +61,12 @@ def table(request):
 
 def plan(table, name, *options, version=None, sft_presets=None):
     preset = table.by_name[name]
-    args = ("--preset", name, "--version", version or preset.revision, "--plan")
+    args = ("--preset", name, "--version", version or rl_compose.RUN_ARTIFACT_VERSION, "--plan")
     if preset.tasks_input == "required":
         args += ("--tasks", SELECTION_IDENTITY)
     args += options
-    return CliRunner().invoke(rl.command(table, argv=args, sft_presets=sft_presets), args)
+    evaluations = mochi_evaluations if table.model == "mochi" else snowball_evaluations
+    return CliRunner().invoke(rl.command(table, argv=args, sft_presets=sft_presets, evaluation_preset=evaluations), args)
 
 
 @pytest.mark.parametrize("cadence, period", [(None, None), (2, 4)])
@@ -92,7 +115,7 @@ def test_mixed_candidate_uses_the_selected_tasks_and_preserves_authored_concurre
     settings = ("context_budget.max_new_tokens_per_turn=24576", "trainer.train_batch_size=128")
     run = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, settings=settings)
     assert run.inputs is not None
-    config = rl_gate.validate_candidate(preset, run.inputs, table=SNOWBALL)["skyrl"]
+    config = rl_gate.compose_preset(preset, run.inputs)["skyrl"]
     buffer = config["trainer"]["rollout_buffer"]
     assert (buffer["max_in_flight"], buffer["groups_per_family"]) == (32, {"agentic": 64, "nonagentic": 64})
     (step,) = run.runs
@@ -182,6 +205,220 @@ def test_rack_exclusion_changes_the_run_identity_and_rejects_non_nvlink_hosts(se
     assert unsupported.exit_code != 0 and "requires an NVL72 GPU variant" in unsupported.output
 
 
+@pytest.mark.parametrize("table", ["snowball", "mochi"], indirect=True)
+def test_named_micro210_resolves_chat_and_pi_on_the_rl_export(selection, table, tmp_path, monkeypatch):
+    monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
+    handles = []
+    monkeypatch.setattr("marin.experiment.cli._print_plan", handles.extend)
+    rack = ("DH1-136-US-EAST-08A",) if table is MOCHI else ()
+    options = ("--priority", "interactive", "--then-eval", "micro210")
+    if rack:
+        options += ("--init", "mochi-v5", "--exclude-rack", rack[0])
+    result = plan(table, "train-long-agentic-micro210", *options)
+    assert result.exit_code == 0, (result.output, result.exception)
+    run = handles[0]
+    [evaluation] = [step for step in handles if step.name.endswith("/micro210")]
+    assert any(step.name.startswith("rl-data/task-health/attempts/") for step in handles)
+    assert run in evaluation.deps
+    config = evaluation.build_config(StepContext.for_fingerprint(evaluation.runtime_args, evaluation.deps))
+    assert [row.benchmark for row in config.evals] == ["micro210-chat", "micro210-pi"]
+    assert rl.skyrl_execution(run).coordinator_timeout_hours >= 146
+    assert materialized_config(run, str(tmp_path)).output.checkpoint_root == str(
+        Path(run.path(str(tmp_path))) / "checkpoints"
+    )
+
+
+def test_micro210_graph_accepts_an_sft_export_that_has_yet_to_run(selection, tmp_path):
+    sft = ArtifactStep.adopt("tests/pending-sft", "2026.11.26", str(tmp_path / "pending-sft"))
+    preset = SNOWBALL.by_name["train-long-agentic-micro210"]
+    [run] = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, init=ArtifactHfModel(sft)).runs
+    recipe = snowball_evaluations(preset.after_run[0]).recipe
+    evaluation = recipe.evaluated(SkyRLPolicyModel(run), version=run.version)
+    assert sft in run.deps and run in evaluation.deps
+
+
+@pytest.mark.parametrize(
+    ("table", "version", "scored"),
+    [("snowball", "2026.11.27", True), ("mochi", "dev", True), ("snowball", "2026.11.27", False)],
+    ids=["snowball-retry", "mochi-dev", "unscored"],
+    indirect=["table"],
+)
+def test_standalone_eval_lite_publishes_its_native_record(selection, table, version, scored, tmp_path, monkeypatch):
+    monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: str(tmp_path))
+    monkeypatch.setattr("experiments.post_training.rl_evaluation_records.CW_RECORDS_PREFIX", str(tmp_path / "records"))
+    monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    artifact = tmp_path / "policy"
+    export = artifact / "checkpoint-2"
+    export.mkdir(parents=True)
+    for name in ("config.json", "tokenizer_config.json"):
+        (export / name).write_text("{}")
+    write_published_artifact(tmp_path, "tests/policy", "2026.11.26", Artifact, source=str(artifact))
+
+    native_attempts = []
+
+    def finish(config):
+        native_attempts.append(config.attempt_id)
+        output = Path(config.output.export_root).parent
+        output.mkdir(parents=True, exist_ok=True)
+        path = output / "launch.yaml"
+        path.write_text(config.launch_config_yaml)
+        [launch] = rl_gate.compose_configs([str(path)], validate_driver=True)
+        assert launch["inputs"]["train_data"] == []
+        assert launch["inputs"]["validation_data"][0]["relative_path"] == FULL_VALIDATION_FILENAME
+        generator = launch["skyrl"]["generator"]
+        sampling = generator["eval_sampling_params"]
+        assert (sampling["temperature"], sampling["top_p"], sampling["max_generate_length"]) == (0.0, 1.0, 8192)
+        assert generator["eval_n_samples_per_prompt"] == 1
+        if table is SNOWBALL:
+            assert generator.get("speculative_decoding") is None
+        write_receipt(
+            output,
+            {"config": launch, "result": {"state": "succeeded", "started_at": "2026-11-27T00:00:00+00:00"}},
+        )
+        rows = evaluation_task_rows(
+            [answer("one", 1.0), answer("two", 0.0)],
+            attempt_id=config.attempt_id,
+            step=-1,
+            evaluation="eval/",
+            selection=None,
+            normalized=None if scored else (None, None),
+        )
+        if not scored:
+            rows = [row.model_copy(update={"score": None, "outcome": row.answers[0].outcome}) for row in rows]
+        write_evaluations(config.output.export_root, rows)
+        append_metrics(
+            output,
+            {
+                0: {
+                    "step": 0,
+                    "attempt_id": config.attempt_id,
+                    "eval/all/num_attempted": 2,
+                    **({"eval/all/avg_verifier_score": 0.5} if scored else {}),
+                }
+            },
+        )
+
+    results = []
+
+    def submit(module, handles, _concurrency, env, *, argv, execution):
+        _coordinator_request(handles, module, argv, tmp_path, env, execution=execution)
+        [step] = handles
+        for _ in range(2 if scored else 1):
+            results.append(step.run(materialized_config(step, str(tmp_path))))
+
+    monkeypatch.setattr("experiments.post_training.rl_evallite.run_skyrl", finish)
+    monkeypatch.setattr(rl, "submit_or_run", submit)
+    catalog = mochi_evaluations if table is MOCHI else snowball_evaluations
+
+    def evaluate():
+        return rl.main(
+            table,
+            argv=[
+                "evaluate",
+                "--init",
+                "tests/policy@2026.11.26",
+                "--evals",
+                "eval-lite",
+                "--version",
+                version,
+                "--run",
+            ],
+            entry_module=f"experiments.post_training.{table.model}_rl",
+            evaluation_preset=catalog,
+        )
+
+    if not scored:
+        with pytest.raises(ValueError, match="No usable verifier scores"):
+            evaluate()
+        [record] = list_records(str(tmp_path / "records"))
+        assert record.status is RunStatus.FAILED
+        return
+
+    assert evaluate() == 0
+    result, repeated = results
+    if version == "dev":
+        assert len(native_attempts) == 2 and repeated.run_ids != result.run_ids
+    else:
+        assert len(native_attempts) == 1 and repeated.run_ids == result.run_ids
+    assert Path(result.path).is_dir()
+    [run_id] = result.run_ids
+    record = read_record(record_path(result.records_prefix, run_id))
+    assert record.model.location == str(export)
+    assert record.evaluation.mechanism == "skyrl" and record.evaluation.name == "eval-lite"
+    assert record.version == version
+    assert record.metrics == {"eval-lite": {"reward": 0.5}}
+    assert record.coverage["eval-lite"].n_scored == 2
+    assert ReadView(record.results_path).is_sealed()
+
+
+def test_after_run_evaluations_record_each_replicates_selected_export(selection, tmp_path, monkeypatch):
+    handles = []
+    monkeypatch.setattr("marin.experiment.cli._print_plan", handles.extend)
+    result = plan(SNOWBALL, "learning-medium", "--replicates", "2", "--then-eval", "micro210", "--then-eval", "mmlu")
+    assert result.exit_code == 0, (result.output, result.exception)
+    left, right, *evaluations = handles
+    assert [step.deps.count(left) for step in evaluations] == [1, 1, 0, 0]
+    assert [step.deps.count(right) for step in evaluations] == [0, 0, 1, 1]
+    assert {step.name for step in evaluations} == {
+        f"{run.name}/evaluations/{name}" for run in (left, right) for name in ("micro210", "mmlu")
+    }
+
+    class Client:
+        def submit(self, *, entrypoint, **_kwargs):
+            _, (batch,), _ = entrypoint.resolve()
+            [benchmark] = batch.evaluations
+            _record(batch, benchmark.identity, RunStatus.SUCCEEDED, None, {"mmlu": {"accuracy": 0.5}}, {}, {})
+            return SimpleNamespace(wait=lambda **_kwargs: None)
+
+    monkeypatch.setattr(eval_pipeline, "iris_ctx", lambda: SimpleNamespace(client=Client()))
+    monkeypatch.setattr(eval_launch, "CW_RECORDS_PREFIX", str(tmp_path / "records"))
+    for index, run in enumerate((left, right)):
+        output = Path(run.path(str(tmp_path)))
+        export = str(output / "best-checkpoint")
+        Path(export).mkdir(parents=True)
+        attempt_ref = RLAttemptRef(run_id=f"training-{index}", attempt_id="completed")
+        write_skyrl_run_record(
+            output,
+            run.name,
+            run.version,
+            fingerprint=run.fingerprint(),
+            hf_model_uri=export,
+            tokenizer_uri=export,
+            tokenizer_revision=None,
+            **attempt_ref.model_dump(),
+        )
+        [benchmark] = [step for step in evaluations if step.name == f"{run.name}/evaluations/mmlu"]
+        report = benchmark.run(materialized_config(benchmark, str(tmp_path)))
+        [run_id] = report.run_ids
+        record = read_record(record_path(report.records_prefix, run_id))
+        assert record.model.location == export
+        assert record.rl_attempt == attempt_ref
+
+
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        (("--export", "none"), "After-run evaluations require a policy export"),
+        (("--then-eval", "unknown"), "Unknown evaluation 'unknown'"),
+    ],
+)
+def test_after_run_evaluation_refuses_unusable_plans(selection, options, error):
+    result = plan(SNOWBALL, "train-long-agentic-micro210", *options)
+    assert result.exit_code == 4, (result.output, result.exception)
+    assert error in result.output
+
+
+def test_cross_host_generation_plan_refuses_a_non_vllm_backend(selection):
+    evaluation = mochi_evaluations("eval-lite").recipe
+    preset = evaluation.preset
+    spec = rl_compose.run_spec(preset, name="cross-host-evaluation", model_name=MOCHI.model)
+    config = yaml.safe_load(spec.config_yaml)
+    config["generator"]["backend"] = "sglang"
+    with pytest.raises(ValueError, match="Cross-host expert-parallel generation requires vLLM"):
+        rl_compose.run_step(preset, replace(spec, config_yaml=yaml.safe_dump(config)))
+
+
 @pytest.mark.parametrize(
     ("dataset", "settings", "error"),
     [
@@ -236,8 +473,8 @@ def mochi_with_incomplete_default(tmp_path):
     preset = MOCHI.by_name["train-long"]
     model = preset.model
     root = tmp_path / "model"
-    (root / "hf").mkdir(parents=True)
-    (root / "hf" / "config.json").write_text("{}")
+    root.mkdir(parents=True)
+    (root / "config.json").write_text("{}")
     model = replace(model, step=ArtifactStep.adopt(model.step.name, model.step.version, str(root)))
     return replace(MOCHI, presets=(replace(preset, model=model),))
 
@@ -261,9 +498,11 @@ def test_resume_inherits_the_source_runs_initializer(
     tokenizer = {"tokenizer_uri": "gs://fixture-models/tokenizer", "tokenizer_revision": "tokenizer-pin"}
     start_args = ()
     if explicit_init:
-        write_published_artifact(tmp_path, model_name, preset.revision, Artifact, source=model_uri, config=tokenizer)
+        write_published_artifact(
+            tmp_path, model_name, rl_compose.RUN_ARTIFACT_VERSION, Artifact, source=model_uri, config=tokenizer
+        )
         monkeypatch.setattr("marin.rl.skyrl.discover_hf_checkpoints", lambda path: [f"{path}/hf"])
-        start_args = ("--init", f"{model_name}@{preset.revision}")
+        start_args = ("--init", f"{model_name}@{rl_compose.RUN_ARTIFACT_VERSION}")
     runs = []
 
     def after_rl(run) -> Artifact:
@@ -284,7 +523,9 @@ def test_resume_inherits_the_source_runs_initializer(
     if explicit_init:
         assert source_model["uri"] == f"{model_uri}/hf"
     else:
-        changed = ArtifactStep.adopt("models/changed-default", preset.revision, "gs://fixture-models/changed-default")
+        changed = ArtifactStep.adopt(
+            "models/changed-default", rl_compose.RUN_ARTIFACT_VERSION, "gs://fixture-models/changed-default"
+        )
         table = replace(table, presets=(replace(preset, model=replace(preset.model, step=changed)),))
     root = Path(source_config.output.resolved_config_uri).parent
     checkpoint = write_native_checkpoint(root, source_launch)
@@ -299,6 +540,16 @@ def test_resume_inherits_the_source_runs_initializer(
         monkeypatch.setattr(rl_compose, "marin_temp_bucket", lambda *_args, **_kwargs: str(resume_prefix))
 
     resume_args = ("--resume", f"{source.name}@{source.version}")
+    composed = []
+    if not explicit_init:
+        compose_preset = rl_gate.compose_preset
+
+        def record_composition(preset, inputs):
+            config = compose_preset(preset, inputs)
+            composed.append(config)
+            return config
+
+        monkeypatch.setattr(rl_gate, "compose_preset", record_composition)
     planned = plan(table, preset.name, *resume_args)
     assert planned.exit_code == 0, (planned.output, planned.exception)
     assert f"  model: {source_model['identity']}\n" in planned.output
@@ -309,17 +560,15 @@ def test_resume_inherits_the_source_runs_initializer(
     assert inputs["model"] == source_model
     assert inputs["starting_checkpoint"]["uri"] == str(checkpoint)
     if not explicit_init:
-        launch = tmp_path / "resumed.yaml"
-        launch.write_text(resumed_config.launch_config_yaml)
-        (plan_document,) = rl_gate.compose_configs([str(launch)])
+        (plan_document,) = composed
         worker_document = deepcopy(plan_document)
         runtime = worker_document["skyrl"].setdefault("runtime", {})
         runtime["model_source_identity"] = inputs["model"]["identity"]
         runtime["starting_checkpoint_identity"] = inputs["starting_checkpoint"]["identity"]
-        assert rl_gate.comparison_config(worker_document) == rl_gate.comparison_config(plan_document)
+        assert rl_gate.config_version(worker_document) == rl_gate.config_version(plan_document)
         runtime["starting_checkpoint_identity"] = "different-checkpoint"
         with pytest.raises(rl_gate.InvalidComparison, match="starting_checkpoint_identity"):
-            rl_gate.comparison_config(worker_document)
+            rl_gate.config_version(worker_document)
         return
     assert all(dep.name != model_name for dep in resumed.lower().deps)
     monkeypatch.setattr(rl, "run_skyrl", lambda _config, **_kwargs: None)
@@ -359,7 +608,7 @@ def test_mochi_plan_refuses_an_incomplete_default_export(
     assert "--sft PRESET" in result.output and "--init NAME@VERSION" in result.output
 
 
-@pytest.mark.usefixtures("source_provenance")
+@pytest.mark.usefixtures("source_provenance", "cache_native_compositions")
 @pytest.mark.parametrize(
     ("model", "override"),
     [("snowball", True), ("mochi", False), ("mochi", True)],
@@ -405,10 +654,20 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
     else:
         monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: durable)
+    fake_s3(monkeypatch)
     monkeypatch.setattr(rl, "_status", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(sys, "argv", [module, *argv])
     monkeypatch.delitem(sys.modules, module)
     submitted = []
+    watch_deadlines = []
+
+    def follow_detached(entry_module, watch):
+        assert entry_module == module
+        assert watch.job == "/fixture/sft-then-rl"
+        watch_deadlines.append(watch.timeout_seconds)
+        return str(Path("/tmp") / "fixture-publication.log")
+
+    monkeypatch.setattr(rl, "_follow_detached", follow_detached)
 
     def submit(entry_module, handles, _max_concurrent, env, *, argv):
         assert entry_module == module
@@ -471,6 +730,8 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
             runpy.run_module(module, run_name="__main__", alter_sys=True)
         assert exit_.value.code == 0
     assert submitted == [(submitted[0][0], argv)] * 2
+    declared = (MOCHI if model == "mochi" else SNOWBALL).by_name["train-long"].recipe.layout
+    assert watch_deadlines == [(declared.coordinator_timeout_hours + (20 if model == "snowball" else 0)) * 3600] * 2
 
 
 @pytest.mark.parametrize(
@@ -496,8 +757,8 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
         (
             "snowball",
             "learning-medium",
-            ("--control", "--priority", "production"),
-            "controls use only the preset's pinned run options",
+            ("--control", "test-batch", "--priority", "production"),
+            "controls use only the preset's default run options",
             None,
         ),
         (
@@ -545,7 +806,6 @@ def test_command_refusals(selection, table, name, options, error, mode, request,
     if mode == "cross-backend":
         monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: "s3://marin-us-east-02a/marin")
         monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/fixture")
-        monkeypatch.setattr(rl, "check_cache", lambda _path: True)
         monkeypatch.setattr(rl, "read_skyrl_attempt", lambda _path: None)
         storage_exists = StoragePath.exists
 
@@ -565,14 +825,23 @@ def test_command_refusals(selection, table, name, options, error, mode, request,
 
 
 def test_mochi_agentic_plan_collects_attempts_with_exports_disabled(selection, tmp_path, monkeypatch):
-    monkeypatch.setattr(rl, "check_cache", lambda _path: True)
+    model = MOCHI.by_name["train-medium-agentic"].model
+    marker = StoragePath(model.step.path()) / MODEL_MANIFEST_FILENAME
+    fake_s3(monkeypatch, str(marker).removeprefix("s3://"))
     monkeypatch.delenv("MARIN_PREFIX", raising=False)
     monkeypatch.delenv("MARIN_TEMP_PREFIX", raising=False)
     scratch = tmp_path / "temporary"
     monkeypatch.setattr(rl_compose, "marin_temp_bucket", lambda *_args, **_kwargs: str(scratch))
     result = plan(MOCHI, "train-medium-agentic")
     assert result.exit_code == 0, (result.output, result.exception)
-    assert "rl-data/task-health/attempts/" in result.output
-    assert f"  root: {scratch}\n" in result.output
-    assert "  source: preset's 3-day storage\n" in result.output
-    assert "coordinator time limit exceeds storage lifetime" in result.output
+    status = printed_status(result.stdout)
+    resolved = result.stdout.partition("\nResolved versions:\n")[2].split()
+    (run,) = status["runs"]
+    assert status["output"]["root"] == str(scratch)
+    assert status["run_options"]["export"] == "none"
+    assert f"rl-data/task-health/attempts/by-run/{run['name']}@{run['version']}" in resolved
+    # The composed launch config turns the "none" export policy into export_hf=False.
+    experiment = rl.build_experiment(MOCHI.by_name["train-medium-agentic"], table=MOCHI, tasks=selection)
+    (step,) = experiment.runs
+    document = yaml.safe_load(materialized_config(step, str(scratch)).launch_config_yaml)
+    assert document["run"]["export_hf"] is False

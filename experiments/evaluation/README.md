@@ -21,7 +21,7 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 Remove `--dry-run` to submit. The command waits for the orchestrator and prints
-each evaluation's result location (and Harbor metrics). Add `--no-wait` to return after submission.
+each evaluation's result location. Add `--no-wait` to return after submission.
 
 Choose exactly one model source:
 
@@ -30,18 +30,24 @@ Choose exactly one model source:
 
 Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
 `smoke`, `core`, `nlp`, `chat`, `math`, `code`, `econevals`, `econevals-o3`, `econevals-sampled`,
-`econevals-sampled-o3`, and `agentic`.
+`econevals-sampled-o3`, `agentic`, `micro210`, and `micro210-smoke`.
 [configs/evaluations.yaml](configs/evaluations.yaml) declares curated suite choices and run overrides. The benchmark catalog supplies ordinary defaults.
 
-Use `--evaluation-config` for a suite or campaign document. Repeat it to combine their named benchmark selections; `--evals` selects entries from the combined documents, or all entries run when omitted. Repeat `--harbor-config` to add Harbor jobs. With no selection, the launcher uses `smoke`.
+`micro210` selects 340 chat rows and 94 Pi rows from the sealed task table. Its policy
+uses Together judging through a Daytona relay and requires Daytona task machines. It caps
+Pi at eight concurrent attempts. Use a backend that accepts seeded requests, a model
+with Pi's thinking format configured, and an HF token with access to the sealed inputs.
+`micro210-smoke` selects three rows from the full suite. The launcher reports the pooled
+reward once at least 90% of the full suite's rows have a score. To read it later, pass
+both run directories from the same launch to `scores`.
 
-For example, run a curated task and a Harbor benchmark on shared GPU serving:
+Use `--evaluation-config` for a suite or campaign document. Repeat it to combine their named benchmark selections; `--evals` selects entries from the combined documents, or all entries run when omitted. With no selection, the launcher uses `smoke`.
+
+For example, run a chat benchmark and a Harbor-format benchmark through shared serving:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-32b \
-  --evals gsm8k-smoke \
-  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
+  --model qwen3-32b --evals gsm8k-smoke,aime-harbor \
   --federated_cluster cw-rno2a --limit 2
 ```
 
@@ -66,18 +72,6 @@ Use `launch --help` for all options. See the
 [evaluation guide](../../docs/tutorials/run-lm-evals.md) for more command examples.
 
 ### Judges
-
-For Harbor, use `--judge-model` or `--judge-model-config` to serve a separate
-judge. The judge must run in the same cluster or region as the candidate.
-`--judge-accelerator` selects its accelerator shape.
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-32b \
-  --judge-model qwen3.5-122b-a10b-fp8 --judge-accelerator H100x8 \
-  --harbor-config experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml \
-  --federated_cluster cw-rno2a --limit 2
-```
 
 Curated evaluations that need an external judge declare its deployment and model
 identity in `judge`, its URL in `judge_endpoint`, and ordered secret references in
@@ -189,7 +183,7 @@ pending evaluation gets an infrastructure-failure record.
 
 During inference preemption, Marin stops affected evaluators and waits for the
 candidate and any hosted judge to become ready. It then restarts the evaluators
-at the same result paths. Harbor keeps completed trials. Curated execution reuses
+at the same result paths. The evaluator reuses
 completed logical trials and retries infrastructure failures. Uncommitted work can
 run again. If inference ends permanently, unfinished evaluations fail.
 
@@ -197,15 +191,6 @@ To repeat a CLI launch while retaining completed steps, set `--run-id` on the
 first launch and reuse it with the same settings. Without it, each CLI launch
 gets new run directories. Changed model, evaluation, judge, or cohort settings
 create separate evaluation run IDs.
-
-To recover an existing Harbor archive in a new launch, use
-`--resume-results-path <URI>` with exactly one Harbor evaluation. The saved
-model, judge, evaluation configuration, runtime, dataset, and task limit must match. Add
-`--retry-unscored-harbor-trials` to remove and retry known unscored trials.
-Scored agent failures and unknown errors are preserved.
-
-Wait for all earlier drivers using that result path to stop before resuming.
-Two live Harbor drivers must not share one results root.
 
 ## Pipelines and catalog changes
 
@@ -274,6 +259,8 @@ Micro210 uses a [Together serverless judge](judge_config.py) and a
 to the 2026.11.18 MiniMax policy; see [#11818](https://github.com/marin-community/marin/pull/11818)
 for the proposed paired re-score.
 
-To read a past run's policy, pass the `policy_reference` from its
-`canonical-evaluation.json` to `read_micro210_policy` in the policy module.
+The launcher uses the sealed 434-row table with per-task provisioning and runtime
+judge access. Each cohort's record identifies the curated corpus and scoring
+protocol. See [the Micro210 evaluation reference](../../docs/references/rl-launching.md#micro210-evaluation)
+for source pins and diagnostic row selection.
 Mini840 keeps its existing judge policy.

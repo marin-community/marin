@@ -7,18 +7,19 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
+import signal
 import subprocess
 import sys
 import tempfile
-import tomllib
 import uuid
-from collections import deque
 from collections.abc import Mapping
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import asdict, dataclass, fields, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path, PurePosixPath
+from time import monotonic, sleep
 from typing import Literal, cast
 
 import fsspec
@@ -57,7 +58,8 @@ _MARINSKYRL_STAGING_ROOT = PurePosixPath("/tmp/marinskyrl")
 _TEMPORARY_OUTPUT_PREFIX = "skyrl"
 _TRACE_JOBS_SUBDIR = "trace_jobs"
 _TRAJECTORIES_SUBDIR = "trajectories"
-_LAUNCHER_DIAGNOSTIC_LINES = 20
+_CPU_DIAGNOSTIC_BYTES = 64 * 1024
+_LAUNCHER_CANCEL_GRACE_SECONDS = 10
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 _BEST_CHECKPOINT_CALLBACK = "best_checkpoint"
 SKYRL_PROJECT = Path("vendor/skyrl")
@@ -124,6 +126,12 @@ class _InferenceGeometry:
     def inference_config(self) -> dict[str, object]:
         return {f"generator.{item.name}": getattr(self, item.name) for item in fields(_InferenceGeometry)}
 
+    def spans_hosts(self, gpus_per_node: int) -> bool:
+        return (
+            self.inference_engine_tensor_parallel_size == self.inference_engine_pipeline_parallel_size == 1
+            and self.inference_engine_expert_parallel_size == self.inference_engine_data_parallel_size > gpus_per_node
+        )
+
 
 @dataclass(frozen=True)
 class SkyRLRolePlan(_InferenceGeometry):
@@ -160,26 +168,14 @@ class SkyRLRolePlan(_InferenceGeometry):
     @property
     def uses_expert_parallel_placement(self) -> bool:
         """Whether rollout uses cross-host, one-GPU expert-parallel workers."""
-        return (
-            not self.colocate_all
-            and self.inference_engine_tensor_parallel_size == 1
-            and self.inference_engine_pipeline_parallel_size == 1
-            and self.inference_engine_expert_parallel_size
-            == self.inference_engine_data_parallel_size
-            > self.policy_num_gpus_per_node
-        )
+        return not self.colocate_all and self.spans_hosts(self.gpus_per_node)
 
     @property
     def num_nodes(self) -> int:
         """Count the nodes used by training and inference roles."""
         if self.colocate_all:
             return self.policy_num_nodes
-        if self.uses_expert_parallel_placement:
-            rollout_gpus = self.num_inference_engines * self.engine_gpus
-            rollout_nodes = (rollout_gpus + self.policy_num_gpus_per_node - 1) // self.policy_num_gpus_per_node
-        else:
-            rollout_nodes = _inference_nodes(self)
-        return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
+        return self.policy_num_nodes + (self.reference_num_nodes or 0) + _inference_nodes(self)
 
     def config_values(self) -> dict[str, object]:
         """Canonical native placement, batch and inference settings."""
@@ -345,14 +341,16 @@ class SkyRLGenerationPlan(_InferenceGeometry):
         _validate_inference_geometry(self)
         if self.num_inference_engines <= 0 or self.n_samples_per_prompt <= 0:
             raise ValueError("SkyRL generation engines and samples per prompt must be positive")
-        _validate_engine_fits_node(self, topology)
+        if not self.spans_hosts(self.gpus_per_node):
+            _validate_engine_fits_node(self, topology)
         if topology.num_nodes != self.num_nodes:
             raise ValueError("SkyRL generation topology must allocate exactly the inference engine nodes")
         if self.gpus_per_node != topology.gpus_per_node:
             raise ValueError("SkyRL inference node width must match the whole-node topology width")
 
     def validate_recipe(self, config: dict[str, object], topology: SkyRLTopology) -> None:
-        return None
+        if self.spans_hosts(self.gpus_per_node) and _declared_config_value(config, "generator.backend") != "vllm":
+            raise ValueError("Cross-host expert-parallel generation requires vLLM")
 
 
 def _validate_engine_fits_node(plan: SkyRLRolePlan | SkyRLGenerationPlan, topology: SkyRLTopology) -> None:
@@ -366,6 +364,8 @@ def _validate_engine_fits_node(plan: SkyRLRolePlan | SkyRLGenerationPlan, topolo
 
 def _inference_nodes(plan: SkyRLRolePlan | SkyRLGenerationPlan) -> int:
     engine_gpus = plan.engine_gpus
+    if plan.spans_hosts(plan.gpus_per_node):
+        return (plan.num_inference_engines * engine_gpus + plan.gpus_per_node - 1) // plan.gpus_per_node
     engines_per_node = plan.gpus_per_node // engine_gpus
     if not engines_per_node:
         raise ValueError("each SkyRL inference engine must fit on one node")
@@ -553,7 +553,7 @@ def resolve_skyrl_policy(ctx: StepContext, source: ArtifactStep[SkyRLRun]) -> Re
     else:
         result = ctx.resolved(source)
         if result.hf_model_uri is None:
-            raise ValueError("A completed SkyRL policy requires export_hf=True")
+            raise ValueError(f"SkyRL run {source.name}@{source.version} has no selected Hugging Face export")
         uri, tokenizer, revision = result.hf_model_uri, result.tokenizer_uri, result.tokenizer_revision
     return ResolvedModelLocator(
         uri=uri,
@@ -873,14 +873,19 @@ class SkyRLRun(Artifact):
     attempt_id: str | None = None
 
 
-def skyrl_cpu_command(*arguments: str) -> list[str]:
-    """Return argv for SkyRL's frozen CPU environment using its declared Python requirement."""
+def skyrl_project_root() -> Path:
+    """Locate the vendored SkyRL project that supplies the native executable."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
-    project_root = workspace_root / SKYRL_PROJECT
+    return workspace_root / SKYRL_PROJECT
+
+
+def skyrl_cpu_command(*arguments: str, project_root: Path | None = None) -> list[str]:
+    """Return argv for the frozen SkyRL CPU environment."""
+    project_root = project_root or skyrl_project_root()
     uv_version = (project_root / ".uv-version").read_text().strip()
-    python_requirement = tomllib.loads((project_root / "pyproject.toml").read_text())["project"]["requires-python"]
+    python_requirement = (project_root / ".python-version").read_text().strip()
     # Match Iris task setup: older cached managed builds can lack Linux pidfd APIs.
     python_selection = ["--python-preference", "system", "--python", python_requirement, "--no-python-downloads"]
     return [
@@ -908,30 +913,104 @@ def _launcher_command(config_path: str) -> list[str]:
     return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
-def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    """Run the launcher, forwarding its live logs and keeping a tail to explain a failure."""
-    tail: deque[str] = deque(maxlen=_LAUNCHER_DIAGNOSTIC_LINES)
+def skyrl_cpu_environment(env_vars: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Remove Python path and virtualenv overrides for SkyRL CPU processes."""
     environment = {**os.environ, **(env_vars or {})}
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
+    return environment
+
+
+def run_skyrl_cpu(
+    command: list[str],
+    *,
+    env_vars: Mapping[str, str] | None = None,
+    timeout: float | None = None,
+    stream_stderr: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run a SkyRL CPU process in its own group and preserve diagnostic output."""
+    environment = skyrl_cpu_environment(env_vars)
+    deadline = None if timeout is None else monotonic() + timeout
     with (
-        tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as response,
+        tempfile.TemporaryFile() as stdout,
+        selectors.DefaultSelector() as diagnostics,
         subprocess.Popen(
-            command, stdout=response, stderr=subprocess.PIPE, text=True, errors="replace", env=environment
+            command, stdout=stdout, stderr=subprocess.PIPE, env=environment, start_new_session=True
         ) as process,
     ):
+        pipe = process.stderr
+        assert pipe is not None
+        diagnostics.register(pipe, selectors.EVENT_READ)
+        tail = b""
+
+        def read_diagnostics(wait: float) -> bool:
+            nonlocal tail
+            if not diagnostics.get_map():
+                sleep(wait)
+                return False
+            if not diagnostics.select(wait):
+                return False
+            data = os.read(pipe.fileno(), _CPU_DIAGNOSTIC_BYTES)
+            if not data:
+                diagnostics.unregister(pipe)
+                return False
+            tail = (tail + data)[-_CPU_DIAGNOSTIC_BYTES:]
+            if stream_stderr:
+                sys.stderr.write(data.decode(errors="replace"))
+            return True
+
+        def drain_diagnostics() -> None:
+            # A descendant may still hold the pipe open after the launcher exits.
+            drain_until = monotonic() + 0.25
+            while monotonic() < drain_until and read_diagnostics(0):
+                pass
+
         try:
-            assert process.stderr is not None
-            for line in process.stderr:
-                sys.stderr.write(line)
-                tail.append(line)
-            returncode = process.wait()
-        except BaseException:
-            # Popen.__exit__ waits but never kills, so without this an interrupt orphans the launcher.
-            process.kill()
+            while process.poll() is None:
+                remaining = 0.25 if deadline is None else min(0.25, deadline - monotonic())
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                read_diagnostics(remaining)
+        except BaseException as error:
+            try:
+                if stream_stderr and isinstance(error, KeyboardInterrupt):
+                    # Give the launcher time to cancel its Iris wait.
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGINT)
+                        cleanup = monotonic() + _LAUNCHER_CANCEL_GRACE_SECONDS
+                        while monotonic() < cleanup:
+                            process.poll()
+                            os.killpg(process.pid, 0)
+                            read_diagnostics(0.1)
+            finally:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            if isinstance(error, subprocess.TimeoutExpired):
+                drain_diagnostics()
+                error.stderr = tail
             raise
-        response.seek(0)
-        return subprocess.CompletedProcess(command, returncode, response.read(), "".join(tail))
+        returncode = process.wait()
+        if returncode:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+        drain_diagnostics()
+        stdout.seek(0)
+        return subprocess.CompletedProcess(
+            command, returncode, stdout.read().decode(errors="replace"), tail.decode(errors="replace")
+        )
+
+
+def prepare_skyrl_cpu_python(timeout: float, *, project_root: Path | None = None) -> Path:
+    """Sync the frozen CPU environment and return its isolated interpreter."""
+    project_root = project_root or skyrl_project_root()
+    interpreter = project_root / ".venv/bin/python"
+    command = skyrl_cpu_command(str(interpreter), "-I", "--version", project_root=project_root)
+    run_skyrl_cpu(command, timeout=timeout).check_returncode()
+    return interpreter
+
+
+def _run_launcher(command: list[str], *, env_vars: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return run_skyrl_cpu(command, env_vars=env_vars, stream_stderr=True)
 
 
 def run_skyrl(
@@ -1045,16 +1124,17 @@ def _launch_config_yaml(
         if not is_rack_based(spec.topology.gpu_variant) or spec.topology.gpus_per_node != NVL72_GPUS_PER_NODE:
             raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
         plan = spec.topology.role_plan
+        training = plan if isinstance(plan, SkyRLRolePlan) else None
         locality = plan_nvlink_roles(
-            policy_gpus=plan.policy_num_nodes * plan.policy_num_gpus_per_node,
+            policy_gpus=training.policy_num_nodes * training.gpus_per_node if training is not None else 0,
             num_inference_engines=plan.num_inference_engines,
             tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
             pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
             data_parallel_size=plan.inference_engine_data_parallel_size,
             expert_parallel_size=plan.inference_engine_expert_parallel_size,
             inference_backend=cast(str, _declared_config_value(recipe, "generator.backend")),
-            colocate_all=plan.colocate_all,
-            colocate_policy_ref=plan.colocate_policy_ref,
+            colocate_all=training.colocate_all if training is not None else False,
+            colocate_policy_ref=training.colocate_policy_ref if training is not None else True,
             gpus_per_node=spec.topology.gpus_per_node,
             max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
         )

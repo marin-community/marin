@@ -29,7 +29,6 @@ from taskcompendium.evaluation.spec import (
     TrialPolicy,
 )
 from taskcompendium.importers.evalchemy.assets import code_protocol
-from taskcompendium.importers.evalchemy.assets.code_protocol import test_program as build_test_program
 from taskcompendium.importers.evalchemy.code import convert_python, python_item, read_crux
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
@@ -160,6 +159,9 @@ def test_crux_answer_skips_restated_tag_instruction(direction, response, expecte
 
 
 CONCAT = "def f(text, value):\n    return text + value"
+NESTED_ARGUMENTS = "[('u', 1)], [('s', 7), ('u', -5)]"
+NESTED = "[('u', 1), ('s', 7), ('u', -5)]"
+TURN_END = "<|eot_id|>"
 
 
 def _passes(program: str) -> bool:
@@ -185,6 +187,13 @@ def _passes(program: str) -> bool:
         # An output answer containing f(<input>), or an input answer without a call, is not an answer.
         ("output", "'a', 'b'", "'ab'", "[ANSWER]\nassert f('a', 'b') == f('a', 'b')\n[/ANSWER]", False),
         ("input", "'a', 'b'", "'ab'", "[ANSWER]\n'ab'\n[/ANSWER]", False),
+        # Nested list and tuple arguments are read whole, tagged or untagged up to a terminal turn token.
+        ("output", NESTED_ARGUMENTS, NESTED, f"assert f({NESTED_ARGUMENTS}) == {NESTED}{TURN_END}", True),
+        ("input", NESTED_ARGUMENTS, NESTED, f"[ANSWER]assert f({NESTED_ARGUMENTS}) == {NESTED}[/ANSWER]", True),
+        ("output", NESTED_ARGUMENTS, NESTED, f"assert f({NESTED_ARGUMENTS}) == [('u', 2)]{TURN_END}", False),
+        ("output", "3, 4", "7", f"assert f(3, 4) == 7{TURN_END}", True),
+        ("output", "3, 4", "7", f"assert f(3, 4) == 8{TURN_END}", False),
+        ("output", "3, 4", "7", "```python\nassert f(3, 4) == 7\n```", False),
     ],
 )
 def test_crux_reads_answers_by_the_harness_rule(direction, arguments, output, reply, passed):
@@ -219,39 +228,3 @@ def test_execution_program_fails_a_nonterminating_program_within_its_budget(tmp_
     reward, duration = _execute(tmp_path, program, 1)
     assert reward == 0.0
     assert duration < 10
-
-
-@pytest.mark.parametrize(
-    ("direction", "response"),
-    [
-        (
-            "output",
-            "assert f([('u', 1), ('s', 7), ('u', -5)]) == [('u', 1), ('s', 7), ('u', -5)]<|eot_id|>",
-        ),
-        (
-            "input",
-            "[ANSWER]assert f([('u', 1), ('s', 7), ('u', -5)]) == [('u', 1), ('s', 7), ('u', -5)][/ANSWER]",
-        ),
-    ],
-)
-def test_crux_program_accepts_nested_call_and_terminal_turn_token(direction, response):
-    problem = {
-        "code": "def f(value): return value",
-        "input": "[('u', 1), ('s', 7), ('u', -5)]",
-        "output": "[('u', 1), ('s', 7), ('u', -5)]",
-    }
-    program = build_test_program(problem, response, "cruxeval", direction)
-    exec(compile(program, "<candidate>", "exec"), {})
-
-
-def test_crux_program_accepts_untagged_answer_with_terminal_turn_token():
-    problem = {"code": "def f(value): return value", "input": "7", "output": "7"}
-    program = build_test_program(problem, "assert f(7) == 7<|eot_id|>", "cruxeval", "output")
-    exec(compile(program, "<candidate>", "exec"), {})
-
-
-def test_crux_program_rejects_untagged_fenced_answer():
-    problem = {"code": "def f(value): return value", "input": "7", "output": "7"}
-    program = build_test_program(problem, "```python\nassert f(7) == 7\n```", "cruxeval", "output")
-    with pytest.raises(SyntaxError):
-        compile(program, "<candidate>", "exec")

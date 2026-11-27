@@ -11,6 +11,7 @@ import pytest
 from evalrecords.records import (
     CuratedAgentRef,
     CuratedSettings,
+    EvaluationOverrides,
     TaskImageBuild,
     TaskMachineBackend,
     TaskMachineSettings,
@@ -21,6 +22,7 @@ from marin.evaluation.model_config import AgentConfig, GenerationConfig, ModelCo
 from marin.evaluation.task_worker import (
     DAYTONA_API_KEY,
     DAYTONA_EGRESS,
+    DEFAULT_MAX_ATTEMPTS,
     JUDGE_API_KEY,
     JUDGE_ENDPOINT,
     DaytonaConnection,
@@ -30,8 +32,10 @@ from marin.inference.types import InferenceBackendState
 from openai import OpenAI
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
 
+from experiments.evaluation.benchmarks import micro210
 from experiments.evaluation.evals import resolve_evaluations
 from experiments.evaluation.launch import LaunchSpec, prepare_evaluation_batch
+from tests.rl.micro210_fixture import policy_fixture_reference
 
 SERVED_CONTEXT = 4096
 MODEL = ModelConfig(
@@ -116,6 +120,53 @@ def test_frontierscience_worker_receives_named_judge(track, tmp_path, created, s
     assert submitted["environment"].secrets[JUDGE_API_KEY] == "fixture-key"
     assert submitted["environment"].secrets[JUDGE_ENDPOINT] == "https://api.together.xyz/v1"
     assert config.judge.default_model == "openai/gpt-oss-120b"
+
+
+def test_micro210_workers_use_the_sealed_judge_route_and_run_settings(tmp_path, created, submitted, monkeypatch):
+    monkeypatch.setattr(micro210, "POLICY_REFERENCE", policy_fixture_reference())
+    selections = resolve_evaluations("micro210")
+    model = replace(
+        MODEL,
+        serve=ServeConfig(max_model_len=SERVED_CONTEXT),
+        agent=AgentConfig(agent_kwargs={"thinking_format": "chat-template"}),
+    )
+    spec = LaunchSpec(
+        model=model,
+        evals=selections,
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=None,
+        records_prefix=str(tmp_path),
+        submission_cluster="marin",
+        federated_cluster="cw-rno2a",
+        priority_band=0,
+    )
+    batch = prepare_evaluation_batch(spec)
+    chat, pi = batch.evaluations
+    env = {JUDGE_API_KEY: "fake-judge-key", DAYTONA_API_KEY: "fake-daytona-key"}
+    for evaluation in (chat, pi):
+        evaluation.executor(SESSION, str(tmp_path), env, backend_state=lambda: InferenceBackendState.READY)
+        _, (_, _, config, attempts), _ = submitted["entrypoint"].resolve()
+        assert attempts == DEFAULT_MAX_ATTEMPTS
+        assert config.seed == 20261030
+        assert config.task_machine.backend == config.verifier_machine.backend == TaskMachineBackend.DAYTONA
+        assert config.image_build is TaskImageBuild.DECLARATIVE
+        assert config.judge.default_model == "zai-org/GLM-5.3-Flash"
+        assert submitted["environment"].secrets[JUDGE_ENDPOINT] == "https://api.together.ai/v1"
+        assert submitted["environment"].secrets[JUDGE_API_KEY] == "fake-judge-key"
+        if evaluation is pi:
+            assert config.concurrency == 8
+
+    with pytest.raises(ValueError, match=r"requires task_machine\.backend=daytona"):
+        prepare_evaluation_batch(replace(spec, task_machine_backend=TaskMachineBackend.LOCAL))
+
+    run = EvaluationOverrides(task_machine=TaskMachineSettings(cpus=2))
+    selected = selections[0].model_copy(update={"run": run})
+    (overridden,) = prepare_evaluation_batch(replace(spec, evals=(selected,))).evaluations
+    overridden.executor(SESSION, str(tmp_path), env, backend_state=lambda: InferenceBackendState.READY)
+    _, (_, _, config, _), _ = submitted["entrypoint"].resolve()
+    assert config.task_machine.cpus == 2
+    assert config.image_build is TaskImageBuild.DECLARATIVE
 
 
 def test_context_admission_uses_server_limit_and_resume_identity_ignores_server_timestamp(created):

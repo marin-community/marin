@@ -73,6 +73,7 @@ def run_config(config_path: Path) -> None:
             "run_id": str(config.run.id),
             **({"model": config.run.model} if config.run.get("model") is not None else {}),
             "attempt_id": str(config.run.attempt_id),
+            "run_index": config.run.get("index"),
             "coordinator_iris_job_id": config.run.coordinator_iris_job_id,
             "iris_job_id": str(job_info.job_id) if job_info is not None else None,
         }
@@ -91,7 +92,7 @@ def run_config(config_path: Path) -> None:
             config.skyrl.runtime.prepared_task_cache = OmegaConf.structured(prepared_cache)
         if topology is not None:
             config.skyrl.runtime.placement = {
-                "policy": topology.selector("policy"),
+                "policy": topology.selector("policy") if "policy" in topology.roles else None,
                 "engines": [topology.selector(role) for role in topology.roles if role != "policy"],
             }
     run(config.skyrl)

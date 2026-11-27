@@ -453,6 +453,7 @@ class ResourceConfig:
     device_alternatives: Sequence[str] | None = None
     image: str | None = None
     container_profile: str | None = None
+    excluded_nvlink_domains: tuple[str, ...] = field(default=(), metadata={"fingerprint_omit_value": ()})
 
     def chip_count(self) -> int:
         """Total accelerator chips across all replicas."""

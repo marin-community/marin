@@ -23,6 +23,7 @@ import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
+from haliax.jax_utils import device_kind, gpu_family
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
@@ -1350,30 +1351,42 @@ def _fake_fa4_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, 
     return q
 
 
+_STUB_GPU_DEVICE = SimpleNamespace(platform="gpu", device_kind="NVIDIA H100 80GB HBM3", compute_capability="9.0")
+
+
 # The hero mesh (11 racks x EP64) leaves `data` at length 1; the second shape partitions every batch axis.
 @pytest.mark.parametrize("axis_sizes", [(2, 1, 2, 1, 1), (1, 2, 2, 1, 1)])
 def test_fa4_attention_traces_through_hero_loss_and_gradient(monkeypatch, axis_sizes):
+    # The stubbed backend must extend to gpu_family() and its per-process cache: the loss
+    # path calls is_amd_instinct(), which would otherwise probe the real (absent) devices.
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
-    monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_fa4_forward)
-    mesh = AbstractMesh(
-        axis_sizes=axis_sizes,
-        axis_names=("replica_dcn", "data", "expert", "context", "model"),
-        axis_types=(AxisType.Explicit,) * 5,
-    )
-    config = dataclasses.replace(_latent_config(), attention_implementation="gpu_fa4_cute")
-    batch_sharding = NamedSharding(mesh, P(model._BATCH_AXES, None))
-    tokens = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.int32, sharding=batch_sharding)
-    loss_weight = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.float32, sharding=batch_sharding)
-
-    def loss_and_grad(token_ids, weight):
-        transformer = model.Transformer.init(config, key=jax.random.key(0))
-        return eqx.filter_value_and_grad(lambda m: m.next_token_loss(token_ids, weight, mask=AttentionMask.causal()))(
-            transformer
+    monkeypatch.setattr(jax, "devices", lambda *args, **kwargs: [_STUB_GPU_DEVICE])
+    gpu_family.cache_clear()
+    device_kind.cache_clear()
+    try:
+        monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+        monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_fa4_forward)
+        mesh = AbstractMesh(
+            axis_sizes=axis_sizes,
+            axis_names=("replica_dcn", "data", "expert", "context", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
         )
+        config = dataclasses.replace(_latent_config(), attention_implementation="gpu_fa4_cute")
+        batch_sharding = NamedSharding(mesh, P(model._BATCH_AXES, None))
+        tokens = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.int32, sharding=batch_sharding)
+        loss_weight = jax.ShapeDtypeStruct((4, config.max_seq_len), jnp.float32, sharding=batch_sharding)
 
-    with use_abstract_mesh(mesh):
-        loss, grads = eqx.filter_eval_shape(loss_and_grad, tokens, loss_weight)
+        def loss_and_grad(token_ids, weight):
+            transformer = model.Transformer.init(config, key=jax.random.key(0))
+            return eqx.filter_value_and_grad(
+                lambda m: m.next_token_loss(token_ids, weight, mask=AttentionMask.causal())
+            )(transformer)
+
+        with use_abstract_mesh(mesh):
+            loss, grads = eqx.filter_eval_shape(loss_and_grad, tokens, loss_weight)
+    finally:
+        gpu_family.cache_clear()
+        device_kind.cache_clear()
 
     assert loss.shape == ()
     assert grads.output_proj.shape == (config.hidden_dim, config.vocab_size)

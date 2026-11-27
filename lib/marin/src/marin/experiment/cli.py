@@ -125,13 +125,16 @@ def _run_locally(handles: list[ArtifactStep], max_concurrent: int) -> None:
     run(*handles, max_concurrent=max_concurrent)
 
 
-def build_options_with_runner(fn: Callable[..., BuildResult], runner: BuildRunner) -> Callable[..., None]:
+def build_options_with_runner(
+    fn: Callable[..., BuildResult], runner: BuildRunner, *, default_version: Callable[[], str | None] | None = None
+) -> Callable[..., None]:
     """Add shared build options and delegate ``--run`` to a domain-specific runner."""
 
     @click.option(
         "--version",
         "default_version",
         required=True,
+        default=default_version,
         callback=_version_callback,
         help="Run-wide default version for artifacts that defer (omit version=). "
         "A calendar version YYYY.MM.DD, or 'dev' to iterate.",

@@ -17,6 +17,7 @@ from finestore.rl.run_records import (
     ExportedPolicy,
     LaunchReceipt,
     LaunchResult,
+    RunIndexIdentity,
     LaunchState,
     read_attempt,
     write_attempt,
@@ -26,6 +27,8 @@ from iris.cluster.client.job_info import get_job_info
 from iris.resources.state import JobState
 from omegaconf import DictConfig, OmegaConf
 from loguru import logger
+
+from skyrl_train.hf_export_schema import ExportFailed
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import RunMode, SubmissionMode, hugging_face_models, load_launch_config
@@ -270,6 +273,26 @@ def _write_attempt_receipt(config: DictConfig, result: LaunchResult) -> LaunchRe
     return receipt
 
 
+def _record_prepared_attempt(config: DictConfig) -> None:
+    """Store a publishable attempt and its coordinator ownership in one update."""
+    export_root = str(config.artifacts.export_root)
+    attempt_id = str(config.run.attempt_id)
+    raw_index = config.run.get("index")
+    index = RunIndexIdentity.model_validate(OmegaConf.to_container(raw_index)) if raw_index is not None else None
+    record = read_attempt(export_root, attempt_id)
+    if record is not None and record.config is not None:
+        return
+    write_attempt(
+        export_root,
+        AttemptRecord(
+            run_id=str(config.run.id),
+            attempt_id=attempt_id,
+            config=OmegaConf.to_container(config, resolve=True),
+            **({"index": index} if index is not None else {}),
+        ),
+    )
+
+
 def execute_launch(
     config_path: Path, *, backend: LaunchBackend | None = None, forward_env: tuple[str, ...] = ()
 ) -> LaunchResult:
@@ -299,18 +322,9 @@ def execute_launch(
         if config.run.submission == SubmissionMode.PREPARE:
             active_backend.validate(resolved_path)
             return _result(config, LaunchState.PREPARED)
+        _record_prepared_attempt(config)
         _prepare_model_caches(config)
         OmegaConf.save(config, resolved_file.name, resolve=False)
-        record = read_attempt(str(config.artifacts.export_root), str(config.run.attempt_id))
-        if record is None or record.config is None:
-            write_attempt(
-                str(config.artifacts.export_root),
-                AttemptRecord(
-                    run_id=str(config.run.id),
-                    attempt_id=str(config.run.attempt_id),
-                    config=OmegaConf.to_container(config, resolve=True),
-                ),
-            )
         try:
             outcome = active_backend.launch(resolved_path)
         except JobFailedError as error:
@@ -331,7 +345,7 @@ def execute_launch(
         if config.run.export_hf:
             try:
                 active_backend.export_terminal_policy(resolved_path)
-            except (OSError, subprocess.CalledProcessError, ValueError) as error:
+            except (OSError, subprocess.CalledProcessError, ValueError, ExportFailed) as error:
                 return _record_failure(config, outcome, f"Terminal policy export failed: {error}")
 
     model = None

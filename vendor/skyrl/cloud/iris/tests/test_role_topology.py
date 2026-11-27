@@ -4,20 +4,50 @@ from importlib.machinery import ModuleSpec
 import json
 import socket
 import sys
+from ctypes import POINTER, cast
 from types import ModuleType, SimpleNamespace
+from uuid import UUID
 
+import pynvml
 import pytest
 import ray
 import yaml
 from omegaconf import OmegaConf
+from ray._private.label_utils import validate_node_label_syntax
 from ray.cluster_utils import Cluster
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from cloud.iris.launch_config import derive_launch_topology, load_launch_config
-from cloud.iris.role_topology import LOCALITY_GROUP_LABEL
+from cloud.iris.role_topology import FABRIC_LABEL, LOCALITY_GROUP_LABEL, node_physical_labels, probe_fabric_info
 from cloud.iris.skyrl_entrypoint import run_config
 from cloud.iris.tests.launch_config_fixtures import raw_launch_config
 from skyrl_train.entrypoints.main_base import BasePPOExp, create_ray_wrapped_inference_engines_from_config
+
+
+def test_fabric_probe_passes_writable_nvml_result_storage(monkeypatch):
+    cluster = UUID(int=1)
+    monkeypatch.setattr(pynvml, "nvmlInit", lambda: None)
+    monkeypatch.setattr(pynvml, "nvmlShutdown", lambda: None)
+    monkeypatch.setattr(pynvml, "nvmlDeviceGetCount", lambda: 4)
+    monkeypatch.setattr(pynvml, "nvmlDeviceGetHandleByIndex", lambda index: index)
+
+    def read_fabric(handle, address):
+        info = cast(address, POINTER(pynvml.c_nvmlGpuFabricInfoV_t)).contents
+        assert info.version == pynvml.nvmlGpuFabricInfo_v2
+        info.clusterUuid[:] = cluster.bytes
+        info.cliqueId = 7
+        info.state = pynvml.NVML_GPU_FABRIC_STATE_COMPLETED
+        info.status = pynvml.NVML_SUCCESS
+        return pynvml.NVML_SUCCESS
+
+    def get_function(name):
+        assert name == "nvmlDeviceGetGpuFabricInfoV"
+        return read_fabric
+
+    monkeypatch.setattr(pynvml, "_nvmlGetFunctionPointer", get_function)
+    labels = node_physical_labels(rank=0, gpus_per_node=4, host="host", fabric_info=probe_fabric_info())
+    validate_node_label_syntax(labels)
+    assert labels[FABRIC_LABEL] == f"{cluster}.7"
 
 
 def launch_config(tmp_path, *, nodes=48, policy_nodes=16, engines=2, dp=64, width=4, variant="GB200", locality=True):
@@ -64,6 +94,19 @@ def test_policy_only_launch_keeps_trainer_local_without_inference(tmp_path, mode
     topology = derive_launch_topology(raw).role_topology
     assert topology.roles == ("policy",)
     assert topology.locality.group_sizes == (8,)
+
+
+def test_multi_host_generation_binds_only_the_inference_selector(tmp_path, monkeypatch):
+    path = launch_config(tmp_path, nodes=4, engines=1, dp=16)
+    raw = yaml.safe_load(path.read_text())
+    raw["skyrl"]["entrypoint"] = "generate"
+    path.write_text(yaml.safe_dump(raw))
+    launched = []
+    monkeypatch.setattr("skyrl_train.entrypoints.main_generate.run", launched.append)
+    run_config(path)
+    [config] = launched
+    assert config.runtime.placement.policy is None
+    assert config.runtime.placement.engines == [{LOCALITY_GROUP_LABEL: "0"}]
 
 
 @pytest.mark.slow

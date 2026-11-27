@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import Mapping, Sequence
+from ctypes import byref
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,13 +45,13 @@ def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> Role
     if not is_rack_based(variant) or width != NVL72_GPUS_PER_NODE:
         raise ValueError("NVLink role placement requires four-GPU NVL72 hosts")
 
-    policy = plan.claim("policy")
-    roles = ["policy"]
+    policy = next((claim for claim in plan.claims if claim.kind is ModelRoleKind.POLICY), None)
+    roles = ["policy"] if policy is not None else []
     shared_reference = True
     for claim in plan.claims:
         if claim.execution is RoleExecution.REMOTE or claim.kind in (ModelRoleKind.POLICY, ModelRoleKind.ROLLOUT):
             continue
-        if claim.kind is not ModelRoleKind.REFERENCE:
+        if claim.kind is not ModelRoleKind.REFERENCE or policy is None:
             raise ValueError("NVLink role placement supports only policy, a shared reference, and local inference engines")
         shared_reference = claim.colocation_group == policy.colocation_group
     rollout = next((claim for claim in plan.claims if claim.kind is ModelRoleKind.ROLLOUT), None)
@@ -59,14 +60,14 @@ def derive_role_topology(config: Mapping[str, Any], plan: SkyRLRolePlan) -> Role
             raise ValueError("NVLink role placement requires separate policy and local inference GPUs")
         roles.extend(f"inference_{index}" for index in range(rollout.replicas))
     locality = plan_nvlink_roles(
-        policy_gpus=policy.num_nodes * policy.gpus_per_node,
+        policy_gpus=policy.num_nodes * policy.gpus_per_node if policy is not None else 0,
         num_inference_engines=rollout.replicas if rollout is not None else 0,
         tensor_parallel_size=rollout.tensor_parallel_size if rollout is not None else 1,
         pipeline_parallel_size=rollout.pipeline_parallel_size if rollout is not None else 1,
         data_parallel_size=rollout.data_parallel_size if rollout is not None else 1,
         expert_parallel_size=rollout.expert_parallel_size if rollout is not None else 1,
         inference_backend=rollout.backend if rollout is not None else "",
-        colocate_all=plan.colocate_all,
+        colocate_all=policy is not None and plan.colocate_all,
         colocate_policy_ref=shared_reference,
         gpus_per_node=width,
         max_nodes_per_domain=SCHEDULABLE_RACK_NODES,
@@ -92,7 +93,7 @@ def probe_fabric_info() -> tuple[FabricSample, ...]:
         for index in range(pynvml.nvmlDeviceGetCount()):
             handle = pynvml.nvmlDeviceGetHandleByIndex(index)
             info = pynvml.c_nvmlGpuFabricInfoV_t()
-            pynvml.nvmlDeviceGetGpuFabricInfoV(handle, info)
+            pynvml.nvmlDeviceGetGpuFabricInfoV(handle, byref(info))
             samples.append(
                 FabricSample(
                     cluster_uuid=uuid.UUID(bytes=bytes(info.clusterUuid)),
@@ -116,7 +117,7 @@ def node_physical_labels(
     for sample in fabric_info:
         if sample.state != pynvml.NVML_GPU_FABRIC_STATE_COMPLETED or sample.status != pynvml.NVML_SUCCESS:
             raise ValueError("Every GPU must report a completed, healthy NVLink fabric")
-        fabrics.add(f"{sample.cluster_uuid}:{sample.clique_id}")
+        fabrics.add(f"{sample.cluster_uuid}.{sample.clique_id}")
     if len(fabrics) != 1:
         raise ValueError("A physical node must fit inside one NVLink domain")
     return {RANK_LABEL: str(rank), HOST_LABEL: host, FABRIC_LABEL: fabrics.pop()}
@@ -124,7 +125,7 @@ def node_physical_labels(
 
 @dataclass(frozen=True)
 class RoleNodeRow:
-    """One node's verified physical placement, as persisted in the attempt report."""
+    """One node's observed physical placement, as persisted in the attempt report."""
 
     rank: int
     host: str
@@ -133,26 +134,24 @@ class RoleNodeRow:
 
 
 def audit_role_nodes(nodes: Sequence[Mapping[str, Any]], *, topology: RoleTopology) -> list[RoleNodeRow]:
-    """Check observed Ray nodes against the plan and return each node's physical placement."""
+    """Check each observed Ray node's NVLink fabric and return its physical placement.
+
+    Iris/Kueue placement is trusted; the audit verifies only the fabric half:
+    every node of a locality group must report the same healthy cluster-UUID/clique-ID pair.
+    """
     alive = [node for node in nodes if node["Alive"]]
     if len(alive) != topology.num_nodes:
         raise ValueError(f"Expected exactly {topology.num_nodes} Ray nodes, observed {len(alive)}")
-    ranks = [int(node["Labels"][RANK_LABEL]) for node in alive]
-    if set(ranks) != set(range(topology.num_nodes)):
-        raise ValueError(f"Ray nodes must cover every Iris rank: {ranks}")
-    hosts = [node["Labels"][HOST_LABEL] for node in alive]
-    if len(set(hosts)) != topology.num_nodes:
-        raise ValueError(f"Ray nodes must occupy distinct physical hosts: {hosts}")
     rows = []
     fabrics: dict[int, set[str]] = {}
-    for rank, node in zip(ranks, alive, strict=True):
+    for node in alive:
         labels = node["Labels"]
-        group = topology.locality.group_for_rank(rank)
-        if labels[LOCALITY_GROUP_LABEL] != str(group):
-            raise ValueError(f"Ray locality label disagrees with Iris rank {rank}")
+        group = int(labels[LOCALITY_GROUP_LABEL])
         fabric = labels[FABRIC_LABEL]
         fabrics.setdefault(group, set()).add(fabric)
-        rows.append(RoleNodeRow(rank=rank, host=labels[HOST_LABEL], locality_group=group, fabric=fabric))
+        rows.append(
+            RoleNodeRow(rank=int(labels[RANK_LABEL]), host=labels[HOST_LABEL], locality_group=group, fabric=fabric)
+        )
     if any(len(value) != 1 for value in fabrics.values()):
         raise ValueError(f"Each locality group must fit inside one physical NVLink domain: {fabrics}")
     return sorted(rows, key=lambda row: row.rank)

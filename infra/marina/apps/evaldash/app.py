@@ -47,7 +47,6 @@ from evalrecords.eval_stats import (
     Completeness,
     MissingPolicy,
     SelectionRequest,
-    declared_protocols,
 )
 from evalrecords.records import (
     DEFAULT_SCAN_PREFIXES,
@@ -77,10 +76,10 @@ from .metrics import (
     ALL_COHORTS,
     RUN_FACETS,
     build_comparison,
+    build_history,
     build_meta,
     build_model_detail,
     build_panel,
-    dashboard_measurements,
     display_status,
     panel_request,
     record_headline,
@@ -572,38 +571,22 @@ class RecordStore:
         groups.sort(key=lambda group: group["created_at"] or "", reverse=True)
         return groups[:limit]
 
-    def history(self, model: str, task: str) -> list[dict]:
-        """Every run's headline score for one ``(model, eval)`` over time, oldest first.
+    def history(self, model: str, task: str, request: SelectionRequest) -> list[dict]:
+        """Admitted headline scores for one ``(model, eval)`` over time, oldest first.
 
-        ``task`` is a panel column, i.e. a registry eval name. One point per run that produced a
-        primary metric, each carrying its interval, coverage, and provenance for the tooltip.
+        ``task`` is a panel column, i.e. a registry eval name. Each point has a primary metric
+        matching the column's protocol, with its interval, coverage, and provenance for the tooltip.
         """
         records, _by_id = self._snapshot()
-        task_records = [
-            record
-            for record in records
-            if record.model.name == model and record.evaluation.name == task and not record_policy_violations(record)
-        ]
-        protocol_records = [
-            record for record in records if record.evaluation.name == task and not record_policy_violations(record)
-        ]
-        protocols = declared_protocols(dashboard_measurements(protocol_records))
-        points = []
-        for record in task_records:
-            headline = record_headline(record, protocols.get(task))
-            if headline is None:
-                continue
-            points.append({**headline, "status": record.status.value})
-        points.sort(key=lambda point: point["created_at"] or "")
-        return points
+        return build_history(records, model, task, request)
 
-    def model_detail(self, model: str) -> dict | None:
+    def model_detail(self, model: str, request: SelectionRequest) -> dict | None:
         """One model's aggregated detail view: cohorts, per-eval history, and every run.
 
         ``None`` when the model has no records, so the route can answer 404.
         """
         records, _by_id = self._snapshot()
-        return build_model_detail(records, model)
+        return build_model_detail(records, model, request)
 
     def group_siblings(self, group_id: str, exclude_run_id: str) -> list[dict]:
         records, _by_id = self._snapshot()
@@ -1344,7 +1327,8 @@ def _analysis_router(store: RecordStore) -> APIRouter:
 
     @router.get("/models/{model_name}")
     async def api_model_detail(request: Request) -> JSONResponse:
-        detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"])
+        selection = panel_request(cohort=request.query_params.get("cohort") or ALL_COHORTS)
+        detail = await asyncio.to_thread(store.model_detail, request.path_params["model_name"], selection)
         if detail is None:
             return JSONResponse({"error": "unknown model"}, status_code=404)
         return JSONResponse(detail)
@@ -1428,10 +1412,10 @@ def _analysis_router(store: RecordStore) -> APIRouter:
         response_model=HistoryResponse,
         openapi_extra=operation_extension(OperationRisk.READ),
     )
-    async def api_history(model: str, task: str) -> HistoryResponse | JSONResponse:
+    async def api_history(model: str, task: str, cohort: str = ALL_COHORTS) -> HistoryResponse | JSONResponse:
         if not model or not task:
             return JSONResponse({"error": "model and task are required"}, status_code=400)
-        points = await asyncio.to_thread(store.history, model, task)
+        points = await asyncio.to_thread(store.history, model, task, panel_request(cohort=cohort))
         return HistoryResponse(model=model, task=task, points=points)
 
     @router.get("/meta")

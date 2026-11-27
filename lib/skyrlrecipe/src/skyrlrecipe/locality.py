@@ -79,7 +79,7 @@ def plan_nvlink_roles(
     ):
         raise ValueError("NVLink role placement requires vLLM TP1/PP1 EP=DP inference engines")
     return plan_locality_groups(
-        [policy_gpus] + [data_parallel_size] * num_inference_engines,
+        ([policy_gpus] if policy_gpus else []) + [data_parallel_size] * num_inference_engines,
         gpus_per_node=gpus_per_node,
         max_nodes_per_domain=max_nodes_per_domain,
     )

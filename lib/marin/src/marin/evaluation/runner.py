@@ -265,6 +265,7 @@ class EvaluationBatch:
     """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
     source_model_config: ModelConfigRef | None = None
     rl_attempt: RLAttemptRef | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -301,11 +302,12 @@ def _record(
         evaluation = evaluation.model_copy(update={"tasks": tasks})
     if serving is None:
         serve = batch.model.serve
+        geometry = batch.accelerator.geometry
         serving = ServingParams(
             tensor_parallel_size=serve.tensor_parallel_size,
             data_parallel_size=serve.data_parallel_size,
             pipeline_parallel_size=serve.pipeline_parallel_size,
-            task_count=serve.pipeline_parallel_size * serve.instances,
+            task_count=(geometry.task_count if geometry is not None else serve.pipeline_parallel_size) * batch.instances,
             max_model_len=serve.max_model_len,
         )
     evalchemy = identity.eval_ref.evalchemy
@@ -673,6 +675,7 @@ def _inference_configs(batch: EvaluationBatch, runtime_env: Mapping[str, str]) -
             api_model=batch.api_model,
             priority=batch.priority_band,
             instances=batch.instances,
+            excluded_nvlink_domains=batch.excluded_nvlink_domains,
             request_timeout_seconds=max(
                 (
                     float(
@@ -785,7 +788,7 @@ def _local_endpoint_session(session: RemoteInferenceSession) -> RemoteInferenceS
     )
 
 
-def print_record(record: EvalRunRecord) -> None:
+def print_record(record: EvalRunRecord) -> EvalRunRecord:
     """Print a run's status, failure context, coverage and metrics.
 
     Curated records carry no metrics; their scores are derived from the run's raw archive.
@@ -811,13 +814,17 @@ def print_record(record: EvalRunRecord) -> None:
         )
     if not record.metrics:
         print("  (no metrics)")
-        return
     for task in sorted(record.metrics):
         for metric in sorted(record.metrics[task]):
             print(f"  {task:<40} {metric:<24} {record.metrics[task][metric]:.4f}")
+    return record
 
 
-def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> bool:
+def wait_and_report(
+    batches: list[SubmittedEvaluationBatch],
+    *,
+    report_group: Callable[[list[EvalRunRecord]], None] | None = None,
+) -> bool:
     """Wait for submitted batches and print their durable records.
 
     Returns whether every evaluation wrote a record with succeeded status. For one that wrote no
@@ -827,6 +834,7 @@ def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> bool:
     configure_coreweave_s3()
     complete = True
     for batch in batches:
+        records = []
         status = batch.job.wait(timeout=float("inf"), raise_on_failure=False)
         for evaluation in batch.evaluations:
             path = record_path(batch.records_prefix, evaluation.run_id)
@@ -840,6 +848,8 @@ def wait_and_report(batches: list[SubmittedEvaluationBatch]) -> bool:
                     print(f"  error: {status.error}")
                 print(f"  record {path} is unreadable: {type(error).__name__}: {error}")
                 continue
-            print_record(record)
+            records.append(print_record(record))
             complete = complete and record.status is RunStatus.SUCCEEDED
+        if report_group is not None:
+            report_group(records)
     return complete

@@ -3,15 +3,100 @@
 
 """Bind model artifacts to the evaluation pipeline."""
 
-from dataclasses import replace
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Protocol
 
 from evalrecords.records import RLAttemptRef
-from marin.evaluation.model_config import ModelConfig
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.rl.skyrl import SkyRLModelSource, SkyRLPolicyModel
+from marin.rl.skyrl import SkyRLModelSource, SkyRLPolicyModel, skyrl_execution
 
-from experiments.evaluation.evals import EvaluationDefinition
-from experiments.evaluation.pipeline import EvaluationResult, eval_step
+if TYPE_CHECKING:
+    from marin.evaluation.model_config import ModelConfig
+
+    from experiments.evaluation.evals import EvaluationDefinition
+    from experiments.evaluation.pipeline import EvaluationResult
+
+
+class EvaluationRecipe[Source, Result](Protocol):
+    """Produce evaluation records from an export or a recorded trainer session."""
+
+    def evaluated(self, source: Source, *, version: str) -> Result: ...
+
+
+@dataclass(frozen=True)
+class EvaluationPreset[Source, Result]:
+    name: str
+    recipe: EvaluationRecipe[Source, Result]
+
+    def evaluated(self, source: Source, *, version: str) -> Result:
+        return self.recipe.evaluated(source, version=version)
+
+
+type ExportEvaluationPreset = EvaluationPreset[SkyRLModelSource, ArtifactStep[EvaluationResult]]
+
+
+def export_evaluation_name(model: SkyRLModelSource, name: str) -> str:
+    return f"{model.step.name}/evaluations/{name}"
+
+
+def export_evaluation_step(
+    preset: ExportEvaluationPreset, model: SkyRLModelSource, *, version: str
+) -> ArtifactStep[EvaluationResult]:
+    return replace(preset.evaluated(model, version=version), name=export_evaluation_name(model, preset.name))
+
+
+@dataclass(frozen=True)
+class CuratedEvaluation:
+    evals: tuple[EvaluationDefinition, ...]
+    serving: ModelConfig
+    accelerator: str | None
+    cluster: str
+    instances: int = 1
+    max_concurrent: int = 1
+
+    def evaluated(self, model: SkyRLModelSource, *, version: str) -> ArtifactStep[EvaluationResult]:
+        placement = skyrl_execution(model.step)
+        cluster = placement.cluster if placement is not None else self.cluster
+        return evaluate_model(
+            model,
+            self.serving,
+            self.evals,
+            version=version,
+            accelerator=self.accelerator,
+            submission_cluster=cluster,
+            federated_cluster=cluster,
+            instances=self.instances,
+            max_concurrent=self.max_concurrent,
+            excluded_nvlink_domains=placement.excluded_nvlink_domains if placement is not None else (),
+        )
+
+
+def catalog_evaluation(
+    name: str, serving: ModelConfig, *, accelerator: str, cluster: str, instances: int = 1
+) -> ExportEvaluationPreset:
+    from experiments.evaluation.evals import resolve_evaluations  # noqa: PLC0415
+
+    return EvaluationPreset(
+        name,
+        CuratedEvaluation(
+            resolve_evaluations(name),
+            serving,
+            accelerator,
+            cluster,
+            instances=instances,
+        ),
+    )
+
+
+def model_rl_attempt(model: SkyRLModelSource, context: StepContext) -> RLAttemptRef | None:
+    if not isinstance(model, SkyRLPolicyModel) or context.is_fingerprint:
+        return None
+    run = context.resolved(model.step)
+    if run.run_id is None or run.attempt_id is None:
+        return None
+    return RLAttemptRef(run_id=run.run_id, attempt_id=run.attempt_id)
 
 
 def evaluate_model(
@@ -23,8 +108,13 @@ def evaluate_model(
     accelerator: str | None,
     submission_cluster: str,
     federated_cluster: str | None,
+    instances: int = 1,
+    max_concurrent: int | None = None,
+    excluded_nvlink_domains: tuple[str, ...] = (),
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate an artifact using a serving config with an empty location."""
+    from experiments.evaluation.pipeline import DEFAULT_EVAL_CONCURRENCY, eval_step  # noqa: PLC0415
+
     if serving.location or any(
         value is not None
         for value in (serving.revision, serving.identity, serving.tokenizer, serving.tokenizer_revision)
@@ -41,22 +131,17 @@ def evaluate_model(
             tokenizer_revision=resolved.tokenizer_revision,
         )
 
-    def resolve_rl_attempt(ctx: StepContext) -> RLAttemptRef | None:
-        if not isinstance(model, SkyRLPolicyModel):
-            return None
-        run = ctx.resolved(model.step)
-        if run.run_id is None or run.attempt_id is None:
-            return None
-        return RLAttemptRef(run_id=run.run_id, attempt_id=run.attempt_id)
-
     return eval_step(
         serving,
         evals,
         version=version,
         deps=model.deps(),
         resolve_model=resolve_model,
-        resolve_rl_attempt=resolve_rl_attempt,
+        resolve_rl_attempt=lambda context: model_rl_attempt(model, context),
         accelerator=accelerator,
         submission_cluster=submission_cluster,
         federated_cluster=federated_cluster,
+        instances=instances,
+        max_concurrent=DEFAULT_EVAL_CONCURRENCY if max_concurrent is None else max_concurrent,
+        excluded_nvlink_domains=excluded_nvlink_domains,
     )

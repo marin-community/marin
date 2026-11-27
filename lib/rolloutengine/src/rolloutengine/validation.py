@@ -62,7 +62,7 @@ def validate_spec(spec: TaskRolloutSpec, machine_factories: Mapping[str, Machine
     grader_environment = placement.environment if isinstance(placement, GraderMachine) else None
     if judge:
         judge_connection(spec)
-        if task.answer_type not in CONVERSATION_ANSWERS | {AnswerType.FILE}:
+        if host_judge and task.answer_type not in CONVERSATION_ANSWERS | {AnswerType.FILE}:
             raise NotImplementedError(
                 f"The engine grades a judge only on a conversation or file answer, not {task.answer_type}"
             )

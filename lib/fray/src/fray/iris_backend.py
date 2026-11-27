@@ -37,7 +37,11 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
-from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    COSCHEDULE_LEAFGROUP,
+    COSCHEDULE_NVLINK_DOMAIN,
+    gpu_gang_coscheduling_level,
+)
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
@@ -161,6 +165,10 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         if isinstance(resources.device, (TpuConfig, GpuConfig)):
             all_variants = [resources.device.variant, *resources.device_alternatives]
             constraints.append(device_variant_constraint(all_variants))
+    constraints.extend(
+        Constraint.create(key=COSCHEDULE_NVLINK_DOMAIN, op=ConstraintOp.NE, value=domain)
+        for domain in resources.excluded_nvlink_domains
+    )
     return constraints
 
 

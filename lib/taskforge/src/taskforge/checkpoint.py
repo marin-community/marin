@@ -50,12 +50,15 @@ class CheckpointSink(Sink):
                 await self._try_upload()
 
     def _publish(self, events: bytes) -> None:
-        status = json.dumps({"terminal": None, "upload_started_at": time.time()}).encode()
+        """Publish the workpiece before the events, so any published stream names the input it came from."""
+        self._replace("workpiece.json", self.workpiece)
         JsonlSink(prefix_join(self.destination, "events.jsonl")).append_bytes(events)
-        for name, data in (("workpiece.json", self.workpiece), ("status.json", status)):
-            with atomic_rename(prefix_join(self.destination, name)) as temporary:
-                with open_url(temporary, "wb") as target:
-                    target.write(data)
+        self._replace("status.json", json.dumps({"terminal": None, "upload_started_at": time.time()}).encode())
+
+    def _replace(self, name: str, data: bytes) -> None:
+        with atomic_rename(prefix_join(self.destination, name)) as temporary:
+            with open_url(temporary, "wb") as target:
+                target.write(data)
 
     async def _upload(self) -> None:
         if not self.pending:

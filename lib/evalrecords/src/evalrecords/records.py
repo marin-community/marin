@@ -179,6 +179,7 @@ class ModelServeConfig(BaseModel):
     backend: str
     tensor_parallel_size: int | None
     data_parallel_size: int | None
+    data_parallel_hosts: int = Field(default=1, exclude_if=lambda value: value == 1)
     pipeline_parallel_size: int = 1
     instances: int = 1
     gpu_memory_utilization: float | None = None

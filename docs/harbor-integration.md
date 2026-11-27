@@ -1,71 +1,19 @@
 # Harbor evaluation
 
-Marin's evaluation launcher starts the model, runs Harbor and saves results in FineStore.
-It stops inference when the batch ends. The candidate is the model under evaluation.
-An optional judge model is shared across the batch.
-Iris runs the evaluator worker. Shellbox runs task commands and graders.
-
-Harbor supports `local` (bubblewrap, the default), `daytona`, `qemu` and `shellsim`.
-See [Running Evaluations with Marin](tutorials/run-lm-evals.md) to choose a model and suite.
-Preflight checks the policy and model settings before allocating evaluation resources.
-
-Before launching:
-
-- Local execution needs prepared images and working bubblewrap namespaces. Shellbox
-  also needs a writable part of the worker's cgroup v2 tree to contain task processes.
-  Launcher preflight cannot check that permission on a remote worker.
-- BixBench and BFCL standalone Pi policies need prepared Pi images. Changed benchmark
-  policies need a new approved cohort version. See [verified cohorts](https://github.com/marin-community/marin/blob/main/eval_policy/README.md).
-  Historical tasks that install Pi at runtime fail preflight.
-- Use a new results root if the old root has no recorded evaluator identity.
-
-## Run a benchmark
-
-The catalog's agentic keys, such as `tb2`, `swebench`, `gaia`, `bfcl`, `aider`,
-`medagentbench` and `aime-harbor`, run as curated TaskSpec corpora through
-RolloutEngine, not through Harbor; see [evaluation tasks](references/evaluation-tasks.md).
-A Harbor policy runs only through `--harbor-config`:
+Marin imports Harbor-format packages into the curated evaluation catalog.
+The launcher selects those benchmarks by name and runs their TaskSpec corpora
+through RolloutEngine. See [Running Evaluations with Marin](tutorials/run-lm-evals.md)
+for model, suite and credential settings.
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
-  --limit 2 --dry-run
+  --model qwen3-8b --evals aime-harbor --limit 2 --dry-run
 ```
 
-Remove `--dry-run` to submit. Repeat `--harbor-config` to add policies. `--limit N`
-caps tasks; policy trial repetitions still apply. `--no-wait` returns after submission.
-You can also select catalog entries with `--evals` in the same command.
-
-To serve a judge in the same batch:
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b --platform gpu \
-  --judge-model qwen3.5-122b-a10b-fp8 --judge-accelerator H100x8 \
-  --harbor-config experiments/evaluation/configs/harbor/simpleqa-hosted-judge.yaml \
-  --federated_cluster cw-rno2a --limit 2
-```
-
-Run the candidate and judge in the same cluster or region. The run record stores both
-model configurations and their hardware. The candidate keeps its own endpoint.
-The hosted judge replaces the judge credentials and model names set by the policy.
-
-To resume, use the recorded Marin checkout and the original model, policy, task limit
-and judge settings. The launcher records evaluator identity from the launch's source-tree
-hash. To resume the AIME example:
-
-```bash
-uv run python -m experiments.evaluation.cli launch \
-  --model qwen3-8b \
-  --harbor-config experiments/evaluation/configs/harbor/aime-harbor.yaml \
-  --limit 2 --resume-results-path "$RESULTS_ROOT"
-```
-
-Set `RESULTS_ROOT` to the prior run's `{records_prefix}/{run_id}/results/` directory.
-Wait for all earlier drivers using that root to exit. Two live drivers must never share
-a results root. Add `--retry-unscored-harbor-trials` to retry known unscored outcomes
-while preserving scored outcomes and unknown errors.
+Harbor JobConfig files run through the [vendored Harbor CLI](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md).
+The backend and task settings below apply to direct Harbor execution. To
+reproduce an archived Harbor cohort, use its recorded Marin checkout and
+dataset revisions. See [verified cohorts](https://github.com/marin-community/marin/blob/main/eval_policy/README.md).
 
 ## Maintained execution types
 
@@ -108,39 +56,15 @@ The host entry point reads `DAYTONA_API_KEY` once. The API URL and target region
 constants (`https://app.daytona.io/api` and `us`). Missing credentials fail before
 allocation. SDK `.env` files, JWT credentials and other connection overrides are not read.
 
-The launcher does not change a policy's provider. Remove unsupported settings from the
-policy and prepare any missing task images before launching. Harbor rejects `--no-delete` and
+Prepare task images for the provider declared in the policy. Harbor rejects `--no-delete` and
 `environment.delete=false` before allocation.
 
 ## Policies and datasets
 
-Catalog policies live under `experiments/evaluation/configs/harbor/`.
-Each filename matches its `EVALS` key. Suite membership, model selection, hardware, task limits
-and secret references belong in `experiments/evaluation/evals.py`.
-
-For a Hugging Face repository containing Harbor task directories:
-
-```yaml
-n_concurrent_trials: 4
-environment:
-  type: daytona
-agents:
-  - name: terminus-2
-datasets:
-  - name: hf://DCAgent2/terminal_bench_2
-    ref: "<dataset-commit-sha>"
-```
-
-Replace `<dataset-commit-sha>` with the source revision. Use `datasets[].name` for `hf://`
-sources. Harbor checks access and counts tasks during preflight, then loads the source
-again on the worker. Pin the revision.
-A moving ref can change between those calls. Gated sources need `HF_TOKEN`. Parquet rows are not converted
-into Harbor task directories.
-
-A registry source uses its native selector, such as `name: aime` and `version: "1.0"`.
-A local source uses `datasets[].path`, relative to the policy. The directory must stay
-inside the Marin workspace and be included in the Iris source bundle. Absolute, missing and
-outside-workspace paths fail preflight.
+Harbor policies use the vendored `JobConfig` schema. Archived policies are
+available under `experiments/evaluation/configs/harbor/`. A direct Harbor
+policy selects a dataset by registry name and version or by a path relative to
+the policy file.
 
 ## Offline execution through Shellbox
 
@@ -156,8 +80,7 @@ datasets:
   - path: prepared-tasks
 ```
 
-Place the policy beside `prepared-tasks` in the workspace. Submit it with
-`--harbor-config path/to/policy.yaml` through the shared launcher.
+Place the policy beside `prepared-tasks` and pass it to the vendored Harbor CLI.
 
 Install `bubblewrap`, `umoci` and `skopeo` on the trusted evaluator host. For Iris jobs,
 put these tools in `iris-task` and rebuild the worker's task image.
@@ -259,11 +182,8 @@ require registry verification.
 
 ## Credentials
 
-Daytona catalog entries use the Daytona eval org: `DAYTONA_EVAL_API_KEY` from the launch
-environment, then the approved Google Secret Manager version. The launcher ignores an
-exported `DAYTONA_API_KEY`. The launcher resolves declared secret
-references before submission. The Harbor subprocess receives backend credentials, HF access
-and storage credentials for result uploads.
+For a direct Daytona policy, supply the eval account credential as
+`DAYTONA_API_KEY` in the trusted Harbor host environment.
 
 Harbor is a trusted host process. `uv --isolated` isolates dependencies.
 It does not restrict the process's filesystem or network access. Keep secrets out of policy
@@ -310,25 +230,11 @@ certify deployed images or provider-injected settings. See the
 [Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md)
 for backend-specific isolation limits.
 
-## Endpoint lifecycle
-
-Marin registers each served model under a unique Iris endpoint name. It gives Harbor a
-URL that grants access to that model. Expiring leases remove abandoned registrations.
-A retry replaces its same-name registration. Saved job and trial JSON redacts these
-credential-bearing URLs. Resume supplies new URLs.
-
-`agents[0].model_name` stores the original model location with a `hosted_vllm/` prefix.
-`model_alias` routes requests to the served model. Moving an endpoint or
-changing its alias does not change the recorded model identity.
-
 ## Agent context limits
 
-Marin derives `model_info.max_input_tokens` from resolved `serve.max_model_len` and
-`max_output_tokens` from `generation.max_gen_toks`. A lower policy limit wins.
-A policy limit above the serving limit fails preflight. `auto_overrides` clamps model settings to
-the checkpoint's native window first. If neither model nor policy states limits, Harbor
-defaults to 32,768 input and 8,192 output tokens. `--dry-run` prints the resolved limits.
-`record.json` stores them under `eval.harbor`.
+Archived launcher records store their resolved context limits under
+`eval.harbor`. Direct Harbor policies declare their context limits in
+`agents[].kwargs.model_info`.
 
 Terminus-2 receives the output limit as `llm_call_kwargs.max_tokens`. Lower explicit request
 limits win. Higher ones fail preflight. Mini-SWE 2.1.0 uses `/tokenize` to count the full
@@ -345,9 +251,9 @@ not look up limits or prices in a model registry.
 LiteLLM is excluded from workspace and standalone evaluation environments. Use one of
 the six supported agents named in the vendored runtime README.
 
-## Results
+## Archived launcher results
 
-Each evaluation writes `record.json` under `{records_prefix}/{run_id}/` and a FineStore
+A recorded Harbor evaluation includes `record.json` under `{records_prefix}/{run_id}/` and a FineStore
 archive under its `results/` directory. The archive contains original Harbor job and trial
 artifacts plus normalized `samples`, `steps` and `rollouts_v1` tables. Evaldash reads samples.
 Verifier rewards use `Grading(method="harbor:verifier")`. Samples link trajectories through
@@ -373,19 +279,11 @@ returned a reward. The archive requires confirmed teardown for the selected atte
 Cancellation clears the reward. Unknown error names fail the evaluation. Marin requires
 the scored fraction to meet `min_completion_rate` (default 0.9), independently of archive sealing.
 
-## Ownership boundary
+## Reproduction
 
-`vendor/harbor` is an independent uv project with its own lockfile and editable Rigging and
-FineStore dependencies. Marin invokes its isolated CLI for preflight and execution.
-Preflight returns policy JSON and benchmark metadata. Execution applies live model routes,
-output paths, model kwargs and the runtime task limit. Policy kwargs override model-catalog
-kwargs. Explicit runtime fields override both. Runtime overlays do not change the source-policy
-digest. Policy `n_tasks` remains part of it.
-
-Reproduce runs from their recorded Marin checkout, dataset revisions and policy. Cache and
-resume identity include the launch's tracked Marin source-tree hash. Changes to that tree
-invalidate reuse. A missing source-tree hash prevents reuse. The runtime lock is
-`vendor/harbor/uv.lock`. See the [vendor guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
+`vendor/harbor` is an independent uv project with its own runtime lock.
+Use the recorded checkout, policy and dataset revisions to reproduce an
+archived run. See the [vendor guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
 for direct CLI use and maintenance.
 
 Verified cohort labels fix parsed benchmark policies. To approve a changed policy, add

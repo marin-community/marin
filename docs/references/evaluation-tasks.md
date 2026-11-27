@@ -469,6 +469,5 @@ coverage or recorded uncertainty.
 
 See [task curation](task-curation.md) for acquisition and publication,
 [running evaluations](../tutorials/run-lm-evals.md) for the shared launcher, and
-[task rollouts](task-rollouts.md) for single-task execution. Harbor policies passed with
-`--harbor-config` run through Harbor; see [Harbor integration](../harbor-integration.md). Historical Evalchemy archives remain readable; reproducing their runs
-requires the recorded checkout.
+[task rollouts](task-rollouts.md) for single-task execution. Reproduce archived
+Harbor and Evalchemy runs using their recorded checkouts. See [Harbor integration](../harbor-integration.md).

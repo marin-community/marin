@@ -6,6 +6,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
+from rolloutengine.machines import MachineSetupError, MachineSetupTimeout
 from rolloutengine.models import GradedRollout, Model, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
 from shellbox.machine import (
     ExecSetupFailed,
@@ -16,7 +17,13 @@ from shellbox.machine import (
 )
 
 from taskforge.effects.events import Event, Fingerprint, ReplayPolicy
-from taskforge.effects.issues import OutputBudgetExhausted, Restart, Transient, describe_exception
+from taskforge.effects.issues import (
+    EnvironmentSetupFailed,
+    OutputBudgetExhausted,
+    Restart,
+    Transient,
+    describe_exception,
+)
 from taskforge.resources.execution import Notify, has_cause, retry_effect
 
 
@@ -31,8 +38,8 @@ class Engine(Protocol):
     async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout: ...
 
 
-def interruption(error: RolloutInterrupted) -> Transient | Restart:
-    """Retry startup and confirmed pre-command websocket setup failures."""
+def interruption(error: RolloutInterrupted) -> Transient | Restart | EnvironmentSetupFailed:
+    """Retry startup and confirmed pre-command websocket setup failures; a failing setup command is the task's."""
     causes: list[str] = []
     seen = {id(error)}
     cause = error.__cause__
@@ -42,6 +49,8 @@ def interruption(error: RolloutInterrupted) -> Transient | Restart:
         cause = cause.__cause__
     detail = ": " + " <- ".join(causes)[:300] if causes else ""
     message = f"Rollout interrupted during {error.operation}{detail}"
+    if has_cause(error, MachineSetupError) and not has_cause(error, MachineSetupTimeout):
+        return EnvironmentSetupFailed(message)
     if error.operation is RolloutOperation.ADVANCE and has_cause(error, MachineOutputLimitExceeded):
         return OutputBudgetExhausted("output budget exhausted")
     if has_cause(error, MachineCancelled) or has_cause(error, MachineUnavailable):

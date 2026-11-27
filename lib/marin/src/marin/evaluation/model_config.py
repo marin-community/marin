@@ -90,6 +90,7 @@ class ServeConfig:
     backend: ServeBackend = ServeBackend.VLLM
     tensor_parallel_size: int | None = None
     data_parallel_size: int | None = None
+    data_parallel_hosts: int = field(default=1, metadata={"fingerprint_omit_value": 1})
     pipeline_parallel_size: int = 1
     instances: int = 1
     gpu_memory_utilization: float | None = None
@@ -124,19 +125,24 @@ class ServeConfig:
             raise ValueError("vLLM source and plugins require the vLLM backend")
         if self.pipeline_parallel_size < 1:
             raise ValueError("pipeline_parallel_size must be >= 1")
+        if self.data_parallel_hosts < 1:
+            raise ValueError("data_parallel_hosts must be >= 1")
         if self.instances < 1:
             raise ValueError("instances must be >= 1")
         for name in ("tensor_parallel_size", "data_parallel_size"):
             value = getattr(self, name)
             if value is not None and value < 1:
                 raise ValueError(f"{name} must be positive")
-        if self.pipeline_parallel_size > 1:
+        if self.data_parallel_hosts > 1 and self.pipeline_parallel_size > 1:
+            raise ValueError("data_parallel_hosts requires pipeline_parallel_size=1")
+        if self.data_parallel_hosts > 1 or self.pipeline_parallel_size > 1:
+            mode = "multi-host data parallelism" if self.data_parallel_hosts > 1 else "pipeline parallelism"
             if self.backend is not ServeBackend.VLLM:
-                raise ValueError("pipeline parallelism requires the vLLM backend")
+                raise ValueError(f"{mode} requires the vLLM backend")
             if self.tensor_parallel_size is None:
-                raise ValueError("pipeline parallelism requires an explicit tensor_parallel_size")
+                raise ValueError(f"{mode} requires an explicit tensor_parallel_size")
             if self.instances > 1:
-                raise ValueError("pipeline parallelism requires instances=1")
+                raise ValueError(f"{mode} requires instances=1")
             validate_serving_geometry_args(self.vllm_extra_args)
         if self.gpu_memory_utilization is not None:
             if not 0 < self.gpu_memory_utilization <= 1:
