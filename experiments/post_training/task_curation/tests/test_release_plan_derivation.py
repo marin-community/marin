@@ -30,7 +30,7 @@ from experiments.post_training.task_curation.grader_drift import (
     MainRecipeReference,
     SealedRecipeReference,
 )
-from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.lexical_artifacts import ActorCensus, SourceTextPopulation
 from experiments.post_training.task_curation.release_stages import declarations as declarations_stage
 from experiments.post_training.task_curation.release_stages import plan_derivation
 from experiments.post_training.task_curation.release_stages import (
@@ -171,6 +171,75 @@ def _source_layer(tmp_path: Path, source_ids: tuple[str, ...]) -> dict:
 
 def _declaration_dump(layer: dict) -> dict:
     return {source_id: source.declaration.model_dump(mode="json") for source_id, source in layer.items()}
+
+
+@pytest.mark.parametrize("evidence", ["current", "foreign_population", "changed_preview", "incomplete"])
+def test_derivation_resolves_the_complete_integrity_group_artifact(tmp_path, evidence):
+    population_dir = _write_population(tmp_path, TARGET_ID, "fixture-target", task_count=65)
+    groups = [{"id": "shared-source", "count": 1, "harness_policy": {"test": index}} for index in range(65)]
+    full_path = tmp_path / "integrity-contracts.json"
+    summary = {"groups": groups[:64], "distinct_groups": 65, "evidence_url": str(full_path)}
+    actor_path = tmp_path / "actor"
+    actor = ActorCensus(
+        path=str(actor_path),
+        source_id=TARGET_ID,
+        dataset_id="fixture-target",
+        dataset_revision="1",
+        converter_version="1",
+        converter_revision="1",
+        input_artifact=population_dir,
+        task_specs_sha256="f" * 64,
+        task_count=65,
+        daytona_safety="not_applicable",
+        daytona_snapshot_count=0,
+        daytona_machine_slots=0,
+        daytona_execution_failures=0,
+        daytona_count_basis="Fixture contains no actor environment.",
+        daytona_unsafe_reasons=[],
+        daytona_unsafe_details={},
+        daytona_unsafe_counts={},
+        daytona_roles={},
+        actor_environment_counts={},
+        empty_declared_environment_tasks={},
+        snapshot_sizes={},
+        execution_failures={},
+        mapping_failures={},
+        integrity_contracts=summary,
+    )
+    write_record(
+        ArtifactRecord(
+            output_path=str(actor_path), result_type=result_type_name(ActorCensus), result=actor.result_payload()
+        )
+    )
+    full = {"groups": groups, "input_artifact": population_dir}
+    if evidence == "foreign_population":
+        full["input_artifact"] = str(tmp_path / "foreign-population")
+    if evidence == "changed_preview":
+        full["groups"] = [{**groups[0], "count": 2}, *groups[1:]]
+    if evidence == "incomplete":
+        full["groups"] = groups[:-1]
+    full_path.write_text(json.dumps(full))
+    declaration = _declaration(TARGET_ID, population_dir)
+    binding = declaration.actor_census_input
+    assert binding is not None
+    source = SimpleNamespace(
+        info=SimpleNamespace(id=TARGET_ID, oracle_filtration=None),
+        declaration=declaration.model_copy(
+            update={
+                "task_count": 65,
+                "within_source_dedup": deduplication_evidence("fixture-target", "1", "1", count=65),
+                "actor_census_input": binding.model_copy(
+                    update={"measured_tasks": 65, "evidence_url": str(actor_path / ".artifact.json")}
+                ),
+            }
+        ),
+    )
+    if evidence != "current":
+        with pytest.raises(ValueError, match="integrity"):
+            plan_derivation._target_integrity_contract(TARGET_ID, source)
+        return
+    resolved = plan_derivation._target_integrity_contract(TARGET_ID, source)
+    assert resolved == {**summary, "groups": groups}
 
 
 def _prior_pins(tmp_path: Path, declared: dict) -> PriorRelease:

@@ -1,6 +1,6 @@
 {
   "repo": "open-athena/marin-rl-data-atlas-registry",
-  "revision": "bba3bd5a796ebb3e92df868bbdf330d9722653c4",
-  "path": "experiments/post_training/task_curation/datasets/derived_contract_receipts_projection_reasoning_gym_20261126_v4/part-002.json",
-  "sha256": "d925a4fadffc567af54990be82ee90671d8eab457fc14c86aeb97ebb1774ba6d"
+  "revision": "95dd169da35b761c8570f1f4c6beabc7d8c358c8",
+  "path": "experiments/post_training/task_curation/datasets/derived_contract_receipts_projection_four_20261127_v5/part-002.json",
+  "sha256": "bad0a61f307ddc2a6dfe02c95589116346f626e71c7e709218d25a12bf2a5bf1"
 }

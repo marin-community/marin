@@ -287,6 +287,17 @@ def _target_integrity_contract(source_id: str, source: Any) -> dict | None:
     summary = actor.integrity_contracts
     if not isinstance(summary, dict) or not summary.get("groups"):
         return None
+    if summary["distinct_groups"] > len(summary["groups"]):
+        complete = json.loads(StoragePath(summary["evidence_url"]).read_bytes())
+        groups = complete["groups"]
+        if (
+            complete["input_artifact"] != actor.input_artifact
+            or len(groups) != summary["distinct_groups"]
+            or groups[: len(summary["groups"])] != summary["groups"]
+            or sum(group["count"] for group in groups) != actor.task_count
+        ):
+            raise ValueError(f"complete integrity artifact differs from the actor census: {source_id}")
+        return {**summary, "groups": groups}
     return summary
 
 

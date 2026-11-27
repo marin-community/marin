@@ -403,6 +403,12 @@ current contract field. Missing, stale or contradictory evidence refuses
 composition; retained alignment scores and unrelated declaration fields remain
 subject to the existing checks.
 
+When an actor census embeds only a preview of its integrity groups, plan
+derivation resolves the full integrity artifact. Its population path, group
+count, embedded preview and total task coverage must match the actor census.
+Backend validation receives the complete group list and retains its
+whole-population coverage check.
+
 Identity/backend composition takes an explicit `snapshot_id` from the release
 plan. Both output surveys and their receipts bind that publication snapshot;
 input survey references and measurement code revisions remain unchanged. A
