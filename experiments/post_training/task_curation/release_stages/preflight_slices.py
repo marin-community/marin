@@ -521,6 +521,7 @@ def slice_runner(node: str, plan: ReleasePlan, selection: SliceSelection) -> Cal
             proof = identity_backend_compose_stage.run_identity_backend_compose(
                 identity_backend_compose_stage.IdentityBackendComposeInputs(
                     release_id=plan.release_id,
+                    snapshot_id=plan.snapshot_id,
                     source_revision=plan.source_revision,
                     output_root=f"{root}/identity-backend",
                     targets=plan.targets,

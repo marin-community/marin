@@ -272,6 +272,7 @@ def _build(
     )
     inputs = compose_stage.IdentityBackendComposeInputs(
         release_id="testrelease",
+        snapshot_id=fresh.snapshot_id,
         source_revision="e" * 40,
         output_root=str(tmp_path / "release"),
         targets=targets,
@@ -322,6 +323,38 @@ def test_planned_removals_leave_both_surveys(tmp_path):
     unknown = dataclasses.replace(inputs, removed_sources=("Test:Never-Retained",))
     with pytest.raises(ValueError, match="planned removals are absent from the retained identity"):
         compose_stage.run_identity_backend_compose(unknown, dry_run=True, registry_reader=reader, feeds=_feeds(tmp_path))
+
+
+def test_metadata_snapshot_rebind_preserves_measurements_and_their_provenance(tmp_path):
+    fingerprints = {source_id: _fingerprint(source_id) for source_id in PRIOR_IDS}
+    inputs, reader = _build(tmp_path, targets=(PRIOR_IDS[0],), prior_identity=_identity_survey(fingerprints, []))
+    destination = dataclasses.replace(inputs, snapshot_id="assembly-metadata-refresh")
+    prior_identity = compose_stage.read_ref(inputs.prior_identity)
+    prior_backend = compose_stage.read_ref(inputs.prior_backend)
+    fresh_receipt = compose_stage.read_ref(inputs.fresh_backend_receipt)
+    fresh_ref = ArtifactRef(**fresh_receipt["survey"])
+    fresh = compose_stage.read_ref(fresh_ref)
+
+    proof = compose_stage.run_identity_backend_compose(
+        destination, dry_run=False, registry_reader=reader, feeds=_feeds(tmp_path)
+    )
+    identity = compose_stage.read_ref(ArtifactRef(**proof["documents"]["identity_survey"]))
+    backend = compose_stage.read_ref(ArtifactRef(**proof["documents"]["backend_map"]))
+    assert identity["snapshot_id"] == backend["snapshot_id"] == destination.snapshot_id
+    assert proof["snapshot_id"] == destination.snapshot_id
+    assert identity["fingerprints"] == prior_identity["fingerprints"]
+    assert {row["source_id"]: row for row in backend["sources"]} == {
+        row["source_id"]: row for row in prior_backend["sources"]
+    }
+    assert backend["git_revision"] == fresh["git_revision"]
+    for key in ("identity_receipt", "backend_receipt"):
+        receipt = compose_stage.read_ref(ArtifactRef(**proof["documents"][key]))
+        assert receipt["snapshot_id"] == destination.snapshot_id
+    backend_receipt = compose_stage.read_ref(ArtifactRef(**proof["documents"]["backend_receipt"]))
+    assert backend_receipt["fresh_survey"] == fresh_receipt["survey"]
+    assert compose_stage.read_ref(inputs.prior_identity) == prior_identity
+    assert compose_stage.read_ref(inputs.prior_backend) == prior_backend
+    assert compose_stage.read_ref(fresh_ref) == fresh
 
 
 def test_write_seals_documents_and_receipts_then_refuses_a_rerun(tmp_path):

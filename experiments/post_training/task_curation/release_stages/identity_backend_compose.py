@@ -5,10 +5,11 @@
 
 One maintained module replaces the per-release compose scripts (see INVENTORY.md);
 every release-identifying value arrives as typed :class:`IdentityBackendComposeInputs`
-and the stage source carries none of them. Additions mode: the retained identity survey
-and backend map are carried verbatim, minus the plan's removed sources (their
+and the stage source carries none of them. The retained identity survey
+and backend map are carried verbatim, minus the plan's removed or replaced sources (their
 fingerprints, backend rows and the pair reviews that touch them), and the fresh targets'
-registry fingerprints and backend survey rows are appended. Nothing is re-pinned.
+registry fingerprints and backend survey rows are appended. Both output surveys bind the
+planned publication snapshot; their input references and measurement revisions remain intact.
 
 The stage verifies before it composes: the fresh backend survey must cover exactly the
 targets under the current requirement schema, prior and fresh runtime settings must
@@ -57,6 +58,7 @@ class IdentityBackendComposeInputs:
     """Typed inputs for one compose run; every value is a graph output."""
 
     release_id: str
+    snapshot_id: str
     source_revision: str
     output_root: str
     targets: tuple[str, ...]
@@ -69,8 +71,8 @@ class IdentityBackendComposeInputs:
 
     def validate(self) -> None:
         """Refuse malformed inputs before any read runs."""
-        if not self.release_id or not self.source_revision or not self.output_root:
-            raise ValueError("release_id, source_revision and output_root are required")
+        if not self.release_id or not self.snapshot_id or not self.source_revision or not self.output_root:
+            raise ValueError("release_id, snapshot_id, source_revision and output_root are required")
         if not self.targets:
             raise ValueError("targets must name the fresh admissions")
         if self.expected_target_count <= 0:
@@ -128,12 +130,12 @@ def verify_backend_alignment(
 
 
 def compose_backend_survey(
-    prior: BackendSurvey, fresh: BackendSurvey, composed_sources: list[BackendSourceMap]
+    prior: BackendSurvey, fresh: BackendSurvey, composed_sources: list[BackendSourceMap], *, snapshot_id: str
 ) -> BackendSurvey:
-    """Retain the prior map and rebind the composed rows to the fresh schema and snapshot."""
+    """Bind verified rows to the publication snapshot, retaining measurement provenance."""
     composed = prior.model_dump(mode="json")
     composed.update(
-        snapshot_id=fresh.snapshot_id,
+        snapshot_id=snapshot_id,
         generated_at=datetime.now(tz=UTC).isoformat(timespec="seconds"),
         git_revision=fresh.git_revision,
         schema_sha256=fresh.schema_sha256,
@@ -271,7 +273,7 @@ def _compose(
     fresh = canonical_backend_survey(read_ref(ArtifactRef(**survey_ref)))
     prior_backend = canonical_backend_survey(read_ref(inputs.prior_backend))
     composed_sources = verify_backend_alignment(prior_backend, fresh, targets, inputs.removed_sources)
-    backend_survey = compose_backend_survey(prior_backend, fresh, composed_sources)
+    backend_survey = compose_backend_survey(prior_backend, fresh, composed_sources, snapshot_id=inputs.snapshot_id)
 
     index = read_ref(inputs.registry_index)
     registry_revision = index.get("revision")
@@ -280,7 +282,7 @@ def _compose(
     fresh_fingerprints = fetch_target_fingerprints(index, targets, registry_reader)
     prior_identity = canonical_identity_survey(read_ref(inputs.prior_identity))
     identity_survey = compose_identity_survey(
-        prior_identity, targets, inputs.removed_sources, fresh_fingerprints, fresh.snapshot_id
+        prior_identity, targets, inputs.removed_sources, fresh_fingerprints, inputs.snapshot_id
     )
 
     # Composed counts shared by the dry-run proof and the sealed receipts.
@@ -309,14 +311,14 @@ def _compose(
     receipt_base = {
         "release_id": inputs.release_id,
         "source_revision": inputs.source_revision,
-        "snapshot_id": fresh.snapshot_id,
+        "snapshot_id": inputs.snapshot_id,
         "registry_revision": registry_revision,
     }
     proof: dict[str, Any] = {
         "kind": f"atlas-{inputs.release_id}-identity-backend-compose",
         "release_id": inputs.release_id,
         "source_revision": inputs.source_revision,
-        "snapshot_id": fresh.snapshot_id,
+        "snapshot_id": inputs.snapshot_id,
         "registry_revision": registry_revision,
         "backend": {"kind": f"atlas-{inputs.release_id}-backend-composition", **backend_counts},
         "identity": {"kind": f"atlas-{inputs.release_id}-identity-composition", **identity_counts},

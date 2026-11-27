@@ -1573,11 +1573,12 @@ def _backend_validation_step(plan: ReleasePlan, census_inputs: ArtifactStep) -> 
 
 def _identity_backend_compose_step(plan: ReleasePlan, backend_validation: ArtifactStep) -> ArtifactStep[StageReceipt]:
     spec = _STAGE_SPECS["identity_backend_compose"]
-    identity = _identity_fields(plan, "release_id", "source_revision", "targets", "expected_source_count")
+    identity = _identity_fields(plan, "release_id", "snapshot_id", "source_revision", "targets", "expected_source_count")
 
     def build_inputs(ctx: StepContext) -> dict:
         return {
             "release_id": plan.release_id,
+            "snapshot_id": plan.snapshot_id,
             "source_revision": plan.source_revision,
             "output_root": stage_output_root(plan, "identity-backend"),
             "targets": plan.targets,

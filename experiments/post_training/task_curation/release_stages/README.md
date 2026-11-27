@@ -394,6 +394,14 @@ alignment. The current receipt must pass the catalog's exact-pin permission and
 source-ban checks. Task-input fingerprints, actor census bindings and task counts
 must still match the aligned inventory.
 
+Identity/backend composition takes an explicit `snapshot_id` from the release
+plan. Both output surveys and their receipts bind that publication snapshot;
+input survey references and measurement code revisions remain unchanged. A
+metadata-only snapshot can reuse verified survey inputs. Registry fingerprints,
+runtime settings and the current backend schema are still checked.
+Snapshot publication refuses either survey if its catalog root or snapshot ID
+differs from the destination, before sealing or moving the selected pointer.
+
 Each rebind proves every current public input against its archived population.
 Stable IDs must preserve their public inputs. Changed IDs require unique public
 content or verified immutable upstream rows. A smaller current population may
