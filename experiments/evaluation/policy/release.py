@@ -88,7 +88,8 @@ class ReleaseCandidate:
     """Each baseline and evaluation without a compliant full run of the inputs this checkout would run."""
     warnings: tuple[str, ...]
     changes: dict[str, str]
-    """For each older commit a pinned run comes from, the evaluation code commits since it."""
+    """For each other commit a pinned run comes from: the evaluation code commits since it, for a commit in HEAD's
+    history, else a summary of how the evaluation code at it differs from HEAD's."""
 
 
 def _released_run(model: str, expected: ExpectedRun, record: EvalRunRecord, scored: EvalRunRecord) -> ReleasedRun:
@@ -107,11 +108,12 @@ def _released_run(model: str, expected: ExpectedRun, record: EvalRunRecord, scor
     )
 
 
-def release_candidate(policy: Policy, root: Path) -> ReleaseCandidate:
+def release_candidate(policy: Policy, root: Path, *, outside_history: Collection[str]) -> ReleaseCandidate:
     """Pick, for every baseline and evaluation, the run a release at HEAD would pin.
 
     A patch keeps each base release run whose inputs are unchanged apart from the version. Every other pair needs a
-    compliant full run of the inputs HEAD would run, at HEAD or an earlier commit in its history.
+    compliant full run of the inputs HEAD would run, at HEAD, an earlier commit in its history, or one of the
+    ``outside_history`` commits, such as an integration branch's whose changes reached HEAD squashed.
     """
     head = git_output(["rev-parse", "HEAD"], root)
     runs, missing, warnings, since = [], [], [], {}
@@ -126,19 +128,31 @@ def release_candidate(policy: Policy, root: Path) -> ReleaseCandidate:
             in_history = tuple(
                 run
                 for run in found_runs(expected)
-                if run.record is not None and is_ancestor(run.record.provenance.git_sha, head, root)
+                if run.record is not None
+                and (
+                    run.record.provenance.git_sha in outside_history
+                    or is_ancestor(run.record.provenance.git_sha, head, root)
+                )
             )
             if (hit := compliant_run(in_history, expected)) is None:
-                missing.append(f"{name} {expected.name}: no compliant full run in HEAD's history")
+                missing.append(f"{name} {expected.name}: no compliant full run in HEAD's history or the named commits")
                 continue
             found, check = hit
             assert found.record is not None
             runs.append(_released_run(name, expected, found.record, check.record))
             warnings.extend(f"{name} {expected.name}: {warning}" for warning in check.warnings)
     for commit in sorted({run.commit for run in runs} - {head}):
-        since[commit] = git_output(["log", "--oneline", f"{commit}..{head}", "--", *EVALUATION_CODE], root)
+        since[commit] = evaluation_code_changes(commit, head, root)
     release = PolicyRelease(version=policy.version, commit=head, base=policy.base, runs=tuple(runs))
     return ReleaseCandidate(release=release, missing=tuple(missing), warnings=tuple(warnings), changes=since)
+
+
+def evaluation_code_changes(commit: str, head: str, root: Path) -> str:
+    """The evaluation code commits from ``commit`` to ``head``, or, for a commit outside ``head``'s history, the
+    files whose evaluation code differs between them."""
+    if is_ancestor(commit, head, root):
+        return git_output(["log", "--oneline", f"{commit}..{head}", "--", *EVALUATION_CODE], root)
+    return git_output(["diff", "--stat", commit, head, "--", *EVALUATION_CODE], root)
 
 
 def is_ancestor(commit: str, head: str, root: Path) -> bool:

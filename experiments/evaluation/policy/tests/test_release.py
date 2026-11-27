@@ -54,12 +54,30 @@ def test_a_release_pins_each_compliant_run_and_lists_pairs_without_one(qwen, rec
     run = _runs(qwen, {"aime24"})["aime24"]
     record = _write(run)
     _archive(record.results_path, [(1000, 10)])
-    candidate = release.release_candidate(TWO, find_project_root())
+    candidate = release.release_candidate(TWO, find_project_root(), outside_history=())
     (pinned,) = candidate.release.runs
     with open(run.record_path, "rb") as handle:
         assert pinned.record_sha256 == hashlib.sha256(handle.read()).hexdigest()
     assert (pinned.evaluation, pinned.run_id) == ("aime24", run.run_id)
-    assert candidate.missing == (f"{QWEN_NAME} gsm8k-0shot: no compliant full run in HEAD's history",)
+    assert candidate.missing == (
+        f"{QWEN_NAME} gsm8k-0shot: no compliant full run in HEAD's history or the named commits",
+    )
+
+
+def test_a_run_from_outside_heads_history_is_pinned_only_from_a_named_commit(qwen, records, archived, monkeypatch):
+    # As for a run launched from an integration branch whose PRs reached main squashed.
+    run = _runs(qwen, {"aime24"})["aime24"]
+    record = _write(run)
+    _archive(record.results_path, [(1000, 10)])
+    monkeypatch.setattr(release, "is_ancestor", lambda commit, head, root: False)
+    root = find_project_root()
+
+    unnamed = release.release_candidate(TWO, root, outside_history=())
+    assert unnamed.release.runs == ()
+
+    named = release.release_candidate(TWO, root, outside_history=(record.provenance.git_sha,))
+    (pinned,) = named.release.runs
+    assert (pinned.evaluation, pinned.commit) == ("aime24", record.provenance.git_sha)
 
 
 def test_a_patch_keeps_the_base_runs_whose_inputs_changed_only_in_version(qwen, records, monkeypatch):

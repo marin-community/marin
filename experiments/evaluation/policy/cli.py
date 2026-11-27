@@ -602,12 +602,20 @@ def verify(version: str, run_ids: tuple[str, ...]) -> None:
 @cli.command()
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
 @click.option("--dry-run", is_flag=True, help="Print what the release would pin without writing or tagging it.")
-def release(version: str, dry_run: bool) -> None:
+@click.option(
+    "--runs-from",
+    "outside_history",
+    multiple=True,
+    help="A commit on origin outside origin/main's history, such as an integration branch's, whose runs may be pinned.",
+)
+def release(version: str, dry_run: bool, outside_history: tuple[str, ...]) -> None:
     """Pin each baseline's compliant full run of each evaluation in a manifest, and tag HEAD as the release.
 
-    Runs from a clean checkout of a commit on origin/main. For each pinned run from an older commit it prints the
-    evaluation code changed since, which the release's reviewer reads for side effects. A patch (a policy with a
-    ``base``) keeps each base release run whose inputs are unchanged apart from the version.
+    Runs from a clean checkout of a commit on origin/main. It pins runs from that commit's history and from the
+    ``--runs-from`` commits. For each pinned run from another commit it prints the evaluation code changed since,
+    or, for a ``--runs-from`` commit, how its evaluation code differs; the release's reviewer reads these for side
+    effects. A patch (a policy with a ``base``) keeps each base release run whose inputs are unchanged apart from
+    the version.
     """
     policy = POLICIES[version]
     configure_coreweave_s3()
@@ -617,8 +625,12 @@ def release(version: str, dry_run: bool) -> None:
     git_output(["fetch", "-q", "origin", "main"], root)
     if not is_ancestor("HEAD", "origin/main", root):
         raise click.ClickException("release from a commit on origin/main")
+    commits = tuple(git_output(["rev-parse", "--verify", f"{commit}^{{commit}}"], root) for commit in outside_history)
+    for commit in commits:
+        if not git_output(["branch", "-r", "--contains", commit], root):
+            raise click.ClickException(f"--runs-from {commit[:12]} is on no branch of origin; push it first")
     try:
-        candidate = release_candidate(policy, root)
+        candidate = release_candidate(policy, root, outside_history=commits)
     except ValueError as error:
         raise click.ClickException(str(error)) from error
     head = candidate.release.commit
