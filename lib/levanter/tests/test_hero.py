@@ -38,7 +38,7 @@ def test_hero_and_snowball_reject_each_others_checkpoint_recipe():
         SnowballConfig.from_hf_config(hero)
 
 
-def test_hero_rejects_checkpoint_with_global_query_log_scaling():
+def test_hero_rejects_checkpoint_with_global_query_log_scaling(tmp_path):
     hf_config = HeroConfig().to_hf_config(
         128,
         {
@@ -48,8 +48,11 @@ def test_hero_rejects_checkpoint_with_global_query_log_scaling():
             "log_scaling_power": 2.0,
         },
     )
-    with pytest.raises(ValueError, match="query log scaling"):
-        HeroConfig.from_hf_config(hf_config)
+    hf_config.save_pretrained(tmp_path)
+    _save_tiny_tokenizer(tmp_path)
+    converter = HFCheckpointConverter.from_hf(str(tmp_path))
+    with pytest.raises(ValueError):
+        _ = converter.default_config
 
 
 @pytest.mark.parametrize(

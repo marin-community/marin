@@ -21,6 +21,7 @@ from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.grug._moe.common import _init_weight
 from levanter.grug.attention import (
     AttentionMask,
+    RotaryConfig,
     align_kv_heads,
     apply_rotary_embedding,
     attention,
@@ -151,6 +152,19 @@ def _apply_rotary_embedding_fused(
     return _apply(q), _apply(k)
 
 
+def _apply_split_half_rope(
+    q: jax.Array, k: jax.Array, rope: RotaryConfig, position_ids: jax.Array | None = None
+) -> tuple[jax.Array, jax.Array]:
+    half = q.shape[-1] // 2
+    q_rot, k_rot = apply_rotary_embedding(
+        q[..., :half], k[..., :half], seq_len=q.shape[1], head_dim=half, rope=rope, position_ids=position_ids
+    )
+    return (
+        jnp.concatenate([q_rot, q[..., half:]], axis=-1),
+        jnp.concatenate([k_rot, k[..., half:]], axis=-1),
+    )
+
+
 class ShortConv(eqx.Module):
     """Depthwise causal 1-D convolution over the sequence axis (Inkling-style SConv).
 
@@ -208,7 +222,7 @@ class HeroAttention(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        is_global: bool | jax.Array = False,
+        is_global: bool = False,
     ) -> Float[Array, "B S D"]:
         head_dim = self.cfg.inferred_head_dim
         seq_len = x.shape[1]
@@ -221,8 +235,8 @@ class HeroAttention(eqx.Module):
         v_flat = jnp.einsum("bsh,hd->bsd", x, self.w_v)
         # SConv: depthwise causal conv after the K projection. segment_ids (packed-document
         # boundaries) come from the mask so the conv never mixes across a document boundary.
-        _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        sconv_segment_ids = _seg[0] if _seg is not None else None
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        sconv_segment_ids = segment_ids[0] if segment_ids is not None else None
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
         q = rearrange(q_flat, "... (n d) -> ... n d", d=head_dim)
@@ -278,26 +292,8 @@ class HeroAttention(eqx.Module):
                 rope=self.cfg.rope,
                 disable_rope=is_global,
             )
-        else:
-
-            def _rope(qh: jax.Array, kh: jax.Array) -> tuple[jax.Array, jax.Array]:
-                half = head_dim // 2
-                q_rot, k_rot = apply_rotary_embedding(
-                    qh[..., :half], kh[..., :half], seq_len=seq_len, head_dim=half, rope=self.cfg.rope
-                )
-                return (
-                    jnp.concatenate([q_rot, qh[..., half:]], axis=-1),
-                    jnp.concatenate([k_rot, kh[..., half:]], axis=-1),
-                )
-
-            if isinstance(is_global, bool):
-                if not is_global:
-                    q, k = _rope(q, k)
-            else:
-                q_roped, k_roped = _rope(q, k)
-                keep = ~jnp.asarray(is_global, dtype=jnp.bool_)
-                q = jnp.where(keep, q_roped, q)
-                k = jnp.where(keep, k_roped, k)
+        elif not is_global:
+            q, k = _apply_split_half_rope(q, k, self.cfg.rope)
         q = q * self.cfg.qk_mult
         if self.cfg.qk_mult_long_scale != 1.0:
             q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
@@ -390,10 +386,10 @@ class HeroMoEMLP(eqx.Module):
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         selected_experts = selected_experts[:, :-1]
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
-        denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
-        combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
+        combine_weights_fp32 = jax.nn.sigmoid(unbiased_topk)
+        denom = jnp.sum(combine_weights_fp32, axis=-1, keepdims=True)
+        combine_weights_fp32 = combine_weights_fp32 * (_ROUTING_RENORM_SUM / (denom + 1e-9))
+        combine_weights = combine_weights_fp32.astype(x.dtype)
         # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
         # `latent_dim`-wide rows in both directions. The router above already read the full-width
         # token, and the shared experts in the enclosing block never see this path.
@@ -474,11 +470,11 @@ class HeroBlock(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        is_global: bool | jax.Array = False,
+        is_global: bool = False,
     ) -> Float[Array, "B S D"]:
         # segment_ids (packed-document boundaries) for the branch-output SConvs; None when unpacked.
-        _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        sconv_segment_ids = _seg[0] if _seg is not None else None
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        sconv_segment_ids = segment_ids[0] if segment_ids is not None else None
 
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         attn_out = self.attn(attn_in, mask, is_global=is_global)
@@ -648,6 +644,7 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
 
     def resize_vocab(self, new_size: int, key=None) -> "HeroLMHeadModel":
+        """Return the model when the requested size matches the exported vocabulary."""
         if new_size != self.Vocab.size:
             raise ValueError(
                 "Hero inference requires the checkpoint vocabulary; export resized weights before loading"
@@ -814,17 +811,7 @@ def _decode_attention(
             disable_rope=use_long,
         )
     elif not use_long:
-        half = width // 2
-        q_rot, k_rot = apply_rotary_embedding(
-            q[..., :half],
-            k[..., :half],
-            seq_len=1,
-            head_dim=half,
-            rope=cfg.rope,
-            position_ids=positions.array[:, None],
-        )
-        q = jnp.concatenate([q_rot, q[..., half:]], axis=-1)
-        k = jnp.concatenate([k_rot, k[..., half:]], axis=-1)
+        q, k = _apply_split_half_rope(q, k, cfg.rope, positions.array[:, None])
     axes = (positions.axes[0], Axis("kv_head", cfg.stored_kv_heads), Axis("head_size", width))
     kv = cache.kv.update(
         info,

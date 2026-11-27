@@ -61,6 +61,7 @@ class HeroConfig(HFCompatConfig):
     rope_fused: bool = True
     attention_implementation: GrugAttentionImplementation | None = None
     inference_attention_implementation: PagedAttentionImplementation | None = None
+    # Multi-rank paged decode uses dropless ring dispatch.
     moe_implementation: MoeImplementation | None = None
     capacity_factor: float = 1.0
     reference_checkpoint: str | None = None

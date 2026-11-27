@@ -176,8 +176,8 @@ def test_hero_engine_clones_preserve_convolution_history(prompt_length, model_ax
         )
         engine = InferenceEngine.from_model_with_config(model, None, config)
         params = dataclasses.replace(SeqDecodingParams.default(), max_num_tokens=jnp.asarray(prompt_length + 4))
-        request = Request([2, 7, 9, 3][:prompt_length], 0, params, n_generations=1)
-        cloned = engine.generate([dataclasses.replace(request, n_generations=2)])
+        request = Request([2, 7, 9, 3][:prompt_length], 0, params, n_generations=2)
+        cloned = engine.generate([request])
         assert cloned.logprobs is not None
         assert len(cloned.tokens) == 2
         for choice, logprobs in zip(cloned.tokens, cloned.logprobs, strict=True):

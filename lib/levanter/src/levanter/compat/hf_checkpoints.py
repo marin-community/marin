@@ -614,14 +614,14 @@ class HFCheckpointConverter(Generic[LevConfig]):
     def _match_converter_config(
         hf_config: HfConfig, candidates: Sequence[type[HFCompatConfig]]
     ) -> type[HFCompatConfig]:
-        """Match remaining recipes by the Transformers class declared by their converter."""
+        """Find a converter for this Transformers config or raise ValueError."""
         config_name = type(hf_config).__name__
         for candidate in candidates:
-            # Defaults for other architectures can load gated tokenizers.
+            instance = candidate()  # pyrefly: ignore[missing-argument]
             try:
-                instance = candidate()  # pyrefly: ignore[missing-argument]
                 candidate_config = instance.hf_checkpoint_converter().HfConfigClass
-            except Exception:
+            except OSError:
+                # A default reference tokenizer can be gated or unavailable offline.
                 logger.debug("Skipping %s during HF config resolution", candidate.__name__, exc_info=True)
                 continue
             if candidate_config.__name__ == config_name:

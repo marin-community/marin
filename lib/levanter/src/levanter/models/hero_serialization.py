@@ -16,6 +16,7 @@ from levanter.sharding import partition_spec_of
 
 
 _EXPERT_BANK_PREFIX = ".mlp.experts."
+_LAYER_PARAMETER_KEY = "model.layers.{layer}.{name}"
 
 
 class _Parameter(NamedTuple):
@@ -93,7 +94,9 @@ def hero_to_state_dict(model: HeroTransformer, prefix: str | None = None) -> Sta
     state = {with_prefix(prefix, p.name): _transpose(p.value, p.transpose) for p in _global_parameters(model)}
     for p in _block_parameters(model.stacked_blocks.stacked):
         for layer in range(model.config.num_layers):
-            state[with_prefix(prefix, f"model.layers.{layer}.{p.name}")] = _transpose(p.value[layer], p.transpose)
+            state[with_prefix(prefix, _LAYER_PARAMETER_KEY.format(layer=layer, name=p.name))] = _transpose(
+                p.value[layer], p.transpose
+            )
     return state
 
 
@@ -133,7 +136,7 @@ def hero_from_state_dict(
         layers = [
             _read_parameter(
                 state_dict,
-                with_prefix(prefix, f"model.layers.{layer}.{p.name}"),
+                with_prefix(prefix, _LAYER_PARAMETER_KEY.format(layer=layer, name=p.name)),
                 p,
                 num_experts=model.config.num_experts,
             )
