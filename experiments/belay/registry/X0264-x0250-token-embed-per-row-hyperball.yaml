@@ -1,0 +1,12 @@
+id: X0264
+slug: x0250-token-embed-per-row-hyperball
+name: X0250 + token_embed per-row hyperball step
+category: Embeddings and inputs
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7208905691
+  author: armorfaye
+  approved_by: armorfaye (trusted)
