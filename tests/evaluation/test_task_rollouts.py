@@ -904,7 +904,19 @@ def test_grader_machines_have_the_network_their_environment_requires(capabilitie
         capabilities=capabilities,
     )
     run_default = machine_runtime(backend="daytona", network=NetworkPolicy.DENY)
-    assert grader_machine(run_default, environment) == run_default.model_copy(update={"network": network})
+    assert grader_machine(run_default, environment, None) == run_default.model_copy(update={"network": network})
+
+
+def test_grader_machines_have_their_task_machines_resources():
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=f"grader@sha256:{'a' * 64}"
+    )
+    run_default = machine_runtime(backend="daytona", network=NetworkPolicy.DENY)
+    task_machine = machine_runtime(
+        backend="daytona", network=NetworkPolicy.DENY, cpus=4, memory_mb=8192, storage_mb=10240
+    )
+    grader = grader_machine(run_default, environment, task_machine)
+    assert grader == run_default.model_copy(update={"cpus": 4, "memory_mb": 8192, "storage_mb": 10240})
 
 
 @dataclass
