@@ -4,7 +4,7 @@ name: X0250 + matrix LR floor + decay floor f=0.05
 category: Optimizers
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7212009445
@@ -52,6 +52,13 @@ trials:
     muonc_anneal_decay_floor_frac: '0.05'
   commit: 383ff48039
   priority: interactive
+  loss:
+  - 3.028
+  delta:
+  - -0.0164
+  steps: 3045
+  baseline: belay-X0266-control 3.0444 (same commit, seed 0)
+  step_time_change: 0%
 potential:
   score: 7
   rationale: −0.0174 at equal data; equal-time run pending, ladder and MFU not run → 7
