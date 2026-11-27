@@ -24,7 +24,7 @@ KIND = "DIFFICULTY_FAILURE_PATTERN"
 REALERT_SECONDS = 3600
 INITIAL_LOOKBACK_SECONDS = 600
 FORWARDING_LOOKBACK_SECONDS = 3600
-EXPECTED_CONTROL_OUTCOMES = frozenset({"scored", "cost", "submitted", "finished", "repaired"})
+EXPECTED_CONTROL_OUTCOMES = frozenset({"scored", "cost", "submitted", "finished", "repaired", "protocol_superseded"})
 
 
 @dataclass
@@ -143,7 +143,7 @@ def tick(ledger: str, state_path: Path, alerts_path: Path, now: datetime) -> int
     logs = finelog_outcomes(since)
     if (StoragePath(ledger) / "v1/campaign.json").exists():
         run_prefix = ledger.removesuffix("/ledger") + "/runs/"
-        logs = [row for row in logs if row.get("run_id", "").startswith(run_prefix)]
+        logs = [row for row in logs if campaign_outcome(row, run_prefix)]
     rows, added = ledger_outcomes(ledger, since, partitions)
     alerts = update_patterns(patterns, seen, logs + rows, now)
     sink = JsonlAlertSink(alerts_path)
@@ -160,6 +160,11 @@ def tick(ledger: str, state_path: Path, alerts_path: Path, now: datetime) -> int
     temporary.write_text(json.dumps(state, sort_keys=True) + "\n")
     temporary.replace(state_path)
     return len(alerts)
+
+
+def campaign_outcome(row: dict, run_prefix: str) -> bool:
+    """Match the producer's evidence URI, retaining legacy explicit run identities."""
+    return any(str(row.get(field) or "").startswith(run_prefix) for field in ("evidence_uri", "run_id"))
 
 
 def main() -> None:
