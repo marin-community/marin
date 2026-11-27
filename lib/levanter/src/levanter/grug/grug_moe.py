@@ -336,6 +336,10 @@ def estimate_qb_beta_topk(
     )(s_minus_alpha, token_valid)
 
 
+def _qb_router_logits(x: Float[Array, "T D"], router: Float[Array, "D E"]) -> Float[Array, "T E"]:
+    return jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
+
+
 class QBRoutedMoE(eqx.Module):
     """QB router and expert MLP composition for flat token batches.
 
@@ -351,7 +355,7 @@ class QBRoutedMoE(eqx.Module):
     # model hyperparameter: selected sigmoid weights are normalized to this sum.
     routing_renorm_sum: float = eqx.field(static=True, default=2.5)
 
-    def _select_experts(self, router_logits, router_bias):
+    def _selected_experts_and_threshold(self, router_logits, router_bias):
         biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
         topk_logits, expert_ids = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
         return expert_ids[:, :-1], topk_logits[:, -1:]
@@ -373,8 +377,8 @@ class QBRoutedMoE(eqx.Module):
         """
         if x.ndim != 2 or token_valid.shape != (x.shape[0],):
             raise ValueError("x and token_valid must have shapes [T, D] and [T]")
-        router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
-        selected_experts, qb_alpha = self._select_experts(router_logits, router_bias)
+        router_logits = _qb_router_logits(x, router)
+        selected_experts, qb_alpha = self._selected_experts_and_threshold(router_logits, router_bias)
         return MoERouteCapture(
             selected_experts=jax.lax.stop_gradient(selected_experts.astype(jnp.int32)),
             token_valid=jax.lax.stop_gradient(token_valid.astype(jnp.bool_)),
@@ -408,10 +412,10 @@ class QBRoutedMoE(eqx.Module):
             raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
 
         with jax.named_scope("moe_route"):
-            router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
+            router_logits = _qb_router_logits(x, router)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
             if route_capture is None:
-                selected_experts, qb_alpha = self._select_experts(router_logits, router_bias)
+                selected_experts, qb_alpha = self._selected_experts_and_threshold(router_logits, router_bias)
             else:
                 if (
                     route_capture.selected_experts.shape != (x.shape[0], self.num_experts_per_token)
