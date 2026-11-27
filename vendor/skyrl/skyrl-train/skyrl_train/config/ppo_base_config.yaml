@@ -132,6 +132,29 @@ trainer:
       lr_decay_steps: null
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
+    # The SkyRL driver still owns rollout selection, RLOO-N and reward shaping.
+    # Only finalized learner batches cross into the separate JAX environment.
+    levanter_config:
+      python_executable: null
+      command_timeout_seconds: 1800
+      initialization_timeout_seconds: 1800
+      coordinator_port: 29590
+      device_memory_fraction: 0.90
+      projection_block_size: 1024
+      attention_implementation: gpu_fa4_cute
+      moe_implementation: ring_gather_combine
+      router_dot_fp32: true
+      moe_capacity_factor: 8.0
+      fp32_activations: false
+      # On GPUs, one global ICI mesh spans all learner hosts; DCN stays one.
+      # The native Snowball batch axes are replica_dcn, data and expert.
+      mesh_axes:
+        replica_dcn: 1
+        replica: 1
+        data: 1
+        expert: 1
+        model: 1
+        context: 1
     sequence_parallel_size: 1
     record_memory: false
     # Pin the standard 4-MiB SIMPLE buffer before process-group initialization.

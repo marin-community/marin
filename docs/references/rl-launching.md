@@ -447,3 +447,17 @@ does not establish correctness for every message size or topology. Check resolve
 role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scaling
 a new configuration. Reference workers now retain larger buffers, so include that
 memory in colocated-role capacity estimates.
+
+### Native Snowball policy learner
+
+Select `trainer.strategy: levanter` for a Snowball policy with JAX optimizer
+state and disaggregated SkyRL rollout engines. Supply the learner Python
+environment and mesh under `trainer.policy.levanter_config`. The product of
+the mesh axes must equal the full policy GPU allocation, and a complete
+optimizer minibatch must divide across the data and expert axes.
+
+This strategy publishes through the existing expert-block transport. The JAX
+learner emits frozen weights to host memory, and the Torch sender stages those
+slices for NCCL. Choose `generator.weight_sync_transport: expert_block` with
+`generator.weight_sync_backend: nccl`. The initial strategy uses the clipped
+policy objective with the KL penalty disabled and saves native JAX checkpoints.

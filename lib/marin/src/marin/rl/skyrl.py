@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -298,6 +299,10 @@ class SkyRLRolePlan(_InferenceGeometry):
                 "SkyRL policy_num_gpus_per_node must match the whole-node topology width; "
                 f"got {self.policy_num_gpus_per_node} and {topology.gpus_per_node}"
             )
+
+        if _declared_config_value(config, "trainer.strategy") == "levanter":
+            _validate_levanter_geometry(config, self)
+            return
 
         forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
         if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != self.micro_train_batch_size_per_gpu:
@@ -837,13 +842,37 @@ def _validate_skyrl_recipe(
 ) -> None:
     """Validate one effective recipe before building an artifact."""
     config = _parsed_config(config_yaml)
-    if _declared_config_value(config, "trainer.strategy") != "megatron":
-        raise ValueError("SkyRL requires trainer.strategy=megatron")
+    strategy = _declared_config_value(config, "trainer.strategy")
+    if strategy not in ("megatron", "levanter"):
+        raise ValueError("SkyRL requires trainer.strategy=megatron or levanter")
     _validate_role_plan_config(config, topology.role_plan)
     if _declared_config_value(config, "entrypoint") is not _MISSING_CONFIG_VALUE:
         raise ValueError("SkyRL entrypoint is derived from the selected plan")
     _validate_skyrl_backend_constraints(config)
     topology.role_plan.validate_recipe(config, topology)
+
+
+def _validate_levanter_geometry(config: dict[str, object], plan: SkyRLRolePlan) -> None:
+    mesh = _declared_config_value(config, "trainer.policy.levanter_config.mesh_axes")
+    axes = {"replica_dcn", "replica", "data", "expert", "model", "context"}
+    if not isinstance(mesh, dict) or mesh.keys() != axes:
+        raise ValueError("Levanter requires an explicit replica_dcn/replica/data/expert/model/context mesh")
+    if any(type(size) is not int or size <= 0 for size in mesh.values()):
+        raise ValueError("Levanter mesh dimensions must be positive integers")
+    if math.prod(mesh.values()) != plan.policy_num_nodes * plan.policy_num_gpus_per_node:
+        raise ValueError("Levanter mesh must consume exactly the policy GPUs")
+    if any(mesh[name] != 1 for name in ("replica_dcn", "replica", "model", "context")):
+        raise ValueError("The Levanter Snowball worker supports data and expert sharding with other axes set to one")
+    rows = plan.policy_mini_batch_size * plan.n_samples_per_prompt
+    microbatch = mesh["data"] * mesh["expert"] * plan.micro_train_batch_size_per_gpu
+    if rows % microbatch:
+        raise ValueError("Levanter optimizer batches must divide the native execution microbatch")
+    if plan.colocate_all or plan.reference_num_nodes is not None:
+        raise ValueError("Levanter requires disaggregated policy workers without a separate reference role")
+    if _declared_config_value(config, "trainer.algorithm.use_kl_loss") is not False:
+        raise ValueError("Levanter requires KL loss disabled")
+    if _declared_config_value(config, "generator.weight_sync_transport") != "expert_block":
+        raise ValueError("Levanter requires expert_block weight publication")
 
 
 @dataclass(frozen=True)
@@ -1141,6 +1170,8 @@ def skyrl_step(
     export_hf: bool = False,
 ) -> ArtifactStep[SkyRLRun]:
     """Build a versioned SkyRL training artifact."""
+    if export_hf and _declared_config_value(_parsed_config(spec.config_yaml), "trainer.strategy") == "levanter":
+        raise ValueError("Levanter supports native checkpoints; terminal HF export is not implemented")
     step_name = spec.name
     model_deps = () if isinstance(spec.model, ResolvedModelLocator) else spec.model.deps()
     deps = tuple(

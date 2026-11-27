@@ -32,6 +32,7 @@ from skyrl_train.config.trajectory_selection import best_of_n_sample_count, opti
 from skyrl_train.config.utils import generation_context_limit, model_expert_count, normalize_logging_backends
 from skyrl_train.config.validation import (
     validate_batch_invariant_config,
+    validate_levanter_algorithm,
     validate_megatron_config,
     validate_training_settings,
 )
@@ -68,19 +69,27 @@ def validate_batch_sizes(cfg: DictConfig):
     # Validate policy mini batch size
     policy_world_size = cfg.trainer.placement.policy_num_nodes * cfg.trainer.placement.policy_num_gpus_per_node
 
-    pp = cfg.trainer.policy.megatron_config.pipeline_model_parallel_size
-    cp = cfg.trainer.policy.megatron_config.context_parallel_size
-    tp = cfg.trainer.policy.megatron_config.tensor_model_parallel_size
-    assert policy_world_size % (pp * cp * tp) == 0, (
-        f"policy_world_size {policy_world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
-        "This ensures that the data parallel size is an integer."
-    )
-    policy_dp_size = policy_world_size // (pp * cp * tp)
+    if cfg.trainer.strategy == "levanter":
+        axes = cfg.trainer.policy.levanter_config.mesh_axes
+        policy_dp_size = axes.replica_dcn * axes.data * axes.expert
+    else:
+        pp = cfg.trainer.policy.megatron_config.pipeline_model_parallel_size
+        cp = cfg.trainer.policy.megatron_config.context_parallel_size
+        tp = cfg.trainer.policy.megatron_config.tensor_model_parallel_size
+        assert policy_world_size % (pp * cp * tp) == 0, (
+            f"policy_world_size {policy_world_size} should be divisible by (pp * cp * tp) {pp * cp * tp}. "
+            "This ensures that the data parallel size is an integer."
+        )
+        policy_dp_size = policy_world_size // (pp * cp * tp)
 
     assert cfg.trainer.train_batch_size % cfg.trainer.policy_mini_batch_size == 0, (
         f"train_batch_size {cfg.trainer.train_batch_size} should be divisible by policy_mini_batch_size {cfg.trainer.policy_mini_batch_size}"
     )
     optimization_group_size = optimization_samples_per_prompt(cfg)
+    if cfg.trainer.strategy == "levanter" and (
+        cfg.trainer.policy_mini_batch_size * optimization_group_size % policy_dp_size
+    ):
+        raise ValueError("Levanter requires complete policy minibatches to divide across its batch mesh")
     if (
         cfg.trainer.batch_builder == BatchBuilder.WORKER
         and cfg.trainer.train_batch_size * optimization_group_size % policy_dp_size
@@ -190,10 +199,83 @@ def require_worker_batch_config(cfg: DictConfig, *, check_runtime_resources: boo
             raise ValueError(f"trainer.batch_builder=worker does not support {reason}")
 
 
+def validate_levanter_cfg(cfg: DictConfig) -> None:
+    """Validate the native learner boundary without importing JAX or GPU packages."""
+    validate_levanter_algorithm(cfg.trainer.algorithm)
+    restrictions = [
+        ("trainer.batch_builder=driver", cfg.trainer.batch_builder != BatchBuilder.DRIVER),
+        ("disaggregated placement", cfg.trainer.placement.colocate_all),
+        ("whole-node policy bundles", cfg.trainer.placement.policy_per_gpu_bundles),
+        ("resident optimizer state", cfg.trainer.offload_optimizer_during_rollouts),
+        ("no optimizer CPU offload", cfg.trainer.policy.megatron_config.optimizer_config_kwargs.optimizer_cpu_offload),
+        (
+            "no optimizer offload fraction",
+            cfg.trainer.policy.megatron_config.optimizer_config_kwargs.optimizer_offload_fraction != 0,
+        ),
+        ("reference-model-free objectives", reference_model_required(cfg.trainer.algorithm)),
+        ("no Megatron router replay", moe_router_replay_requested(cfg)),
+        ("no LoRA", cfg.trainer.policy.model.lora.rank != 0),
+        ("sequence_parallel_size=1", cfg.trainer.policy.sequence_parallel_size != 1),
+        ("policy scoring temperature=1", cfg.generator.sampling_params.temperature != 1.0),
+        ("expert-block publication", cfg.generator.weight_sync_transport != "expert_block"),
+        ("NCCL publication", cfg.generator.weight_sync_backend != "nccl"),
+    ]
+    for requirement, unsupported in restrictions:
+        if unsupported:
+            raise ValueError(f"Levanter quick-loop learner requires {requirement}")
+    runtime = cfg.trainer.policy.levanter_config
+    if not isinstance(runtime.python_executable, str) or not runtime.python_executable.strip():
+        raise ValueError("trainer.policy.levanter_config.python_executable must be set")
+    for name in ("command_timeout_seconds", "initialization_timeout_seconds", "projection_block_size"):
+        if not isinstance(runtime[name], int) or isinstance(runtime[name], bool) or runtime[name] <= 0:
+            raise ValueError(f"trainer.policy.levanter_config.{name} must be a positive integer")
+    if not 0 < runtime.device_memory_fraction <= 1:
+        raise ValueError("trainer.policy.levanter_config.device_memory_fraction must be in (0, 1]")
+    if (
+        not isinstance(runtime.coordinator_port, int)
+        or isinstance(runtime.coordinator_port, bool)
+        or not 1 <= runtime.coordinator_port <= 65535
+    ):
+        raise ValueError("trainer.policy.levanter_config.coordinator_port must be a valid TCP port")
+    axes = runtime.mesh_axes
+    required_axes = {"replica_dcn", "replica", "data", "expert", "model", "context"}
+    if set(axes) != required_axes or any(
+        not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in axes.values()
+    ):
+        raise ValueError(
+            "Levanter mesh_axes must contain six positive integer axes: " + ", ".join(sorted(required_axes))
+        )
+    # GPU multi-host devices form one global ICI mesh, rather than TPU DCN slices.
+    if axes.replica_dcn != 1 or axes.replica != 1:
+        raise ValueError("Levanter GPU Snowball requires mesh_axes.replica_dcn=1 and replica=1")
+    if axes.model != 1 or axes.context != 1:
+        raise ValueError("Levanter quick-loop learner requires mesh_axes.model=1 and context=1")
+    for name in ("policy_num_nodes", "policy_num_gpus_per_node"):
+        value = cfg.trainer.placement[name]
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"trainer.placement.{name} must be a positive integer for Levanter")
+    world_size = cfg.trainer.placement.policy_num_nodes * cfg.trainer.placement.policy_num_gpus_per_node
+    if math.prod(axes.values()) != world_size:
+        raise ValueError("Levanter mesh_axes product must equal the reserved policy node*GPU count")
+    if not math.isfinite(runtime.moe_capacity_factor) or runtime.moe_capacity_factor < axes.expert:
+        raise ValueError("Levanter dropless Snowball requires moe_capacity_factor >= mesh_axes.expert")
+    optimizer = cfg.trainer.policy.optimizer_config
+    if (
+        optimizer.optimizer != "AdamW"
+        or optimizer.scheduler != "constant_with_warmup"
+        or optimizer.num_warmup_steps != 0
+    ):
+        raise ValueError("Levanter quick-loop learner requires constant AdamW without warmup")
+    if set(optimizer.optimizer_kwargs) - {"eps"}:
+        raise ValueError("Levanter quick-loop learner supports only the AdamW eps optimizer option")
+
+
 def validate_cfg(cfg: DictConfig, *, check_runtime_resources: bool = True):
     if BatchBuilder(cfg.trainer.batch_builder) is BatchBuilder.WORKER:
         require_worker_batch_config(cfg, check_runtime_resources=check_runtime_resources)
     validate_training_settings(cfg)
+    if cfg.trainer.strategy == "levanter":
+        validate_levanter_cfg(cfg)
     validate_mismatch_probe_config(cfg)
     distillation_plan = compile_distillation_plan_from_config(cfg)
     validate_distillation_runtime_support(distillation_plan)
@@ -319,7 +401,8 @@ def validate_generator_cfg(cfg: DictConfig, *, check_runtime_resources: bool = T
 
     validate_generation_logprobs(cfg)
 
-    validate_megatron_config(cfg)
+    if cfg.trainer.strategy == "megatron":
+        validate_megatron_config(cfg)
 
     # Validate inference engine parallelism.
     ep_size = cfg.generator.inference_engine_expert_parallel_size

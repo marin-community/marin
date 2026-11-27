@@ -146,6 +146,32 @@ class PolicyOptimizerConfig(Section):
     optimizer_kwargs: OpenMap = field({})
 
 
+class LevanterMeshAxes(Section):
+    replica_dcn: PositiveInt = field(1)
+    replica: PositiveInt = field(1)
+    data: PositiveInt = field(1)
+    expert: PositiveInt = field(1)
+    model: PositiveInt = field(1)
+    context: PositiveInt = field(1)
+
+
+class PolicyLevanterConfig(Section):
+    python_executable: str | None = field(None)
+    command_timeout_seconds: PositiveInt = field(1800)
+    initialization_timeout_seconds: PositiveInt = field(1800)
+    coordinator_port: Annotated[int, Field(ge=1, le=65535)] = field(29590)
+    device_memory_fraction: Annotated[int | float, Field(gt=0, le=1)] = field(0.9)
+    projection_block_size: PositiveInt = field(1024)
+    attention_implementation: str = field("gpu_fa4_cute")
+    moe_implementation: str = field("ring_gather_combine")
+    router_dot_fp32: bool = field(True)
+    moe_capacity_factor: Annotated[int | float, Field(gt=0)] = field(8.0)
+    fp32_activations: bool = field(False)
+    mesh_axes: LevanterMeshAxes = Field(default_factory=LevanterMeshAxes)
+    """On GPUs, one global ICI mesh spans all learner hosts; DCN stays one. The native Snowball batch axes are
+    replica_dcn, data and expert."""
+
+
 class DdpConfig(Section):
     grad_reduce_in_fp32: bool = field(True)
     overlap_grad_reduce: bool = field(False)
@@ -204,6 +230,9 @@ class Policy(Section):
     grug_query_bias_update_rate: int | float | None = field(None)
     model: PolicyModel = Field(default_factory=PolicyModel)
     optimizer_config: PolicyOptimizerConfig = Field(default_factory=PolicyOptimizerConfig)
+    levanter_config: PolicyLevanterConfig = Field(default_factory=PolicyLevanterConfig)
+    """The SkyRL driver still owns rollout selection, RLOO-N and reward shaping. Only finalized learner batches cross
+    into the separate JAX environment."""
     sequence_parallel_size: int = field(1)
     record_memory: bool = field(False)
     nccl_buffer_size_bytes: PositiveInt | None = field(4194304)
@@ -535,7 +564,7 @@ class Trainer(Section):
     model_load_retry: ModelLoadRetry = Field(default_factory=ModelLoadRetry)
     progress: Progress = Field(default_factory=Progress)
     placement: Placement = Field(default_factory=Placement)
-    strategy: Literal["megatron"] = field("megatron")
+    strategy: Literal["megatron", "levanter"] = field("megatron")
     policy: Policy = Field(default_factory=Policy)
     ref: Ref = Field(default_factory=Ref)
     algorithm: Algorithm = Field(default_factory=Algorithm)

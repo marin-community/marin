@@ -1820,6 +1820,22 @@ class RayPPOTrainer:
                 absent, model actors reserve their placement group lazily.
         """
         cfg = self.cfg
+        if cfg.trainer.strategy == "levanter":
+            from skyrl_train.workers.levanter.levanter_worker import LevanterRayActorGroup
+
+            if reference_model_required(cfg.trainer.algorithm) or cfg.trainer.placement.colocate_all:
+                raise ValueError("Levanter requires disaggregated policy workers without a reference model")
+            policy_model = LevanterRayActorGroup(
+                cfg,
+                cfg.trainer.placement.policy_num_nodes,
+                cfg.trainer.placement.policy_num_gpus_per_node,
+                pg=policy_pg,
+            )
+            self.policy_model = policy_model
+            self.ref_model = None
+            self._initialize_model_actors(cfg, policy_model, None)
+            logger.info("init Levanter policy models done")
+            return
         pg = None
 
         use_ref_model = reference_model_required(cfg.trainer.algorithm)

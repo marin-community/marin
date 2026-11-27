@@ -85,8 +85,25 @@ def _iter_config_kwargs(node):
             yield (key,), value
 
 
+def validate_levanter_algorithm(algorithm: DictConfig) -> None:
+    """Fail closed for objective terms outside the matched quick-loop recipe."""
+    requirements = {
+        "policy_loss_type": "regular",
+        "loss_reduction": "token_mean",
+        "use_kl_loss": False,
+        "use_entropy_loss": False,
+    }
+    for name, expected in requirements.items():
+        if algorithm.get(name) != expected:
+            raise ValueError(f"Levanter quick-loop bridge requires {name}={expected!r}")
+    if algorithm.get("off_policy_correction") not in (None, "none") or algorithm.get("off_policy_correction_rules"):
+        raise ValueError("Levanter quick-loop bridge requires off_policy_correction=none")
+    if algorithm.get("distillation") or algorithm.get("ftpo"):
+        raise ValueError("Levanter quick-loop bridge does not support distillation or FTPO")
+
+
 def validate_training_settings(cfg: DictConfig) -> None:
-    if cfg.trainer.strategy != "megatron":
+    if cfg.trainer.strategy not in ("megatron", "levanter"):
         raise ValueError(f"Unsupported training strategy: {cfg.trainer.strategy}")
     runtime_values = {
         "trainer.distributed.placement_group_timeout_seconds": cfg.trainer.distributed.placement_group_timeout_seconds,
@@ -136,7 +153,10 @@ def validate_training_settings(cfg: DictConfig) -> None:
     if cfg.trainer.policy.model.lora.rank > 0:
         raise ValueError("Megatron training does not support LoRA")
 
-    if cfg.trainer.micro_forward_batch_size_per_gpu != cfg.trainer.micro_train_batch_size_per_gpu:
+    if (
+        cfg.trainer.strategy == "megatron"
+        and cfg.trainer.micro_forward_batch_size_per_gpu != cfg.trainer.micro_train_batch_size_per_gpu
+    ):
         raise ValueError(
             "Megatron recomputes old log-probs with micro_forward_batch_size_per_gpu="
             f"{cfg.trainer.micro_forward_batch_size_per_gpu} but trains with micro_train_batch_size_per_gpu="
