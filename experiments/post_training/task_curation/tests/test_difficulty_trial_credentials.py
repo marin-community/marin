@@ -13,7 +13,7 @@ pytest.importorskip("harbor")
 from finestore.rl.difficulty import DifficultyGap, Solver, difficulty_gap_reason
 from harbor.utils.env import validate_task_environment
 
-from experiments.post_training.task_curation import difficulty_trials
+from experiments.post_training.task_curation import difficulty_trials, toolchain_binding
 from experiments.post_training.task_curation.datasets.environments import LEAN_GRADER_PACKAGES
 from experiments.post_training.task_curation.difficulty.importer import receipt_row
 from experiments.post_training.task_curation.difficulty.ledger_worker import source_has_judge_traffic
@@ -430,20 +430,35 @@ def test_normalized_lock_drops_only_the_staging_comment():
     assert difficulty_trials._normalized_lock(staged) == difficulty_trials._normalized_lock(plain)
 
 
-def test_frozen_lock_resolves_to_the_declared_toolchain_image(monkeypatch):
+@pytest.fixture
+def shared_toolchain_lookup(monkeypatch):
+    lookups = (difficulty_trials.declared_grader_machine_image, toolchain_binding.resolved_toolchain_reference)
+    for lookup in lookups:
+        lookup.cache_clear()
+    monkeypatch.setattr(toolchain_binding, "built_image", lambda environment: None)
+    yield toolchain_binding
+    for lookup in lookups:
+        lookup.cache_clear()
+
+
+def test_frozen_lock_resolves_to_the_declared_toolchain_image(monkeypatch, shared_toolchain_lookup):
 
     lean_lock = "# via -r /var/folders/x/tmpABC/requirements.in\npandas==2.2.2\n"
-    monkeypatch.setattr(difficulty_trials, "StoragePath", _fake_storage_path({"s3://fixture/lock": lean_lock}))
-    monkeypatch.setattr(difficulty_trials, "_declared_lock", lambda environment: "pandas==2.2.2\n")
-    difficulty_trials.declared_grader_machine_image.cache_clear()
+    monkeypatch.setattr(shared_toolchain_lookup, "StoragePath", _fake_storage_path({"s3://fixture/lock": lean_lock}))
+    monkeypatch.setattr(
+        shared_toolchain_lookup,
+        "declared_lock",
+        lambda environment: "pandas==2.2.2\n" if environment == LEAN_GRADER_PACKAGES else None,
+    )
     image = difficulty_trials.declared_grader_machine_image("s3://fixture/lock")
     assert image == image_tag(DEFAULT_REPOSITORY, identity_digest(LEAN_GRADER_PACKAGES))
 
 
-def test_unmatched_lock_keeps_the_existing_lock_built_machine(monkeypatch):
-    monkeypatch.setattr(difficulty_trials, "StoragePath", _fake_storage_path({"s3://fixture/lock": "pandas==2.2.2\n"}))
-    monkeypatch.setattr(difficulty_trials, "_declared_lock", lambda environment: "sympy==1.13.3\n")
-    difficulty_trials.declared_grader_machine_image.cache_clear()
+def test_unmatched_lock_keeps_the_existing_lock_built_machine(monkeypatch, shared_toolchain_lookup):
+    monkeypatch.setattr(
+        shared_toolchain_lookup, "StoragePath", _fake_storage_path({"s3://fixture/lock": "pandas==2.2.2\n"})
+    )
+    monkeypatch.setattr(shared_toolchain_lookup, "declared_lock", lambda environment: "sympy==1.13.3\n")
     assert difficulty_trials.declared_grader_machine_image("s3://fixture/lock") is None
 
 
