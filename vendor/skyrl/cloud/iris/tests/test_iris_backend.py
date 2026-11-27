@@ -172,7 +172,6 @@ def test_nested_launch_uses_parent_controller_and_execution_cluster_defaults(
         "bash",
         f"{MARINSKYRL_TASK_ROOT}/cloud/iris/node_entrypoint.sh",
         str(Path(RL_CONFIG_TASK_DIR) / f"{digest}.yaml"),
-        f"{config.ray.rendezvous_dir}/interconnect-gate",
         *(["--pynccl-init"] if entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT else []),
         *(["--gate-single-nvlink-domain"] if len(groups) == 1 else []),
     ]

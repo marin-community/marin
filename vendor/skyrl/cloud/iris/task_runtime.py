@@ -27,13 +27,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-from dataclasses import asdict, dataclass, field, fields
-from enum import StrEnum
-import glob
+from dataclasses import asdict, dataclass, fields
+import errno
 import json
 import os
 from pathlib import Path
-import queue
 import shutil
 import signal
 import socket
@@ -43,7 +41,7 @@ import tempfile
 import threading
 import time
 import uuid
-from typing import Any, Protocol
+from typing import Any
 
 import huggingface_hub.constants
 from filelock import FileLock
@@ -83,7 +81,6 @@ from marinskyrl.environment_contract import (
     TELEMETRY_ENDPOINT_ENV,
     TRAINING_TYPE_ENV,
     TrainingType,
-    ensure_debug_artifact_directories,
     ray_cluster_owner_environment,
 )
 from marinskyrl.hf_model import (
@@ -213,6 +210,7 @@ DEFAULT_RENDEZVOUS_TIMEOUT = 1800
 DEFAULT_CLUSTER_JOIN_TIMEOUT = 1800
 POLL_INTERVAL = 5
 STARTUP_POLL_INTERVAL = 1.0
+RAY_DISABLE_LOG_MONITOR = "--include-log-monitor=false"
 RENDEZVOUS_REWRITE_INTERVAL = 5.0
 # Tolerates clock skew between nodes and the time rank-0 needs to start Ray.
 RENDEZVOUS_FRESHNESS_SLACK = 60
@@ -223,13 +221,7 @@ RENDEZVOUS_WRITE_TIMEOUT = 30  # seconds per attempt
 # Bound `ray start --head` so a hung Ray CLI fails loud (TimeoutExpired).
 RAY_START_HEAD_TIMEOUT = 300  # seconds
 # Failure reporting must never keep an Iris task alive after its driver exits.
-FAILURE_ARTIFACT_TIMEOUT = 30
-# Allow healthy policy phases longer than one hour while bounding a live but silent driver.
-DEFAULT_DRIVER_LIVENESS_TIMEOUT = 9000
-DRIVER_WATCHDOG_POLL_INTERVAL = 1.0
-DRIVER_KILL_TIMEOUT = 30
-DRIVER_STALLED_EXIT_CODE = 124
-IGNORED_DRIVER_OUTPUT_MARKERS = (b"[fd-monitor]",)
+FAILURE_DIAGNOSTICS_TIMEOUT = 30
 
 
 def _log(msg: str) -> None:
@@ -902,18 +894,28 @@ def ensure_fr_dump_dir() -> None:
         )
 
 
-def ensure_task_debug_artifact_directory(debug_mode: DebugMode = DebugMode.LIGHT) -> None:
-    """Give the task uploader and its Ray workers the same artifact root."""
-    if debug_mode is DebugMode.OFF:
-        return
-    environment = EnvVarManager.for_debug_launch(
-        job_name=os.environ.get(RUN_ID_ENV, "run"),
-        artifact_root=os.environ.get(DEBUG_ARTIFACT_DIR_ENV),
-    ).environment_for(EnvVarScope.TASK_RUNTIME)
-    # The trainer resolves its diagnostic preset; the supervisor only owns the root.
-    EnvVarManager({DEBUG_ARTIFACT_DIR_ENV: environment[DEBUG_ARTIFACT_DIR_ENV]}).apply_to_process(
-        EnvVarScope.TASK_RUNTIME
-    )
+def configure_task_debug_artifacts(trainer: DictConfig) -> Path | None:
+    """Put process diagnostics and NCCL dumps in Iris's attempt archive."""
+    mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
+    if mode is DebugMode.OFF:
+        return None
+    artifact_root = Path(os.environ[IRIS_OUTPUT_DIR_ENV]) / "skyrl-debug"
+    environment = {**os.environ, DEBUG_ARTIFACT_DIR_ENV: str(artifact_root)}
+    EnvVarManager.from_config({"trainer": trainer}, environ=environment).apply_to_process(EnvVarScope.TASK_RUNTIME)
+    initialize_process_diagnostics(f"task-runtime-rank{_rank()}")
+    return artifact_root
+
+
+def prune_empty_debug_directories(artifact_root: Path) -> None:
+    """Avoid an Iris archive when SkyRL produced only empty diagnostic directories."""
+    for directory, _, files in os.walk(artifact_root, topdown=False):
+        if files:
+            continue
+        try:
+            Path(directory).rmdir()
+        except OSError as error:
+            if error.errno not in (errno.ENOENT, errno.ENOTEMPTY):
+                _log(f"Could not remove empty diagnostic directory {directory}: {error}")
 
 
 def _rendezvous_uri(rendezvous_dir: str) -> str:
@@ -1207,6 +1209,7 @@ def ray_start_head(
     cmd = [
         _ray_bin(),
         "start",
+        RAY_DISABLE_LOG_MONITOR,
         "--head",
         f"--node-ip-address={head_ip}",
         f"--port={allocated_ray_port(RayPort.HEAD)}",
@@ -1237,6 +1240,7 @@ def ray_start_worker(
     cmd = [
         _ray_bin(),
         "start",
+        RAY_DISABLE_LOG_MONITOR,
         f"--address={head_ip}:{ray_port}",
         f"--node-ip-address={node_ip}",
         *_ray_port_flags(),
@@ -1339,471 +1343,15 @@ def verify_role_placement(ray_address: str, topology: RoleTopology, report_direc
 # ---------------------------------------------------------------------------
 
 
-def capture_termination_artifacts(rendezvous_dir: str | None, reason: str) -> None:
-    """On teardown, snapshot a FAST diagnostic summary to the rendezvous store
-    BEFORE the pod is reaped. Best-effort; never raises; bounded to finish inside
-    the k8s grace period.
-
-    An iris/k8s-level termination (ephemeral-storage EVICTION, cgroup OOM, VRAM
-    OOM) sends the controller a plain SIGTERM and leaves NOTHING in the iris
-    finelog — and the per-node Ray logs are deleted with the pod, so the real
-    cause is unrecoverable post-mortem. This persists disk-hogs + GPU mem + df +
-    dmesg-OOM, keyed by task id, to ``<rendezvous_dir>/term_artifacts/`` so the
-    next probe reads the true cause (disk vs VRAM-OOM vs RAM-OOM).
-    """
-    if not rendezvous_dir:
-        return
+def log_termination_diagnostics(reason: str) -> None:
+    """Report disk, memory, and GPU state to Iris before teardown."""
     task_id = os.environ.get("IRIS_TASK_ID", "unknown").replace("/", "_")
-    ts = int(time.time())
-    summary = f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===\n"
+    _log(f"=== TERMINATION ARTIFACT task={task_id} ts={int(time.time())} reason={reason} ===")
+    script = Path(__file__).with_name("termination_diagnostics.sh")
     try:
-        diagnostics = Path(__file__).with_name("termination_diagnostics.sh")
-        summary += subprocess.run(
-            ["bash", str(diagnostics)], capture_output=True, text=True, errors="replace", timeout=40
-        ).stdout
-    except subprocess.TimeoutExpired as exc:
-        summary += (exc.stdout or b"").decode(errors="replace")
-        summary += "\n<termination diagnostics timed out>\n"
-    except OSError as exc:
-        summary += f"<termination diagnostics failed: {exc}>\n"
-    try:
-        uri = f"{rendezvous_dir.rstrip('/')}/term_artifacts/{task_id}_{ts}.txt"
-        fs, path = fs_and_path(uri)
-        with fs.open(path, "w") as f:
-            f.write(summary)
-        _log(f"[term-capture] wrote termination artifact -> {uri}")
-    except Exception as exc:  # noqa: BLE001 - still emit to finelog as fallback
-        _log(f"[term-capture] upload FAILED ({exc}); emitting inline:\n{summary}")
-
-
-# --- Ray session-log -> object-store sync -----------------------------------------
-# The per-actor Ray WORKER logs (/tmp/ray/session_*/logs/worker-*.{out,err},
-# raylet.out, ...) are the only place the policy / rollout actor stdout+tracebacks
-# land — the iris finelog aggregates only what reaches the head, and a pod GC / eviction
-# DELETES these node-local logs with the pod. This periodically (+ on SIGTERM) uploads
-# THIS node's session logs to the job's durable Ray-log root, keyed by node id, reusing
-# the SAME fsspec/boto3 + AWS_ENDPOINT_URL credentials as the rendezvous / spill /
-# term-artifact writers. Per-node: each pod writes its own logs under
-# <ray_log_dir>/<node_id>/. Gate:
-# OT_AGENT_RAY_LOG_SYNC (default "1"); interval OT_AGENT_RAY_LOG_SYNC_INTERVAL_S (300s).
-RAY_LOG_SYNC_MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024  # skip a single >2 GiB log (pathological)
-# Ray emits many small log files, so upload time is dominated by per-object latency.
-# Keep enough concurrency for a cold short-lived job to finish within the five-minute
-# teardown budget while staying far below object-store request-rate limits.
-RAY_LOG_SYNC_MAX_WORKERS = 16
-RAY_LOG_SYNC_MAX_FAILURE_LOGS = 3
-# A periodic pass must not consume the entire teardown window on a long-lived Ray
-# session. Deferred files remain eligible for the next pass; diagnostic logs sort first.
-RAY_LOG_SYNC_MAX_FILES_PER_PASS = 1024
-RAY_LOG_SYNC_MAX_BYTES_PER_PASS = 1024 * 1024 * 1024
-DEBUG_SYNC_MAX_FILE_BYTES = 512 * 1024 * 1024
-DEBUG_SYNC_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
-
-
-@dataclass(frozen=True)
-class RayLogSyncResult:
-    uploaded_files: int = 0
-    uploaded_bytes: int = 0
-    unchanged_files: int = 0
-    failed_files: int = 0
-    deferred_files: int = 0
-
-
-class RayLogSyncWaitStatus(StrEnum):
-    DISABLED = "disabled"
-    SKIPPED = "skipped"
-    COMPLETED = "completed"
-    TIMED_OUT = "timed_out"
-
-
-class _RayLogFilesystem(Protocol):
-    def put(self, local_path: str, remote_path: str) -> object: ...
-
-
-@dataclass(frozen=True)
-class _RayLogVersion:
-    size_bytes: int
-    modified_ns: int
-
-
-@dataclass(frozen=True)
-class _RayLogUpload:
-    local_path: str
-    remote_path: str
-    version: _RayLogVersion
-
-
-@dataclass(frozen=True)
-class _RayLogUploadResult:
-    upload: _RayLogUpload
-    current_version: _RayLogVersion | None
-    error: Exception | None
-
-
-@dataclass(frozen=True)
-class _RayLogScanFailure:
-    local_path: str
-    error: OSError
-
-
-@dataclass(frozen=True)
-class _RayLogUploadPlan:
-    uploads: tuple[_RayLogUpload, ...]
-    active_remote_paths: frozenset[str]
-    unchanged_files: int
-    scan_failures: tuple[_RayLogScanFailure, ...]
-    deferred_files: int
-
-
-@dataclass(frozen=True)
-class _RayLogSyncSettings:
-    enabled: bool
-    interval_seconds: int
-    final_timeout_seconds: float
-
-    @classmethod
-    def from_environment(cls) -> "_RayLogSyncSettings":
-        return cls(
-            enabled=os.environ.get("OT_AGENT_RAY_LOG_SYNC", "1") == "1",
-            interval_seconds=int(os.environ.get("OT_AGENT_RAY_LOG_SYNC_INTERVAL_S", "300")),
-            final_timeout_seconds=float(os.environ.get("OT_AGENT_RAY_LOG_FINAL_SYNC_TIMEOUT_S", "300")),
-        )
-
-
-def _ray_log_version(path: str) -> _RayLogVersion:
-    """Return the byte size and nanosecond modification time for one local log."""
-    stat = os.stat(path)
-    return _RayLogVersion(size_bytes=stat.st_size, modified_ns=stat.st_mtime_ns)
-
-
-def _upload_ray_logs(
-    filesystem: _RayLogFilesystem,
-    uploads: tuple[_RayLogUpload, ...],
-) -> tuple[_RayLogUploadResult, ...]:
-    """Return one success or captured exception for each requested upload."""
-    if not uploads:
-        return ()
-    pending: queue.Queue[_RayLogUpload] = queue.Queue()
-    completed: queue.Queue[_RayLogUploadResult] = queue.Queue()
-    for upload in uploads:
-        pending.put(upload)
-
-    def _worker() -> None:
-        while True:
-            try:
-                upload = pending.get_nowait()
-            except queue.Empty:
-                return
-            try:
-                filesystem.put(upload.local_path, upload.remote_path)
-                current_version = _ray_log_version(upload.local_path)
-            except Exception as error:  # noqa: BLE001 - capture per-file I/O failures for the result and log
-                completed.put(_RayLogUploadResult(upload=upload, current_version=None, error=error))
-            else:
-                completed.put(_RayLogUploadResult(upload=upload, current_version=current_version, error=None))
-
-    workers = [
-        threading.Thread(target=_worker, daemon=True, name=f"ray-log-upload-{index}")
-        for index in range(min(RAY_LOG_SYNC_MAX_WORKERS, len(uploads)))
-    ]
-    for worker in workers:
-        worker.start()
-    for worker in workers:
-        worker.join()
-    return tuple(completed.get_nowait() for _ in uploads)
-
-
-def _plan_ray_log_uploads(
-    log_dirs: list[str],
-    destination_path: str,
-    uploaded_versions: dict[str, _RayLogVersion],
-) -> _RayLogUploadPlan:
-    uploads: list[_RayLogUpload] = []
-    active_remote_paths: set[str] = set()
-    scan_failures: list[_RayLogScanFailure] = []
-    unchanged_files = 0
-    for log_dir in log_dirs:
-        session = os.path.basename(os.path.dirname(log_dir))
-        for root, directories, files in os.walk(log_dir):
-            directories.sort()
-            for filename in sorted(files):
-                local_path = os.path.join(root, filename)
-                try:
-                    version = _ray_log_version(local_path)
-                except OSError as error:
-                    scan_failures.append(_RayLogScanFailure(local_path=local_path, error=error))
-                    continue
-                if version.size_bytes > RAY_LOG_SYNC_MAX_FILE_BYTES:
-                    continue
-                relative_path = os.path.relpath(local_path, log_dir)
-                remote_path = f"{destination_path}/{session}/{relative_path}"
-                active_remote_paths.add(remote_path)
-                if uploaded_versions.get(remote_path) == version:
-                    unchanged_files += 1
-                    continue
-                uploads.append(_RayLogUpload(local_path=local_path, remote_path=remote_path, version=version))
-
-    def priority(upload: _RayLogUpload) -> tuple[bool, int, str]:
-        filename = os.path.basename(upload.local_path)
-        diagnostic = (
-            filename.endswith(".err")
-            or filename in {"raylet.out", "gcs_server.out"}
-            or filename.startswith("python-core-driver")
-        )
-        return diagnostic, upload.version.modified_ns, upload.local_path
-
-    selected: list[_RayLogUpload] = []
-    selected_bytes = 0
-    for upload in sorted(uploads, key=priority, reverse=True):
-        if len(selected) >= RAY_LOG_SYNC_MAX_FILES_PER_PASS:
-            break
-        if selected_bytes + upload.version.size_bytes > RAY_LOG_SYNC_MAX_BYTES_PER_PASS:
-            continue
-        selected.append(upload)
-        selected_bytes += upload.version.size_bytes
-    return _RayLogUploadPlan(
-        uploads=tuple(selected),
-        active_remote_paths=frozenset(active_remote_paths),
-        unchanged_files=unchanged_files,
-        scan_failures=tuple(scan_failures),
-        deferred_files=len(uploads) - len(selected),
-    )
-
-
-def _apply_ray_log_upload_results(
-    uploaded_versions: dict[str, _RayLogVersion],
-    plan: _RayLogUploadPlan,
-    upload_results: tuple[_RayLogUploadResult, ...],
-) -> tuple[RayLogSyncResult, tuple[_RayLogUploadResult, ...]]:
-    """Prune stale versions, record stable uploads, and return the pass result and failures."""
-    for remote_path in tuple(uploaded_versions):
-        if remote_path not in plan.active_remote_paths:
-            del uploaded_versions[remote_path]
-    uploaded_files = uploaded_bytes = 0
-    failures: list[_RayLogUploadResult] = []
-    for upload_result in upload_results:
-        if upload_result.error is not None or upload_result.current_version is None:
-            failures.append(upload_result)
-            continue
-        upload = upload_result.upload
-        uploaded_files += 1
-        uploaded_bytes += upload.version.size_bytes
-        if upload_result.current_version == upload.version:
-            uploaded_versions[upload.remote_path] = upload.version
-    return (
-        RayLogSyncResult(
-            uploaded_files=uploaded_files,
-            uploaded_bytes=uploaded_bytes,
-            unchanged_files=plan.unchanged_files,
-            failed_files=len(plan.scan_failures) + len(failures),
-            deferred_files=plan.deferred_files,
-        ),
-        tuple(failures),
-    )
-
-
-def sync_debug_artifacts(rendezvous_dir: str | None, node_id: str, reason: str) -> None:
-    """Boundedly persist this node's managed debug directory beside rendezvous data."""
-    source_root = os.environ.get(DEBUG_ARTIFACT_DIR_ENV)
-    if not rendezvous_dir or not source_root or not os.path.isdir(source_root):
-        return
-    destination = f"{rendezvous_dir.rstrip('/')}/debug_artifacts/{node_id}"
-    try:
-        filesystem, destination_path = fs_and_path(destination)
-    except Exception as exc:  # noqa: BLE001 - teardown evidence is best-effort
-        _log(f"[debug-sync] cannot resolve {destination} ({exc}) [{reason}]")
-        return
-
-    copied: list[dict[str, object]] = []
-    skipped: list[dict[str, object]] = []
-    total_bytes = 0
-    for root, directories, files in os.walk(source_root):
-        directories.sort()
-        for filename in sorted(files):
-            local_path = os.path.join(root, filename)
-            relative_path = os.path.relpath(local_path, source_root)
-            try:
-                size = os.path.getsize(local_path)
-                if size > DEBUG_SYNC_MAX_FILE_BYTES or total_bytes + size > DEBUG_SYNC_MAX_TOTAL_BYTES:
-                    skipped.append({"path": relative_path, "bytes": size, "reason": "budget"})
-                    continue
-                filesystem.put(local_path, f"{destination_path}/{relative_path}")
-                copied.append({"path": relative_path, "bytes": size})
-                total_bytes += size
-            except Exception as exc:  # noqa: BLE001 - retain a complete sync receipt
-                skipped.append({"path": relative_path, "reason": str(exc)})
-
-    receipt = {
-        "schema_version": 1,
-        "node_id": node_id,
-        "reason": reason,
-        "source_root": source_root,
-        "copied": copied,
-        "skipped": skipped,
-        "copied_bytes": total_bytes,
-    }
-    try:
-        with filesystem.open(f"{destination_path}/sync-manifest.json", "w") as manifest:
-            json.dump(receipt, manifest, sort_keys=True)
-        _log(f"[debug-sync] uploaded {len(copied)} file(s) / {total_bytes} bytes -> {destination} [{reason}]")
-    except Exception as exc:  # noqa: BLE001 - teardown evidence is best-effort
-        _log(f"[debug-sync] manifest upload failed ({exc}) [{reason}]")
-
-
-@dataclass
-class RayLogSyncSession:
-    """Incrementally upload one node's Ray logs, with a preemptive final evidence pass."""
-
-    ray_log_dir: str | None
-    node_id: str
-    _settings: _RayLogSyncSettings = field(default_factory=_RayLogSyncSettings.from_environment, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-    _uploaded_versions: dict[str, _RayLogVersion] = field(default_factory=dict, repr=False)
-
-    @property
-    def destination(self) -> str | None:
-        if not self.ray_log_dir:
-            return None
-        return join_resource_path(self.ray_log_dir, self.node_id)
-
-    def _sync_pass(
-        self,
-        reason: str,
-        uploaded_versions: dict[str, _RayLogVersion],
-    ) -> RayLogSyncResult:
-        if not self.destination or not self._settings.enabled:
-            return RayLogSyncResult()
-
-        log_dirs = sorted(glob.glob("/tmp/ray/session_*/logs"))
-        if not log_dirs:
-            return RayLogSyncResult()
-        try:
-            filesystem, destination_path = fs_and_path(self.destination)
-        except Exception as error:  # noqa: BLE001 - best-effort teardown evidence
-            _log(f"[ray-log-sync] cannot resolve dest {self.destination} ({error}) [{reason}]")
-            return RayLogSyncResult()
-
-        plan = _plan_ray_log_uploads(log_dirs, destination_path, uploaded_versions)
-        upload_results = _upload_ray_logs(filesystem, plan.uploads)
-        result, upload_failures = _apply_ray_log_upload_results(uploaded_versions, plan, upload_results)
-
-        failure_messages = [
-            f"stat failed for {failure.local_path}: {type(failure.error).__name__}: {failure.error}"
-            for failure in plan.scan_failures
-        ]
-        failure_messages.extend(
-            f"upload failed for {failure.upload.local_path}: {type(failure.error).__name__}: {failure.error}"
-            for failure in upload_failures
-        )
-        for failure_message in failure_messages[:RAY_LOG_SYNC_MAX_FAILURE_LOGS]:
-            _log(f"[ray-log-sync] {failure_message} [{reason}]")
-        if len(failure_messages) > RAY_LOG_SYNC_MAX_FAILURE_LOGS:
-            additional_failures = len(failure_messages) - RAY_LOG_SYNC_MAX_FAILURE_LOGS
-            _log(f"[ray-log-sync] {additional_failures} additional sync failure(s) [{reason}]")
-        _log(
-            f"[ray-log-sync] uploaded {result.uploaded_files} file(s) / "
-            f"{result.uploaded_bytes / 1073741824.0:.2f} GiB "
-            f"(unchanged={result.unchanged_files}, failed={result.failed_files}, deferred={result.deferred_files}) "
-            f"-> {self.destination} [{reason}]"
-        )
-        return result
-
-    def sync(self, reason: str) -> RayLogSyncResult:
-        """Upload a bounded selection of changed files and return per-pass counts."""
-        with self._lock:
-            return self._sync_pass(reason, self._uploaded_versions)
-
-    def _sync_final(self, reason: str) -> RayLogSyncResult:
-        """Run a final pass even when a periodic pass is stuck in remote I/O."""
-        if self._lock.acquire(blocking=False):
-            try:
-                return self._sync_pass(reason, self._uploaded_versions)
-            finally:
-                self._lock.release()
-        _log(f"[ray-log-sync] periodic upload still active; starting independent final pass [{reason}]")
-        # Do not mutate shared version state concurrently. Re-uploading bounded diagnostic
-        # files is preferable to losing the exception that caused process teardown.
-        return self._sync_pass(reason, {})
-
-    def sync_bounded(self, reason: str) -> RayLogSyncWaitStatus:
-        """Wait at most the configured teardown budget and report the terminal wait status."""
-        if not self.destination or not self._settings.enabled:
-            return RayLogSyncWaitStatus.DISABLED
-        timeout = self._settings.final_timeout_seconds
-        if timeout <= 0:
-            _log(f"[ray-log-sync] skipping final upload because timeout is {timeout}s [{reason}]")
-            return RayLogSyncWaitStatus.SKIPPED
-
-        sync_thread = threading.Thread(
-            target=self._sync_final,
-            args=(reason,),
-            daemon=True,
-            name="ray-log-final-sync",
-        )
-        sync_thread.start()
-        sync_thread.join(timeout)
-        if sync_thread.is_alive():
-            _log(
-                f"[ray-log-sync] final upload exceeded {timeout}s; continuing teardown with a partial upload [{reason}]"
-            )
-            return RayLogSyncWaitStatus.TIMED_OUT
-        return RayLogSyncWaitStatus.COMPLETED
-
-    def start_periodic(self, rendezvous_dir: str | None) -> threading.Event:
-        """Start periodic Ray-log and debug-artifact uploads."""
-        stop = threading.Event()
-        if (not self.destination and not rendezvous_dir) or not self._settings.enabled:
-            return stop
-        interval = self._settings.interval_seconds
-        if interval <= 0:
-            return stop
-
-        def _loop() -> None:
-            if stop.wait(min(60, interval)):
-                return
-            self.sync("periodic")
-            sync_debug_artifacts(rendezvous_dir, self.node_id, "periodic")
-            while not stop.wait(interval):
-                self.sync("periodic")
-                sync_debug_artifacts(rendezvous_dir, self.node_id, "periodic")
-
-        threading.Thread(target=_loop, daemon=True, name="ray-log-sync").start()
-        destinations: list[str] = []
-        if self.destination:
-            destinations.append(self.destination)
-        if rendezvous_dir:
-            destinations.append(join_resource_path(rendezvous_dir, "debug_artifacts", self.node_id))
-        _log(f"[artifact-sync] started (every {interval}s, first ~{min(60, interval)}s) -> {', '.join(destinations)}")
-        return stop
-
-
-@dataclass
-class DriverOutputActivity:
-    """Track child output that provides evidence of training progress."""
-
-    last_progress_at: float = field(default_factory=time.monotonic)
-    condition: threading.Condition = field(default_factory=threading.Condition)
-
-    def record(self, line: bytes) -> None:
-        if not line.strip() or any(marker in line for marker in IGNORED_DRIVER_OUTPUT_MARKERS):
-            return
-        with self.condition:
-            self.last_progress_at = time.monotonic()
-            self.condition.notify_all()
-
-    def stream_closed(self) -> None:
-        with self.condition:
-            self.condition.notify_all()
-
-
-@dataclass(frozen=True)
-class DriverExited:
-    exit_code: int
-
-
-@dataclass(frozen=True)
-class DriverStalled:
-    silence: float
+        subprocess.run(["bash", str(script)], check=False, timeout=FAILURE_DIAGNOSTICS_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        _log(f"Termination diagnostics stopped: {error}")
 
 
 def training_driver_command(config_path: Path) -> list[str]:
@@ -1820,242 +1368,143 @@ def launch_training_driver(config_path: Path, env: dict[str, str]) -> subprocess
         env=env,
         cwd=runtime_checkout,
         start_new_session=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
     )
 
 
-def start_driver_output_tee(
-    process: subprocess.Popen,
-    activity: DriverOutputActivity,
-) -> threading.Thread:
-    """Forward child output to the task log and update its liveness signal."""
-    if process.stdout is None:
-        raise RuntimeError("Training driver stdout must be piped for liveness supervision")
-
-    def forward_output() -> None:
-        try:
-            for line in iter(process.stdout.readline, b""):
-                sys.stdout.write(line.decode(errors="replace"))
-                sys.stdout.flush()
-                activity.record(line)
-        finally:
-            activity.stream_closed()
-
-    output_thread = threading.Thread(target=forward_output, daemon=True, name="driver-output-tee")
-    output_thread.start()
-    return output_thread
-
-
-def wait_for_driver(
-    process: subprocess.Popen,
-    activity: DriverOutputActivity,
-    timeout: float,
-) -> DriverExited | DriverStalled:
-    """Return the named child exit or output-stall outcome."""
-    if timeout <= 0:
-        return DriverExited(process.wait())
-
-    while True:
-        exit_code = process.poll()
-        if exit_code is not None:
-            return DriverExited(exit_code)
-        with activity.condition:
-            silence = time.monotonic() - activity.last_progress_at
-            if silence >= timeout:
-                return DriverStalled(silence)
-            activity.condition.wait(timeout=min(timeout - silence, DRIVER_WATCHDOG_POLL_INTERVAL))
-
-
-def kill_driver_process_group(process: subprocess.Popen) -> None:
-    """Kill a stalled driver and its descendants before the Iris task exits."""
-    try:
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-    except ProcessLookupError:
-        process.poll()
-        return
-    try:
-        process.wait(timeout=DRIVER_KILL_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        _log(f"Training driver did not become waitable within {DRIVER_KILL_TIMEOUT}s after SIGKILL")
-
-
-def _persist_failure_artifacts_bounded(action, timeout: float) -> None:
-    """Give failure evidence a bounded upload window without delaying task failure indefinitely."""
-    artifact_thread = threading.Thread(target=action, daemon=True, name="failure-artifact-sync")
+def log_failure_diagnostics(reason: str) -> None:
+    """Log failure diagnostics to the Iris task stream within a fixed budget."""
+    artifact_thread = threading.Thread(
+        target=log_termination_diagnostics, args=(reason,), daemon=True, name="failure-diagnostics"
+    )
     artifact_thread.start()
-    artifact_thread.join(timeout)
+    artifact_thread.join(FAILURE_DIAGNOSTICS_TIMEOUT)
     if artifact_thread.is_alive():
-        _log(f"Failure artifact upload exceeded {timeout}s; continuing task teardown")
+        _log(f"Failure diagnostics exceeded {FAILURE_DIAGNOSTICS_TIMEOUT}s; continuing task teardown")
+
+
+class _HeadInterrupted(BaseException):
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _start_head_cluster(args: argparse.Namespace, head_ip: str, ray_port: int, gang_epoch: str, num_tasks: int) -> str:
+    rendezvous_dir = args.rendezvous_dir
+    if num_tasks > 1:
+        if not rendezvous_dir:
+            raise ValueError("Multi-node SkyRL requires ray.rendezvous_dir")
+        clear_rendezvous(rendezvous_dir)
+
+    ray_start_head(
+        head_ip,
+        resolve_ray_spill_target(rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
+        labels=args.ray_labels,
+    )
+    ray_address = f"{head_ip}:{ray_port}"
+    if num_tasks == 1:
+        _log("Single-node slice: skipping rendezvous and multi-node wait.")
+        return ray_address
+
+    _log(f"Ray head started; publishing rendezvous to {_rendezvous_uri(rendezvous_dir)}")
+    write_rendezvous(rendezvous_dir, head_ip, ray_port, gang_epoch)
+    wait_for_nodes(
+        ray_address,
+        num_tasks,
+        args.cluster_join_timeout,
+        rewrite_cb=lambda: write_rendezvous(rendezvous_dir, head_ip, ray_port, gang_epoch),
+    )
+    return ray_address
 
 
 def run_head(
     args: argparse.Namespace,
     config_path: Path,
     derived_gloo_ifname: str | None = None,
-    *,
-    debug_mode: DebugMode = DebugMode.LIGHT,
 ) -> int:
-    ensure_task_debug_artifact_directory(debug_mode)
     num_tasks = _num_tasks()
     gang_epoch = uuid.uuid4().hex
     head_ip = _own_ip()
     ray_port = allocated_ray_port(RayPort.HEAD)
-    ray_address = f"{head_ip}:{ray_port}"
-    node_id = f"rank0-{socket.gethostname()}"
     _log(f"ROLE=head rank=0/{num_tasks} head_ip={head_ip} ray_port={ray_port}")
-    ray_log_sync_stop: threading.Event | None = None
-    ray_log_sync = RayLogSyncSession(args.ray_log_dir, node_id)
 
-    def persist_runtime_artifacts(reason: str) -> None:
-        if ray_log_sync_stop is not None:
-            ray_log_sync_stop.set()
-        ray_log_sync.sync_bounded(reason)
-        sync_debug_artifacts(args.rendezvous_dir, node_id, reason)
-
-    # Install the SIGTERM/SIGINT handler + termination-artifact capture at the TOP of
-    # bring-up (BEFORE clear_rendezvous / ray_start_head / rendezvous write), so a reap
-    # ANYWHERE in bring-up produces the term artifact instead of dying silently.
-    # `process` is None during bring-up; the handler skips the driver kill until the
-    # training driver is launched below (closure reads the current value).
     process = None
+    termination_signal: int | None = None
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
 
-    def _shutdown(signum, _frame) -> None:
+    def _request_shutdown(signum, _frame) -> None:
+        nonlocal termination_signal
+        if termination_signal is None:
+            termination_signal = signum
+            # Unwind Popen.wait() before trying to reap the same driver during shutdown.
+            raise _HeadInterrupted(signum)
+
+    try:
+        signal.signal(signal.SIGINT, _request_shutdown)
+        signal.signal(signal.SIGTERM, _request_shutdown)
+
+        ray_address = _start_head_cluster(args, head_ip, ray_port, gang_epoch, num_tasks)
+
+        if args.role_topology is not None:
+            verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
+
+        with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
+            env = training_driver_env(derived_gloo_ifname)
+            env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
+
+            _log("Launching MarinSkyRL training driver:")
+            _log("  " + " ".join(training_driver_command(config_path)))
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+            process = launch_training_driver(config_path, env)
+            driver_outcome, outcome_receipt = write_process_outcome(
+                "training-driver",
+                process.wait(),
+                pid=process.pid,
+            )
+            exit_code = driver_outcome.public_exit_code
+            if driver_outcome.kind is ProcessOutcomeKind.SIGNAL:
+                _log(
+                    f"Training driver terminated by {driver_outcome.signal_name} "
+                    f"(raw_returncode={driver_outcome.raw_returncode}, exit_code={exit_code}, "
+                    f"receipt={outcome_receipt})"
+                )
+            if exit_code != 0:
+                log_failure_diagnostics(f"driver exit_code={exit_code} (head rank 0)")
+                ray_stop()
+                return exit_code
+        # Signal workers to unpark, then tear down.
+        if args.rendezvous_dir and num_tasks > 1:
+            write_head_result(args.rendezvous_dir, gang_epoch)
+        ray_stop()
+        return exit_code
+    except _HeadInterrupted as interruption:
+        signum = interruption.signum
         _log(f"Received signal {signum}; terminating training driver and stopping Ray...")
-        # Capture FIRST (before teardown mutates disk/GPU state) — a SIGTERM here is
-        # often a k8s eviction / OOM whose cause survives nowhere else.
-        capture_termination_artifacts(args.rendezvous_dir, f"signal {signum} (head rank 0)")
-        # Flush this node's Ray session logs (per-actor worker stdout/tracebacks) before
-        # the pod is reaped — Ray's node-local logs are deleted with the pod.
-        ray_log_sync.sync_bounded(f"signal {signum} (head)")
-        sync_debug_artifacts(args.rendezvous_dir, node_id, f"signal {signum} (head)")
+        if process is not None and process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+        log_failure_diagnostics(f"signal {signum} (head rank 0)")
         if process is not None:
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
                 process.wait(timeout=60)
-            except (subprocess.TimeoutExpired, ProcessLookupError):
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
         ray_stop()
-        sys.exit(128 + signum)
-
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-
-    # On iris task retry, a rendezvous file from a previous attempt still points
-    # at a now-dead head. Purge before starting the new head.
-    if num_tasks > 1 and args.rendezvous_dir:
-        clear_rendezvous(args.rendezvous_dir)
-
-    ray_start_head(
-        head_ip,
-        resolve_ray_spill_target(args.rendezvous_dir, args.ray_spill_backend, args.ray_spill_dir),
-        labels=args.ray_labels,
-    )
-    _log("Ray head bootstrap complete; entering rendezvous / cluster-join phase.")
-
-    # Start periodic uploads now that Ray has created its session directory.
-    ray_log_sync_stop = ray_log_sync.start_periodic(args.rendezvous_dir)
-
-    if num_tasks > 1:
-        if not args.rendezvous_dir:
-            raise ValueError(
-                "Multi-node iris slice (IRIS_NUM_TASKS>1) requires --rendezvous-dir "
-                "(or OT_AGENT_IRIS_RENDEZVOUS_DIR) so worker ranks can find the head IP."
-            )
-        _log(
-            f"[task-runtime] Ray head subprocess returned; writing rendezvous -> {_rendezvous_uri(args.rendezvous_dir)}"
-        )
-        write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch)
-        wait_for_nodes(
-            ray_address,
-            num_tasks,
-            args.cluster_join_timeout,
-            rewrite_cb=lambda: write_rendezvous(args.rendezvous_dir, head_ip, ray_port, gang_epoch),
-        )
-    else:
-        _log("Single-node slice: skipping rendezvous and multi-node wait.")
-
-    if args.role_topology is not None:
-        verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
-
-    with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
-        env = training_driver_env(derived_gloo_ifname)
-        env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
-        env["PYTHONUNBUFFERED"] = "1"
-
-        _log("Launching MarinSkyRL training driver:")
-        _log("  " + " ".join(training_driver_command(config_path)))
-        sys.stdout.flush()
-        sys.stderr.flush()
-
-        # The SIGTERM/SIGINT handler is already installed at the top of run_head; assigning
-        # `process` here arms its driver-teardown path (the closure reads this value).
-        process = launch_training_driver(config_path, env)
-        driver_activity = DriverOutputActivity()
-        output_thread = start_driver_output_tee(process, driver_activity)
-        if args.driver_liveness_timeout > 0:
-            _log(f"Driver liveness watchdog armed: {args.driver_liveness_timeout:g}s maximum stdout/stderr silence")
-        wait_result = wait_for_driver(process, driver_activity, args.driver_liveness_timeout)
-        if isinstance(wait_result, DriverStalled):
-            reason = f"driver stalled after {wait_result.silence:.0f}s without stdout/stderr progress (head rank 0)"
-            _log(reason)
-
-            def persist_stall_artifacts() -> None:
-                capture_termination_artifacts(args.rendezvous_dir, reason)
-                persist_runtime_artifacts(reason)
-
-            _persist_failure_artifacts_bounded(persist_stall_artifacts, timeout=FAILURE_ARTIFACT_TIMEOUT)
-            kill_driver_process_group(process)
-            output_thread.join(timeout=DRIVER_KILL_TIMEOUT)
-            ray_stop()
-            return DRIVER_STALLED_EXIT_CODE
-        output_thread.join(timeout=DRIVER_KILL_TIMEOUT)
-        driver_outcome, outcome_receipt = write_process_outcome(
-            "training-driver",
-            wait_result.exit_code,
-            pid=process.pid,
-        )
-        exit_code = driver_outcome.public_exit_code
-        if driver_outcome.kind is ProcessOutcomeKind.SIGNAL:
-            _log(
-                f"Training driver terminated by {driver_outcome.signal_name} "
-                f"(raw_returncode={driver_outcome.raw_returncode}, exit_code={exit_code}, "
-                f"receipt={outcome_receipt})"
-            )
-        if exit_code != 0:
-
-            def persist_failure_artifacts() -> None:
-                reason = f"driver exit_code={exit_code} (head rank 0)"
-                capture_termination_artifacts(args.rendezvous_dir, reason)
-                persist_runtime_artifacts(reason)
-
-            _persist_failure_artifacts_bounded(
-                persist_failure_artifacts,
-                timeout=FAILURE_ARTIFACT_TIMEOUT,
-            )
-            ray_stop()
-            return exit_code
-        # Final flush of this node's Ray session logs before teardown reaps them.
-        persist_runtime_artifacts(f"driver exit_code={exit_code} (head)")
-    # Signal workers to unpark, then tear down.
-    if args.rendezvous_dir and num_tasks > 1:
-        write_head_result(args.rendezvous_dir, gang_epoch)
-    ray_stop()
-    return exit_code
+        return 128 + signum
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
-def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LIGHT) -> int:
-    ensure_task_debug_artifact_directory(debug_mode)
+def run_worker(args: argparse.Namespace) -> int:
     worker_start = time.time()
     rank = _rank()
     num_tasks = _num_tasks()
     node_ip = _own_ip()
-    node_id = f"rank{rank}-{socket.gethostname()}"
     _log(f"ROLE=worker rank={rank}/{num_tasks} node_ip={node_ip}")
-    ray_log_sync = RayLogSyncSession(args.ray_log_dir, node_id)
 
     if not args.rendezvous_dir:
         raise ValueError(
@@ -2066,7 +1515,7 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
     python_version, ray_version = _runtime_versions()
     payload = validate_rendezvous_runtime(
         payload,
-        worker_node=node_id,
+        worker_node=f"rank{rank}-{socket.gethostname()}",
         python_version=python_version,
         ray_version=ray_version,
     )
@@ -2084,23 +1533,18 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
     wait_for_nodes(ray_address, num_tasks, args.cluster_join_timeout)
     _log(f"Worker rank {rank} joined Ray cluster at {ray_address}; parking until the head finishes.")
 
-    # Periodic Ray session-log -> object-store sync for THIS worker node (the policy/rollout
-    # actors on this node log to its local /tmp/ray session, deleted with the pod on GC).
-    ray_log_sync_stop = ray_log_sync.start_periodic(args.rendezvous_dir)
-
     stop = threading.Event()
     termination_signal: int | None = None
 
     def _shutdown(signum, _frame) -> None:
         nonlocal termination_signal
-        termination_signal = termination_signal or signum
+        if termination_signal is not None:
+            return
+        termination_signal = signum
         _log(f"Worker rank {rank} received signal {signum}; stopping Ray.")
         # A SIGTERM on a worker node is often a k8s eviction/OOM of that node (it
         # hosts the training actors' GPUs); capture its disk/GPU state before reap.
-        capture_termination_artifacts(args.rendezvous_dir, f"signal {signum} (worker rank {rank})")
-        # Flush this node's per-actor Ray worker logs before the pod is reaped.
-        ray_log_sync.sync_bounded(f"signal {signum} (worker rank {rank})")
-        sync_debug_artifacts(args.rendezvous_dir, node_id, f"signal {signum} (worker rank {rank})")
+        log_failure_diagnostics(f"signal {signum} (worker rank {rank})")
         stop.set()
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -2119,10 +1563,6 @@ def run_worker(args: argparse.Namespace, *, debug_mode: DebugMode = DebugMode.LI
             if stop.is_set():
                 break
             time.sleep(POLL_INTERVAL)
-        # Final flush of this worker node's Ray session logs before Ray teardown.
-        ray_log_sync_stop.set()
-        ray_log_sync.sync_bounded(f"worker rank {rank} teardown")
-        sync_debug_artifacts(args.rendezvous_dir, node_id, f"worker rank {rank} teardown")
     ray_stop()
     if head_completed:
         return 0
@@ -2168,10 +1608,8 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         ray_spill_dir=validate_ray_spill_dir(str(config.ray.spill_dir)),
         ray_spill_backend=RaySpillBackend(str(config.ray.spill_backend)),
         rendezvous_dir=str(config.ray.rendezvous_dir),
-        ray_log_dir=str(config.ray.log_dir),
         rendezvous_timeout=int(config.ray.rendezvous_timeout),
         cluster_join_timeout=int(config.ray.cluster_join_timeout),
-        driver_liveness_timeout=int(config.ray.driver_liveness_timeout),
         run_id=str(config.run.id),
         training_type=None if config.runtime.training_type is None else TrainingType(config.runtime.training_type),
         data_sources_json=_json_list(data_sources) if data_sources else "",
@@ -2312,14 +1750,9 @@ def main() -> None:
     index = launch_config.run.get("index")
     run_id = RunIndexIdentity.model_validate(dict(index)).run_id if index is not None else args.run_id
     export_telemetry_environment(run_id, args.training_type, launch_config.run.get("model"))
-    # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
-    # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.
+    trainer = launch_config.skyrl.get("trainer", {})
+    debug_artifact_root = configure_task_debug_artifacts(trainer)
     ensure_fr_dump_dir()
-    # The launcher projects this manager-owned path before task runtime starts.
-    debug_artifact_root = os.environ.get(DEBUG_ARTIFACT_DIR_ENV)
-    if debug_artifact_root:
-        ensure_debug_artifact_directories(debug_artifact_root)
-        initialize_process_diagnostics(f"task-runtime-rank{_rank()}")
     # Stage datasets on every node before Ray bootstrap because pods have separate filesystems.
     if args.data_sources_json:
         materialize_data_sources(args.data_sources_json)
@@ -2346,10 +1779,13 @@ def main() -> None:
             else policy_local_path or policy_chat_template_model(args.prestage_model, args.model_local_path)
         )
         apply_policy_chat_template(model_path, args.policy_chat_template)
+    # Ray 2.51 inherits the Iris task streams when it starts with log redirection disabled.
+    os.environ["RAY_LOG_TO_STDERR"] = "1"
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    os.environ.setdefault("RAY_BACKEND_LOG_LEVEL", "warning")
+    os.environ.setdefault("RAY_LOGGER_LEVEL", "warning")
     resolve_ray_ports()
     rank = _rank()
-    trainer = launch_config.skyrl.get("trainer", {})
-    debug_mode = DebugMode(str(trainer.get("debug_mode", DebugMode.LIGHT.value)))
     if rank == 0:
         final_config_path = _write_final_config(
             launch_config,
@@ -2357,9 +1793,11 @@ def main() -> None:
             policy_tokenizer=policy_tokenizer,
             draft_model=draft_model,
         )
-        exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode)
+        exit_code = run_head(args, final_config_path, derived_gloo_ifname)
     else:
-        exit_code = run_worker(args, debug_mode=debug_mode)
+        exit_code = run_worker(args)
+    if debug_artifact_root is not None:
+        prune_empty_debug_directories(debug_artifact_root)
     if exit_code != 0:
         sys.exit(exit_code)
 

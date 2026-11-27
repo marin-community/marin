@@ -422,12 +422,7 @@ def test_cat_count_rloo_n_preserves_metrics_across_resume(
                 str(root / "exports/full_task_set"), steps, attempt_id="attempt-4" if resume else generated_attempt_id
             )
         )
-        full_rows = [
-            json.loads(line)
-            for path in dumped.glob("*.jsonl")
-            if path.name != "aggregated_results.jsonl"
-            for line in path.read_text().splitlines()
-        ]
+        full_rows = [json.loads(line) for path in dumped.glob("*.jsonl") for line in path.read_text().splitlines()]
         assert {row["task_id"] for row in full_rows} == {"full-task_set-only"}
         finals = [row for row in full_rows if row["is_last_step"]]
         assert len(finals) == 1

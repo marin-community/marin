@@ -175,10 +175,8 @@ class RayConfig:
     spill_backend: str = RaySpillBackend.LOCAL.value
     spill_dir: str = MISSING
     rendezvous_dir: str = MISSING
-    log_dir: str = MISSING
     rendezvous_timeout: int = 1800
     cluster_join_timeout: int = 1800
-    driver_liveness_timeout: int = 9000
 
 
 @dataclass
@@ -474,11 +472,8 @@ def validate_launch_config(config: DictConfig) -> LaunchTopology:
         raise ValueError("The records backend requires iris.max_retries=0 and a fresh attempt_id per execution")
     validate_evaluation_data(config, source_recipe=_is_source_recipe(config))
     ray = raw["ray"]
-    if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0 or ray["driver_liveness_timeout"] < 0:
-        raise ValueError(
-            "ray rendezvous timeout and cluster join timeout must be positive; "
-            "driver liveness timeout cannot be negative"
-        )
+    if ray["rendezvous_timeout"] <= 0 or ray["cluster_join_timeout"] <= 0:
+        raise ValueError("ray rendezvous timeout and cluster join timeout must be positive")
     resolve_ray_spill_target(
         ray["rendezvous_dir"],
         RaySpillBackend(ray["spill_backend"]),

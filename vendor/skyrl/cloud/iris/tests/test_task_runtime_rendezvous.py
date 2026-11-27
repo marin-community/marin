@@ -3,7 +3,6 @@ import json
 import platform
 import signal
 import socket
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -110,20 +109,8 @@ def test_head_result_object_store_error_keeps_worker_parked(monkeypatch):
     assert not head_succeeded("s3://bucket/rendezvous", "gang-epoch")
 
 
-class _FakeRayLogSyncSession:
-    def __init__(self, *_args):
-        pass
-
-    def start_periodic(self, _rendezvous_dir):
-        return threading.Event()
-
-    def sync_bounded(self, _reason):
-        return None
-
-
 def _worker_args(tmp_path):
     return SimpleNamespace(
-        ray_log_dir=None,
         rendezvous_dir=str(tmp_path),
         rendezvous_timeout=1,
         ray_spill_backend=task_runtime.RaySpillBackend.LOCAL,
@@ -148,14 +135,12 @@ def _isolate_worker_runtime(tmp_path, monkeypatch, payload):
     monkeypatch.setattr(task_runtime, "ray_start_worker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(task_runtime, "wait_for_nodes", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(task_runtime, "ray_stop", lambda: None)
-    monkeypatch.setattr(task_runtime, "RayLogSyncSession", _FakeRayLogSyncSession)
     monkeypatch.setattr(
         task_runtime,
         "ray_metrics_telemetry",
         lambda *_args: contextlib.nullcontext(),
     )
-    monkeypatch.setattr(task_runtime, "capture_termination_artifacts", lambda *_args: None)
-    monkeypatch.setattr(task_runtime, "sync_debug_artifacts", lambda *_args: None)
+    monkeypatch.setattr(task_runtime, "log_failure_diagnostics", lambda *_args: None)
     monkeypatch.setattr(signal, "signal", lambda signum, handler: handlers.setdefault(signum, handler))
     return handlers
 

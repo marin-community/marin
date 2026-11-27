@@ -366,6 +366,23 @@ or Failed after a primary upload timeout even when training succeeds. Some W&B
 records may remain unuploaded. Other cleanup can still exhaust the existing
 120-second teardown watchdog.
 
+Each Ray node writes to its own Iris task's stdout and stderr. Use the job
+logs to see output across the gang. Ray's C++ and Python services default to
+warning-level logs. Set `IrisSkyRLExecution.job_timeout_seconds` to bound the
+total runtime in Iris.
+
+Before Ray starts on a multi-node launch, the NCCL preflight prints its JSON
+report to each participating Iris task's log.
+
+SkyRL writes crash receipts and NCCL flight recorder dumps to
+`$IRIS_OUTPUT_DIR/skyrl-debug/` for the
+[Iris attempt archive](https://github.com/marin-community/marin/blob/main/lib/iris/docs/task-outputs.md).
+Check the attempt's archive status when Iris cancels a task.
+Fatal stacks and termination summaries go to the task log. Distributed debug
+mode adds process manifests, on-demand stacks, and collective phase traces.
+Set `trainer.collective_phase_diagnostics: true` to collect the phase traces
+with light debug mode.
+
 Marin sets the run's export root (`trainer.export_path`) to `<run output>/exports`.
 Set `trainer.dump_data_batch: true` to save diagnostic `TrainingInputBatch`
 pickle files under `<trainer.export_path>/dumped_data/global_step_<step>_training_input.pkl`.
