@@ -670,7 +670,7 @@ launch attempt and extraction schema. The `training_phase` column names the work
 `selection` column identifies the sole training input when the run has one. Evaluation rows leave it
 null. `task_health skip` matches both phases' evidence against the stored digests of the target
 selection's training and active validation rows. The skip file carries `task_digest` for matching
-and `task_key` for locating the upstream row.
+and `task_key` for locating the upstream row. Rows from distinct sources can share a digest.
 
 `content_fraction` is the share of task attempts whose content is written. A hash of `rollout_id` decides, so a
 task attempt has all of its content or none, and the events table has every task attempt. On an event row,

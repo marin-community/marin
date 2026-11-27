@@ -18,6 +18,7 @@ import os
 import re
 import tomllib
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
@@ -54,7 +55,7 @@ MIN_FAILED_TASKS_PER_ENVIRONMENT = 2
 
 TASK_HEALTH_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data/task-health")
 ATTEMPTS_FILENAME = "attempts.parquet"
-ATTEMPT_SNAPSHOT_VERSION = 2
+ATTEMPT_SNAPSHOT_VERSION = 3
 SKIP_FILENAME = "skip.parquet"
 MANIFEST_FILENAME = "manifest.json"
 # The installed-agent runtime grades this reward key unless the launch names another.
@@ -145,9 +146,8 @@ def _environment(task: TaskSpec) -> tuple[str | None, str | None]:
     return image, setup
 
 
-def _tasks(data: bytes) -> dict[str, tuple[TaskSpec, str, str | None]]:
-    """A task file's rows keyed by the digest a selection's task manifest records."""
-    tasks = {}
+def _tasks(data: bytes) -> Iterator[tuple[str, TaskSpec, str, str | None]]:
+    """Yield stored task digests, parsed tasks, source documents, and namespaces."""
     parquet = pq.ParquetFile(io.BytesIO(data))
     columns = [TASK_SPEC_COLUMN]
     if "source" in parquet.schema_arrow.names:
@@ -156,12 +156,12 @@ def _tasks(data: bytes) -> dict[str, tuple[TaskSpec, str, str | None]]:
     for row in parquet.read(columns=columns).to_pylist():
         raw = row[TASK_SPEC_COLUMN]
         source_id = row.get("source")
-        tasks[canonical_sha256(json.loads(raw))] = (
+        yield (
+            canonical_sha256(json.loads(raw)),
             TaskSpec.model_validate_json(raw),
             raw,
             None if source_id == untagged else source_id,
         )
-    return tasks
 
 
 def _grade(result: dict, reward_key: str) -> tuple[Outcome, GradingFailure | None]:
@@ -260,8 +260,7 @@ def _native_attempt_rows(root: StoragePath) -> list[dict]:
 def _historical_attempt_rows(agent: dict, source: dict) -> list[dict]:
     tasks = _tasks((StoragePath(source["uri"]) / source["relative_path"]).read_bytes())
     identities = {
-        task.id: {"task_digest": digest, "task_key": task_key(source_id, task)}
-        for digest, (task, _, source_id) in tasks.items()
+        task.id: {"task_digest": digest, "task_key": task_key(source_id, task)} for digest, task, _, source_id in tasks
     }
     reward_key = agent.get("trial_reward_key", DEFAULT_REWARD_KEY)
     attempts = sorted(StoragePath(agent["output_path"]).ls(), key=str)
@@ -310,15 +309,21 @@ def publish_skip_list(
     if not members:
         raise ValueError(f"No training or validation task files in {selection}")
     data = {str(path): path.read_bytes() for path in (*members, *attempts, *([release] if release else []))}
-    tasks = {digest: task for path in members for digest, task in _tasks(data[str(path)]).items()}
+    tasks = {
+        (digest, task_key(source_id, task)): (task, raw)
+        for path in members
+        for digest, task, raw, source_id in _tasks(data[str(path)])
+    }
     unique = {}
     for path in dict.fromkeys(attempts):
         for row in pq.read_table(io.BytesIO(data[str(path)])).to_pylist():
             if row["task_digest"] is None:
                 continue
             row["training_phase"] = row.get("training_phase") or "train"
-            for column in ("setup_exit_code", "rollout_id", "task_key"):
+            for column in ("setup_exit_code", "rollout_id"):
                 row.setdefault(column, None)
+            row.pop("task_key", None)
+            row.pop("source_row", None)
             key = (row["run"], row["rollout_id"] or row["attempt_id"])
             if unique.setdefault(key, row) != row:
                 raise ValueError(f"Conflicting records for attempt {key}")
@@ -357,18 +362,16 @@ def publish_skip_list(
         for environment, count in environments.items()
         if environment[0] is not None and count >= MIN_FAILED_TASKS_PER_ENVIRONMENT
     }
-    released = {task.id: (task, raw) for task, raw, _ in _tasks(data[str(release)]).values()} if release else {}
+    released = {task.id: task for _, task, _, _ in _tasks(data[str(release)])} if release else {}
     listed = []
-    for digest, (task, raw, source_id) in tasks.items():
+    for (digest, upstream_key), (task, raw) in tasks.items():
         unit = "task" if digest in broken else "environment" if _environment(task) in broken_environments else None
         if unit is None:
             continue
-        if task.id in released:
-            replacement, replacement_raw = released[task.id]
-            document = json.loads(replacement_raw)
-            if "agentic" in task.tags and "agentic" not in replacement.tags:
-                document["tags"] = with_agentic_tag(replacement).tags
-            if canonical_sha256(document) != digest:
+        if replacement := released.get(task.id):
+            if "agentic" in task.tags:
+                replacement = with_agentic_tag(replacement)
+            if canonical_sha256(replacement.model_dump(mode="json")) != canonical_sha256(task.model_dump(mode="json")):
                 continue
         failed = failures.get(digest, [])
         lines = Counter(row["error"].partition("\n")[0] for row in failed if row["error"])
@@ -377,7 +380,7 @@ def publish_skip_list(
                 TASK_SPEC_COLUMN: raw,
                 "task_id": task.id,
                 "task_digest": digest,
-                "task_key": task_key(source_id, task),
+                "task_key": upstream_key,
                 "unit": unit,
                 "attempts": attempted[digest],
                 "failed_attempts": len(failed),
