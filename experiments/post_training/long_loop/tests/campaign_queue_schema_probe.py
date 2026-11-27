@@ -19,15 +19,18 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import require_secret
 from skyrl_train.dataset.dataset import read_prompt_files
 
-from experiments.post_training.long_loop.campaign_data import load_mix
 from experiments.post_training.long_loop.campaign_runtime import lower_parquet
 
 
-def main(selection: Path, output: str) -> None:
+def main(selection: Path, output: str, catalog: Path) -> None:
     if get_job_info() is None:
         raise RuntimeError("Queue schema regression must run inside an Iris CPU job")
     configure_coreweave_s3()
     selected = json.loads(selection.read_bytes())
+    catalog_bytes = catalog.read_bytes()
+    if hashlib.sha256(catalog_bytes).hexdigest() != selected["catalog_sha256"]:
+        raise ValueError("Queue regression catalog changed")
+    catalog_sources = json.loads(catalog_bytes)["sources"]
     report: dict[str, Any] = {
         "status": "RUNNING",
         "selection_sha256": hashlib.sha256(selection.read_bytes()).hexdigest(),
@@ -39,13 +42,18 @@ def main(selection: Path, output: str) -> None:
     schemas: dict[str, pa.Schema] = {}
     target = StoragePath(output)
     for mix_id in selected["mix_ids"]:
-        mix = load_mix(mix_id)
-        if mix.catalog_sha256 != selected["catalog_sha256"]:
-            raise ValueError("Queue regression catalog changed")
+        pins = selected["mixes"][mix_id]["sources"]
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             inputs = []
-            for index, pin in enumerate(mix.sources.values()):
+            for index, (label, pin) in enumerate(pins.items()):
+                declared = catalog_sources[label]
+                if (pin["repo"], pin["revision"], pin["count"]) != (
+                    declared["dataset_id"],
+                    declared["dataset_revision"],
+                    declared["actor_census_input"]["measured_tasks"],
+                ):
+                    raise ValueError(f"Captured queue pin differs from catalog: {label}")
                 identity = f"{pin['repo']}@{pin['revision']}"
                 if identity not in schemas:
                     uri = f"hf://datasets/{identity}/tasks.parquet"
@@ -78,10 +86,10 @@ def main(selection: Path, output: str) -> None:
                 pq.write_table(witness, path)
                 inputs.append(str(path))
             combined = read_prompt_files(inputs)
-            if len(combined) != len(mix.sources):
+            if len(combined) != len(pins):
                 raise ValueError(f"Reader changed schema witness count: {mix_id}")
             report["mixes"][mix_id] = {
-                "sources": list(mix.sources),
+                "sources": list(pins),
                 "status": "PASS",
                 "combined_features": combined.features.to_dict(),
             }
@@ -94,5 +102,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("selection", type=Path)
     parser.add_argument("output")
+    parser.add_argument("catalog", type=Path)
     args = parser.parse_args()
-    main(args.selection, args.output)
+    main(args.selection, args.output, args.catalog)

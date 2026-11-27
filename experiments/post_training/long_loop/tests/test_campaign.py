@@ -331,6 +331,22 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, 
         constraint.key == "cluster" for resource in dispatched for constraint in convert_constraints(resource)
     )
 
+    # A runtime repair must get fresh checkpoint/output paths while the exact
+    # qualified population and holdout keep their original artifact identity.
+    original_pool = next(dep for dep in graph.training.deps if dep.name.endswith("/pools"))
+    retry_spec = campaign_round(mix, "2026.11.26.502", max_steps=50)
+    retry = campaign.campaign_graph(mix, retry_spec, pool_version=spec.version)
+    retry_pool = next(dep for dep in retry.training.deps if dep.name.endswith("/pools"))
+    assert retry_pool.path(spec.storage.output_prefix) == original_pool.path(spec.storage.output_prefix)
+    assert retry_pool.fingerprint() == original_pool.fingerprint()
+    assert retry.training.path(spec.storage.output_prefix) != graph.training.path(spec.storage.output_prefix)
+    assert retry.terminal.path(spec.storage.output_prefix) != graph.terminal.path(spec.storage.output_prefix)
+    assert retry.plan["round"]["rl"]["pools"]["uri"] == graph.plan["pool_uri"]
+    assert (
+        retry.plan["round"]["rl"]["execution"]["coordinator_name"]
+        != graph.plan["round"]["rl"]["execution"]["coordinator_name"]
+    )
+
     # Reproduce the regional CPU failure with the provider SDK absent. The pool
     # worker still needs a materialized, CPU-only graph payload before dispatch.
     script = textwrap.dedent(

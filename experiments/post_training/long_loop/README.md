@@ -1765,6 +1765,13 @@ the cutover: rollout limits are baked into prepared pools, so an earlier pool pr
 does not establish the enabled limit. Campaign RL continues through its existing
 launch path. The campaign coordinator inbox records the landing commit and cutover.
 
+For a runtime-only repair, give RL a fresh `--version` and select the already
+qualified population with `--pool-version <original-version>`. The pool keeps its
+original preparation identity and holdout; training, temporary checkpoints and
+evaluation use the fresh version. Verify the pool manifest, source pins and CPU
+proof against the current launch before submission. A change to tasks, graders or
+baked rollout limits requires a new pool version.
+
 ## Polaris grader repair candidates
 
 `polaris_release` derives a candidate from the retained Polaris release at

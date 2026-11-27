@@ -181,8 +181,11 @@ def run_validated(config: SkyRLRunConfig):
     return run_skyrl(config, env_vars={})
 
 
-def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
+def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str | None = None) -> CampaignGraph:
     """Prepare data regionally, then resolve a native config against its real holdout."""
+    pool_version = spec.version if pool_version is None else pool_version
+    pool_round = campaign_round(mix, pool_version, max_steps=spec.rl.max_steps)
+    spec = dataclasses.replace(spec, rl=dataclasses.replace(spec.rl, pools=pool_round.rl.pools))
     # The existing .131 bindings validate model/role/optimizer controls without inventing
     # future holdout identities. Only the pool producer may supply the campaign holdout.
     reference = load_round(REFERENCE)
@@ -190,7 +193,7 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
     lowering_recipe = copy.deepcopy(reference.rl.recipe)
     place_per_task_images(lowering_recipe, mix)
     reference = dataclasses.replace(
-        reference, rl=dataclasses.replace(reference.rl, execution=spec.rl.execution, recipe=lowering_recipe)
+        reference, rl=dataclasses.replace(reference.rl, execution=pool_round.rl.execution, recipe=lowering_recipe)
     )
     scaffold = adopted_round_rl(reference, verify_pool_at_runtime=True)
     native = materialized_config(scaffold, spec.storage.output_prefix)
@@ -205,10 +208,10 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
             ),
             timeout=Duration.from_hours(4),
         ),
-        version=spec.version,
+        version=pool_version,
         output=OUT,
         mix=mix,
-        pool_version=spec.version,
+        pool_version=pool_version,
         launch_document=native.launch_config_yaml,
     )
     pool_build = pools.build_config
@@ -217,7 +220,7 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
         if context.is_fingerprint:
             # The concrete launch carries an ephemeral attempt ID. Its complete
             # authored recipe, model pins and mix carry the preparation identity.
-            return {"reference": dataclasses.asdict(reference), "mix": dataclasses.asdict(mix), "version": spec.version}
+            return {"reference": dataclasses.asdict(reference), "mix": dataclasses.asdict(mix), "version": pool_version}
         return pool_build(context)
 
     pools = dataclasses.replace(pools, build_config=build_pools)
@@ -284,6 +287,7 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
         "training_identity": training.fingerprint(),
         "terminal_identity": evaluated.fingerprint(),
         "pool_uri": pools.path(spec.storage.output_prefix),
+        "pool_version": pool_version,
         "data_preflight": "regional pool hashes, holdout and actual-agent gate required before GPU allocation",
         "learning_stop": {"max_steps": 50, "wall_time_budget": None},
         "gpu_footprint": {
@@ -303,6 +307,9 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound) -> CampaignGraph:
 @click.option("--snapshot-reference-registry", multiple=True, help="Current complete live-job protection registry URI.")
 @click.option("--daytona-target", envvar="DAYTONA_TARGET", help="Daytona target used by this campaign.")
 @click.option("--daytona-api-url", envvar="DAYTONA_API_URL", default=DEFAULT_DAYTONA_API_URL, show_default=True)
+@click.option(
+    "--pool-version", default=None, help="Reuse this mix's immutable prepared-pool version for a fresh RL attempt."
+)
 @partial(rl_build_options, before_submit=purge_before_campaign_submission)
 def main(
     mix_id: str,
@@ -311,6 +318,7 @@ def main(
     snapshot_reference_registry: tuple[str, ...],
     daytona_target: str | None,
     daytona_api_url: str,
+    pool_version: str | None,
 ) -> ArtifactStep:
     """Build the campaign graph; --run is reserved for the coordinator's rated queue."""
     configure_coreweave_s3()
@@ -318,7 +326,7 @@ def main(
     version = resolve_version(f"rl-data-campaign/{mix.id}", None)
     spec = campaign_round(mix, version, max_steps=max_steps)
     os.environ.update(MARIN_PREFIX=spec.storage.output_prefix, MARIN_TEMP_PREFIX=spec.storage.temporary_prefix)
-    graph = campaign_graph(mix, spec)
+    graph = campaign_graph(mix, spec, pool_version=pool_version)
     terminal, plan = graph.terminal, graph.plan
     validation_output.mkdir(parents=True, exist_ok=True)
     # This checks the recipe/model/geometry before the candidate's regional data exists.
