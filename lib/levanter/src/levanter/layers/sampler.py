@@ -167,6 +167,7 @@ class Sampler(eqx.Module):
         # Full-distribution rows keep their tails even in a mixed batch.
         keep_sorted = keep_sorted | (threshold >= 1.0)
         filtered_sorted_logits = jnp.where(keep_sorted, sorted_logits, -jnp.inf)
-        inverse_permutation = jnp.argsort(sorted_indices, axis=-1)
-        filtered_logits = jnp.take_along_axis(filtered_sorted_logits, inverse_permutation, axis=-1)
+        filtered_logits = jnp.put_along_axis(
+            jnp.full_like(logits_array, -jnp.inf), sorted_indices, filtered_sorted_logits, axis=-1, inplace=False
+        )
         return hax.named(jnp.moveaxis(filtered_logits, -1, vocab_axis_index), scaled_logits.axes)

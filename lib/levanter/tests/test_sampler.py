@@ -49,6 +49,16 @@ def test_sampler_top_p_does_not_overshoot_exact_threshold():
     assert jnp.isneginf(masked_logits.array[1:]).all()
 
 
+def test_sampler_top_p_preserves_original_token_ids_with_tied_logits():
+    vocab, batch = hax.Axis("vocab", 4), hax.Axis("batch", 2)
+    logits = hax.named(jnp.array([[-3.0, 0.0], [0.0, -2.0], [-3.0, 0.0], [0.0, -2.0]]), (vocab, batch))
+    top_p = hax.named(jnp.array([0.4, 1.0]), batch)
+    filtered = jax.jit(Sampler(vocab)._apply_top_p)(logits, top_p)
+
+    np.testing.assert_array_equal(filtered.array[:, 0], np.array([-np.inf, -np.inf, -np.inf, 0.0]))
+    np.testing.assert_array_equal(filtered.array[:, 1], logits.array[:, 1])
+
+
 def test_top_p_one_preserves_full_distribution_in_a_mixed_batch():
     batch, vocab = hax.Axis("batch", 2), hax.Axis("vocab", 4)
     scores = jnp.array([0.0, -10.0, -12.0, -13.0])
