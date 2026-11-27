@@ -23,15 +23,13 @@ import contextlib
 import json
 import math
 import os
-import time
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 from loguru import logger
-from shellbox.backends.daytona.machine import DaytonaImageBuild
 from omegaconf import DictConfig, OmegaConf
+from skyrlrecipe.declared import PooledCheckpointEvaluation
 
 from skyrl_train.evaluation_profiles import (
     DEFAULT_EVALUATION_STEPS,
@@ -45,8 +43,6 @@ from skyrl_train.config.callbacks import has_explicit_callbacks, hf_export_desti
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
-from skyrl_train.inline_harbor_client import collect_harbor
-from skyrl_train.telemetry import TelemetryConfig, iris_resources
 from marinskyrl.checkpoint_paths import BEST_CHECKPOINT_FILENAME, POLICY_CHECKPOINT_SUBDIRECTORY
 from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.inference_engines.vllm.stats import VLLM_NUM_ENGINES_METRIC, IntervalReadMode
@@ -74,9 +70,13 @@ from .types import (
     HF_MODEL_SAVE_CALLBACK_TYPE,
 )
 
+POOLED_VERIFIER_SCORE_METRIC = "eval/all/avg_verifier_score"
+
 # Registry mapping callback type names to classes
 # This enables YAML-based callback configuration
 CALLBACK_REGISTRY: Dict[str, Type[TrainerCallback]] = {"reference_likelihood": ReferenceLikelihoodCallback}
+EVALUATION_ATTEMPTED_METRIC = "eval/all/num_attempted"
+EVALUATION_SCORED_METRIC = "eval/all/num_scored"
 
 
 def register_callback(name: str):
@@ -222,7 +222,7 @@ class BestCheckpointCallback(TrainerCallback):
         initial_model_uri: str,
         expected_tasks: int,
         minimum_scored_tasks: int,
-        selection_metric: str = "eval/all/avg_verifier_score",
+        selection_metric: str = POOLED_VERIFIER_SCORE_METRIC,
         save_after_fraction: float = 0.0,
         preservation_max_drop: dict[str, float] | None = None,
     ):
@@ -246,8 +246,8 @@ class BestCheckpointCallback(TrainerCallback):
                 saved = json.load(stream)
                 self.best_score = saved["accuracy"]
                 self.preservation_baseline = saved.get("preservation_baseline", {})
-        attempted = metrics["eval/all/num_attempted"]
-        scored = metrics["eval/all/num_scored"]
+        attempted = metrics[EVALUATION_ATTEMPTED_METRIC]
+        scored = metrics[EVALUATION_SCORED_METRIC]
         ineligible = (
             attempted != self.expected_tasks
             or scored < self.minimum_scored_tasks
@@ -307,108 +307,33 @@ class BestCheckpointCallback(TrainerCallback):
         return control
 
 
-def _harbor_telemetry_config() -> dict[str, str] | None:
-    config = TelemetryConfig.from_environment()
-    job_id = iris_resources().get("job_id")
-    if not (config.endpoint and config.run_id and config.execution_uid and job_id):
-        return None
-    return {
-        "endpoint": config.endpoint,
-        "root_run_uid": config.run_id,
-        "execution_uid": config.execution_uid,
-        "serving_job_id": job_id,
-    }
-
-
-@register_callback("harbor_evaluation")
-class HarborEvaluationCallback(TrainerCallback):
-    """Evaluate frozen policy weights through Harbor before checkpoint selection."""
-
-    error_behavior = CallbackErrorBehavior.RAISE
-
-    def __init__(
-        self,
-        *,
-        cohorts: list[dict],
-        timeout: float,
-        minimum_coverage: float,
-        daytona_api_key_env: str,
-        minimum_native_coverage: float,
-    ):
-        self.cohorts = OmegaConf.to_container(cohorts, resolve=True) if OmegaConf.is_config(cohorts) else cohorts
-        for cohort in self.cohorts:
-            kwargs = cohort["job"].get("environment", {}).get("kwargs", {})
-            # Reject unknown image build modes before the trainer allocates GPUs.
-            DaytonaImageBuild(kwargs.get("image_build", DaytonaImageBuild.SNAPSHOT))
-        self.timeout = timeout
-        self.minimum_coverage = minimum_coverage
-        self.minimum_native_coverage = minimum_native_coverage
-        self.daytona_api_key_env = daytona_api_key_env
-
-    def _evaluation_cohorts(
-        self, step: int, export_path: str, *, model_name: str, api_base: str
-    ) -> list[dict]:
-        cohorts = deepcopy(self.cohorts)
-        for cohort in cohorts:
-            job = cohort["job"]
-            job["job_name"] = f"step-{step}-{cohort['name']}"
-            job["jobs_dir"] = join_resource_path(export_path, "inline_harbor")
-            for agent in job["agents"]:
-                agent["model_name"] = f"openai/{export_path}/step-{step}"
-                agent["model_alias"] = f"openai/{model_name}"
-                agent.setdefault("kwargs", {})["api_base"] = api_base
-        return cohorts
-
-    async def collect_evaluation(self, state, *, trainer, pool):
-        started_at = time.perf_counter()
-        client = trainer.inference_engine_client
-        if not client.enable_http_endpoint:
-            raise ValueError("Harbor validation requires generator.enable_http_endpoint")
-        cohorts = self._evaluation_cohorts(
-            state.global_step,
-            trainer.cfg.trainer.export_path,
-            model_name=client.model_name,
-            api_base=f"http://{client.http_endpoint_host}:{client.http_endpoint_port}/v1",
-        )
-        environment = os.environ.copy()
-        environment["DAYTONA_API_KEY"] = environment[self.daytona_api_key_env]
-        environment["OPENAI_API_KEY"] = "unused-local-inference"
-        if telemetry := _harbor_telemetry_config():
-            for cohort in cohorts:
-                cohort["job"]["telemetry"] = telemetry
-        async with asyncio.timeout(self.timeout):
-            results = await collect_harbor(cohorts, pool, environment)
-        metrics = {
-            f"eval/harbor/{name}/{key}": value
-            for name, result in results.items()
-            for key, value in result.items()
-        }
-        metrics["eval/harbor/wall_seconds"] = time.perf_counter() - started_at
-        return metrics
-
-    async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
-        attempted = metrics["eval/all/num_attempted"]
-        scored = metrics["eval/all/num_scored"]
-        reward_sum = metrics["eval/all/avg_verifier_score"] * scored if scored else 0.0
-        # The counts cover the primary evaluation until Harbor results are added below.
-        metrics["eval/selection_eligible"] = float(scored >= self.minimum_native_coverage * attempted)
-        for cohort in self.cohorts:
-            name = cohort["name"]
-            prefix = f"eval/harbor/{name}/"
-            result = {key.removeprefix(prefix): value for key, value in metrics.items() if key.startswith(prefix)}
-            if result["num_scored"] < self.minimum_coverage * result["num_attempted"]:
-                metrics["eval/selection_eligible"] = 0.0
-                logger.warning("Insufficient inline Harbor scoring coverage for {}: {}", name, result)
-            attempted += result["num_attempted"]
-            scored += result["num_scored"]
-            reward_sum += result["reward_sum"]
-        metrics["eval/all/num_attempted"] = attempted
-        metrics["eval/all/num_scored"] = scored
-        if scored:
-            metrics["eval/all/avg_verifier_score"] = reward_sum / scored
-        else:
-            metrics.pop("eval/all/avg_verifier_score", None)
-        return control
+def pool_checkpoint_scores(metrics: Dict[str, float], policy: PooledCheckpointEvaluation) -> None:
+    """Pool the scores of individual tasks and assess each source against its declared population."""
+    attempted = scored = 0.0
+    reward_sums = []
+    eligible = True
+    sources = {"eval/all": policy.primary, **{f"eval/{name}/all": count for name, count in policy.cohorts.items()}}
+    for prefix, coverage in sources.items():
+        tried = metrics[f"{prefix}/num_attempted"]
+        included = metrics.get(f"{prefix}/num_scored", 0.0)
+        if tried != coverage.expected_tasks or included < coverage.minimum_scored_tasks:
+            eligible = False
+            logger.warning(
+                "Insufficient checkpoint evaluation coverage for {}: {} scored, {} attempted, {} expected",
+                prefix, included, tried, coverage.expected_tasks,
+            )
+        attempted += tried
+        scored += included
+        if included:
+            reward_sums.append(metrics[f"{prefix}/avg_verifier_score"] * included)
+    metrics["eval/selection_eligible"] = float(eligible)
+    metrics[EVALUATION_ATTEMPTED_METRIC] = attempted
+    metrics[EVALUATION_SCORED_METRIC] = scored
+    metrics["eval/all/verifier_score_coverage"] = scored / attempted if attempted else 0.0
+    if scored:
+        metrics[POOLED_VERIFIER_SCORE_METRIC] = math.fsum(reward_sums) / scored
+    else:
+        metrics.pop(POOLED_VERIFIER_SCORE_METRIC, None)
 
 
 @register_callback("evaluation")
@@ -426,6 +351,7 @@ class EvaluationCallback(TrainerCallback):
             dataset, and does not run after an early stop.
         metric_groups: Output metric names mapped to source metrics whose mean is reported.
         stop_when: Metrics mapped to minimum scores or gains over the initial evaluation.
+        checkpoint_scores: Pool verifier scores across the primary evaluation and the named cohorts.
     """
 
     error_behavior = CallbackErrorBehavior.RAISE
@@ -438,27 +364,37 @@ class EvaluationCallback(TrainerCallback):
         additional_evaluations: Dict[str, EvaluationProfile] | None = None,
         metric_groups: Dict[str, List[str]] | None = None,
         stop_when: Dict[str, Dict[str, float]] | None = None,
+        checkpoint_scores: PooledCheckpointEvaluation | None = None,
     ):
         self.eval_steps = eval_steps
         self.eval_on_train_end = eval_on_train_end
         self.eval_before_train = eval_before_train
         self.additional_evaluations = additional_evaluations or {}
+        self.checkpoint_scores = checkpoint_scores
         self.metric_groups = metric_groups or {}
         self.stop_when = {name: EvaluationStopConfig(**value) for name, value in (stop_when or {}).items()}
         self._initial_values: Dict[str, float] = {}
         self._initial_step: int | None = None
         if any(not keys for keys in self.metric_groups.values()):
             raise ValueError("evaluation metric groups must be nonempty")
+        if checkpoint_scores is not None:
+            for name in checkpoint_scores.cohorts:
+                profile = self.additional_evaluations.get(name)
+                if profile is None or profile.schedule != "every_evaluation" or profile.n_samples_per_prompt != 1:
+                    raise ValueError(f"Checkpoint cohort {name} requires one sample per task at every evaluation")
 
     async def collect_evaluation(self, state, *, trainer, pool):
         metrics = {}
 
         async def collect(name, profile):
-            additional = await trainer.eval(
-                val_set_name=name,
-                profile=profile,
-                evaluation_pool=pool,
-            )
+            scoring = self.checkpoint_scores
+            timeout = scoring.timeout if scoring is not None and name in scoring.cohorts else None
+            async with asyncio.timeout(timeout):
+                additional = await trainer.eval(
+                    val_set_name=name,
+                    profile=profile,
+                    evaluation_pool=pool,
+                )
             metrics.update(additional_evaluation_metrics(additional, name))
 
         async with asyncio.TaskGroup() as tasks:
@@ -470,6 +406,8 @@ class EvaluationCallback(TrainerCallback):
     async def on_evaluate_async(
         self, state: TrainerState, control: TrainerControl, *, metrics: Dict[str, float], trainer, **kwargs
     ) -> TrainerControl:
+        if self.checkpoint_scores is not None:
+            pool_checkpoint_scores(metrics, self.checkpoint_scores)
         for name, members in self.metric_groups.items():
             metrics[name] = math.fsum(metrics[member] / len(members) for member in members)
             if not math.isfinite(metrics[name]):
@@ -592,7 +530,7 @@ class DatabaseRegistrationCallback(TrainerCallback):
     - Direct env vars: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 
     Args:
-        agent_name: Name of the agent being trained (default: from terminal_bench config or "skyrl")
+        agent_name: Name of the agent being trained. Defaults to TRAINING_AGENT_NAME or "skyrl".
         enabled: Whether registration is enabled (default: True, auto-disabled if no credentials)
     """
 
@@ -681,17 +619,7 @@ class DatabaseRegistrationCallback(TrainerCallback):
             logger.warning("DatabaseRegistrationCallback: No config available, skipping registration")
             return control
 
-        # Determine agent name
-        agent_name = self.agent_name
-        if not agent_name:
-            # Try terminal_bench config
-            tb_cfg = getattr(cfg, "terminal_bench_config", None)
-            if tb_cfg:
-                harbor = getattr(tb_cfg, "harbor", None)
-                if harbor:
-                    agent_name = getattr(harbor, "name", None)
-            if not agent_name:
-                agent_name = os.environ.get("TRAINING_AGENT_NAME", "skyrl")
+        agent_name = self.agent_name or os.environ.get("TRAINING_AGENT_NAME", "skyrl")
 
         # Get model path and dataset info
         policy_cfg = getattr(cfg.trainer, "policy", None)
@@ -1155,14 +1083,7 @@ def create_default_callbacks(
     # Database registration callback (auto-enabled, gracefully disabled if no credentials)
     enable_db_registration = getattr(cfg.trainer, "enable_db_registration", True)
     if enable_db_registration:
-        # Get agent name from terminal_bench config if available
-        agent_name = None
-        tb_cfg = getattr(cfg, "terminal_bench_config", None)
-        if tb_cfg:
-            harbor = getattr(tb_cfg, "harbor", None)
-            if harbor:
-                agent_name = getattr(harbor, "name", None)
-        callbacks.append(DatabaseRegistrationCallback(agent_name=agent_name))
+        callbacks.append(DatabaseRegistrationCallback())
 
     # Pre-flight reward gate (default-off)
     gate_cfg = getattr(cfg.trainer, "preflight_gate", None)
@@ -1318,6 +1239,10 @@ def create_callbacks_from_config(
                 config_dict["additional_evaluations"] = {
                     name: profiles[name] for name in config_dict.get("additional_evaluations") or {}
                 }
+                if (score_pool := config_dict.get("checkpoint_scores")) is not None:
+                    if OmegaConf.is_config(score_pool):
+                        score_pool = OmegaConf.to_container(score_pool, resolve=True)
+                    config_dict["checkpoint_scores"] = PooledCheckpointEvaluation.model_validate(score_pool)
             callback = create_callback_from_config(config_dict)
             callbacks.append(callback)
             logger.debug(f"Created callback: {callback.__class__.__name__}")

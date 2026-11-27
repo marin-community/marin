@@ -1,23 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 from copy import deepcopy
 from urllib.parse import urlencode
 
-from finestore.rl.rl_progress import Comparison
+from finestore.rl.rl_progress import Comparison, EvaluationScore
 from marina.journeys import Journey
 from playwright.sync_api import expect
 
-from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
+from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, progress_record
 
 
 def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> None:
     api = f"{journey.origin}/a/{APPLET_ID}/api/runs"
     record = progress_record() | {
         "run_id": "journey/run",
+        "native_run_id": "native/journey/run",
         "label": "Learning fixture",
         "model": "snowball",
-        "evaldash_run_ids": ["first-evaluation", "second-evaluation"],
+        "grader_report": grader_report(),
         "grafana_url": "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training?from=1&to=now&var-run=journey%2Frun",
         "evaluations": [
             Comparison(metric=metric, role="slice", run=value, tasks=2, n_run=1, n_control=0).model_dump(mode="json")
@@ -45,6 +47,10 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     }
     second.pop("issue")
     publish(second)
+    publish(
+        progress_record()
+        | {"run_id": record["native_run_id"], "attempt_id": "legacy-native", "label": "Earlier native attempt"}
+    )
     route = urlencode({"run": record["run_id"], "attempt": record["attempt_id"]})
     journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{route}", wait_until="domcontentloaded")
     dialog = journey.page.get_by_role("dialog")
@@ -53,10 +59,10 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     expect(dialog.get_by_role("link", name=f"Experiment #{record['issue']}")).to_have_attribute(
         "href", f"https://github.com/marin-community/marin/issues/{record['issue']}"
     )
-    for evaluation_id in record["evaldash_run_ids"]:
-        expect(dialog.get_by_role("link", name=f"EvalDash {evaluation_id}")).to_have_attribute(
-            "href", f"https://marina.oa.dev/evaldash/runs/{evaluation_id}"
-        )
+    native_route = urlencode({"run": record["native_run_id"], "attempt": record["attempt_id"]})
+    journey.page.goto("about:blank")
+    journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{native_route}", wait_until="domcontentloaded")
+    expect(dialog.get_by_text("Learning fixture", exact=True)).to_be_visible()
     expect(journey.page.get_by_role("cell", name="snowball", exact=True)).to_be_visible()
     for metric, value in (("family/small", "0.2500"), ("aai_category/coding", "0.3750"), ("difficulty/hard", "0.5000")):
         expect(dialog.get_by_text(f"eval_lite_100@25/{metric}/mean: {value}", exact=False)).to_be_visible()
@@ -65,6 +71,10 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     )
     dialog.get_by_text("eval_lite_100@25/difficulty/hard/mean: 0.5000", exact=False).scroll_into_view_if_needed()
     journey.shoot("stored-attempt-breakdowns")
+    dialog.get_by_role("link", name="Grader stats").click()
+    expect(journey.page.get_by_role("cell", name="test/source", exact=True).first).to_be_visible()
+    journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/#{route}", wait_until="domcontentloaded")
+    expect(dialog).to_be_visible()
     journey.page.keyboard.press("Escape")
     expect(dialog).not_to_be_visible()
     journey.click("Learning fixture")
@@ -99,9 +109,9 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     journey.page.reload(wait_until="domcontentloaded")
     expect(dialog).to_be_visible()
     expect(dialog).to_contain_text("family/small/mean: 0.6250")
-    expect(journey.page.locator("#attempts > tr")).to_have_count(1)
+    expect(journey.page.locator("#attempts > tr")).to_have_count(2)
     response = journey.page.request.get(api)
-    assert response.ok and len(response.json()["runs"]) == 2
+    assert response.ok and len(response.json()["runs"]) == 3
     journey.page.keyboard.press("Escape")
     publish(record | {"run_id": "journey/mochi", "label": "Mochi fixture", "model": "mochi"})
     journey.click("Refresh")
@@ -112,3 +122,179 @@ def test_stored_attempts_keep_links_breakdowns_and_refresh(journey: Journey) -> 
     model_filter.select_option("snowball")
     expect(journey.page.get_by_role("button", name="Updated learning fixture")).to_be_visible()
     expect(journey.page.get_by_role("button", name="Mochi fixture")).to_have_count(0)
+
+
+def test_progress_shows_main_segments_and_optional_branch_attempts(journey: Journey) -> None:
+    api = f"{journey.origin}/a/{APPLET_ID}/api/runs"
+    metric = "eval_lite/family_mean"
+
+    def attempt(name, day, raw, *, comparable="tasks-a/grader-a", final=True):
+        return progress_record() | {
+            "run_id": name,
+            "native_run_id": name,
+            "attempt_id": name,
+            "label": name,
+            "model": "snowball",
+            "branch": "main",
+            "dirty": False,
+            "is_control": True,
+            "commit": f"{day:040x}",
+            "base_commit": f"{day:040x}",
+            "preset_version": f"bbbbbbb{day}",
+            "artifact_uri": f"s3://example/runs/{name}",
+            "started_at": f"2026-11-0{day}T00:00:00Z",
+            "completed_at": f"2026-11-0{day}T01:00:00Z",
+            "gate_result": None,
+            "evaluations": [
+                Comparison(
+                    metric="eval_lite@25/family_mean",
+                    role="slice",
+                    run=raw,
+                    n_run=1,
+                    n_control=0,
+                    evaluation_score=EvaluationScore(
+                        profile="eval_lite",
+                        step=25 if final else 0,
+                        statistic="family_mean",
+                        final=final,
+                        comparability=comparable,
+                    ),
+                ).model_dump(mode="json")
+            ],
+        }
+
+    controls = [
+        attempt(f"control-{i}", i + 1, raw, comparable=identity) | {"evaluation_data_identity": f"panel@selection-v{i}"}
+        for i, (raw, identity) in enumerate(
+            ((0.5, "tasks-a/grader-a"), (0.4, "tasks-a/grader-a"), (0.7, "tasks-b/grader-a"), (0.75, "tasks-b/grader-b"))
+        )
+    ]
+    controls[0]["run_id"] = controls[1]["run_id"] = "shared-index-run"
+    controls[1]["artifact_uri"] = controls[0]["artifact_uri"]
+    controls[0]["commit"] = controls[0]["base_commit"][:10]
+    branch = attempt("branch-at-first-preset", 5, 0.55) | {
+        "branch": "experiment",
+        "is_control": False,
+        "commit": "d" * 40,
+        "base_preset_version": controls[0]["preset_version"],
+        "settings": ["trainer.max_steps=25"],
+        "launch_config": {"skyrl": {"trainer": {"max_steps": 25}}},
+        "wandb_url": "https://wandb.ai/marin-community/marin-rl/runs/fixture",
+        "grafana_url": "https://grafana.oa.dev/d/marin-rl-runs/rl-post-training?var-run=fixture",
+        "gate_result": progress_record()["gate_result"],
+    }
+    superseded = attempt("superseded", 1, 0.15) | {
+        "native_run_id": controls[0]["native_run_id"],
+        "artifact_uri": controls[0]["artifact_uri"],
+        "completed_at": "2026-11-01T00:30:00Z",
+    }
+    early_only = attempt("early-only", 6, 0.2, final=False)
+    unpushed_main = attempt("unpushed-main", 7, 0.65) | {"base_commit": controls[0]["base_commit"]}
+    main_without_control = attempt("main-without-control", 8, 0.68) | {"is_control": False}
+    speed_controls = [
+        attempt(f"speed-control-{i}", 5, 0)
+        | {
+            "series": "speed-medium",
+            "branch": "control-proof",
+            "evaluations": [],
+            "optimizer_steps": 10,
+            "elapsed_excluding_eval_seconds": elapsed,
+            "timing_scope": "checkpoint_lineage_native_jobs",
+            "completed_at": "2026-11-05T01:00:00Z",
+        }
+        for i, elapsed in enumerate((930, 960, None))
+    ]
+    speed_branch = speed_controls[0] | {
+        "run_id": "speed-candidate",
+        "attempt_id": "speed-candidate",
+        "label": "speed-candidate",
+        "artifact_uri": "s3://example/runs/speed-candidate",
+        "branch": "experiment",
+        "is_control": False,
+        "elapsed_excluding_eval_seconds": 905,
+        "completed_at": "2026-11-05T01:04:00Z",
+    }
+    other_control = attempt("scored-control", 4, 0.4) | {
+        "series": "speed-medium",
+        "branch": "scored-proof",
+    }
+    for record in (
+        *controls,
+        branch,
+        superseded,
+        early_only,
+        unpushed_main,
+        main_without_control,
+        *speed_controls,
+        speed_branch,
+        other_control,
+    ):
+        response = journey.page.request.post(api, data=record)
+        assert response.ok, response.text()
+
+    journey.page.goto(f"{journey.origin}/a/{APPLET_ID}/", wait_until="domcontentloaded")
+    journey.page.get_by_role("combobox", name="Preset", exact=True).select_option(label="snowball · learning-medium")
+    chart = journey.page.get_by_role("group", name=metric, exact=True)
+    expect(chart.locator("line.history-global")).to_have_count(3)
+    chain = chart.locator("line.history-chain")
+    expect(chain).to_have_count(1)
+    expect(chain).to_have_attribute("data-from-attempt", "control-0")
+    expect(chain).to_have_attribute("data-to-attempt", "control-1")
+    expect(chart.locator("line.history-marker")).to_have_count(2)
+    for attempt_id in ("control-2", "control-3"):
+        expect(chart.locator(f'line.history-marker[data-attempt="{attempt_id}"]')).to_have_count(1)
+    expect(chart.get_by_role("link")).to_have_count(4)
+    for name in ("superseded", "early-only", "unpushed-main", "main-without-control"):
+        expect(chart.get_by_role("link", name=re.compile(f"^{name}"))).to_have_count(0)
+    journey.shoot("preset-main-controls")
+    chart.get_by_role("link", name="control-0 · 50.0%").click()
+    expect(journey.page.get_by_role("dialog")).to_contain_text("control-0")
+    expect(journey.page.get_by_role("link", name="Source commit")).to_have_attribute(
+        "href", f"https://github.com/marin-community/marin/commit/{controls[0]['commit']}"
+    )
+    journey.page.keyboard.press("Escape")
+
+    toggle = journey.page.get_by_role("checkbox", name="Show branch runs")
+    toggle.check()
+    expect(chart.get_by_role("link")).to_have_count(5)
+    expect(chart.locator("line.history-global")).to_have_count(3)
+    journey.shoot("preset-branch-runs")
+    chart.get_by_role("link", name="branch-at-first-preset · 55.0%").click()
+    dialog = journey.page.get_by_role("dialog")
+    expect(dialog).to_contain_text(branch["base_preset_version"])
+    expect(dialog).to_contain_text(branch["commit"])
+    expect(dialog.get_by_role("link", name="Source commit")).to_have_count(0)
+    expect(dialog).to_contain_text("trainer.max_steps=25")
+    expect(dialog.get_by_role("link", name="W&B run")).to_have_attribute("href", branch["wandb_url"])
+    expect(dialog.get_by_role("link", name="Grafana")).to_have_attribute("href", branch["grafana_url"])
+    dialog.get_by_text("Composed launch configuration", exact=True).click()
+    expect(dialog.locator("pre")).to_contain_text('"max_steps": 25')
+    journey.shoot("branch-run-detail")
+    dialog.get_by_text("Composed launch configuration", exact=True).hover()
+    journey.page.mouse.wheel(0, 1200)
+    expect(dialog.get_by_role("heading", name=branch["label"], exact=True)).not_to_be_in_viewport()
+    journey.page.keyboard.press("Escape")
+    chart.get_by_role("link", name="control-0 · 50.0%").click()
+    expect(dialog.get_by_role("heading", name="control-0", exact=True)).to_be_in_viewport(ratio=1)
+    journey.page.keyboard.press("Escape")
+
+    toggle.uncheck()
+    journey.page.get_by_role("combobox", name="Preset", exact=True).select_option(label="snowball · speed-medium")
+    control_branch = journey.page.get_by_role("combobox", name="Control branch")
+    expect(control_branch).to_have_value("main")
+    timing = journey.page.get_by_role("group", name="Trainer seconds per optimizer update", exact=True)
+    expect(timing).to_have_count(0)
+    control_branch.select_option("control-proof")
+    first = timing.get_by_role("link", name="speed-control-0 · 93.0 s", exact=True)
+    second = timing.get_by_role("link", name="speed-control-1 · 96.0 s", exact=True)
+    expect(first).to_have_attribute("href", "#run=speed-control-0&attempt=speed-control-0")
+    expect(second).to_have_attribute("href", "#run=speed-control-1&attempt=speed-control-1")
+    assert first.locator("circle").get_attribute("cx") != second.locator("circle").get_attribute("cx")
+    expect(timing.locator("line.history-chain")).to_have_count(1)
+    expect(timing.get_by_role("link")).to_have_count(2)
+    toggle.check()
+    expect(timing.get_by_role("link", name="speed-candidate · 90.5 s", exact=True)).to_be_visible()
+    expect(timing.get_by_role("link")).to_have_count(3)
+    control_branch.select_option("scored-proof")
+    expect(chart.get_by_role("link", name="scored-control · 40.0%", exact=True)).to_be_visible()
+    expect(timing.get_by_role("link", name="speed-candidate · 90.5 s", exact=True)).to_be_visible()

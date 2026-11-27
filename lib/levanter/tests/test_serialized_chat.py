@@ -27,6 +27,7 @@ def _cached_transcript_dataset(tmp_path, documents, *, pack, length, block_atten
         writer.result(),
         eos_id=None,
         block_cross_document_attention=block_attention,
+        remainder="drop",
     )
 
 

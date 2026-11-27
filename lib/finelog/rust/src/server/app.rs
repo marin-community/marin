@@ -134,8 +134,8 @@ fn build_connect_service(
         .with_compression(compression_registry())
         .with_limits(
             Limits::default()
-                .max_message_size(MAX_MESSAGE_BYTES)
-                .max_request_body_size(MAX_MESSAGE_BYTES),
+                .with_max_message_size(MAX_MESSAGE_BYTES)
+                .with_max_request_body_size(MAX_MESSAGE_BYTES),
         )
         // SlowRpc registered FIRST -> outermost -> times the whole chain
         // including the concurrency wait.

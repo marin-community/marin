@@ -1,0 +1,82 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+
+import pytest
+from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, Phase
+from rigging.task_errors import ErrorIdentity, ErrorCategory
+from rolloutengine.models import RolloutOperation
+from rolloutengine.test_support import arithmetic_task, rollout_spec
+from shellbox.machine import ExitReason
+from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import EnvironmentRequirements
+
+from skyrl_train.rollouts.task_health import attempt_receipt, write_attempt_receipts
+from skyrl_train.rollouts.training_record import TrainingRollout
+
+
+@pytest.mark.parametrize(
+    ("reason", "exit_code", "recorded_exit_code"),
+    [(ExitReason.EXITED, 2, 2), (ExitReason.TIMED_OUT, 124, None)],
+)
+def test_health_receipt_preserves_setup_exit_evidence(tmp_path, reason, exit_code, recorded_exit_code):
+    task = arithmetic_task(
+        tags=("agentic",), environment_requirements=EnvironmentRequirements(setup_commands=("./setup",))
+    )
+    message = "Could not configure the task environment"
+    result = TrainingRollout(
+        task_id=task.id,
+        messages=(),
+        prompt_token_ids=(),
+        response_token_ids=(),
+        loss_mask=(),
+        logprobs=None,
+        grade=GradeResult(Outcome.INFRA_ERROR, None, message),
+        stop_reason="error",
+        failure=ErrorIdentity(
+            exception_type="MachineSetupError",
+            category=ErrorCategory.INFRASTRUCTURE,
+            operation=RolloutOperation.PREPARE.value,
+            diagnostics={"setup_reason": reason.value, "setup_exit_code": exit_code, "setup_stderr": "setup output"},
+        ),
+    )
+    receipt = attempt_receipt("attempt-1", rollout_spec(task), result)
+    assert receipt is not None
+    write_attempt_receipts(str(tmp_path), [receipt])
+
+    (stored_receipts,) = (tmp_path / ATTEMPT_RECEIPTS_DIRECTORY).glob("*.jsonl")
+    stored = json.loads(stored_receipts.read_text())
+    assert stored["outcome"] == Outcome.INFRA_ERROR
+    assert (stored["phase"], stored["setup_completed"], stored["setup_exit_code"]) == (
+        Phase.TASK_SETUP,
+        False,
+        recorded_exit_code,
+    )
+    assert (stored["error"], stored["setup_stderr"]) == (message, "setup output")
+
+
+@pytest.mark.parametrize(
+    "operation,phase", [(RolloutOperation.START, Phase.ENVIRONMENT), (RolloutOperation.GRADE, Phase.VERIFIER)]
+)
+def test_health_receipt_uses_persisted_operation(tmp_path, operation, phase):
+    task = arithmetic_task(tags=("agentic",))
+    failure = ErrorIdentity(
+        exception_type="TaskMachineError", category=ErrorCategory.INFRASTRUCTURE, operation=operation.value
+    )
+    result = TrainingRollout(
+        task_id=task.id,
+        messages=(),
+        prompt_token_ids=(),
+        response_token_ids=(),
+        loss_mask=(),
+        logprobs=None,
+        grade=GradeResult(Outcome.INFRA_ERROR, None),
+        stop_reason="error",
+        failure=failure,
+    )
+    receipt = attempt_receipt("attempt-1", rollout_spec(task), result)
+    assert receipt is not None
+    write_attempt_receipts(str(tmp_path), [receipt])
+    (stored_receipts,) = (tmp_path / ATTEMPT_RECEIPTS_DIRECTORY).glob("*.jsonl")
+    assert json.loads(stored_receipts.read_text())["phase"] == phase

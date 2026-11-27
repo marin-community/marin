@@ -40,6 +40,7 @@ from finestore.schema import arrow_schema
 from finestore.store import DataStore, Transaction
 from openai import APIError, APIStatusError
 from pydantic import BaseModel, ConfigDict, Field
+from rigging.task_errors import ErrorIdentity
 from rolloutengine.agents.mini_swe.agent import MiniSweModelFormat
 from rolloutengine.agents.pi.agent import AgentKilledBySignalError, ModelAuthenticationError, PiThinkingFormat
 from rolloutengine.agents.terminus.tmux_session import TmuxBatchProtocolError, TmuxCommandError, TmuxSessionEndedError
@@ -106,10 +107,10 @@ logger = logging.getLogger(__name__)
 
 # Raw evidence and turn metadata key naming the root, run identity and evidence blob of a reused model response.
 REUSED_FROM_RUN = "reused_response_from_run"
-# Run descriptor key listing, for each run whose responses this root reused, its root, run identity and driver revision.
+# Run descriptor key listing, for each run whose responses this root reused, its root and run identity.
 RESPONSE_SOURCES = "response_sources"
 # Bump when execution semantics change so resume cannot mix terminal grades from different implementations.
-EVALUATION_EXECUTION_REVISION = "2026.11.23.1"
+EVALUATION_EXECUTION_REVISION = "2026.11.27.1"
 
 
 # Time for a judge-graded attempt's grading beyond the judge's own transport budget.
@@ -331,8 +332,8 @@ def _attempt_key(dataset: str, source_row: str, trial: int) -> tuple[str, str, i
 
 def _completed_turn(raw: Mapping[str, Any]) -> ModelTurn | None:
     """The model turn of a single-turn generation attempt that failed, if at all, only while grading."""
-    failure = raw["failure"]
-    if failure is not None and failure["diagnostics"]["operation"] != RolloutOperation.GRADE:
+    failure = None if raw["failure"] is None else ErrorIdentity.model_validate(raw["failure"])
+    if failure is not None and failure.operation != RolloutOperation.GRADE:
         return None
     conversations = raw["conversations"]
     if len(conversations) != 1 or len(conversations[0]["steps"]) != 1:
@@ -371,7 +372,6 @@ class ResponseSource:
     root: str
     run: str
     """The run identity of the source."""
-    driver_revision: str
 
 
 class _StoredResponses:
@@ -385,7 +385,12 @@ class _StoredResponses:
         run = json.loads(saved)
         if run["config"]["model"] != model.model_dump(mode="json"):
             raise ValueError(f"Reused model responses require the same model identity as {root}")
-        self.source = ResponseSource(root, run_identity(run), run["driver_revision"])
+        if run["driver_revision"] != EVALUATION_EXECUTION_REVISION:
+            raise ValueError(
+                f"Reused model responses require execution revision {EVALUATION_EXECUTION_REVISION}; "
+                f"{root} stored {run['driver_revision']}"
+            )
+        self.source = ResponseSource(root, run_identity(run))
         datasets: dict[str, str] = {}
         for entry in run["datasets"]:
             benchmark = entry["protocol"]["benchmark"]
@@ -851,7 +856,7 @@ async def _score_rollout(
         "conversations": [dataclasses.asdict(conversation) for conversation in rollout.conversations],
         "rollout_metrics": rollout.metrics,
         "stop_reason": rollout.stop_reason,
-        "failure": dataclasses.asdict(rollout.failure) if rollout.failure else None,
+        "failure": rollout.failure.model_dump(mode="json") if rollout.failure else None,
         "failure_evidence": failure_evidence,
         "options": options,
         "limits": limits.model_dump(mode="json"),

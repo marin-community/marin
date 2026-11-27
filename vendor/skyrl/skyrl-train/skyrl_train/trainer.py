@@ -587,7 +587,7 @@ class RayPPOTrainer:
             await self._drain_checkpoint_upload()
         finally:
             try:
-                await self.context.close()
+                await self._guarded_async(self.context.close(), timeout=30, label="Rollout context shutdown")
             finally:
                 await self._teardown()
                 self._shutdown_complete = True
@@ -1222,6 +1222,18 @@ class RayPPOTrainer:
         )
 
     async def _train_loop(self):
+        profile = self.cfg.trainer.policy.megatron_config.get("memory_profile", {})
+        profiling = self.cfg.trainer.strategy == "megatron" and profile.get("enabled", False)
+        if profiling and self.colocate_all:
+            # Sizing snapshots and steps the resident policy, so backload the colocated offload first.
+            self.policy_model.backload_to_gpu()
+        if profiling:
+            with Timer("trainer_memory_profile", self.all_startup_timings):
+                reports = await asyncio.to_thread(
+                    ray.get,
+                    self.policy_model.async_run_ray_method("pass_through", "profile_train_memory"),
+                )
+                logger.info("Trainer warm-state sizing passed on {} ranks", len(reports))
         await self._init_weight_sync()
 
         # Colocated training loads the policy model onto the GPU before its checkpoint.

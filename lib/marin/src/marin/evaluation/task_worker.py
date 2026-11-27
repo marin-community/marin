@@ -19,7 +19,7 @@ from rigging.secrets import get_secret, require_secret
 from rigging.timing import retry_with_backoff
 from rolloutengine.agents.mini_swe.agent import MiniSweOptions, mini_swe_harness
 from rolloutengine.agents.model_relay import VllmTokenizer
-from rolloutengine.agents.pi.agent import PiOptions, PiThinking, pi_harness
+from rolloutengine.agents.pi.agent import PI_HARNESS, PiOptions, PiThinking, pi_harness
 from rolloutengine.agents.terminus.agent import TerminusOptions, TerminusParser, terminus_harness
 from rolloutengine.chat import ChatModel
 from rolloutengine.completion import CompletionModel
@@ -65,7 +65,7 @@ backs off between retries, and the session's model-turn timeout bounds them all.
 # parsing, tools or options change, so its runs get new identities instead of resuming older episodes.
 # tests/evaluation/test_harness_revisions.py pins each revision to a digest of its harness's sources.
 EPISODE_HARNESS_REVISIONS: Mapping[str, str] = MappingProxyType(
-    {"shell": "2026.11.21.1", "terminus-2": "2026.11.21.1", "pi": "2026.11.21.1", "mini-swe-agent": "2026.11.21.1"}
+    {"shell": "2026.11.23.1", "terminus-2": "2026.11.23.1", PI_HARNESS: "2026.11.24.1", "mini-swe-agent": "2026.11.23.1"}
 )
 
 
@@ -115,7 +115,7 @@ def episode_harnesses(config: EvaluationRunConfig, client: AsyncOpenAI) -> Mappi
         )
         return mini_swe_harness(options, tokenizer)
 
-    factories = {"shell": _shell, "terminus-2": _terminus, "pi": pi, "mini-swe-agent": mini_swe}
+    factories = {"shell": _shell, "terminus-2": _terminus, PI_HARNESS: pi, "mini-swe-agent": mini_swe}
     # Planning records a revision for each kind it accepts; the worker must build every one of them.
     assert factories.keys() == EPISODE_HARNESS_REVISIONS.keys(), sorted(
         factories.keys() ^ EPISODE_HARNESS_REVISIONS.keys()
@@ -130,9 +130,13 @@ def machine_backends(config: EvaluationRunConfig) -> frozenset[str]:
 
 
 def execution_config(config: EvaluationRunConfig) -> EvaluationRunConfig:
-    """Default to network-denied Shellbox graders, preserving explicit machine settings."""
+    """Default to network-denied Shellbox graders, preserving explicit machine settings.
+
+    A grader runs the agent's changes, so it runs on the task machines' backend; runs without task machines
+    grade on the local backend.
+    """
     verifier = config.verifier_machine or MachineRuntimeSpec(
-        backend=Backend.LOCAL,
+        backend=config.task_machine.backend if config.task_machine is not None else Backend.LOCAL,
         network=NetworkPolicy.DENY,
         cpus=None,
         memory_mb=None,
@@ -156,10 +160,6 @@ def worker_setup_script(config: EvaluationRunConfig) -> str:
 
 def worker_egress(config: EvaluationRunConfig) -> tuple[str, ...]:
     return DAYTONA_EGRESS if Backend.DAYTONA in machine_backends(config) else ()
-
-
-def daytona_connection(api_key: str) -> DaytonaConnection:
-    return DaytonaConnection(api_key=api_key)
 
 
 class LazyMachineFactories(Mapping[str, MachineFactory]):
@@ -294,7 +294,9 @@ def run_worker(
     judge_endpoint = get_secret(JUDGE_ENDPOINT)
     judge = JudgeConnection(judge_endpoint, require_secret(JUDGE_API_KEY)) if judge_endpoint else None
     daytona = (
-        daytona_connection(require_secret(DAYTONA_API_KEY)) if Backend.DAYTONA in machine_backends(config) else None
+        DaytonaConnection(api_key=require_secret(DAYTONA_API_KEY))
+        if Backend.DAYTONA in machine_backends(config)
+        else None
     )
     execute_with_retries(
         datasets,

@@ -53,7 +53,12 @@ def test_multiturn_counts_match_actual_causal_loss_and_preserve_inputs(gpt2_toke
     with SerialCacheWriter(str(tmp_path / "cache"), processed) as writer:
         writer.write_batch([processed])
     dataset = dataset_for_component(
-        component, Axis("position", 256), writer.result(), eos_id=None, block_cross_document_attention=True
+        component,
+        Axis("position", 256),
+        writer.result(),
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="drop",
     ).as_sync_dataset()
     example = dataset[0]
     assert sum(turn.supervised_tokens for turn in result.turns) == int(example.loss_weight.sum())
@@ -74,7 +79,12 @@ def test_component_pack_override_rejects_accounting_for_packed_updates(gpt2_toke
     with SerialCacheWriter(str(tmp_path / "cache"), processed) as writer:
         writer.write_batch([processed, processed])
     dataset = dataset_for_component(
-        component, Axis("position", 256), writer.result(), eos_id=None, block_cross_document_attention=True
+        component,
+        Axis("position", 256),
+        writer.result(),
+        eos_id=None,
+        block_cross_document_attention=True,
+        remainder="drop",
     ).as_sync_dataset()
     # Two occurrences occupy one packed sequence, so row-counted updates would be wrong.
     assert len(dataset) == 1

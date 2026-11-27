@@ -395,11 +395,11 @@ Raw evidence names the source root, its run identity, and the evidence blob in
 `reused_response_from_run`. A reused attempt records the stored response's token
 usage and stop reason, as an attempt that reuses its own response after a
 grading failure does. `evaluation/run.json`
-lists each source in `response_sources` with its root, run identity, and
-`driver_revision`, so a regraded root differs from a fresh run on the same
-corpus without opening the evidence. Only model identity is checked, so the
-recorded revision is how to tell that responses stored under another driver
-revision were graded under the current one. The sources are not part of the
+lists each source in `response_sources` with its root and run identity, so a
+regraded root differs from a fresh run on the same corpus without opening the
+evidence. Reuse requires the source run's execution revision to match the
+current one, so a root stored by an older driver fails the run instead of
+regenerating its grading-failed attempts. The sources are not part of the
 run identity. A resume keeps the sources already recorded and adds a new one.
 Without `--local`, the run goes to Iris as usual, and the source root must be
 shared object storage as well.

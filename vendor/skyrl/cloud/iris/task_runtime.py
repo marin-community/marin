@@ -31,11 +31,9 @@ from dataclasses import asdict, dataclass, field, fields
 from enum import StrEnum
 import glob
 import json
-import math
 import os
 from pathlib import Path
 import queue
-import re
 import shutil
 import signal
 import socket
@@ -49,9 +47,12 @@ from typing import Any, Protocol
 
 import huggingface_hub.constants
 from filelock import FileLock
+from finestore.rl.run_records import RunIndexIdentity
+from iris.cluster.runtime.env import IRIS_NODE_NAME_ENV, IRIS_OUTPUT_DIR_ENV
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.distributed_lock import create_lock, lease_refresh
 from rigging.timing import RateLimiter
+from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.model_staging import DEFAULT_TOKENIZER_REVISION, HuggingFaceModelCache, model_metadata_relative_path
 
 from cloud.iris.artifacts import (
@@ -62,7 +63,6 @@ from cloud.iris.artifacts import (
     file_inventory,
     fs_and_path,
     materialize,
-    write_json,
 )
 from cloud.iris.hf_model_cache import (
     download_hugging_face_snapshot,
@@ -102,7 +102,7 @@ from marinskyrl.process_diagnostics import (
 )
 from cloud.iris.paths import resolve_repo_path
 from cloud.iris.ray_ports import RayPort, allocated_ray_port, resolve_ray_ports
-from cloud.iris.role_topology import RoleTopology
+from cloud.iris.role_topology import RoleTopology, audit_role_nodes, node_physical_labels, probe_fabric_info
 from cloud.iris.ray_storage import (
     RaySpillBackend,
     RaySpillTarget,
@@ -234,40 +234,6 @@ IGNORED_DRIVER_OUTPUT_MARKERS = (b"[fd-monitor]",)
 
 def _log(msg: str) -> None:
     print(f"[task-runtime] {msg}", flush=True)
-
-
-def stage_task_data(data_json: str, *, role: str) -> None:
-    """Extract HF task datasets to this node's local task directory on every node.
-
-    The controller runs on every node before Ray bootstrap; pods don't share a
-    filesystem, so each pod fetches+extracts the parquet repo to the identical
-    node-local path the rollout workers read. Idempotent (``on_exist=skip``).
-    """
-    try:
-        data = json.loads(data_json)
-    except (ValueError, TypeError):
-        data = [data_json] if data_json else []
-    if not data:
-        return
-
-    # PYTHONPATH includes /app (launcher bootstrap), so cloud.iris is importable.
-    from cloud.iris.rl_data import resolve_rl_train_data
-
-    _log(f"Staging {role} data on this node (rank {_rank()}/{_num_tasks()}): {data}")
-    # This HF *parquet* dataset is NOT pre-cached, so force-clear HF_HUB_OFFLINE /
-    # TRANSFORMERS_OFFLINE for the extraction only (the ranks' env is untouched).
-    # Without this the snapshot_download inside resolve_rl_train_data dies
-    # OfflineModeIsEnabled.
-    saved = {k: os.environ.get(k) for k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")}
-    for k in saved:
-        os.environ.pop(k, None)
-    try:
-        resolved = resolve_rl_train_data(data, on_exist="skip", verbose=True)
-    finally:
-        for k, v in saved.items():
-            if v is not None:
-                os.environ[k] = v
-    _log(f"{role.capitalize()} data staged to node-local paths: {resolved}")
 
 
 def _write_model_ref(cache_root: Path, revision: str, resolved_revision: str) -> None:
@@ -1349,6 +1315,25 @@ def wait_for_nodes(
         ray.shutdown()
 
 
+def verify_role_placement(ray_address: str, topology: RoleTopology, report_directory: Path) -> None:
+    """Audit single-node and multi-node allocations before starting model actors."""
+    # Preserve this module's deferred Ray bootstrap; the audit connects here.
+    import ray  # noqa: PLC0415
+
+    ray.init(address=ray_address, ignore_reinit_error=True)
+    try:
+        nodes = ray.nodes()
+        rows = audit_role_nodes(nodes, topology=topology)
+        report = json.dumps(
+            {"role_topology": RoleTopologyMode.NVLINK_DOMAIN, "nodes": [asdict(row) for row in rows]},
+            sort_keys=True,
+        )
+        (report_directory / "role-topology.json").write_text(report + "\n")
+        _log(f"Verified physical role placement before model actors: {report}")
+    finally:
+        ray.shutdown()
+
+
 # ---------------------------------------------------------------------------
 # Roles.
 # ---------------------------------------------------------------------------
@@ -1368,32 +1353,19 @@ def capture_termination_artifacts(rendezvous_dir: str | None, reason: str) -> No
     """
     if not rendezvous_dir:
         return
-    import subprocess as _sp
-
     task_id = os.environ.get("IRIS_TASK_ID", "unknown").replace("/", "_")
     ts = int(time.time())
-
-    def _run(cmd: str, timeout: int = 7) -> str:
-        try:
-            return _sp.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout
-        except Exception as exc:  # noqa: BLE001 - best-effort
-            return f"<{cmd!r} failed: {exc}>"
-
-    summary = "\n".join(
-        [
-            f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===",
-            "--- df -h /tmp /dev/shm ---",
-            _run("df -h /tmp /dev/shm 2>&1"),
-            "--- top /tmp disk hogs (ephemeral-storage eviction cause) ---",
-            _run("du -sh /tmp/* /tmp/ray/session*/logs /tmp/ray/session*/*spill* 2>/dev/null | sort -rh | head -25", 9),
-            "--- nvidia-smi (VRAM OOM cause) ---",
-            _run("nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv 2>&1"),
-            "--- top RSS procs (host-RAM OOM cause) ---",
-            _run("ps -eo pid,rss,comm --sort=-rss 2>/dev/null | head -12"),
-            "--- dmesg OOM/kill tail ---",
-            _run("dmesg 2>/dev/null | grep -iE 'oom|killed process|out of memory|Xid' | tail -10"),
-        ]
-    )
+    summary = f"=== TERMINATION ARTIFACT task={task_id} ts={ts} reason={reason} ===\n"
+    try:
+        diagnostics = Path(__file__).with_name("termination_diagnostics.sh")
+        summary += subprocess.run(
+            ["bash", str(diagnostics)], capture_output=True, text=True, errors="replace", timeout=40
+        ).stdout
+    except subprocess.TimeoutExpired as exc:
+        summary += (exc.stdout or b"").decode(errors="replace")
+        summary += "\n<termination diagnostics timed out>\n"
+    except OSError as exc:
+        summary += f"<termination diagnostics failed: {exc}>\n"
     try:
         uri = f"{rendezvous_dir.rstrip('/')}/term_artifacts/{task_id}_{ts}.txt"
         fs, path = fs_and_path(uri)
@@ -1805,33 +1777,17 @@ class RayLogSyncSession:
         return stop
 
 
-_TRAINER_COMPLETION_MARKER = b"Training run completed: elapsed_excluding_eval_seconds="
-_TRAINER_COMPLETION_LINE = re.compile(
-    rb"skyrl_train\.entrypoints\.main_base:_run:\d+ - "
-    + _TRAINER_COMPLETION_MARKER
-    + rb"(\d+\.\d{3})\s*$"
-)
-_ANSI_COLOR = re.compile(rb"\x1b\[[0-9;]*m")
-
-
 @dataclass
 class DriverOutputActivity:
     """Track child output that provides evidence of training progress."""
 
     last_progress_at: float = field(default_factory=time.monotonic)
     condition: threading.Condition = field(default_factory=threading.Condition)
-    elapsed_excluding_eval: float | None = None
 
     def record(self, line: bytes) -> None:
         if not line.strip() or any(marker in line for marker in IGNORED_DRIVER_OUTPUT_MARKERS):
             return
         with self.condition:
-            if _TRAINER_COMPLETION_MARKER in line:
-                match = _TRAINER_COMPLETION_LINE.search(_ANSI_COLOR.sub(b"", line))
-                if match is not None:
-                    seconds = float(match[1])
-                    if math.isfinite(seconds) and seconds > 0:
-                        self.elapsed_excluding_eval = seconds
             self.last_progress_at = time.monotonic()
             self.condition.notify_all()
 
@@ -1939,7 +1895,6 @@ def run_head(
     derived_gloo_ifname: str | None = None,
     *,
     debug_mode: DebugMode = DebugMode.LIGHT,
-    trainer_timing_uri: str | None = None,
 ) -> int:
     ensure_task_debug_artifact_directory(debug_mode)
     num_tasks = _num_tasks()
@@ -2023,6 +1978,9 @@ def run_head(
     else:
         _log("Single-node slice: skipping rendezvous and multi-node wait.")
 
+    if args.role_topology is not None:
+        verify_role_placement(ray_address, args.role_topology, Path(os.environ[IRIS_OUTPUT_DIR_ENV]))
+
     with ray_metrics_telemetry(head_ip, allocated_ray_port(RayPort.METRICS), CONTROLLER_ROLE):
         env = training_driver_env(derived_gloo_ifname)
         env["RAY_ADDRESS"] = ray_address  # skyrl-train's bare ray.init() attaches here
@@ -2080,11 +2038,6 @@ def run_head(
             )
             ray_stop()
             return exit_code
-        if trainer_timing_uri is not None and not output_thread.is_alive() and driver_activity.elapsed_excluding_eval:
-            try:
-                write_json(trainer_timing_uri, {"elapsed_excluding_eval_seconds": driver_activity.elapsed_excluding_eval})
-            except Exception as error:
-                _log(f"Could not persist the trainer completion time: {error}")
         # Final flush of this node's Ray session logs before teardown reaps them.
         persist_runtime_artifacts(f"driver exit_code={exit_code} (head)")
     # Signal workers to unpark, then tear down.
@@ -2193,7 +2146,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
     model = config.inputs.model
     skyrl = config.skyrl
     checkpoint_export = config.run.mode == RunMode.CHECKPOINT_EXPORT
-    task_env = {str(key): str(value) for key, value in config.runtime.task_env.items()}
     model_uri = str(model.uri)
     model_identity = str(model.identity)
     train_data = [] if checkpoint_export else _container(config.inputs.train_data)
@@ -2208,7 +2160,7 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         draft_model = SpeculatorModelConfig.from_mapping(
             _container(draft_mapping), context="generator.speculative_decoding.model"
         )
-    offline = task_env.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
+    offline = os.environ.get("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes", "on"}
     prestage_model = model_uri if not is_cloud_uri(model_uri) and (model.chat_template or offline) else ""
     return argparse.Namespace(
         role_topology=derive_launch_topology(_container(config)).role_topology,
@@ -2222,8 +2174,6 @@ def _runtime_namespace(config: DictConfig) -> argparse.Namespace:
         driver_liveness_timeout=int(config.ray.driver_liveness_timeout),
         run_id=str(config.run.id),
         training_type=None if config.runtime.training_type is None else TrainingType(config.runtime.training_type),
-        task_env=task_env,
-        terminal_bench_data=_json_list(skyrl.get("data", {}).get("terminal_bench_data", [])),
         data_sources_json=_json_list(data_sources) if data_sources else "",
         prestage_model=prestage_model,
         model_source_uri=model_uri if is_cloud_uri(model_uri) else "",
@@ -2266,7 +2216,6 @@ def _write_final_config(
     values = TaskLocalSkyRLValues(
         train_data=(),
         validation_data=(),
-        terminal_bench_data=(),
         policy_model_path=policy_model.local_path if policy_model else None,
         draft_model_uri=draft_model.source_uri if draft_model else None,
     )
@@ -2311,6 +2260,7 @@ def _write_final_config(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bootstrap Ray and run one typed MarinSkyRL launch config.")
     parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--environment-prepared", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -2335,10 +2285,19 @@ def main() -> None:
     cli_args = parse_args()
     config_path = Path(materialize_launch_config(str(cli_args.config)))
     launch_config = load_launch_config(config_path)
+    if not cli_args.environment_prepared:
+        os.environ.update({str(key): str(value) for key, value in launch_config.runtime.task_env.items()})
     args = _runtime_namespace(launch_config)
-    os.environ.update(args.task_env)
     if args.role_topology is not None:
-        args.ray_labels = args.role_topology.node_labels(_rank())
+        args.ray_labels = {
+            **args.role_topology.node_labels(_rank()),
+            **node_physical_labels(
+                rank=_rank(),
+                gpus_per_node=int(launch_config.iris.allocation.gpus_per_node),
+                host=os.environ[IRIS_NODE_NAME_ENV],
+                fabric_info=probe_fabric_info(),
+            ),
+        }
     _print_env_snapshot()
     # Pin virtual-hosted S3 addressing for the boto3 path (Ray object-spill IO workers)
     # BEFORE any `ray start`, on head + every worker — CoreWeave R2 rejects path-style.
@@ -2350,7 +2309,9 @@ def main() -> None:
     # would otherwise broadcast the head's name to every node.
     derived_gloo_ifname = pin_socket_ifname()
     # Resolve before Ray starts so its actors inherit this task's telemetry settings.
-    export_telemetry_environment(args.run_id, args.training_type, launch_config.run.get("model"))
+    index = launch_config.run.get("index")
+    run_id = RunIndexIdentity.model_validate(dict(index)).run_id if index is not None else args.run_id
+    export_telemetry_environment(run_id, args.training_type, launch_config.run.get("model"))
     # Ensure the NCCL flight-recorder dump dir exists on THIS node BEFORE any torch/NCCL
     # init, so a collective-timeout FR dump actually writes. See ensure_fr_dump_dir.
     ensure_fr_dump_dir()
@@ -2359,13 +2320,9 @@ def main() -> None:
     if debug_artifact_root:
         ensure_debug_artifact_directories(debug_artifact_root)
         initialize_process_diagnostics(f"task-runtime-rank{_rank()}")
-    # Stage task datasets on THIS node before Ray bootstrap (head + every worker).
-    # Without this, only rank-0 has the extracted tasks and the rollout workers die
-    # with FileNotFoundError on task.toml. See stage_task_data docstring.
+    # Stage datasets on every node before Ray bootstrap because pods have separate filesystems.
     if args.data_sources_json:
         materialize_data_sources(args.data_sources_json)
-    if args.terminal_bench_data:
-        stage_task_data(args.terminal_bench_data, role="terminal-bench sidechannel")
     stage_hugging_face_models(launch_config)
     policy_model = prepare_policy_model(args)
     policy_local_path = policy_model.local_path if policy_model is not None else None
@@ -2400,12 +2357,7 @@ def main() -> None:
             policy_tokenizer=policy_tokenizer,
             draft_model=draft_model,
         )
-        timing_uri = None
-        if launch_config.run.mode == RunMode.TRAIN and trainer.get("dump_grader_report", False):
-            timing_uri = join_resource_path(str(trainer.grader_report_dir), "trainer_timing.json")
-        exit_code = run_head(
-            args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode, trainer_timing_uri=timing_uri
-        )
+        exit_code = run_head(args, final_config_path, derived_gloo_ifname, debug_mode=debug_mode)
     else:
         exit_code = run_worker(args, debug_mode=debug_mode)
     if exit_code != 0:

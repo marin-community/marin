@@ -86,14 +86,16 @@ async def test_tagged_evaluator_shuffle_reorders_combined_dataset_and_preserves_
         assert tags.tolist() == expected_tags
 
 
-def test_tagged_evaluator_excludes_unscored_tags_from_macros_and_logs():
+@pytest.mark.parametrize("compute_bpb", [False, True])
+def test_tagged_evaluator_excludes_unscored_tags_from_macros_and_logs(compute_bpb):
     EvalBatch = Axis("batch", len(jax.devices()))
     first = ListAsyncDataset([jnp.array([0, 0], dtype=jnp.int32)] * EvalBatch.size)
     second = ListAsyncDataset([jnp.array([4, 4], dtype=jnp.int32)] * (2 * EvalBatch.size))
     empty = ListAsyncDataset([])
+    masked = ListAsyncDataset([jnp.array([8, 8], dtype=jnp.int32)] * EvalBatch.size)
 
     def loss_fn(_model, batch) -> LossFnOutput:
-        return batch.astype(jnp.float32), jnp.ones_like(batch, dtype=jnp.float32), batch
+        return batch.astype(jnp.float32), (batch != 8).astype(jnp.float32), batch
 
     with use_test_mesh(tensor_parallelism=1) as mesh:
         evaluator = TaggedEvaluator(
@@ -102,20 +104,27 @@ def test_tagged_evaluator_excludes_unscored_tags_from_macros_and_logs():
                 (first, ["paloma/first"]),
                 (second, ["paloma/second"]),
                 (empty, ["paloma/empty"]),
+                (masked, ["paloma/masked"]),
                 (empty, ["other/empty"]),  # a parent with no scored child
             ],
             loss_fn=loss_fn,
-            tokenizer=PassthroughTokenizer(10),
+            tokenizer=PassthroughTokenizer(10) if compute_bpb else None,
             device_mesh=mesh,
             axis_mapping={EvalBatch.name: ResourceAxis.DATA},
         )
         log_dict = construct_log_dict(evaluator, evaluator.evaluate(jnp.zeros(())), 0.0, prefix="eval")
 
-    # The unequal corpus sizes separate the macro, 2.0, from the micro, 8/3. Averaging in the empty tags would give 1.0.
+    # The unequal corpus sizes separate the macro, 2.0, from the micro, 8/3. Unscored tags have no loss.
     assert log_dict["eval/macro_loss"] == pytest.approx(2.0)
-    assert log_dict["eval/macro_bpb"] == pytest.approx(2.0 / np.log(2))
+    assert log_dict["eval/paloma/macro_loss"] == pytest.approx(2.0)
+    assert log_dict["eval/loss"] == pytest.approx(8 / 3)
+    if compute_bpb:
+        assert log_dict["eval/macro_bpb"] == pytest.approx(2.0 / np.log(2))
+        assert log_dict["eval/paloma/macro_bpb"] == pytest.approx(2.0 / np.log(2))
+    else:
+        assert "eval/macro_bpb" not in log_dict
     assert "eval/paloma/first/loss" in log_dict
-    assert not [key for key in log_dict if "empty" in key or "eval/other" in key]
+    assert not [key for key in log_dict if "empty" in key or "masked" in key or "eval/other" in key]
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():

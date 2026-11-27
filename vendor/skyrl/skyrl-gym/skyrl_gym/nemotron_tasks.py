@@ -55,7 +55,8 @@ from skyrl_gym.python_execution import PythonKernel
 from skyrl_gym.lean_execution import compile_lean
 from skyrl_gym.task_records import fold_grades, grade_result, skipped_grade
 from skyrl_gym.task_sessions import BlockingOperations
-from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR, VerificationResult
+from skyrl_gym.verification import VerificationResult
+from rigging.task_errors import VERIFIER_RUNTIME_ERROR
 
 NS_TOOLS_AGENT = "ns_tools_simple_agent"
 IPI_AGENT = "indirect_prompt_injection_simple_agent"
@@ -104,7 +105,7 @@ class NemotronTaskSession:
         self.grading = GradingMode(self.config.get("grading", GradingMode.VERIFY))
         ultra = parameters.extras["extra_info"]["nemotron_ultra"]
         if ultra["route"] != "task_session":
-            raise ValueError("Terminal source rows require a portable Harbor task")
+            raise ValueError("Terminal source rows require a prepared TaskSpec with a task machine")
         self.agent = ultra["agent"]
         if self.agent not in NEMOTRON_ULTRA_MOPD_AGENTS:
             raise ValueError(f"Unsupported Nemotron source agent: {self.agent!r}")

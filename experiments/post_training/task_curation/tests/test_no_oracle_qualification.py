@@ -208,7 +208,7 @@ def test_a_faithful_mode_change_is_reported_not_failed():
     expectations = (FileExpectation(path="/app/run.sh", sha256="b" * 64, mode=0o644),)
     comparison = _compare_workspace(expectations, f"755 /app/run.sh\n{'b' * 64}  /app/run.sh\n")
     assert (comparison.written, comparison.missing, comparison.altered, comparison.extra) == (1, (), (), ())
-    assert comparison.remoded and comparison.remoded[0].startswith("bbbbbbbbbbbb:")
+    assert comparison.remoded == ("bbbbbbbbbbbb:/app/run.sh:0o755->0o644",)
 
 
 def test_a_mode_zero_file_still_counts_as_present():

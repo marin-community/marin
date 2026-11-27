@@ -22,7 +22,8 @@ from iris.cluster.types import Entrypoint, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from marin.evaluation import task_worker
 from marin.rollouts.evaluation import EvaluationInfrastructureError, EvaluationRunConfig, ModelIdentity
-from rolloutengine.models import RolloutLimits
+from rolloutengine.models import MachineRuntimeSpec, RolloutLimits
+from shellbox.machine import NetworkPolicy
 from taskcompendium.convert.answers import exact_answer_task
 from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import EvaluationProtocol, Metric, MetricKind, Sampling, SummaryKind, TrialPolicy
@@ -213,6 +214,32 @@ def test_in_process_graded_runs_never_build_the_local_sandbox(
     execute_with_retries(recovery_corpora, output, driver_config, "http://fixture.test/v1", "unused", None)
     terminal = [row for row in ReadView(output).iter_rows(ATTEMPTS_TABLE) if row["phase"] == "finished"]
     assert [row["outcome"] for row in terminal] == ["graded"] * 8
+
+
+@pytest.mark.parametrize(
+    ("task_backend", "grader_backend"),
+    [(None, "local"), ("local", "local"), ("docker", "docker"), ("daytona", "daytona")],
+)
+def test_graders_run_on_the_task_machine_backend(driver_config, task_backend, grader_backend):
+    task_machine = None
+    if task_backend is not None:
+        task_machine = MachineRuntimeSpec(
+            backend=task_backend,
+            network=NetworkPolicy.ALLOW,
+            cpus=None,
+            memory_mb=None,
+            storage_mb=None,
+            gpus=0,
+            user=None,
+            startup_timeout=600,
+            cleanup_timeout=60,
+        )
+
+    verifier = task_worker.execution_config(
+        driver_config.model_copy(update={"task_machine": task_machine})
+    ).verifier_machine
+
+    assert (verifier.backend, verifier.network) == (grader_backend, NetworkPolicy.DENY)
 
 
 @pytest.mark.parametrize(

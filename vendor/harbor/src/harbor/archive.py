@@ -31,8 +31,7 @@ from harbor.models.job.paths import (
 from harbor.models.trajectories import ContentPart, Trajectory
 from harbor.models.trial.result import TrialResult
 from harbor.trial.hooks import TrialEvent, TrialHookEvent
-from rigging.task_errors import ErrorCategory, error_category
-from harbor_config.errors import ERROR_CATEGORIES
+from rigging.task_errors import ErrorCategory
 from harbor_config.models.job.config import ArchiveConfig
 
 try:
@@ -113,7 +112,7 @@ def _is_scored(result: TrialResult) -> bool:
     exception = result.exception_info
     if exception is None:
         return result.verifier_result is not None
-    category = error_category(exception.exception_type, categories=ERROR_CATEGORIES)
+    category = exception.category
     if category is ErrorCategory.AGENT:
         return True
     if category is ErrorCategory.PASSTHROUGH:
@@ -134,7 +133,7 @@ def _trial_sample(
         {
             "type": exception.exception_type,
             "message": exception.exception_message,
-            "category": error_category(exception.exception_type, categories=ERROR_CATEGORIES).value,
+            "category": exception.category.value,
         }
         if exception
         else None

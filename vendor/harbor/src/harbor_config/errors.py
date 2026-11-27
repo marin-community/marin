@@ -5,6 +5,7 @@ from types import MappingProxyType
 from rigging.task_errors import (
     API_CONNECTION_ERROR,
     API_TIMEOUT_ERROR,
+    SHARED_RETRYABLE_ERROR_TYPES,
     INTERNAL_SERVER_ERROR,
     TRIAL_TIMEOUT_ERROR,
     ErrorCategory,
@@ -41,7 +42,6 @@ TMUX_BATCH_PROTOCOL_ERROR = "TmuxBatchProtocolError"
 TMUX_COMMAND_ERROR = "TmuxCommandError"
 TMUX_EXEC_TIMEOUT_ERROR = "TmuxExecTimeoutError"
 TMUX_SESSION_ENDED_ERROR = "TmuxSessionEndedError"
-
 
 HARBOR_ERROR_CATEGORIES = MappingProxyType(
     {
@@ -127,3 +127,6 @@ RESUME_RETRYABLE_ERROR_TYPES = frozenset(
 def is_resume_retryable(exception_type: str) -> bool:
     """Whether a persisted exception should be re-run on a fresh job resume."""
     return exception_type in RESUME_RETRYABLE_ERROR_TYPES
+
+
+RETRYABLE_ERROR_TYPES = RESUME_RETRYABLE_ERROR_TYPES | SHARED_RETRYABLE_ERROR_TYPES

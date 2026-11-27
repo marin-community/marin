@@ -9,17 +9,11 @@
 # grading: skip lets judge-backed rows train without a judge; the distillation loss ignores the
 # reward. ns_tools and Lean rows execute in task-local Shellbox machines.
 #
-# Harbor SWE rows (--swe-rows N) use TaskRolloutWorker. Supply the sample's
-# swe-tasks/tasks.parquet as data.terminal_bench_data and TOGETHER_API_KEY for the TaskTrove
-# verifiers. Without that task data the Harbor settings below run no trials, but
-# n_concurrent_trials / n_samples_per_prompt still bounds the launch's derived max_in_flight.
+# Code tasks that require a sandbox enter training as prepared TaskSpecs with a task machine.
 #
 # Pass the student with --model-path (open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92
 # pinned to a commit) and the sample's train.parquet with --train-data.
 entrypoint: standard
-
-config_groups:
-  terminal_bench_config: terminal_bench
 
 context_budget:
   # The swe and terminal teachers have 32,768 positions, and scoring a trajectory takes one
@@ -29,23 +23,12 @@ context_budget:
   max_turns: 50
   generated_budget_fraction: 1.0
 
-terminal_bench:
-  harbor:
-    override_timeout_sec: 600
-    verifier_override_timeout_sec: 300
-    override_cpus: 1
-    override_memory_mb: 4096
-    override_storage_mb: 4096
-    env_network_policy:
-      mode: unrestricted
-    max_retries: 3
-    n_concurrent_trials: 512
-    enable_reward_shaping: false
-    enable_error_classification: true
-    default_error_treatment: zero
 environment:
   env_class: nemotron_ultra
   task_sessions:
+    retry:
+      max_retries: 3
+      wait_multiplier: 2.0
     nemotron_ultra:
       grading: skip
 
@@ -69,7 +52,7 @@ trainer:
       coefficient: 1.0
       reward_mode: replace
     group_admission:
-      # A Harbor trial may take 600 s setup, 600 s agent, and 300 s verifier time.
+      # Leave time for agentic task machine setup, rollout, and verification.
       stall_timeout: 3600
   epochs: 1
   max_steps: 100
@@ -208,7 +191,6 @@ data:
   kind: parquet
   train_data: []
   val_data: []
-  terminal_bench_data: []
   shuffle: true
 
 extra_env:

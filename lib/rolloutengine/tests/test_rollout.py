@@ -18,6 +18,7 @@ import taskcompendium.runtime.grading as grading_runtime
 from shellbox.backends.docker.machine import DockerMachineFactory, docker
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.http_service import HttpResponse, serve_http
 from shellbox.image import DockerfileSource
 from shellbox.machine import (
     Backend,
@@ -80,7 +81,7 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness, LengthStopPolicy
 from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.machines import _machine_spec, task_machine
+from rolloutengine.machines import MachineSetupError, _machine_spec, task_machine
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
     AttemptEnded,
@@ -102,7 +103,6 @@ from rolloutengine.models import (
     RolloutEvent,
     RolloutEventPayload,
     RolloutEventType,
-    RolloutFailure,
     RolloutInterrupted,
     RolloutOperation,
     TaskRolloutSpec,
@@ -683,9 +683,10 @@ async def test_agent_harness_failure_retains_the_generated_turn():
     assert isinstance(caught.value.__cause__, RuntimeError)
     assert caught.value.rollout.conversations[-1].response_token_ids == (20,)
     assert caught.value.rollout.conversations[-1].loss_mask == (1,)
-    assert caught.value.rollout.failure == RolloutFailure(
-        "RuntimeError", {"operation": "advance", "error": "Agent failed after receiving its response"}
-    )
+    failure_record = caught.value.rollout.failure
+    assert failure_record is not None
+    assert failure_record.exception_type == "RuntimeError"
+    assert failure_record.operation == "advance"
     assert "cleanup_errors" not in caught.value.grade.diagnostics
     # A Zephyr or Ray worker sends the exception to another process, which still gets the record and the grade.
     restored = pickle.loads(pickle.dumps(caught.value))
@@ -718,10 +719,10 @@ async def test_an_agent_that_ends_cancelled_fails_its_attempt_instead_of_cancell
     with pytest.raises(GradedRolloutInterrupted) as caught:
         await runner.run_task(rollout_spec(arithmetic_task(), harness="agent"))
     assert caught.value.operation == RolloutOperation.ADVANCE
-    assert caught.value.rollout.failure == RolloutFailure(
-        "RuntimeError",
-        {"operation": "advance", "error": "The agent ended with a CancelledError before the engine stopped it"},
-    )
+    failure_record = caught.value.rollout.failure
+    assert failure_record is not None
+    assert failure_record.exception_type == "RuntimeError"
+    assert failure_record.operation == "advance"
     assert caught.value.rollout.conversations[-1].response_token_ids == (20,)
 
 
@@ -1139,6 +1140,45 @@ async def test_json_answer_grades_typed_evidence_and_rejects_duplicate_keys(answ
     record = await engine(model).run_task(rollout_spec(task))
     assert (record.grade.status, record.grade.reward) == (status, reward)
     assert "12" not in json.dumps(model.requests[0].messages)
+
+
+async def test_text_block_assistant_reply_keeps_valid_score():
+    model = ReplayModel([{"role": "assistant", "content": [{"type": "output_text", "text": "12"}]}])
+
+    result = await engine(model).run_task(rollout_spec(arithmetic_task()))
+
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
+
+
+async def test_malformed_harness_prompt_precedes_malformed_model_reply():
+    async def agent(_context, complete):
+        await complete(Prompt(({"role": "user", "content": 7},), {}))
+
+    malformed = {
+        "role": "assistant",
+        "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "bash", "arguments": '{"cmd": "'}}],
+    }
+    model = ReplayModel([malformed])
+    runner = engine(model, harnesses={"agent": AgentHarness(agent)})
+
+    with pytest.raises(GradedRolloutInterrupted) as failure:
+        await runner.run_task(rollout_spec(arithmetic_task(), harness="agent"))
+
+    assert failure.value.operation is RolloutOperation.GRADE
+
+
+async def test_duplicate_tool_call_ids_in_one_model_turn_score_zero():
+    async def agent(_context, complete):
+        await complete(Prompt(({"role": "user", "content": "Solve the task."},), {}))
+
+    call = {"id": "reused", "type": "function", "function": {"name": "bash", "arguments": "{}"}}
+    model = ReplayModel([{"role": "assistant", "content": "", "tool_calls": [call, call]}])
+
+    result = await engine(model, harnesses={"agent": AgentHarness(agent)}).run_task(
+        rollout_spec(arithmetic_task(), harness="agent")
+    )
+
+    assert (result.grade.status, result.grade.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
 
 
 @pytest.mark.parametrize("provider", ["machine", "harness"])
@@ -2476,6 +2516,96 @@ async def test_environment_setup_runs_as_root_before_agent_commands():
     assert closed.is_set()
 
 
+@pytest.mark.parametrize("relay", ["ready", "failed", "unsupported"])
+async def test_task_machine_user_is_used_for_the_relay_and_not_the_verifier(relay):
+    relay_port = 9000
+    relay_commands = []
+    verifier_users = []
+    startup_error = ValueError("Relay startup failed")
+
+    class Session:
+        stderr = b""
+
+        def __init__(self):
+            self.ready = False
+            self.closed = asyncio.Event()
+
+        async def read(self, max_bytes=65536):
+            if self.ready:
+                await self.closed.wait()
+                return b""
+            self.ready = True
+            return b'{"type":"ready"}\n'
+
+        async def close(self):
+            self.closed.set()
+
+    class Machine:
+        async def run(self, command):
+            if command.argv == ("sh", "/tests/grade.sh"):
+                verifier_users.append(command.user)
+                return Result(0, b"1\n", b"", False, False, ExitReason.EXITED)
+            return Result(0, b"", b"", False, False, ExitReason.EXITED)
+
+        async def upload(self, source, target):
+            pass
+
+        async def download(self, source, target):
+            raise NotImplementedError
+
+        async def close(self):
+            pass
+
+    class ProcessMachine(Machine):
+        async def open_process(self, command):
+            relay_commands.append(command)
+            if relay == "failed":
+                raise startup_error
+            return Session()
+
+    class Factory(DockerMachineFactory):
+        async def create(self, spec):
+            return Machine() if relay == "unsupported" else ProcessMachine()
+
+    class Episode:
+        def __init__(self, context):
+            self.machine = context.machine
+
+        async def prepare(self):
+            async def handler(_request):
+                return HttpResponse(200, b"{}")
+
+            async with asyncio.TaskGroup() as group:
+                service = serve_http(self.machine, handler, port=relay_port, task_group=group)
+                if relay == "ready":
+                    async with service as base_url:
+                        assert base_url == f"http://127.0.0.1:{relay_port}"
+                else:
+                    error = ValueError if relay == "failed" else UnsupportedMachineSpec
+                    with pytest.raises(error) as caught:
+                        async with service:
+                            pytest.fail("An unavailable relay started")
+                    if relay == "failed":
+                        assert caught.value is startup_error
+            return Prompt(({"role": "user", "content": "Run the task."},), {})
+
+        async def advance(self, turn):
+            return Transition(done=True)
+
+        async def close(self):
+            pass
+
+    record = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]),
+        {"local": Factory()},
+        harnesses={"fixture": StepHarness(Episode)},
+    ).run_task(rollout_spec(agent_machine_task(b"echo 1"), machine=machine_runtime(user="learner"), harness="fixture"))
+
+    assert [command.user for command in relay_commands] == ([] if relay == "unsupported" else ["learner"])
+    assert verifier_users == [None]
+    assert record.grade.reward == 1.0
+
+
 async def test_a_failed_setup_command_names_itself_and_keeps_its_output_tail():
     """A setup command that exits non-zero fails the start with the command and its output in the error."""
     stderr = b"mkdir: cannot create directory '/opt/gen': Read-only file system\n"
@@ -2509,7 +2639,10 @@ async def test_a_failed_setup_command_names_itself_and_keeps_its_output_tail():
 
     assert caught.value.operation == RolloutOperation.START
     cause = caught.value.__cause__
-    assert isinstance(cause, RuntimeError)
+    assert isinstance(cause, MachineSetupError)
+    assert cause.exit_code == 1
+    assert cause.stdout == "made /workspace"
+    assert cause.stderr == stderr.decode().strip()
     assert str(cause) == (
         "Environment setup command failed: exited, exit=1; command: 'mkdir -p /workspace /opt/gen'; "
         "stdout: 'made /workspace'; stderr: \"mkdir: cannot create directory '/opt/gen': Read-only file system\""
@@ -4183,9 +4316,11 @@ async def test_a_grading_failure_after_a_model_failure_keeps_the_model_failure()
     assert isinstance(caught.value.__cause__, ConnectionError)
     [note] = caught.value.__cause__.__notes__
     assert "file or byte budget" in note
-    assert caught.value.rollout.failure == RolloutFailure(
-        "ConnectionError", {"operation": "model", "error": "inference server unavailable", "notes": [note]}
-    )
+    failure_record = caught.value.rollout.failure
+    assert failure_record is not None
+    assert failure_record.exception_type == "ConnectionError"
+    assert failure_record.operation == "model"
+    assert failure_record.diagnostics["notes"] == [note]
 
 
 @pytest.mark.parametrize("wrapped", [False, True], ids=["generation-limit", "transport-rejection"])
