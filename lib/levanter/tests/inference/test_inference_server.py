@@ -17,6 +17,7 @@ from levanter.layers.sampler import LogprobMode
 from levanter.models.llama import LlamaLMHeadModel
 from levanter.models.lm_model import LmExample
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
+from levanter.policy_model import PolicyBatch, response_logprobs
 from levanter.testing.devices import use_cpu_devices
 from levanter.testing.helpers import skip_if_no_torch
 from levanter.testing.model_configs import llama_test_config
@@ -40,6 +41,7 @@ try:
         _compute_tokens,
     )
     from levanter.inference.openai_protocol import ChatMessage
+    from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch
     from levanter.inference.router_replay import read_router_replay
 
 except ImportError:
@@ -771,6 +773,7 @@ def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokeniz
     server_config = InferenceServerConfig(
         host="127.0.0.1",
         grpc_port=0,
+        initial_policy_id="test-snowball-policy",
         service=InferenceEngineConfig(
             max_seq_len=16,
             max_pages=16,
@@ -781,6 +784,7 @@ def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokeniz
             max_rounds=2,
             page_size=2,
             compute_dtype=jnp.float32,
+            logprob_mode=LogprobMode.POLICY,
         ),
     )
     prompt = np.array([2, 7, 4, 9, 6], dtype=np.int32)
@@ -816,9 +820,51 @@ def test_grpc_snowball_generation_replays_exact_expert_routes(local_gpt2_tokeniz
                 LmExample(tokens, hax.ones(tokens.axes)), route_replay=replay, reduction=None
             )
 
-    np.testing.assert_allclose(
-        choice.behavior_logprobs, -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0
-    )
+            padded = hax.named(jnp.asarray(np.pad(inputs, (2, 1))[None]), ("batch", "position"))
+            attended = hax.named(jnp.asarray([[0, 0] + [1] * len(inputs) + [0]]), padded.axes)
+            response_axes = (padded.resolve_axis("batch"), hax.Axis("response", 5))
+            objective = hax.named(jnp.asarray([[1, 1, 1, 1, 0]], dtype=jnp.float32), response_axes)
+            batch = PolicyBatch(
+                tokens=padded,
+                attention_mask=attended,
+                position_ids=hax.maximum(hax.cumsum(attended, "position") - 1, 0),
+                response_mask=objective,
+                advantages=objective,
+                policy_weights=objective / 4,
+                kl_weights=objective / 4,
+                old_logprobs=hax.zeros(response_axes),
+                reference_logprobs=None,
+            )
+            prepared = prepare_rollout_policy_batch(
+                model, batch, [RolloutChoice(response, 0)], policy_id="test-snowball-policy"
+            )
+            np.testing.assert_array_equal(prepared.old_logprobs.array[0, :-1], choice.policy_logprobs)
+            np.testing.assert_allclose(
+                response_logprobs(model, prepared, block_size=8).array[0, :-1],
+                choice.policy_logprobs,
+                atol=1e-5,
+                rtol=0,
+            )
+            with pytest.raises(ValueError):
+                prepare_rollout_policy_batch(model, batch, [RolloutChoice(response, 0)], policy_id="stale-policy")
+
+            # Preserve the exact token stream while moving its first token across a padding gap.
+            gapped_tokens = hax.named(padded.array.at[0, 1].set(padded.array[0, 2]), padded.axes)
+            gapped_mask = hax.named(attended.array.at[0, 1].set(1).at[0, 2].set(0), attended.axes)
+            gapped_batch = dataclasses.replace(
+                batch,
+                tokens=gapped_tokens,
+                attention_mask=gapped_mask,
+                position_ids=hax.maximum(hax.cumsum(gapped_mask, "position") - 1, 0),
+            )
+            shifted_batch = dataclasses.replace(batch, position_ids=batch.position_ids + 1)
+            for invalid_batch in (gapped_batch, shifted_batch):
+                with pytest.raises(ValueError):
+                    prepare_rollout_policy_batch(
+                        model, invalid_batch, [RolloutChoice(response, 0)], policy_id="test-snowball-policy"
+                    )
+
+    np.testing.assert_allclose(choice.policy_logprobs, -learner_loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0)
     wrong_inputs = inputs.copy()
     wrong_inputs[0] += 1
     with pytest.raises(ValueError):
