@@ -103,11 +103,6 @@ class UsageReport(TypedDict):
     usage_source: str
     headroom_fraction: float
     per_sandbox: dict[str, int]
-    compute_charged_states: list[str]
-    conditional_compute_charged_states: list[str]
-    conditional_compute_desired_state: str
-    disk_charged_states: list[str]
-    uncharged_states: list[str]
     regions: dict[str, RegionReport]
     sandboxes: SandboxCounts
 
@@ -329,11 +324,6 @@ def usage_report(
         "usage_source": "sandbox_inventory",
         "headroom_fraction": headroom,
         "per_sandbox": maxima,
-        "compute_charged_states": sorted(state.value for state in COMPUTE_CHARGED_STATES),
-        "conditional_compute_charged_states": sorted(state.value for state in CONDITIONAL_COMPUTE_CHARGED_STATES),
-        "conditional_compute_desired_state": SandboxDesiredState.STARTED.value,
-        "disk_charged_states": sorted(state.value for state in DISK_CHARGED_STATES),
-        "uncharged_states": sorted(state.value for state in UNCHARGED_STATES),
         "regions": {
             region.region: _region_report(region, usage.limits.regions[region.region], requested, exceeded, headroom)
             for region in usage.regions

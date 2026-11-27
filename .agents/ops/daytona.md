@@ -114,7 +114,7 @@ neither is available.
 
 `shellbox-daytona-usage` reads every page of the sandbox inventory and reports
 headroom per region. It does not call the organization-usage endpoint, which
-rejects API keys with 403. The quota presets are the `ACCOUNT_LIMITS` mapping in
+rejects API keys with 401. The quota presets are the `ACCOUNT_LIMITS` mapping in
 `lib/shellbox/src/shellbox/backends/daytona/usage_cli.py` — the single source of
 record. They hold the account owner's limits (2026-11-19) for the `us` region,
 the one Daytona region Marin launches in (`DAYTONA_TARGET`); add further regions
@@ -163,9 +163,7 @@ across CPU, RAM and disk. A profile above any per-sandbox maximum gets a zero
 limit.
 
 JSON includes `organization_id`, `observed_at`, `usage_source`, `quota_source`,
-`per_sandbox`, `headroom_fraction`, `compute_charged_states`,
-`conditional_compute_charged_states`, `conditional_compute_desired_state`,
-`disk_charged_states`, `uncharged_states`, account-wide `sandboxes` (`total`,
+`headroom_fraction`, `per_sandbox`, account-wide `sandboxes` (`total`,
 `started`, `by_state`), and `regions`. Each `regions` entry is keyed by region
 and carries that region's `limits`, `resources`, and `sandboxes` (`total`,
 `compute_charged`, `disk_charged`). A supplied profile adds `max_concurrency`
