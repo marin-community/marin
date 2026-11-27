@@ -92,6 +92,18 @@ class PageBatchInfo(eqx.Module):
     def __post_init__(self):
         assert isinstance(self.num_seqs, jnp.ndarray), "num_seqs must be a JAX ndarray"
 
+    def trim_sequence_padding(self, capacity: int) -> "PageBatchInfo":
+        """Trim padding when the caller bounds the number of participating sequences."""
+        if capacity >= self.slot_ids.axis_size("seq"):
+            return self
+        return dataclasses.replace(
+            self,
+            slot_ids=self.slot_ids["seq", :capacity],
+            page_indices=self.page_indices["seq", :capacity],
+            seq_lens=self.seq_lens["seq", :capacity],
+            cu_q_lens=self.cu_q_lens["seq", : capacity + 1],
+        )
+
     def pages_and_slots(self):
         token_dests = self.new_token_dests
 

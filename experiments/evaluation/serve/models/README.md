@@ -203,10 +203,10 @@ geometry; explicit TP must match. Multi-task or routed geometry requires `instan
 `ServedModelConfig.object_store_load_mode` defaults to `STREAM`, which multi-task GPU serving requires.
 Single-task serving also supports local weight staging.
 
-### Native Snowball on v5p
+### Native Snowball on TPU
 
-Select the 64K Snowball profile on a single v5p-8. Set the number of
-concurrent generation slots explicitly for the workload.
+Select the 64K Snowball profile on a single v5p-8 or v6e-8. Set the number
+of concurrent generation slots explicitly for the workload.
 
 ```bash
 uv run marin-serve iris open-athena/Marin-Snowball-67B-A2B-v0.1 \
@@ -214,10 +214,15 @@ uv run marin-serve iris open-athena/Marin-Snowball-67B-A2B-v0.1 \
   --levanter-profile snowball_agentx_v5p --max-seqs 128
 ```
 
-On an allocated v5p-8 host, use `marin-serve local` with the same backend,
+For v6e-8, use `--tpu v6e-8 --levanter-profile snowball_agentx_v6e`.
+
+On an allocated TPU host, use `marin-serve local` with the same backend,
 profile, and slot count. Set `LIBTPU_INIT_ARGS` to
-`--xla_tpu_scoped_vmem_limit_kib=50000 --xla_tpu_use_enhanced_launch_barrier=true`
-before launch. Iris sets those flags in the worker environment. The profile uses BF16 weights, four expert shards,
-and raw policy log probabilities. Streaming chat callers can request
+`--xla_tpu_scoped_vmem_limit_kib=50000` on v5p-8 or
+`--xla_tpu_scoped_vmem_limit_kib=98304` on v6e-8, and include
+`--xla_tpu_use_enhanced_launch_barrier=true`. Iris sets those flags in the
+worker environment. Both profiles use BF16 weights and raw policy log
+probabilities. The v5p-8 profile uses four expert shards, and the v6e-8
+profile uses eight. Streaming chat callers can request
 `return_route_captures` to receive a base64-encoded protobuf `GenerateResponse`
 in the final SSE choice event's `levanter_generation` field.

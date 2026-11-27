@@ -5,6 +5,7 @@ import base64
 import dataclasses
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 
@@ -223,6 +224,148 @@ def test_endpoints_exist(test_client):
     assert "/v1/chat/completions" in routes
 
 
+def test_shutdown_waits_for_active_generation(
+    monkeypatch, trainer_config, inference_server_config, generated_model_and_tokenizer
+):
+    model, tokenizer = generated_model_and_tokenizer
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+        server = InferenceServer.create(inference_server_config, model, tokenizer)
+
+    ctx = server.inference_context
+    started = threading.Event()
+    unblock = threading.Event()
+    shutdown_started = threading.Event()
+    wait_timeout = 15
+    original_execute = ctx._execute_batch
+
+    def blocked_execute(requests, poll):
+        started.set()
+        assert unblock.wait(timeout=wait_timeout)
+        original_execute(requests, poll)
+
+    def shutdown():
+        shutdown_started.set()
+        server.shutdown()
+
+    monkeypatch.setattr(ctx, "_execute_batch", blocked_execute)
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=2) as executor:
+            result = executor.submit(
+                client.post,
+                "/v1/chat/completions",
+                json={
+                    "model": TEST_MODEL_NAME,
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 2,
+                    "seed": 483,
+                },
+            )
+            try:
+                assert started.wait(timeout=wait_timeout)
+                stopping = executor.submit(shutdown)
+                assert shutdown_started.wait(timeout=wait_timeout)
+                with pytest.raises(TimeoutError):
+                    stopping.result(timeout=2.5)
+            finally:
+                unblock.set()
+
+            stopping.result(timeout=wait_timeout)
+            assert result.result(timeout=wait_timeout).status_code == 200
+    finally:
+        server.shutdown()
+
+
+def test_continuous_poll_reads_separate_ready_http_batches(monkeypatch, inference_server_config, local_gpt2_tokenizer):
+    tokenizer = local_gpt2_tokenizer.with_chat_template(TEST_CHAT_TEMPLATE)
+    model_config = SnowballConfig(
+        vocab_size=len(tokenizer),
+        hidden_dim=16,
+        intermediate_dim=32,
+        shared_expert_intermediate_dim=24,
+        num_layers=1,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=TEST_MAX_SEQ_LEN,
+        sliding_window=4,
+        attention_implementation="reference",
+    )
+    service = dataclasses.replace(inference_server_config.service, max_seqs=4, max_rounds=1, max_retained_prompts=8)
+    config = dataclasses.replace(inference_server_config, service=service)
+    mesh = compact_grug_mesh()
+    with jax.set_mesh(mesh):
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", len(tokenizer)), model_config, key=jax.random.key(19))
+        server = InferenceServer.create(config, model, tokenizer, mesh=mesh)
+
+    ctx = server.inference_context
+    entered = threading.Event()
+    enqueued = threading.Event()
+    resume = threading.Event()
+    timeout = 25
+    first_tokens_per_round = []
+    put = ctx.batch_queue.put
+    generate = ctx.engine.generate_continuously
+
+    def put_and_signal(batch):
+        put(batch)
+        enqueued.set()
+
+    def observe_generation(requests, *, on_tokens, **kwargs):
+        entered.set()
+        assert resume.wait(timeout=timeout)
+        started_requests = set()
+
+        def record_tokens(request_id, choice, tokens):
+            started_requests.add(request_id)
+            on_tokens(request_id, choice, tokens)
+
+        generate(
+            requests,
+            on_tokens=record_tokens,
+            step_callback=lambda _step: first_tokens_per_round.append(len(started_requests)),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(ctx.batch_queue, "put", put_and_signal)
+    monkeypatch.setattr(ctx.engine, "generate_continuously", observe_generation)
+    try:
+        with TestClient(server.app) as client, ThreadPoolExecutor(max_workers=4) as executor:
+
+            def submit():
+                return executor.submit(
+                    client.post,
+                    "/v1/chat/completions",
+                    json={
+                        "model": TEST_MODEL_NAME,
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "max_tokens": 5,
+                        "stream": True,
+                        "seed": 483,
+                    },
+                )
+
+            responses = [submit()]
+            try:
+                assert entered.wait(timeout=timeout) and enqueued.wait(timeout=timeout)
+                # Send each request only after the admission thread has queued the preceding batch.
+                for _ in range(3):
+                    enqueued.clear()
+                    responses.append(submit())
+                    assert enqueued.wait(timeout=timeout)
+            finally:
+                resume.set()
+
+            for response in responses:
+                result = response.result(timeout=timeout)
+                assert result.status_code == 200
+                assert "data: [DONE]" in result.text
+            assert first_tokens_per_round[:2] == [1, 4]
+    finally:
+        server.shutdown()
+
+
 def test_models_endpoint_reports_the_configured_model(test_client):
     """A client discovering the server (OpenAI SDK, dashboards) reads the id it should send back."""
     client, server = test_client
@@ -248,7 +391,14 @@ def test_chat_stream_matches_complete_text_for_each_choice(test_client):
     complete = client.post("/v1/chat/completions", json=payload)
     assert complete.status_code == 200, complete.text
     streamed = client.post(
-        "/v1/chat/completions", json={**payload, "stream": True, "stream_options": {"include_usage": True}}
+        "/v1/chat/completions",
+        json={
+            **payload,
+            "max_tokens": 2,
+            "max_completion_tokens": payload["max_tokens"],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        },
     )
     assert streamed.status_code == 200, streamed.text
     events = [line.removeprefix("data: ") for line in streamed.text.splitlines() if line.startswith("data: ")]
@@ -256,6 +406,7 @@ def test_chat_stream_matches_complete_text_for_each_choice(test_client):
     chunks = [json.loads(event) for event in events[:-1]]
     assert chunks[-1]["choices"] == []
     assert chunks[-1]["usage"] == complete.json()["usage"]
+    assert chunks[-1]["usage"]["completion_tokens"] == 10
     for expected in complete.json()["choices"]:
         deltas = [row for chunk in chunks for row in chunk["choices"] if row["index"] == expected["index"]]
         assert "".join(row["delta"].get("content") or "" for row in deltas) == expected["message"]["content"]

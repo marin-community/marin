@@ -1444,6 +1444,56 @@ def test_snowball_engine_capture_preserves_samples_and_predictor_routes(compact_
             np.testing.assert_allclose(scores, -loss.array[0, len(prompt) - 1 : -1], atol=1e-5, rtol=0)
 
 
+def test_continuous_generation_fills_the_next_prefill_batch_while_a_request_is_pending():
+    cfg = _tiny_config(num_layers=2)
+    with use_cpu_devices(1), jax.set_mesh(compact_grug_mesh()):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(22))
+        engine = InferenceEngine.from_model_with_config(
+            model.with_split_decode_cache(),
+            tokenizer=None,
+            config=InferenceEngineConfig(
+                max_seq_len=8,
+                max_pages=16,
+                window_cache_max_pages=10,
+                compute_dtype=jnp.float32,
+                page_size=4,
+                max_rounds=1,
+                max_seqs=3,
+                max_seqs_in_prefill=2,
+                max_queued_tokens=4,
+                max_prefill_size=4,
+                max_retained_prompts=2,
+            ),
+        )
+        params = SeqDecodingParams.default()
+        first = Request([1, 2, 4], 10, replace(params, max_num_tokens=jnp.asarray(8)), n_generations=1)
+        pending = Request([3, 2], 11, replace(params, max_num_tokens=jnp.asarray(3)), n_generations=1)
+        waiting = Request([4, 5], 12, replace(params, max_num_tokens=jnp.asarray(3)), n_generations=1)
+        incoming = [waiting]
+        completed = {}
+        first_token_rounds = {}
+        rounds = []
+
+        def poll(_available):
+            if not rounds or not incoming:
+                return []
+            return [incoming.pop()]
+
+        def record_tokens(request_id, choice, tokens):
+            first_token_rounds.setdefault(request_id, len(rounds))
+
+        engine.generate_continuously(
+            [first, pending],
+            poll_requests=poll,
+            on_complete=completed.__setitem__,
+            on_tokens=record_tokens,
+            step_callback=rounds.append,
+        )
+
+    assert first_token_rounds == {10: 0, 11: 1, 12: 1}
+    assert {request_id: result.total_generated for request_id, result in completed.items()} == {10: 5, 11: 1, 12: 1}
+
+
 @pytest.mark.tpu
 @pytest.mark.skipif(not _tpu_v3_available(), reason="BF16 RPA v3 requires v5p or v6e")
 @pytest.mark.parametrize(
@@ -1586,3 +1636,55 @@ def test_snowball_tpu_rmsnorm_matches_shared_reference():
         actual = forward(model.with_batch_invariant_rmsnorm("pallas_tpu"), tokens)
 
     np.testing.assert_allclose(actual.array, reference.array, atol=2e-6, rtol=2e-6)
+
+
+@pytest.mark.tpu
+def test_snowball_v5p_sparse_expert_tiles_match_reference_decode():
+    if jax.device_count() != 4 or jax.devices()[0].device_kind != "TPU v5":
+        pytest.skip("The Snowball sparse expert tiles require one v5p-8")
+    cfg = _tiny_config(
+        hidden_dim=2560,
+        intermediate_dim=1280,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=1,
+        head_dim=128,
+        max_seq_len=256,
+    )
+    config = InferenceEngineConfig(
+        max_seq_len=256,
+        max_pages=12,
+        max_seqs=4,
+        max_seqs_in_prefill=4,
+        max_prefill_size=256,
+        max_queued_tokens=8,
+        max_rounds=2,
+        logprob_mode=LogprobMode.POLICY,
+    )
+    prompts = [[3, 5, 7, 12, 18], [2, 14, 9, 11, 4], [7, 8, 2, 13, 10]]
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=4)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=random.key(30))
+        model = jmp.get_policy("p=bf16,c=bf16").cast_to_compute(model).with_packed_experts().with_expert_sharded_kv()
+        requests = [
+            Request(
+                prompt,
+                request_id=row,
+                decode_params=replace(
+                    SeqDecodingParams.default(), temperature=jnp.float32(0), max_num_tokens=jnp.int32(len(prompt) + 2)
+                ),
+                n_generations=1,
+            )
+            for row, prompt in enumerate(prompts)
+        ]
+        reference = InferenceEngine.from_model_with_config(
+            model.with_paged_attention("reference"), None, config
+        ).generate(requests, capture_routes=True)
+        actual = InferenceEngine.from_model_with_config(model.with_paged_attention("tpu_v3"), None, config).generate(
+            requests, capture_routes=True
+        )
+    assert actual.tokens == reference.tokens
+    np.testing.assert_allclose(actual.logprobs, reference.logprobs, rtol=0, atol=2e-2)
+    assert actual.expert_routes is not None and reference.expert_routes is not None
+    for left, right in zip(actual.expert_routes, reference.expert_routes, strict=True):
+        np.testing.assert_array_equal(left.expert_ids, right.expert_ids)
+        np.testing.assert_array_equal(left.valid, right.valid)

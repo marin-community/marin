@@ -38,7 +38,7 @@ from levanter.inference.window_page_map import WindowPageMap
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.layers.attention import AttentionMask
 from levanter.layers.kv_cache import ListCache, PageCache
-from levanter.layers.sampler import LogprobMode, Sampler
+from levanter.layers.sampler import FULL_DISTRIBUTION_TOP_P, LogprobMode, Sampler
 from levanter.models.lm_model import LmHeadModel
 from levanter.models.snowball import SnowballLMHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
@@ -421,6 +421,7 @@ class PrefillWork(eqx.Module):
     prompt_tokens: ht.i32[NamedArray, "seq position"]  # type: ignore[name-defined]
     prompt_lengths: ht.i32[NamedArray, "seq"]  # type: ignore[name-defined]
     seq_params: SeqDecodingParams
+    has_clones: bool = eqx.field(static=True)
     cached_pages: NamedArray | None = None
     prompt_rows: NamedArray | None = None
 
@@ -517,21 +518,29 @@ def _decode_for_sampling(
 
 
 def _sample_sharded_positions(
-    sampler: Sampler, logits: NamedArray, temperatures: NamedArray, top_ps: NamedArray, keys: jax.Array
+    sampler: Sampler,
+    logits: NamedArray,
+    temperatures: NamedArray,
+    top_ps: NamedArray,
+    num_samples: jax.Array,
+    keys: jax.Array,
 ) -> tuple[NamedArray, NamedArray]:
     sharding = named_sharding_of(logits.array)
     if sharding is None or sharding.mesh.empty or not sharding.spec or sharding.spec[0] is None:
-        return hax.vmap(sampler, "position")(logits, temperatures, top_ps=top_ps, key=keys)
+        return sampler.sample_positions(logits, temperatures, top_ps=top_ps, num_samples=num_samples, key=keys)
 
     row_spec = PartitionSpec(sharding.spec[0])
     logits_spec = PartitionSpec(sharding.spec[0], None)
+    positions = hax.arange(logits.resolve_axis("position"))
+    top_ps = hax.where(positions < num_samples, top_ps, FULL_DISTRIBUTION_TOP_P)
 
     def local_sample(local_logits, local_temps, local_top_ps, local_keys):
         rows = hax.Axis("position", local_logits.shape[0])
-        tokens, scores = hax.vmap(sampler, "position")(
+        tokens, scores = sampler.sample_positions(
             hax.named(local_logits, (rows, sampler.Vocab)),
             hax.named(local_temps, rows),
             top_ps=hax.named(local_top_ps, rows),
+            num_samples=jnp.int32(rows.size),
             key=local_keys,
         )
         return tokens.array, scores.array
@@ -561,7 +570,9 @@ def _prefill_kernel(
     queue: TokenQueue,
     binfo: PageBatchInfo,
     max_seqs_in_prefill: int,  # static
-    capture_routes: bool = False,
+    capture_routes: bool,
+    *,
+    has_clones: bool,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
@@ -582,6 +593,8 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
+    if gen_state.window_pages is not None:
+        binfo = binfo.trim_sequence_padding(max_seqs_in_prefill)
     gen_state, window_batch = gen_state.remap_window_pages(decode_state, binfo)
     route_buffer = _capture_buffer(model, tokens.size) if capture_routes else None
     logits_at_samples, cache, routes = _decode_for_sampling(
@@ -617,7 +630,9 @@ def _prefill_kernel(
     temps = decode_state.temperature["seq", new_slot_ids]
     top_ps = decode_state.top_p["seq", new_slot_ids]
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_at_samples, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
+    )
 
     # Update decode_state (also enqueues into the main decode queue)
     decode_state = decode_state.update_tokens(new_tokens, new_slot_ids, log_probs, num_new_tokens)
@@ -632,7 +647,7 @@ def _prefill_kernel(
     gen_state = dataclasses.replace(gen_state, cache=cache, decode_state=decode_state)
 
     # If clone targets specified, sample alternative tokens for clones using the same logits slice
-    if decode_state.clone_sources is not None:
+    if has_clones:
         gen_state, outputs = _handle_clones(
             gen_state,
             logits_at_samples,
@@ -667,7 +682,6 @@ def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
 
 def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenState, PageBatchInfo]:
     num_new = work.new_num_seqs.astype(jnp.int32)
-    max_slots = work.new_slot_ids.array.shape[0]
 
     def primary(i: int, state: GenState) -> GenState:
         slot = work.new_slot_ids.array[i]
@@ -693,7 +707,7 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenStat
             )
             return dataclasses.replace(gs, decode_state=decode_state)
 
-        is_primary = (i < num_new) & is_valid(slot) & ~is_valid(work.clone_targets.array[i])
+        is_primary = is_valid(slot) & ~is_valid(work.clone_targets.array[i])
         return jax.lax.cond(is_primary, assign, lambda gs: gs, state)
 
     def clone(i: int, state: GenState) -> GenState:
@@ -704,16 +718,18 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> tuple[GenStat
             cloned, _ = gs.clone_sequence(parent, child_local_id=slot, seq_params=_seq_params_from_work(work, i))
             return cloned
 
-        is_clone = (i < num_new) & is_valid(slot) & is_valid(parent)
+        is_clone = is_valid(slot) & is_valid(parent)
         return jax.lax.cond(is_clone, assign, lambda gs: gs, state)
 
-    gen_state = jax.lax.fori_loop(0, max_slots, primary, gen_state)
+    gen_state = jax.lax.fori_loop(0, num_new, primary, gen_state)
     # Full prefix pages must exist before cloning, so parent prefill fills the shared pages.
     decode_state, binfo = gen_state.decode_state.allocate_for_seq(
         token_slot_ids=work.queue.queued_slot_ids, token_pos_ids=work.queue.queued_pos_ids
     )
     gen_state = dataclasses.replace(gen_state, decode_state=decode_state)
-    return jax.lax.fori_loop(0, max_slots, clone, gen_state), binfo
+    if work.has_clones:
+        gen_state = jax.lax.fori_loop(0, num_new, clone, gen_state)
+    return gen_state, binfo
 
 
 @functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill", "capture_routes"))
@@ -726,7 +742,9 @@ def _run_prefill(
     capture_routes: bool = False,
 ) -> tuple[GenState, _DecodeOutputs]:
     gen_state, binfo = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, binfo, max_seqs_in_prefill, capture_routes)
+    return _prefill_kernel(
+        gen_state, model, sampler, work.queue, binfo, max_seqs_in_prefill, capture_routes, has_clones=work.has_clones
+    )
 
 
 def _handle_clones(
@@ -795,7 +813,9 @@ def _handle_clones(
     top_ps = gen_state.decode_state.top_p["seq", tgt_ids]
     prng_keys = gen_state.decode_state.prng_keys_for(tgt_ids, pos_ids_this_time)
 
-    new_tokens, log_probs = hax.vmap(sampler, "position")(logits_this_time, temps, top_ps=top_ps, key=prng_keys)
+    new_tokens, log_probs = sampler.sample_positions(
+        logits_this_time, temps, top_ps=top_ps, num_samples=num_new, key=prng_keys
+    )
 
     # update page table and cache for the clone targets
     decode_state = gen_state.decode_state
@@ -880,6 +900,9 @@ def _run_generation_loop(
         decode_state, binfo = decode_state.allocate_for_seq(token_slot_ids=slot_ids, token_pos_ids=pos_ids)
 
         max_sample_indices = min(decode_state.page_table.max_seqs, max_tokens_per_round)
+        if gen_state.window_pages is not None:
+            # Every participating sequence contributes at least one token row.
+            binfo = binfo.trim_sequence_padding(max_sample_indices)
         sample_locally = (
             isinstance(model, SnowballLMHeadModel)
             and model.has_expert_sharded_kv
@@ -918,10 +941,12 @@ def _run_generation_loop(
         top_ps = decode_state.top_p["seq", new_slot_ids]
 
         if sample_locally:
-            new_tokens, log_probs = _sample_sharded_positions(sampler, logits_at_samples, temps, top_ps, prng_keys)
+            new_tokens, log_probs = _sample_sharded_positions(
+                sampler, logits_at_samples, temps, top_ps, num_new_tokens, prng_keys
+            )
         else:
-            new_tokens, log_probs = hax.vmap(sampler, "position")(
-                logits_at_samples, temps, top_ps=top_ps, key=prng_keys
+            new_tokens, log_probs = sampler.sample_positions(
+                logits_at_samples, temps, top_ps=top_ps, num_samples=num_new_tokens, key=prng_keys
             )
 
         # Update decode state with the freshly sampled tokens (also enqueues them)
@@ -1228,10 +1253,10 @@ class InferenceEngine:
         )
 
     def _retained_page_refs(self, table: PageTable) -> np.ndarray:
-        refs = np.zeros(table.num_pages, dtype=np.int32)
-        for cached in self._cached_prompts:
-            np.add.at(refs, cached.pages, 1)
-        return refs
+        if not self._cached_prompts:
+            return np.zeros(table.num_pages, dtype=np.int32)
+        pages = np.concatenate([cached.pages for cached in self._cached_prompts])
+        return np.bincount(pages, minlength=table.num_pages).astype(np.int32)
 
     def _reserved_page_usage(self, table: PageTable) -> tuple[int, np.ndarray]:
         shared = np.zeros(table.num_pages, dtype=bool)
@@ -1333,7 +1358,8 @@ class InferenceEngine:
                 continue
             # Leave one query so prefill can compute next-token logits.
             limit = min(len(tokens) - 1, len(cached.tokens))
-            if limit // page_size <= len(pages):
+            next_page_end = (len(pages) + 1) * page_size - 1
+            if next_page_end >= limit or tokens[next_page_end] != cached.tokens[next_page_end]:
                 continue
             mismatches = tokens[:limit] != cached.tokens[:limit]
             first = int(np.argmax(mismatches))
@@ -1386,6 +1412,8 @@ class InferenceEngine:
         max_prefill_size = self.config.max_prefill_size or self.model.Pos.size
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
+        if self.gen_state.window_pages is not None:
+            max_slots = min(max_slots, max_seqs_in_prefill)
 
         queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
         queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
@@ -1553,6 +1581,7 @@ class InferenceEngine:
         return PrefillWork(
             queue=prefill_queue,
             new_num_seqs=jnp.array(total_new, dtype=jnp.int32),
+            has_clones=total_new > num_primary,
             new_slot_ids=hax.named(jnp.asarray(work_slot_ids, dtype=jnp.int32), axis="seq"),
             clone_targets=hax.named(jnp.asarray(clone_targets, dtype=jnp.int32), axis="seq"),
             prompt_tokens=hax.named(jnp.asarray(prompt_tokens, dtype=jnp.int32), axis=("seq", "position")),
@@ -1703,9 +1732,11 @@ class InferenceEngine:
         admit(requests)
         decode_iteration = 0
         while outstanding:
-            if not pending and self.free_slots and poll_requests is not None:
-                available = len(self.free_slots)
-                incoming = poll_requests(available)
+            refill_pending = self.config.max_retained_prompts > 0 and decode_iteration > 0
+            if poll_requests is not None and (not pending or refill_pending):
+                # Pending choices already claim slots even though their prompts have not run.
+                available = len(self.free_slots) - sum(request.n_generations for request in pending)
+                incoming = poll_requests(available) if available > 0 else ()
                 if incoming:
                     self._validate_generation_requests(incoming)
                     if sum(request.n_generations for request in incoming) > available:
@@ -1772,6 +1803,7 @@ class InferenceEngine:
             return PrefillWork(
                 queue=prefill_queue,
                 new_num_seqs=jnp.array(0, dtype=jnp.int32),
+                has_clones=False,
                 new_slot_ids=hax.zeros({"seq": max_slots}, dtype=jnp.int32),
                 clone_targets=hax.zeros({"seq": max_slots}, dtype=jnp.int32),
                 prompt_tokens=hax.zeros({"seq": max_slots, "position": max_len}, dtype=jnp.int32),

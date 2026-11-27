@@ -20,6 +20,7 @@ guards against drift.
 """
 
 import dataclasses
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import partial
@@ -1116,7 +1117,7 @@ class SnowballMoEMLP(eqx.Module):
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
     cfg: SnowballConfig = eqx.field(static=True)
-    selected_decode: bool = eqx.field(static=True, default=False)
+    expert_dispatch: Literal["selected"] | tuple[int, int] | None = eqx.field(static=True, default=None)
 
     @staticmethod
     def init(cfg: SnowballConfig, *, key: PRNGKeyArray) -> "SnowballMoEMLP":
@@ -1197,7 +1198,17 @@ class SnowballMoEMLP(eqx.Module):
 
         valid_flat = None if token_valid is None else reshard(token_valid.reshape(b * s), P(_token_spec()[0]))
         counts = None
-        if self.selected_decode:
+        if isinstance(self.expert_dispatch, tuple):
+            assert valid_flat is not None
+            routed_flat = self.expert_mlp.serving_ring(
+                x_flat,
+                selected_experts.astype(jnp.int32),
+                combine_weights,
+                token_valid=valid_flat,
+                mesh=get_abstract_mesh(),
+                megablox_tiles=self.expert_dispatch,
+            )
+        elif self.expert_dispatch == "selected":
             assert valid_flat is not None
             routed_flat = self.expert_mlp.decode_small_ep(
                 x_flat,
@@ -1520,6 +1531,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     _paged_attention: PagedAttentionImplementation | None = eqx.field(static=True, default=None)
     _kv_axis: Literal["model", "expert"] = eqx.field(static=True, default="model")
     _selected_ep_decode: bool = eqx.field(static=True, default=False)
+    _separate_expert_tiles: Callable[[int], tuple[int, int]] | None = eqx.field(static=True, default=None)
 
     @property
     def has_expert_sharded_kv(self) -> bool:
@@ -1548,7 +1560,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
     def with_selected_ep_decode(self) -> "SnowballLMHeadModel":
         """Read selected matrix slices for eligible small expert-parallel decode batches."""
-        return dataclasses.replace(self, _selected_ep_decode=True)
+        return dataclasses.replace(self, _selected_ep_decode=True, _separate_expert_tiles=None)
+
+    def with_separate_serving_experts(self, tiles_for_rows: Callable[[int], tuple[int, int]]) -> "SnowballLMHeadModel":
+        """Use tiled separate expert projections during expert-parallel paged generation."""
+        return dataclasses.replace(self, _separate_expert_tiles=tiles_for_rows, _selected_ep_decode=False)
 
     def with_batch_invariant_rmsnorm(self, implementation: RmsNormImplementation) -> "SnowballLMHeadModel":
         """Select the same weighted normalization for learner and paged decode."""
@@ -2056,9 +2072,23 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         # A receiver can get every sender's assignments. Reserve that worst-case
         # capacity so expert dispatch cannot drop tokens at serving time.
         strict = self.config.replay_precision == "zero_kl"
-        implementation = _STRICT_MOE_IMPLEMENTATION if strict else "ring"
+        experts = block.mlp.expert_mlp
+        megablox_tiles = None
+        if (
+            not strict
+            and self._paged_attention == "tpu_v3"
+            and experts.w_down.shape[1:] == (1280, 2560)
+            and jax.devices()[0].device_kind == "TPU v5"
+        ):
+            if token_rows <= 2048:
+                megablox_tiles = (32 if token_rows <= 512 else 64, 1280)
+            else:
+                megablox_tiles = (128 if token_rows <= 8192 else 256, None)
         experts = dataclasses.replace(
-            block.mlp.expert_mlp, implementation=implementation, capacity_factor=float(expert_size)
+            experts,
+            implementation=_STRICT_MOE_IMPLEMENTATION if strict else "ring",
+            capacity_factor=float(expert_size),
+            megablox_tiles=megablox_tiles,
         )
         selected = (
             not strict
@@ -2070,7 +2100,10 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             and _mesh_axis_size(_current_mesh(), "replica") == 1
             and _mesh_axis_size(_current_mesh(), "model") == 1
         )
-        mlp = dataclasses.replace(block.mlp, expert_mlp=experts, selected_decode=selected)
+        expert_dispatch: Literal["selected"] | tuple[int, int] | None = "selected" if selected else None
+        if not strict and self._separate_expert_tiles is not None:
+            expert_dispatch = self._separate_expert_tiles(token_rows)
+        mlp = dataclasses.replace(block.mlp, expert_mlp=experts, expert_dispatch=expert_dispatch)
         return eqx.tree_at(lambda candidate: candidate.mlp, block, mlp)
 
     # --- state dict (bidirectional HF serialization) ---

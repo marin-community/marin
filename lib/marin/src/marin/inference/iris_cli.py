@@ -65,7 +65,6 @@ from rigging.timing import Duration
 
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
-    SNOWBALL_AGENTX_LIBTPU_INIT_ARGS,
     WORKER_PYTHON_VERSION,
     BrokerConfig,
     InferenceProxyConfig,
@@ -163,9 +162,9 @@ def _resolve_serving_plan(
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
     if vllm.router is not None and (gpu is None or backend != "vllm"):
         raise click.ClickException("--session-router requires --gpu with the vLLM backend")
-    if backend == "levanter" and levanter.profile == "snowball_agentx_v5p":
-        if gpu is not None or tpu != "v5p-8":
-            raise click.ClickException("The Snowball AgentX profile requires --tpu v5p-8")
+    if backend == "levanter" and (geometry := levanter.snowball_agentx_geometry) is not None:
+        if gpu is not None or tpu != geometry.tpu_type:
+            raise click.ClickException(f"{levanter.profile} requires --tpu {geometry.tpu_type}")
         if not in_checkout:
             raise click.ClickException("Run the Snowball AgentX profile from a Marin checkout")
     if gpu is not None:
@@ -682,10 +681,9 @@ def main(
     setup_scripts = None
     if workspace_dir is None:
         setup_scripts = [_checkout_free_setup_script(_marin_core_version(), plan.worker_extras)]
+    geometry = plan.engine.snowball_agentx_geometry if isinstance(plan.engine, LevanterEngineConfig) else None
     agentx_environment = (
-        {"JAX_PLATFORMS": "tpu", "LIBTPU_INIT_ARGS": SNOWBALL_AGENTX_LIBTPU_INIT_ARGS}
-        if isinstance(plan.engine, LevanterEngineConfig) and plan.engine.profile == "snowball_agentx_v5p"
-        else None
+        {"JAX_PLATFORMS": "tpu", "LIBTPU_INIT_ARGS": geometry.libtpu_init_args} if geometry is not None else None
     )
     worker_environment = create_environment(
         workspace=str(workspace_dir or Path.cwd()),

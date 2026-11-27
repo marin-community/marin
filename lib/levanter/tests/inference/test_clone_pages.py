@@ -93,3 +93,29 @@ def test_kv_cache_copy_page():
         np.asarray(kv2.kv_pages["page", dst_page, "kv_head", 1::2].array),
         np.asarray(kv.kv_pages["page", src_page, "kv_head", 1::2].array),
     )
+
+
+def test_batch_release_keeps_pages_referenced_by_another_sequence():
+    sequences, table = _make_allocator(max_pages=4, max_seqs=3, page_size=4)
+    for slot in range(3):
+        sequences, _ = sequences.reserve_slot(slot)
+    sequences, table, _ = sequences.allocate_for_seq(
+        table,
+        hax.named(jnp.array([0, 0, 0, 0], dtype=jnp.int32), "position"),
+        hax.named(jnp.arange(4, dtype=jnp.int32), "position"),
+    )
+    sequences, table = sequences.clone_pages_from(table, 0, 1)
+    sequences, table = sequences.clone_pages_from(table, 0, 2)
+    shared = int(sequences.page_indices["seq", 0, "page", 0].scalar())
+    sequences, table = sequences.free_pages_for_finished(table, jnp.array([True, True, False]))
+    assert int(table.page_ref_counts["page", shared].scalar()) == 1
+
+    sequences, _ = sequences.reserve_slot(0)
+    sequences, table, _ = sequences.allocate_for_seq(
+        table,
+        hax.named(jnp.array([0], dtype=jnp.int32), "position"),
+        hax.named(jnp.array([0], dtype=jnp.int32), "position"),
+    )
+    assert int(sequences.page_indices["seq", 0, "page", 0].scalar()) != shared
+    _, table = sequences.free_pages_for_finished(table, jnp.array([False, False, True]))
+    assert int(table.page_ref_counts["page", shared].scalar()) == 0

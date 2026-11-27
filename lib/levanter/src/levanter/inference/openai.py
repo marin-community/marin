@@ -216,11 +216,11 @@ class InferenceContext:
         self.batch_thread.start()
 
     def shutdown(self):
-        """Signal shutdown and wait for threads to finish"""
+        """Signal shutdown and wait for the serving workers to exit."""
         logger.info("Shutting down inference context.")
         self.shutdown_event.set()
-        self.inference_thread.join(timeout=1)
-        self.batch_thread.join(timeout=1)
+        self.inference_thread.join()
+        self.batch_thread.join()
 
     def unload(self):
         """Unload the inference model to free up resources."""
@@ -308,7 +308,7 @@ class InferenceContext:
             on_tokens=on_tokens,
         )
 
-        logger.info("Enqueuing request %s", request)
+        logger.debug("Enqueuing request %s with %d prompt tokens", request_id, len(prompt_tokens))
         self.request_queue.put(request)
         return request_id
 
@@ -324,7 +324,7 @@ class InferenceContext:
             batch = InferenceBatch()
             max_tokens_per_seq = self.engine.config.max_seq_len
             max_tokens_per_batch = self.engine.config.page_size * self.engine.config.max_pages  # type: ignore
-            logger.info(f"Max tokens per seq: {max_tokens_per_seq}, per batch: {max_tokens_per_batch}")
+            logger.debug("Max tokens per sequence %d and batch %d", max_tokens_per_seq, max_tokens_per_batch)
 
             for r in requests:
                 if len(r.prompt_tokens) > max_tokens_per_seq:
@@ -364,27 +364,30 @@ class InferenceContext:
 
     def _batch_processing_loop(self) -> None:
         waiting: collections.deque[InferenceRequest] = collections.deque()
+        # Retained-prefix admission reserves the shared KV budget across batches.
+        reserve_pages = self.config.service.max_retained_prompts > 0
 
         def poll(capacity: int, capture_routes: bool) -> InferenceBatch:
-            if not waiting:
-                try:
-                    waiting.extend(self.batch_queue.get_nowait())
-                except queue.Empty:
-                    return InferenceBatch()
+            """Take ready requests in order, leaving a blocked head in the pending queue."""
             admitted = InferenceBatch()
-            while waiting and capacity >= waiting[0].n_generations:
-                if waiting[0].return_route_captures and not capture_routes:
+            while capacity > 0:
+                if not waiting:
+                    if admitted and not reserve_pages:
+                        break
+                    try:
+                        waiting.extend(self.batch_queue.get_nowait())
+                    except queue.Empty:
+                        break
+                request = waiting[0]
+                if request.n_generations > capacity or (request.return_route_captures and not capture_routes):
                     break
-                request = waiting.popleft()
-                admitted.append(request)
+                admitted.append(waiting.popleft())
                 capacity -= request.n_generations
             return admitted
 
         while not self.shutdown_event.is_set():
-            if waiting:
-                batch = InferenceBatch(waiting)
-                waiting.clear()
-            else:
+            batch = poll(self.config.service.max_seqs, capture_routes=True)
+            if not batch:
                 try:
                     batch = self.batch_queue.get(timeout=1)
                 except queue.Empty:

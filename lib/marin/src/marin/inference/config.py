@@ -9,9 +9,11 @@ Accelerator-heavy serving implementations translate them inside worker jobs.
 
 import json
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 from fray.types import CpuConfig, EnvironmentConfig, GpuConfig, ResourceConfig, TpuConfig
@@ -392,8 +394,82 @@ class VllmEngineConfig:
 
 
 DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE = 1
-LevanterServingProfile = Literal["standard", "snowball_agentx_v5p"]
-SNOWBALL_AGENTX_LIBTPU_INIT_ARGS = "--xla_tpu_scoped_vmem_limit_kib=50000 --xla_tpu_use_enhanced_launch_barrier=true"
+LevanterServingProfile = Literal["standard", "snowball_agentx_v5p", "snowball_agentx_v6e"]
+DEFAULT_SNOWBALL_AGENTX_PROFILE: LevanterServingProfile = "snowball_agentx_v5p"
+
+
+@dataclass(frozen=True)
+class SeparateExpertTiles:
+    """Grouped matrix-multiply tiles for separate serving projections."""
+
+    small_batch_limit: int
+    small_batch_rows: int
+    large_batch_rows: int
+    columns: int
+
+    def for_rows(self, token_rows: int) -> tuple[int, int]:
+        rows = self.small_batch_rows if token_rows <= self.small_batch_limit else self.large_batch_rows
+        return rows, self.columns
+
+
+@dataclass(frozen=True)
+class SnowballAgentxGeometry:
+    """TPU mesh, cache capacity, and decode schedule for native AgentX."""
+
+    tpu_type: Literal["v5p-8", "v6e-8"]
+    device_kind: str
+    expert_shards: int
+    scoped_vmem_kib: int
+    max_pages: int
+    window_pages: int
+    retained_spans: int
+    retained_prompts: int
+    max_rounds: int
+    max_tokens_per_round: int
+    prefill_buckets: tuple[int, ...]
+    decode_buckets: tuple[int, ...]
+    separate_expert_tiles: SeparateExpertTiles | None = None
+
+    @property
+    def libtpu_init_args(self) -> str:
+        return f"--xla_tpu_scoped_vmem_limit_kib={self.scoped_vmem_kib} --xla_tpu_use_enhanced_launch_barrier=true"
+
+
+SNOWBALL_AGENTX_PROFILES: Mapping[LevanterServingProfile, SnowballAgentxGeometry] = MappingProxyType(
+    {
+        DEFAULT_SNOWBALL_AGENTX_PROFILE: SnowballAgentxGeometry(
+            tpu_type="v5p-8",
+            device_kind="TPU v5",
+            expert_shards=4,
+            scoped_vmem_kib=50_000,
+            max_pages=49_152,
+            window_pages=5_120,
+            retained_spans=2,
+            retained_prompts=512,
+            max_rounds=6,
+            max_tokens_per_round=32,
+            prefill_buckets=(256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 49152),
+            decode_buckets=(4, 8, 16),
+        ),
+        "snowball_agentx_v6e": SnowballAgentxGeometry(
+            tpu_type="v6e-8",
+            device_kind="TPU v6 lite",
+            expert_shards=8,
+            scoped_vmem_kib=98_304,
+            max_pages=16_384,
+            window_pages=2_880,
+            retained_spans=1,
+            retained_prompts=128,
+            max_rounds=4,
+            max_tokens_per_round=24,
+            prefill_buckets=(256, 512, 2048, 8192, 16384, 32768, 49152),
+            decode_buckets=(8, 16),
+            separate_expert_tiles=SeparateExpertTiles(
+                small_batch_limit=8192, small_batch_rows=128, large_batch_rows=256, columns=1280
+            ),
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -405,9 +481,16 @@ class LevanterEngineConfig:
     checkpoint_load_mode: Literal["standard", "snowball_layerwise"] = "standard"
     profile: LevanterServingProfile = "standard"
 
+    @property
+    def snowball_agentx_geometry(self) -> SnowballAgentxGeometry | None:
+        return SNOWBALL_AGENTX_PROFILES.get(self.profile)
+
     def __post_init__(self) -> None:
-        if self.profile == "snowball_agentx_v5p" and (self.page_size != 128 or self.hbm_utilization != 0.8):
-            raise ValueError("The native Snowball AgentX profile uses 128-token pages and fixed KV capacity")
+        if (geometry := self.snowball_agentx_geometry) is not None:
+            if self.page_size != 128 or self.hbm_utilization != 0.8:
+                raise ValueError("The native Snowball AgentX profile uses 128-token pages and fixed KV capacity")
+            if self.expert_parallel_size not in (DEFAULT_LEVANTER_EXPERT_PARALLEL_SIZE, geometry.expert_shards):
+                raise ValueError(f"{self.profile} uses {geometry.expert_shards} expert shards")
         if self.expert_parallel_size < 1:
             raise ValueError("expert_parallel_size must be positive")
         if self.max_seqs <= 0:
