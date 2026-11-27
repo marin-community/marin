@@ -1226,9 +1226,16 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         kv_cache: ListCache[KvPageCache],
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
+        *,
+        sample_indices: NamedArray | None = None,
     ) -> SnowballPagedResult:
-        """Return the paged generation logits, updated cache, and selected IDs for that call."""
-        return self._decode(input_ids, kv_cache, batch_info, pos_ids, capture_routes=True)
+        """Return logits, updated cache, and the selected expert IDs for every query row.
+
+        The optional sample_indices limits only the vocabulary projection.
+        """
+        return self._decode(
+            input_ids, kv_cache, batch_info, pos_ids, capture_routes=True, sample_indices=sample_indices
+        )
 
     def _decode(
         self,
@@ -1238,6 +1245,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         pos_ids: NamedArray,
         *,
         capture_routes: bool,
+        sample_indices: NamedArray | None = None,
     ) -> SnowballPagedResult:
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Snowball decode requires matching flat token and position arrays")
@@ -1263,12 +1271,18 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
 
         hidden, (cache_pages, expert_ids) = jax.lax.scan(layer_step, hidden, (stacked, cache_pages, long_schedule))
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
-        logits = jnp.einsum(
-            "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
-        )
+        if sample_indices is None:
+            logits = jnp.einsum(
+                "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=_activation_spec("model")
+            )
+            output = hax.named(logits[:, 0], (*input_ids.axes, self.Vocab))
+        else:
+            sampled = hidden[:, 0].at[sample_indices.array].get(out_sharding=P())
+            logits = jnp.einsum("pd,dv->pv", sampled, self.transformer.output_proj, out_sharding=P())
+            output = hax.named(logits, (*sample_indices.axes, self.Vocab))
         caches = ListCache(tuple(KvPageCache(hax.named(cache_pages[i], cache_axes)) for i in range(len(kv_cache))))
         routes = SnowballDecodeRoutes(expert_ids, token_valid) if expert_ids is not None else None
-        return SnowballPagedResult(hax.named(logits[:, 0], (*input_ids.axes, self.Vocab)), caches, routes)
+        return SnowballPagedResult(output, caches, routes)
 
     def _stacked_inference_blocks(self) -> SnowballBlock:
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.transformer.blocks)
