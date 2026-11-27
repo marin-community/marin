@@ -28,6 +28,7 @@ _ROWS = {
     "rdkit": "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_rdkit",
     "rlvr1-lean": "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean",
     "rlvr2-lean": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean",
+    "rlvr2-rdkit": "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_rdkit",
 }
 
 

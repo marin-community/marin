@@ -48,6 +48,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.post_training.task_curation.calibration_inventory import task_blockers
+from experiments.post_training.task_curation.environment import _heredoc_delimiter
 from experiments.post_training.task_curation.harbor_cohort_conversion import (
     CONVERSION_PROTOCOL,
     CohortConversionRejected,
@@ -551,34 +552,43 @@ def pinned_dockerfile(text: str, resolve: Callable[[str], str] = resolve_base_di
     """Rewrite every external FROM base to its digest-pinned reference.
 
     Stage names, ``--platform`` flags, ``scratch`` and already-pinned references
-    pass through unchanged; a base the registry cannot resolve is a typed
-    rejection.
+    pass through unchanged; heredoc bodies are shell data whose bytes pass
+    through untouched (machine-authored recipes embed instruction-looking lines
+    — even literal ``FROM`` text — inside RUN heredocs); a base the registry
+    cannot resolve is a typed rejection.
     """
     stages: set[str] = set()
     pins: dict[str, BasePin] = {}
     lines: list[str] = []
+    heredoc_delimiter: str | None = None
     for raw in text.splitlines():
+        if heredoc_delimiter is not None:
+            if raw.strip() == heredoc_delimiter:
+                heredoc_delimiter = None
+            lines.append(raw)
+            continue
         stripped = raw.strip()
         tokens = stripped.split() if stripped and not stripped.startswith("#") else []
         if not tokens or tokens[0].upper() != "FROM":
             lines.append(raw)
-            continue
-        fields = [token for token in tokens[1:] if not token.startswith("--")]
-        base = fields[0] if fields else ""
-        if len(fields) >= 3 and fields[1].upper() == "AS":
-            stages.add(fields[2])
-        if base in stages or base == "scratch" or re.fullmatch(DOCKER_IMAGE_PATTERN, base):
-            lines.append(raw)
-            continue
-        if base not in pins:
-            try:
-                pinned = resolve(base)
-            except BasePinRejected:
-                raise
-            except (ValueError, OSError) as error:
-                raise BasePinRejected(f"FROM base {base} does not resolve: {error}") from error
-            pins[base] = BasePin(base=base, pinned=pinned)
-        lines.append(stripped.replace(base, pins[base].pinned, 1))
+        else:
+            fields = [token for token in tokens[1:] if not token.startswith("--")]
+            base = fields[0] if fields else ""
+            if len(fields) >= 3 and fields[1].upper() == "AS":
+                stages.add(fields[2])
+            if base in stages or base == "scratch" or re.fullmatch(DOCKER_IMAGE_PATTERN, base):
+                lines.append(raw)
+            else:
+                if base not in pins:
+                    try:
+                        pinned = resolve(base)
+                    except BasePinRejected:
+                        raise
+                    except (ValueError, OSError) as error:
+                        raise BasePinRejected(f"FROM base {base} does not resolve: {error}") from error
+                    pins[base] = BasePin(base=base, pinned=pinned)
+                lines.append(stripped.replace(base, pins[base].pinned, 1))
+        heredoc_delimiter = _heredoc_delimiter(stripped) if stripped and not stripped.startswith("#") else None
     return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), tuple(pins.values())
 
 
