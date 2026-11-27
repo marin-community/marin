@@ -92,6 +92,10 @@ A human then decides what happens. Never work around a refusal.
      out of the plain `--model-set` / `--opt-set` flags. Each value becomes its own variant (`X####v1`, `v2`, ...)
      with its own trial, all launched together against one shared control. A sweep runs on one Track, never a
      ladder; to take a value up the ladder, the approver names it in a new idea.
+   - **If the comment asks for several experiments one launch cannot hold** (several changes, combinations of
+     them, or steps that wait on an earlier result): `B escalate --idea-id <N> --title "Idea #<N> holds several
+     experiments" --body "<each experiment it asks for>"`, then stop working on this idea. Intake takes one idea per
+     comment; a maintainer declines it with that reason or re-queues it with a note naming the one to run.
 5. **Run:** `B new-idea --idea-id <N> --name "<short name>" --category "<category>" --variant "<what changes>"
    --defaults "<chosen values, or none>" --opt-set <name>=<value>`. Give one `--opt-set` or `--model-set` per
    setting. `--name` is the registry title, at most 50 characters, such as "MuonH momentum warmup"; an idea that

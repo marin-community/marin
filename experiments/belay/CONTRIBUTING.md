@@ -18,8 +18,10 @@ Every experiment is compared to the official recipe unless its Track says otherw
    attempts. Decide whether the idea replaces, adds to or adapts an existing feature, and how it scales with model
    size.
 
-2. **Post it on #9514**, one idea per comment, with a `Track:` line (default `speedrun`). Plain-text ideas are
-   preferred. You can also link a paper, a GitHub repo, or a branch that applies the idea directly to the Belay
+2. **Post it on #9514**, one idea per comment, with a `Track:` line (default `speedrun`). One idea is one change
+   judged against one control; several values of one setting (up to 4) count as one idea. Post combinations of
+   several changes as separate ideas, and a follow-up step (such as tuning the winner) as a new comment once the
+   first result is in. Plain-text ideas are preferred. You can also link a paper, a GitHub repo, or a branch that applies the idea directly to the Belay
    architecture. Ideas for the scaling ladder should say how they scale with model size (e.g. "width 0.5·d", "every
    4th layer"), so each rung gets a consistent version rather than a constant tuned at one size.
 
