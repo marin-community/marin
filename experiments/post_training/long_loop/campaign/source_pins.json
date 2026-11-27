@@ -774,21 +774,21 @@
       "status": "Pending",
       "intended_use": "train",
       "pipeline": {
-        "name": "nemotron_ultra_mopd_ultra_sft_step3200_math_tir-retained",
+        "name": "nemotron_ultra_mopd_ultra_sft_step3200_math_tir-retained-sandbox-mirrored",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1",
+        "source": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1",
         "version": "2026.11.13.1",
-        "revision": "7e120186d5b58fbb91497404eea7c62c50dd5aed"
+        "revision": "4720147cbe56862e811c9d9dfa913b7677039dd2"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1/tree/7e120186d5b58fbb91497404eea7c62c50dd5aed",
-        "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1",
-        "revision": "7e120186d5b58fbb91497404eea7c62c50dd5aed"
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1/tree/4720147cbe56862e811c9d9dfa913b7677039dd2",
+        "repo": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1",
+        "revision": "4720147cbe56862e811c9d9dfa913b7677039dd2"
       },
-      "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1",
-      "dataset_revision": "7e120186d5b58fbb91497404eea7c62c50dd5aed",
+      "dataset_id": "open-athena/nemotron-ultra-mopd-math-tir-sandbox-mirrored-20261127-v1",
+      "dataset_revision": "4720147cbe56862e811c9d9dfa913b7677039dd2",
       "actor_census_input": {
         "dataset_id": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/49907debf646334752c0/actor/.artifact.json",
@@ -805,6 +805,14 @@
         "counts": {
           "unsupported": 5790
         }
+      },
+      "repin": {
+        "parent": {
+          "repo": "open-athena/marinskyrl-nemotron-ultra-mopd-ultra-sft-step3200-math-49907deb-retained-20261120-consumer-v1",
+          "revision": "7e120186d5b58fbb91497404eea7c62c50dd5aed"
+        },
+        "change": "actor docker_image moved from private us-east1 Artifact Registry to the digest-identical GHCR mirror ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:280e0871...; no other field changed",
+        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c"
       }
     },
     "Nemotron:nemotron_ultra_mopd/ultra_sft_step3200_multichallenge_len40k": {
@@ -1403,21 +1411,21 @@
       "status": "Pending",
       "intended_use": "train",
       "pipeline": {
-        "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_tir-retained",
+        "name": "nemotron_ultra_rlvr1_ultra_sft_step3200_math_tir-retained-sandbox-mirrored",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1",
+        "source": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1",
         "version": "2026.11.13.1",
-        "revision": "7c2a84bf83e48996ed51dcf4cbf4ace384856efd"
+        "revision": "884d8b1131e37a47374c2002b263927d7672dad5"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1/tree/7c2a84bf83e48996ed51dcf4cbf4ace384856efd",
-        "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1",
-        "revision": "7c2a84bf83e48996ed51dcf4cbf4ace384856efd"
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1/tree/884d8b1131e37a47374c2002b263927d7672dad5",
+        "repo": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1",
+        "revision": "884d8b1131e37a47374c2002b263927d7672dad5"
       },
-      "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1",
-      "dataset_revision": "7c2a84bf83e48996ed51dcf4cbf4ace384856efd",
+      "dataset_id": "open-athena/nemotron-ultra-rlvr1-math-tir-sandbox-mirrored-20261127-v1",
+      "dataset_revision": "884d8b1131e37a47374c2002b263927d7672dad5",
       "actor_census_input": {
         "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/cd9cbcbc3a8b0784ea4a/actor/.artifact.json",
@@ -1434,6 +1442,14 @@
         "counts": {
           "unsupported": 5790
         }
+      },
+      "repin": {
+        "parent": {
+          "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr1-ultra-sft-step3200-math-cd9cbcbc-retained-20261120-consumer-v1",
+          "revision": "7c2a84bf83e48996ed51dcf4cbf4ace384856efd"
+        },
+        "change": "actor docker_image moved from private us-east1 Artifact Registry to the digest-identical GHCR mirror ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:280e0871...; no other field changed",
+        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c"
       }
     },
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_multichallenge_len40k": {
@@ -2180,21 +2196,21 @@
       "status": "Pending",
       "intended_use": "train",
       "pipeline": {
-        "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_tir-retained",
+        "name": "nemotron_ultra_rlvr2_ultra_sft_step3200_math_tir-retained-sandbox-mirrored",
         "files": [
           "tasks.parquet"
         ],
-        "source": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1",
+        "source": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1",
         "version": "2026.11.13.1",
-        "revision": "18d99806633f7ae886baf448f5535e8a2b4620ae"
+        "revision": "46c835ef8f77301140a9c0e861194db36dec9d87"
       },
       "current_release": {
-        "url": "https://huggingface.co/datasets/open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1/tree/18d99806633f7ae886baf448f5535e8a2b4620ae",
-        "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1",
-        "revision": "18d99806633f7ae886baf448f5535e8a2b4620ae"
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1/tree/46c835ef8f77301140a9c0e861194db36dec9d87",
+        "repo": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1",
+        "revision": "46c835ef8f77301140a9c0e861194db36dec9d87"
       },
-      "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1",
-      "dataset_revision": "18d99806633f7ae886baf448f5535e8a2b4620ae",
+      "dataset_id": "open-athena/nemotron-ultra-rlvr2-math-tir-sandbox-mirrored-20261127-v1",
+      "dataset_revision": "46c835ef8f77301140a9c0e861194db36dec9d87",
       "actor_census_input": {
         "dataset_id": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1",
         "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/consumer/20261120/source-publication-v1/nemotron-v2/retained-census/5d445c0f0ff38ab1d734/actor/.artifact.json",
@@ -2211,6 +2227,14 @@
         "counts": {
           "unsupported": 5790
         }
+      },
+      "repin": {
+        "parent": {
+          "repo": "open-athena/marinskyrl-nemotron-ultra-rlvr2-ultra-sft-step3200-math-5d445c0f-retained-20261120-consumer-v1",
+          "revision": "18d99806633f7ae886baf448f5535e8a2b4620ae"
+        },
+        "change": "actor docker_image moved from private us-east1 Artifact Registry to the digest-identical GHCR mirror ghcr.io/marin-community/rl-data-nemo-skills-sandbox@sha256:280e0871...; no other field changed",
+        "evidence": "image-lineage.json and identity-inventory.jsonl in the release; mirror job /benfeuer/mochi-campaign-math-tir-image-mirror-claude-20261127b; LOCAL proof /benfeuer/mochi-campaign-math-tir-local-proof-claude-20261127c"
       }
     },
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_multichallenge_len40k": {

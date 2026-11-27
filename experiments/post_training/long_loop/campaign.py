@@ -47,6 +47,7 @@ DEPLOYED_RL_SPEC = Path(__file__).with_name("specs") / "rl.yaml"
 REFERENCE_SOURCE = "fe4695fbcd27e365284dccab649a40d6caa9fb2b"
 CAMPAIGN_PIPELINE_STAGES = 16
 LOCAL_DISK_ROOT = "/var/lib/shellbox-disk-pool"
+LOCAL_REGISTRY_AUTH_SECRET = "GHCR_READ_PULL_DOCKER_CONFIG"
 CAMPAIGN_SECRET_NAMES = (
     "CW_KEY_ID",
     "CW_KEY_SECRET",
@@ -55,6 +56,7 @@ CAMPAIGN_SECRET_NAMES = (
     "DAYTONA_RL_API_KEY",
     "DAYTONA_EVAL_API_KEY",
     "TOGETHER_API_KEY",
+    "GHCR_READ_PULL_DOCKER_CONFIG",
 )
 
 
@@ -91,7 +93,11 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
     # Stored TaskRolloutSpecs carry the catalog's per-task harness and machine sizing.
     recipe["environment"]["task_sessions"]["task_spec"]["harness_by_dataset"] = {}
     # Retained lock-based verifiers declare LOCAL storage, which only the quota pool enforces.
-    recipe["environment"]["task_sessions"]["local"] = {"disk_root": LOCAL_DISK_ROOT}
+    # LOCAL actors (Math-TIR) pull digest-pinned private GHCR images with the read-only pull credential.
+    recipe["environment"]["task_sessions"]["local"] = {
+        "disk_root": LOCAL_DISK_ROOT,
+        "registry_auth_secret": LOCAL_REGISTRY_AUTH_SECRET,
+    }
     recipe["environment"]["task_sessions"]["remote_judge"] = deployed_judge_binding(
         recipe["environment"]["task_sessions"]["remote_judge"]
     )

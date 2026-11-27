@@ -23,7 +23,12 @@ from skyrl_train.dataset.harbor_import import harbor_trial_task, restore_harbor_
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ExecutionRequirements
 
 from experiments.post_training.long_loop import campaign
-from experiments.post_training.long_loop.campaign import LOCAL_DISK_ROOT, REFERENCE, campaign_round
+from experiments.post_training.long_loop.campaign import (
+    LOCAL_DISK_ROOT,
+    LOCAL_REGISTRY_AUTH_SECRET,
+    REFERENCE,
+    campaign_round,
+)
 from experiments.post_training.long_loop.campaign_data import (
     CampaignMix,
     load_mix,
@@ -195,7 +200,7 @@ def test_campaign_preserves_131_controls_and_disables_learning_clock():
         after["rl"]["recipe"]["environment"]["task_sessions"],
         before["rl"]["recipe"]["environment"]["task_sessions"],
     )
-    assert sessions.pop("local") == {"disk_root": LOCAL_DISK_ROOT}
+    assert sessions.pop("local") == {"disk_root": LOCAL_DISK_ROOT, "registry_auth_secret": LOCAL_REGISTRY_AUTH_SECRET}
     reference_sessions.pop("local")
     judge, reference_judge = sessions.pop("remote_judge"), reference_sessions.pop("remote_judge")
     assert {key: judge[key] for key in reference_judge} == reference_judge
