@@ -1,42 +1,42 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "4539e989bc4f86a6461fb8f450ac87f6b7532b34",
+  "revision": "f7f1979466a46f80487c53d74937876b6137b3d5",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "4539e989bc4f86a6461fb8f450ac87f6b7532b34",
-      "path": "s1_deepresearch_20261126_b_v1/part-000.json",
+      "revision": "f7f1979466a46f80487c53d74937876b6137b3d5",
+      "path": "reasoning_gym_reseal_20261126_a_v1/part-000.json",
       "sha256": "0e1116b6d033cf6950d51e514e979134313abcf2db5902b7223e73e95ad2838a"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "4539e989bc4f86a6461fb8f450ac87f6b7532b34",
-      "path": "s1_deepresearch_20261126_b_v1/part-001.json",
+      "revision": "f7f1979466a46f80487c53d74937876b6137b3d5",
+      "path": "reasoning_gym_reseal_20261126_a_v1/part-001.json",
       "sha256": "2861ec879032f59f42db81ca9e28ea11edcc47280e0785b68e22c4ad715afb82"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "4539e989bc4f86a6461fb8f450ac87f6b7532b34",
-      "path": "s1_deepresearch_20261126_b_v1/part-002.json",
+      "revision": "f7f1979466a46f80487c53d74937876b6137b3d5",
+      "path": "reasoning_gym_reseal_20261126_a_v1/part-002.json",
       "sha256": "506616dacaf827462a29222fedcaa51fd26a3fdec54ba0816a9914ee97c5a6e8"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "4539e989bc4f86a6461fb8f450ac87f6b7532b34",
-      "path": "s1_deepresearch_20261126_b_v1/part-003.json",
-      "sha256": "8c3cd1590c26f0884477f5bc1df95619a75faee297bc27f409ab5a83ecacca20"
+      "revision": "f7f1979466a46f80487c53d74937876b6137b3d5",
+      "path": "reasoning_gym_reseal_20261126_a_v1/part-003.json",
+      "sha256": "d11d958f0136e9d6af6873b2a768bc534facb6e61cc3f8479ed41f5cf582a151"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "4539e989bc4f86a6461fb8f450ac87f6b7532b34",
-      "path": "s1_deepresearch_20261126_b_v1/part-004.json",
-      "sha256": "963697b62da854e2106c10ca6ec011201b4757e6845ed97d97e9f760af21e1bf"
+      "revision": "f7f1979466a46f80487c53d74937876b6137b3d5",
+      "path": "reasoning_gym_reseal_20261126_a_v1/part-004.json",
+      "sha256": "39848245fa2ba9d3cd1af0d4537134b5307708438b3492504fda575707977ad0"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "4539e989bc4f86a6461fb8f450ac87f6b7532b34",
-      "path": "s1_deepresearch_20261126_b_v1/part-005.json",
-      "sha256": "5d444904fad8bacb9cb30e52c7b20c25c2ff3bf9ae4f4b4fdc822c10e327f11d"
+      "revision": "f7f1979466a46f80487c53d74937876b6137b3d5",
+      "path": "reasoning_gym_reseal_20261126_a_v1/part-005.json",
+      "sha256": "106caa89345be3b61c4f94c157307341667550c9b9fa796459bfc9bbc7dc0bb7"
     }
   ]
 }
