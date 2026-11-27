@@ -86,12 +86,7 @@ GRADER_STARTUP_ALLOWANCE = 60
 
 HERE = Path(__file__).parent
 HERO_CLEAN_IDS = tuple(json.loads((HERE / "livecodebench_hero_clean.json").read_text()))
-"""``release_v6`` problems with no copy in the hero pretraining sources or Mochi's SFT and RL data.
-
-A problem has a copy when one document holds at least 30% of the case-folded word 13-grams of its statement,
-after dropping 13-grams shared by three or more problems or found in pre-May 2023 contest problems. The scan
-ran over all 292 normalized hero sources before deduplication and sampling, so the list errs toward exclusion.
-"""
+"""``release_v6`` question IDs with no near-verbatim copy in the hero training data."""
 GRADE = grade_script(HERE / "livecodebench_grade.py", *shipped_files(SCORERS, "livecodebench.py"))
 CONVERSION_REVISION = "1-" + canonical_sha256({resource.path: resource.source.content_base64 for resource in GRADE})[:16]
 """Names the prepared corpus. The hash follows the grade scripts; bump the leading counter whenever this
