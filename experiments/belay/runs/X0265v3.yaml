@@ -12,6 +12,15 @@ runs:
     variant: speedrun control
     control: true
     shared: belay-X0265v1-control
+  seed0-t:
+    seed: 0
+    variant: ID Balancing bias in place of QB, id_balance_gain=0.096
+    flags:
+    - --model-set
+    - id_balance_gain=0.096
+    - --num-steps
+    - '3072'
+    stage: time
 launched:
   seed0: uv run python -m experiments.grug.fast_track.belay_s7 --ladder s7n --size d512 --num-steps 3030 --model-set id_balance_gain=0.096
     --seed 0 --run-id belay-X0265v3-seed0 --output-path tmp/ttl=30d/belay/runs/belay-X0265v3-seed0 --submit --target-cluster
