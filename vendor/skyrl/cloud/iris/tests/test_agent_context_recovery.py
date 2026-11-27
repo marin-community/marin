@@ -5,7 +5,6 @@ import asyncio
 import numpy as np
 from rigging.task_errors import RetrySettings
 import pytest
-from omegaconf import OmegaConf
 from rolloutengine.engine import RolloutEngine
 from marinskyrl.agent_harnesses import AgentHarnessSettings, TaskAgentHarnesses
 from rolloutengine.harness.external import AgentHarness
@@ -19,39 +18,14 @@ from skyrl_train.trajectory_runners.model_clients import (
     ContextLengthExceededError,
     GenerationBudgetExceededError,
 )
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance
+from skyrl_train.trajectory_runners.types import TaskRequestBatch
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AgentMachine, AnswerType, ScriptGrader
 from verifyit.spec import NumericSpec
 from tests.cpu.task_specs import SHELL_ENVIRONMENT, lowered_task, task_input, text_task
 
-
-class WorkerTokenizer:
-    eos_token_id = 99
-
-    def decode(self, token_ids, **kwargs):
-        return "Working"
-
-
-@pytest.fixture
-def worker_config():
-    return OmegaConf.create(
-        {
-            "backend": "vllm",
-            "max_input_length": 3,
-            "max_model_len": 128,
-            "apply_overlong_filtering": False,
-            "sampling_params": {
-                "max_generate_length": 8,
-                "temperature": 1.0,
-                "top_p": 1.0,
-                "top_k": -1,
-                "min_p": 0,
-                "logprobs": 0,
-            },
-        }
-    )
+from cloud.iris.tests.task_worker_fixtures import ScriptedClient, WorkerTokenizer, sampled_reply
 
 
 @pytest.fixture
@@ -77,28 +51,6 @@ def agent_harnesses(monkeypatch):
         )
 
     return bind
-
-
-def sampled_reply(content="Working"):
-    return {
-        "token_provenance": TokenProvenance.ENGINE,
-        "assistant_messages": [{"role": "assistant", "content": content}],
-        "prompt_ids": [[1, 2]],
-        "response_ids": [[3]],
-        "response_logprobs": [[-0.1]],
-        "stop_reasons": ["stop"],
-    }
-
-
-class ScriptedClient:
-    def __init__(self, replies):
-        self.replies = iter(replies)
-
-    async def generate(self, _request):
-        reply = next(self.replies)
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
 
 
 @pytest.mark.asyncio

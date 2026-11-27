@@ -120,7 +120,8 @@ def test_a_known_wrapper_does_not_override_an_unknown_provider_status():
 )
 def test_exception_identity_keeps_a_producer_owned_disposition(owned, cause, expected):
     class ProducerClassified(RuntimeError):
-        retry_disposition = owned
+        def retry_disposition(self) -> RetryDisposition:
+            return owned
 
     error = ProducerClassified("producer classified this failure")
     if cause is not None:
@@ -128,3 +129,14 @@ def test_exception_identity_keeps_a_producer_owned_disposition(owned, cause, exp
     identity = exception_identity(error)
     assert identity.retry_disposition is expected
     assert identity.cause_type == (None if cause is None else cause.__name__)
+
+
+def test_an_include_list_selects_only_its_names():
+    failure = ErrorIdentity(
+        exception_type="TaskMachineError",
+        cause_type="ConnectionError",
+        retry_disposition=RetryDisposition.TRANSIENT,
+    )
+    policy = RetrySettings(jitter=0, max_retries=1, include_exceptions={"TaskMachineError"})
+    assert retry_delay(failure, policy, 0) == 1
+    assert retry_delay(failure, policy.model_copy(update={"include_exceptions": {"OtherError"}}), 0) is None

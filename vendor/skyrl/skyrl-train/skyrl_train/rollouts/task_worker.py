@@ -208,18 +208,12 @@ async def _model_turn(
 
 
 
-def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdentity:
-    error = interruption.__cause__
-    assert isinstance(error, Exception)
-    if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
-        raise error
-    if interruption.operation == RolloutOperation.MODEL and not isinstance(
-        error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
-    ):
-        raise error
-    failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
+def _failure_diagnostics(
+    error: Exception, interruption: GradedRolloutInterrupted
+) -> tuple[str, dict[str, Any]]:
+    """Map the interruption's cause to its persisted exception name and safe diagnostics."""
     exception_type = type(error).__name__
-    diagnostics = {TIMED_OUT_DIAGNOSTIC: isinstance(error, TimeoutError)}
+    diagnostics: dict[str, Any] = {TIMED_OUT_DIAGNOSTIC: isinstance(error, TimeoutError)}
     if isinstance(error, MachineSetupError):
         diagnostics.update(
             setup_exit_code=error.exit_code,
@@ -229,14 +223,6 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         )
     if isinstance(error, PromptTokenizationError):
         diagnostics["status_code"] = error.status_code
-    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
-        provider = daytona_error_identity(error.__cause__, operation=error.operation.value)
-        failure = failure.model_copy(
-            update={
-                "retry_disposition": provider.retry_disposition,
-                "provider_status_code": provider.provider_status_code,
-            }
-        )
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
         diagnostics["machine_operation"] = error.operation.value
         if isinstance(error.__cause__, DaytonaError):
@@ -267,10 +253,30 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
         exception_type = VERIFIER_TIMEOUT_ERROR
-    disposition = failure.retry_disposition
-    if disposition is not RetryDisposition.PERMANENT:
-        if isinstance(error, TimeoutError):
-            disposition = record_retry_disposition(exception_type, None, failure.provider_status_code)
+    return exception_type, diagnostics
+
+
+def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdentity:
+    error = interruption.__cause__
+    assert isinstance(error, Exception)
+    if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
+        raise error
+    if interruption.operation == RolloutOperation.MODEL and not isinstance(
+        error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
+    ):
+        raise error
+    failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
+    provider_disposition = None
+    provider_status = None
+    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
+        provider = daytona_error_identity(error.__cause__, operation=error.operation.value)
+        provider_disposition = provider.retry_disposition
+        provider_status = provider.provider_status_code
+    exception_type, diagnostics = _failure_diagnostics(error, interruption)
+    disposition = provider_disposition if provider_disposition is not None else failure.retry_disposition
+    if disposition is not RetryDisposition.PERMANENT and isinstance(error, TimeoutError):
+        disposition = record_retry_disposition(exception_type, None, provider_status or failure.provider_status_code)
+    status = provider_status if provider_status is not None else failure.provider_status_code
     return failure.model_copy(
         update={
             "exception_type": exception_type,
@@ -278,6 +284,7 @@ def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdent
             "diagnostics": diagnostics,
             "cause_type": failure.cause_type
             or (failure.exception_type if exception_type != failure.exception_type else None),
+            "provider_status_code": status,
             "retry_disposition": disposition,
         }
     )

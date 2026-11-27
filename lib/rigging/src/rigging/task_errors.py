@@ -1,10 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Task error types and categories shared by multiple producers.
+"""Task error types, retry classification, and shared retry delay.
 
-Frameworks own their remaining names. Compose their maps with this common map;
-no framework exception classes are imported here.
+Frameworks own their remaining category names and compose them with the shared
+map. No framework exception classes are imported here; transport and provider
+causes are classified through httpx's exception types and status protocols.
 """
 
 from collections.abc import Mapping
@@ -196,6 +197,13 @@ class HttpStatusError(Protocol):
     def status_code(self) -> int | None: ...
 
 
+@runtime_checkable
+class RetryDispositions(Protocol):
+    """An exception whose producer classifies its own retry disposition."""
+
+    def retry_disposition(self) -> RetryDisposition: ...
+
+
 def exception_identity(
     error: BaseException,
     *,
@@ -253,11 +261,11 @@ def exception_identity(
             status_code,
             retryable_error_types=retryable_error_types,
         )
-    owned_disposition = getattr(error, "retry_disposition", None)
-    if owned_disposition is not None and status_code is None and disposition is not RetryDisposition.PERMANENT:
+    if isinstance(error, RetryDispositions):
         # The exception's producer owns its disposition; keep it unless provider
         # status or a permanent cause already decided.
-        disposition = owned_disposition
+        if status_code is None and disposition is not RetryDisposition.PERMANENT:
+            disposition = error.retry_disposition()
     return ErrorIdentity(
         exception_type=exception_type,
         category=error_category(exception_type, categories=categories),
@@ -272,7 +280,8 @@ def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries:
     """Return the shared retry delay, or None for a terminal attempt.
 
     Only transient dispositions retry, within the configured budget and backoff.
-    Excluded names always win, and permanent or unknown failures stay terminal.
+    Excluded names always win, and an include list selects only its names;
+    permanent and unknown failures stay terminal.
     """
     if failure is None or retries >= settings.max_retries:
         return None
@@ -280,6 +289,8 @@ def retry_delay(failure: ErrorIdentity | None, settings: RetrySettings, retries:
         return None
     names = {failure.exception_type, failure.cause_type} - {None}
     if names.intersection(settings.exclude_exceptions or ()):
+        return None
+    if settings.include_exceptions is not None and not names.intersection(settings.include_exceptions):
         return None
     initial = min(settings.min_wait_sec, settings.max_wait_sec)
     if initial == 0:

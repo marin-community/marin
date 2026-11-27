@@ -725,18 +725,6 @@ async def _grade_staged(
             write_archive(archive_path, files, [])
             submission_archive = root / "submission.tar"
             write_archive(submission_archive, submissions, downloaded)
-            relay_connection = (
-                judge_connection
-                if factory.backend is Backend.DAYTONA
-                and isinstance(grading.grader, ScriptGrader)
-                and grading.grader.judge is not None
-                else None
-            )
-            guest_connection = (
-                replace(relay_connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
-                if relay_connection is not None
-                else judge_connection
-            )
             setup_started = time.monotonic()
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(

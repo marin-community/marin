@@ -210,7 +210,8 @@ class Rollout:
     outputs: dict[str, bytes] = field(default_factory=dict)
     """The files under ``TaskSpec.output_paths``, by path. The engine reads them after the harness ends."""
     failure: ErrorIdentity | None = None
-    """For an interrupted attempt: the exception type and the operation that failed."""
+    """For an interrupted attempt: the failure identity with its exception name, category, cause,
+    operation, provider status, and retry disposition."""
 
 
 @dataclass(frozen=True)
