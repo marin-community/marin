@@ -274,6 +274,12 @@ load is safe; conflicting stored reviews fail. Pass
 exact measurement. Its selected pointer and every archived review checksum are
 then covered by the hosted baseline.
 
+The release identity composer reads target pair reviews from the targets' pinned
+registry documents. It preserves a fresh review only when both endpoints match
+the composed fingerprint input digests; stale or conflicting reviews abort the
+composition. Reviews for replaced populations are superseded, and unrelated
+retained reviews remain unchanged.
+
 Load derived-contract manifests with explicit byte hashes:
 
 ```bash

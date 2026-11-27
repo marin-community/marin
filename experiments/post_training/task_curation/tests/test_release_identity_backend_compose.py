@@ -146,9 +146,14 @@ def _directional(fraction: float) -> DirectionalOverlap:
 
 
 def _review(
-    left: str, right: str, left_fp: SourceFingerprint, right_fp: SourceFingerprint, *, contained: bool = False
+    left: str,
+    right: str,
+    left_fp: SourceFingerprint,
+    right_fp: SourceFingerprint,
+    *,
+    label: DuplicateLabel = DuplicateLabel.DISTINCT,
 ) -> DuplicateReview:
-    fraction = 1.0 if contained else 0.0
+    fraction = {DuplicateLabel.DUPLICATE: 1.0, DuplicateLabel.PARTIAL_OVERLAP: 0.5, DuplicateLabel.DISTINCT: 0.0}[label]
     return DuplicateReview(
         similarity=PairSimilarity(
             left=left,
@@ -163,7 +168,7 @@ def _review(
             shared_lineage=False,
         ),
         verdict=PairVerdict(
-            label=DuplicateLabel.DUPLICATE if contained else DuplicateLabel.DISTINCT,
+            label=label,
             overlap_fraction=fraction,
             reason="fixture ruling",
         ),
@@ -215,14 +220,21 @@ def _document_bytes(document: dict) -> bytes:
 
 
 def _registry_stack(
-    tmp_path: Path, fingerprints: dict[str, SourceFingerprint]
+    tmp_path: Path, fingerprints: dict[str, SourceFingerprint], reviews: list[DuplicateReview]
 ) -> tuple[ArtifactRef, Callable[[RegistryReference], dict]]:
     """Seal per-source registry identity documents; return the index ref and fake reader."""
     documents: dict[str, dict] = {}
     sources: dict[str, dict] = {}
     for source_id, fingerprint in fingerprints.items():
         path = f"identities/{source_id}.json"
-        document = {"fingerprints": {source_id: fingerprint.model_dump(mode="json")}}
+        document = {
+            "fingerprints": {source_id: fingerprint.model_dump(mode="json")},
+            "reviews": [
+                review.model_dump(mode="json")
+                for review in reviews
+                if source_id in {review.similarity.left, review.similarity.right}
+            ],
+        }
         documents[path] = document
         sources[source_id] = {
             "repo": "fixture/registry",
@@ -249,11 +261,14 @@ def _build(
     fresh_backend: BackendSurvey | None = None,
     prior_identity: SourceIdentitySurvey | None = None,
     registry_fingerprints: dict[str, SourceFingerprint] | None = None,
+    registry_reviews: list[DuplicateReview] | None = None,
 ) -> tuple[compose_stage.IdentityBackendComposeInputs, Callable[[RegistryReference], dict]]:
     """Standard inputs over three retained sources and the typed targets; override any piece."""
     prior_fps = {source_id: _fingerprint(source_id) for source_id in PRIOR_IDS}
     reviews = [
-        _review(PRIOR_IDS[0], PRIOR_IDS[1], prior_fps[PRIOR_IDS[0]], prior_fps[PRIOR_IDS[1]], contained=True),
+        _review(
+            PRIOR_IDS[0], PRIOR_IDS[1], prior_fps[PRIOR_IDS[0]], prior_fps[PRIOR_IDS[1]], label=DuplicateLabel.DUPLICATE
+        ),
         _review(PRIOR_IDS[2], PRIOR_IDS[0], prior_fps[PRIOR_IDS[2]], prior_fps[PRIOR_IDS[0]]),
     ]
     identity = prior_identity or _identity_survey(prior_fps, reviews)
@@ -264,7 +279,7 @@ def _build(
         if registry_fingerprints is not None
         else {source_id: _fingerprint(source_id) for source_id in targets}
     )
-    index_ref, reader = _registry_stack(tmp_path, registry)
+    index_ref, reader = _registry_stack(tmp_path, registry, registry_reviews or [])
     survey_ref = _write_json(tmp_path, "fresh-backend.json", fresh.model_dump(mode="json"))
     receipt = _write_json(
         tmp_path,
@@ -502,12 +517,22 @@ def test_replaces_backend_and_identity_without_reusing_old_population_reviews(tm
     )
     fingerprints = {source_id: _fingerprint(source_id) for source_id in PRIOR_IDS}
     fingerprints[TARGETS[0]] = _fingerprint(TARGETS[0], task_count=7)
+    fingerprints[TARGETS[0]] = fingerprints[TARGETS[0]].model_copy(update={"inputs": {"tasks": "9" * 64}})
     stale = _review(PRIOR_IDS[0], TARGETS[0], fingerprints[PRIOR_IDS[0]], fingerprints[TARGETS[0]])
     retained = _review(PRIOR_IDS[1], PRIOR_IDS[2], fingerprints[PRIOR_IDS[1]], fingerprints[PRIOR_IDS[2]])
+    fresh = _review(
+        PRIOR_IDS[0],
+        TARGETS[0],
+        fingerprints[PRIOR_IDS[0]],
+        _fingerprint(TARGETS[0]),
+        label=DuplicateLabel.PARTIAL_OVERLAP,
+    )
+    between_targets = _review(TARGETS[0], TARGETS[1], _fingerprint(TARGETS[0]), _fingerprint(TARGETS[1]))
     inputs, reader = _build(
         tmp_path,
         prior_backend=prior_backend,
         prior_identity=_identity_survey(fingerprints, [stale, retained]),
+        registry_reviews=[fresh, between_targets],
     )
     before = Path(inputs.prior_identity.uri).read_bytes()
     proof = compose_stage.run_identity_backend_compose(
@@ -520,9 +545,49 @@ def test_replaces_backend_and_identity_without_reusing_old_population_reviews(tm
     }
     assert identity["fingerprints"][TARGETS[0]]["task_count"] == 3
     assert identity["fingerprints"][PRIOR_IDS[0]] == fingerprints[PRIOR_IDS[0]].model_dump(mode="json")
-    assert identity["reviews"] == [retained.model_dump(mode="json")]
+    assert identity["reviews"] == [row.model_dump(mode="json") for row in (retained, fresh, between_targets)]
     assert Path(inputs.prior_identity.uri).read_bytes() == before
     assert proof["identity"]["superseded_review_count"] == 1
+    assert proof["identity"]["retained_review_count"] == 1
+    assert proof["identity"]["pair_reviews_touching_targets"] == 2
+
+
+@pytest.mark.parametrize("stale_side", ["left_inputs_sha256", "right_inputs_sha256"])
+def test_a_fresh_target_review_must_measure_both_composed_populations(tmp_path, stale_side):
+    review = _review(PRIOR_IDS[0], TARGETS[0], _fingerprint(PRIOR_IDS[0]), _fingerprint(TARGETS[0]))
+    assert review.measurement is not None
+    review = review.model_copy(update={"measurement": review.measurement.model_copy(update={stale_side: "9" * 64})})
+    inputs, reader = _build(tmp_path, registry_reviews=[review])
+    with pytest.raises(ValueError, match="fresh review measurement inputs disagree"):
+        compose_stage.run_identity_backend_compose(inputs, dry_run=False, registry_reader=reader, feeds=_feeds(tmp_path))
+    assert not (tmp_path / "release" / "source-identities.json").exists()
+
+
+def test_conflicting_target_review_documents_cannot_be_composed(tmp_path):
+    inputs, _ = _build(tmp_path)
+    review = _review(TARGETS[0], TARGETS[1], _fingerprint(TARGETS[0]), _fingerprint(TARGETS[1]))
+    other = _review(
+        TARGETS[0], TARGETS[1], _fingerprint(TARGETS[0]), _fingerprint(TARGETS[1]), label=DuplicateLabel.PARTIAL_OVERLAP
+    )
+    sources = {}
+    for source_id, row in zip(TARGETS, [review, other], strict=True):
+        sources[source_id] = _write_json(
+            tmp_path,
+            f"{source_id}.json",
+            {
+                "fingerprints": {source_id: _fingerprint(source_id).model_dump(mode="json")},
+                "reviews": [row.model_dump(mode="json")],
+            },
+        ).model_dump(mode="json")
+    inputs = dataclasses.replace(
+        inputs,
+        registry_index=_write_json(
+            tmp_path, "conflicting-index.json", {"revision": REGISTRY_REVISION, "sources": sources}
+        ),
+    )
+    with pytest.raises(ValueError, match="conflicting fresh pair reviews"):
+        compose_stage.run_identity_backend_compose(inputs, dry_run=False, feeds=_feeds(tmp_path))
+    assert not (tmp_path / "release" / "source-identities.json").exists()
 
 
 def test_refuses_registry_fingerprint_with_no_tasks(tmp_path):
@@ -548,7 +613,13 @@ def test_storage_fingerprint_uses_canonical_source_identity(tmp_path, duplicate_
     rows = {original: fingerprint.model_dump(mode="json")}
     if duplicate_alias:
         rows[canonical] = fingerprint.model_dump(mode="json")
-    survey_ref = _write_json(tmp_path, "storage-survey.json", {"fingerprints": rows})
+    review = _review(original, PRIOR_IDS[0], fingerprint, _fingerprint(PRIOR_IDS[0]))
+    unrelated = _review(PRIOR_IDS[1], PRIOR_IDS[2], _fingerprint(PRIOR_IDS[1]), _fingerprint(PRIOR_IDS[2]))
+    survey_ref = _write_json(
+        tmp_path,
+        "storage-survey.json",
+        {"fingerprints": rows, "reviews": [row.model_dump(mode="json") for row in (review, unrelated)]},
+    )
     index = {"revision": REGISTRY_REVISION, "sources": {canonical: survey_ref.model_dump(mode="json")}}
     inputs = dataclasses.replace(inputs, registry_index=_write_json(tmp_path, "storage-index.json", index))
     if duplicate_alias:
@@ -560,6 +631,8 @@ def test_storage_fingerprint_uses_canonical_source_identity(tmp_path, duplicate_
     composed = json.loads((tmp_path / "release" / "source-identities.json").read_text())
     assert composed["fingerprints"][canonical] == fingerprint.model_dump(mode="json")
     assert original not in composed["fingerprints"]
+    assert composed["reviews"][-1]["similarity"] == {**review.similarity.model_dump(mode="json"), "left": canonical}
+    assert len(composed["reviews"]) == 3
 
 
 def test_failing_run_emits_a_fail_row(tmp_path):
