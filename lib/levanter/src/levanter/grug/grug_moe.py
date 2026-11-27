@@ -74,7 +74,7 @@ from levanter.grug.sharding import (
     replicate_keeping_reduced,
 )
 from levanter.kernels.pallas.radix_select import radix_select
-from levanter.kernels.pallas.autotune_utils import contains_tracer, named_sharding_of
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
 from levanter.utils.activation import ActivationFunctionEnum
 
 MOE_DROPPED_ASSIGNMENTS_METRIC = "moe/dropped_assignments"
@@ -108,12 +108,12 @@ class MoERouteCapture(NamedTuple):
     qb_alpha: Float[Array, "T 1"]
 
 
-class PreparedMoERouteCapture(NamedTuple):
-    """Canonical route data from native capture or validated host preparation."""
-
-    selected_experts: Int[Array, "T K"]
-    token_valid: Bool[Array, "T"]
-    qb_alpha: Float[Array, "T 1"]
+def validate_captured_experts(expert_ids: np.ndarray, num_experts: int) -> None:
+    """Validate the range and uniqueness of the expert IDs for each token."""
+    if np.any((expert_ids < 0) | (expert_ids >= num_experts)):
+        raise ValueError("captured expert IDs must be in [0, num_experts)")
+    if np.any(np.diff(np.sort(expert_ids, axis=-1), axis=-1) == 0):
+        raise ValueError("captured routes must not contain duplicate experts for a token")
 
 
 def prepare_moe_route_capture(
@@ -122,7 +122,7 @@ def prepare_moe_route_capture(
     *,
     num_experts: int,
     num_experts_per_token: int,
-) -> PreparedMoERouteCapture:
+) -> MoERouteCapture:
     """Validate and canonicalize route data before entering a JIT forward.
 
     This is deliberately a host boundary. It validates concrete arrays once,
@@ -131,8 +131,6 @@ def prepare_moe_route_capture(
     capture against the actual batch mask rather than replacing that mask in
     the model.
     """
-    if not isinstance(capture, MoERouteCapture):
-        raise TypeError("route captures must be prepared from MoERouteCapture")
     selected = np.asarray(capture.selected_experts)
     captured_valid = np.asarray(capture.token_valid)
     actual_valid = np.asarray(token_valid)
@@ -149,35 +147,15 @@ def prepare_moe_route_capture(
         raise TypeError("qb_alpha must have floating dtype and shape [T, 1]")
     if not np.array_equal(captured_valid, actual_valid):
         raise ValueError("captured token_valid does not match the actual replay batch mask")
-    if np.any(selected < 0) or np.any(selected >= num_experts):
-        raise ValueError("captured expert IDs must be in [0, num_experts)")
-    duplicate = selected[:, :, None] == selected[:, None, :]
-    if np.any(duplicate & ~np.eye(num_experts_per_token, dtype=bool)[None, :, :]):
-        raise ValueError("captured routes must not contain duplicate experts for a token")
-    if not np.all(np.isfinite(qb_alpha)):
-        raise ValueError("qb_alpha must contain finite values")
-    return PreparedMoERouteCapture(
-        selected_experts=jnp.asarray(selected, dtype=jnp.int32),
+    validate_captured_experts(selected[actual_valid], num_experts)
+    if not np.all(np.isfinite(qb_alpha[actual_valid])):
+        raise ValueError("qb_alpha must contain finite values on valid rows")
+    return MoERouteCapture(
+        selected_experts=jnp.asarray(
+            np.where(actual_valid[:, None], selected, np.arange(num_experts_per_token)), dtype=jnp.int32
+        ),
         token_valid=jnp.asarray(actual_valid, dtype=jnp.bool_),
-        qb_alpha=jnp.asarray(qb_alpha, dtype=jnp.float32),
-    )
-
-
-def validate_prepared_moe_route_capture(
-    capture: PreparedMoERouteCapture,
-    token_valid: Bool[Array, "T"],
-    *,
-    num_experts: int,
-    num_experts_per_token: int,
-) -> None:
-    """Validate a prepared capture against a concrete replay mask."""
-    if not isinstance(capture, PreparedMoERouteCapture):
-        raise TypeError("replay requires a PreparedMoERouteCapture")
-    prepare_moe_route_capture(
-        MoERouteCapture(*capture),
-        token_valid,
-        num_experts=num_experts,
-        num_experts_per_token=num_experts_per_token,
+        qb_alpha=jnp.asarray(np.where(actual_valid[:, None], qb_alpha, 0), dtype=jnp.float32),
     )
 
 
@@ -385,7 +363,7 @@ class QBRoutedMoE(eqx.Module):
         *,
         router: Float[Array, "D E"],
         router_bias: Float[Array, "E"],
-    ) -> PreparedMoERouteCapture:
+    ) -> MoERouteCapture:
         """Capture discrete routes without capturing differentiable gate weights.
 
         The returned arrays are suitable for a later training forward. The
@@ -395,9 +373,9 @@ class QBRoutedMoE(eqx.Module):
         """
         if x.ndim != 2 or token_valid.shape != (x.shape[0],):
             raise ValueError("x and token_valid must have shapes [T, D] and [T]")
-        router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
+        router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
         selected_experts, qb_alpha = self._select_experts(router_logits, router_bias)
-        return PreparedMoERouteCapture(
+        return MoERouteCapture(
             selected_experts=jax.lax.stop_gradient(selected_experts.astype(jnp.int32)),
             token_valid=jax.lax.stop_gradient(token_valid.astype(jnp.bool_)),
             qb_alpha=jax.lax.stop_gradient(qb_alpha),
@@ -414,7 +392,7 @@ class QBRoutedMoE(eqx.Module):
         expert_mlp: "MoEExpertMlp",
         mesh: jax.sharding.AbstractMesh,
         report_capacity_overflow: bool = True,
-        route_capture: PreparedMoERouteCapture | None = None,
+        route_capture: MoERouteCapture | None = None,
     ) -> tuple[Float[Array, "T D"], dict[str, jax.Array]]:
         """Route tokens and return their expert output plus router metrics.
 
@@ -429,24 +407,18 @@ class QBRoutedMoE(eqx.Module):
         if token_valid.ndim != 1 or token_valid.shape[0] != x.shape[0]:
             raise ValueError(f"token_valid must have shape [{x.shape[0]}], got shape={token_valid.shape}")
 
-        if route_capture is not None and not isinstance(route_capture, PreparedMoERouteCapture):
-            raise TypeError("route_capture must be prepared with prepare_moe_route_capture")
-        if route_capture is not None and not contains_tracer(*route_capture, token_valid):
-            validate_prepared_moe_route_capture(
-                route_capture,
-                token_valid,
-                num_experts=router.shape[1],
-                num_experts_per_token=self.num_experts_per_token,
-            )
-
         with jax.named_scope("moe_route"):
             router_logits = jnp.einsum("td,de->te", x, replicate_keeping_reduced(router)).astype(jnp.float32)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
             if route_capture is None:
                 selected_experts, qb_alpha = self._select_experts(router_logits, router_bias)
             else:
-                if route_capture.selected_experts.shape != (x.shape[0], self.num_experts_per_token):
-                    raise ValueError("route_capture selected_experts must align with x and router K")
+                if (
+                    route_capture.selected_experts.shape != (x.shape[0], self.num_experts_per_token)
+                    or route_capture.qb_alpha.shape != (x.shape[0], 1)
+                    or route_capture.token_valid.shape != token_valid.shape
+                ):
+                    raise ValueError("Route capture must align with learner tokens and router K")
                 sharding = named_sharding_of(router_logits)
                 router_token_spec = (
                     sharding.spec if sharding is not None and sharding.spec else P(self.batch_axes, None)

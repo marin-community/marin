@@ -6,6 +6,7 @@ import functools
 import importlib.util
 from collections.abc import Callable
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -2631,9 +2632,22 @@ def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
             lambda gates: routerer.capture_routes(x, token_valid, router=gates, router_bias=router_bias)
         )
         capture = capture_routes(router)
+        # A packed serving capture may contain sentinel IDs and scores in padding rows.
+        capture = grug_moe.prepare_moe_route_capture(
+            capture._replace(
+                selected_experts=jnp.where(token_valid[:, None], capture.selected_experts, -1),
+                qb_alpha=jnp.where(token_valid[:, None], capture.qb_alpha, jnp.nan),
+            ),
+            token_valid,
+            num_experts=num_experts,
+            num_experts_per_token=routerer.num_experts_per_token,
+        )
         perturbed_router = router.at[:, 3].add(10.0)
         perturbed_capture = capture_routes(perturbed_router)
-        assert not np.array_equal(np.asarray(capture.selected_experts), np.asarray(perturbed_capture.selected_experts))
+        np_valid = np.asarray(token_valid)
+        assert not np.array_equal(
+            np.asarray(capture.selected_experts)[np_valid], np.asarray(perturbed_capture.selected_experts)[np_valid]
+        )
         replayed, replay_stats = routerer(
             x,
             token_valid,
@@ -2684,8 +2698,8 @@ def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
     assert float(replay_stats["skipped_assignments"]) == 4.0
     assert float(jnp.max(jnp.abs(router_grad))) > 0.0
 
-    with pytest.raises(ValueError, match="does not match"):
-        routerer(
+    with jax.set_mesh(mesh), pytest.raises(eqx.EquinoxRuntimeError, match="does not match"):
+        eqx.filter_jit(routerer)(
             x,
             token_valid.at[0].set(False),
             router=perturbed_router,
