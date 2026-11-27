@@ -1,0 +1,16 @@
+experiment: X0267d1024
+track: competitive-d1024
+runs:
+  seed0:
+    seed: 0
+    variant: nonsi + sqrt8 start + fh0.2 + closed-form head logit mult
+    flags:
+    - --opt-set
+    - muonh_nonsi_anneal=true
+    - --opt-set
+    - muonh_wn_star=true
+  control:
+    seed: 0
+    variant: competitive-d1024 control
+    control: true
+    shared: s7n-d1024
