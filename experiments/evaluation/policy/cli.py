@@ -151,20 +151,20 @@ def cli() -> None:
 
 
 def _target_options(command: Callable) -> Callable:
-    """The options naming the policy's models or one supplied model."""
+    """The options naming the policy's baselines, other catalog models, or one supplied model."""
     options = (
         click.option(
             "--model",
             "model_names",
             multiple=True,
-            help="A model catalog key: one of the policy's models, or another to run its evaluations on. Repeatable.",
+            help="A model catalog key: one of the policy's baselines, or another to run its evaluations on. Repeatable.",
         ),
-        click.option("--all-models", is_flag=True, help="Every model of the policy."),
+        click.option("--baselines", "all_baselines", is_flag=True, help="Every baseline of the policy."),
         click.option(
             "--model-config",
             type=click.Path(exists=True, dir_okay=False, path_type=Path),
             default=None,
-            help="A model YAML, such as a training checkpoint's, to run in place of the policy's models.",
+            help="A model YAML, such as a training checkpoint's, to run in place of the policy's baselines.",
         ),
     )
     for option in reversed(options):
@@ -173,12 +173,12 @@ def _target_options(command: Callable) -> Callable:
 
 
 def _targets(
-    policy: Policy, model_names: tuple[str, ...], all_models: bool, model_config: Path | None
+    policy: Policy, model_names: tuple[str, ...], all_baselines: bool, model_config: Path | None
 ) -> tuple[PolicyModel, ...] | None:
-    """The models a command runs: named ones, every one, or a supplied model; None if none chosen."""
-    chosen = bool(model_names) + all_models + (model_config is not None)
+    """The models a command runs: named ones, every baseline, or a supplied model; None if none chosen."""
+    chosen = bool(model_names) + all_baselines + (model_config is not None)
     if chosen > 1:
-        raise click.UsageError("name only one of --model, --all-models and --model-config")
+        raise click.UsageError("name only one of --model, --baselines and --model-config")
     if chosen == 0:
         return None
     catalog = models()
@@ -187,11 +187,11 @@ def _targets(
             model = load_model_config(model_config)
             if model.name in catalog:
                 raise click.UsageError(f"{model.name} names a catalog model; give the supplied model its own name")
-            return (policy_model(policy, model, declared=False),)
+            return (policy_model(policy, model, baseline=False),)
         if unknown := [name for name in model_names if name not in catalog]:
             raise click.BadParameter(f"not in the model catalog: {unknown}", param_hint="--model")
-        names = dict.fromkeys(model_names) if model_names else policy.models
-        return tuple(policy_model(policy, catalog[name], declared=name in policy.models) for name in names)
+        names = dict.fromkeys(model_names) if model_names else policy.baselines
+        return tuple(policy_model(policy, catalog[name], baseline=name in policy.baselines) for name in names)
     except ValueError as error:
         raise click.ClickException(str(error)) from error
 
@@ -345,14 +345,14 @@ def _check_checkout(*, recorded: str, smoke: bool) -> None:
 
 @cli.command()
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
-@click.option("--model", "model_name", help="Show one of the policy's models; default all.")
+@click.option("--model", "model_name", help="Show one of the policy's baselines; default all.")
 def show(version: str, model_name: str | None) -> None:
     """Print each model's evaluations with their resolved settings and exclusions."""
     policy = POLICIES[version]
-    names = (model_name,) if model_name is not None else policy.models
+    names = (model_name,) if model_name is not None else policy.baselines
     for name in names:
         try:
-            model = policy_model(policy, policy.model(name), declared=True)
+            model = policy_model(policy, policy.baseline(name), baseline=True)
             plan = model_evaluations(policy, model)
         except ValueError as error:
             raise click.ClickException(str(error)) from error
@@ -391,7 +391,7 @@ def show(version: str, model_name: str | None) -> None:
 def launch(
     version: str,
     model_names: tuple[str, ...],
-    all_models: bool,
+    all_baselines: bool,
     model_config: Path | None,
     priority: str,
     evaluations: frozenset[str] | None,
@@ -409,9 +409,9 @@ def launch(
     policy = POLICIES[version]
     # A supplied checkpoint's config is read from object storage while its model is resolved.
     configure_coreweave_s3()
-    targets = _targets(policy, model_names, all_models, model_config)
+    targets = _targets(policy, model_names, all_baselines, model_config)
     if targets is None:
-        raise click.UsageError("name --model, --all-models or --model-config")
+        raise click.UsageError("name --model, --baselines or --model-config")
     checkout = source_checkout(find_project_root())
     plans = [
         _launch_plan(
@@ -462,14 +462,16 @@ def _status(runs: tuple[FoundRun, ...], expected: ExpectedRun, checkout: str) ->
 @click.option("--policy", "version", required=True, type=click.Choice(sorted(POLICIES)), help="Policy version.")
 @_target_options
 @click.option("--limit", type=click.IntRange(min=1), default=20, show_default=True, help="Item limit of smoke runs.")
-def status(version: str, model_names: tuple[str, ...], all_models: bool, model_config: Path | None, limit: int) -> None:
+def status(
+    version: str, model_names: tuple[str, ...], all_baselines: bool, model_config: Path | None, limit: int
+) -> None:
     """Print each evaluation's full and smoke run: its compliant run at any commit, else its newest run.
 
     Shows every model unless others are chosen.
     """
     policy = POLICIES[version]
     configure_coreweave_s3()
-    targets = _targets(policy, model_names, all_models, model_config) or _targets(policy, (), True, None)
+    targets = _targets(policy, model_names, all_baselines, model_config) or _targets(policy, (), True, None)
     assert targets is not None
     checkout = source_checkout(find_project_root())
     for model in targets:

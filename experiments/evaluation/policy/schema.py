@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""An eval policy: which catalog models run which named evaluations, at which window, with which exclusions."""
+"""An eval policy: which baseline models run which named evaluations, at which window, with which exclusions."""
 
 import re
 from collections import Counter
@@ -23,15 +23,18 @@ RESERVED_VERSION_PREFIX = "eval-policy-"
 
 @dataclass(frozen=True)
 class Policy:
-    """One version of an eval policy. Every evaluation runs for every model unless the pair is excluded.
+    """One version of an eval policy. Every evaluation runs for every baseline unless the pair is excluded.
+
+    ``baselines`` are model catalog keys whose settings the policy has validated; other models run its
+    evaluations as supplied models.
 
     ``evaluations`` are named catalog selections, normally ``load_evaluations`` of the version's
     ``evaluations.yaml``. ``serving_window`` is the context window every model is served at, or the model's own
-    window if smaller. ``exclusions`` maps a (model, evaluation) pair to the reason it does not run.
+    window if smaller. ``exclusions`` maps a (baseline, evaluation) pair to the reason it does not run.
     """
 
     version: str
-    models: tuple[str, ...]
+    baselines: tuple[str, ...]
     evaluations: tuple[EvaluationSelection, ...]
     serving_window: int
     exclusions: Mapping[tuple[str, str], str] = field(default_factory=lambda: MappingProxyType({}))
@@ -39,24 +42,24 @@ class Policy:
     def __post_init__(self) -> None:
         if self.version.startswith(RESERVED_VERSION_PREFIX):
             raise ValueError(f"{self.version}: {RESERVED_VERSION_PREFIX!r} names policy tags, not versions")
-        _require_unique("model", list(self.models))
+        _require_unique("baseline", list(self.baselines))
         _require_unique("evaluation", [evaluation.name for evaluation in self.evaluations])
         catalog = models()
-        for name in self.models:
+        for name in self.baselines:
             if name not in catalog:
                 raise ValueError(f"{name} is not in the model catalog")
             _require_pinned(catalog[name])
         names = {evaluation.name for evaluation in self.evaluations}
         for model, evaluation in self.exclusions:
-            if model not in self.models or evaluation not in names:
-                raise ValueError(f"exclusion of {model} on {evaluation} names no model or evaluation of this policy")
+            if model not in self.baselines or evaluation not in names:
+                raise ValueError(f"exclusion of {model} on {evaluation} names no baseline or evaluation of this policy")
         for evaluation in self.evaluations:
             _check_evaluation(evaluation)
 
-    def model(self, name: str) -> ModelConfig:
-        """The catalog entry of one of the policy's models."""
-        if name not in self.models:
-            raise ValueError(f"{name} is not a model of {self.version}; known: {list(self.models)}")
+    def baseline(self, name: str) -> ModelConfig:
+        """The catalog entry of one of the policy's baselines."""
+        if name not in self.baselines:
+            raise ValueError(f"{name} is not a baseline of {self.version}; known: {list(self.baselines)}")
         return models()[name]
 
 

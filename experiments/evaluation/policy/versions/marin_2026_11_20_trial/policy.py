@@ -15,7 +15,7 @@ from experiments.evaluation.policy.schema import Policy
 
 POLICY = Policy(
     version="marin-2026-11-20-trial",
-    models=("muse-glimmer-30b", "nvidia-nemotron-3.5-super-vl-120b-a12b-bf16", "qwen3.6-35b-a3b"),
+    baselines=("muse-glimmer-30b", "nvidia-nemotron-3.5-super-vl-120b-a12b-bf16", "qwen3.6-35b-a3b"),
     evaluations=load_evaluations(Path(__file__).with_name("evaluations.yaml")),
     # October served every model at this window.
     serving_window=73_728,

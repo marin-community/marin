@@ -337,22 +337,22 @@ def compliant_run(runs: Collection[FoundRun], expected: ExpectedRun) -> tuple[Fo
 
 
 def record_model(policy: Policy, record: EvalRunRecord) -> PolicyModel:
-    """The model a record ran: the policy's own model of that name, else the supplied model it records.
+    """The model a record ran: the policy's baseline of that name, else the supplied model it records.
 
-    A supplied model may not take the name of one of the policy's models.
+    A supplied model may not take the name of one of the policy's baselines.
     """
-    if record.model.name in policy.models:
-        declared = policy.model(record.model.name)
-        if declared.location != record.model.location:
+    if record.model.name in policy.baselines:
+        baseline = policy.baseline(record.model.name)
+        if baseline.location != record.model.location:
             raise ValueError(
                 f"{record.run_id} ran {record.model.location} as {record.model.name}, which {policy.version} "
-                f"declares at {declared.location}"
+                f"declares at {baseline.location}"
             )
-        return policy_model(policy, declared, declared=True)
+        return policy_model(policy, baseline, baseline=True)
     config = record.model.source_config or record.model.config
     if config is None:
         raise ValueError(f"{record.run_id}: its record names no model config to check it against")
-    return policy_model(policy, draccus.decode(ModelConfig, config.model_dump(mode="json")), declared=False)
+    return policy_model(policy, draccus.decode(ModelConfig, config.model_dump(mode="json")), baseline=False)
 
 
 def find_record(run_id: str) -> tuple[EvalRunRecord, str]:

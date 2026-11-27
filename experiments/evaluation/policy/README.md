@@ -23,10 +23,10 @@ Each version is a directory, `versions/<version>/`, holding three files:
 ```python
 POLICY = Policy(
     version="marin-2026-11-20-trial",
-    models=("muse-glimmer-30b", "nvidia-nemotron-3.5-super-vl-120b-a12b-bf16", "qwen3.6-35b-a3b"),
+    baselines=("muse-glimmer-30b", "nvidia-nemotron-3.5-super-vl-120b-a12b-bf16", "qwen3.6-35b-a3b"),
     evaluations=load_evaluations(Path(__file__).with_name("evaluations.yaml")),
     serving_window=73_728,
-    exclusions={},  # {(model, evaluation): reason}
+    exclusions={},  # {(baseline, evaluation): reason}
 )
 ```
 
@@ -41,8 +41,9 @@ evaluations:
     protocol: 32k
 ```
 
-- **Models** are [model catalog](../serve/models/README.md) keys. Each must pin a Hugging Face commit for
-  its weights and its tokenizer.
+- **Baselines** are [model catalog](../serve/models/README.md) keys whose settings the policy has validated.
+  Each must pin a Hugging Face commit for its weights and its tokenizer. Any other model can run the policy's
+  evaluations as a supplied model.
 - **Evaluations** are [benchmark catalog](../catalog.py) variants, named by their keys:
   - `protocol`, `num_fewshot` and `prompt_format` choose the variant, which owns prompts, thinking mode,
     trials, output caps and metrics;
@@ -52,7 +53,7 @@ evaluations:
   - an evaluation that needs a judge doesn't name one, or one that doesn't need a judge names one;
   - an evaluation sets an item limit;
   - a name repeats;
-  - an exclusion names a model or evaluation the policy doesn't have.
+  - an exclusion names a baseline or evaluation the policy doesn't have.
 - **A version must not start with `eval-policy-`**; that prefix names policy tags.
 
 ## Windows
@@ -67,14 +68,14 @@ context depends on what its benchmark declares:
 | an agent input limit, such as SWE-bench's 32,768 | the smaller of that limit and the serving window |
 | nothing | the serving window |
 
-A policy model served below an evaluation's protocol window is an error unless the policy excludes that pair.
+A baseline served below an evaluation's protocol window is an error unless the policy excludes that pair.
 
 ## Running
 
 ```bash
 uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-20-trial [--model NAME]
 uv run python -m experiments.evaluation.policy.cli launch --policy marin-2026-11-20-trial \
-  --all-models --priority batch [--evaluations a,b] [--limit 20] [--dry-run]
+  --baselines --priority batch [--evaluations a,b] [--limit 20] [--dry-run]
 uv run python -m experiments.evaluation.policy.cli status --policy marin-2026-11-20-trial
 uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11-20-trial RUN_ID...
 ```
@@ -83,12 +84,12 @@ uv run python -m experiments.evaluation.policy.cli verify --policy marin-2026-11
 
 | Option | Runs |
 | --- | --- |
-| `--model KEY`, repeatable | the named catalog models; a key outside the policy runs as a supplied model |
-| `--all-models` | every model of the policy (the default for `status`) |
+| `--model KEY`, repeatable | the named catalog models; a key that isn't a baseline runs as a supplied model |
+| `--baselines` | every baseline of the policy (the default for `status`) |
 | `--model-config FILE` | a supplied model, such as a training checkpoint |
 
 A supplied model leaves out each evaluation it can't run, such as one whose protocol window is larger than its
-own; the dry run and `status` list them. A supplied model may not take a catalog model's name.
+own; the dry run and `status` list them. A supplied model given with `--model-config` may not take a catalog model's name.
 
 Each model runs on one server, split only when its judges need different keys, and the server runs four
 evaluations at once. A full run (no `--limit`) launches only from a clean checkout. `launch`, `status` and

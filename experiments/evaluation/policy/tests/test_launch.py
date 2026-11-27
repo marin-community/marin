@@ -57,10 +57,10 @@ def test_a_protocol_window_is_used_exactly_and_an_agent_gets_the_smaller_of_its_
     assert evaluation_context(qwen, EVALUATIONS["aime24"]) == POLICY.serving_window
 
 
-def test_a_declared_model_served_below_a_protocol_window_must_exclude_it(served):
+def test_a_baseline_served_below_a_protocol_window_must_exclude_it(served):
     # At 65,536 tokens, MRCR's 73,728-token protocol and NUPA's longest window don't fit.
     served(65_536)
-    model = policy_model(POLICY, POLICY.model(QWEN_NAME), declared=True)
+    model = policy_model(POLICY, POLICY.baseline(QWEN_NAME), baseline=True)
     with pytest.raises(ValueError, match="exclude it"):
         model_evaluations(POLICY, model)
     reasons = {(QWEN_NAME, "mrcr"): "too long", (QWEN_NAME, "nupa"): "too long"}
@@ -70,7 +70,7 @@ def test_a_declared_model_served_below_a_protocol_window_must_exclude_it(served)
 
 def test_a_supplied_model_leaves_out_what_it_cant_run(served):
     served(32_768)
-    checkpoint = policy_model(POLICY, replace(POLICY.model(QWEN_NAME), name="qwen-step-100"), declared=False)
+    checkpoint = policy_model(POLICY, replace(POLICY.baseline(QWEN_NAME), name="qwen-step-100"), baseline=False)
     plan = model_evaluations(POLICY, checkpoint)
     assert set(plan.excluded) == {"mmlu-pro", "mrcr", "mrcr-65k", "nupa"}
     assert "mrcr-32k" in {evaluation.name for evaluation in plan.evaluations}
@@ -92,9 +92,12 @@ def test_rewriting_an_object_store_checkpoint_changes_its_run_key(served, tmp_pa
     weights.write_bytes(b"weights")
     # Training checkpoints carry a producer identity, and shards can sit in a subdirectory; the digest covers both.
     checkpoint = replace(
-        POLICY.model(QWEN_NAME), name="qwen-step-100", location=f"file://{tmp_path / 'checkpoint'}", identity="producer"
+        POLICY.baseline(QWEN_NAME),
+        name="qwen-step-100",
+        location=f"file://{tmp_path / 'checkpoint'}",
+        identity="producer",
     )
-    before = policy_model(POLICY, checkpoint, declared=False)
+    before = policy_model(POLICY, checkpoint, baseline=False)
     weights.write_bytes(b"retrained weights")
-    after = policy_model(POLICY, checkpoint, declared=False)
+    after = policy_model(POLICY, checkpoint, baseline=False)
     assert run_key(before, Platform.GPU) != run_key(after, Platform.GPU)

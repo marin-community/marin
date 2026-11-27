@@ -32,12 +32,13 @@ EVALUATIONS_PER_SERVER = 4
 class PolicyModel:
     """A model a policy launch runs, pinned and served at the policy's window or its own if smaller.
 
-    ``declared`` models are the policy's own; others are supplied, such as a training checkpoint.
+    ``baseline`` models are the policy's own, run with validated settings; others are supplied, such as a
+    training checkpoint.
     ``checkpoint`` digests an object-store checkpoint's files, so rewriting it in place changes its run IDs.
     """
 
     model: ModelConfig
-    declared: bool
+    baseline: bool
     checkpoint: str | None
 
     @property
@@ -51,7 +52,7 @@ class PolicyModel:
         return window
 
 
-def policy_model(policy: Policy, model: ModelConfig, *, declared: bool) -> PolicyModel:
+def policy_model(policy: Policy, model: ModelConfig, *, baseline: bool) -> PolicyModel:
     """Pin a model and serve it at the policy's window, or at its own if smaller.
 
     The model's own window is its resolved serving config's, else the one its checkpoint declares.
@@ -63,7 +64,7 @@ def policy_model(policy: Policy, model: ModelConfig, *, declared: bool) -> Polic
         raise ValueError(f"{model.name}: set serve.max_model_len; its checkpoint declares no context window")
     model = replace(model, serve=replace(serve, max_model_len=min(own, policy.serving_window)))
     checkpoint = checkpoint_digest(model.location) if "://" in model.location else None
-    return PolicyModel(model=model, declared=declared, checkpoint=checkpoint)
+    return PolicyModel(model=model, baseline=baseline, checkpoint=checkpoint)
 
 
 def evaluation_context(model: PolicyModel, evaluation: EvaluationSelection) -> int:
@@ -95,7 +96,7 @@ class ModelEvaluations:
 def model_evaluations(policy: Policy, model: PolicyModel, names: Collection[str] | None = None) -> ModelEvaluations:
     """The policy's evaluations for one model, limited to ``names`` if given.
 
-    A declared model leaves out only the policy's exclusions, and any evaluation it can't run is an error. A
+    A baseline leaves out only the policy's exclusions, and any evaluation it can't run is an error. A
     supplied model also leaves out every evaluation it can't run, such as one whose protocol window doesn't fit.
     """
     if names is not None and (unknown := set(names) - {evaluation.name for evaluation in policy.evaluations}):
@@ -104,7 +105,7 @@ def model_evaluations(policy: Policy, model: PolicyModel, names: Collection[str]
     for evaluation in policy.evaluations:
         if names is not None and evaluation.name not in names:
             continue
-        if model.declared and (reason := policy.exclusions.get((model.name, evaluation.name))) is not None:
+        if model.baseline and (reason := policy.exclusions.get((model.name, evaluation.name))) is not None:
             excluded[evaluation.name] = reason
             continue
         try:
@@ -112,7 +113,7 @@ def model_evaluations(policy: Policy, model: PolicyModel, names: Collection[str]
             if (cap := evaluation.run.max_tokens) is not None and cap >= context:
                 raise ValueError(f"output limit {cap} does not fit in context {context}")
         except ValueError as error:
-            if model.declared:
+            if model.baseline:
                 raise ValueError(f"{model.name} on {evaluation.name}: {error}; exclude it") from error
             excluded[evaluation.name] = str(error)
             continue

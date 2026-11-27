@@ -10,7 +10,7 @@ the same Harbor packages, agents and limits. [`policy.py`](policy.py) declares i
 [`evaluations.yaml`](evaluations.yaml) names its evaluations, taken from October's; the
 [policy README](../../README.md) explains the schema and the `policy` command.
 
-## Models
+## Baselines
 
 | Model | Revision | Served window | Native window |
 | --- | --- | --- | --- |
@@ -23,7 +23,7 @@ reasoning and `qwen3_coder` tool parsers.
 
 ## Evaluations
 
-Every model runs every evaluation. `show` prints each one's context, seed, protocol, trials,
+Every baseline runs every evaluation. `show` prints each one's context, seed, protocol, trials,
 output cap, judge and metric.
 
 | Kind | Evaluations |

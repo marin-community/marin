@@ -36,7 +36,7 @@ def served(monkeypatch):
 
 @pytest.fixture
 def qwen(served) -> PolicyModel:
-    return policy_model(POLICY, POLICY.model(QWEN_NAME), declared=True)
+    return policy_model(POLICY, POLICY.baseline(QWEN_NAME), baseline=True)
 
 
 @pytest.fixture
