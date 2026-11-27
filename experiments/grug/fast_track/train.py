@@ -68,6 +68,7 @@ from experiments.grug.checkpointing import (
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.cplm import bind_case_tables, case_class_tables
 from experiments.grug.fast_track.host_stall import HostStallSampler
+from experiments.grug.fast_track.id_balancing import id_balance_update, load_violation_metrics
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
     DenseMLP,
@@ -624,6 +625,8 @@ class GrugTrainState:
     params: Transformer
     opt_state: optax.OptState
     pending_qb_betas: jax.Array
+    # ID Balancing's previous-step load error per layer and expert (``id_balance_gain``); None under QB.
+    id_balance_prev_error: jax.Array | None = None
 
 
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
@@ -659,6 +662,9 @@ def initial_state(
         params=params,
         opt_state=opt_state,
         pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
+        id_balance_prev_error=(
+            jnp.zeros((model_config.num_layers, model_config.num_experts)) if model_config.id_balance_gain else None
+        ),
     )
 
 
@@ -968,8 +974,10 @@ def _make_train_step(
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
     token_embed_stats: bool = False,
+    id_balance_gain: float = 0.0,
 ):
-    """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
+    """``id_balance_gain`` > 0 replaces the QB betas with ID Balancing's bias (``id_balancing.py``).
+    ``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
     ``lm_head_grad_probe_site`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
     ``token_embed_stats`` the ``_token_embed_stats``.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
@@ -1033,6 +1041,17 @@ def _make_train_step(
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
             pending_qb_betas=metrics.get("qb_beta_per_layer", state.pending_qb_betas),
         )
+        if id_balance_gain:
+            # The pending betas hold the negated, mean-zero ID bias, so _apply_qb_betas sets it unchanged.
+            counts = metrics["train/router/routing_counts_per_layer"]
+            bias, error, gate = id_balance_update(
+                -state.pending_qb_betas, state.id_balance_prev_error, counts, id_balance_gain
+            )
+            next_state = dataclasses.replace(next_state, pending_qb_betas=-bias, id_balance_prev_error=error)
+            metrics["qb_beta_per_layer"] = -bias
+            metrics["train/router/bias_min"] = jnp.min(bias)
+            metrics["train/router/bias_max"] = jnp.max(bias)
+            metrics.update(load_violation_metrics(counts, gate))
         if next_state.pending_qb_betas.shape[-1] <= _LOGGED_QB_BETA_MAX_EXPERTS:
             # Few experts (the specialization study models): log every expert's QB balancing bias.
             for layer in range(next_state.pending_qb_betas.shape[0]):
@@ -1619,6 +1638,7 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         lm_head_grad_probe_site=config.model.lm_head_grad_probe_site if config.model.lm_head_grad_probe else None,
         lm_head_grad_clip=config.model.lm_head_grad_clip,
         token_embed_stats=config.model.token_embed_stats,
+        id_balance_gain=config.model.id_balance_gain,
     )
 
 

@@ -541,8 +541,14 @@ class GrugModelConfig:
     shared across passes; the first pass reads only the local mix. The coda and the final gate read the embedding,
     the prelude, the last pass's middle blocks and the coda's own blocks. Needs ``attn_res``; excludes the AttnRes
     plain sum, KV gates, layer skips and ``full_bandwidth_passes``."""
+    id_balance_gain: float = 0.0
+    """ID Balancing (arXiv 2609.39137, ``id_balancing.py``) in place of QB: the train step integrates each expert's
+    normalized load error into the router bias with this integral gain, plus a gated derivative term at the same
+    gain, and the forward skips the QB histogram. 0: QB. Needs routed experts (no ``dense_mlp``)."""
 
     def __post_init__(self) -> None:
+        if self.id_balance_gain < 0 or (self.id_balance_gain and self.dense_mlp):
+            raise ValueError("id_balance_gain must be >= 0, and needs routed experts (dense_mlp=False)")
         if self.full_bandwidth_passes and (self.full_bandwidth_passes < 2 or self.cplm_plus or self.pointer_mixture):
             raise ValueError("full_bandwidth_passes must be 0 or >= 2, and excludes cplm_plus and pointer_mixture")
         if self.lm_head_value_embeds and (
@@ -1376,14 +1382,19 @@ class MoEMLP(eqx.Module):
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha` by binning
         # them into fixed bins over the live global range and reading the (1-K/E) quantile.
-        beta, margin_min, margin_max = qb_beta_hist(
-            reshard(router_logits - alpha, P(_BATCH_AXES, None)),
-            mesh,
-            target_share=k / num_experts,
-            num_experts=num_experts,
-            n_bins=_QB_HIST_BINS,
-            batch_axes=_BATCH_AXES,
-        )
+        if self.cfg.id_balance_gain:
+            # ID Balancing sets the bias from the routing counts; the QB threshold is unused.
+            beta = jnp.zeros((num_experts,), jnp.float32)
+            margin_min = margin_max = jnp.zeros((), jnp.float32)
+        else:
+            beta, margin_min, margin_max = qb_beta_hist(
+                reshard(router_logits - alpha, P(_BATCH_AXES, None)),
+                mesh,
+                target_share=k / num_experts,
+                num_experts=num_experts,
+                n_bins=_QB_HIST_BINS,
+                batch_axes=_BATCH_AXES,
+            )
         router_stats["qb_beta"] = beta
         router_stats[f"{_OUTSTAT_PREFIX}moe_active_k"] = jnp.asarray(float(k), jnp.float32)
         router_stats["margin_min"] = margin_min
