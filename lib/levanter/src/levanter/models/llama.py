@@ -624,6 +624,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        logit_positions: NamedArray | None = None,
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         """Run one decode / pre-fill step with an existing paged-KV *state*.
@@ -638,13 +639,15 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         pos_ids : NamedArray
             Absolute position IDs matching *input_ids* (negative IDs can mark padding as
             in the lower-level API).
+        logit_positions : NamedArray | None
+            Rows to project, indexed within the input position axis. Defaults to all rows.
         key : jax.random.PRNGKey | None
             RNG key for dropout etc.  Can be omitted during inference.
 
         Returns
         -------
         logits : NamedArray
-            Logits for the provided tokens (axes match *input_ids* + ``Vocab``).
+            Logits in the requested row order, with ``Vocab`` as the final axis.
         new_state : ListCache[KvPageCache]
             Updated cache to pass into the next decode call.
         """
@@ -655,6 +658,9 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         # Propagate through the transformer with paged-KV caching
         k_t = maybe_rng_split(key, 1)[0] if key is not None else None
         x, new_state = self.transformer.decode(kv_cache, x, batch_info, pos_ids, key=k_t)
+
+        if logit_positions is not None:
+            x = x.take(input_ids.axes[-1], logit_positions)
 
         # Project to logits
         if self.lm_head is not None:

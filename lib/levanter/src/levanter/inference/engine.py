@@ -434,8 +434,10 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, batch_info, pos_ids)
-    logits_at_samples = _gather_logits(logits, sample_indices)
+    logits_at_samples, cache = model.decode(
+        tokens, gen_state.cache, batch_info, pos_ids, logit_positions=sample_indices
+    )
+    logits_at_samples = hax.shard(logits_at_samples, {})
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(
@@ -700,8 +702,10 @@ def _run_generation_loop(
         sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
-        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = _gather_logits(logits, sample_indices)
+        logits_at_samples, cache = model.decode(
+            tokens, gen_state.cache, binfo, pos_ids, logit_positions=sample_indices
+        )
+        logits_at_samples = hax.shard(logits_at_samples, {})
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]
