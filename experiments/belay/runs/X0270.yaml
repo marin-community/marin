@@ -1,0 +1,19 @@
+experiment: X0270
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: X0250 with token_embed at Adam, no weight decay
+    flags:
+    - --opt-set
+    - muonc_anneal_decay=0.2
+    - --opt-set
+    - muonc_anneal_adamc=12.5
+    - --opt-set
+    - adamc_adam_decay=0.3
+    - --opt-set
+    - muonc_anneal_embed_no_decay=True
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
