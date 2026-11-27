@@ -54,7 +54,7 @@ class DistributedStrategy(ABC):
     def finish_checkpoint(self) -> None:
         """Join the write and publish the rank's checkpoint control files."""
 
-    def discard_checkpoint(self) -> None:
+    def discard_checkpoint_control_files(self) -> None:
         """Join the write and release uncommitted checkpoint control files."""
 
     @abstractmethod

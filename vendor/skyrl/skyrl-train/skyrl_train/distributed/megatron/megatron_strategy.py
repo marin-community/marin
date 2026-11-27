@@ -45,6 +45,7 @@ from skyrl_train.distributed.megatron.checkpoint_restore import (
     restore_model_weights_from_optimizer,
 )
 from marinskyrl.remote_io import abort_multipart_uploads
+from marinskyrl.resource_locator import join_resource_path
 
 from megatron.core.dist_checkpointing.strategies import base as ckpt_base
 from megatron.core.dist_checkpointing.strategies.async_utils import AsyncCallsQueue
@@ -392,46 +393,49 @@ class MegatronStrategy(DistributedStrategy):
 
         sharded_state_dict = self._checkpoint_state_dict(model, optimizer, scheduler)
 
-        # Save the checkpoint across ranks in parallel. Each S3 rank shard is one
-        # multipart object; the local work directory contains only small control files.
-        direct_save = self._prepare_s3_checkpoint(ckpt_dir) if ckpt_dir.startswith("s3://") else None
-        save_strategy = FullyParallelSaveStrategyWrapper(
-            direct_save if direct_save is not None else get_default_save_sharded_strategy("torch_dist"),
-            mpu.get_data_parallel_group(with_context_parallel=True),
-        )
+        if ckpt_dir.startswith("s3://"):
+            self._stage_s3_checkpoint(ckpt_dir, sharded_state_dict, tokenizer, client_state, tag)
+            return
 
-        with ExitStack() as controls:
-            if direct_save is None:
-                work_dir = controls.enter_context(io.local_work_dir(ckpt_dir))
-            else:
-                work_dir = controls.enter_context(TemporaryDirectory())
-            try:
-                dist_checkpointing.save(
-                    sharded_state_dict=sharded_state_dict,
-                    checkpoint_dir=work_dir,
-                    sharded_strategy=save_strategy,
-                    async_sharded_save=False,
-                    validate_access_integrity=True,
-                )
-
-                if self.is_rank_0():
-                    self._write_checkpoint_control_files(work_dir, tokenizer, client_state, tag)
-            except BaseException:
-                if direct_save is not None and direct_save.pending_write is not None:
-                    _join_discarded_write(direct_save.pending_write)
-                raise
-
-            if direct_save is not None:
-                assert direct_save.pending_write is not None, "S3 checkpoint did not start a shard write"
-                self._pending_checkpoint = _PendingCheckpoint(
-                    direct_save.pending_write, controls.pop_all(), work_dir, ckpt_dir
-                )
-                return
-
+        with io.local_work_dir(ckpt_dir) as work_dir:
+            self._write_checkpoint_files(
+                work_dir, get_default_save_sharded_strategy("torch_dist"), sharded_state_dict,
+                tokenizer, client_state, tag,
+            )
         dist.barrier()
         ckpt_base.async_calls.close()
         ckpt_base.async_calls = AsyncCallsQueue(persistent=True)
         self.log(f"Checkpoint successfully saved to {ckpt_dir}")
+
+    def _stage_s3_checkpoint(self, ckpt_dir, sharded_state_dict, tokenizer, client_state, tag) -> None:
+        direct_save = self._prepare_s3_checkpoint(ckpt_dir)
+        # Keep the control directory private until the shard write succeeds.
+        with ExitStack() as controls:
+            work_dir = controls.enter_context(TemporaryDirectory())
+            try:
+                self._write_checkpoint_files(work_dir, direct_save, sharded_state_dict, tokenizer, client_state, tag)
+            except BaseException:
+                if direct_save.pending_write is not None:
+                    _join_discarded_write(direct_save.pending_write)
+                raise
+
+            assert direct_save.pending_write is not None, "S3 checkpoint did not start a shard write"
+            self._pending_checkpoint = _PendingCheckpoint(
+                direct_save.pending_write, controls.pop_all(), work_dir, ckpt_dir
+            )
+
+    def _write_checkpoint_files(self, work_dir, shard_writer, sharded_state_dict, tokenizer, client_state, tag) -> None:
+        dist_checkpointing.save(
+            sharded_state_dict=sharded_state_dict,
+            checkpoint_dir=work_dir,
+            sharded_strategy=FullyParallelSaveStrategyWrapper(
+                shard_writer, mpu.get_data_parallel_group(with_context_parallel=True)
+            ),
+            async_sharded_save=False,
+            validate_access_integrity=True,
+        )
+        if self.is_rank_0():
+            self._write_checkpoint_control_files(work_dir, tokenizer, client_state, tag)
 
     def _checkpoint_state_dict(
         self,
@@ -489,7 +493,7 @@ class MegatronStrategy(DistributedStrategy):
         if (pending := self._take_pending_checkpoint()) is not None:
             pending.finish()
 
-    def discard_checkpoint(self) -> None:
+    def discard_checkpoint_control_files(self) -> None:
         if (pending := self._take_pending_checkpoint()) is not None:
             pending.discard()
 
@@ -598,7 +602,7 @@ class MegatronStrategy(DistributedStrategy):
             self.load_rng_state(state_dict["rng"])
 
         states = {}
-        extra_state_path = os.path.join(ckpt_dir, _EXTRA_CHECKPOINT_STATE_FILENAME)
+        extra_state_path = join_resource_path(ckpt_dir, _EXTRA_CHECKPOINT_STATE_FILENAME)
         if load_training_state and io.exists(extra_state_path):
             with io.open_file(extra_state_path, "rb") as f:
                 extra_state = torch.load(f, weights_only=False)

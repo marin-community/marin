@@ -2846,18 +2846,7 @@ class RayPPOTrainer:
         trainer_state_buffer = stdlib_io.BytesIO()
         torch.save(trainer_state, trainer_state_buffer)
 
-        refs = self.policy_model.async_run_ray_method(
-            "pass_through", "save_checkpoint", ckpt_dir=policy_save_dir, tokenizer=self.tokenizer
-        )
-        try:
-            ray.get(refs)
-        except ray.exceptions.RayTaskError as error:
-            # A rank can fail writing its control files after other ranks hand off staging.
-            try:
-                ray.get(self.policy_model.async_run_ray_method("pass_through", "discard_checkpoint"))
-            except ray.exceptions.RayError as cleanup_error:
-                error.add_note(f"Could not discard pending policy writes: {cleanup_error}")
-            raise
+        self._stage_policy_checkpoint(policy_save_dir)
         latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
         return CheckpointSnapshot(
             step=step,
@@ -2868,6 +2857,20 @@ class RayPPOTrainer:
             trainer_state_payload=trainer_state_buffer.getvalue(),
             marker_path=latest_checkpoint_file,
         )
+
+    def _stage_policy_checkpoint(self, policy_save_dir: str) -> None:
+        refs = self.policy_model.async_run_ray_method(
+            "pass_through", "save_checkpoint", ckpt_dir=policy_save_dir, tokenizer=self.tokenizer
+        )
+        try:
+            ray.get(refs)
+        except ray.exceptions.RayTaskError as error:
+            # A rank can fail writing its control files after other ranks hand off staging.
+            try:
+                ray.get(self.policy_model.async_run_ray_method("pass_through", "discard_checkpoint_control_files"))
+            except ray.exceptions.RayError as cleanup_error:
+                error.add_note(f"Could not discard pending policy writes: {cleanup_error}")
+            raise
 
     def _cleanup_old_checkpoints(self, step: int):
         max_ckpts = self.cfg.trainer.max_ckpts_to_keep

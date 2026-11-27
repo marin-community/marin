@@ -1361,8 +1361,8 @@ class PolicyWorkerBase(Worker):
     def finish_checkpoint(self) -> None:
         self.strategy.finish_checkpoint()
 
-    def discard_checkpoint(self) -> None:
-        self.strategy.discard_checkpoint()
+    def discard_checkpoint_control_files(self) -> None:
+        self.strategy.discard_checkpoint_control_files()
 
     def load_checkpoint(
         self,

@@ -197,9 +197,9 @@ Outcome estimators and SFT/uniform support scalar and per-turn token rewards. Un
 
 SkyRL assigns checkpoint records to policy ranks before copying them into CPU
 memory. Each rank streams its assigned records to S3 and releases buffer space
-as it serializes them. Training can resume as soon as all ranks have copied
-their records. The resume marker is published after all shards and trainer state
-have committed.
+as it serializes them. Training can resume after all ranks have copied their
+records and Megatron has written its small local control files. The resume
+marker is published after all shards and trainer state have committed.
 
 `trainer.policy.megatron_config.checkpoint_max_staged_host_bytes` sets the per-policy-rank budget. The default is 16 GiB.
 When the largest rank's share fits in its buffer, the remaining upload
