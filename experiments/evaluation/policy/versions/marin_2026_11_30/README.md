@@ -63,9 +63,8 @@ Run, with a known difference:
 | Benchmark | October | This policy |
 | --- | --- | --- |
 | Every baseline | served at 73,728 tokens | served at 131,072 |
-| Terminal-Bench 2.1, OT-TBLite, BixBench | every agent 1,800 s and verifier 300 s | each package's own limits: up to 12,000 s on Terminal-Bench 2.1, 600–3,600 s on OT-TBLite, 3,600 s on BixBench |
+| Chat benchmarks without their own reply cap | replies up to the 73,728-token window | replies up to 65,536 tokens |
+| Terminal-Bench 2.1, OT-TBLite, BixBench, DS-1000, BFCL | every agent 1,800 s and verifier 300 s | each package's own limits: up to 12,000 s on Terminal-Bench 2.1, 600–3,600 s on OT-TBLite, 3,600 s on BixBench, 900 s on DS-1000, 300 s on BFCL |
 | BixBench | MiniMax-M3 judge served beside the candidate | Together `openai/gpt-oss-120b` |
 | GPQA Diamond, MRCR, IFBench, OlympiadBench and the other chat benchmarks of [#12221](https://github.com/marin-community/marin/pull/12221) | reasoning and answer graded together | final answer graded |
 | SWE-bench Multilingual | agent with network access | agent offline, graded on a separate machine with network |
-
-DS-1000 and BFCL keep the October campaign's 1,800 s agent limit: their packages declare 900 s and 300 s.
