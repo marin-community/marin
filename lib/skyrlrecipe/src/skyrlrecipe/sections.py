@@ -851,6 +851,8 @@ class TrajectoryRunner(Section):
     command_timeout: int = field(120)
     cleanup_timeout: int = field(30)
     shutdown_timeout: int = field(45)
+    inference_queue_timeout: int = field(2280)
+    "Cumulative inference admission wait per trial, separate from active execution."
     max_concurrent_tasks: int = field(1024)
     "Trajectories each rollout worker runs at once; an evaluation runs at most this many across all workers."
     max_concurrent_training_machine_tasks: PositiveInt | None = field(None)
