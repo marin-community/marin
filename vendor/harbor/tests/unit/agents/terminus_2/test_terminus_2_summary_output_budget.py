@@ -37,6 +37,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from harbor.agents.terminus_2.terminus_2 import (
+    IncompleteOutputPolicy,
     _OVERLONG_SUMMARY_MARKER,
     RESERVED_SUMMARY_OUTPUT,
     EpisodeLoggingPaths,
@@ -207,6 +208,8 @@ def _make_agent(
     proactive_threshold: int = 8000,
 ) -> Terminus2:
     agent = object.__new__(Terminus2)
+    agent._minimum_free_tokens = None
+    agent._incomplete_output_policy = IncompleteOutputPolicy.RECOVER
     agent.logger = logging.getLogger("test-terminus-2-summary-budget")
     agent._llm = fake_llm
     agent._context_window_manager = ContextWindowManager(fake_llm)

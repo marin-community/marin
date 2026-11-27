@@ -79,10 +79,12 @@ def _openai_connect_timeout_sec(env: Mapping[str, str] | None = None) -> float:
 
 def _openai_transport_timeout(
     env: Mapping[str, str] | None = None,
+    *,
+    read_timeout: float | None = None,
 ) -> httpx.Timeout:
     return httpx.Timeout(
         connect=_openai_connect_timeout_sec(env),
-        read=None,
+        read=read_timeout,
         write=600.0,
         pool=600.0,
     )

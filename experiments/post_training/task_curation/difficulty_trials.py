@@ -65,6 +65,7 @@ from experiments.post_training.task_curation.difficulty_config import (
     CandidateRun,
 )
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence, write_same_json_evidence
+from experiments.post_training.task_curation.difficulty_output_budget import dynamic_usage_matches
 from experiments.post_training.task_curation.difficulty_prepared import (
     PreparedTask,
     attempt_judge_model,
@@ -618,6 +619,75 @@ def scored_reward(result, trial: Trial) -> float | None:
     return float(reward)
 
 
+@dataclass(frozen=True)
+class ModelOutputFailure:
+    protocol_id: str
+    request_path: str
+    response_path: str
+    finish_reason: str
+    prompt_tokens: int
+    max_tokens: int
+    completion_tokens: int
+
+
+def model_output_failure(config: CandidateRun, result, trial: Trial, request: Path | None) -> ModelOutputFailure | None:
+    """Qualify a completed empty v2 reply when no grader or infrastructure failure intervened."""
+    policy = config.settings.dynamic_output
+    if policy is None or request is None:
+        return None
+    if (
+        result.finished_at is None
+        or result.completion is None
+        or result.environment_setup is None
+        or result.environment_setup.finished_at is None
+        or result.agent_execution is None
+        or result.agent_execution.finished_at is None
+        or result.verifier_result is not None
+        or result.secondary_exception_info
+        or (result.verifier is not None and result.verifier.started_at is not None)
+        or read_verdict(trial) is not None
+    ):
+        return None
+    if result.exception_info is not None and result.exception_info.exception_type not in {
+        "MalformedModelResponseError",
+        "OutputLengthExceededError",
+    }:
+        return None
+    sent = json.loads((request / "request.json").read_text())
+    response = json.loads((request / "response.json").read_text())
+    if sent.get("dynamic_output") != dataclasses.asdict(policy) or response["status"] != 200:
+        return None
+    prompt_tokens = sent["prompt_tokens"]
+    try:
+        allowance = policy.output_capacity(prompt_tokens)
+    except ValueError:
+        return None
+    if sent["body"].get("max_tokens") != allowance:
+        return None
+    body = response["body"]
+    if not dynamic_usage_matches(body, prompt_tokens, allowance):
+        return None
+    choice = body["choices"][0]
+    message = choice.get("message")
+    if (
+        choice.get("finish_reason") not in {"stop", "length"}
+        or not isinstance(message, dict)
+        or message.get("content") not in (None, "")
+        or message.get("tool_calls")
+        or message.get("function_call")
+    ):
+        return None
+    return ModelOutputFailure(
+        policy.protocol_id,
+        str(request / "request.json"),
+        str(request / "response.json"),
+        choice["finish_reason"],
+        prompt_tokens,
+        allowance,
+        body["usage"]["completion_tokens"],
+    )
+
+
 def math_deadline_phase(trial: Trial) -> str | None:
     """The grading phase whose deadline fired, or None when this is not a math deadline.
 
@@ -768,6 +838,7 @@ def run_task(
         local.mkdir(parents=True, exist_ok=False)
         endpoint = f"{base_url}/{root.name}-{key}-{number}/v1"
         parameters = request_parameters(config.settings)
+        dynamic_output = config.settings.dynamic_output
         common = {"api_base": endpoint}
         if task.workload == "task_spec":
             kwargs = {
@@ -775,6 +846,7 @@ def run_task(
                 "max_turns": 50,
                 "max_tokens": config.settings.output_tokens,
                 "request_parameters": parameters,
+                **({"request_read_timeout": config.provider_limits.request_timeout} if dynamic_output else {}),
             }
             agent_name = "task-spec-chat"
         else:
@@ -783,6 +855,18 @@ def run_task(
                 "max_turns": 50,
                 "temperature": config.settings.temperature,
                 "proactive_summarization_threshold": config.settings.context_tokens - config.settings.input_tokens,
+                **(
+                    {
+                        "enable_summarize": False,
+                        "minimum_free_tokens": (
+                            dynamic_output.minimum_output_tokens + dynamic_output.safety_margin_tokens
+                        ),
+                        "incomplete_output_policy": "stop",
+                        "request_read_timeout": config.provider_limits.request_timeout,
+                    }
+                    if dynamic_output
+                    else {}
+                ),
                 "model_info": {
                     "max_input_tokens": config.settings.context_tokens,
                     "max_output_tokens": config.settings.output_tokens,
@@ -881,6 +965,7 @@ def run_task(
         provider_wait = False
         model_request_failed = False
         candidate_served = False
+        candidate_last_request = None
         route = f"/{root.name}-{key}-{number}"
         for traffic in (root.parent / "model-requests", root.parent / "judge" / "model-requests"):
             requests = sorted((traffic / hashlib.sha256(route.encode()).hexdigest()).glob("*"))
@@ -894,6 +979,8 @@ def run_task(
             if not requests:
                 continue
             last = requests[-1]
+            if traffic == root.parent / "model-requests":
+                candidate_last_request = last
             if not (last / "response.json").exists():
                 model_request_failed = True
                 provider_wait |= (
@@ -908,6 +995,17 @@ def run_task(
                 provider_wait |= error.get("code") == "provider_wait"
         if result.exception_info is not None and not candidate_served:
             model_request_failed = True
+        if (
+            dynamic_output is not None
+            and result.exception_info is not None
+            and result.exception_info.exception_type == "ContextBudgetExceededError"
+        ):
+            unserved = True
+        failure = None
+        if reward is None and not (unserved or provider_wait or model_request_failed):
+            failure = model_output_failure(config, result, trial, candidate_last_request)
+            if failure is not None:
+                reward = 0.0
         if reward is not None and reward != 0 and candidate_served:
             provider_wait = False
             model_request_failed = False
@@ -969,6 +1067,7 @@ def run_task(
                 **attempt.model_dump(mode="json"),
                 **raw_receipt,
                 "judge_temperature": JUDGE_TEMPERATURE if task.judge_model is not None else None,
+                **({"model_output_failure": dataclasses.asdict(failure)} if failure is not None else {}),
             },
         )
         if record_attempt is not None:

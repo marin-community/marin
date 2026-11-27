@@ -11,7 +11,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from openai import AsyncOpenAI
+import httpx
+from openai import AsyncOpenAI, DEFAULT_TIMEOUT
 from pydantic import TypeAdapter
 from rolloutengine.chat import ChatModel
 from rolloutengine.harness.shell import ShellHarness, task_prompt
@@ -111,7 +112,8 @@ class TaskSpecChatAgent(TaskSpecAgent):
     def __init__(
         self, *args, api_base: str, max_turns: int, max_tokens: int, request_parameters: dict[str, Any],
         budget_manifest: str | None = None, budget_manifest_sha256: str | None = None,
-        backend_identity_sha256: str | None = None, tokenization_identity: dict | None = None, **kwargs
+        backend_identity_sha256: str | None = None, tokenization_identity: dict | None = None,
+        request_read_timeout: float | None = None, **kwargs
     ):
         sampling = {"temperature", "top_p", "presence_penalty", "frequency_penalty", "reasoning_effort", "extra_body"}
         extra = request_parameters.get("extra_body", {})
@@ -128,6 +130,7 @@ class TaskSpecChatAgent(TaskSpecAgent):
         self.budget_manifest_sha256 = budget_manifest_sha256
         self.backend_identity_sha256 = backend_identity_sha256
         self.tokenization_identity = tokenization_identity
+        self.request_read_timeout = request_read_timeout
 
     async def tool_free_attempt(self, task: TaskSpec, client: AsyncOpenAI, limits: RolloutLimits) -> GradingAttempt:
         if self.mcp_servers:
@@ -168,6 +171,10 @@ class TaskSpecChatAgent(TaskSpecAgent):
             base_url=self.api_base,
             api_key=self._model_authentication.get(self.api_base, "EMPTY"),
             max_retries=0,
+            **(
+                {"timeout": httpx.Timeout(**{**DEFAULT_TIMEOUT.as_dict(), "read": self.request_read_timeout})}
+                if self.request_read_timeout is not None else {}
+            ),
         ) as client:
             if self.model_alias is None:
                 raise ValueError("TaskSpecChatAgent requires a model identity")

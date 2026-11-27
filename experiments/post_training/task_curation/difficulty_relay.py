@@ -24,7 +24,7 @@ from rolloutengine.chat import chat_template_messages
 from taskcompendium.request_budget import RequestBudget
 from transformers import AutoTokenizer
 
-from experiments.post_training.task_curation.difficulty_output_budget import DynamicOutputBudget
+from experiments.post_training.task_curation.difficulty_output_budget import DynamicOutputBudget, dynamic_usage_matches
 from experiments.post_training.task_curation.difficulty_provider import (
     RETRYABLE_STATUS,
     ProviderGate,
@@ -68,7 +68,13 @@ def budget_relay(
     provider = ProviderGate(provider_limits)
     lock = Lock()
     with httpx.Client(
-        headers={"Authorization": f"Bearer {api_key}"}, timeout=provider_limits.request_timeout
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=httpx.Timeout(
+            provider_limits.request_timeout,
+            connect=min(REQUEST_TIMEOUT, provider_limits.request_timeout),
+            write=min(REQUEST_TIMEOUT, provider_limits.request_timeout),
+            pool=min(REQUEST_TIMEOUT, provider_limits.request_timeout),
+        ),
     ) as upstream:
 
         class Handler(BaseHTTPRequestHandler):
@@ -201,21 +207,7 @@ def budget_relay(
                         }
                 usage: Any = payload.get("usage")
                 if dynamic_output is not None and status == 200:
-                    choices = payload.get("choices")
-                    valid_usage = (
-                        isinstance(usage, dict)
-                        and type(usage.get("prompt_tokens")) is int
-                        and type(usage.get("completion_tokens")) is int
-                        and usage["prompt_tokens"] == len(tokens)
-                        and 0 <= usage["completion_tokens"] <= body["max_tokens"]
-                        and isinstance(choices, list)
-                        and len(choices) == 1
-                        and isinstance(choices[0], dict)
-                        and (
-                            choices[0].get("finish_reason") != "length"
-                            or usage["completion_tokens"] == body["max_tokens"]
-                        )
-                    )
+                    valid_usage = dynamic_usage_matches(payload, len(tokens), body["max_tokens"])
                 else:
                     valid_usage = budget is None or (
                         usage is not None

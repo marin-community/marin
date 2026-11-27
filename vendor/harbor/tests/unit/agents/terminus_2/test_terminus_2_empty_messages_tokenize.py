@@ -19,7 +19,7 @@ import logging
 
 import pytest
 
-from harbor.agents.terminus_2.terminus_2 import Terminus2
+from harbor.agents.terminus_2.terminus_2 import IncompleteOutputPolicy, Terminus2
 
 
 class _ApiBaseLLM:
@@ -41,6 +41,8 @@ class _EmptyChat:
 
 def _make_agent() -> Terminus2:
     agent = object.__new__(Terminus2)
+    agent._minimum_free_tokens = None
+    agent._incomplete_output_policy = IncompleteOutputPolicy.RECOVER
     agent.logger = logging.getLogger("test-terminus-2-empty-messages")
     agent._llm = _ApiBaseLLM()
     agent.model_alias = "fake/model"

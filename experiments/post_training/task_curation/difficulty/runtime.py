@@ -54,7 +54,10 @@ from experiments.post_training.task_curation.difficulty_config import (
     JudgeRun,
 )
 from experiments.post_training.task_curation.difficulty_evidence import write_json_evidence
-from experiments.post_training.task_curation.difficulty_output_budget import require_solver_protocol
+from experiments.post_training.task_curation.difficulty_output_budget import (
+    LARGE_DYNAMIC_REQUEST_TIMEOUT,
+    require_solver_protocol,
+)
 from experiments.post_training.task_curation.difficulty_preparation import PreparedSource, prepare_source
 from experiments.post_training.task_curation.difficulty_prepared import attempt_judge_model
 from experiments.post_training.task_curation.difficulty_protocol import (
@@ -571,7 +574,7 @@ def run_batch(args: argparse.Namespace) -> None:
     provider_limits = ProviderLimits(
         max_in_flight=4 if args.solver == Solver.HOSTED and args.solver_pool is None else args.workers,
         attempts=6 if args.solver == Solver.HOSTED else 1,
-        request_timeout=MODEL_REQUEST_TIMEOUT,
+        request_timeout=LARGE_DYNAMIC_REQUEST_TIMEOUT if settings.dynamic_output else MODEL_REQUEST_TIMEOUT,
     )
     judge_limits = (
         ProviderLimits(max_in_flight=min(8, args.workers), attempts=6, request_timeout=MODEL_REQUEST_TIMEOUT)

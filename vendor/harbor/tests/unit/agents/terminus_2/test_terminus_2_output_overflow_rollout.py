@@ -4,6 +4,7 @@ import pytest
 
 from harbor.agents.base import MalformedModelResponseError
 from harbor.agents.terminus_2.terminus_2 import (
+    IncompleteOutputPolicy,
     EpisodeLoggingPaths,
     LLMRequestContext,
     Terminus2,
@@ -44,6 +45,8 @@ def _recovery_case(
 ) -> tuple[Terminus2, Chat, OutputLengthExceededError, LLMRequestContext]:
     chat = Chat(llm)
     agent = object.__new__(Terminus2)
+    agent._minimum_free_tokens = None
+    agent._incomplete_output_policy = IncompleteOutputPolicy.RECOVER
     agent.logger = SimpleNamespace(debug=lambda *_args, **_kwargs: None)
     agent._parser = _UnsalvageableParser()
     agent._llm = llm
@@ -198,6 +201,8 @@ def test_output_length_limiting_classifies_surrogate_output():
     """Terminal output with an unpaired surrogate ends the attempt as a
     model-output failure instead of crashing the agent loop unclassified."""
     agent = object.__new__(Terminus2)
+    agent._minimum_free_tokens = None
+    agent._incomplete_output_policy = IncompleteOutputPolicy.RECOVER
 
     with pytest.raises(MalformedModelResponseError):
         agent._limit_output_length("analysis \ud842 tail")

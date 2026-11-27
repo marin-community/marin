@@ -18,6 +18,7 @@ import httpx
 import tiktoken
 from harbor.agents.base import (
     BaseAgent,
+    MalformedModelResponseError,
     TurnCapExhaustedError,
     encode_model_output,
 )
@@ -51,7 +52,7 @@ from harbor.llms.base import (
     OutputLengthExceededError,
 )
 from harbor.llms.chat import Chat, assistant_message_from_response
-from harbor.llms.openai_llm import OpenAILLM
+from harbor.llms.openai_llm import OpenAILLM, _openai_transport_timeout
 from harbor.llms.vllm_tokenization import (
     is_retryable_tokenize_error,
     shared_async_tokenize_client,
@@ -76,10 +77,9 @@ from harbor.utils.artifact_writer import ArtifactPersistenceError, get_artifact_
 from harbor.utils.trajectory_utils import format_trajectory_json
 from harbor_config.stop_reason import AgentStopReason
 from tenacity import (
+    RetryCallState,
     retry,
     retry_if_exception,
-    retry_if_exception_type,
-    retry_if_not_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
@@ -317,6 +317,31 @@ class SubagentMetrics:
     total_cost_usd: float = 0.0
 
 
+class IncompleteOutputPolicy(StrEnum):
+    RECOVER = "recover"
+    STOP = "stop"
+
+
+def _retry_llm_query(state: RetryCallState) -> bool:
+    """Preserve recovery retries unless the caller makes incomplete output terminal."""
+    assert state.outcome is not None
+    error = state.outcome.exception()
+    if not isinstance(error, Exception) or isinstance(
+        error,
+        (
+            ContextLengthExceededError,
+            ContextBudgetExceededError,
+            ContextManagementInfrastructureError,
+            LLMRequestTimeoutError,
+        ),
+    ):
+        return False
+    return not (
+        isinstance(error, (MalformedModelResponseError, OutputLengthExceededError))
+        and state.args[0]._incomplete_output_policy is IncompleteOutputPolicy.STOP
+    )
+
+
 class Terminus2(BaseAgent):
     SUPPORTS_ATIF: bool = True
     SUPPORTS_LITERAL_TRACES: bool = True
@@ -413,6 +438,9 @@ class Terminus2(BaseAgent):
         session_id: str | None = None,
         enable_summarize: bool = True,
         proactive_summarization_threshold: int = 8000,
+        minimum_free_tokens: int | None = None,
+        request_read_timeout: float | None = None,
+        incomplete_output_policy: IncompleteOutputPolicy = IncompleteOutputPolicy.RECOVER,
         max_thinking_tokens: int | None = None,
         model_info: dict | None = None,
         tokenizer_encoding: str | None = None,
@@ -452,6 +480,9 @@ class Terminus2(BaseAgent):
                 See class docstring for details. (default: False)
             session_id: Session ID for the agent (default: None)
             enable_summarize: Whether to enable context summarization (default: True)
+            request_read_timeout: Optional read ceiling; preserve connect/write/pool transport limits.
+            minimum_free_tokens: Reject a prompt below this exact free-context floor before summarizing.
+            incomplete_output_policy: Recover incomplete replies, or stop and retain their original evidence.
             proactive_summarization_threshold: Number of free tokens below which to trigger
                 proactive summarization. Set to 0 to disable proactive summarization. (default: 8000)
             max_thinking_tokens: Maximum thinking tokens for Anthropic extended thinking mode.
@@ -606,6 +637,10 @@ class Terminus2(BaseAgent):
         self._batch_exec_timeout_margin_sec = batch_exec_timeout_margin_sec
         self._session_alive_hint: bool | None = None
         self._llm_call_kwargs = dict(llm_call_kwargs) if llm_call_kwargs else {}
+        if request_read_timeout is not None:
+            self._llm_call_kwargs["timeout"] = _openai_transport_timeout(
+                read_timeout=request_read_timeout
+            )
         # Fold an explicit `extra_body` into llm_call_kwargs so it is forwarded to
         # every LLM call's request body (e.g. chat_template_kwargs.enable_thinking for
         # Qwen3.5 thinking models — see __init__ docstring). Merge into any extra_body
@@ -639,6 +674,10 @@ class Terminus2(BaseAgent):
             enable_summarize  # Toggle for proactive and context limit summarization
         )
         self._proactive_summarization_threshold = proactive_summarization_threshold
+        if minimum_free_tokens is not None and minimum_free_tokens <= 0:
+            raise ValueError("minimum_free_tokens must be positive")
+        self._minimum_free_tokens = minimum_free_tokens
+        self._incomplete_output_policy = IncompleteOutputPolicy(incomplete_output_policy)
         self._tmux_pane_width = tmux_pane_width
         self._tmux_pane_height = tmux_pane_height
 
@@ -1833,6 +1872,12 @@ so ask everything you need to know."""
             current_tokens = await self._acount_total_tokens(chat, pending_messages)
         free_tokens = context_limit - current_tokens
 
+        if self._minimum_free_tokens is not None and free_tokens < self._minimum_free_tokens:
+            raise ContextBudgetExceededError(
+                f"Exact prompt has {current_tokens} tokens; {free_tokens} free tokens "
+                f"cannot supply the required {self._minimum_free_tokens}-token allowance"
+            )
+
         # When summarization is disabled, raise only once we've actually reached the
         # limit (within minimal_threshold) — not at the larger proactive threshold —
         # so RL training still uses (nearly) the full context window. Raising here
@@ -1864,21 +1909,7 @@ so ask everything you need to know."""
 
     @retry(
         stop=stop_after_attempt(3),
-        # Context-capacity and exhausted-recovery outcomes need a new conversation
-        # state or a new trial; repeating the identical call cannot resolve them.
-        retry=(
-            retry_if_not_exception_type(
-                (
-                    ContextLengthExceededError,
-                    ContextBudgetExceededError,
-                    ContextManagementInfrastructureError,
-                    LLMRequestTimeoutError,
-                )
-            )
-            # To avoid asyncio.CancelledError retries which inherits from BaseException
-            # rather than Exception
-            & retry_if_exception_type(Exception)
-        ),
+        retry=_retry_llm_query,
         reraise=True,
     )
     async def _query_llm(
@@ -1896,9 +1927,18 @@ so ask everything you need to know."""
             _enqueue_episode_text(prompt_path, prompt)
 
         try:
-            return await self._dispatch_llm_request(
+            response = await self._dispatch_llm_request(
                 chat, prompt, logging_path, response_path
             )
+            if (
+                self._incomplete_output_policy is IncompleteOutputPolicy.STOP
+                and not response.content
+                and not response.tool_calls
+            ):
+                raise MalformedModelResponseError(
+                    "Model stopped without an answer or tool call"
+                )
+            return response
 
         except ContextLengthExceededError as error:
             return await self._recover_context_capacity(
@@ -1909,6 +1949,8 @@ so ask everything you need to know."""
             )
 
         except OutputLengthExceededError as e:
+            if self._incomplete_output_policy is IncompleteOutputPolicy.STOP:
+                raise
             return await self._recover_output_overflow(
                 chat=chat,
                 prompt=prompt,

@@ -2733,10 +2733,24 @@ Dynamic Large actions and `CandidateRun` configurations must carry the same
 `solver_protocol_id`. The worker rejects a mismatch before creating the batch
 output directory. Trial receipts, serving receipts and ledger rows retain the
 selected protocol; receipt imports reject a score lacking
-`solver_protocol_id` inside a v2 run. Historical settings omit the optional dynamic policy, preserving the
-frozen campaign identity and old JSON. Registering this contract does not
-activate it: native full-turn context handling, empty-stop grading, canary
-qualification and a controlled controller cutover remain required.
+`solver_protocol_id` inside a v2 run. Historical settings omit the optional
+dynamic policy, preserving the frozen campaign identity and old JSON.
+
+Under v2, Terminus disables summarization and rejects exact prompts leaving
+fewer than 16,448 free tokens (the output floor plus margin). Its incomplete
+output policy stops on empty or length-limited replies, retaining the original
+request/response instead of issuing recovery requests. Completed, usage-valid
+empty stop/length responses can supply a model-failure reward of zero when no
+source grade exists and no grader, environment or artifact failure intervened.
+An existing qualified source grade remains authoritative. Attempt receipts
+retain the model-failure evidence. The host and native candidate clients for Large v2 use a
+7,200-second read ceiling, preserving their connect/write/pool limits.
+Original source phase deadlines still apply.
+Other solver protocols retain their existing recovery and transport settings.
+
+Registering and testing this contract does not activate it. Canary
+qualification, advisory review and a controlled controller cutover remain
+required before production dispatch.
 
 The versioned `swe-rebench-daytona-cap-20261125-v1` exception runs the pinned
 SWE-rebench native tasks on Daytona at 4 vCPU, 8 GiB RAM and 10 GiB disk,
