@@ -10,20 +10,11 @@ import numpy as np
 import pytest
 
 from levanter.grug.sharding import compact_grug_mesh
-from levanter.inference.binary import (
-    EXPERT_IDS,
-    EXPERT_VALID,
-    LOGPROB_MODE,
-    POLICY_ID,
-    POLICY_LOGPROBS,
-    PROMPT_TOKEN_IDS,
-    TOKEN_IDS,
-    choice_tensor_key,
-    encode_frame,
-)
+from levanter.inference import inference_pb2
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.inference.policy_replay import BinaryRolloutChoice, prepare_binary_policy_batch
+from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch
+from levanter.inference.router_replay import write_router_replay
 from levanter.layers.sampler import LogprobMode
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
@@ -101,18 +92,12 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores():
             tokens[row, : len(full)] = full
             attended[row, : len(full)] = 1
             response[row, len(prompt) - 1 : len(full) - 1] = True
-            fields = {
-                TOKEN_IDS: np.asarray(generated, np.int32),
-                POLICY_LOGPROBS: np.asarray(served, np.float32),
-                EXPERT_IDS: capture.expert_ids,
-                EXPERT_VALID: capture.valid,
-            }
-            frame = encode_frame(
-                {"choices": [{POLICY_ID: snapshot}], LOGPROB_MODE: LogprobMode.POLICY},
-                {PROMPT_TOKEN_IDS: np.asarray(prompt, np.int32)}
-                | {choice_tensor_key(0, name): tensor for name, tensor in fields.items()},
+            generation = inference_pb2.GenerateResponse(
+                prompt_token_ids=prompt, logprob_mode=inference_pb2.LOGPROB_MODE_POLICY
             )
-            rollouts.append(BinaryRolloutChoice(frame, 0))
+            choice = generation.choices.add(policy_id=snapshot, token_ids=generated, policy_logprobs=served)
+            write_router_replay(choice.router_replay, capture.expert_ids, capture.valid)
+            rollouts.append(RolloutChoice(generation, 0))
 
         def named(values, axis):
             return hax.named(jnp.asarray(values), ("batch", axis))
@@ -130,7 +115,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores():
             old_logprobs=hax.zeros(mask.axes),
             reference_logprobs=None,
         )
-        batch = prepare_binary_policy_batch(model, batch, rollouts, policy_id=snapshot)
+        batch = prepare_rollout_policy_batch(model, batch, rollouts, policy_id=snapshot)
         batch = dataclasses.replace(batch, reference_logprobs=batch.old_logprobs)
         scores = jax.jit(response_logprobs)(model, batch).array
 
