@@ -19,6 +19,7 @@ from marin.inference.config import (
     VllmSource,
 )
 from marin.inference.model_preparation import read_tool_chat_template
+from marin.inference.runai_streamer import RUNAI_STREAMER_LOADER_FLAG
 from marin.inference.vllm_router import available_port
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -164,9 +165,9 @@ class VllmBackend:
         if (
             self.config.launcher is not VllmLauncherType.TPU
             and _is_object_store_path(spec.weights)
-            and not any(arg.partition("=")[0] in {"--load-format", "--model-loader-extra-config"} for arg in loader_args)
+            and not any(arg.partition("=")[0] in {"--load-format", RUNAI_STREAMER_LOADER_FLAG} for arg in loader_args)
         ):
-            loader_args = ("--model-loader-extra-config", '{"distributed":true}', *loader_args)
+            loader_args = (RUNAI_STREAMER_LOADER_FLAG, '{"distributed":true}', *loader_args)
         return [
             *(
                 ("--tensor-parallel-size", str(spec.tensor_parallel_size))

@@ -6,7 +6,7 @@
 import json
 from collections.abc import Mapping, Sequence
 
-_LOADER_CONFIG_FLAG = "--model-loader-extra-config"
+RUNAI_STREAMER_LOADER_FLAG = "--model-loader-extra-config"
 _DISTRIBUTED_DEFAULTS = (
     ("concurrency", "RUNAI_STREAMER_CONCURRENCY", "4"),
     ("memory_limit", "RUNAI_STREAMER_MEMORY_LIMIT", str(16 << 30)),
@@ -18,13 +18,13 @@ def distributed_streamer_environment(extra_args: Sequence[str], environment: Map
     value = None
     for position, token in enumerate(extra_args):
         flag, separator, inline_value = token.partition("=")
-        if flag != _LOADER_CONFIG_FLAG:
+        if flag != RUNAI_STREAMER_LOADER_FLAG:
             continue
         if separator:
             value = inline_value
         else:
             if position + 1 == len(extra_args):
-                raise ValueError(f"{_LOADER_CONFIG_FLAG} requires a JSON value")
+                raise ValueError(f"{RUNAI_STREAMER_LOADER_FLAG} requires a JSON value")
             value = extra_args[position + 1]
 
     child_environment = dict(environment)
