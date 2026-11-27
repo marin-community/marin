@@ -1,12 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind frozen Micro210 task resources to a new judge without changing task membership."""
+"""Lower frozen Micro210 packages into native Pi rollouts without changing task membership.
+
+The lowering keeps each package's provisioning, verifier, and grading semantics, binds the
+runtime judge transport where a frozen grading plan consults the judge, and writes the derived
+native task table with its binding receipt.
+"""
 
 import json
 import tomllib
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -17,21 +22,30 @@ from rolloutengine.agents.pi.agent import PI_HARNESS
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from taskcompendium.importers.harbor.config import HarborTaskConfig, read_task_config
 from taskcompendium.importers.harbor.package import HarborTask, JobSettings, PackageTests, lower_package
-from taskcompendium.models import ScriptGrader, TaskResource, TaskSpec
-from taskcompendium.runtime.resources import inline_resource, resource_bytes
+from taskcompendium.models import ScriptGrader, TaskSpec
+from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import JudgeSpec
 
-from experiments.evaluation.judge_config import JudgeConfig
+JUDGE_CREDENTIAL_ENV = "OPENAI_API_KEY"
+"""The frozen verifier env variable whose presence declares a judge connection."""
 
-RESOURCE_DIRECTORY = Path(__file__).resolve().parent.parent
-"""The evaluation package directory, which holds the judge transport resources the tasks embed."""
+JUDGE_CONNECTION_ENV = (JUDGE_CREDENTIAL_ENV, "OPENAI_BASE_URL", "MODEL_NAME")
+"""Judge connection variables a frozen verifier environment declares; the runtime strips them
+from ``task.toml`` and re-supplies them through ``JUDGE_COMMAND``."""
+
+JUDGE_ENV_BINDINGS = (
+    ("JUDGE_BASE_URL", "VERIFYIT_JUDGE_BASE_URL"),
+    ("JUDGE_API_KEY", "VERIFYIT_JUDGE_API_KEY"),
+    ("OPENAI_BASE_URL", "VERIFYIT_JUDGE_BASE_URL"),
+    ("OPENAI_API_KEY", "VERIFYIT_JUDGE_API_KEY"),
+    ("MODEL_NAME", "VERIFYIT_JUDGE_MODEL"),
+)
+"""The judge connection names frozen scripts read, mapped to the runtime transport variables."""
 
 JUDGE_COMMAND = (
     "sh",
     "-c",
-    'export JUDGE_BASE_URL="$VERIFYIT_JUDGE_BASE_URL" JUDGE_API_KEY="$VERIFYIT_JUDGE_API_KEY" '
-    'OPENAI_BASE_URL="$VERIFYIT_JUDGE_BASE_URL" OPENAI_API_KEY="$VERIFYIT_JUDGE_API_KEY" '
-    'MODEL_NAME="$VERIFYIT_JUDGE_MODEL"; exec "$@"',
+    "export " + " ".join(f'{name}="${source}"' for name, source in JUDGE_ENV_BINDINGS) + '; exec "$@"',
     "micro210-judge",
 )
 
@@ -85,12 +99,10 @@ def lower_frozen_package(task: TaskSpec, agent_timeout: float, image_digests: Ma
         settings = read_task_config(package)
         config = tomllib.loads(config_path.read_text())
         judge_env = config["verifier"].get("env", {})
-        needs_judge = "OPENAI_API_KEY" in judge_env
+        needs_judge = JUDGE_CREDENTIAL_ENV in judge_env
         if needs_judge:
             config["verifier"]["env"] = {
-                key: value
-                for key, value in judge_env.items()
-                if key not in {"OPENAI_API_KEY", "OPENAI_BASE_URL", "MODEL_NAME"}
+                key: value for key, value in judge_env.items() if key not in JUDGE_CONNECTION_ENV
             }
             config_path.write_text(tomli_w.dumps(config))
         lowered = lower_package(
@@ -180,67 +192,3 @@ def native_inputs(
             {**row, "task_spec": rollout.task.model_dump_json(), "task_rollout_spec": rollout.model_dump_json()}
         )
     pq.write_table(pa.Table.from_pylist(native_rows, schema=table.schema), destination)
-
-
-def evalchemy_judge_resources(files: dict[str, TaskResource], judge: JudgeConfig) -> dict[str, bytes]:
-    """Bind the Evalchemy task's transport and model while retaining its rubric."""
-    config = json.loads(resource_bytes(files["config.json"]))
-    config.update(judge_model=judge.model, judge=asdict(judge))
-    source = resource_bytes(files["grade.py"]).decode()
-    bindings = {
-        "from eval.execution.judge import JudgeBackend": (
-            "from micro210_together_judge import TogetherJudgeBackend as JudgeBackend"
-        ),
-        "JudgeBackend(judge, session)": 'JudgeBackend(judge, session, policy=config["judge"])',
-    }
-    for original, replacement in bindings.items():
-        if source.count(original) != 1:
-            raise ValueError(f"Frozen Micro210 grade.py changed its judge binding: {original}")
-        source = source.replace(original, replacement)
-    return {
-        "config.json": json.dumps(config).encode(),
-        "grade.py": source.encode(),
-        "micro210_together_judge.py": (RESOURCE_DIRECTORY / "together_judge.py").read_bytes(),
-        "micro210_judge_config.py": (RESOURCE_DIRECTORY / "judge_config.py").read_bytes(),
-    }
-
-
-def bixbench_judge_resources(files: dict[str, TaskResource], judge: JudgeConfig) -> dict[str, bytes]:
-    """Bind BixBench's JSON-schema client to the same judge and explicit deadlines."""
-    config = tomllib.loads(resource_bytes(files["task.toml"]).decode())
-    config["verifier"]["env"].update(
-        OPENAI_API_KEY="${OPENAI_API_KEY}", OPENAI_BASE_URL=judge.base_url, MODEL_NAME=judge.model
-    )
-    source = resource_bytes(files["tests/llm_judge.py"]).decode()
-    bindings = {
-        'OpenAI(api_key=os.getenv("OPENAI_API_KEY"))': (
-            f'OpenAI(api_key=os.getenv("OPENAI_API_KEY"), timeout={judge.bixbench_request_timeout!r}, '
-            f"max_retries={judge.bixbench_transport_attempts - 1})"
-        ),
-        "max_tokens=1024,": (
-            f"max_tokens={judge.bixbench_max_tokens}, temperature={judge.bixbench_temperature!r}, "
-            f"top_p={judge.top_p!r}, "
-            f"reasoning_effort={str(judge.reasoning_effort)!r},"
-        ),
-    }
-    for original, replacement in bindings.items():
-        if source.count(original) != 1:
-            raise ValueError(f"Frozen BixBench client changed its judge binding: {original}")
-        source = source.replace(original, replacement)
-    return {"task.toml": tomli_w.dumps(config).encode(), "tests/llm_judge.py": source.encode()}
-
-
-def task_with_judge(task: TaskSpec, judge: JudgeConfig) -> TaskSpec:
-    """Replace only judge configuration and transport resources in a task package."""
-    files = {resource.path: resource for resource in task.resources.verifier}
-    replacements = {}
-    if "config.json" in files and frozen_plan_uses_judge(task):
-        replacements.update(evalchemy_judge_resources(files, judge))
-    if "bixbench" in task.id:
-        replacements.update(bixbench_judge_resources(files, judge))
-    if not replacements:
-        return task
-    resources = tuple(resource for resource in task.resources.verifier if resource.path not in replacements) + tuple(
-        inline_resource(path, content) for path, content in replacements.items()
-    )
-    return task.model_copy(update={"resources": task.resources.model_copy(update={"verifier": resources})})

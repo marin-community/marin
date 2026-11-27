@@ -3,7 +3,6 @@
 
 """Serializable Together serverless judge policy, also embedded in task packages."""
 
-import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -37,18 +36,6 @@ class JudgeConfig:
     bixbench_request_timeout: float
     bixbench_transport_attempts: int
     credential: str
-
-    def completion_parameters(self, parameters: dict) -> dict:
-        """Translate vLLM choice decoding into Together's regex response format."""
-        parameters = dict(parameters)
-        choices = parameters.pop("structured_outputs")["choice"]
-        parameters.update(
-            temperature=self.temperature,
-            top_p=self.top_p,
-            reasoning_effort=self.reasoning_effort,
-            response_format={"type": "regex", "pattern": "(" + "|".join(re.escape(label) for label in choices) + ")"},
-        )
-        return parameters
 
 
 MICRO210_JUDGE = JudgeConfig(

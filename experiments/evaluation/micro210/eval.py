@@ -56,11 +56,14 @@ PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Native task bindings have their own artifact identity alongside the frozen source.
 NATIVE_INPUTS_VERSION = "2026.11.27"
-NATIVE_INPUTS_FINGERPRINT = "7271aa72"
+NATIVE_INPUTS_FINGERPRINT = "64fba0ac"
 
 NATIVE_ROLLOUTS = "rollouts.parquet"
 """The published native table name; the launch reads the derived artifact at this fixed
 location rather than the frozen source's policy-relative layout."""
+
+NATIVE_BINDING_RECEIPT = "binding.json"
+"""The receipt recorded beside the native table: source, converter, table digest, and image pins."""
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 
@@ -146,10 +149,10 @@ def prepare_native_inputs(
             image_digests=image_digests,
             smoke_rows=rows,
         )
-        (output / "binding.json").write_text(binding.model_dump_json(indent=2))
+        (output / NATIVE_BINDING_RECEIPT).write_text(binding.model_dump_json(indent=2))
 
 
-def validate_inputs(evaluation: Micro210Evaluation) -> None:
+def validate_model_binding(evaluation: Micro210Evaluation) -> None:
     """Reject changed model export or tokenizer metadata before GPU allocation."""
     protocol = evaluation.policy()
     manifest = (StoragePath(evaluation.model.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
@@ -172,7 +175,7 @@ def verified_native_evaluation(evaluation: Micro210Evaluation, inputs: str) -> M
     pins — against this evaluation; the artifact system owns the table's byte identity.
     """
     root = StoragePath(inputs)
-    binding = NativeInputsBinding.model_validate_json((root / "binding.json").read_text())
+    binding = NativeInputsBinding.model_validate_json((root / NATIVE_BINDING_RECEIPT).read_text())
     if binding.source_sha256 != evaluation.policy()["prepared_rollouts_sha256"]:
         raise ValueError("Micro210 native binding has a different frozen source")
     if binding.converter_sha256 != native_binding_code_sha256():
@@ -185,7 +188,7 @@ def verified_native_evaluation(evaluation: Micro210Evaluation, inputs: str) -> M
 def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
-    validate_inputs(config.evaluation)
+    validate_model_binding(config.evaluation)
     document = yaml.safe_load(config.skyrl.launch_config_yaml)
     native_inputs_uri = document["inputs"]["validation_data"][0]["uri"]
     evaluation = verified_native_evaluation(config.evaluation, native_inputs_uri)
