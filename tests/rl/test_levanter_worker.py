@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.inference import inference_pb2
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from marin.rl.levanter_worker_protocol import LearnerProcess
 from tokenizers import Tokenizer, models
@@ -32,6 +33,7 @@ def _hf_initializer(path):
     tokenizer.save_pretrained(path)
     config = SnowballConfig(
         vocab_size=64,
+        initializer_std=0.12,
         hidden_dim=32,
         intermediate_dim=32,
         shared_expert_intermediate_dim=32,
@@ -54,6 +56,32 @@ def _hf_initializer(path):
             save_reference_code=False,
             dtype=jnp.float32,
         )
+
+
+def _rollout_with_routes(tokens, scores, expert_ids, policy_id):
+    valid = np.ones(tokens.size, dtype=bool)
+    valid[-1] = False
+    ids = np.broadcast_to(np.asarray(expert_ids, np.uint8), (2, tokens.size, 2))
+    response = inference_pb2.GenerateResponse(
+        prompt_token_ids=tokens[: -scores.size].tolist(),
+        logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
+        choices=[
+            inference_pb2.Choice(
+                token_ids=tokens[-scores.size :].tolist(),
+                policy_logprobs=scores,
+                policy_id=policy_id,
+                router_replay=inference_pb2.RouterReplay(
+                    num_layers=2,
+                    num_positions=tokens.size,
+                    experts_per_token=2,
+                    expert_ids=ids.tobytes(),
+                    expert_id_dtype=inference_pb2.EXPERT_ID_DTYPE_UINT8,
+                    valid=valid.tolist(),
+                ),
+            )
+        ],
+    )
+    return response.SerializeToString()
 
 
 def _request_all(children, method, payloads):
@@ -161,10 +189,23 @@ def test_native_learner_subprocess_updates_and_resumes_exactly(tmp_path, process
                 "kl_weights": np.zeros((batch_size, 2), dtype=np.float32),
             }
         )
+        policy_id = "published-fixture"
+
+        def with_served_routes(expert_ids):
+            rollouts = [
+                (_rollout_with_routes(row[1:], values, expert_ids, policy_id), 0)
+                for row, values in zip(tokens, scores, strict=True)
+            ]
+            return payload | {"policy_id": policy_id, "grpc_rollouts": rollouts}
+
+        replayed = _same_request(children, "forward", with_served_routes([0, 1]))[0]["output"]
+        other = _same_request(children, "forward", with_served_routes([2, 3]))[0]["output"]
+        assert np.max(np.abs(replayed - other)) > 1e-5
+        payload = with_served_routes([0, 1])
         updates = _same_request(children, "train", payload)
         assert all(update["optimizer_step"] == 1 and update["router_bias_unchanged"] == 1 for update in updates)
         after = _same_request(children, "forward", payload)[0]["output"]
-        assert np.max(np.abs(after - scores)) > 1e-5
+        assert np.max(np.abs(after - replayed)) > 1e-5
         saved = _same_request(children, "save_checkpoint", checkpoint)
         for row in saved:
             for name in ("model", "opt_state", "training_key", "step"):

@@ -29,6 +29,8 @@ from jax.sharding import NamedSharding, PartitionSpec
 from levanter.checkpoint import load_checkpoint, load_checkpoint_metadata, save_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.distributed import DistributedConfig
+from levanter.inference import inference_pb2
+from levanter.inference.policy_replay import RolloutChoice, prepare_rollout_policy_batch
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.policy import ClippedPolicyConfig
 from levanter.policy_learner import SpmdPolicyLearner
@@ -53,7 +55,13 @@ def _trainable_filter(model):
 def _payload_fingerprint(payload: dict) -> str:
     digest = hashlib.sha256()
     for name in ("old_logprobs", "advantages", "policy_weights"):
-        value = payload["arrays"][name]
+        value = payload["arrays"].get(name)
+        if name == "old_logprobs" and payload.get("grpc_rollouts") is not None:
+            digest.update(name.encode())
+            for response, choice in payload["grpc_rollouts"]:
+                digest.update(hashlib.sha256(response).digest())
+                digest.update(str(choice).encode())
+            continue
         digest.update(name.encode())
         digest.update(np.asarray(value).tobytes())
     return digest.hexdigest()
@@ -245,17 +253,14 @@ class NativePolicyRuntime:
         batch_size, sequence_length = source["tokens"].shape
         axes = (hax.Axis("batch", batch_size), hax.Axis("position", sequence_length))
         response_axes = (axes[0], hax.Axis("response", payload["response_length"]))
-        sharding = NamedSharding(self.trainer.device_mesh, PartitionSpec(("replica_dcn", "data", "expert"), None))
 
         def named(name: str, *, response: bool):
             values = source.get(name)
             if values is None:
                 values = np.zeros(tuple(axis.size for axis in response_axes), dtype=np.float32)
-            values = np.asarray(values)
-            array = jax.make_array_from_callback(values.shape, sharding, lambda index: values[index])
-            return hax.named(array, response_axes if response else axes)
+            return hax.named(np.asarray(values), response_axes if response else axes)
 
-        return PolicyBatch(
+        batch = PolicyBatch(
             tokens=named("tokens", response=False),
             attention_mask=named("attention_mask", response=False),
             position_ids=named("position_ids", response=False),
@@ -267,6 +272,26 @@ class NativePolicyRuntime:
             reference_logprobs=named("reference_logprobs", response=True) if "reference_logprobs" in source else None,
             segment_ids=named("segment_ids", response=False) if "segment_ids" in source else None,
         )
+
+        grpc_rollouts = payload.get("grpc_rollouts")
+        if grpc_rollouts is not None:
+            rollouts = [
+                RolloutChoice(inference_pb2.GenerateResponse.FromString(response), choice)
+                for response, choice in grpc_rollouts
+            ]
+            batch = prepare_rollout_policy_batch(self.state.model, batch, rollouts, policy_id=payload["policy_id"])
+
+        def place(value: hax.NamedArray) -> hax.NamedArray:
+            mesh = self.trainer.device_mesh
+            batch_axes = ("replica_dcn", "data", "expert")
+            sharding = NamedSharding(
+                mesh, PartitionSpec(*(batch_axes if axis.name == "batch" else None for axis in value.axes))
+            )
+            values = np.asarray(value.array)
+            array = jax.make_array_from_callback(values.shape, sharding, lambda index: values[index])
+            return hax.named(array, value.axes)
+
+        return jax.tree.map(place, batch, is_leaf=lambda value: isinstance(value, hax.NamedArray))
 
     def forward(self, payload: dict) -> dict:
         batch = self._batch(payload)

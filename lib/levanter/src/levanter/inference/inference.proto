@@ -1,0 +1,74 @@
+// Copyright The Levanter Authors
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package levanter.inference.v1;
+
+service Inference {
+  rpc Generate(GenerateRequest) returns (GenerateResponse);
+}
+
+message GenerateRequest {
+  repeated uint32 prompt_token_ids = 1;
+  uint32 max_new_tokens = 2;
+  optional float temperature = 3;
+  optional float top_p = 4;
+  optional uint32 seed = 5;
+  repeated TokenSequence stop_sequences = 6;
+  optional uint32 num_choices = 7;
+  optional string expected_policy_id = 8;
+  LogprobMode expected_logprob_mode = 9;
+
+  // Levanter extension. Use a high tag away from vLLM's core fields.
+  bool capture_router_replay = 50001;
+}
+
+message TokenSequence {
+  repeated uint32 token_ids = 1;
+}
+
+message GenerateResponse {
+  repeated uint32 prompt_token_ids = 1;
+  repeated Choice choices = 2;
+  LogprobMode logprob_mode = 3;
+}
+
+message Choice {
+  repeated uint32 token_ids = 1;
+  repeated float behavior_logprobs = 2;
+  optional string policy_id = 4;
+  uint64 model_version = 5;
+  repeated float policy_logprobs = 6;
+
+  // Levanter extension. Present only when router replay was requested.
+  RouterReplay router_replay = 50001;
+}
+
+message RouterReplay {
+  uint32 num_layers = 1;
+  uint32 num_positions = 2;
+  uint32 experts_per_token = 3;
+
+  reserved 4;
+
+  // One flag per position. An unprocessed final token has no recorded route.
+  repeated bool valid = 5;
+
+  // Row major [layer, position, expert slot] with the width given by
+  // expert_id_dtype. Positions index the concatenated prompt and generated tokens.
+  bytes expert_ids = 6;
+  ExpertIdDtype expert_id_dtype = 7;
+}
+
+enum ExpertIdDtype {
+  EXPERT_ID_DTYPE_UNSPECIFIED = 0;
+  EXPERT_ID_DTYPE_UINT8 = 1;
+  EXPERT_ID_DTYPE_UINT16_LE = 2;
+}
+
+enum LogprobMode {
+  LOGPROB_MODE_UNSPECIFIED = 0;
+  LOGPROB_MODE_BEHAVIOR = 1;
+  LOGPROB_MODE_POLICY = 2;
+}
