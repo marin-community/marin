@@ -19,7 +19,7 @@ from verifyit.spec import DEFAULT_OUTPUT
 from experiments.post_training.task_curation.environment import Environment
 from experiments.post_training.task_curation.images.build import EnvironmentArtifact, identity_digest
 
-POLICY = "polaris-final-text-v2"
+POLICY = "polaris-final-text-v3"
 VERIFYIT_REVISION = "ef09a1e250fdada00c2420c12534d452735a7c8a"
 GRADER_ENVIRONMENT = Environment(
     requirements=(

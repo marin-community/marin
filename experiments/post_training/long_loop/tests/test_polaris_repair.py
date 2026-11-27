@@ -8,11 +8,13 @@ from pathlib import Path
 import pytest
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import resource_bytes
+from verifyit.grade import InvalidTask
 
 from experiments.post_training.long_loop.polaris_repair import GRADER_ENVIRONMENT, with_final_text_grader
 from experiments.post_training.task_curation.images.build import EnvironmentArtifact, identity_digest
 
 FIXTURE = Path(__file__).with_name("fixtures") / "polaris_plain_task.json"
+REVIEW_CASES = json.loads((Path(__file__).with_name("fixtures") / "polaris_review_regressions.json").read_text())
 BUILT = EnvironmentArtifact(path="s3://fixture/polaris-grader", identity=identity_digest(GRADER_ENVIRONMENT))
 
 
@@ -149,3 +151,78 @@ def test_explicit_answer_before_explanation_is_retained(tmp_path, monkeypatch):
 def test_opening_claim_does_not_select_a_matching_explanatory_number(answer, expected, tmp_path, monkeypatch):
     repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
     assert repaired(answer, {"problem": "Find the maximum count.", "answer": "16"}) == expected
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            case,
+            id=case["case_id"],
+            marks=(
+                pytest.mark.xfail(strict=True, reason="#12386: semantic or partial-reference target unresolved")
+                if case["case_id"] in {"49484db9029d", "69eac79fc55d", "9627bad7da0c"}
+                else ()
+            ),
+        )
+        for case in REVIEW_CASES
+        if case["status"] == "reviewed_pass"
+    ],
+)
+def test_reviewed_final_answers_receive_their_reward(case, tmp_path, monkeypatch):
+    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
+    assert repaired(case["answer"], {"problem": case["problem"], "answer": case["reference"]}) == case["expected"]
+
+
+def test_malformed_retained_reference_stays_unscored(tmp_path, monkeypatch):
+    case = next(case for case in REVIEW_CASES if case["status"] == "invalid_reference")
+    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
+    with pytest.raises(InvalidTask):
+        repaired(case["answer"], {"problem": case["problem"], "answer": case["reference"]})
+
+
+@pytest.mark.parametrize(
+    ("answer", "reference", "problem", "expected"),
+    [
+        ("The average will increase by 1.2 points.", "-1.2", "What is the change in the average?", 0.0),
+        ("The average will decrease by 1.3 points.", "-1.2", "What is the change in the average?", 0.0),
+        ("The average will not decrease by 1.2 points.", "-1.2", "What is the change in the average?", 0.0),
+        ("a=2, d=3", "2", r"Find \(d\).", 0.0),
+        ("d=2, d=3", "2", r"Find \(d\).", 0.0),
+        ("a=2", "2", r"Find \(d\).", 0.0),
+        ("d=not 2", "2", r"Find \(d\).", 0.0),
+        (r"a=\boxed{2}, d=3", "2", r"Find \(d\).", 0.0),
+        ("21\n\n**Justification:**\nThe answer is 22.", "21", "Find the maximum count.", 0.0),
+        ("The probability is exactly 1/3.", "1/2", "Find the probability.", 0.0),
+        ("The answer is not exactly 1/2.", "1/2", "Find the probability.", 0.0),
+        (r"\[2\] Earlier work. \[3\] This completes the proof.", "2", "Prove the result.", 0.0),
+        (r"\[3\] Earlier work. \[2\] This completes the proof.", "2", "Prove the result.", 1.0),
+        ("A", r"\textbf{(A)}{-}z", r"Choose: $\textbf{(A) }{-}z \qquad \textbf{(B) }{-}1$", 1.0),
+        ("B", r"\textbf{(A)}{-}z", r"Choose: $\textbf{(A) }{-}z \qquad \textbf{(B) }{-}1$", 0.0),
+    ],
+)
+def test_structured_answers_do_not_select_an_unrelated_correct_value(
+    answer, reference, problem, expected, tmp_path, monkeypatch
+):
+    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
+    assert repaired(answer, {"problem": problem, "answer": reference}) == expected
+
+
+@pytest.mark.parametrize(
+    ("answer", "problem", "reference"),
+    [
+        ("2", r"Choose: $\textbf{(A) }1 \qquad \textbf{(B) }2$", r"\textbf{(A)}2"),
+        ("ppo", r"Choose: $\textbf{(A) }pop \qquad \textbf{(B) }ppo$", r"\textbf{(A)}ppo"),
+    ],
+)
+def test_choice_reference_must_match_its_declared_option(answer, problem, reference, tmp_path, monkeypatch):
+    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
+    with pytest.raises(InvalidTask):
+        repaired(answer, {"problem": problem, "answer": reference})
+
+
+def test_empty_response_cannot_hide_a_malformed_reference(tmp_path, monkeypatch):
+    case = next(case for case in REVIEW_CASES if case["status"] == "invalid_reference")
+    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
+    with pytest.raises(InvalidTask):
+        repaired("", {"problem": case["problem"], "answer": case["reference"]})

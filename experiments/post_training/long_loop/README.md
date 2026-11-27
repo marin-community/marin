@@ -1772,7 +1772,7 @@ or missing row fails the candidate build without publishing completed output.
 Print the artifact plan without downloading the cohort or building an environment:
 
 ```bash
-uv run python -m experiments.post_training.long_loop.polaris_release --version 2026.11.27.1
+uv run python -m experiments.post_training.long_loop.polaris_release --version 2026.11.27.2
 ```
 
 Build with `--run` inside an Iris CPU task in the target storage region, with
@@ -1788,3 +1788,12 @@ controls and a fresh independent review pass. A development replay is not that
 review. Existing ambiguous reference defects remain recorded without edits or
 filters. Only a separately qualified immutable source pin may release campaign
 holds; existing pools retain their original grader.
+
+The v3 candidate recognizes explicitly delimited explanations, final proof displays,
+signed changes, and assignments to the variable requested by the question. It
+checks that a labelled reference agrees with the question's declared option before
+removing the label. An invalid reference remains unscored even for an empty response.
+These rules never select an explanatory number by matching the reference value.
+Multi-target questions with an unlabelled partial reference and answers expressed as
+constraint assignments still require a faithful target or constraint binding; their
+known regressions remain strict expected failures and prevent admission.

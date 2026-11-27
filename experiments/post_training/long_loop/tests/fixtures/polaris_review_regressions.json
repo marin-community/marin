@@ -1,0 +1,82 @@
+[
+  {
+    "case_id": "05447311a257",
+    "problem": "Kim earned scores of 89, 85, 91, and 87 on her first four mathematics examinations. If Kim receives a score of 82 on the fifth exam, what will be the change in her average score?",
+    "reference": "-1.2",
+    "answer": "Her average will decrease by 1.2 points.",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "49484db9029d",
+    "problem": "Chords \\(AB\\) and \\(CD\\) of a circle \\(\\Gamma\\) with center \\(O\\) each have a length of 4. The extensions of segments \\(BA\\) and \\(CD\\) beyond points \\(A\\) and \\(D\\) respectively intersect at point \\(P\\). Line \\(PO\\) intersects segment \\(AC\\) at point \\(L\\) such that \\(AL:LC = 1:4\\).\n\na) Find \\(AP\\).\n\nb) Additionally, suppose the radius of circle \\(\\Gamma\\) is 3 and point \\(T\\) is the center of the circle inscribed in triangle \\(ACP\\). Find the length of segment \\(PT\\) and the area of triangle \\(ACP\\).",
+    "reference": "\\dfrac{4}{3}",
+    "answer": "a) AP = 4/3  \nb) PT = (√145 - 9)/3, Area = 128√5/87",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "f568404163d1",
+    "problem": "If \\( a = -1 + 2 - 3 + 4 - 5 + 6 - \\ldots + 100 \\), find \\( a \\).\n\nThe sum of the first \\( b \\) positive odd numbers is \\( 2a \\). Find \\( b \\).\n\nA bag contains \\( b \\) white balls and 3 black balls. Two balls are drawn from the bag at random. If the probability of getting 2 balls of different colors is \\( \\frac{c}{13} \\), find \\( c \\).\n\nIf the lines \\( cx + 10y = 4 \\) and \\( dx - y = 5 \\) are perpendicular to each other, find \\( d \\).",
+    "reference": "2",
+    "answer": "a = 50, b = 10, c = 5, d = 2",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "52ec563dd860",
+    "problem": "Grandma has two balls of yarn: one large and one small. From the large ball, she can either knit a sweater and three socks, or five identical hats. From the small ball, she can either knit half a sweater or two hats. (In both cases, all the yarn will be used up.) What is the maximum number of socks Grandma can knit using both balls of yarn? Justify your answer.",
+    "reference": "21",
+    "answer": "21\n\n**Justification:**\nLet the amount of yarn required for one hat be \\(H\\).  \nFrom the small ball, Grandma can knit either half a sweater or two hats, so:  \n\\(\\frac{1}{2} \\text{ sweater} = 2H \\Rightarrow 1 \\text{ sweater} = 4H\\).  \n\nFrom the large ball, she can knit either five hats or one sweater plus three socks:  \n\\(5H = 1 \\text{ sweater} + 3 \\text{ socks} = 4H + 3 \\text{ socks}\\).  \nThus, \\(3 \\text{ socks} = H \\Rightarrow 1 \\text{ sock} = \\frac{H}{3}\\).  \n\nThe total yarn from both balls is \\(5H + 2H = 7H\\).  \nIf she uses all the yarn to knit only socks, she can make:  \n\\(7H \\div \\frac{H}{3} = 21\\) socks.  \n\nAny other combination (e.g., knitting sweaters or hats) would use yarn that could have made socks, so 21 is the maximum.",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "69eac79fc55d",
+    "problem": "11. (20 points) Given non-negative real numbers $x, y, z$ satisfying $x+y+z=1$. Find the maximum and minimum values of $x^{3}+2 y^{2}+\\frac{10}{3} z$.",
+    "reference": "\\dfrac{10}{3}",
+    "answer": "The maximum value is \\(\\frac{10}{3}\\) and the minimum value is \\(\\frac{14}{27}\\).",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "9627bad7da0c",
+    "problem": "Let $AB$, multiplied by $C$, equal $DE$. If $DE$ is subtracted from $FG$, the result is $HI$.\n\nEach letter represents a distinct digit (1, 2, 3, 4, 5, 6, 7, 8, or 9). The digit 0 does not appear in the problem.",
+    "reference": "93-68=25",
+    "answer": "A=1, B=7, C=4, D=6, E=8, F=9, G=3, H=2, I=5.",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "a17e22548c97",
+    "problem": "The polynomial \\( P(x, y) \\) has the following property: \\( P(x, y) = P(x+1, y+1) \\) for all \\( x \\) and \\( y \\). Prove that \\( P(x, y) = \\sum_{k=0}^{n} a_{k}(x-y)^{k} \\).",
+    "reference": "P(x,y)=\\sum_{k=0}^na_k(x-y)^k",
+    "answer": "The polynomial \\(P(x,y)\\) satisfies \\(P(x,y)=P(x+1,y+1)\\) for all \\(x,y\\). We prove that \\(P\\) depends only on \\(x-y\\).\n\n1. **Change of variables.** Let \\(u = x+y\\) and \\(v = x-y\\). Then \\(x = \\frac{u+v}{2}\\), \\(y = \\frac{u-v}{2}\\). Define\n   \\[\n   Q(u,v) = P\\!\\left(\\frac{u+v}{2}, \\frac{u-v}{2}\\right).\n   \\]\n   Since \\(P\\) is a polynomial, \\(Q\\) is a polynomial in \\(u\\) and \\(v\\).\n\n2. **Translate the condition.** Using the given property:\n   \\[\n   Q(u,v) = P(x,y) = P(x+1,y+1) = P\\!\\left(\\frac{u+v}{2}+1, \\frac{u-v}{2}+1\\right) = P\\!\\left(\\frac{u+v+2}{2}, \\frac{u-v+2}{2}\\right) = Q(u+2,v).\n   \\]\n   Hence \\(Q(u,v) = Q(u+2,v)\\) for all \\(u,v\\). This means \\(Q\\) is periodic in \\(u\\) with period \\(2\\).\n\n3. **\\(Q\\) is independent of \\(u\\).** View \\(Q\\) as a polynomial in \\(u\\) whose coefficients are polynomials in \\(v\\). For any fixed \\(v\\), the function \\(u \\mapsto Q(u,v)\\) is a polynomial in one variable. A non‑constant polynomial cannot be periodic because its magnitude grows without bound as \\(|u| \\to \\infty\\). Therefore, for each \\(v\\), \\(Q(u,v)\\) must be constant in \\(u\\). This implies that the coefficients of all positive powers of \\(u\\) are identically zero as polynomials in \\(v\\). Thus \\(Q\\) does not actually depend on \\(u\\); there exists a polynomial \\(R\\) in one variable such that \\(Q(u,v) = R(v)\\).\n\n4. **Express \\(P\\) in terms of \\(x-y\\).** Substituting back,\n   \\[\n   P(x,y) = Q(x+y, x-y) = R(x-y).\n   \\]\n   A polynomial in one variable is a finite sum of powers of that variable. Writing \\(R(v) = \\sum_{k=0}^{n} a_k v^k\\), we obtain\n   \\[\n   P(x,y) = \\sum_{k=0}^{n} a_k (x-y)^k.\n   \\]\n   This completes the proof.",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "ef0651ba2c4f",
+    "problem": "A and B each independently toss a fair coin. A tosses the coin 10 times, and B tosses the coin 11 times. What is the probability that the number of heads B gets is greater than the number of heads A gets?",
+    "reference": "1/2",
+    "answer": "The probability that B gets more heads than A is exactly 1/2.\n\nLet \\(A\\) be the number of heads A gets in 10 tosses, and let \\(B_1\\) be the number of heads B gets in the first 10 tosses. Then \\(A\\) and \\(B_1\\) are independent and identically distributed Binomial(10, 1/2). Let \\(B_2\\) be the outcome of B's 11th toss (0 or 1), so \\(B = B_1 + B_2\\).\n\nWe want \\(P(B > A)\\). Consider the difference \\(D = A - B_1\\). Since \\(A\\) and \\(B_1\\) are i.i.d., the distribution of \\(D\\) is symmetric: \\(P(D = k) = P(D = -k)\\). Then \\(B > A\\) is equivalent to \\(B_1 + B_2 > A\\), or \\(B_2 > D\\). Because \\(B_2\\) is an independent fair coin, \\(P(B_2 > D) = P(D < 0) + \\frac{1}{2}P(D = 0)\\). By symmetry, \\(P(D < 0) = P(D > 0)\\).\n\nSimilarly, \\(B < A\\) is equivalent to \\(D > B_2\\), giving \\(P(B < A) = P(D > 1) + \\frac{1}{2}P(D = 1)\\). Using symmetry, one can show \\(P(B > A) - P(B < A) = P(B = A)\\). Since \\(P(B > A) + P(B < A) + P(B = A) = 1\\), it follows that \\(P(B > A) = \\frac{1}{2}\\).\n\nThus, the probability is \\(\\frac{1}{2}\\).",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "c3b0627499ec",
+    "problem": "Let $Q(z)$ and $R(z)$ be the unique polynomials such that\\[z^{2021}+1=(z^2+z+1)Q(z)+R(z)\\]and the degree of $R$ is less than $2.$ What is $R(z)?$\n$\\textbf{(A) }{-}z \\qquad \\textbf{(B) }{-}1 \\qquad \\textbf{(C) }2021\\qquad \\textbf{(D) }z+1 \\qquad \\textbf{(E) }2z+1$",
+    "reference": "\\textbf{(A)}{-}z",
+    "answer": "-z",
+    "expected": 1.0,
+    "status": "reviewed_pass"
+  },
+  {
+    "case_id": "84395fa1e074",
+    "problem": "Find the volume of a regular hexagonal pyramid with a base side length \\( a \\) and the radius \\( R \\) of the circumscribed sphere.",
+    "reference": "\\frac{\\sqrt{3}}{2}^2(R+\\sqrt{R^2-^2})",
+    "answer": "The volume of a regular hexagonal pyramid with base side length \\( a \\) and radius \\( R \\) of the circumscribed sphere is given by the formula:\n\n\\( V = \\frac{\\sqrt{3}}{2} a^2 \\left( R + \\sqrt{R^2 - a^2} \\right) \\)\n\nThis result is derived by calculating the area of the regular hexagonal base, determining the height of the pyramid using the geometry of the circumscribed sphere, and applying the volume formula \\( V = \\frac{1}{3} S_{\\text{base}} h \\). Note that for such a pyramid to exist, the condition \\( R \\ge a \\) must be satisfied.",
+    "expected": null,
+    "status": "invalid_reference"
+  }
+]
