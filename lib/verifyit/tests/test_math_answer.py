@@ -119,6 +119,36 @@ def test_math_typed_answers_use_their_comparison(tmp_path, expected, math_type, 
     assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
 
 
+# math-verify compares equations by their solution lists, so two equations
+# that solve to nothing compare as equal (huggingface/Math-Verify#87): a
+# ground-true reference scored 1.0 for `1 = 2` and for a wrong right-hand
+# side (issue #11736). The grader must compare such equations directly.
+@pytest.mark.parametrize(
+    "expected, text, reward",
+    [
+        ("5 + 3 + 14 = 22", "\\boxed{5 + 3 + 14 = 22}", 1.0),
+        ("5 + 3 + 14 = 22", "\\boxed{5 + 3 + 14 = 23}", 0.0),
+        ("5 + 3 + 14 = 22", "\\boxed{1 = 2}", 0.0),
+        ("f(2008) = 1", "\\boxed{f(2008) = 1}", 1.0),
+        ("f(2008) = 1", "\\boxed{f(2008) = 99}", 0.0),
+        ("f(2008) = 1", "\\boxed{1 = 2}", 0.0),
+        ("a+b+c = 6+2+11 = 19", "\\boxed{a+b+c = 6+2+11 = 19}", 1.0),
+        ("a+b+c = 6+2+11 = 19", "\\boxed{a+b+c = 6+2+11 = 20}", 0.0),
+        ("(10a + 5)^2 = 100a(a + 1) + 25", "\\boxed{(10a + 5)^2 = 100a(a + 1) + 25}", 1.0),
+        ("(10a + 5)^2 = 100a(a + 1) + 25", "\\boxed{1 = 2}", 0.0),
+        ("(10a + 5)^2 = 100a(a + 1) + 25", "\\boxed{(10a + 5)^2 = 100a(a + 1) + 26}", 0.0),
+        # Equations with a genuine solution list still go through math-verify.
+        ("x = 5", "\\boxed{x = 5}", 1.0),
+        ("x = 5", "\\boxed{x = 6}", 0.0),
+        ("x = 5", "\\boxed{5 = x}", 1.0),
+    ],
+)
+def test_math_equations_with_no_solution_are_not_all_equal(tmp_path, expected, text, reward):
+    _answer(tmp_path, text)
+    spec = MathSpec(expected=expected, math_type=MathType.EQUATION)
+    assert grade_math.grade(spec, tmp_path, tmp_path).reward == reward
+
+
 # A HARDMath polynomial_roots answer in the dataset's own form: two \left[…\right] members
 # and no outer brackets (row 122 of the train split, issue #11511).
 HARDMATH_ROOTS_ANSWER = (

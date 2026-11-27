@@ -214,6 +214,40 @@ def _verify(expected: Any, candidate: Any, allow_set_relation_comp: bool = False
     )
 
 
+def _equation_vacuous_match(gold: Any, target: Any) -> bool | None:
+    """Verdict for an equation pair math-verify would compare vacuously.
+
+    math-verify compares equations by solving both sides for their free
+    symbols and comparing the solution lists (huggingface/Math-Verify#87),
+    so two equations that solve to nothing compare as equal: ``1 = 2``
+    scores 1.0 against ``5 + 3 + 14 = 22``. Returns True/False when the
+    pair is decided by the equations themselves, else None to defer to
+    math-verify.
+    """
+    from math_verify.utils import timeout  # noqa: PLC0415
+    from sympy import Eq, simplify  # noqa: PLC0415
+
+    if not (isinstance(gold, Eq) and isinstance(target, Eq)):
+        return None
+
+    @timeout(_timeout())
+    def gaps() -> tuple[Any, Any]:
+        return simplify(gold.lhs - gold.rhs), simplify(target.lhs - target.rhs)
+
+    gold_gap, target_gap = gaps()
+    if gold_gap == 0 or target_gap == 0:
+        # One side is true for every value; the pair matches only when the
+        # other side is too (an identity against itself, or the same
+        # ground-true equation).
+        return gold_gap == 0 and target_gap == 0
+    if not gold_gap.free_symbols and not target_gap.free_symbols:
+        # Neither side constrains a symbol, so there is no solution list to
+        # compare: the equations match only when they state the same
+        # relation, up to rearrangement (the sign of the gap).
+        return simplify(gold_gap - target_gap) == 0 or simplify(gold_gap + target_gap) == 0
+    return None
+
+
 def _verify_pair(gold: Any, target: Any, allow_set_relation_comp: bool) -> bool:
     from math_verify import verify  # noqa: PLC0415
     from sympy import Eq, Ne  # noqa: PLC0415
@@ -243,6 +277,9 @@ def _verify_pair(gold: Any, target: Any, allow_set_relation_comp: bool) -> bool:
         # math-verify refuses to compare nan or zoo; a reference that is defined
         # cannot equal it.
         return False
+    vacuous = _equation_vacuous_match(gold, target)
+    if vacuous is not None:
+        return vacuous
     try:
         return verify(
             gold,
