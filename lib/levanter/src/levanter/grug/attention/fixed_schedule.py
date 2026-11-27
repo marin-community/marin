@@ -157,19 +157,12 @@ def _local_fixed_attention(
     )
     safe_q = jnp.where(jnp.isfinite(q), q, 0).astype(jnp.float32)
 
-    # Size each call for four KV heads at most. This keeps the FP32 Q
-    # and output tiles within v4 VMEM for production GQA.
-    kv_heads = spec.num_kv_heads
-    kv_heads_per_call = min(4, 1 << (kv_heads - 1).bit_length())
-    groups = (kv_heads + kv_heads_per_call - 1) // kv_heads_per_call
-    q_per_kv = spec.num_q_heads // kv_heads
-    head_padding = groups * kv_heads_per_call - kv_heads
-    if head_padding:
-        safe_kv_pages = jnp.pad(safe_kv_pages, ((0, 0), (0, 0), (0, 2 * head_padding), (0, 0)))
-        safe_q = jnp.pad(safe_q, ((0, 0), (0, head_padding * q_per_kv), (0, 0)))
+    # Four KV heads fit in v4 VMEM. Launch the tail with its own head width
+    # so a five-head model runs one full tile and one single-head tile.
+    kv_heads_per_call = 4
+    q_per_kv = spec.num_q_heads // spec.num_kv_heads
 
-    def attend(query_and_pages):
-        query, pages = query_and_pages
+    def attend(query, pages):
         # Keep DEFAULT dot precision independent of the caller's context.
         with jax.default_matmul_precision("default"):
             return ragged_paged_attention(
@@ -190,16 +183,19 @@ def _local_fixed_attention(
                 vmem_limit_bytes=None,
             )
 
-    if groups == 1:
-        output = attend((safe_q, safe_kv_pages))
-    else:
-        q_groups = safe_q.reshape(spec.max_kv_len, groups, kv_heads_per_call * q_per_kv, spec.head_dim)
-        page_groups = safe_kv_pages.reshape(
-            spec.num_physical_pages, spec.page_size, groups, 2 * kv_heads_per_call, spec.head_dim
-        )
-        output = jax.lax.map(attend, (q_groups.swapaxes(0, 1), jnp.moveaxis(page_groups, 2, 0)))
-        output = output.swapaxes(0, 1).reshape(spec.max_kv_len, -1, spec.head_dim)
-    output = jnp.where(query_valid[:, None, None], output[:, : spec.num_q_heads], 0.0)
+    outputs = []
+    for start in range(0, spec.num_kv_heads, kv_heads_per_call):
+        stop = min(start + kv_heads_per_call, spec.num_kv_heads)
+        num_heads = stop - start
+        query = safe_q[:, start * q_per_kv : stop * q_per_kv]
+        pages = safe_kv_pages[:, :, 2 * start : 2 * stop]
+        padding = (1 << (num_heads - 1).bit_length()) - num_heads
+        if padding:
+            query = jnp.pad(query, ((0, 0), (0, padding * q_per_kv), (0, 0)))
+            pages = jnp.pad(pages, ((0, 0), (0, 0), (0, 2 * padding), (0, 0)))
+        outputs.append(attend(query, pages)[:, : num_heads * q_per_kv])
+    output = jnp.concatenate(outputs, axis=1)
+    output = jnp.where(query_valid[:, None, None], output, 0.0)
     output = jnp.where(valid_metadata, output, jnp.nan)
     return output[None, ...]
 
