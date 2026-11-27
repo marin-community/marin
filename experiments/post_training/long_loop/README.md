@@ -1792,8 +1792,16 @@ holds; existing pools retain their original grader.
 The v3 candidate recognizes explicitly delimited explanations, final proof displays,
 signed changes, and assignments to the variable requested by the question. It
 checks that a labelled reference agrees with the question's declared option before
-removing the label. An invalid reference remains unscored even for an empty response.
-These rules never select an explanatory number by matching the reference value.
+removing the label. These rules never select an explanatory number by matching
+the reference value.
+
+Invalid reference data produces `infra_error` with `reward=None` when the grader
+entrypoint runs, including with an empty answer file. Native submission grading
+first applies the TaskSpec's empty-output policy: `empty_output=zero` can return
+`submission_failure` with reward 0 before calling the grader. The separate
+`grade_empty_in_sandbox` audit invokes the grader directly with an empty answer
+file and leaves that submission policy unchanged.
+
 The v4 candidate also recognizes the complete multiplication/subtraction digit-puzzle
 grammar and verifies both equations and distinct digits 1–9. A complete assignment or
 subtraction equation must determine exactly one valid full solution, independent of
