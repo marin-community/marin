@@ -36,13 +36,16 @@ _POLICY_ID = "frozen-snapshot"
 _NEW_TOKENS = 8
 _SLOTS = 4
 _PAGE_SIZE = 128
+_FIXTURE_CONTEXT = 256
 _PRODUCTION_PROMPT_LENGTHS = (19, 29, 63, 131)
+_PRODUCTION_WINDOW_PROMPT_LENGTHS = (19, 29, 63, 2051)
 _FIXTURE_PROMPT_LENGTHS = (124, 128, 129, 131)
 _WARMUP_ROUNDS = 2
 
 
 def _generate(model, tokenizer, mesh, prompts, measured_rounds):
     length = model.config.max_seq_len
+    rpc_timeout = 480 if length > _FIXTURE_CONTEXT or model.config.num_layers == 26 else 240
     server = InferenceServer.create(
         InferenceServerConfig(
             initial_policy_id=_POLICY_ID,
@@ -86,7 +89,7 @@ def _generate(model, tokenizer, mesh, prompts, measured_rounds):
                                 expected_policy_id=_POLICY_ID,
                                 expected_logprob_mode=inference_pb2.LOGPROB_MODE_POLICY,
                             ),
-                            timeout=480 if model.config.num_layers == 26 else 240,
+                            timeout=rpc_timeout,
                         )
                         for row, prompt in enumerate(prompts)
                     )
@@ -153,14 +156,40 @@ def _score_error(actual, expected):
 
 @pytest.mark.tpu
 @pytest.mark.parametrize(
-    "layers,expert_axis_size",
+    "layers,expert_axis_size,context_size,prompt_lengths",
     [
-        pytest.param(1, 1, id="fixture-data4", marks=pytest.mark.timeout(300)),
-        pytest.param(2, 4, id="production-width-expert4", marks=(pytest.mark.manual, pytest.mark.timeout(900))),
-        pytest.param(26, 4, id="production-depth-expert4", marks=(pytest.mark.manual, pytest.mark.timeout(1500))),
+        pytest.param(
+            1, 1, _FIXTURE_CONTEXT, _FIXTURE_PROMPT_LENGTHS, id="fixture-data4", marks=pytest.mark.timeout(300)
+        ),
+        pytest.param(
+            2,
+            4,
+            _FIXTURE_CONTEXT,
+            _PRODUCTION_PROMPT_LENGTHS,
+            id="production-width-expert4",
+            marks=(pytest.mark.manual, pytest.mark.timeout(900)),
+        ),
+        pytest.param(
+            2,
+            4,
+            2176,
+            _PRODUCTION_WINDOW_PROMPT_LENGTHS,
+            id="production-window-expert4",
+            marks=(pytest.mark.manual, pytest.mark.timeout(900)),
+        ),
+        pytest.param(
+            26,
+            4,
+            _FIXTURE_CONTEXT,
+            _PRODUCTION_PROMPT_LENGTHS,
+            id="production-depth-expert4",
+            marks=(pytest.mark.manual, pytest.mark.timeout(1500)),
+        ),
     ],
 )
-def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, layers, expert_axis_size):
+def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
+    tmp_path, layers, expert_axis_size, context_size, prompt_lengths
+):
     if jax.default_backend() != "tpu" or jax.device_count() != _SLOTS:
         pytest.skip("The strict replay gate requires one four-device TPU host")
     device_kind = jax.devices()[0].device_kind.lower()
@@ -170,7 +199,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
         pytest.skip("The full-depth FP32 fixture requires the v5p HBM budget")
     production_width = layers > 1
     if production_width:
-        base = SnowballConfig(num_layers=layers, max_seq_len=256, moe_capacity_factor=float(expert_axis_size))
+        base = SnowballConfig(num_layers=layers, max_seq_len=context_size, moe_capacity_factor=float(expert_axis_size))
     else:
         base = SnowballConfig(
             vocab_size=23,
@@ -182,12 +211,11 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
             num_kv_heads=1,
             num_experts=2,
             num_experts_per_token=1,
-            max_seq_len=256,
+            max_seq_len=context_size,
             sliding_window=128,
         )
     cfg = base.with_zero_kl_replay()
     rng = np.random.default_rng(91)
-    prompt_lengths = _PRODUCTION_PROMPT_LENGTHS if production_width else _FIXTURE_PROMPT_LENGTHS
     prompts = [rng.integers(1, cfg.vocab_size, size=length).tolist() for length in prompt_lengths]
     vocabulary = {f"token{index}": index for index in range(cfg.vocab_size)}
     hf_tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(models.WordLevel(vocabulary)))

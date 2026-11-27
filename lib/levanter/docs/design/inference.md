@@ -148,8 +148,9 @@ old/current log-ratio and KL at the serving snapshot.
 
 Run the production-width case on v4-8, v5p-8, or v6e-4 to exercise Snowball's
 2560-wide, 20-query-head, five-KV-head, 256-expert geometry. This case uses two
-layers and a 256-token context. The full-depth case uses 26 layers and requires
-the v5p HBM budget.
+layers and a 256-token context. The `production-window` case uses a
+2,176-token context and a prompt that crosses the 2,048-token sliding window.
+The `production-depth` case uses 26 layers and requires the v5p HBM budget.
 
 ```bash
 uv run --package marin-levanter --extra tpu --extra serve --group test pytest \
