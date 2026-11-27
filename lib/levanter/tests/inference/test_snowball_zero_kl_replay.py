@@ -36,7 +36,9 @@ _POLICY_ID = "frozen-snapshot"
 _NEW_TOKENS = 8
 _SLOTS = 4
 _PAGE_SIZE = 128
-_PROMPT_LENGTHS = (19, 29, 63, 131)
+_PRODUCTION_PROMPT_LENGTHS = (19, 29, 63, 131)
+_FIXTURE_PROMPT_LENGTHS = (124, 128, 129, 131)
+_WARMUP_ROUNDS = 2
 
 
 def _generate(model, tokenizer, mesh, prompts, measured_rounds):
@@ -69,7 +71,7 @@ def _generate(model, tokenizer, mesh, prompts, measured_rounds):
         async with grpc.aio.insecure_channel(f"{server.config.host}:{server.app.state.grpc_port}") as channel:
             stub = inference_pb2_grpc.InferenceStub(channel)
             rounds = []
-            for _ in range(measured_rounds + 1):
+            for _ in range(_WARMUP_ROUNDS + measured_rounds if measured_rounds else 1):
                 start = time.perf_counter()
                 responses = await asyncio.gather(
                     *(
@@ -184,7 +186,8 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
         )
     cfg = base.with_zero_kl_replay()
     rng = np.random.default_rng(91)
-    prompts = [rng.integers(1, cfg.vocab_size, size=length).tolist() for length in _PROMPT_LENGTHS]
+    prompt_lengths = _PRODUCTION_PROMPT_LENGTHS if production_width else _FIXTURE_PROMPT_LENGTHS
+    prompts = [rng.integers(1, cfg.vocab_size, size=length).tolist() for length in prompt_lengths]
     vocabulary = {f"token{index}": index for index in range(cfg.vocab_size)}
     hf_tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(models.WordLevel(vocabulary)))
     hf_tokenizer.save_pretrained(tmp_path)
@@ -203,15 +206,16 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
                 + json.dumps(
                     {
                         "layers": layers,
-                        "first_batch_seconds": strict_rounds[0],
-                        "warmed_batch_seconds": strict_rounds[1:],
-                        "output_tokens_per_second": _SLOTS * _NEW_TOKENS / np.median(strict_rounds[1:]),
+                        "warmup_batch_seconds": strict_rounds[:_WARMUP_ROUNDS],
+                        "warmed_batch_seconds": strict_rounds[_WARMUP_ROUNDS:],
+                        "output_tokens_per_second": _SLOTS * _NEW_TOKENS / np.median(strict_rounds[_WARMUP_ROUNDS:]),
                     }
                 ),
                 flush=True,
             )
         batch = _rollout_batch(model, prompts, generations)
-        packed = pack_policy_batch(batch, sequence_length=cfg.max_seq_len, pad_token_id=0)
+        packing_length = cfg.max_seq_len if production_width else 2 * cfg.max_seq_len
+        packed = pack_policy_batch(batch, sequence_length=packing_length, pad_token_id=0)
         assert packed.tokens.resolve_axis("batch").size < _SLOTS
         score = jax.jit(response_logprobs)
 
@@ -257,7 +261,7 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
                     {
                         "device_kind": jax.devices()[0].device_kind,
                         "mesh": dict(mesh.shape),
-                        "prompt_lengths": _PROMPT_LENGTHS,
+                        "prompt_lengths": prompt_lengths,
                         "context": cfg.max_seq_len,
                         "layers": cfg.num_layers,
                         "hidden": cfg.hidden_dim,
@@ -265,10 +269,14 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, laye
                         "heads": cfg.num_heads,
                         "vocabulary": cfg.vocab_size,
                         "strict_first_batch_seconds": strict_rounds[0],
-                        "strict_output_tokens_per_second": _SLOTS * _NEW_TOKENS / np.median(strict_rounds[1:]),
+                        "strict_output_tokens_per_second": _SLOTS
+                        * _NEW_TOKENS
+                        / np.median(strict_rounds[_WARMUP_ROUNDS:]),
                         "fast_kv_layout": "expert_sharded",
                         "fast_first_batch_seconds": fast_rounds[0],
-                        "fast_output_tokens_per_second": _SLOTS * _NEW_TOKENS / np.median(fast_rounds[1:]),
+                        "fast_output_tokens_per_second": _SLOTS
+                        * _NEW_TOKENS
+                        / np.median(fast_rounds[_WARMUP_ROUNDS:]),
                         "fast_score_error": _score_error(actual, expected),
                     },
                     sort_keys=True,
