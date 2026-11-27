@@ -137,11 +137,22 @@ class _RangeFileSystem(LocalFileSystem):
         super().__init__(**kwargs)
         self.fetched_bytes = 0
         self.largest_fetch = 0
+        # Object stores answer a size lookup with a request, as S3 does with HEAD.
+        self.size_lookups = 0
 
-    def _open(self, path, mode="rb", *, cache_type="readahead", block_size=None, **_kwargs):
+    def info(self, path, **kwargs):
+        self.size_lookups += 1
+        return super().info(path, **kwargs)
+
+    def _open(self, path, mode="rb", *, cache_type="readahead", block_size=None, size=None, **_kwargs):
         assert mode == "rb"
         return _RangeFile(
-            self, path, mode=mode, block_size=block_size or _RANGE_DEFAULT_BLOCK_BYTES, cache_type=cache_type
+            self,
+            path,
+            mode=mode,
+            block_size=block_size or _RANGE_DEFAULT_BLOCK_BYTES,
+            cache_type=cache_type,
+            size=size,
         )
 
     def cat_file(self, path, start=None, end=None, **_kwargs):
@@ -395,6 +406,8 @@ def test_compaction_buffers_compressed_file_reads(tmp_path, monkeypatch):
         assert filesystem.fetched_bytes > 0
         # Inputs above the whole-file prefetch budget must retain bounded streaming reads.
         assert filesystem.largest_fetch <= 2 * row_bytes
+        # Each row group opens its shard again; the manifest's sizes spare a lookup per open.
+        assert filesystem.size_lookups == 0
         rows = ReadView(root).iter_rows("samples")
         assert [(row["id"], row["revision"], row["doc"]) for row in rows] == [
             (index, 1, expected[index]) for index in range(rows_per_flush)

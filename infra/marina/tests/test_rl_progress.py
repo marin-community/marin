@@ -6,22 +6,30 @@ import json
 
 import pytest
 
-from infra.marina.tests.rl_progress_fixtures import APPLET_ID, progress_record
+from infra.marina.tests.rl_progress_fixtures import APPLET_ID, grader_report, progress_record
 
 pytestmark = pytest.mark.integration
+
+
+def _projection(record: dict, *, main_control: bool = False) -> dict:
+    projected = record.copy()
+    projected["has_grader_report"] = projected.pop("grader_report", None) is not None
+    projected.pop("launch_config", None)
+    projected["is_main_control"] = main_control
+    return projected
 
 
 def test_grader_report_survives_republication_and_is_served_by_attempt(rl_progress_client):
     client, request = rl_progress_client
     api = f"/a/{APPLET_ID}/api"
     record = progress_record()
-    report = {"evaluation": {"eval_lite/0": [{"environment": "script", "success_rate": 0.5}]}}
+    report = grader_report()
     assert client.post(f"{api}/runs", json=record | {"grader_report": report}).status_code == 200
     assert client.post(f"{api}/runs", json=record | {"attempt_id": "native-second"}).status_code == 200
     assert client.post(f"{api}/runs", json=record).status_code == 200
     first, second = client.get(f"{api}/runs").json()["runs"]
     assert first["has_grader_report"] is True and "grader_report" not in first
-    assert second.get("has_grader_report") is None
+    assert second["has_grader_report"] is False
     query = {"run_id": record["run_id"], "attempt_id": record["attempt_id"]}
     assert client.get(f"{api}/graders", params=query).json() == {"label": record["label"], "report": report}
     assert client.get(f"{api}/graders", params=query | {"attempt_id": "missing"}).status_code == 404
@@ -60,22 +68,71 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     sparse = {key: value for key, value in record.items() if value is not None}
     sparse.pop("evaluations")
     sparse.pop("failed_facts")
+    running = record | {"status": "running", "completed_at": None, "elapsed_seconds": None, "gate_result": None}
+    assert publish(running)["status"] == "running"
     assert publish(sparse) == record
+    assert publish(running) == record
+    main_publication = copy.deepcopy(
+        {
+            key: value
+            for key, value in record.items()
+            if key
+            not in {
+                "native_run_id",
+                "preset_version",
+                "is_control",
+                "user",
+                "branch",
+                "dirty",
+                "pr_number",
+                "coordinator_iris_job_id",
+                "elapsed_excluding_eval_seconds",
+                "base_commit",
+                "base_preset_version",
+                "commit",
+                "evaluation_data_identity",
+                "launch_config",
+                "settings",
+            }
+        }
+    )
+    for comparison in main_publication["gate_result"]["comparisons"]:
+        comparison.pop("evaluation_score", None)
+    assert publish(main_publication | {"evaldash_run_ids": None}) == main_publication
     failed = record | {
         "attempt_id": "native-second",
         "started_at": "2026-11-03T00:00:00+00:00",
         "completed_at": "2026-11-03T01:00:00+00:00",
         "status": "failed",
         "optimizer_steps": 0,
+        "failed_facts": ["native_attempt"],
     }
-    publish(failed)
+    assert publish(failed) == failed
+    delayed = failed | {"status": "running", "completed_at": None, "elapsed_seconds": None, "failed_facts": []}
+    assert publish(delayed) == failed
     changed = copy.deepcopy(record)
-    changed.update(issue=456, label="corrected label", model="snowball", evaldash_run_ids=["eval-start", "eval-finish"])
+    changed.update(
+        issue=456,
+        label="corrected label",
+        model="snowball",
+        launch_config={"skyrl": {"trainer": {"max_steps": 25}}},
+        branch="main",
+        dirty=False,
+        is_control=True,
+        preset_version="current",
+        commit="abcdef1234",
+        base_commit="abcdef1234567890abcdef1234567890abcdef12",
+    )
     changed["gate_result"]["comparisons"][0]["run"] = 0.9
     assert publish(changed) == changed
+    config_query = {"run_id": changed["run_id"], "attempt_id": changed["attempt_id"]}
+    assert client.get(f"/a/{APPLET_ID}/api/configuration", params=config_query).json() == changed["launch_config"]
+    legacy_link = changed | {"evaldash_run_ids": ["existing-evaluation"]}
+    assert publish(legacy_link) == changed
+    assert publish(changed | {"is_control": None})["is_control"] is True
     for omit_issue in (False, True):
         missing_issue = copy.deepcopy(changed)
-        for field in ("issue", "gate", "gate_result", "model", "evaldash_run_ids"):
+        for field in ("issue", "gate", "gate_result", "model", "launch_config"):
             if omit_issue:
                 missing_issue.pop(field)
             else:
@@ -91,7 +148,7 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "optimizer_steps": None,
         "evidence": ["Checkpoint lineage timing is unknown: a native time window is missing."],
     }
-    legacy = {key: value for key, value in unknown.items() if key not in {"model", "evaldash_run_ids", "issue"}}
+    legacy = {key: value for key, value in unknown.items() if key not in {"model", "issue"}}
     request(
         "http://localhost",
         "POST",
@@ -101,12 +158,12 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
             "parameters": {
                 "run_id": legacy["run_id"],
                 "attempt_id": "unknown",
-                "record": json.dumps(legacy | {"issue": "opted_out"}),
+                "record": json.dumps(legacy | {"issue": "opted_out", "future_fact": "stored"}),
             },
         },
     )
     for run_id, invalid in (
-        ("test/legacy", record | {"run_id": "test/legacy", "attempt_id": "bad", "evaluation": None}),
+        ("test/bad-status", record | {"run_id": "test/bad-status", "attempt_id": "bad", "status": "unknown"}),
         ("test/wrong-sql-key", record | {"attempt_id": "bad"}),
         ("test/bad-shape", ["unexpected"]),
         ("test/bad-scalar", "unexpected"),
@@ -154,13 +211,51 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
     )
     payload = client.get(f"/a/{APPLET_ID}/api/runs").json()
     rows = {row["attempt_id"]: row for row in payload["runs"]}
-    assert rows["native-first"] == changed
-    assert rows["native-second"] == failed
-    assert rows["unknown"] == legacy | {"issue": None}
+    assert rows["native-first"] == _projection(changed, main_control=True)
+    assert rows["native-second"] == _projection(failed)
+    assert rows["unknown"] == _projection(legacy | {"issue": None, "future_fact": "stored"})
     assert len(rows) == 3
+    rich = changed | {
+        "commit": "a" * 40,
+        "settings": ["trainer.max_steps=25"],
+        "is_control": True,
+        "evaluations": [
+            {
+                "metric": "eval_lite@25/family_mean",
+                "role": "slice",
+                "run": 0.7,
+                "n_run": 1,
+                "n_control": 0,
+                "evaluation_score": {
+                    "profile": "eval_lite",
+                    "step": 25,
+                    "statistic": "family_mean",
+                    "final": True,
+                    "comparability": "example-comparison",
+                },
+            }
+        ],
+    }
+    assert publish(rich)["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
+    for evaldash_ids in (None, ["existing-evaluation"]):
+        previous_format = main_publication | {
+            "preset_version": "same-version",
+            "is_control": False,
+            "evaldash_run_ids": evaldash_ids,
+        }
+        response = publish(previous_format)
+        assert response["attempt_id"] == changed["attempt_id"]
+        assert response["issue"] == changed["issue"] and response["status"] == rich["status"]
+        assert "evaluation_score" not in response["evaluations"][0]
+        served = next(row for row in client.get(api_path).json()["runs"] if row["attempt_id"] == changed["attempt_id"])
+        assert served["issue"] == changed["issue"]
+        assert (served["commit"], served["settings"], served["is_control"]) == (rich["commit"], rich["settings"], True)
+        assert served["evaluations"][0]["evaluation_score"] == rich["evaluations"][0]["evaluation_score"]
+    unclassified = main_publication | {"attempt_id": "unclassified", "is_control": None}
+    assert publish(unclassified | {"evaldash_run_ids": None})["is_control"] is None
     skipped = {row["run_id"]: row["error"] for row in payload["skipped_records"]}
     assert "gate_result.comparisons" in skipped["test/bad-result"]
-    assert "evaluation: extra_forbidden" in skipped["test/legacy"]
+    assert "status: literal_error" in skipped["test/bad-status"]
     assert set(skipped) == {
         "test/bad-shape",
         "test/bad-scalar",
@@ -168,14 +263,14 @@ def test_progress_publication_updates_attempts_and_serves_valid_records(rl_progr
         "test/huge-extra",
         "test/huge-gate",
         "test/wrong-sql-key",
-        "test/legacy",
+        "test/bad-status",
     }
 
     for run_id in ("test/bad-result", "test/huge-gate"):
         repaired = record | {"run_id": run_id, "attempt_id": "bad", "gate_result": None}
         assert publish(repaired | {"issue": None, "gate": None}) == repaired
         recovered = client.get(api_path).json()
-        assert repaired in recovered["runs"]
+        assert _projection(repaired) in recovered["runs"]
         assert run_id not in {row["run_id"] for row in recovered["skipped_records"]}
 
     before = client.get(api_path).json()

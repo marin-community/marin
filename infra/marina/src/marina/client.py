@@ -3,6 +3,7 @@
 
 """Authenticated HTTP client helpers for Marina's command line."""
 
+import os
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
@@ -43,6 +44,8 @@ def _cached_login_provider() -> TokenProvider | None:
 
 def marina_token_provider() -> TokenProvider:
     """Resolve an expiring-token provider for reuse across a sequence of requests."""
+    if credentials_file := os.environ.get("MARINA_GOOGLE_APPLICATION_CREDENTIALS"):
+        return IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id, credentials_file=credentials_file)
     return _cached_login_provider() or IapServiceAccountTokenProvider(MARIN_DESKTOP_OAUTH_CLIENT.client_id)
 
 

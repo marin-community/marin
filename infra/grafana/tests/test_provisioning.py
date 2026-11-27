@@ -38,6 +38,8 @@ EXPRESSION_UID = "__expr__"
 # Grafana's built-in fan-out datasource: the panel's targets each name a real one.
 MIXED_DATASOURCE = "-- Mixed --"
 VALID_SEVERITIES = {"critical", "warning"}
+CHECKPOINT_ALERT_UID = "iris-controller-checkpoint-failed"
+CHECKPOINT_METRIC = "iris_controller_checkpoint_upload_success"
 
 
 def _stitched_dashboards() -> dict[str, dict]:
@@ -136,11 +138,13 @@ def test_alert_rules_have_resolvable_datasources_and_refids():
 
 
 def test_alert_rules_define_nodata_and_error_behavior():
-    # Most alert endpoints return explicit zeros when healthy. The storage rules
-    # stay normal until the optional CoreWeave collector writes its first rows.
+    # Most alert endpoints return explicit zeros when healthy.
     for rule in _rules():
-        optional_metrics = rule["uid"].startswith("coreweave-storage-") or rule["uid"] == "node-runtime-filesystem-full"
-        expected_no_data = "OK" if optional_metrics else "Alerting"
+        no_data_ok = rule["uid"].startswith("coreweave-storage-") or rule["uid"] in {
+            "node-runtime-filesystem-full",
+            CHECKPOINT_ALERT_UID,
+        }
+        expected_no_data = "OK" if no_data_ok else "Alerting"
         assert rule["noDataState"] == expected_no_data, rule["uid"]
         assert rule["execErrState"] == "Alerting", rule["uid"]
         assert rule["labels"]["severity"] in VALID_SEVERITIES, rule["uid"]
@@ -183,6 +187,8 @@ class _FakeFinelog:
         )
 
     def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        if CHECKPOINT_METRIC in sql:
+            return pa.table({"cluster": ["cw-rno2a"], "value": [0]})
         if "node_filesystem_available_bytes" in sql:
             return pa.table(
                 {"cluster": ["cw-a"], "node": ["n1"], "node_uid": ["uid1"], "mountpoint": ["/"], "value": [0.5]}
@@ -236,6 +242,36 @@ def test_every_rule_query_url_answers_on_the_bridge():
             response = client.get(url, params=params)
             assert response.status_code == 200, f"{rule['uid']}: GET {url} -> {response.status_code}"
             assert response.json(), f"{rule['uid']}: GET {url} returned no rows"
+
+
+def test_controller_checkpoint_alert_tracks_latest_attempt_per_cluster():
+    (rule,) = [rule for rule in _rules() if rule["uid"] == CHECKPOINT_ALERT_UID]
+    sql = rule["data"][0]["model"]["url_options"]["params"][0]["value"]
+    database = duckdb.connect()
+    database.execute(
+        'CREATE TABLE "telemetry_v1.iris" '
+        "(cluster VARCHAR, service VARCHAR, name VARCHAR, value DOUBLE, timestamp_ms BIGINT, seq BIGINT)"
+    )
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    database.executemany(
+        'INSERT INTO "telemetry_v1.iris" VALUES (?, ?, ?, ?, ?, ?)',
+        [
+            ("cw-rno2a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 120_000, 1),
+            ("cw-rno2a", "iris-controller", CHECKPOINT_METRIC, 1, now_ms - 60_000, 2),
+            ("cw-us-east-02a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 30_000, 3),
+            ("cw-us-east-08a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 14_400_000, 4),
+            ("cw-rno2a", "iris-controller", "unrelated_metric", 0, now_ms, 5),
+            ("cw-us-west-04a", "iris-controller", CHECKPOINT_METRIC, 0, now_ms - 5_400_000, 6),
+        ],
+    )
+
+    assert dict(database.execute(sql).fetchall()) == {
+        "cw-rno2a": 0,
+        "cw-us-east-02a": 1,
+        "cw-us-west-04a": 1,
+    }
+    database.execute('DELETE FROM "telemetry_v1.iris"')
+    assert database.execute(sql).fetchall() == []
 
 
 def test_configured_finelog_query_dependent_alerts_stay_normal_when_query_path_is_unavailable():

@@ -6,14 +6,17 @@ import json
 from dataclasses import replace
 from functools import partial
 from pathlib import PurePosixPath
+from typing import override
 from unittest.mock import AsyncMock
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from lib.taskforge.tests.fake_resources import resources
 from lib.taskforge.tests.stage_fakes import CandidateEngine, Environments, RecordingHarness, SolverEngine, solver_model
-from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
+from rolloutengine.machines import MachineSetupError
+from rolloutengine.models import GradedRollout, Model, Rollout, RolloutInterrupted, RolloutOperation, TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task, rollout_spec
+from shellbox.machine import ExitReason, Result
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
 from taskcompendium.models import EnvironmentRequirements, TaskResource, TaskSpec
 from taskcompendium.runtime.resources import inline_resource
@@ -22,7 +25,7 @@ from taskforge.arms import decided, validated
 from taskforge.config import TaskforgeConfig, WorkspaceHydration
 from taskforge.effects.context import Context
 from taskforge.effects.events import Note, Resolved
-from taskforge.effects.issues import ContextExceeded, Hold, OutputBudgetExhausted, Restart
+from taskforge.effects.issues import ContextExceeded, EnvironmentSetupFailed, Hold, OutputBudgetExhausted, Restart
 from taskforge.effects.log import EventLog
 from taskforge.harness.loop import AgenticHarness
 from taskforge.harness.protocol import Returned, Stopped, StopReason, Submitted
@@ -56,18 +59,23 @@ from taskforge.model.review import (
     ValidationResult,
 )
 from taskforge.model.workpiece import WORKPIECE, Conversation, Submission, Terminal, Workpiece
-from taskforge.policy import GRADER_BASE_IMAGE, Policy, load_policy, sampling
+from taskforge.policy import GRADER_BASE_IMAGE, SOURCE_TASK_ID, SOURCE_TASK_SOURCE, Policy, load_policy, sampling
 from taskforge.policy.defaults import DEFAULTS_DIR
+from taskforge.resources.bundle import Resources
+from taskforge.resources.clock import Clock
+from taskforge.resources.env import FakeEnv
 from taskforge.resources.grading import GradeCandidate, GradingResource, grade
+from taskforge.resources.ids import Ids
 from taskforge.resources.inference import FakeInference
-from taskforge.resources.rollouts import SolverRollout
+from taskforge.resources.rollouts import Engine, RolloutResource, SolverRollout
+from taskforge.resources.web import FakeWeb
 from taskforge.stages.author import author
 from taskforge.stages.classify import grade_cause, replayable_grade
 from taskforge.stages.exits import Decided, Validated
 from taskforge.stages.review import review
-from taskforge.stages.rules import default_review
+from taskforge.stages.rules import NO_CONTROLS, default_review
 from taskforge.stages.validate import adversary_result, claim_result, control_result, solver_result, validate
-from taskforge.wiring import build_config
+from taskforge.wiring import build_config, install, submit_gate
 
 
 @pytest.fixture
@@ -128,13 +136,14 @@ async def test_author_hydrates_revision_and_preserves_saved_session(workpiece: W
         == submission.controls
     )
     assert isinstance(bundle.envs, Environments)
+    assert workpiece.proposal is not None
     assert bundle.envs.created[0].files[PurePosixPath("/workspace/proposal.json")] == render(workpiece.proposal).encode()
     assert bundle.envs.created[0].closed
 
 
 async def test_author_workspace_holds_caller_files_on_fresh_and_revision_entries(workpiece: Workpiece) -> None:
     def proposal_id(entry: Workpiece, policy: Policy) -> tuple[TaskResource, ...]:
-        return (inline_resource("workspace/reference/id.txt", entry.proposal.header.id.encode()),)
+        return (inline_resource("workspace/reference/id.txt", entry.id.encode()),)
 
     hydration = WorkspaceHydration((inline_resource("workspace/reference/static.txt", b"static"),), proposal_id)
     setup = replace(config(), workspace=hydration)
@@ -146,7 +155,7 @@ async def test_author_workspace_holds_caller_files_on_fresh_and_revision_entries
         assert isinstance(bundle.envs, Environments)
         files = bundle.envs.created[0].files
         assert files[PurePosixPath("/workspace/reference/static.txt")] == b"static"
-        assert files[PurePosixPath("/workspace/reference/id.txt")] == workpiece.proposal.header.id.encode()
+        assert files[PurePosixPath("/workspace/reference/id.txt")] == workpiece.id.encode()
 
 
 async def test_author_new_session_and_failed_harness_close_environment(workpiece: Workpiece) -> None:
@@ -159,11 +168,185 @@ async def test_author_new_session_and_failed_harness_close_environment(workpiece
     await ctx.drain()
     assert harness.session is not None
     assert harness.client is author_client
+    assert workpiece.proposal is not None
     assert harness.session.messages[-1].content == config(harness).policy.prompt("author.user").render(
         proposal=render(workpiece.proposal)
     )
     assert isinstance(bundle.envs, Environments)
     assert bundle.envs.created[0].closed
+
+
+SWE_IMAGE = "docker.io/swerebench/sweb.eval.x86_64.astropy_1776_astropy-12907@sha256:" + "b" * 64
+
+
+@pytest.mark.parametrize(
+    "image,admitted,own",
+    [(SWE_IMAGE, [SWE_IMAGE], True), (SWE_IMAGE, [], False), (GRADER_BASE_IMAGE, [GRADER_BASE_IMAGE], True)],
+    ids=["source-image", "unadmitted-image", "pinned-image"],
+)
+async def test_source_task_author_works_in_the_tasks_own_environment_when_admitted(
+    workpiece: Workpiece, image: str, admitted: list[str], own: bool
+) -> None:
+    assert workpiece.submission is not None
+    environment = requirements(image=image, workdir="/testbed", setup=("sh setup.sh",))
+    notes = inline_resource("workspace/setup.sh", b"true\n")
+    task = workpiece.submission.task.model_copy(
+        update={
+            "environment_requirements": environment,
+            "resources": workpiece.submission.task.resources.model_copy(update={"worker": (notes,)}),
+        }
+    )
+    submission = Submission(task, (), "source task")
+    source = Workpiece(
+        "source", submission=submission, source=submission, decisions=(Modify(("The task has no controls",)),)
+    )
+    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    setup = config(harness)
+    setup = replace(setup, policy=setup.policy.overlaid({"sandbox.source_images": admitted}))
+    ctx = Context(log=EventLog())
+    bundle = resources(ctx)
+    await author(ctx, source, setup, bundle)
+    await ctx.drain()
+    assert isinstance(bundle.envs, Environments)
+    (requested,) = bundle.envs.requested
+    (installed,) = bundle.envs.installed
+    (env,) = bundle.envs.created
+    if own:
+        assert requested == environment
+        # The task's own setup may read its files, so they are installed before it runs, as for the solver,
+        # and not written again over whatever setup made of them.
+        assert notes in installed
+        assert PurePosixPath("/workspace/setup.sh") not in env.files
+    else:
+        assert (requested.docker_image, requested.working_directory) == (GRADER_BASE_IMAGE, "/workspace")
+        assert installed == ()
+        assert env.files[PurePosixPath("/workspace/setup.sh")] == b"true\n"
+    assert harness.session is not None
+    system = harness.session.messages[0].content
+    # The prompt describes the machine the author got: its image and the directory its shell starts in.
+    assert (f"`{requested.docker_image}`" in system, "`/testbed`" in system) == (True, own)
+
+
+def source_identity_config(task: TaskSpec) -> TaskforgeConfig:
+    setup = config()
+    identity = {SOURCE_TASK_ID: task.id, SOURCE_TASK_SOURCE: task.source.model_dump_json()}
+    return replace(setup, policy=setup.policy.overlaid(identity))
+
+
+def test_submit_gate_returns_a_source_task_whose_id_changed_to_the_author(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    original = workpiece.submission
+    renamed = replace(original, task=original.task.model_copy(update={"id": "renamed"}))
+    settings = lowering_settings(source_identity_config(original.task).policy)
+    # The author hears of the rule as submit-tool feedback in the same session, before any modify round.
+    (finding,) = submit_gate(renamed, settings=settings, factories={})
+    assert "'renamed'" in finding and repr(original.task.id) in finding
+    assert submit_gate(original, settings=settings, factories={}) == ()
+
+
+async def test_validate_returns_a_source_task_whose_id_changed_to_the_author(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    original = workpiece.submission
+    renamed = replace(original, task=original.task.model_copy(update={"id": "renamed"}))
+    source = Workpiece("source", submission=renamed, source=original)
+    setup = source_identity_config(original.task)
+    ctx = Context(log=EventLog())
+    result = (await validate(ctx, source, setup, resources(ctx))).result
+    await ctx.drain()
+    assert result.lowering_cause is Cause.INVALID_TASK and not result.solver
+    assert result.lowering_error is not None and "'renamed'" in result.lowering_error
+    decision = default_review(source.with_(evidence=(result,)), setup.band, setup.budget)
+    assert isinstance(decision, Modify)
+
+
+class SetupFails(Engine):
+    """A task whose environment's setup command fails on every machine, for rollouts and grades alike."""
+
+    @override
+    async def run_task(self, spec: TaskRolloutSpec, model: Model, *, run_id: str | None = None) -> GradedRollout:
+        error = RolloutInterrupted(Rollout(run_id or "setup", (), "interrupted"), RolloutOperation.START)
+        raise error from MachineSetupError(
+            "git clone", Result(128, b"", b"fatal: could not read from remote", False, False, ExitReason.EXITED)
+        )
+
+
+async def test_validate_returns_a_failing_environment_setup_to_the_author(workpiece: Workpiece) -> None:
+    ctx = Context(log=EventLog())
+    bundle = Resources(
+        Environments(),
+        FakeInference(()),
+        RolloutResource(SetupFails(), solver_model, "solver"),
+        GradingResource(SetupFails(), "grader"),
+        Clock(),
+        Ids(),
+        {},
+        FakeWeb({}, {}),
+    )
+    install(ctx, bundle)
+    result = (await validate(ctx, workpiece, config(), bundle)).result
+    await ctx.drain()
+    assert {trial.cause for trial in (*result.solver, *result.controls)} == {Cause.INVALID_TASK}
+    decision = default_review(workpiece.with_(evidence=(result,)), config().band, config().budget)
+    assert isinstance(decision, Modify) and any("git clone" in finding for finding in decision.findings)
+
+
+async def test_review_reports_no_solve_rate_for_a_source_task_whose_setup_failed(workpiece: Workpiece) -> None:
+    assert workpiece.submission is not None
+    submission = replace(workpiece.submission, controls=())
+    source = Workpiece("source", submission=submission, source=submission)
+    ctx = Context(log=EventLog())
+    bundle = Resources(
+        Environments(),
+        FakeInference(()),
+        RolloutResource(SetupFails(), solver_model, "solver"),
+        GradingResource(SetupFails(), "grader"),
+        Clock(),
+        Ids(),
+        {},
+        FakeWeb({}, {}),
+    )
+    install(ctx, bundle)
+    result = (await validate(ctx, source, config(), bundle)).result
+    await ctx.drain()
+    decision = default_review(source.with_(evidence=(result,)), config().band, config().budget)
+    assert isinstance(decision, Modify) and NO_CONTROLS in decision.findings
+    # Every trial failed in setup, so none measured the task's difficulty.
+    assert not any("trials solved" in finding for finding in decision.findings)
+
+
+async def test_source_author_works_in_author_image_when_the_task_environment_will_not_start(
+    workpiece: Workpiece,
+) -> None:
+    assert workpiece.submission is not None
+    image = "ghcr.io/example/swe-task@sha256:" + "a" * 64
+    environment = requirements(image=image, workdir="/testbed", setup=("git clone https://example.invalid/repo .",))
+    task = workpiece.submission.task.model_copy(update={"environment_requirements": environment})
+    submission = Submission(task, (), "source task")
+    source = Workpiece("source", submission=submission, source=submission, decisions=(Modify(("no controls",)),))
+
+    class SourceSetupFails(Environments):
+        @override
+        async def create(
+            self, requirements: EnvironmentRequirements, resources: tuple[TaskResource, ...] = ()
+        ) -> FakeEnv:
+            if requirements.docker_image == image:
+                self.requested.append(requirements)
+                raise EnvironmentSetupFailed("Environment setup command failed: exited, exit=128")
+            return await super().create(requirements)
+
+    harness = RecordingHarness(Stopped(StopReason.FINISHED, Conversation((), ())))
+    setup = config(harness)
+    setup = replace(setup, policy=setup.policy.overlaid({"sandbox.source_images": [image]}))
+    ctx = Context(log=EventLog())
+    bundle = replace(resources(ctx), envs=SourceSetupFails())
+    await author(ctx, source, setup, bundle)
+    await ctx.drain()
+    assert isinstance(bundle.envs, SourceSetupFails)
+    assert [requested.docker_image for requested in bundle.envs.requested] == [image, GRADER_BASE_IMAGE]
+    assert harness.session is not None
+    assert "exit=128" in harness.session.messages[-1].content
+    # On author.image the author is still told to keep the source's own image.
+    assert f"`{image}`" in harness.session.messages[0].content
 
 
 async def test_author_reference_describes_valid_wire_values_and_supported_environments(workpiece: Workpiece) -> None:

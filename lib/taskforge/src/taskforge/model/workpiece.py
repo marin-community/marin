@@ -47,7 +47,8 @@ class Terminal(StrEnum):
 
 class WorkpieceChanges(TypedDict, total=False):
     id: str
-    proposal: TaskProposal
+    proposal: TaskProposal | None
+    source: Submission | None
     round: int
     session: Conversation | None
     submission: Submission | None
@@ -60,8 +61,16 @@ class WorkpieceChanges(TypedDict, total=False):
 
 @dataclass(frozen=True, slots=True)
 class Workpiece:
+    """A task in progress, started from a proposal or from an existing task in ``submission``.
+
+    A workpiece without a proposal repairs a task another source wrote: it starts at validation, and
+    review's findings open its author sessions. ``source`` keeps that task as the source delivered it,
+    after the author replaces ``submission``.
+    """
+
     id: str
-    proposal: TaskProposal
+    proposal: TaskProposal | None = None
+    source: Submission | None = None
     round: int = 0
     session: Conversation | None = None
     submission: Submission | None = None
@@ -70,6 +79,21 @@ class Workpiece:
     terminal: Terminal | None = None
     too_easy_baseline: Submission | None = None
     accepted_with: BandOutcome | None = None
+
+    def __post_init__(self) -> None:
+        if self.proposal is None and self.submission is None:
+            raise ValueError(f"Workpiece {self.id} needs a proposal or an existing task")
+        if self.proposal is not None and self.source is not None:
+            raise ValueError(f"Workpiece {self.id} starts from a proposal or a source task, not both")
+
+    @property
+    def modify_rounds(self) -> int:
+        """The review modify rounds charged against ``budget.max_modify_rounds``.
+
+        A source task's first modify only opens its first author session, after review measured the task as
+        its source wrote it, so it is not charged: a source task gets as many author sessions as a proposal.
+        """
+        return self.round - 1 if self.proposal is None and self.round > 0 else self.round
 
     def with_(self, **changes: Unpack[WorkpieceChanges]) -> "Workpiece":
         return replace(self, **changes)
