@@ -269,7 +269,8 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
     ),
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_lean": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="intake; wave 2 — same conversion path as the mopd pair",
+        note="admitted R41 intake — release-pin SAMPLE GOOD, evidence sealed, overlap"
+        " acknowledged; surfaces at the load",
     ),
     "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_math_tir": SourceOwner(
         owner="R41 self-executing · ses_deccb722",
@@ -277,7 +278,8 @@ SOURCE_OWNERS: dict[str, SourceOwner] = {
     ),
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_lean": SourceOwner(
         owner="ingest C · ses_de69f162affeNDxM7uXXruALFm",
-        note="intake; wave 2 — same conversion path as the mopd pair",
+        note="admitted R41 intake — release-pin SAMPLE GOOD, evidence sealed, overlap"
+        " acknowledged; surfaces at the load",
     ),
     "Nemotron:nemotron_ultra_rlvr2/ultra_sft_step3200_math_tir": SourceOwner(
         owner="R41 self-executing · ses_deccb722",
