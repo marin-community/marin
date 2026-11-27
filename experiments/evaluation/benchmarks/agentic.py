@@ -597,6 +597,18 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             )
             for dataset in SWEBENCH_PRO_DATASETS
         ),
+        # Pi beside mini-swe-agent at SWE-bench Pro's context, with BixBench's profile, Python 3 and Pi installed over
+        # each task's image, under the packages' own timeouts.
+        *(
+            harbor_source(
+                dataset,
+                BIXBENCH_PI,
+                max_input_tokens=SWEBENCH_PRO_MAX_INPUT_TOKENS,
+                max_output_tokens=SWEBENCH_PRO_MAX_OUTPUT_TOKENS,
+                job=replace(SWEBENCH_PRO_JOB, agent_install=PYTHON3_INSTALL + pi_install(BIXBENCH_PI)),
+            )
+            for dataset in SWEBENCH_PRO_DATASETS
+        ),
         # Pi with BixBench's profile, installed with Python 3 over each task's image, under the packages' own timeouts.
         *(
             harbor_source(
