@@ -138,17 +138,11 @@ def batch_invariant_selected_logprobs(logits: jax.Array, token_ids: jax.Array) -
     return shifted - correction
 
 
-def batch_invariant_log_softmax_and_logsumexp(logits: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """Return FP32 log probabilities and absolute log-normalizers over the final axis."""
+def batch_invariant_log_softmax(logits: jax.Array) -> jax.Array:
+    """Return FP32 policy log probabilities over the final vocabulary axis."""
     logits = logits.astype(jnp.float32)
     normalizer = _batch_invariant_shifted_normalizer(logits)
     pivot_index, pivot, correction = normalizer
     is_pivot = jnp.arange(logits.shape[-1]) == pivot_index[..., None]
     shifted = jnp.where(is_pivot, 0, logits - pivot[..., None])
-    return shifted - correction[..., None], normalizer.logsumexp
-
-
-def batch_invariant_log_softmax(logits: jax.Array) -> jax.Array:
-    """Return FP32 policy log probabilities over the final vocabulary axis."""
-    log_probs, _ = batch_invariant_log_softmax_and_logsumexp(logits)
-    return log_probs
+    return shifted - correction[..., None]

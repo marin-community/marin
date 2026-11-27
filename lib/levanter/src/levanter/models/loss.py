@@ -1,7 +1,6 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from enum import StrEnum
 from typing import Literal, Optional, cast, overload
 
 import jax
@@ -14,7 +13,6 @@ from haliax import NamedArray
 from haliax.core import flatten_all_axes_but
 from haliax.nn import cross_entropy_loss_and_log_normalizers
 from haliax.partitioning import _get_mesh, current_thread_local_mapping, shard_map
-from levanter.kernels.logsumexp import batch_invariant_log_softmax_and_logsumexp
 from levanter.kernels.pallas.fused_cross_entropy_loss import (
     Implementation,
     fused_cross_entropy_loss_and_logsumexp_penalty as fused_cross_entropy_loss_and_logsumexp_penalty_kernel,
@@ -121,11 +119,6 @@ def maybe_fused_next_token_loss(
     )
 
 
-class CrossEntropyNormalization(StrEnum):
-    DEFAULT = "default"
-    BATCH_INVARIANT = "batch_invariant"
-
-
 def next_token_loss(
     Pos: hax.AxisSelector,
     Vocab: hax.AxisSelector,
@@ -135,8 +128,6 @@ def next_token_loss(
     reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
-    *,
-    normalization: CrossEntropyNormalization = CrossEntropyNormalization.DEFAULT,
 ):
     """
     Compute the next token loss with optional logsumexp penalty.
@@ -150,8 +141,7 @@ def next_token_loss(
         reduction: reduction function or None to disable reduction
         reduction_axis: axis to apply reduction. None means all axes
         logsumexp_weight: weight for the logsumexp penalty
-        normalization: BATCH_INVARIANT fixes each row's reduction order on explicit meshes.
-            Auto meshes delegate partitioning to JAX.
+        logit_soft_cap: optional soft cap for logits
     Returns:
         NamedArray: computed loss
     """
@@ -170,7 +160,6 @@ def next_token_loss(
         reduction_axis=reduction_axis,
         weight=loss_weight,
         logsumexp_weight=logsumexp_weight,
-        normalization=normalization,
     )
 
 
@@ -183,23 +172,10 @@ def cross_entropy_and_logsumexp_penalty(
     reduction_axis: Optional[hax.AxisSelection] = None,
     weight: Optional[NamedArray] = None,
     logsumexp_weight=0.0,
-    normalization: CrossEntropyNormalization = CrossEntropyNormalization.DEFAULT,
 ) -> NamedArray:
     """A loss function that combines cross entropy loss with a logsumexp penalty."""
 
-    if normalization == CrossEntropyNormalization.BATCH_INVARIANT:
-        vocab = pred_y.resolve_axis(Vocab)
-        axis = pred_y.axes.index(vocab)
-        log_probs, normalizers = batch_invariant_log_softmax_and_logsumexp(jnp.moveaxis(pred_y.array, axis, -1))
-        log_normalizers = hax.named(normalizers, tuple(a for a in pred_y.axes if a != vocab))
-        named_log_probs = hax.named(jnp.moveaxis(log_probs, -1, axis), pred_y.axes)
-        # A masked vocabulary entry with zero target mass contributes zero loss.
-        named_log_probs = hax.where((target_y == 0) & hax.isneginf(named_log_probs), 0, named_log_probs)
-        loss = -hax.sum(target_y * named_log_probs, axis=vocab)
-    elif normalization == CrossEntropyNormalization.DEFAULT:
-        loss, log_normalizers = cross_entropy_loss_and_log_normalizers(pred_y, Vocab, target_y)
-    else:
-        raise ValueError(f"Unknown cross entropy normalization: {normalization}")
+    loss, log_normalizers = cross_entropy_loss_and_log_normalizers(pred_y, Vocab, target_y)
 
     if logsumexp_weight is not None and logsumexp_weight != 0.0:
         loss = loss + logsumexp_weight * (log_normalizers**2)

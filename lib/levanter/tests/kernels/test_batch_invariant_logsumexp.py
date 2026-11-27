@@ -145,3 +145,22 @@ def test_logprobs_and_derivatives_match_through_nested_vmap():
         rtol=1e-5,
         atol=1e-5,
     )
+
+
+@pytest.mark.tpu
+def test_selected_logprobs_preserve_small_tail_gradient():
+    values = np.array([[9, -9, -9], [109, 91, 91], [9, -np.inf, -np.inf], [0, 0, 0]], dtype=np.float32)
+    targets = jnp.zeros(values.shape[0], dtype=jnp.int32)
+
+    def objective(logits):
+        scores = batch_invariant_selected_logprobs(logits, targets)
+        return scores.sum(), scores
+
+    (_, scores), gradients = jax.jit(jax.value_and_grad(objective, has_aux=True))(jnp.asarray(values))
+    fp64 = values.astype(np.float64)
+    tails = np.exp(fp64[:, 1:] - fp64[:, :1])
+    tail_mass = tails.sum(axis=-1)
+    expected_scores = -np.log1p(tail_mass)
+    expected_gradients = np.column_stack((tail_mass, -tails)) / (1 + tail_mass[:, None])
+    np.testing.assert_allclose(scores, expected_scores, rtol=1e-5, atol=0)
+    np.testing.assert_allclose(gradients, expected_gradients, rtol=1e-5, atol=0)
