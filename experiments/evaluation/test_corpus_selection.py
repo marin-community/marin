@@ -427,6 +427,8 @@ async def test_driver_archives_full_selection_ledger_and_sends_full_prompts(refi
             stop_reason="stop",
             text=answer,
             usage=TokenUsage(10, 2),
+            # Graders see only the final answer, so separate reasoning cannot displace MRCR's nonce.
+            metadata={"reasoning": "Let me find the requested message."},
         )
 
     config = EvaluationRunConfig(

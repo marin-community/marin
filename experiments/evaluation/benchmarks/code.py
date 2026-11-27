@@ -87,7 +87,10 @@ def python_source(
                 summary=SummaryKind.MEAN,
                 expected_population=population,
             ),
-            item_builder=partial(python_item, generation=TextGeneration() if completion else ChatGeneration()),
+            item_builder=partial(
+                python_item,
+                generation=TextGeneration() if completion else ChatGeneration(response_selection="final_only"),
+            ),
         ),
         pipeline=prepare_evaluation,
     )

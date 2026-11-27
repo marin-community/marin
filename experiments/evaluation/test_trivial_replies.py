@@ -4,6 +4,7 @@
 """Replies that ignore the task are scored through the evaluation driver and reduced per benchmark."""
 
 import json
+from functools import partial
 
 import pytest
 from evalrecords.rollout_attempts import ATTEMPTS_TABLE
@@ -88,7 +89,9 @@ def publish_corpus(tmp_path, rows: list[dict]) -> str:
     client = LocalClient()
     try:
         with ZephyrContext(client=client, max_workers=1, chunk_storage_prefix=str(tmp_path / "chunks")) as context:
-            publish_evaluation_corpus(recipe, protocol, chat_item, context, str(source), str(corpus))
+            publish_evaluation_corpus(
+                recipe, protocol, partial(chat_item, response_selection="final_only"), context, str(source), str(corpus)
+            )
     finally:
         client.shutdown()
     return str(corpus)

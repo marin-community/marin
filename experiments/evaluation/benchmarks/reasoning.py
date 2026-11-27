@@ -166,7 +166,7 @@ def choice_dataset(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.02",
+                version="2026.11.02" if benchmark == "MMLUPro" else "2026.11.24",
                 operation=OperationKind.CHAT_GENERATION,
                 sampling=Sampling(
                     temperature=None,

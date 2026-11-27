@@ -4,6 +4,7 @@
 import hashlib
 import json
 from dataclasses import replace
+from functools import partial
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -51,6 +52,8 @@ from taskcompendium.models import TextMessage
 from taskcompendium.pipeline.evaluation import publish_evaluation_corpus
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles, SourceFormat
 from taskcompendium.pipeline.models import IntendedUse, NormalizationChange, NormalizedTask, RawRow, SourceRecipe
+
+FINAL_ANSWER_ITEM = partial(chat_item, response_selection="final_only")
 
 
 def convert_evaluation(row: RawRow, _context: ConversionContext):
@@ -104,7 +107,7 @@ def corpus(tmp_path):
     return source, tmp_path / "output", recipe, protocol
 
 
-def publish(corpus, tmp_path, item_builder=chat_item):
+def publish(corpus, tmp_path, item_builder=FINAL_ANSWER_ITEM):
     source, output, recipe, protocol = corpus
     client = LocalClient()
     try:
@@ -236,7 +239,7 @@ def test_evaluation_metadata_scan_and_selected_rows_avoid_unselected_task_decodi
 
 
 def raw_item(task):
-    return chat_item(task).model_copy(update={"operation": TextGeneration()})
+    return chat_item(task, response_selection="final_only").model_copy(update={"operation": TextGeneration()})
 
 
 def convert_multimessage(row, context):
@@ -477,10 +480,11 @@ def test_grouped_selection_rejects_missing_active_stratum(corpus, tmp_path):
 
 
 def variant_item(task):
-    return chat_item(task).model_copy(
+    return chat_item(task, response_selection="final_only").model_copy(
         update={
             "operation": ChatGeneration(
                 prompt_selection="fit_context",
+                response_selection="final_only",
                 variants=(
                     ChatPromptVariant(
                         context=task.context.model_copy(
@@ -530,7 +534,7 @@ EPISODE = AgentEpisode(
 
 
 def episode_item(task, *, agent_timeout=1800):
-    return chat_item(task).model_copy(
+    return chat_item(task, response_selection="final_only").model_copy(
         update={
             "operation": EPISODE,
             "episode": EpisodeInputs(agent_timeout=agent_timeout, cpus=2, memory_mb=4096, network=NetworkPolicy.DENY),
@@ -575,7 +579,7 @@ def test_chat_items_serialize_without_episode_inputs(corpus, tmp_path):
 @pytest.mark.parametrize(
     "item_builder",
     [
-        pytest.param(chat_item, id="missing-episode-inputs"),
+        pytest.param(FINAL_ANSWER_ITEM, id="missing-episode-inputs"),
         pytest.param(lambda task: episode_item(task, agent_timeout=3400), id="no-attempt-backstop"),
     ],
 )

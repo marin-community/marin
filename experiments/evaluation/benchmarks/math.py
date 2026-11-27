@@ -183,7 +183,7 @@ def olympiad_source(*, judged: bool) -> RlDataSource[EvaluationCorpusRecipe]:
                 summary=SummaryKind.MEAN,
                 expected_population=30,
             ),
-            chat_item,
+            partial(chat_item, response_selection="final_only"),
         ),
         pipeline=prepare_evaluation,
     )
@@ -250,7 +250,7 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
         amc,
         config=replace(
             amc.config,
-            item_builder=chat_item,
+            item_builder=partial(chat_item, response_selection="final_only"),
             recipe=replace(amc.config.recipe, convert=convert_amc, version=scorer_revision("amc")),
             protocol=amc.config.protocol.model_copy(
                 update={

@@ -184,7 +184,14 @@ def published_corpora(tmp_path):
                     expected_population=3,
                 )
                 output = tmp_path / (benchmark + "-published")
-                publish_evaluation_corpus(recipe, protocol, chat_item, context, str(source), str(output))
+                publish_evaluation_corpus(
+                    recipe,
+                    protocol,
+                    partial(chat_item, response_selection="final_only"),
+                    context,
+                    str(source),
+                    str(output),
+                )
                 roots.append(str(output))
         return tuple(roots)
     finally:
@@ -573,9 +580,10 @@ class CharacterTokenizer:
 
 def policy_item(task):
     source = source_evidence(task)
-    operation = ChatGeneration()
+    operation = ChatGeneration(response_selection="final_only")
     if "zero_shot" in source:
         operation = ChatGeneration(
+            response_selection="final_only",
             variants=(
                 ChatPromptVariant(
                     context=ConversationInput(events=(TextMessage(role="user", content=source["zero_shot"]),)),
@@ -1620,7 +1628,15 @@ def convert_ignoring_case(row: RawRow, _context: ConversionContext):
 COLORS = ("colors/0", "colors/1", "colors/2")
 
 
-def publish_colors_corpus(tmp_path, name, *, converter=convert, questions=COLORS, trials=None, item=chat_item):
+def publish_colors_corpus(
+    tmp_path,
+    name,
+    *,
+    converter=convert,
+    questions=COLORS,
+    trials=None,
+    item=partial(chat_item, response_selection="combine"),
+):
     """A colors corpus; trials default to three unseeded greedy trials, which send identical requests."""
     source = tmp_path / (name + "-source")
     source.mkdir()

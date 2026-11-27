@@ -83,7 +83,7 @@ def instruction_following_evaluation(
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version="2026.11.22.1" if profile is InstructionProfile.HARNESS else "2026.11.02",
+                version="2026.11.22.1" if profile is InstructionProfile.HARNESS else "2026.11.24",
                 operation=(
                     OperationKind.TEXT_GENERATION
                     if profile is InstructionProfile.HARNESS
@@ -144,7 +144,7 @@ def benchmarks() -> list[EvaluationBenchmark]:
         [
             *sources(),
             *[
-                chat_source(source, {})
+                chat_source(source, {}, response_selection="final_only")
                 for source in sources()
                 if source.config is not None and source.config.protocol.benchmark == "ifeval"
             ],

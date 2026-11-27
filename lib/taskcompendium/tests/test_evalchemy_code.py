@@ -112,7 +112,12 @@ def test_python_publication_keeps_tests_private_and_expands_crux_directions(case
             publish_evaluation_corpus(
                 recipe,
                 protocol,
-                partial(python_item, generation=TextGeneration() if suite == "humaneval" else ChatGeneration()),
+                partial(
+                    python_item,
+                    generation=(
+                        TextGeneration() if suite == "humaneval" else ChatGeneration(response_selection="final_only")
+                    ),
+                ),
                 context,
                 str(root),
                 output,

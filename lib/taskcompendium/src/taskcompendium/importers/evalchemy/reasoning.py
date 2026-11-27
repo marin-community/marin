@@ -16,7 +16,6 @@ from zephyr.readers import load_parquet
 
 from taskcompendium.convert.answers import source_evidence
 from taskcompendium.convert.tasks import conversation_task
-from taskcompendium.evaluation.corpus import chat_item
 from taskcompendium.evaluation.spec import (
     ChatGeneration,
     ChatPromptVariant,
@@ -242,6 +241,6 @@ def reasoning_item(task: TaskSpec, *, benchmark: str) -> EvaluationItem:
             ),
         )
         if benchmark == "MMLUPro"
-        else ChatGeneration()
+        else ChatGeneration(response_selection="final_only")
     )
-    return chat_item(task).model_copy(update={"groups": groups, "operation": operation})
+    return EvaluationItem(task_id=task.id, source_row=task.source.row, operation=operation, groups=groups)
