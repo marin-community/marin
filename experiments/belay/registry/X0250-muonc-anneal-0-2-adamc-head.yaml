@@ -138,3 +138,18 @@ potential:
   inputs_digest: 8c82a27eb955
 code_commits:
 - 7a52fd90052952608c6a5f0f99b1011c8148e41e
+projection:
+  delta: -0.0044
+  multiplier: 1.104
+  alpha: 0.08645
+  recipe_alpha: 0.08657
+  hero_flops: 9.234e+23
+  extrapolation: 4023
+  protocol: equal_steps
+  trials:
+  - t002
+  - t003
+  - t004
+  - t005
+  basis: Belay Ckpt Oct 20 2026 (s7n) fit of 2026-11-01, on s7n-d512, s7n-d768, s7n-d1024 and s7n-d1280L16
+  date: '2026-11-27'
