@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import tarfile
+import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -86,6 +87,8 @@ MISSING_PREPARED_IMAGE_REASON = difficulty_gap_reason(DifficultyGap.ENVIRONMENT_
 UNSUPPORTED_COMPOSE_DOCUMENT_REASON = difficulty_gap_reason(DifficultyGap.UNSUPPORTED_COMPOSE_DOCUMENT)
 NETWORK_POLICY_REASON = difficulty_gap_reason(DifficultyGap.NETWORK_POLICY_VIOLATION)
 MATH_DEADLINE_LIMIT = 3
+REGISTRY_LOOKUP_ATTEMPTS = 3
+REGISTRY_LOOKUP_TIMEOUT_SEC = 30
 
 
 def task_required_provider_secrets(task_dirs: Iterable[Path]) -> frozenset[str]:
@@ -207,14 +210,27 @@ def pinned_registry_reference(reference: str, authfile: str | None = None) -> st
     # The wave's skopeo rejects a bare registry reference as an unknown
     # transport; the explicit docker:// transport parses everywhere.
     command.append(f"docker://{reference}")
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
-    digest = completed.stdout.strip()
-    if completed.returncode != 0 or not digest.startswith("sha256:"):
-        raise ValueError(
-            f"Registry digest lookup failed for {reference} (rc={completed.returncode}): "
-            f"{(completed.stderr or completed.stdout).strip()[:400]}"
-        )
-    return f"{reference}@{digest}"
+    for attempt in range(REGISTRY_LOOKUP_ATTEMPTS):
+        try:
+            completed = subprocess.run(
+                command, check=False, capture_output=True, text=True, timeout=REGISTRY_LOOKUP_TIMEOUT_SEC
+            )
+        except subprocess.TimeoutExpired as error:
+            if attempt + 1 == REGISTRY_LOOKUP_ATTEMPTS:
+                raise ValueError(f"Registry digest lookup timed out for {reference}") from error
+        else:
+            digest = completed.stdout.strip()
+            if completed.returncode == 0 and re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                return f"{reference}@{digest}"
+            diagnostic = (completed.stderr or completed.stdout).strip()
+            transient = completed.returncode != 0 and re.search(r"HTTP status: (?:429|5\d\d)\b", diagnostic)
+            if not transient or attempt + 1 == REGISTRY_LOOKUP_ATTEMPTS:
+                raise ValueError(
+                    f"Registry digest lookup failed for {reference} (rc={completed.returncode}): {diagnostic[:400]}"
+                )
+        LOGGER.warning("Retrying registry digest lookup for %s after attempt %s", reference, attempt + 1)
+        time.sleep(2**attempt)
+    raise AssertionError("Registry lookup exhausted without a result")
 
 
 def actor_phase_gap_reason(task: PreparedTask, result) -> str | None:
