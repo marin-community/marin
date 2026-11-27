@@ -108,9 +108,18 @@ uv run --project lib/shellbox --frozen --extra daytona shellbox-daytona-snapshot
 Pass `--api-key-env DAYTONA_EVAL_API_KEY` to inventory or purge the eval account
 used for validation builds.
 
-Read the account's current quota and inventory before submission. Snapshot quota
-and live sandbox capacity are separate limits. A successful GPU allocation proves
+Read the account's snapshot inventory before submission. Snapshot quota and
+live sandbox capacity are separate limits. A successful GPU allocation proves
 neither is available.
+
+Sandbox creation waits while a region's sandbox quota is exhausted. Shellbox
+retries Daytona's `Total CPU|memory|disk|GPU limit exceeded` rejection with
+backoff, logging `Retrying Daytona creation after exhausted quota`, until the
+startup timeout (`create_timeout`, default 600 s). It then raises
+`MachineUnavailable` with Daytona's message, which rollout evaluation retries.
+Stopped and paused sandboxes keep their disk charged, so a disk-quota wait can
+last the full timeout until they are deleted. A request above a per-sandbox
+maximum fails immediately.
 
 `shellbox-daytona-usage` reads the account's live quota, current usage and
 remaining capacity. It lists the account's sandboxes (paginated) and reports
