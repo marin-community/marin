@@ -21,8 +21,7 @@ from shellbox.machine import (
     NetworkPolicy,
 )
 from shellbox.task import ContainerSpec, TaskSpec
-
-from lib.shellbox.tests.local_machine_support import SPEC, make_factory, on_machine
+from shellbox.testing.local_machine_support import SPEC, make_factory, on_machine
 
 ROOT_DELIVERY_QUIESCE_PROGRAM = """\
 import os, signal

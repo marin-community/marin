@@ -25,8 +25,7 @@ from shellbox.machine import (
     NetworkPolicy,
 )
 from shellbox.task import ContainerSpec, ReadinessProbe, ServiceEndpoint, TaskSpec, single_container_task
-
-from lib.shellbox.tests.local_machine_support import SPEC, make_factory, on_machine, run_command
+from shellbox.testing.local_machine_support import SPEC, make_factory, on_machine, run_command
 
 HTTP_CLIENT = """import sys, urllib.request
 with urllib.request.urlopen(sys.argv[1], timeout=5) as response:

@@ -20,9 +20,8 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
+from shellbox.testing.local_machine_support import SPEC, on_machine, run_command
 from shellbox.transfer import download_files
-
-from lib.shellbox.tests.local_machine_support import SPEC, on_machine, run_command
 
 
 def _stream(*members: tuple[tarfile.TarInfo, bytes]) -> bytes:

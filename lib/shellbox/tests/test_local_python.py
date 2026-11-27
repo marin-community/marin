@@ -20,9 +20,8 @@ from shellbox.machine import (
     MachineSpec,
     PackageSpec,
 )
-
-from lib.shellbox.tests.local_machine_support import SPEC, make_factory, on_machine
-from lib.shellbox.tests.local_python_support import PYTHON_VERSION
+from shellbox.testing.local_machine_support import SPEC, make_factory, on_machine
+from shellbox.testing.local_python_support import PYTHON_VERSION
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="The local bubblewrap backend requires Linux")

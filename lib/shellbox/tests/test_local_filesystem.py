@@ -18,8 +18,7 @@ from shellbox.machine import (
     Result,
     UnsupportedMachineSpec,
 )
-
-from lib.shellbox.tests.local_machine_support import (
+from shellbox.testing.local_machine_support import (
     SPEC,
     make_factory,
     on_machine,

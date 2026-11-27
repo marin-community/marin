@@ -28,8 +28,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
 )
 from shellbox.task import ContainerSpec, TaskSpec
-
-from lib.shellbox.tests.local_machine_support import (
+from shellbox.testing.local_machine_support import (
     ACCESS_PROBE,
     SPEC,
     THREAD_BOMB,
