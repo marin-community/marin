@@ -1759,3 +1759,32 @@ unchanged task/grader, and repeats the grading proof. Use a fresh pool version a
 the cutover: rollout limits are baked into prepared pools, so an earlier pool proof
 does not establish the enabled limit. Campaign RL continues through its existing
 launch path. The campaign coordinator inbox records the landing commit and cutover.
+
+## Polaris grader repair candidates
+
+`polaris_release` derives a candidate from the retained Polaris release at
+`9079512fe3d2d332b446b1b37deb9d2898f5461e`. It preserves all 53,167 task identities,
+questions, references, runtime values and extra columns. It replaces the legacy
+format-dependent grader and its package lock, records old and new task hashes,
+and retains the original release metadata. A bad task hash, duplicate identity
+or missing row fails the candidate build without publishing completed output.
+
+Print the artifact plan without downloading the cohort or building an environment:
+
+```bash
+uv run python -m experiments.post_training.long_loop.polaris_release --version 2026.11.27.1
+```
+
+Build with `--run` inside an Iris CPU task in the target storage region, with
+`MARIN_PREFIX` pointing to that region. The graph first builds the pinned grader
+environment, then streams the retained cohort in batches of 64. It writes a new
+candidate artifact and verifies uploaded file hashes. It does not publish a
+Hugging Face release, alter the catalog, regrade a live run or launch training.
+Failed artifacts require investigation before a fresh attempt; the command
+does not automatically retry them.
+
+The candidate remains unqualified until its Linux grading guest, regression
+controls and a fresh independent review pass. A development replay is not that
+review. Existing ambiguous reference defects remain recorded without edits or
+filters. Only a separately qualified immutable source pin may release campaign
+holds; existing pools retain their original grader.
