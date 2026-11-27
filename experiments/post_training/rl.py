@@ -36,7 +36,6 @@ from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
-from iris.rpc.proto_display import priority_band_value
 from marin.execution.artifact import is_mutable_version, read_artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.fingerprint import fingerprint_hash
@@ -1157,7 +1156,6 @@ def command(
                     coordinator_prefix=(
                         recipe.run_prefix(preset) if preset.temporary_output or sft_data_mix is not None else None
                     ),
-                    priority=priority_band_value(preset.recipe.layout.priority),
                 )
             except ValueError as error:
                 raise click.BadParameter(str(error), param_hint="--sft") from error

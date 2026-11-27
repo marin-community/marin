@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 from fray.current_client import set_current_client
 from haliax import Axis
-from iris.rpc.proto_display import priority_band_value
 from levanter.data.text.datasets import DatasetComponent, LmDataConfig, dataset_for_component
 from levanter.data.text.formats import PrebuiltLmDatasetFormat, TextLmDatasetFormat
 from levanter.store.cache import SerialCacheWriter
@@ -177,9 +176,7 @@ def test_exp7_resolves_exp6_sft_controls_at_the_native_boundary(tmp_path):
     (tmp_path / "data.json").write_text(json.dumps(draccus.encode(data)))
     binding = PreparedData(ArtifactStep.adopt("tests/exp7", "2026.11.25", str(tmp_path)), "data.json", EXP7_TOKENIZER)
     spec = EXP7_262K_32NODE.recipe.with_data_mix(binding).with_steps(1893, version="2026.11.25.7")
-    # The launch threads the layout's band into the training child; the preset pins none.
-    preset = replace(EXP7_262K_32NODE, recipe=spec)
-    step = preset.model(priority=priority_band_value("production")).step
+    step = spec.trained(EXP7_262K_32NODE.resources).step
     config = materialized_config(step, str(tmp_path)).train_config
     actual = {
         key: draccus.encode(getattr(config, key))
@@ -230,7 +227,8 @@ def test_exp7_resolves_exp6_sft_controls_at_the_native_boundary(tmp_path):
     ):
         step.run(materialized_config(step, str(tmp_path)))
     [request] = requests
-    assert request.priority == 1
+    # The child leaves the band unset; the coordinator flow resolves it to the parent's band.
+    assert request.priority == 0
     assert request.max_retries_failure == 2 and request.max_task_failures == 64
     for name, expected in reference["source_runtime_env"].items():
         observed = request.environment.env_vars[name]

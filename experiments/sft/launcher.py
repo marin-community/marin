@@ -373,7 +373,6 @@ class HFModel(_LevanterModelSource):
     model: LmConfig = field(default_factory=Qwen3Config)
     eos_token_ids: Sequence[int] = LLAMA3_CHAT_EOS_TOKEN_IDS
     task_timeout_seconds: int | None = None
-    priority: int = 0
     failure_budget: FailureBudget = field(default_factory=FailureBudget)
     # Built once: ArtifactStep compares by identity, so init_deps and build_train_config must share it.
     _mirror: ArtifactStep[LevanterCheckpoint] | None = field(init=False, repr=False, compare=False)
@@ -393,10 +392,11 @@ class HFModel(_LevanterModelSource):
     @property
     def run(self) -> Callable[..., None]:
         timeout = None if self.task_timeout_seconds is None else Duration.from_seconds(self.task_timeout_seconds)
+        # priority stays unset: train_job submits with PRIORITY_BAND_INHERIT, and the coordinator
+        # flow resolves it to the parent job's band.
         return partial(
             train_job,
             timeout=timeout,
-            priority=self.priority,
             failure_budget=self.failure_budget,
         )
 
@@ -770,23 +770,9 @@ class SFTPreset[RecipeT: SFTRecipe]:
     recipe: RecipeT
     resources: ResourceConfig
 
-    def model(
-        self,
-        *,
-        coordinator_cluster: str | None = None,
-        coordinator_prefix: str | None = None,
-        priority: int | None = None,
-    ) -> ArtifactHfModel:
-        """Build the model export using the preset's fixed allocation.
-
-        ``priority`` is the resolved Iris band for the training child. It applies to Levanter
-        specs, whose ``HFModel`` dispatch carries the band; other backends have no child-band
-        dispatch and leave it to the coordinator route.
-        """
-        recipe = self.recipe
-        if priority is not None and isinstance(recipe, SFTSpec) and isinstance(recipe.model, HFModel):
-            recipe = replace(recipe, model=replace(recipe.model, priority=priority))
-        return recipe.trained(
+    def model(self, *, coordinator_cluster: str | None = None, coordinator_prefix: str | None = None) -> ArtifactHfModel:
+        """Build the model export using the preset's fixed allocation."""
+        return self.recipe.trained(
             self.resources, coordinator_cluster=coordinator_cluster, coordinator_prefix=coordinator_prefix
         )
 
