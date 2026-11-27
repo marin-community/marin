@@ -177,6 +177,7 @@ class LaunchSpec:
     run_id: str | None = None
     policy_finalization: PolicyFinalization | None = None
     rl_attempt: RLAttemptRef | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
     task_machine_backend: TaskMachineBackend | None = None
     """Replaces the task-machine backend of every curated selection that runs on task machines."""
 
@@ -364,6 +365,8 @@ def build_evaluation_batch(
     model = pinned_model(spec.model)
     source_model_config = ModelConfigRef.model_validate(asdict(model))
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
+    if spec.instances > 1 and accelerator.geometry is not None and accelerator.geometry.task_count > 1:
+        raise ValueError("multi-task serving requires one serving instance")
     if spec.federated_cluster is not None:
         if accelerator.platform is not Platform.GPU:
             raise ValueError("--federated_cluster requires a GPU accelerator")
@@ -486,6 +489,7 @@ def build_evaluation_batch(
         version=spec.version,
         description=spec.description,
         rl_attempt=spec.rl_attempt,
+        excluded_nvlink_domains=spec.excluded_nvlink_domains,
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,
@@ -646,7 +650,7 @@ def run_evaluation_group(batch: EvaluationBatch) -> None:
 def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
     """Bind final evaluation steps and submit one CPU orchestrator."""
     constraints = None
-    if batch.accelerator.target_cluster and batch.accelerator.target_cluster != batch.submission_cluster:
+    if batch.accelerator.target_cluster:
         constraints = [
             Constraint.create(
                 key=CLUSTER_CONSTRAINT_KEY,

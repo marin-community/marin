@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from evalrecords.records import RLAttemptRef
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.rl.skyrl import SkyRLModelSource, SkyRLPolicyModel
+from marin.rl.skyrl import SkyRLModelSource, SkyRLPolicyModel, skyrl_execution
 
 if TYPE_CHECKING:
     from marin.evaluation.model_config import ModelConfig
@@ -19,19 +19,32 @@ if TYPE_CHECKING:
     from experiments.evaluation.pipeline import EvaluationResult
 
 
-class EvaluationRecipe(Protocol):
-    """Evaluate an exported model and publish its records."""
+class EvaluationRecipe[Source, Result](Protocol):
+    """Produce evaluation records from an export or a recorded trainer session."""
 
-    def evaluated(self, model: SkyRLModelSource, *, version: str) -> ArtifactStep[EvaluationResult]: ...
+    def evaluated(self, source: Source, *, version: str) -> Result: ...
 
 
 @dataclass(frozen=True)
-class EvaluationPreset:
+class EvaluationPreset[Source, Result]:
     name: str
-    recipe: EvaluationRecipe
+    recipe: EvaluationRecipe[Source, Result]
 
-    def evaluated(self, model: SkyRLModelSource, *, version: str) -> ArtifactStep[EvaluationResult]:
-        return replace(self.recipe.evaluated(model, version=version), name=f"{model.step.name}/{self.name}")
+    def evaluated(self, source: Source, *, version: str) -> Result:
+        return self.recipe.evaluated(source, version=version)
+
+
+type ExportEvaluationPreset = EvaluationPreset[SkyRLModelSource, ArtifactStep[EvaluationResult]]
+
+
+def export_evaluation_name(model: SkyRLModelSource, name: str) -> str:
+    return f"{model.step.name}/evaluations/{name}"
+
+
+def export_evaluation_step(
+    preset: ExportEvaluationPreset, model: SkyRLModelSource, *, version: str
+) -> ArtifactStep[EvaluationResult]:
+    return replace(preset.evaluated(model, version=version), name=export_evaluation_name(model, preset.name))
 
 
 @dataclass(frozen=True)
@@ -44,17 +57,37 @@ class CuratedEvaluation:
     max_concurrent: int = 1
 
     def evaluated(self, model: SkyRLModelSource, *, version: str) -> ArtifactStep[EvaluationResult]:
+        placement = skyrl_execution(model.step)
+        cluster = placement.cluster if placement is not None else self.cluster
         return evaluate_model(
             model,
             self.serving,
             self.evals,
             version=version,
             accelerator=self.accelerator,
-            submission_cluster=self.cluster,
-            federated_cluster=self.cluster,
+            submission_cluster=cluster,
+            federated_cluster=cluster,
             instances=self.instances,
             max_concurrent=self.max_concurrent,
+            excluded_nvlink_domains=placement.excluded_nvlink_domains if placement is not None else (),
         )
+
+
+def catalog_evaluation(
+    name: str, serving: ModelConfig, *, accelerator: str, cluster: str, instances: int = 1
+) -> ExportEvaluationPreset:
+    from experiments.evaluation.evals import resolve_evaluations  # noqa: PLC0415
+
+    return EvaluationPreset(
+        name,
+        CuratedEvaluation(
+            resolve_evaluations(name),
+            serving,
+            accelerator,
+            cluster,
+            instances=instances,
+        ),
+    )
 
 
 def model_rl_attempt(model: SkyRLModelSource, context: StepContext) -> RLAttemptRef | None:
@@ -77,6 +110,7 @@ def evaluate_model(
     federated_cluster: str | None,
     instances: int = 1,
     max_concurrent: int | None = None,
+    excluded_nvlink_domains: tuple[str, ...] = (),
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate an artifact using a serving config with an empty location."""
     from experiments.evaluation.pipeline import DEFAULT_EVAL_CONCURRENCY, eval_step  # noqa: PLC0415
@@ -109,4 +143,5 @@ def evaluate_model(
         federated_cluster=federated_cluster,
         instances=instances,
         max_concurrent=DEFAULT_EVAL_CONCURRENCY if max_concurrent is None else max_concurrent,
+        excluded_nvlink_domains=excluded_nvlink_domains,
     )

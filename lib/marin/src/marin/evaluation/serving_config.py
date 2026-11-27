@@ -269,6 +269,7 @@ def inference_config_for_model(
     instances: int | None = None,
     broker: BrokerConfig | None = None,
     request_timeout_seconds: float | None = None,
+    excluded_nvlink_domains: tuple[str, ...] = (),
 ) -> RemoteInferenceConfig:
     """Lower one model and selected accelerator into remote inference configuration."""
     if request_timeout_seconds is None:
@@ -302,7 +303,9 @@ def inference_config_for_model(
     worker_env = dict(env_vars)
     if serve.hf_hub_disable_xet:
         worker_env["HF_HUB_DISABLE_XET"] = "1"
-    extra_args = serve_config_vllm_args(serve)
+    extra_args = serve_config_vllm_args(
+        replace(serve, data_parallel_size=None) if geometry is not None and geometry.task_count > 1 else serve
+    )
     max_model_len = serve.max_model_len
 
     hint = model.resource_hint
@@ -320,6 +323,7 @@ def inference_config_for_model(
             ram=memory,
             disk=disk,
             regions=regions,
+            excluded_nvlink_domains=excluded_nvlink_domains,
         )
         if serve.backend is ServeBackend.VLLM:
             engine: VllmEngineConfig | LevanterEngineConfig = _vllm_engine_config(

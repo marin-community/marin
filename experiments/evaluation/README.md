@@ -259,9 +259,8 @@ Micro210 uses a [Together serverless judge](judge_config.py) and a
 to the 2026.11.18 MiniMax policy; see [#11818](https://github.com/marin-community/marin/pull/11818)
 for the proposed paired re-score.
 
-The native evaluation's EvalDash record identifies the policy by its `source_digest`.
-The sealed 434-row table runs through native TaskSpecs with per-task provisioning
-and runtime judge access. See the [native launch and smoke controls](../../docs/references/rl-launching.md#micro210-native-evaluation)
-for source pins and diagnostic row selection. Diagnostic records include the selected
-row indices.
+The launcher uses the sealed 434-row table with per-task provisioning and runtime
+judge access. Each cohort's record identifies the curated corpus and scoring
+protocol. See [the Micro210 evaluation reference](../../docs/references/rl-launching.md#micro210-evaluation)
+for source pins and diagnostic row selection.
 Mini840 keeps its existing judge policy.

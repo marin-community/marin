@@ -3,9 +3,11 @@
 
 """Run reinforcement learning from the production Mochi SFT export."""
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
+from marin.evaluation.model_config import AgentConfig, ModelConfig, ResourceHint, ServeConfig
 from marin.execution.lazy import ArtifactStep
 from marin.rl.skyrl import ArtifactHfModel, MegatronGeometry, SkyRLGenerationPlan, SkyRLRetentionPolicy, SkyRLRolePlan
 from skyrlrecipe import ContextBudget, RecipePatch, sections
@@ -13,8 +15,6 @@ from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.locality import RoleTopologyMode
 from skyrlrecipe.sampling import EvalSamplingParams
 
-from experiments.evaluation.micro210 import Micro210SkyRL
-from experiments.grug.moe_hero_ep.ops.export_metadata import MANIFEST_FILENAME as SFT_EXPORT_MANIFEST
 from experiments.post_training import rl
 from experiments.post_training.mochi_assets import (
     MOCHI_STEP_400407_EXPORT,
@@ -22,6 +22,7 @@ from experiments.post_training.mochi_assets import (
     MOCHI_TOKENIZER_URI,
 )
 from experiments.post_training.rl_agentic_recipe import agentic_limits, agentic_preset
+from experiments.post_training.rl_evallite import EvalLite
 from experiments.post_training.rl_presets import (
     RL_TRAINING_BASE,
     SAMPLED_TRAJECTORIES,
@@ -37,7 +38,7 @@ from experiments.post_training.rl_presets import (
     Training,
     WindowStatistic,
 )
-from experiments.post_training.skyrl_evaluation import EvaluationPreset
+from experiments.post_training.skyrl_evaluation import EvaluationPreset, ExportEvaluationPreset, catalog_evaluation
 from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME, VALIDATION_FILENAME
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
@@ -241,14 +242,6 @@ _EVAL_SERVING = RecipePatch(
     extra_env=_THREE_RACK_PATCH.extra_env,
 )
 
-MICRO210_RECIPE = Recipe(
-    layout=_EVAL_LAYOUT,
-    fixed_reply_tokens=None,
-    config=_EVAL_SERVING,
-    sft_export_manifest=SFT_EXPORT_MANIFEST,
-    engine_serving_keys=frozenset({"load_format", "moe_backend", "model_loader_extra_config", "compilation_config"}),
-)
-
 _EVALUATION = Evaluation(
     name="eval_lite_100",
     file=Path(VALIDATION_FILENAME).stem,
@@ -327,12 +320,13 @@ _LEARNING_MEDIUM = replace(
 
 _TRAIN_LONG_AGENTIC = agentic_preset(_TRAIN_LONG, name="train-long-agentic", limits=_AGENTIC_LIMITS)
 
-_EVAL_SHORT = replace(
+_EVAL_LITE = replace(
     _TRAIN_LONG,
-    name="eval-short",
+    name="eval-lite",
     recipe=Recipe(layout=_EVAL_LAYOUT, fixed_reply_tokens=None, config=_ONE_TURN.merge(_EVAL_SERVING)),
     updates=0,
     measured=range(1),
+    temporary_output=False,
     tasks_input="forbidden",
     evaluations=(replace(_EVALUATION, name="eval_lite", file=Path(FULL_VALIDATION_FILENAME).stem, every=None),),
 )
@@ -359,7 +353,6 @@ MOCHI = ModelPresets(
         _TRAIN_MEDIUM,
         _TRAIN_LONG,
         _TRAIN_LONG_3RACK,
-        _EVAL_SHORT,
         agentic_preset(_TRAIN_MEDIUM, name="train-medium-agentic", limits=_AGENTIC_LIMITS),
         _TRAIN_LONG_AGENTIC,
         _TRAIN_LONG_MICRO210,
@@ -371,8 +364,37 @@ MOCHI = ModelPresets(
 )
 
 
-def evaluation_presets() -> tuple[EvaluationPreset, ...]:
-    return (EvaluationPreset("micro210", Micro210SkyRL(MICRO210_RECIPE, "mochi")),)
+def evaluation_presets(name: str) -> ExportEvaluationPreset:
+    if name == "eval-lite":
+        return EvaluationPreset(name, EvalLite(_EVAL_LITE, MOCHI.model))
+    engine = _EVAL_SERVING.to_skyrl()["generator"]["engine_init_kwargs"]
+    serving = ModelConfig(
+        name=MOCHI.model,
+        location="",
+        resource_hint=ResourceHint(gpu={"GB200": 4}, memory=_EVAL_LAYOUT.host_memory, disk=_EVAL_LAYOUT.host_disk),
+        agent=AgentConfig(agent_kwargs={"thinking_format": "chat-template"}),
+        serve=ServeConfig(
+            tensor_parallel_size=1,
+            data_parallel_size=16,
+            data_parallel_hosts=4,
+            max_model_len=65_536,
+            max_num_seqs=128,
+            max_num_batched_tokens=2048,
+            gpu_memory_utilization=0.90,
+            auto_overrides=False,
+            vllm_extra_args=(
+                "--enable-expert-parallel",
+                "--attention-backend",
+                "FLASHINFER",
+                "--no-enable-prefix-caching",
+                "--compilation-config",
+                json.dumps(engine["compilation_config"]),
+                "--model-loader-extra-config",
+                json.dumps(engine["model_loader_extra_config"]),
+            ),
+        ),
+    )
+    return catalog_evaluation(name, serving, accelerator="GB200x4", cluster=_EVAL_LAYOUT.cluster)
 
 
 def main() -> int:

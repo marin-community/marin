@@ -2,14 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from evalrecords.records import RunStatus, record_path
+from fray.iris_backend import convert_constraints
 from huggingface_hub import constants
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, ConstraintOp
+from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_NVLINK_DOMAIN
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.runner import _record
+from marin.evaluation.runner import _inference_configs, _record
 from marin.execution.artifact import RECORD_FILENAME, ArtifactRecord
 from marin.execution.lazy import ArtifactStep, materialized_config
 from marin.inference.model_preparation import read_tool_chat_template
@@ -21,9 +25,12 @@ from transformers import PreTrainedTokenizerFast
 
 import experiments.evaluation.launch as launch_module
 import experiments.evaluation.pipeline as pipeline_module
+from experiments.evaluation.benchmarks import micro210
 from experiments.evaluation.evals import resolve_evaluations
+from experiments.post_training import mochi_rl, rl_compose
 from experiments.post_training.rl_tests.fixtures import write_skyrl_run_record
-from experiments.post_training.skyrl_evaluation import evaluate_model
+from experiments.post_training.skyrl_evaluation import catalog_evaluation, evaluate_model, export_evaluation_step
+from tests.rl.micro210_fixture import policy_fixture_reference
 
 
 def evaluate_smoke(source, serving):
@@ -63,8 +70,12 @@ def test_evaluate_rejects_invalid_inputs_when_building_the_step(tmp_path, model_
         evaluate_smoke(source, ModelConfig(name="candidate", **{"location": "", **model_fields}))
 
 
-@pytest.mark.parametrize("source_kind", ["rl", "without-ids", "hf"])
-def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_path, monkeypatch, source_kind):
+@pytest.mark.parametrize(
+    ("source_kind", "evaluation_name"), [("rl", "smoke"), ("without-ids", "smoke"), ("hf", "smoke"), ("rl", "micro210")]
+)
+def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(
+    tmp_path, monkeypatch, source_kind, evaluation_name
+):
     root = tmp_path / "model"
     export = root / "policy"
     export.mkdir(parents=True)
@@ -102,26 +113,66 @@ def test_evaluate_preserves_model_and_attempt_metadata_on_read_and_reuse(tmp_pat
         if source_kind == "without-ids":
             remove_attempt_ids(producer_receipt, legacy=True)
 
+    preset = catalog_evaluation(
+        evaluation_name, ModelConfig(name="candidate", location=""), accelerator="H100x1", cluster="cw-rno2a"
+    )
+    if evaluation_name == "micro210":
+        layout = replace(mochi_rl.MOCHI.by_name["train-long"].recipe.layout, excluded_nvlink_domains=("reserved-rack",))
+        source = SkyRLPolicyModel(
+            replace(source.step, runtime_args={"skyrl_execution": rl_compose.layout_execution(layout)})
+        )
+        monkeypatch.setattr(micro210, "POLICY_REFERENCE", policy_fixture_reference())
+        secret_refs = []
+
+        def resolve_secret(ref):
+            secret_refs.append(ref)
+            return SimpleNamespace(value="test")
+
+        monkeypatch.setattr(launch_module, "resolve_secret_spec", resolve_secret)
+        preset = mochi_rl.evaluation_presets(evaluation_name)
+
     class Client:
-        def submit(self, *, entrypoint, **_kwargs):
+        def submit(self, *, entrypoint, constraints, **_kwargs):
             _, (batch,), _ = entrypoint.resolve()
             if source_kind == "hf":
                 assert (
                     read_tool_chat_template(batch.model.tokenizer, batch.model.effective_tokenizer_revision) == template
                 )
+            if evaluation_name == "micro210":
+                [placement] = [constraint for constraint in constraints if constraint.key == CLUSTER_CONSTRAINT_KEY]
+                assert placement.op is ConstraintOp.EQ and placement.values[0].value == layout.cluster
+                assert any(ref[0] == "env:TOGETHER_API_KEY" for ref in secret_refs)
+                assert {evaluation.identity.eval_ref.name for evaluation in batch.evaluations} == {
+                    "micro210-chat",
+                    "micro210-pi",
+                }
+                [inference] = _inference_configs(batch, {}).values()
+                assert inference.iris.serving_geometry.label == "PP1 TP1 DP16"
+                resources = inference.iris.worker_resources
+                assert resources.replicas == 4 and resources.chip_count() == 16
+                assert "--data-parallel-size" not in inference.engine.extra_args
+                [exclusion] = [
+                    constraint
+                    for constraint in convert_constraints(resources)
+                    if constraint.key == COSCHEDULE_NVLINK_DOMAIN
+                ]
+                assert exclusion.op is ConstraintOp.NE and exclusion.label_value == "reserved-rack"
             for evaluation in batch.evaluations:
                 _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
             return SimpleNamespace(wait=lambda **_kwargs: None)
 
     monkeypatch.setattr(pipeline_module, "iris_ctx", lambda: SimpleNamespace(client=Client()))
     monkeypatch.setattr(launch_module, "CW_RECORDS_PREFIX", str(tmp_path / "records"))
-    evaluation = evaluate_smoke(source, ModelConfig(name="candidate", location=""))
+    evaluation = export_evaluation_step(preset, source, version=version)
     result = evaluation.run(materialized_config(evaluation, str(tmp_path)))
 
     assert len(result.run_ids) == 2
     for run_id in result.run_ids:
         path = Path(record_path(result.records_prefix, run_id))
         record_json = json.loads(path.read_text())
+        if evaluation_name == "micro210":
+            assert record_json["eval"]["name"] in {"micro210-chat", "micro210-pi"}
+            assert record_json["hardware"]["task_count"] == 4
         model = record_json["model"]
         assert model["location"] == export_uri
         config = model["config"]

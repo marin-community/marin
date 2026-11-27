@@ -353,8 +353,6 @@ class Recipe:
     fixed_reply_tokens: int | None
     config: RecipePatch
     training_plan: SkyRLRolePlan | None = None
-    sft_export_manifest: str | None = None
-    engine_serving_keys: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

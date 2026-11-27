@@ -8,35 +8,50 @@ from copy import deepcopy
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
+from types import SimpleNamespace
 
 import click
 import pytest
 import yaml
 from click.testing import CliRunner
+from evalrecords.records import RLAttemptRef, RunStatus, list_records, read_record, record_path
+from finestore.reader import ReadView
+from finestore.rl.run_records import write_evaluations
 from fray.types import ANY_REGION
 from iris.cluster.types import JobName
+from marin.evaluation.runner import _record
 from marin.execution.artifact import Artifact
-from marin.execution.lazy import ArtifactStep, apply, artifact_identity, materialized_config
+from marin.execution.lazy import ArtifactStep, StepContext, apply, artifact_identity, materialized_config
+from marin.rl.cli import _coordinator_request
 from marin.rl.skyrl import ArtifactHfModel, IrisSkyRLExecution, SkyRLPolicyModel, skyrl_execution
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME
 from rigging.filesystem.storage_path import StoragePath
 from skyrlrecipe import RecipePatch
 from skyrlrecipe.documents import set_path
 
+from experiments.evaluation import launch as eval_launch
+from experiments.evaluation import pipeline as eval_pipeline
 from experiments.post_training import rl, rl_compose, rl_gate
 from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.mochi_rl import evaluation_presets as mochi_evaluations
+from experiments.post_training.rl_evallite import EvalLite
 from experiments.post_training.rl_measurements import read_run_inputs
 from experiments.post_training.rl_presets import BatchMix
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
+    answer,
+    append_metrics,
+    evaluation_task_rows,
     fake_s3,
     printed_status,
     write_published_artifact,
+    write_receipt,
+    write_skyrl_run_record,
 )
 from experiments.post_training.snowball_rl import SNOWBALL
 from experiments.post_training.snowball_rl import evaluation_presets as snowball_evaluations
 from experiments.post_training.snowball_sft import MIXTURE_262K_32NODE
+from experiments.post_training.task_curation.selection import FULL_VALIDATION_FILENAME
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 
 
@@ -194,7 +209,7 @@ def test_rack_exclusion_changes_the_run_identity_and_rejects_non_nvlink_hosts(se
 
 
 @pytest.mark.parametrize("table", ["snowball", "mochi"], indirect=True)
-def test_named_micro210_uses_the_rl_export_and_its_placement(selection, table, tmp_path, monkeypatch):
+def test_named_micro210_resolves_chat_and_pi_on_the_rl_export(selection, table, tmp_path, monkeypatch):
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
     handles = []
     monkeypatch.setattr("marin.experiment.cli._print_plan", handles.extend)
@@ -208,12 +223,8 @@ def test_named_micro210_uses_the_rl_export_and_its_placement(selection, table, t
     [evaluation] = [step for step in handles if step.name.endswith("/micro210")]
     assert any(step.name.startswith("rl-data/task-health/attempts/") for step in handles)
     assert run in evaluation.deps
-    execution = rl.skyrl_execution(evaluation)
-    assert (execution.cluster, execution.priority, execution.excluded_nvlink_domains) == (
-        rl.skyrl_execution(run).cluster,
-        "interactive",
-        rack,
-    )
+    config = evaluation.build_config(StepContext.for_fingerprint(evaluation.runtime_args, evaluation.deps))
+    assert [row.benchmark for row in config.evals] == ["micro210-chat", "micro210-pi"]
     assert rl.skyrl_execution(run).coordinator_timeout_hours >= 146
     assert materialized_config(run, str(tmp_path)).output.checkpoint_root == str(
         Path(run.path(str(tmp_path))) / "checkpoints"
@@ -224,22 +235,169 @@ def test_micro210_graph_accepts_an_sft_export_that_has_yet_to_run(selection, tmp
     sft = ArtifactStep.adopt("tests/pending-sft", "2026.11.26", str(tmp_path / "pending-sft"))
     preset = SNOWBALL.by_name["train-long-agentic-micro210"]
     [run] = rl.build_experiment(preset, table=SNOWBALL, tasks=selection, init=ArtifactHfModel(sft)).runs
-    recipe = next(evaluation.recipe for evaluation in snowball_evaluations() if evaluation.name == preset.after_run[0])
+    recipe = snowball_evaluations(preset.after_run[0]).recipe
     evaluation = recipe.evaluated(SkyRLPolicyModel(run), version=run.version)
     assert sft in run.deps and run in evaluation.deps
 
 
-def test_after_run_evaluations_bind_each_replicates_selected_export(selection, monkeypatch):
+@pytest.mark.parametrize(
+    ("table", "temperature", "version", "scored"),
+    [("snowball", 0.0, "2026.11.27", True), ("mochi", 0.7, "dev", True), ("snowball", 0.0, "2026.11.27", False)],
+    ids=["snowball-retry", "mochi-dev", "unscored"],
+    indirect=["table"],
+)
+def test_standalone_eval_lite_publishes_its_native_record(
+    selection, table, temperature, version, scored, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: str(tmp_path))
+    monkeypatch.setattr("experiments.post_training.rl_evaluation_records.CW_RECORDS_PREFIX", str(tmp_path / "records"))
+    monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
+    monkeypatch.delenv("MARIN_PREFIX", raising=False)
+    artifact = tmp_path / "policy"
+    export = artifact / "checkpoint-2"
+    export.mkdir(parents=True)
+    for name in ("config.json", "tokenizer_config.json"):
+        (export / name).write_text("{}")
+    write_published_artifact(tmp_path, "tests/policy", "2026.11.26", Artifact, source=str(artifact))
+
+    native_attempts = []
+
+    def finish(config):
+        native_attempts.append(config.attempt_id)
+        output = Path(config.output.export_root).parent
+        output.mkdir(parents=True, exist_ok=True)
+        path = output / "launch.yaml"
+        path.write_text(config.launch_config_yaml)
+        [launch] = rl_gate.compose_configs([str(path)], validate_driver=True)
+        assert launch["inputs"]["train_data"] == []
+        assert launch["inputs"]["validation_data"][0]["relative_path"] == FULL_VALIDATION_FILENAME
+        generator = launch["skyrl"]["generator"]
+        assert generator["eval_sampling_params"]["temperature"] == temperature
+        assert generator["eval_n_samples_per_prompt"] == 1
+        if table is SNOWBALL:
+            assert generator.get("speculative_decoding") is None
+        write_receipt(
+            output,
+            {"config": launch, "result": {"state": "succeeded", "started_at": "2026-11-27T00:00:00+00:00"}},
+        )
+        rows = evaluation_task_rows(
+            [answer("one", 1.0), answer("two", 0.0)],
+            attempt_id=config.attempt_id,
+            step=-1,
+            evaluation="eval/",
+            selection=None,
+            normalized=None if scored else (None, None),
+        )
+        if not scored:
+            rows = [row.model_copy(update={"score": None, "outcome": row.answers[0].outcome}) for row in rows]
+        write_evaluations(config.output.export_root, rows)
+        append_metrics(
+            output,
+            {
+                0: {
+                    "step": 0,
+                    "attempt_id": config.attempt_id,
+                    "eval/all/num_attempted": 2,
+                    **({"eval/all/avg_verifier_score": 0.5} if scored else {}),
+                }
+            },
+        )
+
+    results = []
+
+    def submit(module, handles, _concurrency, env, *, argv, execution):
+        _coordinator_request(handles, module, argv, tmp_path, env, execution=execution)
+        [step] = handles
+        for _ in range(2 if scored else 1):
+            results.append(step.run(materialized_config(step, str(tmp_path))))
+
+    monkeypatch.setattr("experiments.post_training.rl_evallite.run_skyrl", finish)
+    monkeypatch.setattr(rl, "submit_or_run", submit)
+    catalog = mochi_evaluations if table is MOCHI else snowball_evaluations
+
+    def evaluate():
+        return rl.main(
+            table,
+            argv=[
+                "evaluate",
+                "--init",
+                "tests/policy@2026.11.26",
+                "--evals",
+                "eval-lite",
+                "--version",
+                version,
+                "--run",
+            ],
+            entry_module=f"experiments.post_training.{table.model}_rl",
+            evaluation_presets=catalog,
+        )
+
+    if not scored:
+        with pytest.raises(ValueError, match="No usable verifier scores"):
+            evaluate()
+        [record] = list_records(str(tmp_path / "records"))
+        assert record.status is RunStatus.FAILED
+        return
+
+    assert evaluate() == 0
+    result, repeated = results
+    if version == "dev":
+        assert len(native_attempts) == 2 and repeated.run_ids != result.run_ids
+    else:
+        assert len(native_attempts) == 1 and repeated.run_ids == result.run_ids
+    assert Path(result.path).is_dir()
+    [run_id] = result.run_ids
+    record = read_record(record_path(result.records_prefix, run_id))
+    assert record.model.location == str(export)
+    assert record.evaluation.mechanism == "skyrl" and record.evaluation.name == "eval-lite"
+    assert record.version == version
+    assert record.metrics == {"eval-lite": {"reward": 0.5}}
+    assert record.coverage["eval-lite"].n_scored == 2
+    assert ReadView(record.results_path).is_sealed()
+
+
+def test_after_run_evaluations_record_each_replicates_selected_export(selection, tmp_path, monkeypatch):
     handles = []
     monkeypatch.setattr("marin.experiment.cli._print_plan", handles.extend)
-    result = plan(SNOWBALL, "learning-medium", "--replicates", "2", "--then-eval", "micro210", "--then-eval", "standard")
+    result = plan(SNOWBALL, "learning-medium", "--replicates", "2", "--then-eval", "micro210", "--then-eval", "mmlu")
     assert result.exit_code == 0, (result.output, result.exception)
     left, right, *evaluations = handles
     assert [step.deps.count(left) for step in evaluations] == [1, 1, 0, 0]
     assert [step.deps.count(right) for step in evaluations] == [0, 0, 1, 1]
     assert {step.name for step in evaluations} == {
-        f"{run.name}/{name}" for run in (left, right) for name in ("micro210", "standard")
+        f"{run.name}/evaluations/{name}" for run in (left, right) for name in ("micro210", "mmlu")
     }
+
+    class Client:
+        def submit(self, *, entrypoint, **_kwargs):
+            _, (batch,), _ = entrypoint.resolve()
+            [benchmark] = batch.evaluations
+            _record(batch, benchmark.identity, RunStatus.SUCCEEDED, None, {"mmlu": {"accuracy": 0.5}}, {}, {})
+            return SimpleNamespace(wait=lambda **_kwargs: None)
+
+    monkeypatch.setattr(eval_pipeline, "iris_ctx", lambda: SimpleNamespace(client=Client()))
+    monkeypatch.setattr(eval_launch, "CW_RECORDS_PREFIX", str(tmp_path / "records"))
+    for index, run in enumerate((left, right)):
+        output = Path(run.path(str(tmp_path)))
+        export = str(output / "best-checkpoint")
+        Path(export).mkdir(parents=True)
+        attempt_ref = RLAttemptRef(run_id=f"training-{index}", attempt_id="completed")
+        write_skyrl_run_record(
+            output,
+            run.name,
+            run.version,
+            fingerprint=run.fingerprint(),
+            hf_model_uri=export,
+            tokenizer_uri=export,
+            tokenizer_revision=None,
+            **attempt_ref.model_dump(),
+        )
+        [benchmark] = [step for step in evaluations if step.name == f"{run.name}/evaluations/mmlu"]
+        report = benchmark.run(materialized_config(benchmark, str(tmp_path)))
+        [run_id] = report.run_ids
+        record = read_record(record_path(report.records_prefix, run_id))
+        assert record.model.location == export
+        assert record.rl_attempt == attempt_ref
 
 
 @pytest.mark.parametrize(
@@ -256,7 +414,9 @@ def test_after_run_evaluation_refuses_unusable_plans(selection, options, error):
 
 
 def test_cross_host_generation_plan_refuses_a_non_vllm_backend(selection):
-    preset = MOCHI.by_name["eval-short"]
+    evaluation = mochi_evaluations("eval-lite").recipe
+    assert isinstance(evaluation, EvalLite)
+    preset = evaluation.preset
     spec = rl_compose.run_spec(preset, name="cross-host-evaluation", model_name=MOCHI.model)
     config = yaml.safe_load(spec.config_yaml)
     config["generator"]["backend"] = "sglang"

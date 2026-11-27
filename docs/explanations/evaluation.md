@@ -83,9 +83,9 @@ preserved. Reproduction uses the recorded historical checkout and cohort.
 The RL model commands accept `--then-eval NAME` to score the policy they export,
 and `evaluate --init NAME@VERSION --evals NAME` to score published weights.
 Named evaluations bind the model's serving recipe and publish EvalDash records.
-Catalog agentic benchmarks lower Harbor task packages to curated corpora and run through RolloutEngine.
-The Micro210 `evaluate` preset uses SkyRL to score the sealed tasks. Its catalog
-selections can also run through the endpoint launcher.
+Catalog benchmarks, including Micro210's sealed chat and Pi cohorts, run
+through the shared endpoint launcher. The `eval-lite` recipe scores an export
+in a generation-only SkyRL job.
 
 EvalLite and checkpoint cohorts run on the live SkyRL policy during training.
 The first and last recorded sessions for each evaluation publish to EvalDash

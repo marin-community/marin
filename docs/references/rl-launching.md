@@ -500,42 +500,27 @@ role settings and the effective `NCCL_BUFFSIZE` in worker INIT logs before scali
 a new configuration. Reference workers now retain larger buffers, so include that
 memory in colocated-role capacity estimates.
 
-## Micro210 native evaluation
+## Micro210 evaluation
 
-`experiments.evaluation.micro210` binds the sealed Micro210 policy at
+The shared evaluation launcher binds the sealed Micro210 policy at
 `open-athena/micro210-policy@7ab57cf5e33cacc98440bfcc2dfd452b94c44344`
 and prepared tasks at
 `open-athena/micro210-prepared-tasks@2d33d7be129e6a93bb4279af8a4998a6915771a9`.
 The sealed table contains 434 rows. The policy's historical selection lists 440;
 its `task_changes` records the six dropped attempts and the HumanEval replacement.
 
-The graph verifies the prepared Parquet digest and derives a native table without
-changing row order, repetitions, prompts, or task membership. Package resources
-become native Pi tasks with their own CPU, memory, disk, network, and verifier
-limits. `binding.json` records the source and derived table digests and image pins.
-The launch re-hashes the native table and verifies its frozen source, converter code,
-image pins, and smoke selection before allocation. The EvalDash record includes
-the verified `native_table_sha256` and `native_inputs_uri`. The production
-native artifact pins its fingerprint; bump `PREPARED_INPUTS_VERSION` and update
-`NATIVE_INPUTS_FINGERPRINT` when the converter or image lock changes.
-The launch accepts a completed RL or SFT export dependency. It binds the SHA-256 of
-`.marinskyrl-model-manifest.json` or `export-manifest.json` when available, and uses
-the producer's artifact identity for exports without a manifest. Use
-`evaluate --init NAME@VERSION --evals micro210` on the Snowball or Mochi RL command
-to plan a standalone evaluation. Add `--run` to submit or `--version` to name a
-distinct evaluation artifact.
-The standalone Snowball command uses `cw-us-east-02a`. Both layouts use the sealed
-sampling settings. A full evaluation writes one aggregate verifier score after
-all 434 rows are scored.
-Context overflow and agent timeout retain the verifier verdict; unnamed errors
-are excluded from scored denominators.
+The catalog verifies the prepared table and defines cohorts of 340 chat rows
+and 94 Pi rows. Each cohort has an `EvalRunRecord` with the model artifact
+identity and the producing RL attempt when available. The `scores` command pools
+reward after at least 90% of the sealed rows have a score.
 
-Forward `DAYTONA_EVAL_API_KEY` and `TOGETHER_API_KEY` when submitting from a host
-with access to the pinned secrets. The coordinator uses the forwarded Together
-key before trying the policy's GCP secret reference. Judge credentials are passed
-at runtime. BixBench's verifier uses the machine-local judge relay after Pi stops.
+Use `evaluate --init NAME@VERSION --evals micro210` on the Snowball or Mochi RL
+command to plan an evaluation. Add `--run` to submit or `--version` to name a
+distinct evaluation artifact. `--then-eval micro210` scores the RL run's selected
+export. Snowball uses sixteen eight-H100 instances for the full suite. Mochi uses
+one distributed vLLM instance with four GB200 hosts. Both use the sealed
+sampling settings.
 
-Pipeline callers can use `micro210_step` with a `Micro210Smoke` configuration.
-Rows 0, 1, and 12 of the sealed table exercise CRUXEval, BixBench, and BFCL.
-The diagnostic record identifies the selected rows and preserves the production
-protocol for those tasks. Use a fresh calendar version for each runtime change.
+The `micro210-smoke` catalog selection exercises CRUXEval, BixBench, and BFCL on
+sealed rows 0, 1, and 12. Pi uses Daytona task machines and the Together judge
+uses the task-local relay. See the [launcher guide](../../experiments/evaluation/README.md#micro210-judge-policy).

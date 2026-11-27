@@ -52,7 +52,8 @@ from rigging.redaction import redact_value
 from experiments.post_training import rl_gate as gate
 from experiments.post_training import rl_presets as presets
 from experiments.post_training.rl_command import attempt_grafana_url, visible_setting
-from experiments.post_training.rl_evaluation_records import publish_skyrl_evaluation
+from experiments.post_training.rl_compose import RUN_ARTIFACT_VERSION
+from experiments.post_training.rl_evaluation_records import SkyRLRecordedEvaluation, SkyRLSession
 from experiments.post_training.rl_index import publish_result
 from experiments.post_training.rl_measurements import (
     InvalidComparison,
@@ -66,6 +67,7 @@ from experiments.post_training.rl_measurements import (
     recorded_lineage,
     training_invariants,
 )
+from experiments.post_training.skyrl_evaluation import EvaluationPreset
 
 logger = logging.getLogger(__name__)
 
@@ -436,6 +438,7 @@ def _publish_training_evaluations(run_output: str, preset: presets.Preset, attem
     ids = []
     for profile in profiles:
         name = profile.name
+        evaluation = EvaluationPreset(name, SkyRLRecordedEvaluation(EvalRef(name=name, mechanism="skyrl")))
         prefix = native_prefix(launch, name)
         attempted_key = f"{prefix}all/num_attempted"
         recorded_steps = [step for step, values in metrics.items() if values.get(attempted_key, 0) > 0]
@@ -447,10 +450,9 @@ def _publish_training_evaluations(run_output: str, preset: presets.Preset, attem
             if sum(len(row.answers) for row in rows) != session_metrics[attempted_key]:
                 continue
             score = session_metrics.get(f"{prefix}all/avg_verifier_score")
-            record = publish_skyrl_evaluation(
-                attempt=attempt,
-                evaluation=EvalRef(name=name, mechanism="skyrl"),
-                model=ModelRef(
+            session = SkyRLSession(
+                attempt,
+                ModelRef(
                     name=launch.model_name or preset.name,
                     location=(
                         exported_model.policy_export_uri
@@ -463,11 +465,11 @@ def _publish_training_evaluations(run_output: str, preset: presets.Preset, attem
                     ),
                     backend=launch.engine.backend,
                 ),
-                rows=rows,
-                rl_attempt=attempt_ref,
-                score=score if score is not None and math.isfinite(score) else None,
+                rows,
+                attempt_ref,
+                score if score is not None and math.isfinite(score) else None,
             )
-            ids.append(record.run_id)
+            ids.append(evaluation.evaluated(session, version=RUN_ARTIFACT_VERSION).run_id)
     return tuple(ids)
 
 

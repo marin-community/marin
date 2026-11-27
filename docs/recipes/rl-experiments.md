@@ -16,7 +16,6 @@ The short loop, also called the quick loop, uses gated presets to compare one ch
 |---|---|---|---|---| --- |
 | `speed-short` | Generation throughput per GPU | 8 H100s, 512 prompts × four answers. 11m42s and 1.56 H100-hours in the four-proposal comparison. | Separate pass on the EvalLite pool. Gated on throughput and EvalLite pool family mean. | Screen a vLLM wheel, kernel or engine option before testing the full training loop with `speed-medium`. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `data-short` | Fraction of prompts with both passing and failing answers | 8 H100s, 256 candidate training prompts × four answers, 10–15 min and about 2 H100-hours | Scores the sampled candidate tasks. Gated on mixed-answer fraction. | Screen a new `--tasks` selection before training on it with `data-medium`. | CPU plan only |
-| `eval-short` | Published model scores | 8 H100s. | Scores the full EvalLite pool without a control comparison. | Evaluate a published checkpoint in a generation-only job. | Ran as written |
 | `speed-medium` | Update time and policy agreement | 40 H100s, 10 updates. 20m12s and 13.47 H100-hours in the four-proposal comparison. | Training metrics on updates 2–10. Gated on speed and mismatch. | Check startup, trainer kernels, parallelism, weight synchronization or numerics. Use `learning-medium` to measure quality after a precision change. | [Direct GPU comparison](https://github.com/marin-community/marin/pull/11975) |
 | `learning-medium` | EvalLite pool family mean and score gain per GPU-hour | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Gated on EvalLite pool family mean. | Compare objectives, optimizers, sampling, batch shape or initial weights. | CPU plan only |
 | `data-medium` | Learning on a candidate training selection | 40 H100s, 25 updates. Wall time and cost are unmeasured. | EvalLite pool at steps 0 and 25. Reports scores for the candidate selection. | Train on a `--tasks` selection after it passes the short screen. | CPU plan only |
@@ -637,7 +636,7 @@ names such as `mmlu-smoke,gsm8k-smoke`. The result gives the evaluation group ID
 records prefix, and result paths. Each run writes a record and an archive with per-question results.
 An RL policy record includes `rl_attempt` when both the training run ID and attempt ID are available.
 
-Use `eval-short` to score published weights with the same EvalLite protocol as the
+Use `evaluate --evals eval-lite` to score published weights with the same EvalLite protocol as the
 trainer, in a generation-only job. Use trainer evaluation to track policy scores at the run's
 scheduled training steps. Snowball scores the full EvalLite pool on one node with eight H100s.
 A recorded run used 1.1 H100-hours.
@@ -645,10 +644,10 @@ Mochi scores the same pool on four GB200 hosts in one NVLink domain.
 
 ```bash
 uv run python -m experiments.post_training.snowball_rl \
-  --preset eval-short --init "$MODEL" --version dev --plan
+  evaluate --init "$MODEL" --evals eval-lite --version dev
 ```
 
-Set `MODEL` to a published `NAME@VERSION`. Replace `--plan` with `--run` to submit.
+Set `MODEL` to a published `NAME@VERSION`. Add `--run` to submit.
 
 To publish a checkpoint export, enable export and set `trainer.hf_hub_repo_id` in the training recipe.
 Gated Snowball presets fix that setting. For a manual checkpoint export use `--hf-hub-repo-id` on

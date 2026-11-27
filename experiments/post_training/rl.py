@@ -99,7 +99,11 @@ from experiments.post_training.rl_measurements import (
     read_recorded_launch,
     run_inputs,
 )
-from experiments.post_training.skyrl_evaluation import EvaluationPreset
+from experiments.post_training.skyrl_evaluation import (
+    ExportEvaluationPreset,
+    export_evaluation_name,
+    export_evaluation_step,
+)
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     VALIDATION_FILENAME,
@@ -1003,7 +1007,7 @@ def command(
     argv: tuple[str, ...],
     init: SkyRLModelSource | None = None,
     sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
-    evaluation_presets: Callable[[], Sequence[EvaluationPreset]] | None = None,
+    evaluation_presets: Callable[[str], ExportEvaluationPreset] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> click.Command:
@@ -1369,7 +1373,7 @@ def command(
         following = (
             *(preset.then(step) for step in run.runs if preset.then is not None),
             *(
-                evaluation.evaluated(SkyRLPolicyModel(step), version=step.version)
+                export_evaluation_step(evaluation, SkyRLPolicyModel(step), version=step.version)
                 for step in run.runs
                 for evaluation in after_run
             ),
@@ -1420,21 +1424,22 @@ def command(
 
 
 def _selected_evaluations(
-    names: tuple[str, ...], presets: Callable[[], Sequence[EvaluationPreset]] | None
-) -> tuple[EvaluationPreset, ...]:
-    if not names:
-        return ()
-    catalog = {evaluation.name: evaluation for evaluation in presets()} if presets is not None else {}
-    for name in names:
-        if name not in catalog:
-            choices = ", ".join(catalog) or "none"
-            raise click.BadParameter(f"Unknown evaluation {name!r}. Available evaluations: {choices}")
-    return tuple(catalog[name] for name in dict.fromkeys(names))
+    names: tuple[str, ...], presets: Callable[[str], ExportEvaluationPreset] | None
+) -> tuple[ExportEvaluationPreset, ...]:
+    selected = []
+    for name in dict.fromkeys(names):
+        try:
+            if presets is None:
+                raise ValueError("this model has no evaluation presets")
+            selected.append(presets(name))
+        except ValueError as error:
+            raise click.BadParameter(f"Unknown evaluation {name!r}: {error}") from error
+    return tuple(selected)
 
 
 def _evaluate_command(
     table: presets.ModelPresets,
-    evaluation_presets: Callable[[], Sequence[EvaluationPreset]] | None,
+    evaluation_presets: Callable[[str], ExportEvaluationPreset] | None,
     *,
     entry_module: str | None,
     argv: tuple[str, ...],
@@ -1461,8 +1466,8 @@ def _evaluate_command(
         configure_coreweave_s3()
         (evaluation,) = _selected_evaluations((evaluation_name,), evaluation_presets)
         model = recipe.published_model(init_name, preset=preset, initializers=table.initializers)
-        version = resolve_version(f"{model.step.name}/{evaluation.name}", None)
-        return evaluation.evaluated(model, version=version)
+        version = resolve_version(export_evaluation_name(model, evaluation.name), None)
+        return export_evaluation_step(evaluation, model, version=version)
 
     return click.command(help="Evaluate a published model export. --version defaults to the named export's version.")(
         build_options_with_runner(build, runner, default_version=initializer_version)
@@ -1510,7 +1515,7 @@ def main(
     argv: Sequence[str] | None = None,
     init: SkyRLModelSource | None = None,
     sft_presets: Callable[[], Sequence[SFTModelPreset]] | None = None,
-    evaluation_presets: Callable[[], Sequence[EvaluationPreset]] | None = None,
+    evaluation_presets: Callable[[str], ExportEvaluationPreset] | None = None,
     entry_module: str | None = None,
     forward_env: tuple[str, ...] = (),
 ) -> int:

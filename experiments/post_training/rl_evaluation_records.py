@@ -9,6 +9,7 @@ import json
 import math
 from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from evalrecords.records import (
@@ -32,17 +33,31 @@ from finestore.rl.run_records import AttemptRecord, EvaluationTaskRow
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 
+@dataclass(frozen=True)
+class SkyRLSession:
+    attempt: AttemptRecord
+    model: ModelRef
+    rows: Sequence[EvaluationTaskRow]
+    rl_attempt: RLAttemptRef | None
+    score: float | None
+
+
+@dataclass(frozen=True)
+class SkyRLRecordedEvaluation:
+    evaluation: EvalRef
+
+    def evaluated(self, source: SkyRLSession, *, version: str) -> EvalRunRecord:
+        return publish_skyrl_evaluation(source, evaluation=self.evaluation, version=version)
+
+
 def publish_skyrl_evaluation(
+    source: SkyRLSession,
     *,
-    attempt: AttemptRecord,
     evaluation: EvalRef,
-    model: ModelRef,
-    rows: Sequence[EvaluationTaskRow],
-    rl_attempt: RLAttemptRef | None,
-    score: float | None = None,
-    answer_coverage: bool = False,
+    version: str,
 ) -> EvalRunRecord:
     """Seal a native session's answer archive, then publish its shared evaluation record."""
+    attempt, model, rows, rl_attempt, score = source.attempt, source.model, source.rows, source.rl_attempt, source.score
     if not rows:
         raise ValueError(f"No native answer rows for {evaluation.name}")
     step = rows[0].step
@@ -52,9 +67,6 @@ def publish_skyrl_evaluation(
         raise ValueError("SkyRL evaluation rows must belong to one attempt and session")
     source = "\n".join(row.model_dump_json() for row in sorted(rows, key=lambda row: row.task_id)) + "\n"
     digest = hashlib.sha256(source.encode()).hexdigest()
-    answers = [answer for row in rows for answer in row.answers]
-    items = answers if answer_coverage else rows
-    values = [answer.verifier_score for answer in answers] if answer_coverage else [row.score for row in rows]
     key = json.dumps((attempt.run_id, attempt.attempt_id, evaluation.name, rows[0].evaluation, step, digest, score))
     run_id = "skyrl-" + hashlib.sha256(key.encode()).hexdigest()[:24]
     native = attempt.native
@@ -75,10 +87,10 @@ def publish_skyrl_evaluation(
             raise ValueError(f"Published SkyRL evaluation archive is unsealed for {run_id}")
         return existing
 
-    errors = Counter(item.error_type for item in items if item.error_type is not None)
+    errors = Counter(row.error_type for row in rows if row.error_type is not None)
     coverage = TaskCoverage(
-        n_attempted=len(values),
-        n_scored=sum(value is not None and math.isfinite(value) for value in values),
+        n_attempted=len(rows),
+        n_scored=sum(row.score is not None and math.isfinite(row.score) for row in rows),
         errors=dict(errors),
     )
     if not archive_sealed:
@@ -112,6 +124,8 @@ def publish_skyrl_evaluation(
     record = EvalRunRecord(
         run_id=run_id,
         group_id=run_id,
+        # Training sessions retain the unlabeled cohort used by existing records.
+        version=version if step == -1 else None,
         created_at=result.finished_at or result.started_at or datetime.now(UTC).isoformat(),
         user=getpass.getuser(),
         model=model,

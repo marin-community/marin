@@ -265,6 +265,7 @@ class EvaluationBatch:
     """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
     source_model_config: ModelConfigRef | None = None
     rl_attempt: RLAttemptRef | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -301,11 +302,12 @@ def _record(
         evaluation = evaluation.model_copy(update={"tasks": tasks})
     if serving is None:
         serve = batch.model.serve
+        geometry = batch.accelerator.geometry
         serving = ServingParams(
             tensor_parallel_size=serve.tensor_parallel_size,
             data_parallel_size=serve.data_parallel_size,
             pipeline_parallel_size=serve.pipeline_parallel_size,
-            task_count=serve.pipeline_parallel_size * serve.instances,
+            task_count=(geometry.task_count if geometry is not None else serve.pipeline_parallel_size) * batch.instances,
             max_model_len=serve.max_model_len,
         )
     evalchemy = identity.eval_ref.evalchemy
@@ -673,6 +675,7 @@ def _inference_configs(batch: EvaluationBatch, runtime_env: Mapping[str, str]) -
             api_model=batch.api_model,
             priority=batch.priority_band,
             instances=batch.instances,
+            excluded_nvlink_domains=batch.excluded_nvlink_domains,
             request_timeout_seconds=max(
                 (
                     float(

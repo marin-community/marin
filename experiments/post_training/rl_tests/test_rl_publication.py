@@ -476,11 +476,34 @@ def test_control_comment_checks_repository_access_and_dispatches_main(
 
 @pytest.mark.integration
 @pytest.mark.timeout(90)
-def test_training_publication_links_first_and_last_sessions(rl_progress_client, recorded_runs, tmp_path):
+@pytest.mark.parametrize("with_cohort", [False, True], ids=["eval-lite", "checkpoint-cohort"])
+def test_training_publication_links_first_and_last_sessions(rl_progress_client, recorded_runs, tmp_path, with_cohort):
     client, _ = rl_progress_client
     table = snowball_model.SNOWBALL
     preset = table.by_name["learning-medium"]
     source = recorded_runs(preset.name, "tests/evaluation-sessions", attempt_id="native-0")
+    profiles = ("eval_lite", "checkpoint-cohort") if with_cohort else ("eval_lite",)
+    if with_cohort:
+        _write_checkpoint_cohort(source, preset.updates)
+
+    def published_ids():
+        result = publication.publish_runs([str(source)], preset, table=table, service_url="http://localhost")
+        assert result.served_records and not result.errors
+        [row] = client.get(f"/a/{APPLET_ID}/api/runs").json()["runs"]
+        return row["native_run_id"], row["evaluation_run_ids"]
+
+    native_run_id, ids = published_ids()
+    records = {record.run_id: record for record in list_records(str(tmp_path / "evaldash"))}
+    linked = [records[run_id] for run_id in ids]
+    assert {item.rl_attempt for item in linked} == {RLAttemptRef(run_id=native_run_id, attempt_id="native-0")}
+    assert {(item.evaluation.name, item.evaluation.postprocessing["skyrl_step"]) for item in linked} == {
+        (profile, step) for profile in profiles for step in ("0", str(preset.updates))
+    }
+    assert len(linked) == len(records) == 2 * len(profiles)
+    assert published_ids() == (native_run_id, ids)
+
+
+def _write_checkpoint_cohort(source, final_step):
     export_root = str(source / "exports")
     primary_rows = read_evaluations(export_root, attempt_id="native-0", evaluation="eval/")
     with edit_receipt(source) as receipt:
@@ -493,8 +516,8 @@ def test_training_publication_links_first_and_last_sessions(rl_progress_client, 
             "sampling_params": generator["eval_sampling_params"],
             "n_samples_per_prompt": generator["eval_n_samples_per_prompt"],
         }
-    cohort_steps = (0, 1, preset.updates)
-    cohort_rows = [row for row in primary_rows if row.step == preset.updates]
+    cohort_steps = (0, 1, final_step)
+    cohort_rows = [row for row in primary_rows if row.step == final_step]
     write_evaluations(
         export_root,
         [
@@ -515,22 +538,6 @@ def test_training_publication_links_first_and_last_sessions(rl_progress_client, 
             for step in cohort_steps
         },
     )
-
-    def published_ids():
-        result = publication.publish_runs([str(source)], preset, table=table, service_url="http://localhost")
-        assert result.served_records and not result.errors
-        [row] = client.get(f"/a/{APPLET_ID}/api/runs").json()["runs"]
-        return row["native_run_id"], row["evaluation_run_ids"]
-
-    native_run_id, ids = published_ids()
-    records = {record.run_id: record for record in list_records(str(tmp_path / "evaldash"))}
-    linked = [records[run_id] for run_id in ids]
-    assert {item.rl_attempt for item in linked} == {RLAttemptRef(run_id=native_run_id, attempt_id="native-0")}
-    assert {(item.evaluation.name, item.evaluation.postprocessing["skyrl_step"]) for item in linked} == {
-        (profile, step) for profile in ("eval_lite", "checkpoint-cohort") for step in ("0", str(preset.updates))
-    }
-    assert len(linked) == len(records) == 4
-    assert published_ids() == (native_run_id, ids)
 
 
 @pytest.mark.integration

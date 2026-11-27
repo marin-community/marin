@@ -23,7 +23,6 @@ from skyrlrecipe import ContextBudget, RecipePatch, sections
 from skyrlrecipe.declared import EvaluationProfile
 from skyrlrecipe.sampling import EvalSamplingParams
 
-from experiments.evaluation.micro210 import Micro210SkyRL
 from experiments.post_training import rl
 from experiments.post_training.rl_agentic_recipe import (
     NO_AGENTIC_TASKS,
@@ -33,6 +32,7 @@ from experiments.post_training.rl_agentic_recipe import (
     shell_tool_preset,
 )
 from experiments.post_training.rl_compose import BATCH_SETTINGS
+from experiments.post_training.rl_evallite import EvalLite
 from experiments.post_training.rl_presets import (
     CHECKPOINT_EVALUATION,
     RL_TRAINING_BASE,
@@ -49,7 +49,7 @@ from experiments.post_training.rl_presets import (
     Training,
     WindowStatistic,
 )
-from experiments.post_training.skyrl_evaluation import CuratedEvaluation, EvaluationPreset
+from experiments.post_training.skyrl_evaluation import EvaluationPreset, ExportEvaluationPreset, catalog_evaluation
 from experiments.post_training.task_curation.selection import (
     FULL_VALIDATION_FILENAME,
     TRAIN_FILENAME,
@@ -229,17 +229,6 @@ _REPORTING_P40 = replace(
 
 _GENERATING = Recipe(layout=E8, fixed_reply_tokens=None, config=_DEFAULT_PATCH, training_plan=_P40_PLAN)
 
-MICRO210_RECIPE = Recipe(
-    layout=replace(
-        E8,
-        workload=Generation(replace(E8.workload.plan, num_inference_engines=16, n_samples_per_prompt=1)),
-        host_memory="512GB",
-        host_disk="256GB",
-        priority="production",
-    ),
-    fixed_reply_tokens=None,
-    config=RecipePatch(generator=sections.Generator(max_num_seqs=8, gpu_memory_utilization=0.85)),
-)
 # The nightly Iris principal can submit H100 workloads in Reno.
 _RENO_P40 = replace(_ASYNC_P40, layout=replace(P40, cluster="cw-rno2a"))
 _RENO_GENERATING = replace(_GENERATING, layout=replace(E8, cluster=_RENO_P40.layout.cluster))
@@ -545,19 +534,18 @@ _PRESETS = (
         checkpoint_evaluation=CHECKPOINT_EVALUATION,
         gaps=(*_TRAIN_LONG.gaps, "agentic-eval-on-daytona"),
     ),
-    _snowball(
-        tasks=_DEFAULT_TASKS,
-        held_out_tasks=_DEFAULT_EVAL_LITE,
-        name="eval-short",
-        checkpoints="none",
-        recipe=_GENERATING,
-        updates=0,
-        measured=range(1),
-        accepts_init=True,
-        owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
-        evaluations=(EVALUATIONS["eval_lite"],),
-        budget="8 min; 1.1 H100-h",
-    ),
+)
+
+_EVAL_LITE = _snowball(
+    tasks=_DEFAULT_TASKS,
+    held_out_tasks=_DEFAULT_EVAL_LITE,
+    name="eval-lite",
+    checkpoints="none",
+    recipe=_GENERATING,
+    updates=0,
+    measured=range(1),
+    accepts_init=True,
+    evaluations=(EVALUATIONS["eval_lite"],),
 )
 
 SNOWBALL = ModelPresets(
@@ -567,17 +555,17 @@ SNOWBALL = ModelPresets(
 )
 
 
-def evaluation_presets() -> tuple[EvaluationPreset, ...]:
-    from experiments.evaluation.evals import resolve_evaluations  # noqa: PLC0415
+def evaluation_presets(name: str) -> ExportEvaluationPreset:
+    if name == "eval-lite":
+        return EvaluationPreset(name, EvalLite(_EVAL_LITE, SNOWBALL.model))
     from experiments.evaluation.models import models  # noqa: PLC0415
 
     grug = models()["grug-67b-a2b-datakit-sft-262k-2026-09-21"]
     serving = replace(grug, name="snowball", location="", revision=None, tokenizer=None, tokenizer_revision=None)
-    return (
-        EvaluationPreset("micro210", Micro210SkyRL(MICRO210_RECIPE, "snowball")),
-        EvaluationPreset(
-            "standard", CuratedEvaluation(resolve_evaluations("standard-local"), serving, "H100x8", "cw-us-east-02a")
-        ),
+    if name == "micro210":
+        serving = replace(serving, serve=replace(serving.serve, max_num_seqs=8, gpu_memory_utilization=0.85))
+    return catalog_evaluation(
+        name, serving, accelerator="H100x8", cluster=E8.cluster, instances=16 if name == "micro210" else 1
     )
 
 

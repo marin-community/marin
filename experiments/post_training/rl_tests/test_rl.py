@@ -107,8 +107,8 @@ SFT_ARM_TEST_PREFIX = "s3://marin-test/llom"
 
 def test_preset_table_rejects_duplicate_names():
     table = snowball_model.SNOWBALL
-    with pytest.raises(ValueError, match="Duplicate preset name 'eval-short'"):
-        replace(table, presets=(*table.presets, table.by_name["eval-short"]))
+    with pytest.raises(ValueError, match="Duplicate preset name 'learning-medium'"):
+        replace(table, presets=(*table.presets, table.by_name["learning-medium"]))
 
 
 def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch):
@@ -128,8 +128,6 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
         arguments = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION]
         if preset.tasks_input == "required":
             arguments += ["--tasks", SELECTION_IDENTITY]
-        if preset.name == "eval-short":
-            arguments += ["--init", initializer]
         launch_path = tmp_path / f"{preset.name}.yaml"
         launch_paths[preset.name] = str(launch_path)
         with monkeypatch.context() as capture:
@@ -139,18 +137,14 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
                 arguments,
             )
         assert result.exit_code == 0, (preset.name, result.output, result.exception)
-        status = printed_status(result.stdout.partition("\nStepSpec(")[0])
-        if preset.name == "eval-short":
-            assert status["inputs"]["model"].partition(":")[0] == initializer
-            assert status["updates"] == 0 and status["guards"] == []
-        elif preset.name in ("speed-short", "data-short"):
+        if preset.name in ("speed-short", "data-short"):
             invalid = [*arguments, "--init", initializer]
             result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
             assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
     composed = gate.compose_configs(list(launch_paths.values()), validate_driver=True)
     configs = dict(zip(launch_paths, composed, strict=True))
-    for name in ("speed-short", "data-short", "eval-short"):
+    for name in ("speed-short", "data-short"):
         assert configs[name]["runtime"]["entrypoint"] == "skyrl_train.entrypoints.main_generate"
 
     # Published train-long controls still contain defaults removed by the TaskSpec migration.
@@ -567,19 +561,6 @@ def test_mochi_three_rack_launch_configures_evaluation_without_model_exports(sel
     section = docs.split("`mochi-inference.yaml`", 1)[1]
     fragment = yaml.safe_load(section.split("```yaml\n", 1)[1].split("```", 1)[0])
     assert merge_mappings(config["skyrl"], fragment) == config["skyrl"]
-
-
-def test_snowball_omits_default_draft_for_an_alternate_initializer(selection, tmp_path):
-    table = snowball_model.SNOWBALL
-    preset = table.by_name["eval-short"]
-    initializer = ArtifactHfModel(
-        ArtifactStep.adopt("tests/alternate-initializer", "2026.10.26", selection.path(), kind=LevanterCheckpoint),
-        relative_path="",
-    )
-    [alternate] = snowball.build_experiment(preset, table=table, init=initializer).runs
-    config = yaml.safe_load(materialized_config(alternate, str(tmp_path)).launch_config_yaml)
-
-    assert config["skyrl"]["generator"].get("speculative_decoding") is None
 
 
 def test_run_identity_tracks_code_inputs_and_replicates(selection, monkeypatch, tmp_path, recorded_runs):

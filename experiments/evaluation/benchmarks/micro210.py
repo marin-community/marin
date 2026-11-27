@@ -3,6 +3,7 @@
 
 """Publish and score the sealed Micro210 rows on the TaskSpec launcher."""
 
+import hashlib
 import json
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -44,7 +45,6 @@ from taskcompendium.pipeline.models import IntendedUse, RawRow
 
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.benchmarks.harbor import EPISODE_LABEL, REWARD, harbor_item
-from experiments.evaluation.micro210 import STOP_TOKEN_CONTENT, native_binding_code_sha256
 from experiments.evaluation.micro210_inputs import native_rollout
 from experiments.evaluation.micro210_policy import (
     POLICY_REFERENCE,
@@ -73,6 +73,13 @@ FULL_PROTOCOL = "sealed"
 SOURCE_FAMILY = "micro210_family"
 IMAGE_LOCK = Path(__file__).parents[1] / "micro210_images.json"
 CORPUS_REVISION = f"{POLICY_REFERENCE.revision}-launcher.1"
+STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
+
+
+def native_binding_code_sha256() -> str:
+    sources = (Path(__file__).parents[1] / name for name in ("micro210_inputs.py", "micro210_policy.py"))
+    digests = "".join(file_sha256(StoragePath(str(path))) for path in sources)
+    return hashlib.sha256(digests.encode()).hexdigest()
 
 
 @cache
@@ -187,7 +194,7 @@ def build_source(cohort: Cohort, variant: ProtocolVariant) -> tuple[RlDataSource
             default_model=judge["model"],
         ),
         judge_endpoint=judge["base_url"],
-        judge_api_key=(judge["credential"],),
+        judge_api_key=("env:TOGETHER_API_KEY", judge["credential"]),
     )
     source = HfSource(
         PREPARED_REPO,

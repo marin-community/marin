@@ -52,6 +52,7 @@ _ACCELERATOR_RUNTIME_ARG = "accelerator"
 _SUBMISSION_CLUSTER_RUNTIME_ARG = "submission_cluster"
 _FEDERATED_CLUSTER_RUNTIME_ARG = "federated_cluster"
 _INSTANCES_RUNTIME_ARG = "instances"
+_EXCLUDED_NVLINK_DOMAINS = "excluded_nvlink_domains"
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class EvalStepConfig:
     version: str
     instances: int = 1
     rl_attempt: RLAttemptRef | None = None
+    excluded_nvlink_domains: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
         rl_attempt=config.rl_attempt,
+        excluded_nvlink_domains=config.excluded_nvlink_domains,
         cache_key=None if is_mutable_version(config.version) else config.artifact_path,
     )
     submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
@@ -136,6 +139,7 @@ def eval_step(
     accelerator: str | None = None,
     submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
     federated_cluster: str | None = None,
+    excluded_nvlink_domains: tuple[str, ...] = (),
 ) -> ArtifactStep[EvaluationResult]:
     """Evaluate a model with curated TaskSpec corpora and Harbor.
 
@@ -167,6 +171,7 @@ def eval_step(
             federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
             rl_attempt=resolve_rl_attempt(ctx) if resolve_rl_attempt is not None else None,
+            excluded_nvlink_domains=ctx.runtime_arg(_EXCLUDED_NVLINK_DOMAINS),
         )
 
     return ArtifactStep(
@@ -181,6 +186,7 @@ def eval_step(
             _SUBMISSION_CLUSTER_RUNTIME_ARG: submission_cluster,
             _FEDERATED_CLUSTER_RUNTIME_ARG: federated_cluster,
             _INSTANCES_RUNTIME_ARG: instances,
+            _EXCLUDED_NVLINK_DOMAINS: excluded_nvlink_domains,
         },
     )
 
