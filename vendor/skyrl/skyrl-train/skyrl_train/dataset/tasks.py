@@ -57,10 +57,13 @@ TASK_SCHEMA = pa.schema([pa.field(TASK_ROLLOUT_COLUMN, pa.string(), nullable=Fal
 PARQUET_BATCH_SIZE = 1024
 
 
-def task_evaluation_identity(task: dict, selection: SelectionManifest | None) -> TaskEvaluationIdentity:
+def task_evaluation_identity(
+    task: dict, selection: SelectionManifest | None, source_id: str | None
+) -> TaskEvaluationIdentity:
     digest = canonical_sha256(task)
     if selection is None:
-        return TaskEvaluationIdentity(task_digest=digest, strata=TaskStrata(agentic="agentic" in task.get("tags", ())))
+        strata = TaskStrata.model_validate({"source": source_id, "agentic": "agentic" in task.get("tags", ())})
+        return TaskEvaluationIdentity(task_digest=digest, strata=strata)
     identity = selection.identity(task["id"])
     if identity.task_digest != digest:
         raise ValueError(f"evaluation task content differs from selection manifest: {task['id']}")
@@ -319,7 +322,7 @@ class SourceTaskDataset(TaskDataset):
                 document = json.loads(row[column])
                 task = document if column == TASK_SPEC_COLUMN else document["task"]
                 task_id = task["id"]
-                identity = task_evaluation_identity(task, selection)
+                identity = task_evaluation_identity(task, selection, row.get("source"))
                 if selection is not None and TASK_SPEC_COLUMN in row:
                     carried = {key: row[key] for key in TaskStrata.model_fields if row.get(key) is not None}
                     if carried != identity.strata.model_dump(include=set(carried)):

@@ -1,10 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Record an RL run's agent attempts and publish versioned task skip lists from the records.
+"""Record an RL run's task attempts and publish versioned task skip lists from the records.
 
 ``extract`` writes one row per attempt in the run's task health receipts. ``skip`` lists a
-selection's training rows whose tasks repeatedly fail declared setup or verification without ever
+selection's rows whose tasks repeatedly fail declared setup or verification without ever
 grading, and every row of an environment where enough tasks do. A skip file is a selection recipe's
 ``exclusions`` input in ``task_digest`` format.
 """
@@ -18,12 +18,13 @@ import os
 import re
 import tomllib
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from finestore.rl.run_records import LaunchState
-from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, AttemptReceipt, Phase
+from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, EVALUATION_RECEIPTS_DIRECTORY, AttemptReceipt, Phase
 from marin.execution.artifact import validate_path_segment
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.rl.skyrl import read_skyrl_attempt
@@ -44,6 +45,7 @@ from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
     TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
+    VALIDATION_FILENAME,
     with_agentic_tag,
 )
 
@@ -76,11 +78,15 @@ NATIVE_VERIFIER_TASK_FAILURES = frozenset(
 HARBOR_SETUP_COMMAND_FAILURE = re.compile(r"^Declared task setup command \d+ exited -?[1-9]\d*\b")
 # Only ungraded attempts carry the output tails and the attempt's address.
 ATTEMPT_COLUMNS = (
-    "run selection attempt_id task_id task_digest outcome grading_failure exception_type error phase "
-    "docker_image setup_sha256 setup_completed setup_exit_code setup_stdout setup_stderr "
+    "run selection attempt_id rollout_id task_id task_digest source_row outcome grading_failure exception_type "
+    "error phase docker_image setup_sha256 setup_completed setup_exit_code setup_stdout setup_stderr "
     "verifier_stdout verifier_stderr address"
 ).split()
-ATTEMPT_COLUMN_TYPES = {"setup_completed": pa.bool_(), "setup_exit_code": pa.int64()}
+ATTEMPT_COLUMN_TYPES = {
+    "setup_completed": pa.bool_(),
+    "setup_exit_code": pa.int64(),
+    "source_row": pa.list_(pa.string()),
+}
 ATTEMPT_SCHEMA = pa.schema([(name, ATTEMPT_COLUMN_TYPES.get(name, pa.string())) for name in ATTEMPT_COLUMNS])
 SKIP_COLUMNS = (TASK_SPEC_COLUMN, "task_id", "unit", "attempts", "failed_attempts", "error", "example")
 SKIP_SCHEMA = pa.schema([(name, pa.int64() if name.endswith("attempts") else pa.string()) for name in SKIP_COLUMNS])
@@ -132,7 +138,7 @@ def _tasks(data: bytes) -> dict[str, tuple[TaskSpec, str]]:
     tasks = {}
     for raw in pq.read_table(io.BytesIO(data), columns=[TASK_SPEC_COLUMN])[TASK_SPEC_COLUMN].to_pylist():
         task = TaskSpec.model_validate_json(raw)
-        tasks[canonical_sha256(task.model_dump(mode="json"))] = task, raw
+        tasks[canonical_sha256(json.loads(raw))] = task, raw
     return tasks
 
 
@@ -205,12 +211,11 @@ def _parquet(table: pa.Table) -> bytes:
 
 
 def extract_attempts(run_output: StoragePath, run: str, output: StoragePath) -> StoragePath:
-    """Publish one row per stored agent attempt, graded or not."""
+    """Publish one row per stored task attempt, graded or not."""
     return _extract_attempts(read_skyrl_launch_config(str(run_output)), run, output)
 
 
-def _native_attempt_rows(export_path: str) -> list[dict]:
-    root = StoragePath(export_path) / ATTEMPT_RECEIPTS_DIRECTORY
+def _native_attempt_rows(root: StoragePath) -> list[dict]:
     if not root.exists():
         return []
     rows: dict[str, tuple[AttemptReceipt, str | None]] = {}
@@ -223,15 +228,18 @@ def _native_attempt_rows(export_path: str) -> list[dict]:
         for path, batch in zip(paths, pool.map(read_batch, paths), strict=True):
             for receipt in batch:
                 address = str(path) if receipt.outcome != Outcome.GRADED else None
-                prior, _ = rows.setdefault(receipt.attempt_id, (receipt, address))
+                identity = receipt.rollout_id or receipt.attempt_id
+                prior, _ = rows.setdefault(identity, (receipt, address))
                 if prior != receipt:
-                    raise ValueError(f"Conflicting records for attempt {receipt.attempt_id}")
+                    raise ValueError(f"Conflicting records for attempt {identity}")
     return [{**receipt.model_dump(mode="json"), "address": address} for receipt, address in rows.values()]
 
 
-def _historical_attempt_rows(agent: dict, source: dict) -> list[dict]:
-    tasks = _tasks((StoragePath(source["uri"]) / source["relative_path"]).read_bytes())
-    digests = {task.id: digest for digest, (task, _) in tasks.items()}
+def _historical_attempt_rows(agent: dict, sources: Sequence[dict]) -> list[dict]:
+    digests = {}
+    for source in sources:
+        tasks = _tasks((StoragePath(source["uri"]) / source["relative_path"]).read_bytes())
+        digests.update({task.id: digest for digest, (task, _) in tasks.items()})
     reward_key = agent.get("trial_reward_key", DEFAULT_REWARD_KEY)
     attempts = sorted(StoragePath(agent["output_path"]).ls(), key=str)
     with ThreadPoolExecutor(READ_THREADS) as pool:
@@ -244,14 +252,20 @@ def _historical_attempt_rows(agent: dict, source: dict) -> list[dict]:
 
 def _extract_attempts(config: dict, run: str, output: StoragePath) -> StoragePath:
     skyrl = config["skyrl"]
-    (source,) = config["inputs"]["train_data"]
-    selection = source["identity"].rpartition(":")[0].removeprefix(f"{SELECTION_PREFIX}/")
+    sources = config["inputs"].get("train_data", ())
+    selection = (
+        sources[0]["identity"].rpartition(":")[0].removeprefix(f"{SELECTION_PREFIX}/") if len(sources) == 1 else None
+    )
+    evaluation = []
     if agent := skyrl.get("terminal_bench_config", {}).get("installed_agent"):
-        rows = _historical_attempt_rows(agent, source)
+        training = _historical_attempt_rows(agent, sources)
     else:
-        rows = _native_attempt_rows(skyrl["trainer"]["export_path"])
+        root = StoragePath(skyrl["trainer"]["export_path"]) / ATTEMPT_RECEIPTS_DIRECTORY
+        training = _native_attempt_rows(root)
+        evaluation = _native_attempt_rows(root / EVALUATION_RECEIPTS_DIRECTORY)
     table = pa.Table.from_pylist(
-        [{**row, "run": run, "selection": selection} for row in rows],
+        [{**row, "run": run, "selection": selection} for row in training]
+        + [{**row, "run": run, "selection": None} for row in evaluation],
         schema=ATTEMPT_SCHEMA,
     )
     publish_once(output, {ATTEMPTS_FILENAME: _parquet(table)})
@@ -265,17 +279,18 @@ def publish_skip_list(
     code_commit: str,
     release: StoragePath | None = None,
 ) -> dict:
-    """Publish the selection's training rows whose tasks or environments fail setup or verification."""
-    training = selection / TRAIN_FILENAME
-    data = {str(path): path.read_bytes() for path in (training, *attempts, *([release] if release else []))}
-    tasks = _tasks(data[str(training)])
-    # An attempt of a task outside its run's training selection has no digest.
+    """Publish selection rows whose tasks or environments fail setup or verification."""
+    members = [path for name in (TRAIN_FILENAME, VALIDATION_FILENAME) if (path := selection / name).exists()]
+    if not members:
+        raise ValueError(f"No training or validation task files in {selection}")
+    data = {str(path): path.read_bytes() for path in (*members, *attempts, *([release] if release else []))}
+    tasks = {digest: task for path in members for digest, task in _tasks(data[str(path)]).items()}
     unique = {}
     for path in dict.fromkeys(attempts):
         for row in pq.read_table(io.BytesIO(data[str(path)])).to_pylist():
             if row["task_digest"] is None:
                 continue
-            key = (row["run"], row["attempt_id"])
+            key = (row["run"], row.get("rollout_id") or row["attempt_id"])
             row.setdefault("setup_exit_code", None)
             if unique.setdefault(key, row) != row:
                 raise ValueError(f"Conflicting records for attempt {key}")
@@ -382,7 +397,7 @@ def _record_attempts(run_output: str, run: str, output: str) -> None:
 
 
 def task_health_step(run: ArtifactStep) -> ArtifactStep:
-    """Collect one completed run's agent attempts."""
+    """Collect one completed run's task attempts."""
     return apply(
         f"rl-data/task-health/attempts/by-run/{run.name}",
         _record_attempts,
@@ -396,7 +411,7 @@ def task_health_step(run: ArtifactStep) -> ArtifactStep:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    extract = commands.add_parser("extract", help="record every stored agent attempt of a run")
+    extract = commands.add_parser("extract", help="record every stored task attempt of a run")
     extract.add_argument("--cluster", required=True, help="Iris cluster whose storage prefix holds the run")
     extract.add_argument("--run", required=True, help="run artifact NAME@VERSION")
     skip = commands.add_parser("skip", help="publish a versioned skip list for a task selection")

@@ -395,7 +395,7 @@ def released_training(path: Path, *tasks: TaskSpec) -> ReleasedSource:
     )
 
 
-def released_probe(root, release, tasks, *, graded, pin=True):
+def released_probe(root, release, tasks, *, graded, pin=True, include_evaluation=False):
     name, version = "probe", "2026.11.18.1"
     selection = root / selection_module.SELECTION_PREFIX / name / version
     selection.mkdir(parents=True)
@@ -414,6 +414,8 @@ def released_probe(root, release, tasks, *, graded, pin=True):
                 "outcome": Outcome.GRADED if index < graded else Outcome.INFRA_ERROR,
             }
         )
+    if include_evaluation:
+        rows.append({**rows[-1], "selection": None, "outcome": Outcome.GRADED})
     attempts = root / "attempts.parquet"
     pq.write_table(pa.Table.from_pylist(rows), attempts)
     return ReleaseAdmission(uri=str(attempts), sha256=hashlib.sha256(attempts.read_bytes()).hexdigest())
@@ -514,7 +516,8 @@ def test_selection_mixes_released_and_curated_tasks(tmp_path, monkeypatch):
     skipped = source_task("skip-exact-task")
     tasks = (repaired, repeated, alias, skipped)
     release = released_training(tmp_path / "release.parquet", *tasks)
-    release = release.model_copy(update={"admission": released_probe(tmp_path, release, tasks, graded=len(tasks))})
+    probe = released_probe(tmp_path, release, tasks, graded=len(tasks), include_evaluation=True)
+    release = release.model_copy(update={"admission": probe})
     skip_list = task_file(
         tmp_path / "skip.parquet", [selection_module.with_agentic_tag(task) for task in (old_task, skipped)]
     )
@@ -631,7 +634,9 @@ def test_selection_requires_matching_released_task_admission(tmp_path, monkeypat
         if fault == "different-content":
             admitted = tuple(task.model_copy(update={"tags": ("different",)}) for task in tasks)
         graded = 44 if fault == "coverage" else len(admitted)
-        probe = released_probe(tmp_path, release, admitted, graded=graded, pin=fault != "pin")
+        probe = released_probe(
+            tmp_path, release, admitted, graded=graded, pin=fault != "pin", include_evaluation=fault == "coverage"
+        )
         if fault == "hash":
             probe = probe.model_copy(update={"sha256": "0" * 64})
         release = release.model_copy(update={"admission": probe})

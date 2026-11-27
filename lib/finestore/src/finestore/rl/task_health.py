@@ -8,6 +8,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict
 
 ATTEMPT_RECEIPTS_DIRECTORY = "task-health"
+EVALUATION_RECEIPTS_DIRECTORY = "eval"
 
 
 class Phase(StrEnum):
@@ -37,3 +38,5 @@ class AttemptReceipt(BaseModel):
     verifier_stdout: str | None
     verifier_stderr: str | None
     setup_exit_code: int | None = None
+    source_row: tuple[str | None, str, str, str] | None = None
+    rollout_id: str | None = None

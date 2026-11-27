@@ -658,6 +658,16 @@ To read a transcript, order the message rows of one `rollout_id` by `event_index
 and `TransitionCompleted` the new observations. A harness that starts a new conversation writes its messages
 again.
 
+Native SkyRL task workers record each training and evaluation attempt, including retries, in the
+run's export directory. Evaluation receipts are under `task-health/eval/`. Each receipt joins to
+Finelog by `rollout_id` and carries the curated source ID, upstream dataset, revision and row
+locator in `source_row`. Inputs without a curated source ID have a null first element.
+In Iris, the workers send events and available transcript messages to Finelog and flush on shutdown.
+
+`task_health extract` collects receipts from both phases. The `selection` column identifies the sole
+training input when the run has one. Evaluation rows leave it null. `task_health skip` can use either
+phase's receipts and matches them against the target selection's training and active validation rows.
+
 `content_fraction` is the share of task attempts whose content is written. A hash of `rollout_id` decides, so a
 task attempt has all of its content or none, and the events table has every task attempt. On an event row,
 `content_chars` is the size of the content also when it is not written, `content_captured` says that it was

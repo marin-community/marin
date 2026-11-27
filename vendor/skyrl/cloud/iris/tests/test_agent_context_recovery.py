@@ -1,24 +1,34 @@
 """Native rollout harnesses preserve exact sampled work through SkyRL."""
 
 import asyncio
+import json
+from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from omegaconf import OmegaConf
+from finelog.client import FlushResult, LogClient
+from finestore.rl.strata import TaskEvaluationIdentity, TaskStrata
+from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, EVALUATION_RECEIPTS_DIRECTORY, AttemptReceipt
+from iris.runtime import telemetry as runtime_telemetry
+from omegaconf import OmegaConf, open_dict
 from rolloutengine.engine import RolloutEngine
+from rolloutengine.finelog_observer import EVENTS_NAMESPACE, MESSAGES_NAMESPACE
 from marinskyrl.agent_harnesses import AgentHarnessSettings, TaskAgentHarnesses
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.harness.step import StepHarness
 from rolloutengine.models import ContextWindowExceeded, Prompt, Transition
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command
+from skyrl_train.config.utils import get_default_config
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
-from skyrl_train.rollouts.task_worker import TaskRolloutWorker, _model_turn
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker, TaskRolloutWorkerSpec, _model_turn
+from skyrl_train.rollouts.workers import WorkerShard
 from skyrl_train.trajectory_runners.model_clients import (
     ContextLengthExceededError,
     GenerationBudgetExceededError,
 )
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance
+from skyrl_train.trajectory_runners.types import BatchMetadata, TaskRequestBatch, TokenProvenance
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AgentMachine, AnswerType, ScriptGrader
@@ -269,7 +279,7 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("exit_code", "retries"), [(2, 0), (137, 1)])
-async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, exit_code, retries):
+async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, exit_code, retries, tmp_path):
     async def agent(_context, _complete):
         pytest.fail("An unsuccessful setup must stop the agent")
 
@@ -286,6 +296,7 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
         {"shellsim": ShellSimMachineFactory()},
         retry_wait=skip_backoff,
         agents=agent_harnesses(agent),
+        task_health_export=str(tmp_path),
         shutdown_timeout=5,
     )
     try:
@@ -295,3 +306,123 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
     assert result.failure is not None
     assert result.failure.diagnostics["setup_exit_code"] == exit_code
     assert result.metrics["rollout_retries"] == retries
+    receipts = read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY)
+    assert len(receipts) == len({receipt.rollout_id for receipt in receipts}) == retries + 1
+    assert {receipt.setup_exit_code for receipt in receipts} == {exit_code}
+
+
+def read_receipts(directory):
+    return [
+        AttemptReceipt.model_validate_json(line)
+        for path in directory.glob("*.jsonl")
+        for line in path.read_text().splitlines()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_native_eval_failure_joins_receipt_to_transcript_after_shutdown(tmp_path, monkeypatch):
+    class BufferedTable:
+        def __init__(self):
+            self.pending = []
+            self.rows = []
+
+        def write(self, rows):
+            self.pending.extend(rows)
+
+        def flush(self, timeout):
+            self.rows.extend(self.pending)
+            self.pending.clear()
+            return FlushResult.SUCCEEDED
+
+    class UnavailableEngine:
+        async def tokenize(self, _payload):
+            return {"tokens": [1, 2]}
+
+        async def chat_completion(self, _payload):
+            raise ConnectionError("The serving endpoint disconnected")
+
+    def resolve(*, run_id, execution_uid):
+        return runtime_telemetry.FinelogRuntime(
+            "fixture", lambda endpoint: endpoint, {"run_id": run_id, "execution_uid": execution_uid}
+        )
+
+    tables = {name: BufferedTable() for name in (EVENTS_NAMESPACE, MESSAGES_NAMESPACE)}
+    client = SimpleNamespace(get_table=lambda namespace, *args, **kwargs: tables[namespace], close=lambda: None)
+    monkeypatch.setattr(runtime_telemetry, "resolve", resolve)
+    monkeypatch.setattr(LogClient, "connect", lambda *args, **kwargs: client)
+    config = get_default_config()
+    with open_dict(config), open_dict(config.environment.task_sessions):
+        config.runtime = {"run_id": "validation-run", "attempt_id": "execution-2"}
+        config.environment.task_sessions.max_verifier_workers = 0
+    config.trainer.export_path = str(tmp_path)
+    task = text_task(prompt="What is the answer?", source="upstream/data")
+    row = task_input(lowered_task(task))
+    identity = TaskEvaluationIdentity(panel_name="validation", strata=TaskStrata(source="curated-math"))
+    row = replace(row, metadata=replace(row.metadata, evaluation_identity=identity))
+    request = TaskRequestBatch(rows=(row,), batch_metadata=BatchMetadata(global_step=7, training_phase="eval"))
+    worker = TaskRolloutWorkerSpec.from_config(config, [UnavailableEngine()]).build(
+        WorkerTokenizer(), WorkerShard(0, 1)
+    )
+    try:
+        (result,) = await worker.generate(request)
+    finally:
+        await worker.shutdown()
+
+    assert result.failure is not None
+    (receipt,) = read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY / EVALUATION_RECEIPTS_DIRECTORY)
+    assert receipt.source_row == ("curated-math", "upstream/data", "1", "0")
+    assert receipt.exception_type == "ConnectionError"
+    assert receipt.rollout_id
+    events = tables[EVENTS_NAMESPACE].rows
+    assert {event.rollout_id for event in events} == {receipt.rollout_id}
+    assert {event.event_type for event in events} >= {"attempt_started", "attempt_ended"}
+    (message,) = [
+        message
+        for message in tables[MESSAGES_NAMESPACE].rows
+        if message.role == "user" and json.loads(message.content)["content"] == "What is the answer?"
+    ]
+    assert (message.rollout_id, message.run_id, message.run_attempt_id) == (
+        receipt.rollout_id,
+        "validation-run",
+        "execution-2",
+    )
+    assert (message.phase, message.step) == ("eval", 7)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_batch_retains_completed_task_receipts(worker_config, tmp_path):
+    second_started = asyncio.Event()
+
+    class Client:
+        async def generate(self, request):
+            if any(message["content"] == "Wait" for message in request["prompts"][0]):
+                second_started.set()
+                await asyncio.Future()
+            return sampled_reply()
+
+    worker = TaskRolloutWorker(
+        worker_config,
+        WholeTaskProjection(worker_config, WorkerTokenizer()),
+        Client(),
+        {},
+        task_health_export=str(tmp_path),
+        concurrent_tasks=1,
+        shutdown_timeout=5,
+    )
+    request = TaskRequestBatch(
+        rows=tuple(
+            task_input(lowered_task(text_task(task_id, prompt=prompt)))
+            for task_id, prompt in (("complete", "Answer"), ("cancelled", "Wait"))
+        )
+    )
+    pending = asyncio.create_task(worker.generate(request))
+    try:
+        await asyncio.wait_for(second_started.wait(), 5)
+    finally:
+        await worker.shutdown()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    receipts = {receipt.task_id: receipt for receipt in read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY)}
+    assert receipts["complete"].exception_type is None
+    assert receipts["complete"].source_row == (None, "fixture", "1", "0")
+    assert receipts["cancelled"].exception_type == "CancelledError"

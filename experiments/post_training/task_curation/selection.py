@@ -458,8 +458,9 @@ def _release_admission_attempts(source: ReleasedSource) -> list[dict[str, Any]]:
     attempts = pq.read_table(
         io.BytesIO(contents), columns=["selection", "task_id", "task_digest", "outcome"]
     ).to_pylist()
+    attempts = [attempt for attempt in attempts if attempt["selection"] is not None]
     selections = {attempt["selection"] for attempt in attempts}
-    if len(selections) != 1 or None in selections:
+    if len(selections) != 1:
         raise ValueError("Admission attempts must name one versioned selection")
     (identity,) = selections
     name, _, version = identity.rpartition("@")

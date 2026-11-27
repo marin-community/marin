@@ -13,7 +13,10 @@ from uuid import uuid4
 
 from jinja2 import TemplateError
 from daytona import DaytonaError
+from finelog.client import LogClient
+from finestore.rl.strata import TaskStrata
 from finestore.rl.task_health import AttemptReceipt
+from iris.runtime import telemetry as runtime_telemetry
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
@@ -40,6 +43,7 @@ from rolloutengine.models import (
     TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
+from rolloutengine.finelog_observer import FinelogObserver, FinelogRolloutLog, RolloutScope
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.agent_harnesses import AgentHarnessSettings, TaskAgentHarnesses
@@ -344,9 +348,11 @@ def _failed_rollout(
     )
 
 
-async def _run_task_attempt(engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, attempt_id: str) -> TrainingRollout:
+async def _run_task_attempt(
+    engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, rollout_id: str
+) -> TrainingRollout:
     try:
-        result = training_rollout(await engine.run_task(spec, model, run_id=attempt_id), spec)
+        result = training_rollout(await engine.run_task(spec, model, run_id=rollout_id), spec)
     except GradedRolloutInterrupted as interruption:
         result = _failed_rollout(interruption, spec)
     task = spec.task
@@ -427,6 +433,7 @@ class TaskRolloutWorker:
         agents: TaskAgentHarnesses | None = None,
         judge_connection: JudgeConnection | None = None,
         task_health_export: str | None = None,
+        finelog: runtime_telemetry.FinelogRuntime | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
@@ -438,6 +445,13 @@ class TaskRolloutWorker:
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
         self.agents = agents
         self.task_health_export = task_health_export
+        self.finelog_client = (
+            None if finelog is None else LogClient.connect(finelog.endpoint, resolver=finelog.resolver)
+        )
+        self.rollout_log = None if self.finelog_client is None else FinelogRolloutLog(self.finelog_client)
+        self.rollout_scope = (
+            None if finelog is None else RolloutScope(finelog.attributes["run_id"], finelog.attributes["execution_uid"])
+        )
         self.retry_wait = retry_wait
         self.group_graders = group_graders
         self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else nullcontext()
@@ -508,7 +522,13 @@ class TaskRolloutWorker:
         max_input_length = int(self.trajectory_runner_cfg.max_input_length)
         max_context_length = generation_context_limit(self.trajectory_runner_cfg)
         agents = {} if self.agents is None else self.agents.bind(max_context_length, int(sampling["max_tokens"]))
-        engines = [RolloutEngine(self.factories, self._harnesses(spec, agents)) for spec in lowered_tasks]
+        observer = None
+        if self.rollout_scope is not None and self.rollout_log is not None:
+            scope = replace(self.rollout_scope, phase=phase, step=None if metadata is None else metadata.global_step)
+            observer = FinelogObserver(self.rollout_log, scope, content_fraction=1.0)
+        engines = [
+            RolloutEngine(self.factories, self._harnesses(spec, agents), observer=observer) for spec in lowered_tasks
+        ]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
             engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
@@ -520,6 +540,9 @@ class TaskRolloutWorker:
             attempt_id = session_id
             external_agent = lowered.harness in agents
             identity = request.rows[index].metadata.evaluation_identity
+            source_id = identity.strata.source if identity is not None else None
+            if source_id == TaskStrata().source:
+                source_id = None
 
             async def model(request):
                 try:
@@ -546,15 +569,30 @@ class TaskRolloutWorker:
             )
             while True:
                 async with machine_slots, self.task_slots:
-                    result = await _run_task_attempt(engine, lowered, model, attempt_id)
+                    rollout_id = uuid4().hex
+                    observed: TrainingRollout | BaseException
+                    try:
+                        result = await _run_task_attempt(engine, lowered, model, rollout_id)
+                        if external_agent:
+                            result = _reject_unconfirmed_cleanup(result)
+                        observed = result
+                    except BaseException as error:
+                        observed = error
+                        raise
+                    finally:
+                        if self.task_health_export is not None:
+                            evidence.append(
+                                attempt_receipt(
+                                    attempt_id,
+                                    lowered,
+                                    observed,
+                                    rollout_id=rollout_id,
+                                    source_id=source_id,
+                                    task_digest=None if identity is None else identity.task_digest,
+                                )
+                            )
                 if not external_agent:
                     return result
-                result = _reject_unconfirmed_cleanup(result)
-                if self.task_health_export is not None and phase == "train":
-                    if receipt := attempt_receipt(
-                        attempt_id, lowered, result, task_digest=None if identity is None else identity.task_digest
-                    ):
-                        evidence.append(receipt)
                 if retries or not _retryable_agent_attempt(result):
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
                 logger.info("Retrying task {} after an infrastructure failure", task.id)
@@ -564,11 +602,21 @@ class TaskRolloutWorker:
                 attempt_id = f"{session_id}:retry-{retries}"
 
         with rollout_phase("collect"):
-            async with asyncio.TaskGroup() as group:
-                pending = [group.create_task(run(index, item)) for index, item in enumerate(lowered_tasks)]
-            if evidence:
-                assert self.task_health_export is not None
-                await asyncio.to_thread(write_attempt_receipts, self.task_health_export, evidence)
+            batch_failure = None
+            try:
+                async with asyncio.TaskGroup() as group:
+                    pending = [group.create_task(run(index, item)) for index, item in enumerate(lowered_tasks)]
+            except BaseException as error:
+                batch_failure = error
+                raise
+            finally:
+                if self.task_health_export is not None and evidence:
+                    try:
+                        await asyncio.to_thread(write_attempt_receipts, self.task_health_export, evidence, phase=phase)
+                    except Exception as error:
+                        if batch_failure is None:
+                            raise
+                        batch_failure.add_note(f"Could not store task receipts ({type(error).__name__})")
             rollouts = await grade_groups(
                 tasks,
                 group_graders,
@@ -624,8 +672,21 @@ class TaskRolloutWorker:
         finally:
             if self.verifier_executor is not None:
                 self.verifier_executor.shutdown(wait=False, cancel_futures=True)
+            if self.finelog_client is not None:
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        await asyncio.to_thread(self._close_finelog)
+                except TimeoutError:
+                    logger.warning("Task worker shutdown deadline expired while flushing Finelog")
         if failures:
             raise ExceptionGroup("Task worker shutdown failed", failures)
+
+    def _close_finelog(self) -> None:
+        assert self.rollout_log is not None and self.finelog_client is not None
+        try:
+            self.rollout_log.flush(timeout=5)
+        finally:
+            self.finelog_client.close()
 
     async def start_eval_session(self, *, run_name: str, eval_step: int, val_set_name: str | None) -> None:
         pass
@@ -677,6 +738,8 @@ class TaskRolloutWorkerSpec:
             )
         factories = task_machine_factories(task_sessions)
         machine_task_limit = self.config.trajectory_runner.get("max_concurrent_training_machine_tasks")
+        runtime = self.config.get("runtime", {})
+        finelog = runtime_telemetry.resolve(run_id=runtime.get("run_id"), execution_uid=runtime.get("attempt_id"))
         return TaskRolloutWorker(
             runner_config,
             (
@@ -693,5 +756,6 @@ class TaskRolloutWorkerSpec:
             concurrent_training_machine_tasks=None if machine_task_limit is None else max(1, machine_task_limit // shard.count),
             agents=agents,
             judge_connection=judge,
-            task_health_export=str(self.config.trainer.export_path) if agents is not None else None,
+            task_health_export=str(self.config.trainer.export_path),
+            finelog=finelog,
         )

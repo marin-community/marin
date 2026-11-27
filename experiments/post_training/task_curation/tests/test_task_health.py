@@ -9,7 +9,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, AttemptReceipt
+from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, EVALUATION_RECEIPTS_DIRECTORY, AttemptReceipt
 from marin.execution.lazy import ArtifactStep, run
 from marin.rl.skyrl_records import RESOLVED_LAUNCH_FILENAME, TERMINAL_RECEIPT_FILENAME
 from rigging.filesystem.storage_path import StoragePath
@@ -33,6 +33,7 @@ from experiments.post_training.task_curation.selection import (
     SELECTION_PREFIX,
     TASK_SPEC_COLUMN,
     TRAIN_FILENAME,
+    VALIDATION_FILENAME,
 )
 from experiments.post_training.task_curation.task_health import (
     ATTEMPT_SCHEMA,
@@ -72,11 +73,15 @@ def selection_digest(task: TaskSpec) -> str:
     return canonical_sha256(task.model_dump(mode="json"))
 
 
-def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_path):
+@pytest.mark.parametrize("selection_file", [TRAIN_FILENAME, VALIDATION_FILENAME])
+def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_path, selection_file):
     task = harbor_task("example", SHARED_IMAGE)
     killed = harbor_task("killed", "swe/killed")
     export = tmp_path / "export"
     receipts = export / ATTEMPT_RECEIPTS_DIRECTORY
+    evaluating = selection_file == VALIDATION_FILENAME
+    if evaluating:
+        receipts = receipts / EVALUATION_RECEIPTS_DIRECTORY
     receipts.mkdir(parents=True)
     receipt = AttemptReceipt(
         attempt_id="trial-1",
@@ -95,14 +100,16 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
         setup_stderr=MISSING_MODULE,
         verifier_stdout=None,
         verifier_stderr=None,
+        source_row=("fixture", "fixture-swe", "release", "example"),
     )
     first = receipts / "first.jsonl"
     second = receipts / "second.jsonl"
     for ordinal, path in enumerate((first, second), start=1):
-        failed_setup = receipt.model_copy(update={"attempt_id": f"setup-{ordinal}"})
+        failed_setup = receipt.model_copy(update={"attempt_id": "setup", "rollout_id": f"setup-rollout-{ordinal}"})
         killed_setup = receipt.model_copy(
             update={
                 "attempt_id": f"killed-{ordinal}",
+                "rollout_id": f"killed-rollout-{ordinal}",
                 "task_id": killed.id,
                 "task_digest": selection_digest(killed),
                 "docker_image": "swe/killed",
@@ -110,22 +117,29 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
             }
         )
         path.write_text("\n".join(row.model_dump_json() for row in (failed_setup, killed_setup)) + "\n")
+    sources = [{"identity": f"{SELECTION_PREFIX}/fixture-pi:1"}]
+    if evaluating:
+        sources.append({"identity": f"{SELECTION_PREFIX}/another-selection:1"})
     config = {
         "skyrl": {"trainer": {"export_path": str(export)}},
-        "inputs": {"train_data": [{"identity": f"{SELECTION_PREFIX}/fixture-pi:1"}]},
+        "inputs": {"train_data": sources},
     }
     snapshot = task_health._extract_attempts(config, "fixture@1", StoragePath(str(tmp_path / "snapshot")))
     rows = pq.read_table(str(snapshot)).to_pylist()
 
-    assert {row["selection"] for row in rows} == {"fixture-pi"}
+    assert {row["selection"] for row in rows} == {None if evaluating else "fixture-pi"}
     assert {row["address"] for row in rows} == {str(first), str(second)}
+    assert {(row["rollout_id"], tuple(row["source_row"])) for row in rows if row["task_id"] == task.id} == {
+        ("setup-rollout-1", ("fixture", "fixture-swe", "release", "example")),
+        ("setup-rollout-2", ("fixture", "fixture-swe", "release", "example")),
+    }
     assert {(row["task_digest"], row["setup_exit_code"]) for row in rows} == {
         (receipt.task_digest, 1),
         (selection_digest(killed), 137),
     }
-    training = write_tasks(tmp_path / TRAIN_FILENAME, [task, killed])
+    members = write_tasks(tmp_path / selection_file, [task, killed])
     skip = StoragePath(str(tmp_path / "skip"))
-    publish_skip_list(StoragePath(str(training.parent)), [snapshot], skip, "fixture")
+    publish_skip_list(StoragePath(str(members.parent)), [snapshot], skip, "fixture")
     assert pq.read_table(str(skip / SKIP_FILENAME))["task_id"].to_pylist() == [task.id]
 
 
