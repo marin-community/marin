@@ -2012,7 +2012,8 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             routes = None if result.routes is None else result.routes[:, 0]
             return (result.output, pages), routes
 
-        initial = (hidden, stacked_cache.kv_pages.array)
+        cache_pages = reshard(stacked_cache.kv_pages.array, P(None, None, None, kv_axis, None))
+        initial = (hidden, cache_pages)
         if unroll:
             state = initial
             routes_by_layer = []
