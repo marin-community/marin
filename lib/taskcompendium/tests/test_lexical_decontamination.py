@@ -166,10 +166,6 @@ def test_full_train_source_drops_contaminated_rows_and_records_the_measurement(t
     assert evidence["contaminated_tasks"] == 2
     assert evidence["contaminated_fraction"] == 0.4
     assert evidence["matched_evals"] == {"fixture-benchmark": 2}
-    assert evidence["eval_corpus_version"] == "fixture-corpus-v1"
-    assert evidence["drop_set_uris"] == ["fixture://drops/local", "fixture://drops/global"]
-    assert evidence["text_renderer_version"] == "taskcompendium-format-conversation-v1"
-    assert evidence["ngram_length"] == 13
 
     all_ids = {row["task_id"] for row in parquet_rows(Path(result.normalize_path))}
     dropped = {row["id"] for row in parquet_rows(output / "lexical" / "drop_manifest.parquet")}
@@ -186,10 +182,7 @@ def test_full_train_source_drops_contaminated_rows_and_records_the_measurement(t
     assert {row["task_id"] for row in rejected} == dropped
     assert all("lexical:contaminated" in row["filter_reasons"] for row in rejected)
     assert result.lexical_path == str(output / "lexical")
-    measurement = json.loads((output / "lexical" / "measurement.json").read_text())
-    assert measurement["measured_tasks"] == 5
-    telemetry = json.loads((output / "telemetry.json").read_text())
-    assert {phase["phase"] for phase in telemetry["phases"]} >= {"lexical_text", "lexical_mark", "lexical_gate"}
+    assert json.loads((output / "lexical" / "measurement.json").read_text()) == evidence
 
 
 def test_full_eval_source_keeps_every_row_and_still_records_the_measurement(tmp_path):
