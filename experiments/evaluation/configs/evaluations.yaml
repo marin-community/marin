@@ -245,6 +245,13 @@ evaluations:
       concurrency: 32
       task_machine:
         image_build: declarative
+  swebench-pro-hard:
+    benchmark: swebench-pro-hard
+    protocol: mini-swe-agent
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
   swebench-pro-200:
     benchmark: swebench-pro-200
     protocol: mini-swe-agent

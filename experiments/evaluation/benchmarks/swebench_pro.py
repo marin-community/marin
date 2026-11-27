@@ -308,6 +308,62 @@ SWEBENCH_PRO_SMOKE_PACKAGES = frozenset(
     """.split()
 )
 """Two tasks from each of SWE-Bench Pro V2's 11 repositories, drawn with ``random.Random(0)``."""
+SWEBENCH_PRO_HARD_PACKAGES = frozenset(
+    """
+    instance_NodeBB__NodeBB-8168c6c40707478f71b8af60300830fe554c778c-vf2cf3cbd463b7ad942381f1c6d077626485a1e9e
+    instance_ansible__ansible-40ade1f84b8bb10a63576b0ac320c13f57c87d34-v6382ea168a93d80a64aab1fbd8c4f02dc5ada5bf
+    instance_ansible__ansible-b748edea457a4576847a10275678127895d2f02f-v1055803c3a812189a1133297f7f5468579283f86
+    instance_ansible__ansible-c1f2df47538b884a43320f53e787197793b105e8-v906c969b551b346ef54a2c0b41e04f632b7b73c2
+    instance_ansible__ansible-d33bedc48fdd933b5abd65a77c081876298e2f07-v0f01c69f1e2528b935359cfe578530722bca2c59
+    instance_ansible__ansible-d62496fe416623e88b90139dc7917080cb04ce70-v0f01c69f1e2528b935359cfe578530722bca2c59
+    instance_ansible__ansible-d72025be751c894673ba85caa063d835a0ad3a8c-v390e508d27db7a51eece36bb6d9698b63a5b638a
+    instance_ansible__ansible-de5858f48dc9e1ce9117034e0d7e76806f420ca8-v1055803c3a812189a1133297f7f5468579283f86
+    instance_ansible__ansible-e9e6001263f51103e96e58ad382660df0f3d0e39-v30a923fb5c164d6cd18280c02422f75e611e8fb2
+    instance_element-hq__element-web-5dfde12c1c1c0b6e48f17e3405468593e39d9492-vnan
+    instance_element-hq__element-web-66d0b318bc6fee0d17b54c1781d6ab5d5d323135-vnan
+    instance_element-hq__element-web-772df3021201d9c73835a626df8dcb6334ad9a3e-vnan
+    instance_element-hq__element-web-ecfd1736e5dd9808e87911fc264e6c816653e1a9-vnan
+    instance_flipt-io__flipt-2ca5dfb3513e4e786d2b037075617cccc286d5c3
+    instance_flipt-io__flipt-3d5a345f94c2adc8a0eaa102c189c08ad4c0f8e8
+    instance_flipt-io__flipt-524f277313606f8cd29b299617d6565c01642e15
+    instance_flipt-io__flipt-c1728053367c753688f114ec26e703c8fdeda125
+    instance_flipt-io__flipt-c188284ff0c094a4ee281afebebd849555ebee59
+    instance_flipt-io__flipt-cd18e54a0371fa222304742c6312e9ac37ea86c1
+    instance_flipt-io__flipt-e2bd19dafa7166c96b082fb2a59eb54b4be0d778
+    instance_future-architect__vuls-5af1a227339e46c7abf3f2815e4c636a0c01098e
+    instance_future-architect__vuls-ca3f6b1dbf2cd24d1537bfda43e788443ce03a0c
+    instance_future-architect__vuls-e1fab805afcfc92a2a615371d0ec1e667503c254-v264a82e2f4818e30f5a25e4da53b27ba119f62b5
+    instance_future-architect__vuls-ef2be3d6ea4c0a13674aaab08b182eca4e2b9a17-v264a82e2f4818e30f5a25e4da53b27ba119f62b5
+    instance_gravitational__teleport-1316e6728a3ee2fc124e2ea0cc6a02044c87a144-v626ec2a48416b10a88641359a169d99e935ff037
+    instance_gravitational__teleport-2b15263e49da5625922581569834eec4838a9257-vee9b09fb20c43af7e520f57e9239bbcf46b7113d
+    instance_gravitational__teleport-65438e6e44b6ce51458d09b7bb028a2797cfb0ea-vce94f93ad1030e3136852817f2423c1b3ac37bc4
+    instance_gravitational__teleport-7744f72c6eb631791434b648ba41083b5f6d2278-vce94f93ad1030e3136852817f2423c1b3ac37bc4
+    instance_gravitational__teleport-eda668c30d9d3b56d9c69197b120b01013611186
+    instance_gravitational__teleport-f432a71a13e698b6e1c4672a2e9e9c1f32d35c12
+    instance_internetarchive__openlibrary-0dc5b20fa186f9714f8a838178597e69f549d026-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59
+    instance_internetarchive__openlibrary-322d7a46cdc965bfabbf9500e98fde098c9d95b2-v13642507b4fc1f8d234172bf8129942da2c2ca26
+    instance_internetarchive__openlibrary-53d376b148897466bb86d5accb51912bbbe9a8ed-v08d8e8889ec945ab821fb156c04c7d2e2810debb
+    instance_internetarchive__openlibrary-630221ab686c64e75a2ce253c893c033e4814b2e-v93c53c13d5f9b383ebb411ee7750b49dcd1a34c6
+    instance_internetarchive__openlibrary-6e889f4a733c9f8ce9a9bd2ec6a934413adcedb9-ve8c8d62a2b60610a3c4631f5f23ed866bada9818
+    instance_internetarchive__openlibrary-7cbfb812ef0e1f9716e2d6e85d538a96fcb79d13-vfa6ff903cb27f336e17654595dd900fa943dcd91
+    instance_internetarchive__openlibrary-a48fd6ba9482c527602bc081491d9e8ae6e8226c-vfa6ff903cb27f336e17654595dd900fa943dcd91
+    instance_internetarchive__openlibrary-b67138b316b1e9c11df8a4a8391fe5cc8e75ff9f-ve8c8d62a2b60610a3c4631f5f23ed866bada9818
+    instance_navidrome__navidrome-69e0a266f48bae24a11312e9efbe495a337e4c84
+    instance_navidrome__navidrome-874b17b8f614056df0ef021b5d4f977341084185
+    instance_navidrome__navidrome-bf2bcb12799b21069f137749e0c331f761d1f693
+    instance_protonmail__webclients-08bb09914d0d37b0cd6376d4cab5b77728a43e7b
+    instance_protonmail__webclients-5f0745dd6993bb1430a951c62a49807c6635cd77
+    instance_protonmail__webclients-715dbd4e6999499cd2a576a532d8214f75189116
+    instance_protonmail__webclients-c5a2089ca2bfe9aa1d85a664b8ad87ef843a1c9c
+    instance_protonmail__webclients-e65cc5f33719e02e1c378146fb981d27bc24bdf4
+    instance_qutebrowser__qutebrowser-3e21c8214a998cb1058defd15aabb24617a76402-v5fc38aaf22415ab0b70567368332beee7955b367
+    instance_qutebrowser__qutebrowser-c09e1439f145c66ee3af574386e277dd2388d094-v2ef375ac784985212b1805e1d0431dc8f1b3c171
+    instance_qutebrowser__qutebrowser-deeb15d6f009b3ca0c3bd503a7cef07462bd16b4-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d
+    instance_qutebrowser__qutebrowser-e70f5b03187bdd40e8bf70f5f3ead840f52d1f42-v02ad04386d5238fe2d1a1be450df257370de4b6a
+    instance_tutao__tutanota-f373ac3808deefce8183dad8d16729839cc330c1-v2939aa9f4356f0dc9f523ee5ce19d09e08ab979b
+    """.split()
+)
+"""Scale's HARD-51: V2 tasks that at least two of five frontier model families failed (``v2/hard51_ids.txt``)."""
 SWEBENCH_PRO_200 = replace(
     SWEBENCH_PRO,
     recipe="swebench-pro-200",
@@ -326,7 +382,16 @@ SWEBENCH_PRO_SMOKE = replace(
     count=22,
     images=SWEBENCH_PRO.recipe,
 )
-SWEBENCH_PRO_DATASETS = (SWEBENCH_PRO, SWEBENCH_PRO_200, SWEBENCH_PRO_SMOKE)
+SWEBENCH_PRO_HARD = replace(
+    SWEBENCH_PRO,
+    recipe="swebench-pro-hard",
+    benchmark="swebench-pro-hard",
+    title="SWE-Bench Pro V2, HARD-51",
+    source=replace(SWEBENCH_PRO_SOURCE, packages=SWEBENCH_PRO_HARD_PACKAGES),
+    count=51,
+    images=SWEBENCH_PRO.recipe,
+)
+SWEBENCH_PRO_DATASETS = (SWEBENCH_PRO, SWEBENCH_PRO_HARD, SWEBENCH_PRO_200, SWEBENCH_PRO_SMOKE)
 SWEBENCH_PRO_MAX_INPUT_TOKENS = 131072
 SWEBENCH_PRO_MAX_OUTPUT_TOKENS = 16384
 """Marin's agentic eval policy for mini-swe-agent: a 128K context and 16K replies."""
