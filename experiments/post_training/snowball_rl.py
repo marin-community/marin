@@ -431,6 +431,8 @@ _TRAIN_MEDIUM_TOOLS = shell_tool_preset(
     name="train-medium-tools",
 )
 
+_SPEED_MEDIUM_GAPS = (*_GAPS, "mismatch-is-agreement")
+
 _SPEED_MEDIUM = _snowball(
     evaluations=(),
     name="speed-medium",
@@ -447,7 +449,7 @@ _SPEED_MEDIUM = _snowball(
     owned_keys=_OWNED_KEYS | _SPEED_KEYS | _BATCH_KEYS,
     guards=_SPEED_GUARDS,
     objectives=_SPEED_OBJECTIVES,
-    gaps=(*_GAPS, "mismatch-is-agreement", "layout-p40-only"),
+    gaps=(*_SPEED_MEDIUM_GAPS, "layout-p40-only"),
     budget="20m12s and 13.5 H100-h in the four-proposal comparison",
 )
 
@@ -466,7 +468,7 @@ _SPEED_MEDIUM_16X16 = replace(
                 trainer=sections.Trainer(
                     policy=sections.Policy(
                         megatron_config=sections.PolicyMegatronConfig(
-                            # Two learner nodes leave one expert replica. Keep the Adam states in host memory.
+                            # Keep Adam state in host memory to leave GPU memory for the smaller learner.
                             optimizer_config_kwargs=sections.OptimizerConfigKwargs(
                                 optimizer_cpu_offload=True, optimizer_offload_fraction=1.0
                             )
@@ -478,8 +480,23 @@ _SPEED_MEDIUM_16X16 = replace(
     ),
     guards=(),
     objectives=_SPEED_GUARDS,
-    gaps=(*_GAPS, "mismatch-is-agreement"),
+    gaps=_SPEED_MEDIUM_GAPS,
     budget="32 H100s; wall time and cost are unmeasured",
+)
+
+_SPEED_MEDIUM_8X8 = replace(
+    _SPEED_MEDIUM_16X16,
+    name="speed-medium-8x8",
+    recipe=replace(
+        _SPEED_MEDIUM_16X16.recipe,
+        layout=replace(
+            _RENO_P40.layout,
+            name="p8-r8",
+            workload=Training(replace(_P40_PLAN, policy_num_nodes=1)),
+            megatron=replace(_RENO_P40.layout.megatron, pipeline_model_parallel_size=1),
+        ),
+    ),
+    budget="16 H100s; wall time and cost are unmeasured",
 )
 
 _PRESETS = (
@@ -517,6 +534,7 @@ _PRESETS = (
     ),
     _SPEED_MEDIUM,
     _SPEED_MEDIUM_16X16,
+    _SPEED_MEDIUM_8X8,
     _snowball(
         evaluations=(),
         name="speed-long",
