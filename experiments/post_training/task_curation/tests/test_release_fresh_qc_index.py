@@ -28,8 +28,11 @@ def _declarations(tmp_path: Path) -> ArtifactRef:
     document = {
         "Marin:fixture": {
             "id": "Marin:fixture",
+            "dataset_id": "fixture",
+            "dataset_revision": "old",
+            "pipeline": None,
             "data_restriction": "open",
-            "independent_qc": {"evidence_url": f"file://{tmp_path}/review"},
+            "independent_qc": {"evidence_url": "s3://bucket/review"},
         }
     }
     raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
@@ -46,7 +49,11 @@ def _completion(tmp_path: Path, *, status: str = "PASS") -> ArtifactRef:
             {
                 "source_id": "Marin:fixture",
                 "pipeline_key": KEY,
-                "original_receipt": {"artifact": {"uri": "s3://bucket/review", "sha256": "b" * 64}, "current_pin": True},
+                "original_receipt": {
+                    "artifact": {"uri": "s3://bucket/review/.artifact.json", "sha256": "b" * 64},
+                    "panel": {"dataset_id": "fixture", "dataset_revision": "old", "sample_size": 2},
+                    "current_pin": True,
+                },
             }
         ],
     }
@@ -317,6 +324,73 @@ def test_reassembles_a_chunked_batch_record(tmp_path, fake_query):
     document = json.loads(gzip.decompress(StoragePath(index["receipts"][0]["reference"]["uri"]).read_bytes()))
     assert document["batches"][0]["record"]["payload"] == "abcdef"
     assert "payload_chunks" not in document["batches"][0]["record"]
+
+
+@pytest.mark.parametrize("fault", [None, "changed_retained_pin", "corrupt_retained_panel"])
+def test_cli_refreshes_selected_panel_and_reuses_verified_staged_bytes(
+    tmp_path, fake_query, fresh_panel, monkeypatch, capsys, fault
+):
+    reference, declaration = fresh_panel
+    inputs = _inputs(tmp_path, fresh_panels={declaration["id"]: reference})
+    path = StoragePath(inputs.declarations.uri)
+    declarations = json.loads(path.read_text())
+    declarations[declaration["id"]] = declaration
+    path.write_text(json.dumps(declarations))
+    inputs = dataclasses.replace(
+        inputs, declarations=ArtifactRef(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    )
+    original = stage.run_fresh_qc_index(inputs, dry_run=False)
+    prior = json.loads(StoragePath(original["index"]["uri"]).read_bytes())
+    retained = next(row for row in prior["receipts"] if row["source_id"] == "Marin:fixture")
+    replacement = StoragePath(str(tmp_path / "replacement" / ".artifact.json"))
+    replacement.write_bytes(StoragePath(reference.uri).read_bytes(), auto_mkdir=True)
+    fresh = ArtifactRef(uri=str(replacement), sha256=hashlib.sha256(replacement.read_bytes()).hexdigest())
+    declarations[declaration["id"]] = {**declaration, "independent_qc": {"evidence_url": str(replacement)}}
+    if fault == "changed_retained_pin":
+        declarations["Marin:fixture"]["dataset_revision"] = "unreviewed"
+    if fault == "corrupt_retained_panel":
+        StoragePath(retained["reference"]["uri"]).write_bytes(b"corrupt")
+    current_path = StoragePath(str(tmp_path / "current-declarations.json"))
+    current_path.write_text(json.dumps(declarations))
+    refresh = dataclasses.replace(
+        inputs,
+        declarations=ArtifactRef(uri=str(current_path), sha256=hashlib.sha256(current_path.read_bytes()).hexdigest()),
+        prior_index=ArtifactRef(**original["index"]),
+        fresh_panels={declaration["id"]: fresh},
+        snapshot_id="assembly-current-v2",
+        source_revision="f" * 40,
+        output_root=str(tmp_path / "refreshed"),
+    )
+
+    def no_sql(*args):
+        raise AssertionError("index refresh must use sealed artifacts without SQL")
+
+    monkeypatch.setattr(stage.paced_query, "open_paced_query", no_sql)
+    if fault:
+        with pytest.raises(ValueError):
+            stage.run_fresh_qc_index(refresh, dry_run=False)
+        assert not StoragePath(f"{refresh.output_root}/fresh-qc-index.json").exists()
+        return
+    stage.run_fresh_qc_index(refresh, dry_run=True)
+    assert not StoragePath(refresh.output_root).exists()
+    config = tmp_path / "refresh-inputs.json"
+    document = dataclasses.asdict(refresh)
+    for field in ("declarations", "qc_completion", "prior_index"):
+        document[field] = getattr(refresh, field).model_dump(mode="json")
+    document["fresh_panels"] = {declaration["id"]: fresh.model_dump(mode="json")}
+    config.write_text(json.dumps(document))
+    monkeypatch.setattr(sys, "argv", ["fresh_qc_index", "--inputs", str(config), "--mode", "write"])
+    stage.main()
+    result = json.loads(capsys.readouterr().out)
+    current = json.loads(StoragePath(result["index"]["uri"]).read_bytes())
+    panels = {row["source_id"]: row for row in current["receipts"]}
+    assert panels["Marin:fixture"] == retained
+    replaced = json.loads(gzip.decompress(StoragePath(panels[declaration["id"]]["reference"]["uri"]).read_bytes()))
+    assert replaced["receipt"]["artifact"] == fresh.model_dump(mode="json")
+    assert replaced["receipt"]["current_pin"] is True
+    assert {row["task_id"] for row in replaced["items"]} == {"kept", "dropped", "unshaped"}
+    assert current["provenance"]["prior_index"] == original["index"]
+    assert current["snapshot_id"] == "assembly-current-v2"
 
 
 def test_refuses_a_panel_without_a_frozen_declaration(tmp_path, fake_query):
