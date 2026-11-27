@@ -392,6 +392,14 @@ def forbidden_words(text: str, params: dict) -> tuple[bool, str]:
     return not hits, f"hits={hits}"
 
 
+@constraint("keywords:exclude_word_harder")
+def exclude_word_harder(text: str, params: dict) -> tuple[bool, str]:
+    keyword = params.get("keyword")
+    if not isinstance(keyword, str) or not keyword.strip():
+        return False, "missing keyword"
+    return forbidden_words(text, {"forbidden_words": [keyword.strip()]})
+
+
 @constraint("keywords:word_once")
 def word_once(text: str, params: dict) -> tuple[bool, str]:
     """The prompt asks to include the keyword; "once" is only in the instruction id."""
@@ -767,12 +775,19 @@ def bigram_wrapping(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("detectable_format:constrained_response")
 def constrained_response(text: str, params: dict) -> tuple[bool, str]:
-    stripped = text.strip()
-    wrapped = ANSWER_WRAPPING.match(stripped)
-    if wrapped:
-        stripped = wrapped.group(2).strip()
-    passed = stripped in CONSTRAINED_RESPONSES
-    return passed, f"matched_constrained={passed}"
+    """Without ``options``, the response must be one of IFEval's fixed answers; with them, it must name exactly one."""
+    options = params.get("options")
+    if options is None:
+        stripped = text.strip()
+        wrapped = ANSWER_WRAPPING.match(stripped)
+        if wrapped:
+            stripped = wrapped.group(2).strip()
+        passed = stripped in CONSTRAINED_RESPONSES
+        return passed, f"matched_constrained={passed}"
+    if not isinstance(options, list) or not all(isinstance(option, str) and option.strip() for option in options):
+        return False, "options must be a list of text"
+    named = [option for option in options if count_keyword(text, option.strip())]
+    return len(named) == 1, f"options_named={named}"
 
 
 # === detectable_content =====================================================
@@ -879,17 +894,22 @@ def count_unique(text: str, params: dict) -> tuple[bool, str]:
     return not repeated, f"unique={len(counts)} total={counts.total()} repeated={repeated[:5]}"
 
 
+def single_keyword(value: object) -> str | None:
+    """The keyword given as a string or, in TaskTrove rows, a one-element list; ``None`` otherwise."""
+    if isinstance(value, list) and len(value) == 1:
+        value = value[0]
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 @constraint("count:count_increment_word")
 def count_increment_word(text: str, params: dict) -> tuple[bool, str]:
-    """The first keyword group must appear exactly one more time than the second."""
-    first_group = params.get("keyword1")
-    second_group = params.get("keyword2")
-    if not isinstance(first_group, list) or not isinstance(second_group, list):
-        return False, "bad kwargs"
-    first = sum(count_keyword(text, w) for w in first_group if isinstance(w, str))
-    second = sum(count_keyword(text, w) for w in second_group if isinstance(w, str))
-    passed = first > 0 and first == second + 1
-    return passed, f"kw1_count={first} kw2_count={second} (need kw1 == kw2+1)"
+    """``keyword1`` must appear exactly once and ``keyword2`` exactly twice, as the prompt asks."""
+    first = single_keyword(params.get("keyword1"))
+    second = single_keyword(params.get("keyword2"))
+    if first is None or second is None:
+        return False, "keyword1 and keyword2 must each name one keyword"
+    counts = (count_keyword(text, first), count_keyword(text, second))
+    return counts == (1, 2), f"{first!r}={counts[0]} {second!r}={counts[1]} need 1 and 2"
 
 
 @constraint("count:lowercase_counting")
@@ -1003,16 +1023,66 @@ def repeat_phrase(text: str, params: dict) -> tuple[bool, str]:
     return passed, f"copies={len(changes)} need={expected} changed_positions={changes}"
 
 
+def copy_key(text: str) -> str:
+    return text.strip().lower()
+
+
+def separated_parts(text: str) -> list[str] | None:
+    """The worded parts between six-asterisk separators, or ``None`` if an inner part has no word."""
+    sections = TWO_RESPONSE_SEPARATOR.split(text)
+    if any(not WORD.search(section) for section in sections[1:-1]):
+        return None
+    return [section.strip() for section in sections if WORD.search(section)]
+
+
+@constraint("copy:copy")
+@constraint("copy:copying_simple")
+def copy_request(text: str, params: dict) -> tuple[bool, str]:
+    """The response must be the request alone, ignoring outer whitespace and case."""
+    request = params.get("prompt_to_repeat")
+    if not isinstance(request, str) or not request.strip():
+        return False, "missing prompt_to_repeat"
+    passed = copy_key(text) == copy_key(request)
+    return passed, f"copied_request={passed}"
+
+
+@constraint("copy:copying_multiple")
+def copying_multiple(text: str, params: dict) -> tuple[bool, str]:
+    """The response must be ``N`` copies of the request separated by six asterisks."""
+    request = params.get("prompt_to_repeat")
+    expected = params.get("N")
+    if not isinstance(request, str) or not request.strip() or not isinstance(expected, int):
+        return False, "bad kwargs"
+    parts = separated_parts(text)
+    if parts is None:
+        return False, "empty part between copies"
+    copies = sum(copy_key(part) == copy_key(request) for part in parts)
+    return len(parts) == copies == expected, f"parts={len(parts)} copies={copies} need={expected}"
+
+
+@constraint("new:copy_span_idx")
+def copy_span_idx(text: str, params: dict) -> tuple[bool, str]:
+    """The response must be ``prompt_to_repeat[n_start : n_end + 1]``, ignoring outer whitespace and case."""
+    request = params.get("prompt_to_repeat")
+    start = params.get("n_start")
+    end = params.get("n_end")
+    if not isinstance(request, str) or not isinstance(start, int) or not isinstance(end, int):
+        return False, "bad kwargs"
+    span = request[start : end + 1]
+    if not 0 <= start <= end < len(request) or not span.strip():
+        return False, f"characters {start} to {end} of the {len(request)}-character request hold no text"
+    passed = copy_key(text) == copy_key(span)
+    return passed, f"copied_span={passed}"
+
+
 # === combination ============================================================
 
 
 @constraint("combination:two_responses")
 def two_responses(text: str, params: dict) -> tuple[bool, str]:
-    sections = TWO_RESPONSE_SEPARATOR.split(text)
-    if any(not WORD.search(section) for section in sections[1:-1]):
+    parts = separated_parts(text)
+    if parts is None:
         return False, "empty section between responses"
-    # A part with no words, such as the "." after a closing separator, is not a response.
-    parts = [section.strip() for section in sections if WORD.search(section)]
     passed = len(parts) == 2 and parts[0] != parts[1]
     return passed, f"sections_by_******={len(parts)}"
 
@@ -1097,8 +1167,8 @@ def repeat_prompt(text: str, params: dict) -> tuple[bool, str]:
     prompt = params.get("prompt_to_repeat")
     if not isinstance(prompt, str) or not prompt.strip():
         return False, "missing prompt_to_repeat"
-    candidate = text.strip().lower()
-    expected = prompt.strip().lower()
+    candidate = copy_key(text)
+    expected = copy_key(prompt)
     passed = candidate.startswith(expected) and len(candidate) > len(expected)
     return passed, f"repeats_prompt={passed}"
 

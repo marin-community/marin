@@ -11,6 +11,16 @@ from verifyit.modes import grade_ifeval
 from verifyit.modes.ifeval import CONSTRAINTS
 from verifyit.spec import Constraint, EmptyOutputPolicy, IfevalSpec
 
+# The options that every IFBench training prompt with detectable_format:constrained_response lists.
+IFBENCH_RESPONSE_OPTIONS = [
+    "My answer is yes.",
+    "My answer is no.",
+    "My answer is maybe.",
+    "I think yes.",
+    "I think no.",
+    "I think maybe.",
+]
+
 # A passing and a failing response per constraint, written the way a model would answer.
 CASES = [
     (
@@ -1013,6 +1023,84 @@ CASES = [
         {},
         "Mom called.",
         "Visit www.site.org",
+    ),
+    (
+        "detectable_format:constrained_response",
+        {},
+        "My answer is maybe.",
+        "I think maybe.",
+    ),
+    (
+        "detectable_format:constrained_response",
+        {"options": IFBENCH_RESPONSE_OPTIONS},
+        "i think maybe. the evidence is mixed.\n\np.s. ask again in a week.",
+        "My answer is yes. I think yes.",
+    ),
+    (
+        "detectable_format:constrained_response",
+        {"options": IFBENCH_RESPONSE_OPTIONS},
+        "**I think no.**",
+        "I think so, but I am not sure.",
+    ),
+    (
+        "count:count_increment_word",
+        {"keyword1": "abuse", "keyword2": "bus"},
+        "Report abuse, then take the bus or the night bus.",
+        "Report abuse, then take the bus.",
+    ),
+    (
+        "count:count_increment_word",
+        {"keyword1": ["help"], "keyword2": ["dump"]},
+        "Help me dump the box, then dump the rest.",
+        "Help me, help me dump the box.",
+    ),
+    (
+        "keywords:exclude_word_harder",
+        {"keyword": "piano"},
+        "I play the guitar.",
+        "Piano lessons help.",
+    ),
+    (
+        "keywords:exclude_word_harder",
+        {"keyword": "2."},
+        "Version 2.5 ships today.",
+        "Step 2. Ship it.",
+    ),
+    (
+        "copy:copy",
+        {"prompt_to_repeat": "What is the capital of France?"},
+        "What is the capital of France?",
+        "What is the capital of France?\n\nParis.",
+    ),
+    (
+        "copy:copying_simple",
+        {"prompt_to_repeat": "What is the capital of France?"},
+        "\nWhat is the capital of France?\n",
+        "What is the capital of France? Repeat the request without change and do not answer the actual request!",
+    ),
+    (
+        "copy:copying_multiple",
+        {"prompt_to_repeat": "Name a fruit.", "N": 2},
+        "Name a fruit.\n******\nName a fruit.",
+        "Name a fruit.\n*******\nName a fruit.",
+    ),
+    (
+        "copy:copying_multiple",
+        {"prompt_to_repeat": "Name a fruit.", "N": 2},
+        "Name a fruit.******Name a fruit.",
+        "Name a fruit.\n******\nName a fruit.\n******\nName a fruit.",
+    ),
+    (
+        "new:copy_span_idx",
+        {"prompt_to_repeat": "The quick brown fox jumps.", "n_start": 4, "n_end": 14},
+        "quick brown",
+        "The quick brown fox jumps.",
+    ),
+    (
+        "new:copy_span_idx",
+        {"prompt_to_repeat": "The quick brown fox jumps.", "n_start": 6, "n_end": 12},
+        "ick bro",
+        "quick brown",
     ),
 ]
 
