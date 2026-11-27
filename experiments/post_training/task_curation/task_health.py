@@ -408,7 +408,7 @@ def _record_attempts(run_output: str, run: str, output: str) -> None:
 def task_health_step(run: ArtifactStep) -> ArtifactStep:
     """Collect one completed run's task attempts."""
     return apply(
-        f"rl-data/task-health/attempts/v{ATTEMPT_SNAPSHOT_VERSION}/by-run/{run.name}",
+        f"rl-data/task-health/attempts/by-run/{run.name}",
         _record_attempts,
         version=run.version,
         run_output=run,
