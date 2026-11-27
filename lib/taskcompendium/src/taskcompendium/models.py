@@ -28,7 +28,7 @@ from shellbox.machine import PackageSpec
 from verifyit.candidate import candidate_spec
 from verifyit.grade import InvalidTask
 from verifyit.json_objects import unique_object
-from verifyit.judge_contract import validate_judge_spec
+from verifyit.judge_contract import validate_judge_spec, validate_script_judge
 from verifyit.modes.extract import extract_boxed, unwrap_enclosing_fence
 from verifyit.spec import (
     DEFAULT_OUTPUT,
@@ -728,8 +728,10 @@ class ScriptGrader(BaseModel):
     ``answer_path`` (``None`` when the agent's files are the result), and the conversation is
     written to ``conversation_path`` as JSON chat messages.
 
-    ``judge`` declares a required service contract, staged as ``/tests/judge.toml``. The runtime
-    supplies endpoint credentials only to the grading command's machine. ``empty_output`` permits scripts
+    ``judge`` declares the judge service the command requires, staged as ``/tests/judge.toml``. An
+    empty rubric is a task-owned rubric: the script reads only the connection and grades with its
+    own logic. The runtime supplies endpoint credentials only to the grading command's machine.
+    ``empty_output`` permits scripts
     to grade blank plain-text submissions when the source requires per-item metrics for them.
     """
 
@@ -751,7 +753,7 @@ class ScriptGrader(BaseModel):
     def validate_grader(self) -> "ScriptGrader":
         if self.judge is not None:
             try:
-                validate_judge_spec(self.judge)
+                validate_script_judge(self.judge)
             except InvalidTask as error:
                 raise ValueError(str(error)) from error
         if self.cwd is not None:
@@ -1096,6 +1098,11 @@ class TaskSpec(BaseModel):
     output_paths: tuple[str, ...] = ()
     answer_type: AnswerType
     answer_format: AnswerFormat
+    verifies_stopped_workspace: bool = False
+    """Whether the verifier can score the workspace after the agent stops at a limit — its turn
+    timeout or the model's context window — instead of completing. The sealed Harbor protocol
+    grades the workspace an agent leaves behind; tasks whose verifier needs a completed run keep
+    the default."""
     grader: Grader
     reasoning_markup: ReasoningMarkupPolicy = ReasoningMarkupPolicy.GRADE
     source: Source
@@ -1124,6 +1131,8 @@ class TaskSpec(BaseModel):
             raise ValueError("Native-action tasks require advertised functions")
         if self.answer_type in CONVERSATION_ANSWERS and not self.answer_format.supports(self.answer_type):
             raise ValueError(f"Answer format {self.answer_format.kind} cannot carry a {self.answer_type} answer")
+        if self.verifies_stopped_workspace and self.answer_type != AnswerType.WORKSPACE_STATE:
+            raise ValueError(f"Only a {AnswerType.WORKSPACE_STATE} answer can verify a stopped workspace")
         validate_output_paths(self.output_paths)
         if isinstance(self.grader, VerifyitGrader) and self.grader.placement is None:
             if self.answer_type == AnswerType.WORKSPACE_STATE:

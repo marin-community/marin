@@ -154,6 +154,8 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
         {},
         retry=RetrySettings(jitter=0),
         shutdown_timeout=30,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)
@@ -230,6 +232,8 @@ async def test_assistant_prefix_worker_grades_only_an_ended_turn_without_its_ter
         {},
         retry=RetrySettings(jitter=0),
         shutdown_timeout=30,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)
@@ -284,6 +288,8 @@ async def test_a_malformed_turn_is_rejected_or_penalized_by_reward_shaping(
         {},
         retry=RetrySettings(jitter=0),
         shutdown_timeout=30,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
     )
     try:
         (rollout,) = await worker.generate(request)

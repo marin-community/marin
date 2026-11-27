@@ -407,6 +407,8 @@ class TaskRolloutWorker:
         agents: TaskAgentHarnesses | None = None,
         judge_connection: JudgeConnection | None = None,
         task_health_export: str | None = None,
+        agent_max_retries: int,
+        max_concurrent_agents: int | None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
@@ -420,6 +422,8 @@ class TaskRolloutWorker:
         self.task_health_export = task_health_export
         self.retry_wait = retry_wait
         self.retry = retry
+        self.agent_max_retries = agent_max_retries
+        self.agent_slots = asyncio.Semaphore(max_concurrent_agents) if max_concurrent_agents is not None else nullcontext()
         self.group_graders = group_graders
         self.task_slots = asyncio.Semaphore(concurrent_tasks) if concurrent_tasks is not None else nullcontext()
         self.training_machine_slots = (
@@ -526,7 +530,7 @@ class TaskRolloutWorker:
                 self.training_machine_slots if phase == "train" and lowered.task_machine is not None else nullcontext()
             )
             while True:
-                async with machine_slots, self.task_slots:
+                async with machine_slots, self.task_slots, self.agent_slots if external_agent else nullcontext():
                     result = await _run_task_attempt(engine, lowered, model, attempt_id)
                 if external_agent:
                     result = _reject_unconfirmed_cleanup(result)
@@ -543,6 +547,9 @@ class TaskRolloutWorker:
                     delay is not None
                     and classify_failure(result.failure, self.error_handling) is ErrorTreatment.PASSTHROUGH
                 ):
+                    delay = None
+                # The policy's agent retry budget bounds agent-task retries on top of the shared settings.
+                if delay is not None and external_agent and retries >= self.agent_max_retries:
                     delay = None
                 if delay is None:
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
@@ -684,4 +691,9 @@ class TaskRolloutWorkerSpec:
             agents=agents,
             judge_connection=judge,
             task_health_export=str(self.config.trainer.export_path) if agents is not None else None,
+            agent_max_retries=int(task_sessions.agent_max_retries),
+            max_concurrent_agents=(
+                max(1, int(task_sessions.max_concurrent_agents) // shard.count)
+                if task_sessions.max_concurrent_agents is not None else None
+            ),
         )

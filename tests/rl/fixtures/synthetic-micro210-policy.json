@@ -60,6 +60,9 @@
         "strategy": "megatron",
         "algorithm": {
           "use_kl_loss": false
+        },
+        "placement": {
+          "colocate_all": true
         }
       },
       "generator": {
@@ -82,7 +85,14 @@
         }
       },
       "terminal_bench": {
-        "harbor": {},
+        "harbor": {
+          "daytona_api_key_env": "DAYTONA_EVAL_API_KEY",
+          "daytona_provisioning": "declarative",
+          "max_retries": 0,
+          "n_concurrent_trials": 8,
+          "override_timeout_sec": 1800,
+          "trial_attempt_timeout_sec": 10800
+        },
         "installed_agent": {
           "agent": {
             "kwargs": {
@@ -119,6 +129,10 @@
             "api_key_env": "JUDGE_API_KEY"
           }
         }
+      },
+      "entrypoint": "generate",
+      "config_groups": {
+        "terminal_bench_config": "terminal_bench"
       }
     }
   }

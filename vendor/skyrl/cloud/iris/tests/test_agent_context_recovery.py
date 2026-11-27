@@ -116,6 +116,8 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
         agents=agent_harnesses(agent),
         retry=RetrySettings(jitter=0),
         shutdown_timeout=5,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)
@@ -165,6 +167,8 @@ async def test_native_worker_keeps_a_workspace_verdict_without_sampled_tokens(ag
         agents=agent_harnesses(agent),
         retry=RetrySettings(jitter=0),
         shutdown_timeout=5,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)
@@ -221,6 +225,8 @@ async def test_training_machine_limit_leaves_inline_work_unblocked(agent_harness
         concurrent_training_machine_tasks=1,
         retry=RetrySettings(jitter=0),
         shutdown_timeout=5,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
     )
     try:
         async with asyncio.timeout(5), asyncio.TaskGroup() as group:

@@ -372,6 +372,10 @@ VERIFYIT_ENVIRONMENT = {"kind": "verifyit", "placement": GRADER_MACHINE}
             id="grader-machine-with-tool-providers",
         ),
         pytest.param(
+            {"verifies_stopped_workspace": True},
+            id="stopped-workspace-verdict-on-a-text-answer",
+        ),
+        pytest.param(
             {"grader": {**SCRIPT, "placement": {"kind": "agent_machine", "collect": [{"argv": ["true"]}]}}},
             id="agent-machine-collects-from-itself",
         ),
@@ -399,6 +403,24 @@ def test_invalid_script_judge_is_schema_feedback(judge):
     # Full S 20261108 d01.discrete.graph-analysis/06: InvalidTask escaped Pydantic and held the author.
     with pytest.raises(ValidationError, match="needs non-empty"):
         ScriptGrader(argv=("true",), placement=GraderMachine(environment=GRADING_ENVIRONMENT), judge=judge)
+
+
+@pytest.mark.parametrize(
+    "judge,match",
+    [
+        (JudgeSpec(model="fixture-judge", rubric=""), None),
+        (JudgeSpec(model="fixture-judge", rubric="reference", references=("done",)), None),
+        (JudgeSpec(model="fixture-judge", rubric="", request_timeout=0), "request timeout"),
+        (JudgeSpec(model="fixture-judge", rubric="equivalence"), "unknown judge rubric"),
+    ],
+)
+def test_script_judge_contract(judge, match):
+    grader = dict(argv=("true",), placement=GraderMachine(environment=GRADING_ENVIRONMENT), judge=judge)
+    if match is None:
+        assert ScriptGrader(**grader).judge == judge
+    else:
+        with pytest.raises(ValidationError, match=match):
+            ScriptGrader(**grader)
 
 
 TASK_SPEC_0_30 = Path(__file__).parent / "fixtures" / "task_spec_0_30.json"

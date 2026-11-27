@@ -28,6 +28,7 @@ from rolloutengine.models import (
     SETUP_SECONDS_METRIC,
     AttemptEnded,
     AttemptStarted,
+    ContextWindowExceeded,
     Graded,
     GradedRollout,
     GradedRolloutInterrupted,
@@ -221,9 +222,18 @@ class RolloutEngine:
         await stopped.aclose()
         if failure is None and not recorder.has_response and task.answer_type in CONVERSATION_ANSWERS:
             attempt.grade = GradeResult(Outcome.UNAVAILABLE, None, recorder.no_response_reason)
-        # A model failure leaves the completed turns intact, so the engine grades them. An attempt that ended
-        # before the first response, at a limit or with an agent that gave up, leaves its answer on the machine.
-        elif failure is None or (failure[0] == RolloutOperation.MODEL and recorder.has_response):
+        # Completed turns survive model failures. A task that declares its verifier scores the
+        # agent's stopped workspace is also graded when the attempt ends at a limit — the agent's
+        # turn timeout or the model's context limit; other failures leave the workspace unknown.
+        elif (
+            failure is None
+            or (failure[0] == RolloutOperation.MODEL and recorder.has_response)
+            or (
+                task.verifies_stopped_workspace
+                and failure[0] == RolloutOperation.ADVANCE
+                and isinstance(failure[1], (TimeoutError, ContextWindowExceeded))
+            )
+        ):
             try:
                 await self._grade(attempt, machine, resources)
             except _Interrupted as interrupted:

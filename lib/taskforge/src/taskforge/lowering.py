@@ -27,7 +27,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.shell import resolve_shell_tool
 from taskcompendium.submission import require_submission_compatibility
 from verifyit.grade import InvalidTask
-from verifyit.judge_contract import validate_judge_spec
+from verifyit.judge_contract import validate_judge_spec, validate_script_judge
 from verifyit.modes.grade_judge import JudgeConnection
 
 from taskforge.model.controls import Candidate
@@ -53,9 +53,13 @@ def check_authored(task: TaskSpec) -> None:
     Runs before machine admission, so the defect returns to the author instead of holding the stage.
     """
     try:
-        judge = judge_spec(task.grader)
+        grader = task.grader
+        judge = judge_spec(grader)
         if judge is not None:
-            validate_judge_spec(judge)
+            if isinstance(grader, ScriptGrader):
+                validate_script_judge(judge)
+            else:
+                validate_judge_spec(judge)
         resolve_shell_tool(task, DEFAULT_SHELL_TOOL)
         if task.answer_type in CONVERSATION_ANSWERS:
             require_submission_compatibility(task)

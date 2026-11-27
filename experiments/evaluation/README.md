@@ -252,6 +252,27 @@ To extend the catalog:
   a `protocol: terminus-2` entry to [configs/evaluations.yaml](configs/evaluations.yaml).
   Add keys to a suite when they belong in one.
 
+A benchmark that is neither curated nor agentic — one with a sealed protocol and
+its own artifact graph — follows the same ingestion shape.
+[micro210/](micro210/README.md) is the worked example:
+
+1. Pin the protocol: publish the policy (task selection, sampling, judge
+   settings) as an immutable artifact, and record its digest, byte size, and
+   immutable revision in a policy module that refuses modified bytes.
+2. Pin the inputs: freeze the source table behind a digest recorded in the
+   policy; converters verify it before deriving anything.
+3. Derive runtime inputs in an `ArtifactStep`: lower the source to runtime
+   bindings and write a receipt recording source, converter, and image digests.
+   The artifact system owns caching and byte identity; steps do not re-read
+   tables to re-verify bytes.
+4. Verify at launch: check the receipt against the pinned policy, converter,
+   and image digests before allocating accelerators, and bind the verified
+   input identity into the run record.
+5. Record the run: write a serializable record (model, policy reference,
+   verified inputs, outputs) beside the results so past runs stay re-readable.
+6. Scale diagnostics separately: smokes build their own artifacts with their
+   own row selections and never count as full scores.
+
 ## Archive maintenance
 
 Archive upgrades and sample backfills use a separate administrative CLI:
@@ -269,11 +290,6 @@ source files. Read each command's `--help` before writing to production storage.
 
 ## Micro210 judge policy
 
-Micro210 uses a [Together serverless judge](judge_config.py) and a
-[content-pinned policy](micro210_policy.py). Scores are not directly comparable
-to the 2026.11.18 MiniMax policy; see [#11818](https://github.com/marin-community/marin/pull/11818)
-for the proposed paired re-score.
-
-To read a past run's policy, pass the `policy_reference` from its
-`canonical-evaluation.json` to `read_micro210_policy` in the policy module.
-Mini840 keeps its existing judge policy.
+Micro210 is packaged under [`micro210/`](micro210/README.md): its judge policy,
+frozen protocol references, and native launch live there. Diagnostic runs are not
+full Micro210 scores. Mini840 keeps its existing judge policy.

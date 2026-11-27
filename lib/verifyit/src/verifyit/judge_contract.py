@@ -112,13 +112,7 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         raise InvalidTask("judge token budget must be positive")
     if spec.incomplete_retry_tokens and spec.incomplete_retry_tokens <= spec.max_completion_tokens:
         raise InvalidTask("retry token budget must exceed the initial budget")
-    if (
-        isinstance(spec.request_timeout, bool)
-        or not isinstance(spec.request_timeout, (int, float))
-        or spec.request_timeout <= 0
-        or not math.isfinite(spec.request_timeout)
-    ):
-        raise InvalidTask("judge request timeout must be finite and positive")
+    require_request_timeout(spec.request_timeout)
     if (
         not isinstance(spec.exact_gate_answers, tuple)
         or any(not isinstance(answer, str) or not answer for answer in spec.exact_gate_answers)
@@ -136,10 +130,30 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
     )
 
 
+def require_request_timeout(seconds: int | float) -> None:
+    """Reject a judge request deadline that is not a finite positive number."""
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0 or not math.isfinite(seconds):
+        raise InvalidTask("judge request timeout must be finite and positive")
+
+
 def validate_judge_spec(spec: JudgeSpec) -> None:
     """Validate a complete judge contract before any provider side effects."""
     validated_judge_spec(spec)
     empty_output_policy(spec)
+
+
+def validate_script_judge(spec: JudgeSpec) -> None:
+    """Validate a script grader's judge contract; an unnamed rubric stays task-owned.
+
+    A script grader declares the judge service its command requires. An empty rubric is a
+    task-owned rubric: the script grades with its own logic and reads only the connection, so
+    only the service deadline applies. A named rubric stages the script's grading contract and
+    follows the same payload rules as a verifyit judge.
+    """
+    if not spec.rubric:
+        require_request_timeout(spec.request_timeout)
+        return
+    validate_judge_spec(spec)
 
 
 def answer_text(text: str, strip_reasoning: bool, *, unfinished_error: str | None = None) -> str:

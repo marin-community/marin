@@ -32,7 +32,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import get_secret
 
-from experiments.evaluation.micro210_policy import (
+from experiments.evaluation.micro210.policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
     POLICY_REPO,

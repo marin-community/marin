@@ -30,8 +30,8 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.evaluation.micro210 import Micro210Run, micro210_step
-from experiments.evaluation.micro210_policy import Micro210Model
+from experiments.evaluation.micro210.eval import Micro210Run, micro210_step
+from experiments.evaluation.micro210.policy import Micro210Model
 from experiments.post_training import iceball_micro, rl, skyrl_port_smoke, snowball_online_eagle
 from experiments.post_training import mochi_rl as mochi_model
 from experiments.post_training import rl_compose as recipe
@@ -106,7 +106,7 @@ def generation_geometry_step() -> ArtifactStep[SkyRLRun]:
 
 
 def _micro210_step(artifact_root):
-    with patch("experiments.evaluation.micro210_policy.POLICY_REFERENCE", policy_fixture_reference()):
+    with patch("experiments.evaluation.micro210.policy.POLICY_REFERENCE", policy_fixture_reference()):
         return micro210_step(
             Micro210Model(str(artifact_root / "policy"), "sha256:" + "a" * 64, "test/tokenizer", "b" * 40),
             name="micro210/census",
