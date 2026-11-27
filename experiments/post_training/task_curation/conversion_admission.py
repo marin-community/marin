@@ -29,6 +29,7 @@ from pathlib import Path
 
 from finestore.rl.curation import (
     DatasetRelease,
+    GradingEnvironmentEvidence,
     LexicalContaminationEvidence,
     SourceUse,
     TaskFormat,
@@ -190,6 +191,12 @@ def bind_conversion_admission(source: RlDataSource, receipt: ConversionAdmission
         lexical_contamination=lexical,
         grading_environment=receipt_actor_grading(receipt),
         within_source_dedup=dedup,
+        # The oracle-flow evidence binds the zero-task pin; the conversion admission
+        # replaces it (the original pin and its filtration evidence stay archived in
+        # the receipt and the notes).
+        oracle_filtration=None,
+        no_oracle_executability_policy=None,
+        no_oracle_static_retention=None,
         recipe_qa_history=(
             history.model_copy(
                 update={
@@ -225,7 +232,7 @@ def receipt_actor_grading(receipt: ConversionAdmissionReceipt):
     document = json.loads(StoragePath(receipt.grading_evidence_uri).read_bytes())
     for row in document if isinstance(document, list) else [document]:
         if row.get("source_id") == receipt.source_id:
-            return row["evidence"]
+            return GradingEnvironmentEvidence.model_validate(row["evidence"])
     raise ValueError(f"The grading census receipt does not cover {receipt.source_id}: {receipt.grading_evidence_uri}")
 
 

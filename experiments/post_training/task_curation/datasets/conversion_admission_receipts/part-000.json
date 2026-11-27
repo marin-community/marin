@@ -1,0 +1,6 @@
+{
+  "repo": "open-athena/marin-rl-data-atlas-registry",
+  "revision": "a496ccab3826fb197cbd88f5bf2a876abb8d58e6",
+  "path": "experiments/post_training/task_curation/datasets/conversion_admission_receipts_basepin_20261127_v1/part-000.json",
+  "sha256": "c164fb09fb060939fcb306a96977227fc79740f3bac1199a4a014b73c6dbe831"
+}

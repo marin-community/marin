@@ -7,17 +7,30 @@ import json
 from pathlib import Path
 
 import pytest
-from finestore.rl.curation import ActorCensusInput as ActorCensusInputModel
-from finestore.rl.curation import DatasetRelease, DaytonaMeasurement, SourceOrigin, TaskFormat
+from finestore.rl.curation import (
+    ActorCensusInput as ActorCensusInputModel,
+)
+from finestore.rl.curation import (
+    DatasetRelease,
+    DaytonaMeasurement,
+    LexicalContaminationEvidence,
+    LexicalUse,
+    SourceOrigin,
+    TaskFormat,
+)
 from finestore.rl.status_taxonomy import DataRestriction
+from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 from taskcompendium.pipeline.models import IntendedUse
 
+from experiments.post_training.task_curation import conversion_admission
 from experiments.post_training.task_curation.census_binding import ActorCensusReceipt
 from experiments.post_training.task_curation.conversion_admission import (
     ConversionAdmissionReceipt,
     bind_conversion_admission,
 )
-from experiments.post_training.task_curation.prebuilt import PrebuiltCohort
+from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
+from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt
+from experiments.post_training.task_curation.prebuilt import PrebuiltCohort, import_taskcompendium_cohort
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
 
 ORIGINAL_REPO = "open-athena/task-trove-laion__exp_rpt_fixture-oracle-filter-20261114-v2"
@@ -80,7 +93,6 @@ def _receipt(**overrides) -> ConversionAdmissionReceipt:
 
 def _staged_population(tmp_path, receipt: ConversionAdmissionReceipt) -> Path:
     """A real staged population record at a local path, matching the census binding."""
-    from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 
     population = SourceTextPopulation(
         path="placeholder",
@@ -104,10 +116,8 @@ def _staged_population(tmp_path, receipt: ConversionAdmissionReceipt) -> Path:
             "drop_manifest_uri": "s3://fixture/within-source-dedup/drops.parquet",
         },
     )
-    from marin.execution.artifact import ArtifactRecord, result_type_name, write_record
 
     root = tmp_path / "staged-population"
-    record = receipt.population_record
     write_record(
         ArtifactRecord(
             output_path=str(root),
@@ -145,17 +155,12 @@ def _original_source(receipt: ConversionAdmissionReceipt) -> RlDataSource:
 
 
 def _original_pipeline():
-    from experiments.post_training.task_curation.prebuilt import import_taskcompendium_cohort
 
     return import_taskcompendium_cohort
 
 
 def _inject_lexical(monkeypatch, receipt: ConversionAdmissionReceipt) -> None:
     """A registered lexical measurement at the conversion release (0 contaminated)."""
-    from finestore.rl.curation import LexicalUse
-
-    from experiments.post_training.task_curation import conversion_admission
-    from experiments.post_training.task_curation.lexical_binding import LexicalMeasurementReceipt
 
     evidence = receipt_lexical_evidence(receipt)
     monkeypatch.setattr(
@@ -173,7 +178,6 @@ def _inject_lexical(monkeypatch, receipt: ConversionAdmissionReceipt) -> None:
 
 
 def receipt_lexical_evidence(receipt: ConversionAdmissionReceipt):
-    from finestore.rl.curation import LexicalContaminationEvidence
 
     return LexicalContaminationEvidence.model_validate(
         {

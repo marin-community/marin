@@ -288,6 +288,13 @@ def main() -> None:
         "staged population (referenced in the census basis).",
     )
     parser.add_argument("--output", required=True, type=Path, help="The staged census artifact directory.")
+    parser.add_argument(
+        "--published-artifact",
+        required=True,
+        help="The census artifact's object-storage directory (the regional census root's per-cohort "
+        "path): the receipt's evidence_url records THIS location, because the admission binding reads "
+        "the census evidence from the registry, not from the pod-local scratch.",
+    )
     parser.add_argument("--receipts-output", required=True, type=Path, help="The staged receipt shard directory.")
     parser.add_argument("--report", type=Path, help="Write the census result JSON here.")
     args = parser.parse_args()
@@ -306,9 +313,9 @@ def main() -> None:
     )
     record, census = staged.record, staged.census
     args.output.mkdir(parents=True, exist_ok=True)
-    census["path"] = str(args.output)
+    census["path"] = str(args.published_artifact)
     (args.output / ".artifact.json").write_text(
-        json.dumps({"result": {**record, "path": str(args.output)}}, indent=2, sort_keys=True) + "\n"
+        json.dumps({"result": {**record, "path": str(args.published_artifact)}}, indent=2, sort_keys=True) + "\n"
     )
     receipt = receipt_from_census(census, None)
     check_receipt_evidence(receipt)
