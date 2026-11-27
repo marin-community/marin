@@ -19,7 +19,7 @@ from levanter.utils.mesh import create_mesh_from_axis_specs
 
 
 class DummyModel(eqx.Module):
-    """Minimal model stub to drive GenerationService for tests.
+    """Minimal model stub to drive InferenceEngine for tests.
 
     - `initial_cache` returns an empty KvPageCache sized to the page-table spec.
     - `decode` returns constant logits that strongly prefer token `EOS`.

@@ -1112,7 +1112,7 @@ class InferenceEngine:
         """Generate tokens for a batch of Requests.
 
         Each Request provides prompt_tokens, decode_params, and n_generations (clones).
-        Returns (outputs_per_sequence, total_generated_tokens).
+        Returns a GenerationResult with choices in request order.
 
         Args:
             requests: Sequence of generation requests
