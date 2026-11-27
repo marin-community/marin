@@ -642,9 +642,9 @@ def derive_release_plan(
 def seal_derivation(release_root: str, derived: DerivedRelease) -> dict:
     """Seal the derived plan and its receipt write-once under the release prefix.
 
-    Re-deriving at the same freeze must produce byte-identical documents: a
-    content mismatch refuses (a moved prior state or a changed registry is a
-    decision, not a resume). Returns the sealed plan reference.
+    Resuming compares every receipt field except the generation timestamp and
+    preserves the original receipt unchanged. The complete plan must also match.
+    Returns the sealed plan reference.
     """
     plan = ReleasePlan.model_validate(derived.plan_document)
     plan.validate_shape()
@@ -652,7 +652,10 @@ def seal_derivation(release_root: str, derived: DerivedRelease) -> dict:
     receipt_path = StoragePath(f"{release_root}/{DERIVATION_RECEIPT_NAME}")
     raw = (json.dumps(derived.receipt, indent=2, sort_keys=True) + "\n").encode()
     if receipt_path.exists():
-        if receipt_path.read_bytes() != raw:
+        raw = receipt_path.read_bytes()
+        sealed = json.loads(raw)
+        resumed = {**derived.receipt, "generated_at": sealed["generated_at"]}
+        if sealed != resumed:
             raise ValueError(
                 f"the derivation receipt already exists with different content at {receipt_path};"
                 " the release inputs moved after the freeze — re-derive deliberately"

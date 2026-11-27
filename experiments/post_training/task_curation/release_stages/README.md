@@ -324,6 +324,10 @@ statistics for unaffected sources retain their existing values. The handoff
 records replacement source IDs and scopes its unchanged-value evidence to the
 retained sources.
 
+Resuming the same frozen plan compares all derivation receipt fields except the
+generation timestamp. If they match, the original receipt stays unchanged;
+changed measured inputs refuse resume.
+
 QC browse staging preserves only prior panels whose source inputs and selected
 evidence still match the frozen declaration. Derivation omits changed panels
 from that copy and counts copied panels separately from the final selected set.

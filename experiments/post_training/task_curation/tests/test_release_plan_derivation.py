@@ -13,6 +13,7 @@ the injected boundaries (the release resolves the real ones at run time).
 import hashlib
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -511,6 +512,7 @@ def test_interrupted_derivation_resumes_at_the_same_version(tmp_path, frozen_lay
     release_root = derived.plan_document["release_root"]
     seal_derivation(release_root, derived)
     sealed = (Path(release_root) / "release-plan.json").read_bytes()
+    sealed_receipt = (Path(release_root) / "derivation-receipt.json").read_bytes()
     plan = ReleasePlan.model_validate(derived.plan_document)
     fingerprints_before = {node["name"]: node["fingerprint"] for node in graph_nodes(release_graph(plan))}
 
@@ -518,12 +520,25 @@ def test_interrupted_derivation_resumes_at_the_same_version(tmp_path, frozen_lay
     # every graph fingerprint matches so the runner skips sealed nodes instead of
     # rerunning them.
     derived_again = _derive(tmp_path, layer, config, monkeypatch, panels=[RETAINED_ID], available=[RETAINED_ID])
+    derived_again = replace(
+        derived_again, receipt={**derived_again.receipt, "generated_at": "2099-01-01T00:00:00+00:00"}
+    )
     seal_derivation(release_root, derived_again)
     resumed_plan = ReleasePlan.model_validate(derived_again.plan_document)
     fingerprints_after = {node["name"]: node["fingerprint"] for node in graph_nodes(release_graph(resumed_plan))}
     assert fingerprints_before == fingerprints_after
     assert (Path(release_root) / "release-plan.json").read_bytes() == sealed
-    assert (Path(release_root) / "derivation-receipt.json").exists()
+    assert (Path(release_root) / "derivation-receipt.json").read_bytes() == sealed_receipt
+    changed_measurement = replace(
+        derived_again,
+        receipt={
+            **derived_again.receipt,
+            "measured": {**derived_again.receipt["measured"], "expected_population_tasks": 999},
+        },
+    )
+    with pytest.raises(ValueError, match="release inputs moved"):
+        seal_derivation(release_root, changed_measurement)
+    assert (Path(release_root) / "derivation-receipt.json").read_bytes() == sealed_receipt
 
 
 def test_read_prior_catalog_state_measurements(tmp_path, frozen_layer, deployment):
