@@ -64,6 +64,7 @@ from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     curation_embedding_pipeline,
 )
+from experiments.post_training.task_curation.lexical_engine import DatakitDecontamination
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.selection import (
@@ -106,6 +107,30 @@ def _selected_sources(sources: tuple[str, ...]) -> dict[str, RlDataSource]:
         for name, pipeline in catalog.items()
         if (name in sources if sources else pipeline.declaration.type != "eval")
     }
+
+
+def _lexical_engine(
+    bloom_dir: str | None,
+    global_drop_set_dir: str | None,
+    corpus_version: str | None,
+    frozen_drop_sets: Path | None,
+) -> DatakitDecontamination | None:
+    """Build the lexical stage's engine from the frozen eval-corpus flags, or ``None`` to skip it."""
+    if bloom_dir is None and global_drop_set_dir is None and corpus_version is None:
+        if frozen_drop_sets is not None:
+            raise click.UsageError("--lexical-frozen-drop-sets requires the corpus flags")
+        return None
+    if bloom_dir is None or global_drop_set_dir is None or corpus_version is None:
+        raise click.UsageError(
+            "Lexical decontamination requires --lexical-bloom, --lexical-global-drop-set and --lexical-corpus-version"
+        )
+    frozen = json.loads(frozen_drop_sets.read_text()) if frozen_drop_sets is not None else None
+    return DatakitDecontamination(
+        bloom_dir=bloom_dir,
+        global_drop_set_dir=global_drop_set_dir,
+        eval_corpus_version=corpus_version,
+        frozen_source_drop_sets=frozen,
+    )
 
 
 def _image_factory(backend: Backend | None, controller_url: str | None) -> MachineFactory | None:
@@ -430,6 +455,14 @@ def _embedding_pass(
     show_default=True,
 )
 @click.option("--verification-sample-size", type=click.IntRange(min=1), default=20)
+@click.option("--lexical-bloom", help="Frozen eval-corpus bloom directory; enables lexical decontamination.")
+@click.option("--lexical-global-drop-set", help="Frozen corpus-common global drop-set directory.")
+@click.option("--lexical-corpus-version", help="The eval corpus version the bloom and drop sets were built from.")
+@click.option(
+    "--lexical-frozen-drop-sets",
+    type=click.Path(exists=True, path_type=Path),
+    help="Optional JSON mapping of source name to its frozen source-local drop-set directory.",
+)
 @click.option(
     "--curation-attempt",
     type=click.IntRange(min=0),
@@ -519,6 +552,10 @@ def main(
     seed: int,
     quality_sample_size: int,
     verification_sample_size: int,
+    lexical_bloom: str | None,
+    lexical_global_drop_set: str | None,
+    lexical_corpus_version: str | None,
+    lexical_frozen_drop_sets: Path | None,
     curation_attempt: int,
     assess: bool | None,
     assessment_sample_size: int,
@@ -737,6 +774,9 @@ def main(
         if model_revision is not None and review_mode is not None
         else None
     )
+    decontamination = _lexical_engine(
+        lexical_bloom, lexical_global_drop_set, lexical_corpus_version, lexical_frozen_drop_sets
+    )
     recipe_settings = RecipeSettings(
         review=review,
         review_cache=review_cache or (str(cache_dir / "review-cache") if cache_dir else None),
@@ -756,6 +796,7 @@ def main(
         verification_sample_size=verification_sample_size,
         curation_attempt=curation_attempt,
         execution=AuditExecution(max_workers=max_workers, worker_resources=worker_resources),
+        decontamination=decontamination,
     )
     options = PipelineOptions(processing_mode, runtime, inputs=inputs, recipe_settings=recipe_settings)
     assessment = None

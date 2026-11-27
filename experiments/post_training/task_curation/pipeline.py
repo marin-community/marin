@@ -50,6 +50,7 @@ from taskcompendium.models import CommandSemantics, EnvironmentRequirements
 from taskcompendium.pipeline.controls import GradingMachines, controls_identity
 from taskcompendium.pipeline.fingerprints import callable_identity, recipe_code_identity
 from taskcompendium.pipeline.inputs import ConversionContext, FileParts, SourceFileOverride, SourceFiles, SourceFormat
+from taskcompendium.pipeline.lexical import DecontaminationEngine
 from taskcompendium.pipeline.models import (
     RESOURCE_BUDGET_BYTES,
     Controls,
@@ -446,6 +447,7 @@ def _pipeline_config(
     max_workers: int,
     worker_resources: ResourceConfig,
     normalized_shards: int,
+    decontamination: DecontaminationEngine | None = None,
 ) -> SourcePipelineConfig:
     return SourcePipelineConfig(
         mode=mode,
@@ -464,6 +466,7 @@ def _pipeline_config(
         filter_policy=FilterPolicy(),
         normalized_shards=normalized_shards,
         machines=machines,
+        decontamination=decontamination,
     )
 
 
@@ -490,6 +493,7 @@ def _source_config(
         max_workers=settings.execution.max_workers,
         worker_resources=settings.execution.worker_resources,
         normalized_shards=settings.normalized_shards,
+        decontamination=settings.decontamination,
     )
 
 
@@ -547,20 +551,21 @@ def _pipeline_result(result: ConversionResult | SourcePipelineResult) -> Pipelin
     stages = ["download", "normalize"]
     if review_manifest["rubric"] is not None:
         stages.append("review")
+    if manifest.get("lexical") is not None:
+        stages.append("lexical")
     if any(phase["phase"] == "verification" for phase in telemetry["phases"]):
         stages.append("verify")
     stages.append("final")
-    return PipelineResult(
-        result.status,
-        {"normalize": result.normalize_path, "final": result.final_path},
-        {
-            "download": result.download_path,
-            "review": result.review_path,
-            "verify": result.verify_path,
-            "manifest": result.manifest_path,
-        },
-        tuple(stages),
-    )
+    outputs = {"normalize": result.normalize_path, "final": result.final_path}
+    evidence = {
+        "download": result.download_path,
+        "review": result.review_path,
+        "verify": result.verify_path,
+        "manifest": result.manifest_path,
+    }
+    if result.lexical_path is not None:
+        evidence["lexical"] = result.lexical_path
+    return PipelineResult(result.status, outputs, evidence, tuple(stages))
 
 
 class RlDataArtifact(CampaignArtifact):

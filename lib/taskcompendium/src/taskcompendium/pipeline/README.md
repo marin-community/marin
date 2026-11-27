@@ -68,7 +68,17 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    and counted separately from defects; the manifest records them as
    `unavailable_reviews`. They make the source `incomplete` only when resolving
    them could change the quality decision.
-6. **Verify.** With controls, [source_verification.py](source_verification.py)
+6. **Decontaminate.** With a `decontamination` engine configured, [lexical.py](lexical.py)
+   renders every kept row's conversation as text and marks it against the
+   caller's frozen eval corpus. The engine records the measurement —
+   contaminated count and fraction, overlap statistics, matched benchmark
+   families — in the manifest's `lexical` section and the `lexical/` view, and
+   attributes each match through the corpus hash index. A training source
+   rejects contaminated kept rows (`lexical:contaminated`) before verification,
+   so `final/` holds the retained population; an evaluation or benchmark source
+   keeps every task and records the measurement only. Without an engine the
+   stage is skipped and the manifest's `lexical` section is `null`.
+7. **Verify.** With controls, [source_verification.py](source_verification.py)
    samples kept rows and grades one control submission per task through the
    same grading path rollouts use ([controls.py](controls.py)):
    - `golden(task)`, a known-correct `Reply`, `WorkspaceFiles` or
@@ -98,12 +108,12 @@ pass `PhaseTelemetry` to the writer to retain counters and the execution ID.
    explicit judge endpoint, outside the grader sandbox. Endpoint credentials are runtime-only and
    are not recorded in task specifications, artifact identities or reports. Judge sources without
    declared controls remain unverified.
-7. **Admit and export.** Each row gets an `admission`:
+8. **Admit and export.** Each row gets an `admission`:
 
    | Admission | Meaning |
    | --- | --- |
    | `admitted` | Kept, and the grader runs in process, is a verifyit judge, passed its controls, or is covered by a passing control sample. |
-   | `rejected` | Rejected by conversion, checks, review or verification. |
+   | `rejected` | Rejected by conversion, checks, review, decontamination or verification. |
    | `deferred` | Held back for unavailable review or inconclusive verification. |
    | `no_grader` | The converter found no runnable grader (`NoGrader`). |
    | `unverified` | A sandbox grader, other than a judge, without controls or a passing control sample. |
@@ -116,7 +126,8 @@ normalize/     every converted row (TaskSpec JSON, rejection reason, normalizati
 review/        review and filter decisions, report.json, manifest.json
 verify/        checks, grader readiness and admission per row, report.json, manifest.json
 final/         admitted rows only
-manifest.json  status, counts, quality and verification reports, admission summary
+lexical/       measurement.json, task_flags/ and the drop manifest, when decontaminated
+manifest.json  status, counts, quality, verification, lexical measurement, admission summary
 telemetry.json Zephyr execution IDs, counters and phase wall times
 ```
 
@@ -205,6 +216,7 @@ A source runs these phases in order:
 | `full_prepare` | Full mode only: one execution converts, deduplicates and checks every row. |
 | `audit_review` | One execution reuses the panel's reviews and applies the source decision to every other prepared row, without model requests. |
 | `filter` | One execution writes the filtered audit and its kept rows. |
+| `lexical_text`, `lexical_mark`, `lexical_gate` | With a decontamination engine: one execution renders the kept population, the engine's executions mark it against the frozen eval corpus, and one execution rejects contaminated training rows in the audit. |
 | `verification` | With controls, the executions of [source verification](#verification-trials). |
 | `export` | One execution shuffles the checked rows by task ID into the normalized shards and writes the `normalize`, `review`, `verify` and `final` views, with the unprocessed review rows of an unexpanded sample. |
 
