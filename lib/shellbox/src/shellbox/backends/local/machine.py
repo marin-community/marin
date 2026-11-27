@@ -694,6 +694,8 @@ class LocalMachine:
                                 break
                         except json.JSONDecodeError:
                             pass  # bwrap may still be writing its single status document.
+                        except FileNotFoundError:
+                            pass  # The child already exited; the keeper's exit below reports why.
                     if self._keeper.returncode is not None:
                         assert self._keeper.stderr is not None
                         error = (await self._keeper.stderr.read()).decode(errors="replace")
