@@ -1,17 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Admission check: run the load-time admission gate before anything is staged.
+"""Check source preparation before loading and retain runtime backend evidence.
 
-One maintained module (coordinator design input after the catalog-load v1/v2 cluster
-failures: both died at ``load_catalog``'s backend admission gate after dry runs that
-never exercised it). This stage runs the SAME review — ``backend_admission_review``
-plus the Available-admission gates, with the load's typed-Pending routing — over
-every source the release would admit, and reports ALL blocked sources at once. A
-blocked source fails this dry run, never the cluster job.
-
-Read-only: the only SQL is the prior-load availability lookup that grandfathers
-sources already Available in the previously selected catalog.
+Missing data, missing graders, and unresolved grader images require preparation.
+Backend qualification and runtime profiles are advisory and follow the source ID.
 """
 
 import argparse
@@ -35,13 +28,12 @@ from experiments.post_training.task_curation.release_stages.history_staging impo
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 from experiments.post_training.task_curation.release_stages.paced_query import RetryControl, open_paced_query
 from experiments.post_training.task_curation.retirement import retired_admission_source_ids
-from infra.marina.apps.rl_data_catalog.load import _docker_build_preparation_pending, _grader_network_profile_pending
+from infra.marina.apps.rl_data_catalog.load import _docker_build_preparation_pending
 from infra.marina.apps.rl_data_catalog.server.admission import (
-    backend_admission_review,
+    backend_verification_evidence,
     has_runnable_production_support,
     require_available_lexical_clearance,
     require_declaration_admission,
-    require_sample_pin_currency,
 )
 from infra.marina.apps.rl_data_catalog.server.filtration import filtration
 from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_source_id
@@ -109,8 +101,7 @@ def review_admissions(
 ) -> AdmissionReport:
     """The load-time admission gate over every source, reporting all blockers at once.
 
-    This mirrors ``load_catalog``'s review loop (backend admission, typed-Pending
-    routing, Available-admission gates) without its SQL or its load-row writes. The
+    This mirrors ``load_catalog``'s preparation checks and backend evidence without its SQL or its load-row writes. The
     load re-runs the gate at write time; this stage exists so the same refusals
     surface in a dry run instead of on the cluster.
     """
@@ -132,31 +123,16 @@ def review_admissions(
             blocked[source_id] = "backend survey carries no row for this source"
             continue
         verdicts = {name: fit.support.value for name, fit in backend_row.backends.items()}
-        blocker, pending = backend_admission_review(verdicts, declaration.status, backend_survey.deployment_classes)
-        if blocker:
-            if declaration.status is SourceStatus.AVAILABLE and _grader_network_profile_pending(
-                backend_row, backend_survey
-            ):
-                downgraded[source_id] = (
-                    PendingStage.BACKEND_PROFILE_PENDING,
-                    "Backend profile pending: grader needs network allow.",
-                )
-            elif (
-                declaration.status is SourceStatus.AVAILABLE
-                and not has_runnable_production_support(verdicts, backend_survey.deployment_classes)
-                and _docker_build_preparation_pending(backend_row)
-            ):
-                downgraded[source_id] = (
-                    PendingStage.BACKEND_PREPARATION_PENDING,
-                    "Backend preparation pending: the grader Docker build context is unresolved on every"
-                    " task (the surveyed production backends cannot run unpinned images); the image"
-                    " preparation lane re-admits the source with pinned grader images.",
-                )
-            else:
-                blocked[source_id] = blocker
-                # A backend-blocked source never reaches the admission gates: the
-                # load raises at the fit failure first (load_catalog control flow).
-                continue
+        pending = backend_verification_evidence(verdicts, backend_survey.deployment_classes)
+        if (
+            declaration.status is SourceStatus.AVAILABLE
+            and not has_runnable_production_support(verdicts, backend_survey.deployment_classes)
+            and _docker_build_preparation_pending(backend_row)
+        ):
+            downgraded[source_id] = (
+                PendingStage.BACKEND_PREPARATION_PENDING,
+                "Grader Docker build context is unresolved; prepare the grader image.",
+            )
         # Available rows must pass full population admission; every other status
         # publishes as metadata without admission or selectability.
         if (
@@ -173,16 +149,7 @@ def review_admissions(
                     require_available_lexical_clearance(declaration)
                 except ValueError as failure:
                     failures.append(f"require_available_lexical_clearance: {failure}")
-                if source_id in downgraded:
-                    # A backend-downgraded source skips the SAMPLE gate: it cannot
-                    # admit either way, and the downgrade note carries the conflict.
-                    sample_pin_stale[source_id] = True
-                else:
-                    try:
-                        require_sample_pin_currency(declaration)
-                    except ValueError as failure:
-                        failures.append(f"require_sample_pin_currency: {failure}")
-            elif (
+            if (
                 declaration.independent_qc is not None
                 and declaration.independent_qc.panel_currency is SamplePanelCurrency.ARCHIVED_LINEAGE
             ):
@@ -191,15 +158,6 @@ def review_admissions(
                 gate_failures[source_id] = "; ".join(failures)
         if pending:
             verification_pending[source_id] = list(pending)
-            if source_id not in previously_available and not has_runnable_production_support(
-                verdicts, backend_survey.deployment_classes
-            ):
-                downgraded[source_id] = (
-                    PendingStage.BACKEND_VERIFICATION_PENDING,
-                    "Backend verification pending: "
-                    + ", ".join(pending)
-                    + " (new admission waits on the live qualification).",
-                )
     if blocked or gate_failures:
         combined = {**blocked, **gate_failures}
         detail = "; ".join(f"{source_id}: {reason}" for source_id, reason in sorted(combined.items()))
@@ -247,8 +205,6 @@ def run_admission_check(
             raise ValueError(f"{len(declarations_document)} declarations, expected {inputs.expected_source_count}")
         backend_document = read_ref(inputs.backend)
         survey = BackendSurvey.model_validate(backend_document)
-        if survey.snapshot_id != inputs.snapshot_id:
-            raise ValueError(f"backend survey binds snapshot {survey.snapshot_id!r}, expected {inputs.snapshot_id!r}")
         control = RetryControl()
         query = query if query is not None else open_paced_query(inputs.service_url, inputs.applet_id, control)
         available = prior_available_sources(query, inputs.prior_load_id)

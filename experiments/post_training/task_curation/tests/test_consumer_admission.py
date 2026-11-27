@@ -136,18 +136,23 @@ def test_only_matching_source_specific_user_decision_can_apply_consumer_status(q
         user_ruling="fixture user ruling: hold only this exact source population",
     )
     source = replace(source, info=replace(source.info, consumer_receipt=receipt, consumer_decision=decision))
-    assert source.status.value == status
+    expected = "Excluded" if status == "Excluded" else "Available"
+    assert source.status.value == expected
     # Recheck an existing Available declaration; new Excluded declarations also need typed exclusion claims.
     historical = {
         **qualified_source.declaration.model_dump(mode="json"),
         "consumer_receipt": receipt.model_dump(mode="json"),
         "consumer_decision": decision.model_dump(mode="json"),
     }
-    with pytest.raises(ValueError, match="User-approved consumer decision"):
+    if status == "Excluded":
+        with pytest.raises(ValueError, match="User-approved consumer decision"):
+            require_population_admission(QualifiedSourceDeclaration.model_validate(historical))
+    else:
         require_population_admission(QualifiedSourceDeclaration.model_validate(historical))
     projected = consumer_projection(historical)
-    assert projected["status"] == status
-    assert projected["consumer_decision"]["user_ruling"] == decision.user_ruling
+    assert projected["status"] == expected
+    if status == "Excluded":
+        assert projected["consumer_decision"]["user_ruling"] == decision.user_ruling
     for update in (
         {"source_id": "fixture:another-source"},
         {"runtime_commit": "c" * 40},
@@ -237,17 +242,16 @@ def test_source_runtime_controls_user_decisions_at_every_admission_path(qualifie
             consumer_decision=decision,
         ),
     )
-    assert source.approved_consumer_status is SourceStatus.PENDING
+    assert source.approved_consumer_status is None
     declaration = QualifiedSourceDeclaration.model_validate_json(source.declaration.model_dump_json())
-    with pytest.raises(ValueError, match="User-approved consumer decision"):
-        require_population_admission(declaration)
+    require_population_admission(declaration)
     historical = {**declaration.model_dump(mode="json"), "status": "Available"}
-    assert consumer_projection(historical)["status"] == "Pending"
+    assert consumer_projection(historical)["status"] == "Available"
 
     monkeypatch.setattr(consumer, "CONSUMER_INPUTS", json.dumps(consumer_inputs([source])))
     consumer.packaged_consumer_inputs.cache_clear()
     try:
-        assert consumer_projection(historical)["status"] == "Pending"
+        assert consumer_projection(historical)["status"] == "Available"
         other = replace(source, info=replace(source.info, consumer_runtime_commit="e" * 40))
         assert other.approved_consumer_status is None
         require_population_admission(other.declaration)

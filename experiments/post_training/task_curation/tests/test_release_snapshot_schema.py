@@ -29,7 +29,7 @@ def catalog() -> CurationCatalog:
     return CurationCatalog(CATALOG)
 
 
-def _stage_of(source_id: str) -> PendingStage:
+def _stage_of(source_id: str) -> PendingStage | None:
     return pending_stage(source_id, receipt_registry_keys())
 
 
