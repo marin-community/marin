@@ -1,10 +1,20 @@
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+
+class ExpertIdDtype(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    EXPERT_ID_DTYPE_UNSPECIFIED: _ClassVar[ExpertIdDtype]
+    EXPERT_ID_DTYPE_UINT8: _ClassVar[ExpertIdDtype]
+    EXPERT_ID_DTYPE_UINT16_LE: _ClassVar[ExpertIdDtype]
+EXPERT_ID_DTYPE_UNSPECIFIED: ExpertIdDtype
+EXPERT_ID_DTYPE_UINT8: ExpertIdDtype
+EXPERT_ID_DTYPE_UINT16_LE: ExpertIdDtype
 
 class GenerateRequest(_message.Message):
     __slots__ = ("prompt_token_ids", "max_new_tokens", "temperature", "top_p", "seed", "stop_sequences", "num_choices", "expected_policy_id", "capture_router_replay")
@@ -57,15 +67,17 @@ class Choice(_message.Message):
     def __init__(self, token_ids: _Optional[_Iterable[int]] = ..., behavior_logprobs: _Optional[_Iterable[float]] = ..., policy_id: _Optional[str] = ..., model_version: _Optional[int] = ..., router_replay: _Optional[_Union[RouterReplay, _Mapping]] = ...) -> None: ...
 
 class RouterReplay(_message.Message):
-    __slots__ = ("num_layers", "num_positions", "experts_per_token", "expert_ids", "valid")
+    __slots__ = ("num_layers", "num_positions", "experts_per_token", "valid", "expert_ids", "expert_id_dtype")
     NUM_LAYERS_FIELD_NUMBER: _ClassVar[int]
     NUM_POSITIONS_FIELD_NUMBER: _ClassVar[int]
     EXPERTS_PER_TOKEN_FIELD_NUMBER: _ClassVar[int]
-    EXPERT_IDS_FIELD_NUMBER: _ClassVar[int]
     VALID_FIELD_NUMBER: _ClassVar[int]
+    EXPERT_IDS_FIELD_NUMBER: _ClassVar[int]
+    EXPERT_ID_DTYPE_FIELD_NUMBER: _ClassVar[int]
     num_layers: int
     num_positions: int
     experts_per_token: int
-    expert_ids: _containers.RepeatedScalarFieldContainer[int]
     valid: _containers.RepeatedScalarFieldContainer[bool]
-    def __init__(self, num_layers: _Optional[int] = ..., num_positions: _Optional[int] = ..., experts_per_token: _Optional[int] = ..., expert_ids: _Optional[_Iterable[int]] = ..., valid: _Optional[_Iterable[bool]] = ...) -> None: ...
+    expert_ids: bytes
+    expert_id_dtype: ExpertIdDtype
+    def __init__(self, num_layers: _Optional[int] = ..., num_positions: _Optional[int] = ..., experts_per_token: _Optional[int] = ..., valid: _Optional[_Iterable[bool]] = ..., expert_ids: _Optional[bytes] = ..., expert_id_dtype: _Optional[_Union[ExpertIdDtype, str]] = ...) -> None: ...
