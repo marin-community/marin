@@ -26,3 +26,6 @@ serve:
   - glm5_next
   - --kv-cache-dtype
   - fp8
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

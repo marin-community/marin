@@ -30,3 +30,6 @@ serve:
   - --trust-remote-code
   - --chat-template-content-format
   - string
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

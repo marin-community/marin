@@ -29,3 +29,6 @@ serve:
     commit: 12eb1d4eec9288b21f5d6d0ac31ffe84f47d91da
     torch_backend: cu132
     cuda_toolchain_version: 13.2.78
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

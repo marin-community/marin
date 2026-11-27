@@ -21,3 +21,6 @@ serve:
   - cohere-melody==0.15.3
   vllm_extra_args:
   - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    thinking_format: chat-template
