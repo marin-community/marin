@@ -708,8 +708,8 @@ class Job:
     def _is_resume_retryable_result(trial_result: TrialResult) -> bool:
         """Return whether a saved trial needs another attempt on resume.
 
-        Incomplete teardown, retryable failures, and historical zero-budget
-        BadRequestError results need a fresh attempt.
+        Missing completion or finish timestamps, retryable failures, and
+        historical zero-budget BadRequestError results need a fresh attempt.
         """
         if trial_result.completion is None or trial_result.finished_at is None:
             return True

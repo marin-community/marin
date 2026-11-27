@@ -32,6 +32,7 @@ from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.machine import Backend, MachineFactory, NetworkPolicy
 from taskcompendium.evaluation.spec import EpisodeAgent, PiAgent
+from transformers import PreTrainedTokenizerBase
 from verifyit.modes.grade_judge import JudgeConnection
 
 from marin.rollouts.evaluation import (
@@ -67,6 +68,8 @@ backs off between retries, and the session's model-turn timeout bounds them all.
 EPISODE_HARNESS_REVISIONS: Mapping[str, str] = MappingProxyType(
     {"shell": "2026.11.23.1", "terminus-2": "2026.11.23.1", PI_HARNESS: "2026.11.24.1", "mini-swe-agent": "2026.11.23.1"}
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _shell(_agent: EpisodeAgent, _budget: EpisodeBudget) -> Harness:
@@ -130,9 +133,13 @@ def machine_backends(config: EvaluationRunConfig) -> frozenset[str]:
 
 
 def execution_config(config: EvaluationRunConfig) -> EvaluationRunConfig:
-    """Default to network-denied Shellbox graders, preserving explicit machine settings."""
+    """Default to network-denied Shellbox graders, preserving explicit machine settings.
+
+    A grader runs the agent's changes, so it runs on the task machines' backend; runs without task machines
+    grade on the local backend.
+    """
     verifier = config.verifier_machine or MachineRuntimeSpec(
-        backend=Backend.LOCAL,
+        backend=config.task_machine.backend if config.task_machine is not None else Backend.LOCAL,
         network=NetworkPolicy.DENY,
         cpus=None,
         memory_mb=None,
@@ -209,6 +216,20 @@ def model_client(endpoint: str, api_key: str, timeout: float | None) -> AsyncOpe
     return AsyncOpenAI(base_url=endpoint, api_key=api_key, max_retries=MODEL_REQUEST_RETRIES, timeout=timeout)
 
 
+def context_bos_token_id(tokenizer: PreTrainedTokenizerBase) -> int | None:
+    """Return the BOS token the model expects before a likelihood context, if any.
+
+    Gemma 4's chat template writes BOS although its tokenizer never adds it, so either signal counts.
+    """
+    bos = tokenizer.bos_token_id
+    if bos is None:
+        return None
+    adds_bos = tokenizer.encode("a", add_special_tokens=True)[:1] == [bos]
+    template = tokenizer.chat_template
+    writes_bos = isinstance(template, str) and "bos_token" in template
+    return bos if adds_bos or writes_bos else None
+
+
 async def execute(
     datasets: tuple[str, ...],
     output: str,
@@ -230,6 +251,8 @@ async def execute(
     prefix = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
     if prefix is None:
         raise ValueError("Likelihood scoring needs a tokenizer BOS or EOS prefix token")
+    bos = context_bos_token_id(tokenizer)
+    logger.info("Likelihood contexts start with BOS token %s", bos)
     machines = machine_factories(config, daytona)
     async with model_client(endpoint, api_key, config.limits.model_turn_timeout) as client:
         await run_evaluation(
@@ -239,7 +262,7 @@ async def execute(
             # Each request sets its own output limit: the protocol's, or for Pi, Pi's.
             ChatModel(client, config.model.name, max_tokens=None),
             completion_model=CompletionModel(client, config.model.name),
-            likelihood=VllmLikelihood(client, config.model.name, tokenizer, config.model.context_window, prefix),
+            likelihood=VllmLikelihood(client, config.model.name, tokenizer, config.model.context_window, prefix, bos),
             machine_factories=machines,
             harnesses=episode_harnesses(config, client),
             tokenizer=tokenizer,

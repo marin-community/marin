@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from rigging.task_errors import RetrySettings
 import pytest
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import assistant_prefix_prompt
@@ -147,7 +148,14 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
             }
 
     worker = TaskRolloutWorker(
-        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30, agent_max_retries=1, max_concurrent_agents=None
+        config,
+        WholeTaskProjection(config, WorkerTokenizer()),
+        DirectModelClient(Engine()),
+        {},
+        retry=RetrySettings(jitter=0),
+        shutdown_timeout=30,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)
@@ -218,7 +226,14 @@ async def test_assistant_prefix_worker_grades_only_an_ended_turn_without_its_ter
             }
 
     worker = TaskRolloutWorker(
-        config, WholeTaskProjection(config, WorkerTokenizer()), DirectModelClient(Engine()), {}, shutdown_timeout=30, agent_max_retries=1, max_concurrent_agents=None
+        config,
+        WholeTaskProjection(config, WorkerTokenizer()),
+        DirectModelClient(Engine()),
+        {},
+        retry=RetrySettings(jitter=0),
+        shutdown_timeout=30,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
     )
     try:
         (result,) = await worker.generate(request)
@@ -266,7 +281,16 @@ async def test_a_malformed_turn_is_rejected_or_penalized_by_reward_shaping(
                 REASONING_VIOLATION_TOKENS_KEY: [2],
             }
 
-    worker = TaskRolloutWorker(config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {}, shutdown_timeout=30, agent_max_retries=1, max_concurrent_agents=None)
+    worker = TaskRolloutWorker(
+        config,
+        WholeTaskProjection(config, WorkerTokenizer()),
+        Client(),
+        {},
+        retry=RetrySettings(jitter=0),
+        shutdown_timeout=30,
+        agent_max_retries=1,
+        max_concurrent_agents=None,
+    )
     try:
         (rollout,) = await worker.generate(request)
         batch = await worker.training_batch(request, [rollout])
@@ -410,9 +434,7 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "max_prompt_length": 2,
         }
     )
-    assert [row["prompt_token_ids"] for row in submitted] == (
-        [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
-    )
+    assert [row["prompt_token_ids"] for row in submitted] == ([[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]])
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
     assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
     assert all(row["sampling_params"]["include_stop_str_in_output"] is True for row in submitted)

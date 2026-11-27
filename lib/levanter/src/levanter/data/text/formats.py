@@ -17,6 +17,7 @@ from ._batch_tokenizer import BatchTokenizer
 class TokenSeqDict(TypedDict):
     input_ids: np.ndarray
     loss_weights: NotRequired[np.ndarray]
+    valid_tokens: NotRequired[np.ndarray]
 
 
 class LmDatasetFormatBase(PluginRegistry, discover_packages_path="levanter.data.text"):

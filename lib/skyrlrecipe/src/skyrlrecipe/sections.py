@@ -446,8 +446,8 @@ class RolloutBuffer(Section):
     prompt waits until the prompt order offers it again."""
     max_unusable_groups: PositiveInt = field(3)
     """How many unusable groups in a row (every sample masked, or too few graded samples for the group baseline) a
-    prompt may produce before it sits out 10 training steps. A prompt stays in rotation when one batch needs every
-    prompt still offered."""
+    prompt may produce before it sits out 10 training steps. Each pool keeps enough eligible prompts to fill its
+    open batches and one spare."""
     max_in_flight: PositiveInt | None = field(None)
     """Cap on prompt groups generating at once. Iris defaults to 1.5 training batches, rounded up. Elsewhere null
     bounds generation only by staleness."""
@@ -811,7 +811,7 @@ class Generator(Section):
     weight_sync_pause_timeout_seconds: int | float = field(30.0)
     "Deadline for every engine to acknowledge a weight-sync pause or resume."
     error_handling: ErrorHandling = Field(default_factory=ErrorHandling)
-    "Mask unknown terminal failures and zero rewards for known agent errors."
+    "Terminal-error treatment by name/category; unknown failures use the configured default treatment."
     chat_template: ChatTemplate | None = Field(default_factory=ChatTemplate)
     chat_template_kwargs: OpenMap = field({})
     engine_init_kwargs: OpenMap = field({})

@@ -5,15 +5,20 @@
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Mapping
-from contextlib import suppress
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from statistics import mean
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 import numpy as np
+from finestore.rl.rl_progress import (
+    GRADER_REPORT_FILENAME,
+    GraderReport,
+    SubsetSummary,
+    SuccessSummary,
+    TaskSummary,
+)
 from loguru import logger
-from finestore.rl.rl_progress import GRADER_REPORT_FILENAME
 from marinskyrl.resource_locator import join_resource_path
 from rolloutengine.models import RolloutOperation
 from skyrl_gym.verification import VerificationStatus
@@ -22,7 +27,7 @@ from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAIL
 from skyrl_train.io import io
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.trajectory_processing import rollout_successes
-from skyrl_train.trajectory_runners.types import TrajectoryBatch
+from skyrl_train.trajectory_runners.types import ERROR_IDENTITIES_KEY, TrajectoryBatch
 
 
 @dataclass
@@ -67,35 +72,6 @@ class _TaskStats:
     subset_ids: set[str] = field(default_factory=set)
 
 
-class GradingLatency(TypedDict):
-    count: int
-    mean: float | None
-    p95: float | None
-    max: float | None
-
-
-class SuccessSummary(TypedDict):
-    attempted: int
-    verified: int
-    passed: int
-    verification_coverage: float
-    success_rate: float | None
-
-
-class SubsetSummary(SuccessSummary):
-    subset_id: str
-    data_sources: list[str]
-    verification_statuses: dict[str, int]
-    grading_failures: dict[str, int]
-    rollout_failures: dict[str, int]
-    grading_latency_seconds: GradingLatency
-
-
-class TaskSummary(SuccessSummary):
-    task_id: str
-    subset_ids: list[str]
-
-
 class GraderSummary(TypedDict):
     subsets: list[SubsetSummary]
     tasks: list[TaskSummary]
@@ -113,7 +89,10 @@ class GraderStats:
         results = batch.get("verification_results") or [None] * len(batch["rewards"])
         successes = rollout_successes(batch["rewards"], results)
         final_rows = batch.get("is_last_step") or [True] * len(results)
-        for row, result, passed, final in zip(metadata, results, successes, final_rows, strict=True):
+        identities = batch.get(ERROR_IDENTITIES_KEY) or [None] * len(results)
+        for row, result, passed, final, identity in zip(
+            metadata, results, successes, final_rows, identities, strict=True
+        ):
             if not final:
                 continue
             subset_id = row.subset_id
@@ -136,10 +115,10 @@ class GraderStats:
                 stats.durations.append(duration)
             if failure := result.diagnostics.get(GRADING_FAILURE):
                 stats.grading_failures[failure] += 1
-            elif result.diagnostics.get("operation") == RolloutOperation.GRADE:
+            elif identity is not None and identity.operation == RolloutOperation.GRADE:
                 stats.grading_failures["execution"] += 1
-            elif operation := result.diagnostics.get("operation"):
-                stats.rollout_failures[operation] += 1
+            elif identity is not None and identity.operation:
+                stats.rollout_failures[identity.operation] += 1
 
     def merge(self, other: "GraderStats") -> None:
         """Accumulate observations from a completed group."""
@@ -186,20 +165,25 @@ class GraderStats:
         }
 
 
-type GraderReportSection = Literal[
-    "training", "training_tasks", "evaluation", "evaluation_tasks", "evaluation_duration_seconds"
-]
+class GraderReportSections(TypedDict, total=False):
+    training: list[SubsetSummary]
+    training_tasks: list[TaskSummary]
+    evaluation: list[SubsetSummary]
+    evaluation_tasks: list[TaskSummary]
+    evaluation_duration_seconds: float
 
 
-def write_grader_report(export_path: str, key: str, sections: Mapping[GraderReportSection, object]) -> None:
-    """Update the run report for one evaluation step or training attempt."""
-    path = join_resource_path(export_path, GRADER_REPORT_FILENAME)
+def write_grader_report(report_dir: str, key: str, sections: GraderReportSections) -> None:
+    """Update the attempt's diagnostics for a training or evaluation step."""
+    path = join_resource_path(report_dir, GRADER_REPORT_FILENAME)
     try:
-        report = {"training": {}, "evaluation": {}}
-        with suppress(FileNotFoundError):
+        try:
             report = json.loads(io.read_bytes(path))
+        except FileNotFoundError:
+            report = {}
         for section, value in sections.items():
             report.setdefault(section, {})[key] = value
-        io.write_bytes_atomic(path, (json.dumps(report, indent=2, allow_nan=False) + "\n").encode())
-    except Exception:
-        logger.exception("Failed to update grader report at {} for {}", path, key)
+        payload = GraderReport.model_validate(report).model_dump_json()
+        io.write_bytes_atomic(path, (payload + "\n").encode())
+    except Exception as error:
+        logger.warning("Could not write grader report for {} at {} ({})", key, path, type(error).__name__)

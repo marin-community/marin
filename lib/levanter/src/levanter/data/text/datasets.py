@@ -120,6 +120,42 @@ class TokenSeqDataset(AsyncDataset[TokenSeqDict]):
         ]
 
 
+class PaddedTokenSeqDataset(TokenSeqDataset):
+    """Retain a continuous token stream's final sequence with masked right padding."""
+
+    async def async_len(self) -> int:
+        tokens = await self.doc_cache.async_flat_field_length("input_ids")
+        return (tokens + self.seq_len - 1) // self.seq_len
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[TokenSeqDict]:
+        if not indices:
+            return []
+
+        token_count = await self.doc_cache.async_flat_field_length("input_ids")
+        full_sequences, remainder = divmod(token_count, self.seq_len)
+        sequence_count = full_sequences + (remainder > 0)
+        if min(indices) < 0 or max(indices) >= sequence_count:
+            raise ValueError("Requested indices beyond the end of the dataset")
+
+        full_indices = [index for index in indices if index < full_sequences]
+        examples = dict(zip(full_indices, await super().get_batch(full_indices), strict=True))
+        for example in examples.values():
+            example["valid_tokens"] = np.ones(self.seq_len, dtype=bool)
+        if full_sequences in indices:
+            offset = full_sequences * self.seq_len
+            (tokens,) = await self.doc_cache.get_flat_field_batch("input_ids", [offset], remainder)
+            padded: TokenSeqDict = {
+                "input_ids": np.pad(tokens, (0, self.seq_len - remainder)),
+                "valid_tokens": np.arange(self.seq_len) < remainder,
+            }
+            if self.loss_weights_key is not None:
+                (weights,) = await self.doc_cache.get_flat_field_batch(self.loss_weights_key, [offset], remainder)
+                padded["loss_weights"] = np.pad(weights, (0, self.seq_len - remainder))
+            examples[full_sequences] = padded
+
+        return [examples[index] for index in indices]
+
+
 def _single_cpu_sharding() -> jax.sharding.SingleDeviceSharding:
     return jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
@@ -168,6 +204,17 @@ class CausalLmDataset(MappedAsyncDataset[TokenSeqDict, GrugLmExample]):
                 eos_id=eos_id,
                 block_cross_document_attention=block_cross_document_attention,
             )
+
+            if "valid_tokens" in example_dict:
+                valid = example_dict["valid_tokens"]
+                segments = example.attn_mask.segment_ids
+                segment_ids = jnp.zeros_like(example.tokens) if segments is None else segments[0]
+                segment_ids = jnp.where(valid, segment_ids, -1)
+                example = dataclasses.replace(
+                    example,
+                    loss_weight=example.loss_weight * jnp.roll(valid, -1),
+                    attn_mask=example.attn_mask.with_segment_ids(segment_ids),
+                )
 
             example = jax.lax.with_sharding_constraint(example, sharding)
 
@@ -554,6 +601,7 @@ def dataset_for_component(
     *,
     eos_id: int | None,
     block_cross_document_attention: bool,
+    remainder: Literal["drop", "pad"],
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
     if component.pack_lookahead_window is not None and not pack:
@@ -594,7 +642,7 @@ def dataset_for_component(
                 lookahead_window=component.pack_lookahead_window,
             )
         return CausalLmDataset(
-            TokenSeqDataset(cache, Pos.size),
+            PaddedTokenSeqDataset(cache, Pos.size) if remainder == "pad" else TokenSeqDataset(cache, Pos.size),
             Pos,
             eos_id=eos_id,
             block_cross_document_attention=block_cross_document_attention,
@@ -981,6 +1029,7 @@ class LmDataConfig:
                         cache,
                         eos_id=self.the_tokenizer.eos_token_id,
                         block_cross_document_attention=self.block_cross_document_attention,
+                        remainder="pad" if split == "validation" else "drop",
                     )
                 if child_datasets:
                     datasets[name] = ConcatDataset(child_datasets)
@@ -1027,6 +1076,7 @@ class LmDataConfig:
                 cache,
                 eos_id=self.the_tokenizer.eos_token_id,
                 block_cross_document_attention=self.block_cross_document_attention,
+                remainder="pad" if split == "validation" else "drop",
             )
 
         return datasets
@@ -1504,6 +1554,7 @@ def count_corpus_sizes(
             cache,
             eos_id=None,
             block_cross_document_attention=config.block_cross_document_attention,
+            remainder="drop",
         )
         train_seqs = len(train_set.as_sync_dataset())
         stats[f"{metric_prefix}total_seqs"] = train_seqs
@@ -1533,6 +1584,7 @@ def count_corpus_sizes(
             cache,
             eos_id=None,
             block_cross_document_attention=config.block_cross_document_attention,
+            remainder="pad",
         )
         stats[f"{metric_prefix}total_seqs"] = len(validation_set.as_sync_dataset())
 

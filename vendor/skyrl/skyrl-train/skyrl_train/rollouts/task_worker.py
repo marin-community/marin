@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Any, TypedDict
+from typing import Any
 from uuid import uuid4
 
 from jinja2 import TemplateError
@@ -17,8 +17,25 @@ from finestore.rl.task_health import AttemptReceipt
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from rigging.redaction import redact_string
-from rigging.task_errors import ErrorCategory, error_category, setup_exit_is_task_failure
-from shellbox.machine import ExitReason, MachineFactory
+from rigging.task_errors import (
+    AGENT_SETUP_TIMEOUT_ERROR,
+    AGENT_TIMEOUT_ERROR,
+    CONTEXT_LENGTH_EXCEEDED_ERROR,
+    ENVIRONMENT_START_TIMEOUT_ERROR,
+    TRIAL_TIMEOUT_ERROR,
+    VERIFIER_RUNTIME_ERROR,
+    VERIFIER_TIMEOUT_ERROR,
+    ErrorCategory,
+    ErrorIdentity,
+    RetryDisposition,
+    RetrySettings,
+    error_category,
+    exception_identity,
+    retry_disposition_from_record,
+    retry_delay,
+)
+from shellbox.backends.daytona.errors import daytona_error_identity, daytona_error_diagnostics
+from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader, ReasoningMarkupPolicy
 from verifyit.modes.grade_judge import JudgeConnection
@@ -35,7 +52,7 @@ from rolloutengine.models import (
     ModelRequest,
     ModelTurn,
     RolloutContractError,
-    RolloutFailure,
+    CLEANUP_ERRORS_DIAGNOSTIC,
     RolloutOperation,
     TaskRolloutSpec,
 )
@@ -47,7 +64,6 @@ from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
-from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
 
 from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInterface, InferenceEngineInput
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
@@ -78,10 +94,12 @@ from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_TOKEN_METADATA_KEY,
     TrainingRollout,
     reject_malformed_reasoning,
+    rollout_with_verifier_failure,
     training_rollout,
 )
-from skyrl_train.task_error_handling import ErrorHandlingConfig
-from skyrl_train.task_errors import ERROR_CATEGORIES
+from skyrl_train.error_treatment import ErrorTreatment
+from skyrl_train.task_error_handling import ErrorHandlingConfig, classify_failure
+from skyrl_train.task_errors import ERROR_CATEGORIES, TASK_MACHINE_ERROR, TEMPLATE_ERROR, TIMED_OUT_DIAGNOSTIC
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -89,32 +107,6 @@ from skyrl_train.trajectory_runners.types import (
     TrajectoryBatch,
     TaskRequestBatch,
 )
-
-DAYTONA_DIAGNOSTIC_CALLS = frozenset(
-    {
-        ("daytona._async.daytona", "create"),
-        ("daytona._async.daytona", "_create"),
-        ("daytona._async.daytona", "delete"),
-        ("daytona._async.snapshot", "get"),
-        ("daytona._async.snapshot", "create"),
-        ("daytona._async.sandbox", "wait_for_sandbox_start"),
-        ("daytona._async.process", "exec"),
-        ("daytona._async.filesystem", "upload_file_stream"),
-        ("daytona._async.filesystem", "download_file"),
-        ("daytona_api_client_async.api.sandbox_api", "create_sandbox"),
-        ("daytona_api_client_async.api.sandbox_api", "get_toolbox_proxy_url"),
-        ("daytona_api_client_async.api.sandbox_api", "get_sandbox"),
-    }
-)
-DAYTONA_RATE_LIMIT_HEADERS = frozenset(
-    f"{prefix}-{throttler}"
-    for prefix in ("x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "retry-after")
-    for throttler in ("anonymous", "authenticated", "sandbox-create", "sandbox-lifecycle")
-) | {"retry-after"}
-
-
-AGENT_RETRY_BACKOFF = 1.0
-
 
 async def _tokenize(
     inference: InferenceEngineClient, template_kwargs: Mapping[str, Any], payload: dict[str, Any]
@@ -215,60 +207,13 @@ async def _model_turn(
     )
 
 
-class _DaytonaDiagnostics(TypedDict, total=False):
-    provider_sdk_call: str
-    provider_status_code: int
-    provider_rate_limits: dict[str, int]
 
-
-def _daytona_diagnostics(error: DaytonaError) -> _DaytonaDiagnostics:
-    diagnostics: _DaytonaDiagnostics = {"provider_sdk_call": "unknown"}
-    status = error.status_code
-    if isinstance(status, int) and 100 <= status <= 599:
-        diagnostics["provider_status_code"] = status
-    rate_limits = {
-        name.lower(): int(value)
-        for name, value in (error.headers or {}).items()
-        if name.lower() in DAYTONA_RATE_LIMIT_HEADERS
-        and isinstance(value, str)
-        and value.isascii()
-        and value.isdecimal()
-        and len(value) <= 12
-    }
-    if rate_limits:
-        diagnostics["provider_rate_limits"] = rate_limits
-    # A compound provider operation can span several SDK calls. The SDK may suppress the cause's traceback.
-    nested_error: BaseException | None = error
-    seen = set()
-    while nested_error is not None and id(nested_error) not in seen:
-        seen.add(id(nested_error))
-        traceback = nested_error.__traceback__
-        while traceback is not None:
-            frame = traceback.tb_frame
-            call = (frame.f_globals.get("__name__"), frame.f_code.co_name)
-            if call in DAYTONA_DIAGNOSTIC_CALLS:
-                diagnostics["provider_sdk_call"] = ".".join(call)
-            traceback = traceback.tb_next
-        nested_error = nested_error.__cause__ or nested_error.__context__
-    return diagnostics
-
-
-def _failed_rollout(
-    interruption: GradedRolloutInterrupted,
-    lowered: TaskRolloutSpec,
-) -> TrainingRollout:
-    """Retain verified turns and safe diagnostics for the training policy."""
-    task = lowered.task
-    error = interruption.__cause__
-    assert isinstance(error, Exception)
-    if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
-        raise error
-    if interruption.operation == RolloutOperation.MODEL and not isinstance(
-        error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
-    ):
-        raise error
+def _failure_diagnostics(
+    error: Exception, interruption: GradedRolloutInterrupted
+) -> tuple[str, dict[str, Any]]:
+    """Map the interruption's cause to its persisted exception name and safe diagnostics."""
     exception_type = type(error).__name__
-    diagnostics = {"operation": interruption.operation.value, "timed_out": isinstance(error, TimeoutError)}
+    diagnostics: dict[str, Any] = {TIMED_OUT_DIAGNOSTIC: isinstance(error, TimeoutError)}
     if isinstance(error, MachineSetupError):
         diagnostics.update(
             setup_exit_code=error.exit_code,
@@ -279,36 +224,81 @@ def _failed_rollout(
     if isinstance(error, PromptTokenizationError):
         diagnostics["status_code"] = error.status_code
     if isinstance(error, TaskMachineError) and error.__cause__ is not None:
-        diagnostics["cause_error_type"] = type(error.__cause__).__name__
         diagnostics["machine_operation"] = error.operation.value
         if isinstance(error.__cause__, DaytonaError):
-            diagnostics.update(_daytona_diagnostics(error.__cause__))
+            diagnostics.update(daytona_error_diagnostics(error.__cause__))
     if isinstance(error, TimeoutError):
         exception_type = {
-            RolloutOperation.ATTEMPT: "TrialTimeoutError",
-            RolloutOperation.START: "EnvironmentStartTimeoutError",
-            RolloutOperation.PREPARE: "AgentSetupTimeoutError",
-            RolloutOperation.GRADE: "VerifierTimeoutError",
-        }.get(interruption.operation, "AgentTimeoutError")
+            RolloutOperation.ATTEMPT: TRIAL_TIMEOUT_ERROR,
+            RolloutOperation.START: ENVIRONMENT_START_TIMEOUT_ERROR,
+            RolloutOperation.PREPARE: AGENT_SETUP_TIMEOUT_ERROR,
+            RolloutOperation.GRADE: VERIFIER_TIMEOUT_ERROR,
+        }.get(interruption.operation, AGENT_TIMEOUT_ERROR)
     elif isinstance(error, TemplateError):
-        exception_type = "TemplateError"
-        diagnostics["cause_error_type"] = type(error).__name__
+        exception_type = TEMPLATE_ERROR
+    elif isinstance(error, TaskMachineError):
+        exception_type = TASK_MACHINE_ERROR
     elif isinstance(error, ContextWindowExceeded):
-        exception_type = "ContextLengthExceededError"
+        exception_type = CONTEXT_LENGTH_EXCEEDED_ERROR
         diagnostics["error_category"] = "context_overflow"
     elif interruption.operation in {RolloutOperation.START, RolloutOperation.PREPARE} and not isinstance(
-        error, (TaskMachineError, PromptTokenizationError)
+        error, PromptTokenizationError
     ):
         exception_type = VERIFIER_RUNTIME_ERROR
-        diagnostics.setdefault("cause_error_type", type(error).__name__)
     elif isinstance(error, ModelServerError):
         if error.category == "context_overflow":
-            exception_type = "ContextLengthExceededError"
+            exception_type = CONTEXT_LENGTH_EXCEEDED_ERROR
         diagnostics.update(error_category=error.category, request_id=error.request_id, status_code=error.status_code)
     if interruption.grade.failure == GradingFailure.TIMEOUT:
         # The engine may attempt verification after a model failure. The verifier
         # timeout determines whether pass-through can retain a scored rollout.
-        exception_type = "VerifierTimeoutError"
+        exception_type = VERIFIER_TIMEOUT_ERROR
+    return exception_type, diagnostics
+
+
+def _interruption_identity(interruption: GradedRolloutInterrupted) -> ErrorIdentity:
+    error = interruption.__cause__
+    assert isinstance(error, Exception)
+    if isinstance(error, (TypeError, AttributeError, AssertionError, ImportError)):
+        raise error
+    if interruption.operation == RolloutOperation.MODEL and not isinstance(
+        error, (ModelServerError, TimeoutError, ConnectionError, TemplateError)
+    ):
+        raise error
+    failure = exception_identity(error, operation=interruption.operation.value, categories=ERROR_CATEGORIES)
+    provider_disposition = None
+    provider_status = None
+    if isinstance(error, TaskMachineError) and isinstance(error.__cause__, DaytonaError):
+        provider = daytona_error_identity(error.__cause__, operation=error.operation.value)
+        provider_disposition = provider.retry_disposition
+        provider_status = provider.provider_status_code
+    exception_type, diagnostics = _failure_diagnostics(error, interruption)
+    disposition = provider_disposition if provider_disposition is not None else failure.retry_disposition
+    if disposition is not RetryDisposition.PERMANENT and isinstance(error, TimeoutError):
+        disposition = retry_disposition_from_record(exception_type, None, provider_status or failure.provider_status_code)
+    status = provider_status if provider_status is not None else failure.provider_status_code
+    return failure.model_copy(
+        update={
+            "exception_type": exception_type,
+            "category": error_category(exception_type, categories=ERROR_CATEGORIES),
+            "diagnostics": diagnostics,
+            "cause_type": failure.cause_type
+            or (failure.exception_type if exception_type != failure.exception_type else None),
+            "provider_status_code": status,
+            "retry_disposition": disposition,
+        }
+    )
+
+
+def _failed_rollout(
+    interruption: GradedRolloutInterrupted,
+    lowered: TaskRolloutSpec,
+) -> TrainingRollout:
+    """Retain verified turns and safe diagnostics for the training policy."""
+    task = lowered.task
+    error = interruption.__cause__
+    failure = _interruption_identity(interruption)
+    exception_type = failure.exception_type
     rollout = training_rollout(GradedRollout(interruption.rollout, interruption.grade), lowered)
     if (
         interruption.operation == RolloutOperation.ADVANCE
@@ -340,11 +330,13 @@ def _failed_rollout(
         rollout,
         grade=grade,
         stop_reason="error",
-        failure=RolloutFailure(exception_type, diagnostics),
+        failure=failure,
     )
 
 
-async def _run_task_attempt(engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, attempt_id: str) -> TrainingRollout:
+async def _run_task_attempt(
+    engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, attempt_id: str
+) -> TrainingRollout:
     try:
         result = training_rollout(await engine.run_task(spec, model, run_id=attempt_id), spec)
     except GradedRolloutInterrupted as interruption:
@@ -365,7 +357,7 @@ async def _run_task_attempt(engine: RolloutEngine, spec: TaskRolloutSpec, model:
 
 
 def _reject_unconfirmed_cleanup(result: TrainingRollout) -> TrainingRollout:
-    if not result.grade.diagnostics.get("cleanup_errors"):
+    if not result.grade.diagnostics.get(CLEANUP_ERRORS_DIAGNOSTIC):
         return result
     grade = replace(
         result.grade,
@@ -375,26 +367,13 @@ def _reject_unconfirmed_cleanup(result: TrainingRollout) -> TrainingRollout:
         error="Could not confirm agent task cleanup",
         failure=GradingFailure.EXECUTION,
     )
-    failure = result.failure or RolloutFailure("TaskMachineError", {"machine_operation": "close"})
+    failure = result.failure or ErrorIdentity(
+        exception_type=TASK_MACHINE_ERROR,
+        category=ErrorCategory.INFRASTRUCTURE,
+        operation="close",
+        retry_disposition=RetryDisposition.PERMANENT,
+    )
     return replace(result, grade=grade, failure=failure)
-
-
-def _retryable_agent_attempt(result: TrainingRollout) -> bool:
-    """Retry unscored infrastructure failures after confirmed cleanup."""
-    failure = result.failure
-    if failure is None or result.grade.status in {Outcome.GRADED, Outcome.SUBMISSION_FAILURE}:
-        return False
-    if result.grade.diagnostics.get("cleanup_errors"):
-        return False
-    if failure.diagnostics.get("setup_reason") == ExitReason.TIMED_OUT:
-        return True
-    setup_exit = failure.diagnostics.get("setup_exit_code")
-    if isinstance(setup_exit, int):
-        return setup_exit != 0 and not setup_exit_is_task_failure(setup_exit)
-    status = failure.diagnostics.get("provider_status_code", failure.diagnostics.get("status_code"))
-    if isinstance(status, int):
-        return status in (409, 429) or 500 <= status < 600
-    return error_category(failure.exception_type, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
 
 
 @dataclass(frozen=True)
@@ -416,6 +395,7 @@ class TaskRolloutWorker:
         projection: WholeTaskProjection | StepTaskProjection,
         model_client: ModelClient,
         factories: Mapping[str, MachineFactory],
+        retry: RetrySettings,
         max_verifier_workers: int = 0,
         concurrent_tasks: int | None = None,
         retry_wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -441,6 +421,7 @@ class TaskRolloutWorker:
         self.agents = agents
         self.task_health_export = task_health_export
         self.retry_wait = retry_wait
+        self.retry = retry
         self.agent_max_retries = agent_max_retries
         self.agent_slots = asyncio.Semaphore(max_concurrent_agents) if max_concurrent_agents is not None else nullcontext()
         self.group_graders = group_graders
@@ -551,19 +532,30 @@ class TaskRolloutWorker:
             while True:
                 async with machine_slots, self.task_slots, self.agent_slots if external_agent else nullcontext():
                     result = await _run_task_attempt(engine, lowered, model, attempt_id)
-                if not external_agent:
-                    return result
-                result = _reject_unconfirmed_cleanup(result)
+                if external_agent:
+                    result = _reject_unconfirmed_cleanup(result)
+                result = rollout_with_verifier_failure(result)
                 if self.task_health_export is not None and phase == "train":
                     if receipt := attempt_receipt(
                         attempt_id, lowered, result, task_digest=None if identity is None else identity.task_digest
                     ):
                         evidence.append(receipt)
-                if retries >= self.agent_max_retries or not _retryable_agent_attempt(result):
+                replayable = not result.steps
+                cleanup_confirmed = not result.grade.diagnostics.get(CLEANUP_ERRORS_DIAGNOSTIC)
+                delay = retry_delay(result.failure, self.retry, retries) if replayable and cleanup_confirmed else None
+                if (
+                    delay is not None
+                    and classify_failure(result.failure, self.error_handling) is ErrorTreatment.PASSTHROUGH
+                ):
+                    delay = None
+                # The policy's agent retry budget bounds agent-task retries on top of the shared settings.
+                if delay is not None and external_agent and retries >= self.agent_max_retries:
+                    delay = None
+                if delay is None:
                     return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
                 logger.info("Retrying task {} after an infrastructure failure", task.id)
                 with rollout_wait("retry_backoff"):
-                    await self.retry_wait(AGENT_RETRY_BACKOFF)
+                    await self.retry_wait(delay)
                 retries += 1
                 attempt_id = f"{session_id}:retry-{retries}"
 
@@ -690,6 +682,7 @@ class TaskRolloutWorkerSpec:
             ),
             client,
             factories,
+            retry=RetrySettings.model_validate(OmegaConf.to_container(task_sessions.retry, resolve=True)),
             max_verifier_workers=int(task_sessions.max_verifier_workers),
             concurrent_tasks=int(self.config.trajectory_runner.max_concurrent_tasks),
             sessions=self.sessions,

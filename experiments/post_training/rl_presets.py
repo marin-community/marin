@@ -24,7 +24,7 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
 )
 from pydantic import BaseModel, Field, PositiveInt
-from rolloutengine.agents.pi.agent import PI_HARNESS
+from rigging.task_errors import RetrySettings
 from skyrlrecipe import RecipePatch, sections
 from skyrlrecipe.declared import (
     BestCheckpointCallback,
@@ -357,6 +357,12 @@ class Metric:
     higher_is_better: bool
     window: WindowStatistic = WindowStatistic.MEAN
 
+    source: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.window is WindowStatistic.GAIN_PER_GPU_HOUR) != bool(self.source):
+            raise ValueError("Gain-per-GPU-hour metrics require an explicit source key")
+
 
 @dataclass(frozen=True)
 class BatchMix:
@@ -389,8 +395,9 @@ def validate_agentic_recipe(config: RecipePatch) -> None:
     if "ttl_minutes" in daytona and daytona["ttl_minutes"] * 60 < attempt_timeout:
         raise ValueError("Daytona ttl_minutes must cover the task attempt timeout")
     stall = config.trainer.algorithm.group_admission.stall_timeout
-    if PI_HARNESS in sessions.get("agent_harnesses", {}) and stall is not None and stall < 2 * attempt_timeout:
-        raise ValueError("group_admission.stall_timeout must cover the Pi attempt and one retry")
+    retry = RetrySettings.model_validate(sessions.get("retry", {}))
+    if stall is not None and stall < (1 + retry.max_retries) * attempt_timeout:
+        raise ValueError("group_admission.stall_timeout must cover the task attempt and configured retries")
 
 
 CheckpointPolicy = Literal["none", "latest", "best"]
@@ -404,15 +411,12 @@ class Preset:
     """
 
     name: str
-    revision: str
     recipe: Recipe
     updates: int
     measured: range
     tasks_input: Literal["forbidden", "required", "optional"] = "forbidden"
     accepts_settings: bool = True
     accepts_init: bool = False
-    publishes: bool = False
-    control_preset: str | None = None
     checkpoint_every: int | None = None
     checkpoints: CheckpointPolicy = "best"
     keep_every: int | None = None
@@ -420,7 +424,7 @@ class Preset:
     data_settings: frozenset[str] = frozenset()
     tasks: str
     model: ArtifactHfModel
-    default_speculative_decoding: sections.SpeculativeDecoding | None = None
+    speculative_decoding_model: sections.SpeculatorModel | None = None
     evaluations: tuple[Evaluation, ...]
     seed: int
     sample_namespace: str
@@ -440,8 +444,6 @@ class Preset:
     def __post_init__(self) -> None:
         if not set(self.measured).issubset(self.recipe.layout.workload.planned_steps(self.updates)):
             raise ValueError("measured window must lie within the planned steps")
-        if self.gated and not self.guards:
-            raise ValueError("gated presets require guards")
         if self.held_out is not None and not self.held_out_tasks:
             raise ValueError("held-out evaluations require a held-out task selection")
         cadence = self.checkpoint_every
@@ -476,7 +478,7 @@ class Preset:
 
     @property
     def gated(self) -> bool:
-        return self.control_preset is not None
+        return bool(self.guards)
 
     @property
     def output_ttl_days(self) -> int | None:
@@ -499,20 +501,11 @@ class Preset:
 
 
 @dataclass(frozen=True)
-class ControlPin:
-    preset: str
-    commit: str
-    revision: str
-    replicates: int
-
-
-@dataclass(frozen=True)
 class ModelPresets:
     model: str
     presets: tuple[Preset, ...]
     namespace: str
-    control_pins: Mapping[str, ControlPin]
-    needs_completed_default_export: bool = False
+    default_export_marker: str | None = None
 
     def __post_init__(self) -> None:
         names: set[str] = set()

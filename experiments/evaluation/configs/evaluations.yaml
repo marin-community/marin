@@ -21,6 +21,9 @@ evaluations:
   facts-grounding-v2:
     benchmark: facts-grounding-v2
     run: *together_judge
+  facts-parametric:
+    benchmark: facts-parametric
+    run: *together_judge
   frontierscience-olympiad:
     benchmark: frontierscience-olympiad
     run: *together_judge
@@ -132,6 +135,9 @@ evaluations:
   truthfulqa-6shot:
     benchmark: truthfulqa
     num_fewshot: 6
+  truthfulqa-binary-chat:
+    benchmark: truthfulqa-binary
+    protocol: chat
   mmlu-0shot:
     benchmark: mmlu
     num_fewshot: 0
@@ -167,6 +173,12 @@ evaluations:
   longbench-v2-thinking:
     benchmark: longbench-v2
     protocol: thinking
+  # Each grade stages a test archive of up to 203 MiB in the grader job; at 64 concurrent grades
+  # it runs out of memory. Remove once grading is bounded separately (#12217).
+  livecodebench-pro:
+    benchmark: livecodebench-pro
+    run:
+      concurrency: 16
   # Agentic benchmarks lowered from Harbor task packages; see experiments/evaluation/benchmarks/agentic.py.
   # Datasets with more distinct environments than the Daytona eval account's snapshot quota build
   # each machine's image declaratively. Each runs as many attempts at once as its Harbor job did.
@@ -201,6 +213,34 @@ evaluations:
   swebench-full:
     benchmark: swebench-verified
     protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-multilingual:
+    benchmark: swebench-multilingual-100
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-multilingual-lite:
+    benchmark: swebench-multilingual-100
+    protocol: terminus-2
+    run:
+      limit: 2
+      task_machine:
+        image_build: declarative
+  swebench-multilingual-full:
+    benchmark: swebench-multilingual
+    protocol: terminus-2
+    run:
+      concurrency: 32
+      task_machine:
+        image_build: declarative
+  swebench-science:
+    benchmark: swebench-science
+    protocol: pi-xhigh
     run:
       concurrency: 32
       task_machine:

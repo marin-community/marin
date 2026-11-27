@@ -3,13 +3,21 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
-from upath import UPath
-
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.id import GitTaskId, LocalTaskId, PackageTaskId
 from harbor.models.trial.config import TrialConfig
 from harbor.models.verifier.result import VerifierResult
+from harbor_config.errors import ERROR_CATEGORIES, RETRYABLE_ERROR_TYPES
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from rigging.task_errors import (
+    ErrorCategory,
+    ErrorIdentity,
+    RetryDisposition,
+    error_category,
+    exception_identity,
+    retry_disposition_from_record,
+)
+from upath import UPath
 
 
 class TimingInfo(BaseModel):
@@ -19,10 +27,25 @@ class TimingInfo(BaseModel):
     finished_at: datetime | None = None
 
 
-class ExceptionInfo(BaseModel):
+class ExceptionInfo(ErrorIdentity):
     """Information about an exception that occurred during trial execution."""
 
-    exception_type: str
+    category: ErrorCategory = Field(
+        default_factory=lambda data: error_category(
+            data["exception_type"], categories=ERROR_CATEGORIES
+        )
+    )
+    retry_disposition: RetryDisposition = Field(
+        default_factory=lambda data: retry_disposition_from_record(
+            data["exception_type"],
+            data["cause_type"],
+            data["provider_status_code"],
+            retryable_error_types=RETRYABLE_ERROR_TYPES,
+        )
+    )
+
+    model_config = ConfigDict(frozen=False)
+
     exception_message: str
     exception_traceback: str
     occurred_at: datetime
@@ -30,7 +53,11 @@ class ExceptionInfo(BaseModel):
     @classmethod
     def from_exception(cls, e: BaseException) -> "ExceptionInfo":
         return cls(
-            exception_type=type(e).__name__,
+            **exception_identity(
+                e,
+                categories=ERROR_CATEGORIES,
+                retryable_error_types=RETRYABLE_ERROR_TYPES,
+            ).model_dump(),
             exception_message=str(e),
             exception_traceback=traceback.format_exc(),
             occurred_at=datetime.now(),

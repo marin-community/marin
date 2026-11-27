@@ -101,8 +101,10 @@ def validated_judge_spec(spec: JudgeSpec) -> ValidatedJudgeSpec:
         _validate_answers_spec(spec, references)
     if spec.rubric == RUBRIC_PAIRWISE:
         _validate_pairwise_spec(spec)
-    elif spec.label_weights or spec.verdict_patterns:
-        raise InvalidTask("label weights and verdict patterns apply only to pairwise judges")
+    elif spec.label_weights:
+        raise InvalidTask("label weights apply only to pairwise judges")
+    elif spec.verdict_patterns and spec.rubric != RUBRIC_LABELS:
+        raise InvalidTask("verdict patterns apply only to label and pairwise judges")
     for budget in (spec.max_completion_tokens, spec.incomplete_retry_tokens):
         if type(budget) is not int or budget < 0:
             raise InvalidTask("judge token budgets must be nonnegative integers")
@@ -189,10 +191,13 @@ def _candidate_step(step: CandidateStep) -> Callable[[str], str]:
 def _validate_label_spec(spec: JudgeSpec, references: tuple[str, ...]) -> None:
     if len(references) != 1 or len(spec.references) != 1 or not spec.prompt_template.strip() or not spec.label_scores:
         raise InvalidTask("label rubric requires one reference, a prompt template and labels")
-    if not isinstance(spec.label_scan, str) or spec.label_scan not in {"literal", "lines", "whole", "json"}:
-        raise InvalidTask("label_scan must be literal, lines, whole or json")
+    if not isinstance(spec.label_scan, str) or spec.label_scan not in {"literal", "lines", "whole", "json", "pattern"}:
+        raise InvalidTask("label_scan must be literal, lines, whole, json or pattern")
     if not isinstance(spec.label_field, str) or (spec.label_scan == "json") != bool(spec.label_field.strip()):
         raise InvalidTask("label_field names the verdict member exactly when label_scan is json")
+    if (spec.label_scan == "pattern") != bool(spec.verdict_patterns):
+        raise InvalidTask("verdict_patterns are set exactly when label_scan is pattern")
+    _validate_verdict_patterns(spec)
     if type(spec.strip_reasoning_blocks) is not bool:
         raise InvalidTask("strip_reasoning_blocks must be boolean")
     _validate_verdict_labels(spec)
@@ -220,13 +225,7 @@ def _validate_pairwise_spec(spec: JudgeSpec) -> None:
         raise InvalidTask("pairwise rubric reports its own metric and has no exact gate")
     if not spec.verdict_patterns:
         raise InvalidTask("pairwise rubric requires verdict patterns")
-    for pattern in spec.verdict_patterns:
-        try:
-            groups = re.compile(pattern).groups
-        except re.error as error:
-            raise InvalidTask(f"malformed verdict pattern {pattern!r}") from error
-        if groups != 1:
-            raise InvalidTask("each verdict pattern must capture exactly one group")
+    _validate_verdict_patterns(spec)
     _validate_verdict_labels(spec)
     if not spec.label_scores:
         raise InvalidTask("pairwise rubric requires verdict labels")
@@ -237,6 +236,16 @@ def _validate_pairwise_spec(spec: JudgeSpec) -> None:
             raise InvalidTask("label weights must be finite and positive")
     if not {"answer_a", "answer_b"} <= _template_fields(spec, PAIRWISE_FIELDS):
         raise InvalidTask("pairwise template must include answer_a and answer_b")
+
+
+def _validate_verdict_patterns(spec: JudgeSpec) -> None:
+    for pattern in spec.verdict_patterns:
+        try:
+            groups = re.compile(pattern).groups
+        except re.error as error:
+            raise InvalidTask(f"malformed verdict pattern {pattern!r}") from error
+        if groups != 1:
+            raise InvalidTask("each verdict pattern must capture exactly one group")
 
 
 def _validate_verdict_labels(spec: JudgeSpec) -> None:

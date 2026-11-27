@@ -776,7 +776,7 @@ async def test_daytona_output_unavailable_retries_by_name(
     )
     assert first.completion is not None
     assert first.exception_info.exception_type == "DaytonaOutputUnavailable"
-    assert error_category(first.exception_info.exception_type, categories=ERROR_CATEGORIES) is ErrorCategory.INFRASTRUCTURE
+    assert first.exception_info.category is ErrorCategory.INFRASTRUCTURE
     assert result.trial_relpath == "daytona-command/attempts/001"
     assert result.verifier_result.rewards == {"reward": 1.0}
 

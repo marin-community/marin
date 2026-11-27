@@ -49,8 +49,6 @@ from zephyr.context import ZephyrContext
 from experiments.evaluation.benchmarks.code import sources as code_sources
 from experiments.evaluation.benchmarks.reasoning import sources as reasoning_sources
 from experiments.post_training.rl_compose import sampled_tasks_step
-from experiments.post_training.rl_scoring import EvalLiteVersionScore, score_eval_lite_version
-from experiments.post_training.rl_tests.fixtures import answer, evaluation_task_rows
 from experiments.post_training.task_curation import selection as selection_module
 from experiments.post_training.task_curation.campaign import error_chain
 from experiments.post_training.task_curation.datasets.nemo_tool_calls import sources as tool_call_sources
@@ -249,7 +247,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     assert {row["aai_category"] for row in carried} == {AAII_CATEGORIES["calendar"]}
     assert all(row["agentic"] is True for row in carried)
     assert all(
-        row["source"] == json.loads(row["task_spec"])["source"]["dataset"]
+        row["source"] == ("fixture:second" if json.loads(row["task_spec"])["id"] == "training-c" else "fixture:first")
         and row["topic"] == row["difficulty"] == "untagged"
         for row in carried
     )
@@ -259,9 +257,7 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
         for row in carried
     )
 
-    derived = Path(
-        run(sampled_tasks_step(selection_step, "train", 1, 1, revision="2026.11.17.1", namespace="fixture"))[0].path
-    )
+    derived = Path(run(sampled_tasks_step(selection_step, "train", 1, 1, namespace="fixture"))[0].path)
     sampled = read_tasks(derived / TRAIN_FILENAME)
     assert len(sampled) == 1 and sampled[0] in tasks
     subset = read_selection_manifest(str(derived))
@@ -280,6 +276,11 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path,
     structural = next(task for task in full if families[task.id] == STRUCTURAL_FAMILY)
     assert structural.context.events[-1] == TextMessage(role="assistant", content='{"a":[1')
     assert structural.grader.mode == "structure_closure"
+    assert panel.identity(structural.id).strata.source == "OpenAthena:structure-closure/validation"
+    assert (
+        panel.identity("heldout-calendar-0").strata.source
+        == "Nemotron:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2"
+    )
     summary = json.loads((output / "summary.json").read_text())
     assert summary["source_counts"] == {
         "fixture:first": {
@@ -1060,7 +1061,7 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
             "agents" if agent else questions.family,
             "agents" if agent else questions.aaii_category,
             "in_process" if agent else "package",
-            task.source.dataset,
+            "Nemotron:predicted-action" if agent else questions.source_id,
             task.source.model_dump_json(),
             "fixture-agents" if agent else "fixture-general",
         )
@@ -1169,22 +1170,8 @@ def test_eval_lite_publication_preserves_untouched_strata_and_joins_initializer_
     assert all(successor_panel.tasks[task.id].state != MembershipState.RETIRED for task, _ in additions)
     active = [row for row in successor_panel.tasks.values() if row.state == MembershipState.ACTIVE]
     assert Counter(row.family for row in active) == settings.fast_counts
-    measured_rows = evaluation_task_rows(
-        [answer(task_id, float(task_id != saturated.id)) for task_id in successor_tasks],
-        attempt_id="successor",
-        step=2,
-        evaluation="eval/",
-        selection=successor_panel,
-    )
-    measured_rows = [
-        row.model_copy(update={"task_digest": canonical_sha256(json.loads(successor_tasks[row.task_id]))})
-        for row in measured_rows
-    ]
-    assert score_eval_lite_version(measured_rows, successor_panel, expected_answers=1) == EvalLiteVersionScore(
-        1.0, sum(settings.fast_counts.values()), (), ()
-    )
     cells = Counter((row.source, row.topic, row.difficulty) for row in active if row.family == questions.family)
-    parent_source = template.source.dataset
+    parent_source = questions.source_id
     assert cells == {
         (parent_source, "untagged", "learnable"): 1,
         ("fixture:a", "topic-a", "hard"): 1,

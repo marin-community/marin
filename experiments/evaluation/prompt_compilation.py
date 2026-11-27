@@ -43,10 +43,16 @@ from taskcompendium.pipeline.models import Converter, IntendedUse
 from experiments.evaluation.benchmark import EvaluationBenchmark, ProtocolVariant
 from experiments.evaluation.preparation import EvaluationCorpusRecipe, chat_source, prepare_evaluation
 from experiments.post_training.task_curation.environment import Environment
-from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, RecipeSource
+from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource, RecipeSource, UrlSource
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 EXPLICIT_TEMPLATE_VERSION = "2026.11.05.3"
+LIKELIHOOD_CONTEXT_REVISION = "bos-2026.11.24"
+
+
+def likelihood_protocol_version(version: str) -> str:
+    """Mark a likelihood protocol so results scored before contexts started with BOS are not reused."""
+    return version + "-" + LIKELIHOOD_CONTEXT_REVISION
 
 
 def evaluation_source(
@@ -98,7 +104,7 @@ def multiple_choice_evaluation(
     *,
     name: str,
     benchmark: str,
-    source: HfSource,
+    source: HfSource | UrlSource,
     population: int,
     template: ChoiceTemplate,
     metrics: tuple[LikelihoodMetric, ...],
@@ -106,6 +112,10 @@ def multiple_choice_evaluation(
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     """Bind a family's explicit prompt and normalization policies to a curated corpus."""
     policy = template.fewshot
+    inputs = {}
+    if policy.pool_file:
+        assert isinstance(source, HfSource), "a few-shot pool file is read from the source's Hugging Face revision"
+        inputs = {"fewshot": HfSource(source.repo, source.revision, (policy.pool_file,), SourceFormat.PARQUET)}
     return RlDataSource(
         info=SourceInfo(
             data_restriction=DataRestriction.OPEN,
@@ -121,18 +131,14 @@ def multiple_choice_evaluation(
             CurationRecipe(
                 name="checkpoint-" + name,
                 source=replace(source, read=partial(read_fewshot_choices, template=template)),
-                inputs=(
-                    {"fewshot": HfSource(source.repo, source.revision, (policy.pool_file,), SourceFormat.PARQUET)}
-                    if policy.pool_file
-                    else {}
-                ),
+                inputs=inputs,
                 convert=partial(convert_choice_document, benchmark=benchmark),
                 version=EXPLICIT_TEMPLATE_VERSION,
                 intended_use=IntendedUse.EVAL,
             ),
             EvaluationProtocol(
                 benchmark=benchmark,
-                version=EXPLICIT_TEMPLATE_VERSION,
+                version=likelihood_protocol_version(EXPLICIT_TEMPLATE_VERSION),
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),
@@ -205,7 +211,7 @@ def lm_eval_multiple_choice(
             recipe=recipe,
             protocol=EvaluationProtocol(
                 benchmark=benchmark,
-                version=version,
+                version=likelihood_protocol_version(version),
                 operation=OperationKind.CHOICE_LIKELIHOOD,
                 sampling=None,
                 trials=TrialPolicy(count=1, seed=None),

@@ -174,7 +174,7 @@ def test_gpu_conversion_finishes_before_cpu_publication(export_run, mode):
 def test_failed_hub_upload_retries_on_cpu_without_reconversion(export_run):
     run = export_run
     run.failures.append(True)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(export_hf_checkpoint.ExportFailed):
         export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])
     pending = read_hf_export_request(run.spec.request.checkpoint_path)
     assert pending.status is HFExportStatus.PENDING
@@ -227,7 +227,7 @@ def test_cpu_submission_transport_failure_leaves_a_retryable_request(export_run,
         raise ConnectError(Code.UNAVAILABLE, "controller unavailable")
 
     monkeypatch.setattr(submission, "open_iris_client", unavailable)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(export_hf_checkpoint.ExportFailed):
         export_hf_checkpoint.submit_requested_export(run.spec, ["convert"])
     assert read_hf_export_request(run.spec.request.checkpoint_path).status is HFExportStatus.PENDING
     assert run.events == []

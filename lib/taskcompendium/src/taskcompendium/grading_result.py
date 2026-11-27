@@ -5,7 +5,17 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
+
+from rigging.task_errors import (
+    REWARD_FILE_EMPTY_ERROR,
+    REWARD_FILE_NOT_FOUND_ERROR,
+    VERIFIER_OUTPUT_PARSE_ERROR,
+    VERIFIER_RUNTIME_ERROR,
+    VERIFIER_TIMEOUT_ERROR,
+    ErrorIdentity,
+)
 
 GRADING_DURATION_SECONDS = "grading_duration_seconds"
 GRADING_FAILURE = "grading_failure"
@@ -41,3 +51,22 @@ class GradeResult:
     score_min: float = 0.0
     score_max: float = 1.0
     verifier_setup_seconds: float = 0.0
+
+
+_GRADING_ERROR_TYPES = MappingProxyType(
+    {
+        GradingFailure.TIMEOUT: VERIFIER_TIMEOUT_ERROR,
+        GradingFailure.MISSING_REWARD: REWARD_FILE_NOT_FOUND_ERROR,
+        GradingFailure.EMPTY_REWARD: REWARD_FILE_EMPTY_ERROR,
+        GradingFailure.INVALID_REWARD: VERIFIER_OUTPUT_PARSE_ERROR,
+        GradingFailure.EXECUTION: VERIFIER_RUNTIME_ERROR,
+    }
+)
+
+
+def grading_failure_identity(grade: GradeResult) -> ErrorIdentity | None:
+    """Synthesize an identity for an INFRA_ERROR grade."""
+    if grade.status is not Outcome.INFRA_ERROR:
+        return None
+    exception_type = VERIFIER_RUNTIME_ERROR if grade.failure is None else _GRADING_ERROR_TYPES[grade.failure]
+    return ErrorIdentity(exception_type=exception_type)
