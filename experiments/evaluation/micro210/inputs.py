@@ -23,7 +23,8 @@ from verifyit.spec import JudgeSpec
 
 from experiments.evaluation.judge_config import JudgeConfig
 
-RESOURCE_DIRECTORY = Path(__file__).parent
+RESOURCE_DIRECTORY = Path(__file__).resolve().parent.parent
+"""The evaluation package directory, which holds the judge transport resources the tasks embed."""
 
 JUDGE_COMMAND = (
     "sh",
@@ -35,15 +36,12 @@ JUDGE_COMMAND = (
 )
 
 
-TASK_OWNED_JUDGE_REFERENCE = "task-owned rubric"
-
-
 def bind_script_judge(grader: ScriptGrader, model: str, request_timeout: float) -> ScriptGrader:
-    """Declare the judge transport while the frozen script retains its rubric."""
+    """Declare the judge transport; the frozen script keeps its own rubric and connection reading."""
     return grader.model_copy(
         update={
             "argv": (*JUDGE_COMMAND, *grader.argv),
-            "judge": JudgeSpec(model=model, references=(TASK_OWNED_JUDGE_REFERENCE,), request_timeout=request_timeout),
+            "judge": JudgeSpec(model=model, rubric="", request_timeout=request_timeout),
         }
     )
 
@@ -53,6 +51,24 @@ class NativePackage:
     lowered: HarborTask
     settings: HarborTaskConfig
     judge_required: bool
+
+
+JUDGED_GRADER_NAMES = frozenset({"equivalence_judge", "equivalence_label", "judge_failed"})
+"""The sealed grader registry names whose grade plan consults the judge."""
+
+
+def frozen_judge_plan(task: TaskSpec) -> bool:
+    """Whether the task's frozen Evalchemy grading plan consults the judge.
+
+    The frozen driver reads the judge connection only for a judged grade plan, and the sealed
+    spec records that selection: a judged grader name, or the math equivalence grader's
+    reference when the frozen source escalates a mismatched answer to the judge.
+    """
+    config = next((resource for resource in task.resources.verifier if resource.path == "config.json"), None)
+    if config is None:
+        return False
+    grader = json.loads(resource_bytes(config))["spec"]["grader"]
+    return grader["name"] in JUDGED_GRADER_NAMES or bool((grader.get("reference") or {}).get("judge"))
 
 
 def lower_frozen_package(task: TaskSpec, agent_timeout: float, image_digests: Mapping[str, str]) -> NativePackage:
@@ -94,8 +110,9 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
     if rollout.harness != "harbor_trial":
         grader = task.grader
         assert isinstance(grader, ScriptGrader)
-        # Only equivalence-judged rows need a provider connection. The task's script retains its rubric.
-        if any(resource.path == "config.json" for resource in task.resources.verifier):
+        # Only judged grading plans read the judge connection; exact-match and code-execution
+        # graders run without provider credentials.
+        if frozen_judge_plan(task):
             grader = bind_script_judge(
                 grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["request_timeout"]
             )
@@ -112,7 +129,15 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
         grader = bind_script_judge(
             grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["bixbench_request_timeout"]
         )
-    native = native.model_copy(update={"tags": task.tags, "labels": task.labels, "grader": grader})
+    native = native.model_copy(
+        update={
+            "tags": task.tags,
+            "labels": task.labels,
+            "grader": grader,
+            # The sealed Harbor protocol scores the workspace an agent leaves when it stops at a limit.
+            "verifies_stopped_workspace": True,
+        }
+    )
     machine = MachineRuntimeSpec(
         backend="daytona",
         network=episode.network,
@@ -209,7 +234,7 @@ def task_with_judge(task: TaskSpec, judge: JudgeConfig) -> TaskSpec:
     """Replace only judge configuration and transport resources in a task package."""
     files = {resource.path: resource for resource in task.resources.verifier}
     replacements = {}
-    if "config.json" in files:
+    if "config.json" in files and frozen_judge_plan(task):
         replacements.update(evalchemy_judge_resources(files, judge))
     if "bixbench" in task.id:
         replacements.update(bixbench_judge_resources(files, judge))

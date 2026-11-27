@@ -29,7 +29,7 @@ from uuid import uuid4
 from shellbox.http_service import forward_http_posts
 from shellbox.machine import Backend, Command, ExitReason, Machine, MachineFactory, MachineSpec, Result
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
-from verifyit.spec import Spec, render_spec
+from verifyit.spec import JudgeSpec, Spec, render_spec
 
 from taskcompendium.grading import answer_submission, gradeable_empty_text, parse_grade_result, terminal_grade
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
@@ -432,10 +432,12 @@ async def _verifyit_reward(
 
 @dataclass(frozen=True)
 class _SandboxGrading:
-    """A machine grader with its spec, placement, working directory, and time limit."""
+    """A machine grader with its spec, judge contract, placement, working directory, and time limit."""
 
     grader: VerifyitGrader | ScriptGrader
     spec: Spec | None
+    judge: JudgeSpec | None
+    """A script grader's declared judge service; ``None`` when grading runs no script judge."""
     placement: AgentMachine | GraderMachine
     workspace: str | None
     limit: float
@@ -446,10 +448,10 @@ def _sandbox_grading(task: TaskSpec, timeout: float | None) -> _SandboxGrading:
     grader = task.grader
     if isinstance(grader, VerifyitGrader) and grader.placement is not None:
         limit = GRADING_TIMEOUT if timeout is None else timeout
-        grading = _SandboxGrading(grader, verifyit_spec(grader), grader.placement, grader_workspace(grader), limit)
+        grading = _SandboxGrading(grader, verifyit_spec(grader), None, grader.placement, grader_workspace(grader), limit)
     elif isinstance(grader, ScriptGrader):
         limit = grader.timeout if timeout is None else min(timeout, grader.timeout)
-        grading = _SandboxGrading(grader, None, grader.placement, grader.cwd, limit)
+        grading = _SandboxGrading(grader, None, grader.judge, grader.placement, grader.cwd, limit)
     else:
         raise TypeError(
             f"Machine grading requires a verifyit grader with a placement or a script grader, not {grader.kind}"
@@ -488,8 +490,8 @@ def _grading_files(
     if isinstance(grading.grader, ScriptGrader):
         messages = conversation_messages(attempt.conversation.events)
         files.append(StagedFile(grading.grader.conversation_path, json.dumps(messages, allow_nan=False).encode()))
-        if grading.grader.judge is not None:
-            files.append(StagedFile(JUDGE_SPEC_PATH, render_spec(grading.grader.judge).encode()))
+        if grading.judge is not None:
+            files.append(StagedFile(JUDGE_SPEC_PATH, render_spec(grading.judge).encode()))
     if task.answer_type in CONVERSATION_ANSWERS:
         if grading.spec is not None:
             answer_path = verifyit_answer_file(grading.spec)
@@ -572,10 +574,10 @@ def _grading_env(
     env = {}
     if attempt.stop_reason is not None:
         env["TASKCOMPENDIUM_STOP_REASON"] = attempt.stop_reason
-    if isinstance(grading.grader, ScriptGrader) and grading.grader.judge is not None:
+    if grading.judge is not None:
         if judge_connection is None:
             raise ValueError("A script judge requires an explicit connection")
-        model = grading.grader.judge.model.strip() or (judge_connection.default_model or "").strip()
+        model = grading.judge.model.strip() or (judge_connection.default_model or "").strip()
         if not model:
             raise ValueError("A script judge requires an explicit model")
         env.update({BASE_URL_ENV: judge_connection.base_url, API_KEY_ENV: judge_connection.api_key, MODEL_ENV: model})
@@ -590,17 +592,18 @@ class _ScriptJudgeRoute:
 
 
 def _script_judge_route(
-    grader: ScriptGrader | VerifyitGrader, connection: JudgeConnection | None, backend: Backend
+    judge: JudgeSpec | None, connection: JudgeConnection | None, backend: Backend
 ) -> _ScriptJudgeRoute:
-    if (
-        connection is None
-        or backend is not Backend.DAYTONA
-        or not isinstance(grader, ScriptGrader)
-        or grader.judge is None
-    ):
+    """The guest and relay judge connections for a script judge on one machine backend.
+
+    A script judge runs task code inside the machine, so on Daytona it reaches the judge only
+    through the machine-local relay and the host credential stays with the relay; other
+    placements and graders without a script judge use the runtime connection directly.
+    """
+    if connection is None or backend is not Backend.DAYTONA or judge is None:
         return _ScriptJudgeRoute(connection, None, None)
     guest = replace(connection, base_url=JUDGE_RELAY_URL, api_key=JUDGE_RELAY_KEY)
-    return _ScriptJudgeRoute(guest, connection, grader.judge.request_timeout)
+    return _ScriptJudgeRoute(guest, connection, judge.request_timeout)
 
 
 def _relay_script_judge(machine: Machine, route: _ScriptJudgeRoute) -> AbstractAsyncContextManager[None]:
@@ -641,7 +644,7 @@ async def grade_in_agent_machine(
     answers = _answer_files(task, attempt, grading)
     if isinstance(answers, GradeResult):
         return answers
-    route = _script_judge_route(grading.grader, judge_connection, backend)
+    route = _script_judge_route(grading.judge, judge_connection, backend)
     env = _grading_env(grading, attempt, route.guest)
     try:
         with TemporaryDirectory(prefix="taskcompendium-grading-") as directory:
@@ -744,7 +747,7 @@ async def _grade_staged(
             write_archive(archive_path, files, [])
             submission_archive = root / "submission.tar"
             write_archive(submission_archive, submissions, downloaded)
-            route = _script_judge_route(grading.grader, judge_connection, factory.backend)
+            route = _script_judge_route(grading.judge, judge_connection, factory.backend)
             setup_started = time.monotonic()
             async with asyncio.timeout(machine_spec.startup_timeout):
                 prepared = await asyncio.to_thread(

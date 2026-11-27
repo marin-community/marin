@@ -30,6 +30,7 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import resolve_secret_spec
@@ -37,8 +38,8 @@ from taskcompendium.evaluation.corpus import file_sha256
 from transformers import AutoTokenizer
 
 from experiments.evaluation.judge_config import JudgeConfig
-from experiments.evaluation.micro210_inputs import native_inputs
-from experiments.evaluation.micro210_policy import (
+from experiments.evaluation.micro210.inputs import native_inputs
+from experiments.evaluation.micro210.policy import (
     MODEL_IDENTITY_PREFIX,
     PREPARED_COMMIT,
     PREPARED_REPO,
@@ -54,10 +55,23 @@ from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Native task bindings have their own artifact identity alongside the frozen source.
-PREPARED_INPUTS_VERSION = "2026.11.24.2"
+PREPARED_INPUTS_VERSION = "2026.11.27"
 NATIVE_INPUTS_FINGERPRINT = "a1adbf11"
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
+
+
+class NativeInputsBinding(BaseModel):
+    """The receipt recorded beside a derived native task table."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_sha256: str
+    converter_sha256: str
+    rollouts_sha256: str
+    """Digest of the ``rollouts.parquet`` beside this receipt, computed when it was written."""
+    image_digests: dict[str, str]
+    smoke_rows: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -84,9 +98,21 @@ def judge_runtime_config(config: dict, judge: JudgeConfig) -> dict:
 
 
 def native_binding_code_sha256() -> str:
-    sources = (Path(__file__).with_name(name) for name in ("micro210_inputs.py", "micro210_policy.py"))
+    sources = (Path(__file__).with_name(name) for name in ("inputs.py", "policy.py"))
     digests = "".join(file_sha256(StoragePath(str(path))) for path in sources)
     return hashlib.sha256(digests.encode()).hexdigest()
+
+
+def image_lock() -> dict[str, str]:
+    """The pinned container image digests native task provisioning runs."""
+    return json.loads(Path(__file__).with_name("images.json").read_text())
+
+
+def native_inputs_step_name(rows: tuple[int, ...]) -> str:
+    """The native inputs artifact a row selection builds; equal selections share one conversion."""
+    if not rows:
+        return "evaluation/micro210/native"
+    return "evaluation/micro210/native-smoke-" + "-".join(map(str, rows))
 
 
 def prepare_native_inputs(
@@ -109,26 +135,19 @@ def prepare_native_inputs(
         native_inputs(str(original), str(native), policy, image_digests, rows=rows)
         output = StoragePath(destination)
         (output / "rollouts.parquet").write_bytes(native.read_bytes())
-        (output / "binding.json").write_text(
-            json.dumps(
-                {
-                    "source_sha256": policy["prepared_rollouts_sha256"],
-                    "converter_sha256": converter_sha256,
-                    "native_sha256": file_sha256(StoragePath(str(native))),
-                    "image_digests": image_digests,
-                    "smoke_rows": rows,
-                },
-                indent=2,
-            )
+        binding = NativeInputsBinding(
+            source_sha256=policy["prepared_rollouts_sha256"],
+            converter_sha256=converter_sha256,
+            rollouts_sha256=file_sha256(StoragePath(str(native))),
+            image_digests=image_digests,
+            smoke_rows=rows,
         )
+        (output / "binding.json").write_text(binding.model_dump_json(indent=2))
 
 
-def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
-    """Reject changed prepared tasks or export metadata before GPU allocation."""
+def validate_inputs(evaluation: Micro210Evaluation) -> None:
+    """Reject changed model export or tokenizer metadata before GPU allocation."""
     protocol = evaluation.policy()
-    table = (StoragePath(inputs) / protocol["evaluation"]["data_relative_path"]).read_bytes()
-    if hashlib.sha256(table).hexdigest() != protocol["prepared_rollouts_sha256"]:
-        raise ValueError("Canonical Micro210 prepared task bytes changed")
     manifest = (StoragePath(evaluation.model.uri) / MODEL_MANIFEST_FILENAME).read_bytes()
     if MODEL_IDENTITY_PREFIX + hashlib.sha256(manifest).hexdigest() != evaluation.model.identity:
         raise ValueError("Micro210 model export manifest differs from the model binding")
@@ -143,27 +162,26 @@ def validate_inputs(evaluation: Micro210Evaluation, inputs: str) -> None:
 
 
 def verified_native_evaluation(evaluation: Micro210Evaluation, inputs: str) -> Micro210Evaluation:
-    """Verify the table consumed by the launch and bind its identity to the run record."""
+    """Verify the native inputs the launch consumes and bind their identity to the run record.
+
+    The launch checks the artifact's binding receipt — its frozen source, converter, and image
+    pins — against this evaluation; the artifact system owns the table's byte identity.
+    """
     root = StoragePath(inputs)
-    receipt = json.loads((root / "binding.json").read_text())
-    if receipt["source_sha256"] != evaluation.policy()["prepared_rollouts_sha256"]:
+    binding = NativeInputsBinding.model_validate_json((root / "binding.json").read_text())
+    if binding.source_sha256 != evaluation.policy()["prepared_rollouts_sha256"]:
         raise ValueError("Micro210 native binding has a different frozen source")
-    if tuple(receipt["smoke_rows"]) != evaluation.smoke_rows:
-        raise ValueError("Micro210 native binding has different smoke rows")
-    if receipt["converter_sha256"] != native_binding_code_sha256():
+    if binding.converter_sha256 != native_binding_code_sha256():
         raise ValueError("Micro210 native binding has a different converter")
-    if receipt["image_digests"] != json.loads(Path(__file__).with_name("micro210_images.json").read_text()):
+    if binding.image_digests != image_lock():
         raise ValueError("Micro210 native binding has different image pins")
-    digest = file_sha256(root / "rollouts.parquet")
-    if digest != receipt["native_sha256"]:
-        raise ValueError("Canonical Micro210 native task bytes changed")
-    return replace(evaluation, native_sha256=digest, native_inputs_uri=inputs)
+    return replace(evaluation, native_inputs_sha256=binding.rollouts_sha256, native_inputs_uri=inputs)
 
 
 def run_micro210(config: Micro210Run) -> SkyRLRun:
     if hashlib.sha256(config.skyrl.launch_config_yaml.encode()).hexdigest() != config.canonical_launch_sha256:
         raise ValueError("Canonical Micro210 refuses modified field: launch_config_yaml")
-    validate_inputs(config.evaluation, PREPARED_INPUTS)
+    validate_inputs(config.evaluation)
     document = yaml.safe_load(config.skyrl.launch_config_yaml)
     native_inputs_uri = document["inputs"]["validation_data"][0]["uri"]
     evaluation = verified_native_evaluation(config.evaluation, native_inputs_uri)
@@ -180,10 +198,7 @@ def micro210_step(
     model: Micro210Model, *, name: str, version: str, smoke: Micro210Smoke | None = None
 ) -> ArtifactStep[SkyRLRun]:
     """Build the canonical evaluation graph for a model and run identity."""
-    binding = replace(
-        micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>"),
-        smoke_rows=() if smoke is None else smoke.rows,
-    )
+    binding = micro210_evaluation(model, run_id=f"{name}@{version}", output_uri="<resolved-at-build>")
     frozen = binding.policy()
     evaluation_policy = frozen["evaluation"]
     model_artifact = ArtifactStep.adopt(
@@ -195,16 +210,18 @@ def micro210_step(
         PREPARED_INPUTS,
         config={"sha256": frozen["prepared_rollouts_sha256"]},
     )
+    rows = () if smoke is None else smoke.rows
+    # Smoke tables are their own artifact, so equal selections share one conversion across runs.
     inputs = apply(
-        "evaluation/micro210/native" if smoke is None else f"{name}/native-inputs",
+        native_inputs_step_name(rows),
         prepare_native_inputs,
         source=frozen_inputs,
         destination=OUT,
         policy=frozen,
-        image_digests=json.loads(Path(__file__).with_name("micro210_images.json").read_text()),
-        rows=binding.smoke_rows,
+        image_digests=image_lock(),
+        rows=rows,
         converter_sha256=native_binding_code_sha256(),
-        version=PREPARED_INPUTS_VERSION if smoke is None else version,
+        version=PREPARED_INPUTS_VERSION,
     )
     if smoke is None:
         inputs = replace(inputs, expected_fingerprint=NATIVE_INPUTS_FINGERPRINT)

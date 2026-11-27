@@ -4442,14 +4442,19 @@ async def test_supplied_verifier_remains_caller_owned(fails):
 
 @pytest.mark.parametrize("error", [TimeoutError, ContextWindowExceeded, ConnectionError])
 @pytest.mark.parametrize("sampled", [False, True])
-async def test_workspace_agent_timeout_runs_verifier_and_transport_failure_stays_unavailable(error, sampled):
+@pytest.mark.parametrize("verifies_stopped", [False, True])
+async def test_declared_stopped_workspace_runs_verifier_and_other_failures_stay_unavailable(
+    error, sampled, verifies_stopped
+):
     async def agent(context, complete):
         await context.machine.run(Command(("sh", "-c", "echo 12 > /workspace/answer")))
         if sampled:
             await complete(Prompt(({"role": "user", "content": "Working"},), {}))
         raise error("Agent stopped")
 
-    task = file_task(answer_type=AnswerType.WORKSPACE_STATE)
+    # A workspace task declares that its verifier scores the workspace its agent stopped in; the
+    # sealed Harbor protocol declares it, and undeclared tasks stay unavailable after a failure.
+    task = file_task(answer_type=AnswerType.WORKSPACE_STATE, verifies_stopped_workspace=verifies_stopped)
     with pytest.raises(GradedRolloutInterrupted) as caught:
         await engine(
             ReplayModel([{"role": "assistant", "content": "Working"}]),
@@ -4460,6 +4465,6 @@ async def test_workspace_agent_timeout_runs_verifier_and_transport_failure_stays
     assert result.operation == (RolloutOperation.ADVANCE if sampled else RolloutOperation.PREPARE)
     assert (result.grade.status, result.grade.reward) == (
         (Outcome.GRADED, 1.0)
-        if sampled and error in (TimeoutError, ContextWindowExceeded)
+        if verifies_stopped and sampled and error in (TimeoutError, ContextWindowExceeded)
         else (Outcome.UNAVAILABLE, None)
     )

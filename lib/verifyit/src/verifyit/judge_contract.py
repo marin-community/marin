@@ -140,6 +140,26 @@ def validate_judge_spec(spec: JudgeSpec) -> None:
     empty_output_policy(spec)
 
 
+def validate_script_judge(spec: JudgeSpec) -> None:
+    """Validate a script grader's judge contract; an unnamed rubric stays task-owned.
+
+    A script grader declares the judge service its command requires. An empty rubric is a
+    task-owned rubric: the script grades with its own logic and reads only the connection, so
+    only the service deadline applies. A named rubric stages the script's grading contract and
+    follows the same payload rules as a verifyit judge.
+    """
+    if not spec.rubric:
+        if (
+            isinstance(spec.request_timeout, bool)
+            or not isinstance(spec.request_timeout, (int, float))
+            or spec.request_timeout <= 0
+            or not math.isfinite(spec.request_timeout)
+        ):
+            raise InvalidTask("judge request timeout must be finite and positive")
+        return
+    validate_judge_spec(spec)
+
+
 def answer_text(text: str, strip_reasoning: bool, *, unfinished_error: str | None = None) -> str:
     """Strip outer whitespace and optionally remove the reasoning preceding an answer."""
     if not strip_reasoning:

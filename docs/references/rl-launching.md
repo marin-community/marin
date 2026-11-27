@@ -473,20 +473,19 @@ memory in colocated-role capacity estimates.
 
 ## Micro210 native evaluation
 
-`experiments.evaluation.micro210` binds the sealed Micro210 policy at
+`experiments.evaluation.micro210.eval` binds the sealed Micro210 policy at
 `open-athena/micro210-policy@7ab57cf5e33cacc98440bfcc2dfd452b94c44344`
 and prepared tasks at
 `open-athena/micro210-prepared-tasks@2d33d7be129e6a93bb4279af8a4998a6915771a9`.
-The sealed table contains 434 rows. The policy's historical selection lists 440;
-its `task_changes` records the six dropped attempts and the HumanEval replacement.
 
 The graph verifies the prepared Parquet digest and derives a native table without
 changing row order, repetitions, prompts, or task membership. Package resources
 become native Pi tasks with their own CPU, memory, disk, network, and verifier
 limits. `binding.json` records the source and derived table digests and image pins.
-The launch re-hashes the native table and verifies its frozen source, converter code,
-image pins, and smoke selection before allocation. The evaluation record includes
-the verified `native_sha256`, `native_inputs_uri`, and `smoke_rows`. The production
+The launch verifies the native binding receipt — frozen source, converter code, and
+image pins — before allocation; the artifact system owns the table's byte identity.
+The evaluation record includes the verified `native_inputs_uri` and
+`native_inputs_sha256`. The production
 native artifact pins its fingerprint; bump `PREPARED_INPUTS_VERSION` and update
 `NATIVE_INPUTS_FINGERPRINT` when the converter or image lock changes.
 The launch uses a generation plan and retains the policy's vLLM startup settings.
@@ -500,7 +499,8 @@ at runtime. BixBench's verifier uses the machine-local judge relay after Pi stop
 
 For a diagnostic smoke, use the production command with row and engine scale
 options, for example `--smoke-row 0 --smoke-row 1 --smoke-row 12 --smoke-engines 1`.
-These select CRUXEval, BixBench, and BFCL from the sealed table. All other task,
-sampling, timeout, and serving settings remain those of the production protocol.
-The evaluation record identifies smoke rows; a smoke is not a full Micro210 score.
+All other task, sampling, timeout, and serving settings remain those of the
+production protocol.
+Each row selection builds its own cached native-table artifact, so repeated
+selections reuse one conversion; a smoke is not a full Micro210 score.
 Use a fresh calendar version for each runtime change.

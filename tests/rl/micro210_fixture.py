@@ -6,7 +6,7 @@
 import hashlib
 from pathlib import Path
 
-from experiments.evaluation.micro210_policy import Micro210PolicyReference
+from experiments.evaluation.micro210.policy import Micro210PolicyReference
 
 
 def policy_fixture_reference() -> Micro210PolicyReference:

@@ -16,8 +16,13 @@ from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210 import PREPARED_INPUTS, micro210_step, native_binding_code_sha256, run_micro210
-from experiments.evaluation.micro210_policy import (
+from experiments.evaluation.micro210.eval import (
+    PREPARED_INPUTS,
+    micro210_step,
+    native_binding_code_sha256,
+    run_micro210,
+)
+from experiments.evaluation.micro210.policy import (
     LEGACY_POLICY_REFERENCE,
     POLICY_REFERENCE,
     Micro210Model,
@@ -31,8 +36,8 @@ from tests.rl.micro210_fixture import policy_fixture_reference
 @pytest.fixture(autouse=True)
 def policy_reference(monkeypatch):
     reference = policy_fixture_reference()
-    monkeypatch.setattr("experiments.evaluation.micro210_policy.POLICY_REFERENCE", reference)
-    monkeypatch.setattr("experiments.evaluation.micro210.NATIVE_INPUTS_FINGERPRINT", None)
+    monkeypatch.setattr("experiments.evaluation.micro210.policy.POLICY_REFERENCE", reference)
+    monkeypatch.setattr("experiments.evaluation.micro210.eval.NATIVE_INPUTS_FINGERPRINT", None)
     return reference
 
 
@@ -40,7 +45,7 @@ def test_micro210_binding_rejects_modified_protocol_bytes(tmp_path, monkeypatch,
     changed = tmp_path / "protocol.json"
     changed.write_text(StoragePath(policy_reference.uri).read_text().replace('"seed": 20261030', '"seed": 20261031'))
     monkeypatch.setattr(
-        "experiments.evaluation.micro210_policy.POLICY_REFERENCE", replace(policy_reference, uri=str(changed))
+        "experiments.evaluation.micro210.policy.POLICY_REFERENCE", replace(policy_reference, uri=str(changed))
     )
     with pytest.raises(ValueError, match="hash mismatch"):
         micro210_evaluation(
@@ -61,7 +66,7 @@ def test_default_policy_references_pin_immutable_hugging_face_revisions():
         assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
 
 
-def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_allocation(
+def test_micro210_launch_records_protocol_and_rejects_drift_before_gpu_allocation(
     tmp_path, monkeypatch, policy_reference
 ):
     model_dir = tmp_path / "model"
@@ -78,15 +83,15 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     raw = json.dumps(protocol).encode()
     protocol_path.write_bytes(raw)
     monkeypatch.setattr(
-        "experiments.evaluation.micro210_policy.POLICY_REFERENCE",
+        "experiments.evaluation.micro210.policy.POLICY_REFERENCE",
         replace(policy_reference, uri=str(protocol_path), sha256=hashlib.sha256(raw).hexdigest(), byte_size=len(raw)),
     )
-    monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(inputs))
+    monkeypatch.setattr("experiments.evaluation.micro210.eval.PREPARED_INPUTS", str(inputs))
     monkeypatch.setenv("MARIN_TEMP_PREFIX", str(tmp_path / "temporary"))
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "artifacts"))
     token_content = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
     monkeypatch.setattr(
-        "experiments.evaluation.micro210.AutoTokenizer.from_pretrained",
+        "experiments.evaluation.micro210.eval.AutoTokenizer.from_pretrained",
         lambda *args, **kwargs: SimpleNamespace(convert_ids_to_tokens=token_content.__getitem__),
     )
     binding = Micro210Model(str(model_dir), "sha256:" + hashlib.sha256(manifest).hexdigest(), "test/tokenizer", "a" * 40)
@@ -111,10 +116,10 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         json.dumps(
             {
                 "source_sha256": protocol["prepared_rollouts_sha256"],
-                "native_sha256": native_digest,
+                "rollouts_sha256": native_digest,
                 "smoke_rows": [],
                 "converter_sha256": native_binding_code_sha256(),
-                "image_digests": json.loads(Path(__file__).with_name("micro210_images.json").read_text()),
+                "image_digests": json.loads(Path(__file__).with_name("images.json").read_text()),
             }
         )
     )
@@ -127,7 +132,7 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         )
         return SimpleNamespace(value="test-together-key")
 
-    monkeypatch.setattr("experiments.evaluation.micro210.resolve_secret_spec", resolve_key)
+    monkeypatch.setattr("experiments.evaluation.micro210.eval.resolve_secret_spec", resolve_key)
 
     def submit_evaluation(skyrl, *, env_vars):
         assert env_vars == {"JUDGE_API_KEY": "test-together-key", "OPENAI_API_KEY": "test-together-key"}
@@ -138,15 +143,15 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
         raise AssertionError("API judging must not prepare or provision a hosted judge")
 
     monkeypatch.setattr("marin.inference.iris.prepare_inference", refuse_hosted_judge)
-    monkeypatch.setattr("experiments.evaluation.micro210.run_skyrl", submit_evaluation)
+    monkeypatch.setattr("experiments.evaluation.micro210.eval.run_skyrl", submit_evaluation)
     run_micro210(config)
     launch = submitted[0]
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
     assert launch["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]["pi"]["version"] == "0.87.0"
     assert all("test-together-key" not in str(value) for value in launch.values())
     record = draccus.decode(Micro210Record, json.loads((output / "canonical-evaluation.json").read_text()))
-    assert record.canonical_spec_sha256 == hashlib.sha256(raw).hexdigest()
-    assert record.native_sha256 == native_digest
+    assert record.policy_reference.sha256 == hashlib.sha256(raw).hexdigest()
+    assert record.native_inputs_sha256 == native_digest
     assert record.native_inputs_uri == native_inputs_uri
     assert (
         submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
@@ -166,14 +171,18 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     with pytest.raises(ValueError, match="launch_config_yaml"):
         run_micro210(replace(config, skyrl=replace(config.skyrl, launch_config_yaml=yaml.safe_dump(altered))))
     assert submitted == []
-    (native_root / "rollouts.parquet").write_bytes(b"changed-native-tasks")
-    with pytest.raises(ValueError, match="native task bytes changed"):
-        run_micro210(config)
-    assert submitted == []
-    (native_root / "rollouts.parquet").write_bytes(native_bytes)
-    with pytest.raises(ValueError, match="different smoke rows"):
-        run_micro210(replace(config, evaluation=replace(config.evaluation, smoke_rows=(1,))))
-    assert submitted == []
+    binding_path = native_root / "binding.json"
+    binding = json.loads(binding_path.read_text())
+    for field, value, message in (
+        ("converter_sha256", "0" * 64, "different converter"),
+        ("source_sha256", "0" * 64, "different frozen source"),
+        ("image_digests", {"python:3.10-slim": "sha256:" + "0" * 64}, "different image pins"),
+    ):
+        binding_path.write_text(json.dumps({**binding, field: value}))
+        with pytest.raises(ValueError, match=message):
+            run_micro210(config)
+        assert submitted == []
+    binding_path.write_text(json.dumps(binding))
     manifest_path = model_dir / ".marinskyrl-model-manifest.json"
     manifest_path.write_bytes(b'{"files": ["changed"]}')
     with pytest.raises(ValueError, match="export manifest differs"):
@@ -182,11 +191,6 @@ def test_micro210_launch_records_protocol_and_rejects_changed_inputs_before_gpu_
     manifest_path.write_bytes(manifest)
     token_content[128009] = "ordinary-token"
     with pytest.raises(ValueError, match="incompatible stop token ID: 128009"):
-        run_micro210(config)
-    assert submitted == []
-    (inputs / "rollouts.parquet").write_bytes(b"changed-tasks")
-    submitted.clear()
-    with pytest.raises(ValueError, match="task bytes changed"):
         run_micro210(config)
     assert submitted == []
 
@@ -222,7 +226,7 @@ def test_new_prepared_inputs_do_not_reuse_old_policy_provenance(
             "evaluation/micro210/prepared", previous_version, str(old_inputs), config={"sha256": previous_digest}
         )
     )
-    monkeypatch.setattr("experiments.evaluation.micro210.PREPARED_INPUTS", str(new_inputs))
+    monkeypatch.setattr("experiments.evaluation.micro210.eval.PREPARED_INPUTS", str(new_inputs))
     step = micro210_step(
         Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40),
         name="fixture/new-policy",
@@ -253,22 +257,22 @@ def test_prepared_inputs_adopt_the_pinned_hugging_face_source():
 
 @pytest.mark.parametrize("change", ["image_lock", "converter"])
 def test_native_artifact_pin_rejects_conversion_drift(tmp_path, monkeypatch, change):
-    source = Path(__file__).with_name("micro210.py")
-    for name in ("micro210_images.json", "micro210_inputs.py", "micro210_policy.py"):
+    source = Path(__file__).with_name("eval.py")
+    for name in ("images.json", "inputs.py", "policy.py"):
         (tmp_path / name).write_bytes(source.with_name(name).read_bytes())
-    monkeypatch.setattr("experiments.evaluation.micro210.__file__", str(tmp_path / "micro210.py"))
+    monkeypatch.setattr("experiments.evaluation.micro210.eval.__file__", str(tmp_path / "eval.py"))
     model = Micro210Model("s3://fixture/model", "sha256:" + "a" * 64, "fixture/tokenizer", "b" * 40)
     step = micro210_step(model, name="fixture/pinned-binding", version="2026.11.24")
     native = next(dep for dep in step.deps if dep.name == "evaluation/micro210/native")
-    monkeypatch.setattr("experiments.evaluation.micro210.NATIVE_INPUTS_FINGERPRINT", native.fingerprint())
+    monkeypatch.setattr("experiments.evaluation.micro210.eval.NATIVE_INPUTS_FINGERPRINT", native.fingerprint())
     lower(micro210_step(model, name="fixture/pinned-binding", version="2026.11.24"))
-    lock_path = tmp_path / "micro210_images.json"
+    lock_path = tmp_path / "images.json"
     if change == "image_lock":
         lock = json.loads(lock_path.read_text())
         lock[next(iter(lock))] = "sha256:" + "f" * 64
         lock_path.write_text(json.dumps(lock))
     else:
-        converter = tmp_path / "micro210_inputs.py"
+        converter = tmp_path / "inputs.py"
         converter.write_text(converter.read_text() + "\n# changed converter fixture\n")
     with pytest.raises(FingerprintMismatchError, match="expected_fingerprint pins"):
         lower(micro210_step(model, name="fixture/pinned-binding", version="2026.11.24"))

@@ -15,12 +15,14 @@ from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import rollout_spec
 from taskcompendium.models import (
+    AgentMachine,
     AnswerType,
     ConversationInput,
     EnvironmentRequirements,
     NoGrader,
     PlainText,
     ResourceGroups,
+    ScriptGrader,
     Source,
     TaskSpec,
     TextMessage,
@@ -28,7 +30,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210_inputs import native_inputs, task_with_judge
+from experiments.evaluation.micro210.inputs import native_inputs, task_with_judge
 from tests.rl.micro210_fixture import policy_fixture_reference
 
 
@@ -47,7 +49,16 @@ def task():
             verifier=(
                 inline_resource("grade.py", source),
                 inline_resource(
-                    "config.json", json.dumps({"judge_model": "old/judge", "spec": {"target": "4"}}).encode()
+                    "config.json",
+                    json.dumps(
+                        {
+                            "judge_model": "old/judge",
+                            "spec": {
+                                "target": "4",
+                                "grader": {"name": "math_equivalence", "reference": {"judge": True, "answers": ["4"]}},
+                            },
+                        }
+                    ).encode(),
                 ),
             )
         ),
@@ -61,7 +72,7 @@ def test_task_rebinding_preserves_solver_prompt_and_reference(task):
     files = {resource.path: resource_bytes(resource) for resource in rebound.resources.verifier}
     config = json.loads(files["config.json"])
     assert config["judge_model"] == config["judge"]["model"] == "zai-org/GLM-5.3-Flash"
-    assert config["spec"] == {"target": "4"}
+    assert config["spec"]["target"] == "4"
     for name in ("grade.py", "micro210_together_judge.py", "micro210_judge_config.py"):
         ast.parse(files[name])
     parameters = MICRO210_JUDGE.completion_parameters(
@@ -140,6 +151,63 @@ def complete():
     assert request.extensions["timeout"]["read"] == 600.0
 
 
+def script_row_task(task_id: str, grader_name: str, reference: dict) -> TaskSpec:
+    """One single-turn task whose frozen config names the registry grader that grades it."""
+    return TaskSpec(
+        id=task_id,
+        context=ConversationInput(events=(TextMessage(role="user", content="What is 2+2?"),)),
+        environment_requirements=EnvironmentRequirements(),
+        answer_type=AnswerType.TEXT,
+        answer_format=PlainText(),
+        grader=ScriptGrader(
+            argv=("python3", "grade.py"),
+            placement=AgentMachine(),
+        ),
+        source=Source(dataset="fixture", revision="pinned", row="0", importer_revision="fixture-v1"),
+        resources=ResourceGroups(
+            verifier=(
+                inline_resource("grade.py", b"print(1)\n"),
+                inline_resource(
+                    "config.json",
+                    json.dumps(
+                        {"spec": {"target": "4", "grader": {"name": grader_name, "reference": reference}}}
+                    ).encode(),
+                ),
+            )
+        ),
+    )
+
+
+def test_native_inputs_bind_the_judge_only_to_judged_rows(tmp_path):
+    judged = script_row_task("fixture/olympiad", "math_equivalence", {"judge": True, "answers": ["4"]})
+    unjudged = script_row_task("fixture/humaneval", "program_suite", {"language": "python"})
+    rollouts = [rollout_spec(unjudged), rollout_spec(judged)]
+    original = pa.table(
+        {
+            "task_id": [task.id for task in (unjudged, judged)],
+            "repetition_index": [0, 0],
+            "task_spec": [unjudged.model_dump_json(), judged.model_dump_json()],
+            "task_rollout_spec": [rollout.model_dump_json() for rollout in rollouts],
+        }
+    )
+    source, destination = tmp_path / "frozen.parquet", tmp_path / "native.parquet"
+    pq.write_table(original, source)
+    policy = json.loads(StoragePath(policy_fixture_reference().uri).read_text())
+    native_inputs(str(source), str(destination), policy, {"fixture:sealed": "sha256:" + "a" * 64})
+    converted = pq.read_table(destination)
+    graders = []
+    for row in converted.to_pylist():
+        native = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
+        graders.append((row["task_id"], native.task.grader))
+    unjudged_grader = next(grader for task_id, grader in graders if task_id == "fixture/humaneval")
+    judged_grader = next(grader for task_id, grader in graders if task_id == "fixture/olympiad")
+    assert unjudged_grader.judge is None
+    assert unjudged_grader.argv == ("python3", "grade.py")
+    assert judged_grader.judge.model == MICRO210_JUDGE.model
+    assert judged_grader.argv[:2] == ("sh", "-c") and "micro210-judge" in judged_grader.argv
+    assert judged_grader.argv[-1:] == ("grade.py",)
+
+
 def test_native_table_preserves_repeated_membership_and_package_provisioning(tmp_path, task):
     package = {
         "instruction.md": b"What is 2+2?",
@@ -197,6 +265,7 @@ allow_internet = true
         )
         assert native.task_machine.network == "allow"
         assert native.harness == "pi"
+        assert native.task.verifies_stopped_workspace is True
         assert native.limits.total_turn_timeout == 1800
         assert native.limits.verifier_timeout == native.task.grader.timeout == 600
         assert {r.path: resource_bytes(r) for r in native.task.resources.verifier} == {

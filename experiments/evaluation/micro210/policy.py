@@ -9,6 +9,7 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.agents.pi.agent import PI_HARNESS
 
@@ -75,14 +76,14 @@ class Micro210Model:
 class Micro210Record:
     """Serializable identity of the model, protocol and evaluation outputs."""
 
-    canonical_spec_sha256: str
     model: Micro210Model
     run_id: str
     output_uri: str
     policy_reference: Micro210PolicyReference
-    native_sha256: str
     native_inputs_uri: str
-    smoke_rows: tuple[int, ...] = ()
+    """The verified native inputs artifact the evaluation ran on."""
+    native_inputs_sha256: str
+    """Digest of the derived task table, recorded in that artifact's binding receipt."""
 
 
 @dataclass(frozen=True)
@@ -92,8 +93,7 @@ class Micro210Evaluation:
     model: Micro210Model
     run_id: str
     output_uri: str
-    smoke_rows: tuple[int, ...] = ()
-    native_sha256: str | None = None
+    native_inputs_sha256: str | None = None
     native_inputs_uri: str | None = None
 
     def policy(self) -> dict:
@@ -101,17 +101,15 @@ class Micro210Evaluation:
 
     def record(self) -> Micro210Record:
         self.policy()
-        if self.native_sha256 is None or self.native_inputs_uri is None:
+        if self.native_inputs_sha256 is None or self.native_inputs_uri is None:
             raise ValueError("Micro210 native inputs must be verified before recording")
         return Micro210Record(
-            POLICY_REFERENCE.sha256,
             self.model,
             self.run_id,
             self.output_uri,
             POLICY_REFERENCE,
-            self.native_sha256,
             self.native_inputs_uri,
-            self.smoke_rows,
+            self.native_inputs_sha256,
         )
 
 
@@ -130,32 +128,83 @@ def read_micro210_policy(reference: Micro210PolicyReference) -> dict:
     return json.loads(raw)
 
 
+class NativePiHarness(BaseModel):
+    """The frozen Pi agent's session settings in the native runtime."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    version: str
+    thinking: str
+    thinking_format: str
+    setup_timeout: float
+
+
+class NativeDaytonaSessions(BaseModel):
+    """The task-machine provisioning the frozen Harbor protocol selects."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    api_key_env: str
+    ttl_minutes: int
+    image_build: str
+
+
+class NativeTaskSessions(BaseModel):
+    """The native task-session settings bound from the frozen Harbor protocol."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    daytona: NativeDaytonaSessions
+    agent_max_retries: int
+    max_concurrent_agents: int | None
+    agent_harnesses: dict[str, NativePiHarness]
+
+    def task_sessions(self) -> dict:
+        """The ``environment.task_sessions`` entries this binding sets in the runtime config."""
+        return self.model_dump()
+
+
+NATIVE_ERROR_HANDLING = {
+    "enable_error_classification": True,
+    "default_error_treatment": "mask",
+    "passthrough_exceptions": ("ContextLengthExceededError", "AgentTimeoutError"),
+}
+"""How the rollout runner treats agent failures the frozen protocol still scores."""
+
+
+def native_task_sessions(policy: dict) -> NativeTaskSessions:
+    """Bind the frozen Harbor block into typed native task-session settings."""
+    retired = policy["evaluation"]["config"]["terminal_bench"]
+    harbor, installed = retired["harbor"], retired["installed_agent"]
+    agent = installed["agent"]
+    if agent["name"] != "pi":
+        raise ValueError("Micro210 requires the frozen Pi agent")
+    return NativeTaskSessions(
+        daytona=NativeDaytonaSessions(
+            api_key_env=harbor["daytona_api_key_env"],
+            ttl_minutes=180,
+            image_build=harbor["daytona_provisioning"],
+        ),
+        agent_max_retries=harbor["max_retries"],
+        max_concurrent_agents=harbor["n_concurrent_trials"],
+        agent_harnesses={
+            PI_HARNESS: NativePiHarness(
+                version=agent["kwargs"]["version"],
+                thinking=agent["kwargs"]["thinking"],
+                thinking_format=agent["kwargs"]["thinking_format"],
+                setup_timeout=installed["setup_timeout"],
+            )
+        },
+    )
+
+
 def runtime_policy_config(policy: dict) -> dict:
     """Bind the frozen Harbor protocol to the native evaluation runtime."""
     config = deepcopy(policy["evaluation"]["config"])
     config.pop("entrypoint")
     config.pop("config_groups")
-    retired = config.pop("terminal_bench")
-    harbor, installed = retired["harbor"], retired["installed_agent"]
-    agent = installed["agent"]
-    if agent["name"] != "pi":
-        raise ValueError("Micro210 requires the frozen Pi agent")
+    config.pop("terminal_bench")
     config["trainer"]["placement"]["colocate_all"] = False
-    sessions = config["environment"]["task_sessions"]
-    sessions["daytona"] = {
-        "api_key_env": harbor["daytona_api_key_env"],
-        "ttl_minutes": 180,
-        "image_build": harbor["daytona_provisioning"],
-    }
-    sessions["agent_max_retries"] = harbor["max_retries"]
-    sessions["max_concurrent_agents"] = harbor["n_concurrent_trials"]
-    sessions["agent_harnesses"] = {
-        PI_HARNESS: {key: agent["kwargs"][key] for key in ("version", "thinking", "thinking_format")}
-    }
-    sessions["agent_harnesses"][PI_HARNESS]["setup_timeout"] = installed["setup_timeout"]
-    config["generator"]["error_handling"] = {
-        "enable_error_classification": True,
-        "default_error_treatment": "mask",
-        "passthrough_exceptions": ["ContextLengthExceededError", "AgentTimeoutError"],
-    }
+    config["environment"]["task_sessions"].update(native_task_sessions(policy).task_sessions())
+    config["generator"]["error_handling"] = dict(NATIVE_ERROR_HANDLING)
     return config
