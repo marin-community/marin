@@ -159,7 +159,7 @@ def choice_dataset(
                 name="evalchemy-" + name,
                 source=source,
                 convert=converter,
-                version=scorer_revision("mmlu_pro" if benchmark == "MMLUPro" else "gpqa"),
+                version=("2-" + scorer_revision("mmlu_pro")) if benchmark == "MMLUPro" else scorer_revision("gpqa"),
                 intended_use=IntendedUse.EVAL,
                 grader=BASIC_GRADER,
                 inputs=inputs,
