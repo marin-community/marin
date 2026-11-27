@@ -525,26 +525,6 @@ MANUAL_EXCLUSION_CLAIMS: dict[str, tuple[ExclusionClaim, ...]] = {
             ),
         ),
     ),
-    "TaskTrove:laion__r2egym-patched-full-oracle-v3": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note(
-                "Grades by overlap between test_info.json and expected_output_json rather than "
-                "by pytest node id; not the trusted-paths shape the swe converters handle."
-            ),
-        ),
-    ),
-    "TaskTrove:laion__swegym-tasks-patched-validated-v5": (
-        ExclusionClaim(
-            reason=ExclusionReason.GRADER_DEFECT,
-            evidence=_note(
-                "Image ships no repository: the instruction clones it and runs make init at "
-                "agent time, and the old grader pip-installed requirements again at grading "
-                "time. Sampled oracles fail on missing dependencies and the empty check cannot "
-                "start."
-            ),
-        ),
-    ),
     "TaskTrove:laion__toolscale-v4": (
         ExclusionClaim(
             reason=ExclusionReason.GRADER_DEFECT,
