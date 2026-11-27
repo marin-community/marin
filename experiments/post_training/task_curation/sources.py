@@ -15,6 +15,7 @@ from experiments.post_training.task_curation.conversion_admission import (
     conversion_admission_receipts,
 )
 from experiments.post_training.task_curation.datasets import (
+    acecode_89k_admitted,
     backfill_releases,
     big_math_admitted,
     campaign_releases,
@@ -258,6 +259,7 @@ PENDING_MEASUREMENT_SOURCES = (
     *freeform_formatting_admitted.sources(),
     *citation_formatting_admitted.sources(),
     *big_math_admitted.sources(),
+    *acecode_89k_admitted.sources(),
     *(
         source
         for source in campaign_releases.sources()
@@ -349,6 +351,7 @@ def configured_sources() -> list[RlDataSource]:
         *freeform_formatting_admitted.sources(),
         *citation_formatting_admitted.sources(),
         *big_math_admitted.sources(),
+        *acecode_89k_admitted.sources(),
         *nemotron_ultra_renames_admitted.sources(),
         *workplace.sources(),
         *nemo_mcqa.sources(),

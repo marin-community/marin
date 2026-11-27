@@ -24,6 +24,8 @@
     "ScienceOne:S1-DeepResearch-15k": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Nvidia:Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "Nvidia:Nemotron-RL-Instruction-Following-Citation-Formatting-v1": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+    "SynthLabs:Big-Math-RL-Verified": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+    "Tiger-lab:AceCode-89K": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
     "TaskTrove:tasktrove-competitive-coding-rebuilt-v1": "ingest B \u00b7 Codex 01a1e039",
     "TaskTrove:tasktrove-code-contests-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
     "TaskTrove:tasktrove-taco-built-image": "atlas-pending-burndown \u00b7 ses_de7b345a3ffe",
@@ -968,6 +970,26 @@
       },
       "consumer_decision": null
     },
+    "SynthLabs:Big-Math-RL-Verified": {
+      "consumer_requirements": [
+        "custom_judge"
+      ],
+      "consumer_receipt": {
+        "source_id": "SynthLabs:Big-Math-RL-Verified",
+        "dataset_id": "open-athena/synthlabs-big-math-rl-verified-e85c52ce-retained-20261127-b-big-math-v1",
+        "dataset_revision": "74e24a22f5a5458ceace7915e4a511ee3996a79f",
+        "task_specs_sha256": "a25ef0a4ff4bf7343ee83e58630e58e3290baa7a6f5b10d654e7909c5e85290f",
+        "runtime_commit": "f26f6059d043191a89cf76ecdba41090d8ddff4d",
+        "checked_tasks": 239611,
+        "failed_tasks": 0,
+        "failures": {},
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/big-math/2026.11.27.1/consumer-binding-v1/audit/e85c52ceae00d6f0ec8f.json",
+        "requirements": {
+          "custom_judge": 239611
+        }
+      },
+      "consumer_decision": null
+    },
     "OpenResearcher:OpenResearcher-Dataset": {
       "consumer_requirements": [
         "custom_judge",
@@ -1677,6 +1699,42 @@
       "upstream_dataset": "Nemotron-RL-Instruction-Following-Citation-Formatting-v1",
       "upstream_url": null,
       "notes": "TRAIN citation formatting: the original native user prompts, role metadata and the source's own system instructions are preserved verbatim; the tasks grade through deterministic native format verifiers (no judge), so no judge execution is claimed or needed. Standard lexical retention removed 0 input row(s); no within-source duplicates. Canonical static retention covers all 9,525 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 100/100, found 16 issues and 0 unavailable; Result some_issues; findings remain verbatim. The content survey measured ten neighbors and the recorded disposition acknowledges the four family pairs: the Ultra SFT components carry these sources' prompts verbatim (40/40 inspected pairs identical) and the TaskTrove freeform/citation cohorts rephrase the shared upstream questions (0/40 identical); retain both, no double-counting. Quality never vetoes admission. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/9525; global schema rejections advisory per the standing policy. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/final-pin-sample-v3/citation-flat.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/admission-evidence-citation-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/consumer-binding-citation-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/formatting/2026.11.26.1/overlap-disposition-v6/disposition-receipt.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "SynthLabs:Big-Math-RL-Verified",
+      "display_name": "SynthLabs \u00b7 Big-Math-RL-Verified",
+      "status": "Pending",
+      "origin": "SynthLabs",
+      "upstream_dataset": "Big-Math-RL-Verified",
+      "upstream_url": null,
+      "notes": "TRAIN math tasks under one declared judge family: the context is the verbatim verified problem as the sole user message, and the dataset's closed-form answer is the MEDIUM reference judge's gold (the S1 closed-ended precedent). The llama8b_solve_rate difficulty column stays in task labels, never in the policy context. Standard lexical retention removed 3,328 of the 242,939 converted input rows (contamination against the standing eval basis); the conversion's typed fail-closed rejections removed 19 (incomplete_big_math_contract) and within-source dedup removed 8,164 duplicates; 239,611 retained. Canonical static retention covers all 239,611 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 100/100, found 8 issues and zero unavailable; Result good; findings remain verbatim. The content survey measured ten neighbors and the recorded disposition acknowledges the three flagged math-source pairs (deepscaler, numina_math, POLARIS-53K - shared upstream and overlapping populations; 15/41 inspected pairs share identical public problem texts); retain both, no double-counting. Quality never vetoes admission. The canonical consumer-runtime receipt binds the substituted runtime f26f6059d043191a89cf76ecdba41090d8ddff4d per the coordinator ruling (the declared MiniMax-M3 judge served as GLM-5.3-Flash, reasoning_effort low): bespoke failures 0/239611; global schema rejections advisory per the standing policy. This records loader and launch binding, not live judge responses or executable-grader qualification. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/big-math/2026.11.26.1/final-pin-sample-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/big-math/2026.11.26.1/admission-evidence-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/big-math/2026.11.27.1/consumer-binding-v1/result.json.",
+      "stage": "Measurements pending",
+      "dataset_id": null,
+      "dataset_revision": null,
+      "owner": "ingest B \u00b7 OpenCode ses_de6edbb82ffeg8kF9ytv2hToj2",
+      "use": "train",
+      "method_tags": [
+        "RL"
+      ],
+      "reasons": []
+    },
+    {
+      "id": "Tiger-lab:AceCode-89K",
+      "display_name": "Tiger-lab \u00b7 AceCode-89K",
+      "status": "Pending",
+      "origin": "Tiger-lab",
+      "upstream_dataset": "AceCode-89K",
+      "upstream_url": null,
+      "notes": "TRAIN code tasks under one declared judge family: the context is the verbatim native question plus a recorded completion-format normalization, and the grader is the shipped runner that execs the candidate's fenced block then every inferred assert case in one namespace (reward 1 when all pass, 0 on candidate-code failure, harness defects exit nonzero). The source's 64 sampled model inferences stay private provenance, never judge gold. Contract defects fail closed: the conversion turned 87,149 input rows into 86,560 unique tasks with 589 typed non-assert rejections and zero within-source duplicates. Standard lexical retention removed zero of 86,560 rows. Canonical static retention covers all 86,560 current-pin tasks under the no-oracle policy, executability unmeasured. Fresh seed-zero V4 SAMPLE reviewed 100/100, found 16 issues and zero unavailable; Result some_issues; findings remain verbatim and quality never vetoes admission. The content survey measured ten neighbors, all DISTINCT. The canonical consumer-runtime check at b9373278 is advisory: bespoke failures 0/86560; global schema rejections 86560/86560, paths {'integrity_contract': 86560} (the Formatting-precedent advisory class). This records loader and launch binding, not live grader execution. Evidence: s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/acecode-89k/2026.11.26.1/final-pin-sample-v1/result.json, s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/acecode-89k/2026.11.26.1/admission-evidence-v1/result.json and s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/acecode-89k/2026.11.26.1/consumer-binding-v1/result.json.",
       "stage": "Measurements pending",
       "dataset_id": null,
       "dataset_revision": null,
