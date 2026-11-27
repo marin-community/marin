@@ -6,9 +6,10 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from finelog.client import FlushResult, LogClient
-from finestore.rl.strata import TaskEvaluationIdentity, TaskStrata
 from finestore.rl.task_health import ATTEMPT_RECEIPTS_DIRECTORY, EVALUATION_RECEIPTS_DIRECTORY, AttemptReceipt
 from iris.runtime import telemetry as runtime_telemetry
 from omegaconf import OmegaConf, open_dict
@@ -21,6 +22,7 @@ from rolloutengine.models import ContextWindowExceeded, Prompt, Transition
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset
 from skyrl_train.rollouts.group_grader import GroupGraderSpec
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker, TaskRolloutWorkerSpec, _model_turn
@@ -32,13 +34,17 @@ from skyrl_train.trajectory_runners.model_clients import (
 from skyrl_train.trajectory_runners.types import BatchMetadata, TaskRequestBatch, TokenProvenance
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import AgentMachine, AnswerType, ScriptGrader
+from taskcompendium.identity import canonical_sha256
+from taskcompendium.models import SCHEMA_VERSION, UPGRADABLE_SCHEMA_VERSION, AgentMachine, AnswerType, ScriptGrader
 from verifyit.spec import NumericSpec
 from tests.cpu.task_specs import SHELL_ENVIRONMENT, lowered_task, task_input, text_task
 
 
 class WorkerTokenizer:
     eos_token_id = 99
+
+    def apply_chat_template(self, messages, **kwargs):
+        return [1, 2]
 
     def decode(self, token_ids, **kwargs):
         return "Working"
@@ -358,13 +364,22 @@ async def test_native_eval_failure_joins_receipt_to_transcript_after_shutdown(tm
         config.environment.task_sessions.max_verifier_workers = 0
     config.trainer.export_path = str(tmp_path)
     task = text_task(prompt="What is the answer?", source="upstream/data")
-    row = task_input(lowered_task(task))
-    identity = TaskEvaluationIdentity(panel_name="validation", strata=TaskStrata(source="curated-math"))
-    row = replace(row, metadata=replace(row.metadata, evaluation_identity=identity))
-    request = TaskRequestBatch(rows=(row,), batch_metadata=BatchMetadata(global_step=7, training_phase="eval"))
-    worker = TaskRolloutWorkerSpec.from_config(config, [UnavailableEngine()]).build(
-        WorkerTokenizer(), WorkerShard(0, 1)
+    stored_task = {**task.model_dump(mode="json"), "schema_version": UPGRADABLE_SCHEMA_VERSION}
+    path = tmp_path / "validation.parquet"
+    pq.write_table(pa.table({TASK_SPEC_COLUMN: [json.dumps(stored_task)], "source": ["curated-math"]}), path)
+    tokenizer = WorkerTokenizer()
+    dataset = SourceTaskDataset(
+        [str(path)],
+        tokenizer,
+        128,
+        num_workers=1,
+        environment_configs=OmegaConf.to_container(config.environment.task_sessions, resolve=True),
     )
+    (row,) = dataset.collate_fn(list(dataset))
+    loaded = row["input"]
+    assert loaded.spec.task.schema_version == SCHEMA_VERSION
+    request = TaskRequestBatch(rows=(loaded,), batch_metadata=BatchMetadata(global_step=7, training_phase="eval"))
+    worker = TaskRolloutWorkerSpec.from_config(config, [UnavailableEngine()]).build(tokenizer, WorkerShard(0, 1))
     try:
         (result,) = await worker.generate(request)
     finally:
@@ -372,6 +387,7 @@ async def test_native_eval_failure_joins_receipt_to_transcript_after_shutdown(tm
 
     assert result.failure is not None
     (receipt,) = read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY / EVALUATION_RECEIPTS_DIRECTORY)
+    assert receipt.task_digest == canonical_sha256(stored_task)
     assert receipt.source_row == ("curated-math", "upstream/data", "1", "0")
     assert receipt.exception_type == "ConnectionError"
     assert receipt.rollout_id

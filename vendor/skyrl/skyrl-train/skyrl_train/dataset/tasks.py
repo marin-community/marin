@@ -109,7 +109,8 @@ class TaskDataset(PromptDataset):
     def collate_fn(self, rows) -> list[dict]:
         inputs = []
         for _, environment, extras, uid in rows:
-            lowered = TaskRolloutSpec.model_validate_json(extras[TASK_ROLLOUT_COLUMN])
+            stored_rollout = extras[TASK_ROLLOUT_COLUMN]
+            lowered = TaskRolloutSpec.model_validate_json(stored_rollout)
             if isinstance(lowered.task.grader, NoGrader) and {"extras", "config"} <= lowered.task.grader.contract.keys():
                 extras = {**session_parameters(lowered.task).extras, **extras}
             extra_info = extras.get("extra_info") or {}
@@ -120,12 +121,12 @@ class TaskDataset(PromptDataset):
                 else ()
             )
             stored_identity = extras.get(TASK_EVALUATION_IDENTITY)
-            identity = TaskEvaluationIdentity.model_validate_json(stored_identity) if stored_identity else None
-            subset = (
-                identity.strata.source
-                if identity is not None and identity.panel_name is not None
-                else task_subset(lowered.task)
+            identity = (
+                TaskEvaluationIdentity.model_validate_json(stored_identity)
+                if stored_identity
+                else task_evaluation_identity(json.loads(stored_rollout)["task"], None, None)
             )
+            subset = identity.strata.source if identity.panel_name is not None else task_subset(lowered.task)
             inputs.append(
                 {
                     "uid": uid,
@@ -160,7 +161,10 @@ def _stored_prompt(lowered: TaskRolloutSpec) -> dict:
 
 
 def _stored_task_prompt(row: dict) -> dict:
-    return _stored_prompt(TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN]))
+    stored_rollout = row[TASK_ROLLOUT_COLUMN]
+    prompt = _stored_prompt(TaskRolloutSpec.model_validate_json(stored_rollout))
+    prompt[TASK_ROLLOUT_COLUMN] = stored_rollout
+    return prompt
 
 
 def _restore_task_prompts(batch: dict) -> dict:

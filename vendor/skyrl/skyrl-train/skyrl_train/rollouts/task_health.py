@@ -11,7 +11,6 @@ from rigging.redaction import redact_string
 from rolloutengine.models import SETUP_COMPLETED_METRIC, RolloutFailure, RolloutOperation, TaskRolloutSpec
 from shellbox.machine import ExitReason
 from taskcompendium.grading_result import GradeResult, Outcome
-from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import task_key
 from taskcompendium.runtime.environment import environment_identity
 
@@ -32,8 +31,8 @@ def attempt_receipt(
     result: TrainingRollout | BaseException,
     *,
     rollout_id: str,
+    task_digest: str,
     source_id: str | None = None,
-    task_digest: str | None = None,
 ) -> AttemptReceipt:
     """Project the result's setup and verifier evidence without retaining the trajectory."""
     task = spec.task
@@ -66,7 +65,7 @@ def attempt_receipt(
         rollout_id=rollout_id,
         source_row=task_key(source_id, task),
         task_id=task.id,
-        task_digest=task_digest if task_digest is not None else canonical_sha256(task.model_dump(mode="json")),
+        task_digest=task_digest,
         outcome=Outcome.INFRA_ERROR if setup_failed else grade.status,
         grading_failure=grade.failure,
         exception_type=failure.exception_type if failure is not None else None,

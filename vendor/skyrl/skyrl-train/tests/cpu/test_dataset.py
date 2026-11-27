@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 from marinskyrl.task_sources import PreparedTaskCacheSource
 from omegaconf import OmegaConf
+from rolloutengine.models import TASK_ROLLOUT_COLUMN
 from skyrl_train import task_inputs
 from skyrl_train.config.rollout_validation import FAMILY_COLUMN, GROUPS_PER_FAMILY_KEY
 from skyrl_train.config.utils import get_default_config
@@ -17,6 +18,7 @@ from skyrl_train.dataset.prepared_tasks import PROMPT_LENGTH_COLUMN
 from skyrl_train.dataset.tasks import TASK_SPEC_COLUMN, SourceTaskDataset, TaskDataset, source_row_task, write_tasks
 from skyrl_train.rollouts.context import TrainingContext
 from skyrl_train.task_inputs import task_messages
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import ExitCodeReward, GraderMachine, ScriptGrader
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
@@ -66,6 +68,9 @@ def test_task_preprocessing_preserves_filtered_rows_and_forks_only_large_inputs(
     assert [task_messages(row["input"].spec) for row in prepared] == [rows[i]["prompt"] for i in indices]
     assert [row["input"].spec.task.source.row for row in prepared] == [str(i) for i in indices]
     assert [row["input"].metadata.data_source for row in prepared] == ["fixture"] * len(indices)
+    assert [row["input"].metadata.evaluation_identity.task_digest for row in prepared] == [
+        canonical_sha256(json.loads(raw)["task"]) for raw in dataset.dataframe.with_format(None)[TASK_ROLLOUT_COLUMN]
+    ]
     assert all(row["input"].metadata.teacher_route == "math" for row in prepared)
     assert bool(tuple(fork_records.iterdir())) == (row_count == 8)
 

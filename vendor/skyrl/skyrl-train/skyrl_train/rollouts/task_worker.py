@@ -505,6 +505,13 @@ class TaskRolloutWorker:
             return await self._generate(request)
 
     async def _generate(self, request: TaskRequestBatch) -> list[TrainingRollout]:
+        receipt_identities: list[tuple[str, str]] = []
+        if self.task_health_export is not None:
+            for row in request.rows:
+                identity = row.metadata.evaluation_identity
+                if identity is None or not identity.task_digest:
+                    raise ValueError(f"Task {row.spec.task.id} has no stored task digest for its attempt receipt")
+                receipt_identities.append((identity.task_digest, identity.strata.source))
         lowered_tasks = [row.spec.model_copy(update={"judge_connection": self.judge_connection}) for row in request.rows]
         group_graders = [row.group_grader for row in request.rows]
         metadata = request.batch_metadata
@@ -537,15 +544,14 @@ class TaskRolloutWorker:
         def record_attempt(index: int, attempt_id: str, rollout_id: str, result: TrainingRollout | BaseException):
             if self.task_health_export is None:
                 return
-            identity = request.rows[index].metadata.evaluation_identity
-            source_id = identity.strata.source if identity is not None else None
+            task_digest, source_id = receipt_identities[index]
             evidence[rollout_id] = attempt_receipt(
                 attempt_id,
                 lowered_tasks[index],
                 result,
                 rollout_id=rollout_id,
                 source_id=None if source_id == TaskStrata().source else source_id,
-                task_digest=None if identity is None else identity.task_digest,
+                task_digest=task_digest,
             )
 
         async def run(index: int, lowered: TaskRolloutSpec) -> tuple[TrainingRollout, str, str]:
