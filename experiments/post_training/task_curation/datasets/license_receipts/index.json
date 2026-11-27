@@ -1,54 +1,48 @@
 {
   "repo": "open-athena/marin-license-receipts",
-  "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
+  "revision": "b5d6abaabb4d0be16d008ba51f6892afa627c122",
   "references": [
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
-      "path": "projection_bigmath_integration_20261127_v1/part-000.json",
-      "sha256": "61d4a0b9b4b2016d0ab820ffe58af2339ec51cae9951fd16f694837093c73c65"
+      "revision": "b5d6abaabb4d0be16d008ba51f6892afa627c122",
+      "path": "projection_crosscode_exact_pin_20261127_v3/part-000.json",
+      "sha256": "75356ced1db999ac7a001911539b551e777aaeb2c194feba39e374df4bda10b2"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
-      "path": "projection_bigmath_integration_20261127_v1/part-001.json",
-      "sha256": "d53e574fda8f358cc92c2aa81fcef45b5b9e69ddf21a373fdb741326b5e89ff7"
+      "revision": "b5d6abaabb4d0be16d008ba51f6892afa627c122",
+      "path": "projection_crosscode_exact_pin_20261127_v3/part-001.json",
+      "sha256": "855b30e06b438e75251993f8c4d8284079b2284061175c906352ca67f74fe100"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
-      "path": "projection_bigmath_integration_20261127_v1/part-002.json",
-      "sha256": "a7c290948a895840fde8c86ad95163d1bbf2dbacbfab2c8b5dc296d976535c45"
+      "revision": "b5d6abaabb4d0be16d008ba51f6892afa627c122",
+      "path": "projection_crosscode_exact_pin_20261127_v3/part-002.json",
+      "sha256": "7f37e052f398c872201b35ec0253619300c83b3c85e95dadf06aeaf9c3125e1a"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
-      "path": "projection_bigmath_integration_20261127_v1/part-003.json",
-      "sha256": "0e792a62e3d5355dcc94195ca33d0ccf9828b3a37f472ca1071ec6190cfe6d29"
+      "revision": "b5d6abaabb4d0be16d008ba51f6892afa627c122",
+      "path": "projection_crosscode_exact_pin_20261127_v3/part-003.json",
+      "sha256": "e1d4214c1e1f10d237e901ebce181dedc3b5a96efca282fe2dcd588e2343f74e"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
-      "path": "projection_bigmath_integration_20261127_v1/part-004.json",
-      "sha256": "b95fc03a64d693757f01a25f60f3f3ebe8c4702fbeee0c4bb33016870e0c822e"
+      "revision": "b5d6abaabb4d0be16d008ba51f6892afa627c122",
+      "path": "projection_crosscode_exact_pin_20261127_v3/part-004.json",
+      "sha256": "0f893eba70c13bbf073d56ac4d0de47cd6e472145765c541051e78e04af5fd7a"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
-      "path": "projection_bigmath_integration_20261127_v1/part-005.json",
-      "sha256": "eef274c14c1abec22bf79e195d9d9262b1d603e7bbe6b32bc112f38393464965"
+      "revision": "b5d6abaabb4d0be16d008ba51f6892afa627c122",
+      "path": "projection_crosscode_exact_pin_20261127_v3/part-005.json",
+      "sha256": "c765757d7235346825dc2206e332638c1a80071a55aa3c26bf839a0fce3454a8"
     },
     {
       "repo": "open-athena/marin-license-receipts",
-      "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
-      "path": "projection_bigmath_integration_20261127_v1/part-006.json",
-      "sha256": "15cedce442ccd5c770ee4aa8e70b17f01c1b3bf54e9ba6841346d116da22209d"
-    },
-    {
-      "repo": "open-athena/marin-license-receipts",
-      "revision": "89fd6b7d71f42636e6b3072ca71b220572b71a8e",
-      "path": "projection_bigmath_integration_20261127_v1/part-007.json",
-      "sha256": "b857dacc33fce54e8b0dd8ca2bfb37833fbe85e824bf366093c92dc6dfef10b9"
+      "revision": "b5d6abaabb4d0be16d008ba51f6892afa627c122",
+      "path": "projection_crosscode_exact_pin_20261127_v3/part-006.json",
+      "sha256": "8b0a547cad464dfbce8376c1a961dd512abaa3e216c3641e41feb5ab01b6beb0"
     }
   ]
 }
