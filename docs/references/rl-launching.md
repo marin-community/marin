@@ -4,6 +4,9 @@ Marin RL experiments use one artifact entry point for planning and execution. Th
 constructs the complete graph locally, which makes deterministic configuration errors fail before
 Iris accepts a coordinator job or allocates GPUs.
 
+The [Levanter quick-loop design](../design/quick-loop-rl.md) tracks the learner
+and native Snowball rollout migrations.
+
 ## Experiment entry point
 
 An RL launch module defines a `main` that returns the terminal artifact handles and uses
