@@ -9,6 +9,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 from levanter.optim.config import OptimizerConfig, _convert_frac_or_steps
 from levanter.optim.util import CoefficientType
@@ -263,6 +264,53 @@ def _power_decay_schedule(peak: float, floor: float, warmup_steps: int, total_st
         return jnp.where(step < warmup_steps, warm, decayed)
 
     return schedule
+
+
+def _front_heavy_matrix_lr(
+    learning_rate_schedule, num_train_steps: int, warmup_steps: int, late_anneal_start: int, peak: float, floor: float
+):
+    """``muonh_wn_star``'s matrix LR: the ``muonh_nonsi_anneal`` matrix LR with its base shape made front-heavy.
+
+    ``learning_rate_schedule`` (``lr_t``, ``s(t) = lr_t / peak``) keeps the warmup. After it, with ``u`` the post-warmup
+    progress, the base is ``peak`` until ``u = WN_STAR_HOLD_FRAC``, then ``peak (floor + (1 - floor) (1 - x^q))`` with
+    ``x = (u - WN_STAR_HOLD_FRAC) / (1 - WN_STAR_HOLD_FRAC)``. From ``t0 = late_anneal_start`` it is multiplied by
+    ``s(t) / s(t0)``. ``q`` is solved so that the post-warmup mean of this annealed LR equals that of
+    ``muonh_nonsi_anneal``'s (``lr_t``, times ``s(t) / s(t0)`` from ``t0``).
+    """
+    steps = np.arange(num_train_steps, dtype=np.float64)
+    base = np.asarray(jax.vmap(learning_rate_schedule)(jnp.arange(num_train_steps)), np.float64)
+    lr_at_late_anneal_start = float(learning_rate_schedule(late_anneal_start))
+    late = steps >= late_anneal_start
+    anneal = np.where(late, base / lr_at_late_anneal_start, 1.0)
+    post_warmup = steps >= warmup_steps
+    target = float(np.mean((base * anneal)[post_warmup]))
+    progress = np.clip((steps - warmup_steps) / max(num_train_steps - warmup_steps, 1), 0.0, 1.0)
+    held = progress < WN_STAR_HOLD_FRAC
+    decay_progress = np.clip((progress - WN_STAR_HOLD_FRAC) / (1.0 - WN_STAR_HOLD_FRAC), 0.0, 1.0)
+
+    def mean_at(q: float) -> float:
+        shape = np.where(held, 1.0, floor + (1.0 - floor) * (1.0 - decay_progress**q))
+        return float(np.mean((peak * shape * anneal)[post_warmup]))
+
+    # The mean rises with q (q -> 0: the floor right after the hold; q -> inf: the peak throughout).
+    low, high = WN_STAR_Q_BRACKET
+    if not mean_at(low) <= target <= mean_at(high):
+        raise ValueError(f"muonh_wn_star: no q in {WN_STAR_Q_BRACKET} matches the mean matrix LR {target:.4g}")
+    for _ in range(100):
+        mid = 0.5 * (low + high)
+        low, high = (mid, high) if mean_at(mid) < target else (low, mid)
+    q = 0.5 * (low + high)
+
+    def schedule(step):
+        lr = learning_rate_schedule(step)
+        step = jnp.asarray(step, jnp.float32)
+        u = jnp.clip((step - warmup_steps) / max(num_train_steps - warmup_steps, 1), 0.0, 1.0)
+        x = jnp.clip((u - WN_STAR_HOLD_FRAC) / (1.0 - WN_STAR_HOLD_FRAC), 0.0, 1.0)
+        shape = jnp.where(u < WN_STAR_HOLD_FRAC, 1.0, floor + (1.0 - floor) * (1.0 - x**q))
+        angle = jnp.where(step < warmup_steps, lr, peak * shape)
+        return jnp.where(step >= late_anneal_start, angle * lr / lr_at_late_anneal_start, angle)
+
+    return schedule, q
 
 
 def scale_with_grug_muonh(
@@ -662,6 +710,20 @@ LAW_CAP_LAMBDA = 0.2
 """``muonh_law_cap_ball``: the ball radius is ``kappa |U|`` with
 ``kappa = sqrt(LAW_CAP_TAU lr_max / (2 LAW_CAP_LAMBDA))``, the size MuonC's matrices settle at for decay
 ``LAW_CAP_LAMBDA`` (arXiv 2506.02285)."""
+WN_STAR_INIT_MULT = math.sqrt(8.0)
+"""``muonh_wn_star``: the matrices of the ``muonh`` and ``kda_beta`` groups start at this multiple of their init."""
+WN_STAR_HOLD_FRAC = 0.2
+"""``muonh_wn_star``: the matrix LR holds at its peak until this post-warmup progress."""
+WN_STAR_Q_BRACKET = (1e-3, 1e3)
+"""``muonh_wn_star``: the search interval of the matrix LR's decay exponent ``q``."""
+HEAD_LOGIT_LAW_A = 0.689
+HEAD_LOGIT_LAW_B = 0.303
+HEAD_LOGIT_LAW_LOSS_OFFSET = 1.82
+TRUNCATED_NORMAL_STD = 0.98658
+"""``muonh_wn_star``'s head logit multiplier ``c = K / min(K, exp(HEAD_LOGIT_LAW_A) S_A^HEAD_LOGIT_LAW_B)`` with
+``K = sqrt(2 (ln V - HEAD_LOGIT_LAW_LOSS_OFFSET)) / (sigma0 sqrt(d))``, ``S_A`` the run's summed Adam LR and
+``sigma0 = initializer_std TRUNCATED_NORMAL_STD`` the head's init RMS (a normal truncated at +-3 std)."""
+_INIT_SCALED_GROUPS = ("muonh", "kda_beta", "muonh_radial", "kda_beta_radial")
 _ADAM_LEAVES = re.compile(
     r"(?:^|\.)(value_embed|ve_lambda|ve_gate|head_ve_lambda|head_ve_gate|head_ve_gain|qk_mult"
     r"|pointer_w|pointer_b|pointer_open|ngram_cache_w|ngram_cache_b|ngram_cache_open"
@@ -805,6 +867,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """``token_embed`` takes ``scale_by_row_hyperball_momentum`` (one fp32 momentum buffer at ``momentum``, each row
     held at its init norm) with turn per step ``theta_t = embed_row_hyperball * adam_lr_t / adam_lr``, the Adam
     schedule, and no decay, in place of its Adam group. Every other leaf is unchanged. 0: off."""
+    muonh_wn_star: bool = False
+    """WN*, with ``muonh_nonsi_anneal``: three changes on top of it. (1) Every rank >= 2 leaf of the ``muonh`` and
+    ``kda_beta`` groups starts at ``WN_STAR_INIT_MULT`` x its init (``scale_initial_params``), so each learned radius
+    starts there. (2) The matrix sphere steps take ``_front_heavy_matrix_lr``: the base shape holds at the peak until
+    ``WN_STAR_HOLD_FRAC`` of the post-warmup run, then decays as ``1 - x^q`` to the ``min_lr_ratio`` floor, with ``q``
+    solved so the mean annealed matrix LR is unchanged; the late anneal applies on top. The radius and head LRs keep
+    ``muonh_nonsi_anneal``'s. (3) The model's ``head_logit_mult`` is set to ``head_logit_mult(...)`` (the train
+    loop sets it)."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -833,6 +903,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return jnp.where(step >= late_anneal_start, annealed, lr)
 
             hyperparams["matrix_lr"] = matrix_lr_schedule
+            if self.muonh_wn_star:
+                hyperparams["matrix_lr"], _ = _front_heavy_matrix_lr(
+                    learning_rate_schedule,
+                    num_train_steps,
+                    _convert_frac_or_steps(self.warmup, num_train_steps),
+                    late_anneal_start,
+                    self.learning_rate,
+                    self.min_lr_ratio,
+                )
 
         def muonh_radial_at(lr, radius_lr, softcap, b1, b2):
             return optax.chain(
@@ -1154,6 +1233,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
         if self.muonc_init_mult < 0 or (self.muonc_init_mult and not self.muonc_anneal_decay):
             raise ValueError("muonc_init_mult must be non-negative and needs muonc_anneal_decay")
+        if self.muonh_wn_star and not self.muonh_nonsi_anneal:
+            raise ValueError("muonh_wn_star needs muonh_nonsi_anneal")
         if self.muonh_law_cap_ball and (
             self.muonh_radial_softcap or self.muonc_decay_mult or self.muonh_nonsi_anneal or self.muonc_anneal_decay
         ):
@@ -1163,16 +1244,31 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             )
 
     def scale_initial_params(self, params):
-        """``params`` with the MuonC matrices scaled by ``muonc_init_mult``; ``params`` itself when it is off."""
-        if not self.muonc_init_mult:
+        """``params`` with the ``muonh`` and ``kda_beta`` matrices scaled by ``muonc_init_mult`` (or
+        ``WN_STAR_INIT_MULT`` under ``muonh_wn_star``); ``params`` itself when both are off."""
+        mult = self.muonc_init_mult or (WN_STAR_INIT_MULT if self.muonh_wn_star else 0.0)
+        if not mult:
             return params
 
         def scale(param, label):
-            if label in ("muonh", "kda_beta") and _is_matrix_stack(param):
-                return param * jnp.asarray(self.muonc_init_mult, param.dtype)
+            if label in _INIT_SCALED_GROUPS and _is_matrix_stack(param):
+                return param * jnp.asarray(mult, param.dtype)
             return param
 
         return jax.tree.map(scale, params, self.create_mask(params))
+
+    def head_logit_mult(self, num_train_steps: int, *, hidden_dim: int, vocab_size: int, initializer_std: float):
+        """``muonh_wn_star``'s fixed head logit multiplier for a run of ``num_train_steps`` (see
+        ``TRUNCATED_NORMAL_STD``); 0.0 when it is off."""
+        if not self.muonh_wn_star:
+            return 0.0
+        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        adam_lrs = np.asarray(jax.vmap(adam_lr_schedule)(jnp.arange(num_train_steps)), np.float64)
+        summed_adam_lr = float(np.sum(adam_lrs))
+        head_init_rms = initializer_std * TRUNCATED_NORMAL_STD
+        loss_scale = math.sqrt(2.0 * (math.log(vocab_size) - HEAD_LOGIT_LAW_LOSS_OFFSET))
+        k = loss_scale / (head_init_rms * math.sqrt(hidden_dim))
+        return k / min(k, math.exp(HEAD_LOGIT_LAW_A) * summed_adam_lr**HEAD_LOGIT_LAW_B)
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)

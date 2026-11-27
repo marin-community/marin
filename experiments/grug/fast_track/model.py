@@ -545,6 +545,11 @@ class GrugModelConfig:
     """ID Balancing (arXiv 2609.39137, ``id_balancing.py``) in place of QB: the train step integrates each expert's
     normalized load error into the router bias with this integral gain, plus a gated derivative term at the same
     gain, and the forward skips the QB histogram. 0: QB. Needs routed experts (no ``dense_mlp``)."""
+    head_logit_mult: float = 0.0
+    """Fixed multiplier ``c`` on the vocabulary logits, ``c W_head^T x``; the cross-entropy and its z-loss see the
+    scaled logits. 0: off. ``GrugMoeMuonHConfig.muonh_wn_star`` sets it for each run. Excludes the heads that read
+    the vocabulary logits elsewhere (``cplm_plus``, ``pointer_mixture``, ``ngram_cache_mixture``,
+    ``entropy_skip_layers``)."""
 
     def __post_init__(self) -> None:
         if self.id_balance_gain < 0 or (self.id_balance_gain and self.dense_mlp):
@@ -568,6 +573,14 @@ class GrugModelConfig:
         ):
             raise ValueError(
                 "ngram_cache_mixture excludes cplm_plus, lm_head_bilinear, pointer_mixture and full_bandwidth_passes"
+            )
+        if self.head_logit_mult < 0 or (
+            self.head_logit_mult
+            and (self.cplm_plus or self.pointer_mixture or self.ngram_cache_mixture or self.entropy_skip_layers)
+        ):
+            raise ValueError(
+                "head_logit_mult must be non-negative and excludes cplm_plus, pointer_mixture, ngram_cache_mixture "
+                "and entropy_skip_layers"
             )
         if self.cplm_plus and self.logit_soft_cap is not None:
             raise ValueError("cplm_plus mixes uncapped vocabulary logits; set logit_soft_cap=None")
@@ -2913,6 +2926,9 @@ class Transformer(eqx.Module):
         logsumexp_weight: float | None,
         loss_dtype: jnp.dtype,
     ) -> jax.Array:
+        if self.config.head_logit_mult:
+            # c W^T x == W^T (c x): the multiplier scales the head input, so the fused kernel is unchanged.
+            head_in = head_in * jnp.asarray(self.config.head_logit_mult, head_in.dtype)
         return fused_linear_softmax_cross_entropy_loss(
             head_in,
             self.output_proj,

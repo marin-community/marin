@@ -1108,6 +1108,22 @@ def _stall_diagnostic(timeout) -> None:
     logger.critical("py-spy native dump (exit %d):\n%s%s", dump.returncode, dump.stdout, dump.stderr)
 
 
+def _with_wn_star_head_logit_mult(config: GrugRunConfig, num_train_steps: int) -> GrugRunConfig:
+    """``config`` with the model's ``head_logit_mult`` set by ``muonh_wn_star``; ``config`` itself when it is off."""
+    if not isinstance(config.optimizer, GrugMoeMuonHConfig) or not config.optimizer.muonh_wn_star:
+        return config
+    if config.model.head_logit_mult:
+        raise ValueError("muonh_wn_star sets head_logit_mult; leave it unset")
+    mult = config.optimizer.head_logit_mult(
+        num_train_steps,
+        hidden_dim=config.model.hidden_dim,
+        vocab_size=config.model.vocab_size,
+        initializer_std=config.model.initializer_std,
+    )
+    logger.info("muonh_wn_star: head_logit_mult %.4f", mult)
+    return dataclasses.replace(config, model=dataclasses.replace(config.model, head_logit_mult=mult))
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
     marker = config.trainer.completion_marker_path
@@ -1119,6 +1135,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     trainer = config.trainer.trainer
     trainer.initialize()
+    config = _with_wn_star_head_logit_mult(config, trainer.num_train_steps)
     levanter.tracker.log_configuration(config)
     if config.model.cplm_plus:
         tables = case_class_tables(config.data.the_tokenizer, config.model.vocab_size)
@@ -1159,7 +1176,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         batch_schedule = trainer.batch_schedule
 
         scale_initial_params = None
-        if isinstance(config.optimizer, GrugMoeMuonHConfig) and config.optimizer.muonc_init_mult:
+        if isinstance(config.optimizer, GrugMoeMuonHConfig) and (
+            config.optimizer.muonc_init_mult or config.optimizer.muonh_wn_star
+        ):
             scale_initial_params = config.optimizer.scale_initial_params
 
         @jax.jit
