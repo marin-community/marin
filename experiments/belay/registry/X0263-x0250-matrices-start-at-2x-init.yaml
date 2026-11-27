@@ -1,0 +1,12 @@
+id: X0263
+slug: x0250-matrices-start-at-2x-init
+name: X0250 matrices start at 2x init norm
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7208904984
+  author: armorfaye
+  approved_by: armorfaye (trusted)
