@@ -4,7 +4,7 @@ name: X0271 with 2x token_embed row-AdamH LR
 category: Embeddings and inputs
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7229588356
@@ -28,3 +28,10 @@ trials:
     muonc_anneal_embed_row_adamh_lr_div: '0.5'
   commit: e3799865ff
   priority: interactive
+  loss:
+  - 3.0298
+  delta:
+  - -0.0149
+  steps: 3030
+  baseline: belay-X0274-control 3.0446 (same commit, seed 0)
+  step_time_change: 0%
