@@ -143,7 +143,7 @@ class ExpertBlockSync:
 
     async def _policy(self, method: str, *args) -> list:
         refs = self.policy_model.async_run_ray_method("pass_through", "expert_block_rpc", method, *args)
-        return list(await asyncio.gather(*refs))
+        return [row for rows in await asyncio.gather(*refs) for row in rows]
 
     async def _receivers(self, method: str, *args) -> list:
         """Call a receiver method on every worker. Returns one reply per worker, in engine then worker order."""
@@ -175,6 +175,8 @@ class ExpertBlockSync:
                 )
             receivers.extend(zip(rows, engine.worker_placements, strict=True))
         if self.colocated:
+            if any("host" not in row or "gpu_uuid" not in row for row in policy_rows):
+                raise ValueError("Colocated expert-block sync requires verified trainer GPU placements")
             policy_gpus = {(row["host"], row["gpu_uuid"]) for row in policy_rows}
             receiver_gpus = {(placement.worker.host, placement.worker.gpu_uuid) for _, placement in receivers}
             if len(policy_gpus) != len(policy_rows) or policy_gpus != receiver_gpus:

@@ -914,8 +914,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         return output
 
     async def expert_block_rpc(self, method: str, *args):
-        """Call a method of this rank's expert-block sender."""
-        return getattr(self._expert_block_sender, method)(*args)
+        """Return this rank's reply as a single-row sender response."""
+        return (getattr(self._expert_block_sender, method)(*args),)
 
     async def _broadcast_to_inference_engines(self, inference_engine_client):
         from torch.multiprocessing.reductions import reduce_tensor
