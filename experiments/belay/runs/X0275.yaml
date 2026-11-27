@@ -1,0 +1,22 @@
+experiment: X0275
+track: speedrun
+runs:
+  seed0:
+    seed: 0
+    variant: X0271 + token_embed row-AdamH LR 2x adam_lr (lr_div=0.5)
+    flags:
+    - --opt-set
+    - muonc_anneal_decay=0.2
+    - --opt-set
+    - muonc_anneal_adamc=12.5
+    - --opt-set
+    - adamc_adam_decay=0.3
+    - --opt-set
+    - muonc_anneal_embed_row_adamh=True
+    - --opt-set
+    - muonc_anneal_embed_row_adamh_lr_div=0.5
+  control:
+    seed: 0
+    variant: speedrun control
+    control: true
+    shared: belay-X0274-control
