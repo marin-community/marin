@@ -81,6 +81,8 @@ from shellbox.machine import (
 )
 from yarl import URL
 
+COMMAND_FILE_REMOVAL = "rm -rf /tmp/.shellbox-"
+
 
 def sandbox_json(sandbox_id: str, state: str, toolbox_url: str) -> dict:
     """A Daytona API sandbox record named ``fixture``."""
@@ -824,7 +826,7 @@ def test_daytona_unanswered_command_cleanup_reports_a_lost_machine(tmp_path, mon
         armed = False
 
         async def exec(self, command, **kwargs):
-            if self.armed and "rm -rf /tmp/.shellbox-" in command:
+            if self.armed and COMMAND_FILE_REMOVAL in command:
                 await asyncio.Future()
             return await super().exec(command, **kwargs)
 
@@ -860,7 +862,7 @@ def test_daytona_failed_interruption_cleanup_closes_machine(tmp_path, interrupt_
                 if interrupt_failure == "files":
                     return SimpleNamespace(exit_code=0, result="")
                 return SimpleNamespace(exit_code=1, result="Cannot stop the process group")
-            if interrupt_failure == "files" and entered.is_set() and "rm -rf /tmp/.shellbox-" in command:
+            if interrupt_failure == "files" and entered.is_set() and COMMAND_FILE_REMOVAL in command:
                 return SimpleNamespace(exit_code=1, result="Cannot remove command files")
             return await super().exec(command, **kwargs)
 
@@ -1276,7 +1278,7 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
         async def exec(self, command, **kwargs):
             if "candidate-fail" in command_script(command):
                 raise OSError("Provider command failed")
-            if "rm -rf /tmp/.shellbox-" in command:
+            if COMMAND_FILE_REMOVAL in command:
                 entered.set()
                 await asyncio.Future()
             return await super().exec(command, **kwargs)
@@ -1301,6 +1303,44 @@ def test_daytona_cancellation_during_failed_command_cleanup_remains_cancellation
 
 
 @pytest.mark.requires_host_setsid
+def test_daytona_cancellation_during_command_file_removal_preserves_machine(tmp_path):
+    removing = asyncio.Event()
+
+    class InterruptedRemoval(LocalProcess):
+        def __init__(self):
+            super().__init__()
+            self.interrupted = False
+
+        async def exec(self, command, **kwargs):
+            if COMMAND_FILE_REMOVAL in command and not self.interrupted:
+                self.interrupted = True
+                await super().exec(command, **kwargs)
+                removing.set()
+                await asyncio.Future()
+            return await super().exec(command, **kwargs)
+
+    async def scenario():
+        client = LocalDaytona()
+        client.sandbox.process = InterruptedRemoval()
+        machine = await DaytonaMachineFactory(lambda: client).create(
+            MachineSpec(RegistryImage("ubuntu:24.04"), workdir=str(tmp_path))
+        )
+        try:
+            pending = asyncio.create_task(machine.run(Command(("sh", "-c", "echo 12 > answer"))))
+            await asyncio.wait_for(removing.wait(), timeout=5)
+            pending.cancel("agent deadline")
+            with pytest.raises(asyncio.CancelledError, match="agent deadline"):
+                await pending
+            graded = await machine.run(Command(("sh", "-c", 'test "$(cat answer)" = 12 && printf 1.0')))
+            assert (graded.exit_code, graded.stdout) == (0, b"1.0")
+            assert not client.deleted and not client.closed
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.requires_host_setsid
 def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
     output_error = TimeoutError("Provider output request timed out")
 
@@ -1308,7 +1348,7 @@ def test_daytona_output_failure_retains_cleanup_note_on_the_primary_error():
         async def exec(self, command, **kwargs):
             if "wc -c" in command:
                 raise output_error
-            if "rm -rf /tmp/.shellbox-" in command:
+            if COMMAND_FILE_REMOVAL in command:
                 raise OSError("Provider cleanup failed")
             return await super().exec(command, **kwargs)
 
@@ -1425,7 +1465,7 @@ def test_daytona_file_cleanup_failure_closes_machine_and_preserves_primary_error
         async def exec(self, command, **kwargs):
             if "candidate-fail" in command_script(command) and primary_failure:
                 raise provider_error
-            if "rm -rf /tmp/.shellbox-" in command:
+            if COMMAND_FILE_REMOVAL in command:
                 if cleanup_failure == "timeout":
                     raise TimeoutError("Provider cleanup timed out")
                 return SimpleNamespace(exit_code=1, result="Cannot remove command files")
