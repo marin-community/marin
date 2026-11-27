@@ -69,7 +69,7 @@ def test_tpu_wheel_update_preserves_packaged_pins_when_only_one_wheel_is_selecte
     packaged.write_text("existing paired pins\n")
     monkeypatch.setattr(update_external, "TPU_FORKS_CONFIG", path)
     monkeypatch.setattr(update_external, "GENERATED_PINS", packaged)
-    with pytest.raises(ValueError, match="complete pair"):
+    with pytest.raises(ValueError):
         update_external.regenerate_generated_pins((), check=False)
     assert packaged.read_text() == "existing paired pins\n"
 

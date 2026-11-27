@@ -24,4 +24,3 @@ sha256 = "a6d3b67bf3033e59a1ffa1e3fb1a62a268baa313b1b8fa687f3d59db70339fb1"
 
 [environment]
 exclude_newer = "2026-11-26T21:50:00Z"
-manifest_sha256 = "cd341f59719897d02951102274f8d2ed58ec47cd22738818adfa7ce36efc3982"

@@ -359,10 +359,7 @@ class IsolatedTpuVllm:
         # inherits this from the launch environment.
         # DP scheduler workers fork after JAX has warmed the parent. Single-threaded
         # OpenMP/MKL avoids a libgomp crash while allocating structured-output masks.
-        environment = {"VLLM_TARGET_DEVICE": "tpu", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
-        if self.exclude_newer is not None:
-            environment.update(UV_PRERELEASE="allow", UV_LINK_MODE="copy", PYTHONPATH="")
-        return environment
+        return {"VLLM_TARGET_DEVICE": "tpu", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
 
     def cache_identity(self) -> str:
         return (

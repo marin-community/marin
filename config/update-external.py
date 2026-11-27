@@ -30,6 +30,7 @@ VLLM_CONFIG_NAME = "vllm"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
+VLLM_RELEASE_ASSET_PREFIX = f"https://github.com/{GPU_RELEASE_REPOSITORY}/releases/download/"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
 CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
     {
@@ -148,14 +149,13 @@ def upgrade_project_lock(project: ExternalProject) -> None:
     subprocess.run(command, check=True)
 
 
-def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
+def tpu_fork_source(config: dict, name: str, *, path: Path) -> LockedGitSource:
     """Read one forked TPU vLLM pin (repository + commit) from the fork descriptor.
 
     The TPU vLLM stack (``vllm`` + ``tpu-inference``) runs from an isolated uvx env rather than
     the workspace lock, so its SHAs live in ``config/external/vllm/tpu.toml`` instead of
     ``uv.lock``. See ``marin.inference.vllm_server.IsolatedTpuVllm``.
     """
-    config = tomllib.loads(path.read_text())
     if name not in config:
         raise ValueError(f"{path}: missing [{name}] section")
     entry = config[name]
@@ -192,7 +192,7 @@ def gpu_release_url_prefix(release_tag: str) -> str:
     Shared by the writer and the validator so a rendered wheel URL and the URL the
     loader accepts stay byte-identical.
     """
-    return f"https://github.com/{GPU_RELEASE_REPOSITORY}/releases/download/{release_tag}/"
+    return f"{VLLM_RELEASE_ASSET_PREFIX}{release_tag}/"
 
 
 def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
@@ -564,9 +564,9 @@ def regenerate_generated_pins(dependencies: tuple[LockedDependency, ...], *, che
 def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_release: VllmGpuRelease) -> str:
     """Render packaged dependency pins."""
     names = ("vllm", "tpu-inference")
-    sources = {name: tpu_fork_source(TPU_FORKS_CONFIG, name) for name in names}
-    requirements = {name: f"{name} @ git+{source.repository}@{source.commit}" for name, source in sources.items()}
     descriptor = tomllib.loads(TPU_FORKS_CONFIG.read_text())
+    sources = {name: tpu_fork_source(descriptor, name, path=TPU_FORKS_CONFIG) for name in names}
+    requirements = {name: f"{name} @ git+{source.repository}@{source.commit}" for name, source in sources.items()}
     wheels = {name: descriptor[name]["wheel"] for name in names if "wheel" in descriptor[name]}
     exclude_newer = descriptor.get("environment", {}).get("exclude_newer")
     if wheels:
@@ -575,7 +575,7 @@ def render_generated_pins(dependencies: tuple[LockedDependency, ...], vllm_gpu_r
         release_prefixes = set()
         for name, wheel in wheels.items():
             url, sha256 = wheel["url"], wheel["sha256"]
-            if not url.startswith(f"https://github.com/{GPU_RELEASE_REPOSITORY}/releases/download/"):
+            if not url.startswith(VLLM_RELEASE_ASSET_PREFIX):
                 raise ValueError("TPU wheel must be an immutable Marin release asset")
             if SHA256_PATTERN.fullmatch(sha256) is None:
                 raise ValueError("TPU wheel requires its SHA-256")

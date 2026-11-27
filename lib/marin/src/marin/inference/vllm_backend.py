@@ -38,11 +38,16 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     if config.launcher is VllmLauncherType.PREINSTALLED:
         return PreinstalledVllm()
     if config.launcher is VllmLauncherType.TPU:
-        return IsolatedTpuVllm(
+        launcher = IsolatedTpuVllm(
             vllm_ref=VLLM_FORK_REQUIREMENT,
             tpu_inference_ref=TPU_INFERENCE_FORK_REQUIREMENT,
             exclude_newer=VLLM_TPU_EXCLUDE_NEWER,
         )
+        if VLLM_TPU_EXCLUDE_NEWER is not None:
+            return VllmLauncherWithEnvironment(
+                launcher, {"UV_PRERELEASE": "allow", "UV_LINK_MODE": "copy", "PYTHONPATH": ""}
+            )
+        return launcher
     source = VllmType.MARIN_FORK if config.source is VllmSource.MARIN_FORK else VllmType.UPSTREAM
     version = config.version if source is VllmType.UPSTREAM else None
     if source is VllmType.UPSTREAM and version is None:
