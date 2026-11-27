@@ -15,7 +15,7 @@ resource_hint:
     GB200: 4
 serve:
   tensor_parallel_size: 4
-  max_model_len: 73728
+  max_model_len: 147456
   limit_mm_per_prompt: '{"image":0,"video":0}'
   reasoning_parser: glm47
   tool_call_parser: glm47

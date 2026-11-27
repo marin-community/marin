@@ -10,7 +10,7 @@ resource_hint:
     H100: 2
 serve:
   tensor_parallel_size: 2
-  max_model_len: 73728
+  max_model_len: 131072
   reasoning_parser: nemotron_v3
   tool_call_parser: qwen3_coder
   vllm_extra_args:
