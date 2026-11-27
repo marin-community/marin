@@ -137,44 +137,4 @@ def sources() -> list[RlDataSource]:
                 "itself is unchanged."
             ),
         ),
-        _repair_cohort(
-            source_id="SWE-rebench:ibragim-bad/SWE-rebench-V2.1@sealed-20261124",
-            upstream_dataset="ibragim-bad/SWE-rebench-V2.1",
-            variant="sealed-20261124",
-            cohort_name="swe-rebench-v2-1-repaired-release-20261126-v1",
-            recipe_version="2026.11.20.2",
-            expected_rows=7484,
-            release_repo="open-athena/swe-rebench-v2-1-repaired-release-20261126-v1",
-            release_revision="adaba5629b54ca31f8e6055ae2ae680d5555fd49",
-            family="swe-repo",
-            tags=(
-                "agentic",
-                "single-turn",
-                "license:cc-by-4.0",
-                "repair-release",
-                "converted",
-            ),
-            upstream_url="https://huggingface.co/datasets/ibragim-bad/SWE-rebench-V2.1/tree/26c0145ded93168b0d5d095420155901ad2d5a2f",
-            upstream_repo="open-athena/swe-rebench-v2-1-repaired-release-20261124-v1",
-            upstream_revision="937f71c7e245d8f80223c23f40b16a47423a656c",
-            origin=SourceOrigin.SWE_REBENCH,
-            task_format=TaskFormat.HARBOR,
-            count_basis=(
-                "Production machine_spec census over all 7,207 published Harbor tasks at the release cut "
-                "8 snapshot identities (the ten consolidated group bases, 8 used), 7,207 machine slots, "
-                "zero execution failures"
-            ),
-            verification=(
-                "The repair lane's canonical filtration over the 7,484-row sealed cohort: 7,207 rows "
-                "admitted by the production Harbor oracle trials with conclusive nonpassing physical nop "
-                "controls at the declared Marin org profile; the 277 exclusions carry typed reasons in "
-                "the merged OracleFilterReceipt v4 and the lane's typed-exclusion documents"
-            ),
-            notes=(
-                "Sealed sub-population of SWE-rebench:ibragim-bad/SWE-rebench-V2.1@repaired-20261119: the "
-                "7,484 rows the wave campaign validated (nop 0.0 + oracle 1.0), cut at the canonical "
-                "filtration's 7,207 admitted (decision c, 2026-11-26). The tracked repaired source itself "
-                "is unchanged; the cohort's own oracle/control evidence lives in the merged receipt."
-            ),
-        ),
     ]
