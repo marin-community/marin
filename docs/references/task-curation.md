@@ -143,33 +143,12 @@ the training population.
 
 For the current task-to-training recipe, see the [Snowball RL experiments](../recipes/rl-experiments.md).
 
-The recipe contains an explicit source allowlist and family quotas. For example,
-this small recipe selects 100 calendar tasks from two admitted sources:
-
-```json
-{
-  "name": "calendar-trial",
-  "version": "2026.10.23.1",
-  "sources": {
-    "Task Trove:laion__nemotron-gym-agent-calendar-v2": "calendar",
-    "Task Trove:laion__nemotron-gym-instruction-following-calendar-v3": "calendar"
-  },
-  "family_limits": {"calendar": 100},
-  "heldout": [{
-    "uri": "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet",
-    "version": "2026.10.23.1",
-    "rows": 910,
-    "format": "historical"
-  }],
-  "validation_per_family": 20,
-  "seed": 20261023
-}
-```
-
-The retained S3 heldout input contains all 910 original Snowball development
-tasks, with string columns `lowered_task_spec` (TaskSpec 0.27) and `teacher_route`.
-Its pinned upstream is
-[`cb728a7` on Hugging Face](https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/tree/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3).
+The recipe declares an explicit source allowlist, family quotas, heldout inputs,
+an evaluation sample size per family, and a seed. Each heldout input includes its
+URI, version, format, and expected row count. See the
+[checked-in selection recipes](https://github.com/marin-community/marin/tree/main/experiments/post_training/task_curation/recipes)
+for concrete declarations and the [curation README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md)
+for their dataset lineage.
 
 Use `--selection recipe.json` alongside the normal FULL campaign options, or
 select again from the campaign's saved admitted corpus:
@@ -208,37 +187,21 @@ Every training row carries `family`, `aai_category`, `source`, `topic` and
 `task_manifest.parquet` uses the shared `finestore.rl.strata.SelectionTaskRow`
 schema for the complete training and heldout pool: task digest, strata, active
 membership, grader metadata and measured difficulty. `summary.json` stores the
-versioned `SelectionDefinition` with its pool and active files. Historical
-upstream pass rates remain measured difficulty values; they are not inferred tags. Historical Nemotron panel tasks use the package
-environment from an admitted task in their matching training component; their
-private grader resources and command stay attached to each task. The historical
-structural heldout tasks use the shared closure converter. SkyRL chooses rollout
-limits, harnesses and verifier backends when it loads these canonical tasks.
+versioned `SelectionDefinition` with its pool and active files. Upstream pass
+rates remain measured difficulty values; they are not inferred tags. SkyRL chooses
+rollout limits, harnesses and verifier backends when it loads these canonical tasks.
 
 ### EvalLite
 
-EvalLite is a fixed sample of 1,500 public benchmark tasks that RL runs
-grade on the training job's own machines, with no container image or judge
-service. It draws only from evaluation sources and skips any task that matches
-training data or the 910-task development panel, which tuning looks at. It
-compares checkpoints of one model; it is not a headline benchmark (use
+EvalLite is a heldout benchmark selection that RL runs grade on the training
+job's own machines, with no container image or judge service. It draws only
+from evaluation sources and excludes matches against training data and the
+development panel. It compares checkpoints of one model; it is not a headline benchmark (use
 [`experiments/evaluation`](https://github.com/marin-community/marin/tree/main/experiments/evaluation) for that) and does not
 cover multi-turn agent work or long context.
 
-| family | sources (tasks) | fast subset |
-|---|---|---|
-| scientific_reasoning | MATH500 (500), AIME24 (20) | 35 |
-| general | MMLU-Pro (200), GPQA-Diamond (50) | 17 |
-| competitive_coding | HumanEval+ (164), MBPP+ (111) | 18 |
-| structural | IFEval (150), IFBench (140) | 19 |
-| agents | NeMo next tool call (165) | 11 |
-
-Benchmark tasks come from the catalog's Evalchemy corpora, asked once in chat
-form without examples. An agents task shows a tool-use conversation and asks for
-the next tool call; only the exact function name with exact JSON arguments
-scores 1. It measures tool-call accuracy, not agent ability. The agents part
-stays only while the starting model passes 5%–95% of its answers; the published
-panel measured 19.2%.
+The [curation README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#evallite)
+records its source composition, task protocols, and pinned panel lineage.
 
 To change the panel:
 
@@ -275,21 +238,17 @@ retired; missing reference evidence does not establish saturation.
 
 ### Rebuild a Snowball training selection
 
-Ungated Snowball presets and Mochi use `snowball-100k@2026.11.25.1`
-and `eval-lite@2026.11.25.1`. These manifests use catalog source IDs for training
-and evaluation subsets. The selection summaries record the parent versions.
+Ungated Snowball and Mochi presets use versioned training and evaluation
+selections. Their manifests use catalog source IDs, and their summaries record
+parent versions. The [curation README](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#snowball-training-selections)
+records the selection lineage.
 
-`recipes/snowball-100k.json` selects the 100,000 training tasks from twelve
-admitted training sources, with a quota for each source. It excludes the
-development panel (`heldout`) and EvalLite (`exclusions`) by task ID, full
-conversation and whitespace-normalized final user statement, and refuses tasks
-that need a container image or a judge service.
+`recipes/snowball-100k.json` assigns source quotas and declares heldout and
+exclusion inputs. The selection builder excludes declared inputs by task ID,
+full conversation and whitespace-normalized final user statement, and refuses
+tasks that need a container image or a judge service.
 
-The checked-in recipe names version `2026.11.10.1`, which is not yet published;
-build it before training on it. The published `snowball-100k@2026.11.04.1` was
-built before EvalLite and has no `exclusions`; the panel build excludes it
-instead, and existing Snowball controls use it. Published versions are frozen;
-any recipe change takes a new version.
+Published versions are frozen; any recipe change takes a new version.
 
 Run the driver with an admitted `--corpus`, `--selection RECIPE.json` and
 `--run`. Use a separate `--artifact-root` for an independent rebuild.

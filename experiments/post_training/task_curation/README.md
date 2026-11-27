@@ -21,10 +21,49 @@ for the handoff to [Snowball RL experiments](../../../docs/recipes/rl-experiment
 
 `--corpus <converted-corpus.json> --eval-lite
 experiments/post_training/task_curation/recipes/eval-lite.json`
-builds the EvalLite: 1,500 evaluation-only benchmark tasks that RL
-runs grade without containers or judges, and a 100-task fast subset. The
-[panel reference](../../../docs/references/task-curation.md#evallite)
-lists its parts and how to change them.
+builds EvalLite. The original full pool has 1,500 evaluation-only benchmark
+tasks, and its fast subset has 100 tasks. RL grades them without containers or
+judges. The [panel reference](../../../docs/references/task-curation.md#evallite)
+explains how to change the selection. The versioned selection manifest records
+current active membership.
+
+| Family | Sources in the original pool | Fast subset |
+| --- | --- | ---: |
+| scientific_reasoning | MATH500 (500), AIME24 (20) | 35 |
+| general | MMLU-Pro (200), GPQA-Diamond (50) | 17 |
+| competitive_coding | HumanEval+ (164), MBPP+ (111) | 18 |
+| structural | IFEval (150), IFBench (140) | 19 |
+| agents | NeMo next tool call (165) | 11 |
+
+Benchmark tasks come from the catalog's Evalchemy corpora and are asked once
+in chat form without examples. An agents task shows a tool-use conversation
+and asks for the next call. Only the exact function name and JSON arguments
+score 1, so this part measures tool-call accuracy, not agent ability. It stays
+in the active set only while the starting model passes 5%–95% of its answers;
+the published panel measured 19.2%. Each later selection version records its
+reference model measurements and any retired tasks in `task_manifest.parquet`.
+
+## Snowball training selections
+
+The [snowball-100k recipe](recipes/snowball-100k.json) declares quotas for twelve
+admitted training sources. The mixed
+[snowball-100k-agentic recipe](recipes/snowball-100k-agentic.json) adds released
+SWE v4 agent tasks beside the one-turn rows. The selection manifests record the
+exact source revisions and row counts used by each published version.
+
+The original Snowball development input contains 910 tasks with string columns
+`lowered_task_spec` (TaskSpec 0.27) and `teacher_route`. Its pinned upstream is
+[`cb728a7` on Hugging Face](https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/tree/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3).
+Historical Nemotron panel tasks use the package environment from an admitted
+task in their matching training component; their private grader resources and
+command stay attached to each task. Historical structural heldout tasks use the
+shared closure converter.
+
+The published `snowball-100k@2026.11.04.1` selection predates EvalLite and has
+no `exclusions`. The later panel build excludes that selection, and existing
+Snowball controls use it. A training selection with both `heldout` and
+`exclusions` excludes both panels. The checked-in recipe can differ from the
+latest published selection; follow the manifest and its parent references.
 
 ## Local conversion loop
 
