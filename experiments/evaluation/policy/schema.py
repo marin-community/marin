@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+from evalrecords.policy_release import RELEASE_TAG_PREFIX
 from evalrecords.records import EvaluationSelection
 from marin.evaluation.model_config import ModelConfig
 
@@ -17,8 +18,6 @@ from experiments.evaluation.curated import requires_judge
 from experiments.evaluation.models import models
 
 HF_COMMIT = re.compile(r"[0-9a-f]{40}")
-RESERVED_VERSION_PREFIX = "eval-policy-"
-"""The generic launcher rejects unknown versions with this prefix; policy tags use it."""
 
 
 @dataclass(frozen=True)
@@ -31,6 +30,9 @@ class Policy:
     ``evaluations`` are named catalog selections, normally ``load_evaluations`` of the version's
     ``evaluations.yaml``. ``serving_window`` is the context window every model is served at, or the model's own
     window if smaller. ``exclusions`` maps a (baseline, evaluation) pair to the reason it does not run.
+
+    A patch names the released version it patches as ``base``: each evaluation whose inputs are unchanged apart
+    from the version keeps the base release's run.
     """
 
     version: str
@@ -38,10 +40,14 @@ class Policy:
     evaluations: tuple[EvaluationSelection, ...]
     serving_window: int
     exclusions: Mapping[tuple[str, str], str] = field(default_factory=lambda: MappingProxyType({}))
+    base: str | None = None
 
     def __post_init__(self) -> None:
-        if self.version.startswith(RESERVED_VERSION_PREFIX):
-            raise ValueError(f"{self.version}: {RESERVED_VERSION_PREFIX!r} names policy tags, not versions")
+        # The generic launcher also rejects unknown versions with this prefix.
+        if self.version.startswith(RELEASE_TAG_PREFIX):
+            raise ValueError(f"{self.version}: {RELEASE_TAG_PREFIX!r} names policy tags, not versions")
+        if self.base == self.version:
+            raise ValueError(f"{self.version} can't patch itself")
         _require_unique("baseline", list(self.baselines))
         _require_unique("evaluation", [evaluation.name for evaluation in self.evaluations])
         catalog = models()
