@@ -6,24 +6,22 @@
 import math
 from collections.abc import Callable
 from functools import partial
-from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Bool, Float, Int
 
 from haliax.nn.ragged_dot import ragged_dot
-from levanter.grug._moe.ep_ring import _ring_route_order
+from levanter.grug._moe.ep_ring import (
+    _gather_ring_inputs,
+    _GatheredInputs,
+    _ring_physical_capacity,
+    _ring_route_order,
+    _take_valid_rows,
+)
 
 _SMALL_DECODE_ROUTE_CAPACITY = 256
 _MIN_CHUNKED_PREFILL_TOKENS = 512
-
-
-class _GatheredInputs(NamedTuple):
-    activations: jax.Array
-    expert_ids: jax.Array
-    weights: jax.Array
-    valid: jax.Array
 
 
 def _gather_serving_inputs(
@@ -35,12 +33,7 @@ def _gather_serving_inputs(
     pack_metadata: bool,
 ) -> _GatheredInputs:
     if not pack_metadata:
-        return _GatheredInputs(
-            jax.lax.all_gather(activations, "expert", tiled=True),
-            jax.lax.all_gather(expert_ids, "expert", tiled=True),
-            jax.lax.all_gather(weights, "expert", tiled=True),
-            jax.lax.all_gather(token_valid, "expert", tiled=True),
-        )
+        return _gather_ring_inputs(activations, expert_ids, weights, token_valid)
     # BF16 represents every expert ID exactly for banks up to 256 experts.
     width = activations.shape[1]
     top_k = expert_ids.shape[1]
@@ -70,7 +63,7 @@ def _moe_mlp_serving_ring_local(
     capacity_factor: float,
     megablox_tiles: tuple[int, int] | None = None,
 ) -> Float[Array, "Tlocal H"]:
-    """Gather routes and scatter expert outputs using separate gate and up weights."""
+    """Return combined outputs for this shard's tokens with bounded prefill scratch."""
     local_experts = gate_weight.shape[0]
     ep_size, remainder = divmod(num_experts, local_experts)
     if remainder:
@@ -81,7 +74,7 @@ def _moe_mlp_serving_ring_local(
     topk = selected_experts_local.shape[1]
     tokens = local_tokens * ep_size
     assignments = tokens * topk
-    physical_capacity = min(assignments, max(local_experts, math.ceil(capacity_factor * assignments / ep_size)))
+    physical_capacity = _ring_physical_capacity(assignments, local_experts, ep_size, capacity_factor)
     pack_metadata = (
         physical_capacity <= _SMALL_DECODE_ROUTE_CAPACITY
         and x_local.dtype == jnp.bfloat16
@@ -112,8 +105,7 @@ def _moe_mlp_serving_ring_local(
         token_index = jnp.floor_divide(local_idx, topk)
         weight_local = jnp.take(weight_flat, local_idx, axis=0).astype(x_local.dtype)
 
-        x_take = jnp.take(x_global, token_index, axis=0)
-        x_dispatch = jnp.where(valid[:, None], x_take, jnp.zeros_like(x_take))
+        x_dispatch = _take_valid_rows(x_global, token_index, valid)
         weight_dispatch = jnp.where(valid, weight_local, jnp.zeros_like(weight_local))
         with jax.named_scope("moe_up_down"):
             # Omit unused rows from the grouped dots and mask their unwritten results.
@@ -122,7 +114,7 @@ def _moe_mlp_serving_ring_local(
             up = jnp.where(active_rows, dot(x_dispatch, up_weight, group_sizes), 0)
             out_dispatch = jnp.where(active_rows, dot(activation(gate) * up, moe_w2_local, group_sizes), 0)
 
-        with jax.named_scope("scatter"):
+        with jax.named_scope("combine"):
             destinations = jnp.where(valid, token_index, tokens)
             return output.at[destinations].add(out_dispatch * weight_dispatch[:, None], mode="drop")
 
@@ -151,7 +143,7 @@ def _moe_mlp_serving_ring_local(
 
         return jax.lax.fori_loop(0, num_chunks, process_chunk, jnp.zeros_like(x_global))
 
-    # Chunk prefill when the receiving shard exceeds twice its even share.
+    # Chunk large prefills when routes exceed twice the receiving shard's even share.
     balanced_capacity = max(local_experts, 2 * assignments // ep_size)
     if balanced_capacity < physical_capacity and tokens >= _MIN_CHUNKED_PREFILL_TOKENS:
         out_global = jax.lax.cond(

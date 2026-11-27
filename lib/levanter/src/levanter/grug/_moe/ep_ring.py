@@ -25,6 +25,35 @@ from levanter.grug._moe.common import (
 from levanter.grug._moe.ep_common import _assignment_sources, _prefix_cap_counts
 
 
+class _GatheredInputs(NamedTuple):
+    activations: jax.Array
+    expert_ids: jax.Array
+    weights: jax.Array
+    valid: jax.Array
+
+
+def _gather_ring_inputs(
+    activations: jax.Array, expert_ids: jax.Array, weights: jax.Array, valid: jax.Array
+) -> _GatheredInputs:
+    return _GatheredInputs(
+        jax.lax.all_gather(activations, "expert", tiled=True),
+        jax.lax.all_gather(expert_ids, "expert", tiled=True),
+        jax.lax.all_gather(weights, "expert", tiled=True),
+        jax.lax.all_gather(valid, "expert", tiled=True),
+    )
+
+
+def _ring_physical_capacity(assignments: int, local_experts: int, ep_size: int, capacity_factor: float) -> int:
+    return min(assignments, max(local_experts, math.ceil(capacity_factor * assignments / ep_size)))
+
+
+class _LocalExpertAssignments(NamedTuple):
+    accepted_counts: Int[Array, "Elocal"]
+    dropped: jax.Array
+    picked: Int[Array, "C"]
+    valid: Bool[Array, "C"]
+
+
 class _ExpertRouteOrder(NamedTuple):
     counts: jax.Array
     accepted_counts: jax.Array
@@ -90,7 +119,7 @@ def _select_local_assignments(
     local_experts: int,
     logical_capacity: jax.Array,
     physical_capacity: int,
-) -> tuple[Int[Array, "Elocal"], jax.Array, Int[Array, "C"], Bool[Array, "C"]]:
+) -> _LocalExpertAssignments:
     """Pick this shard's assignments in (local expert id, flat position) order under ring's capacity rule.
 
     ``local_expert`` must be zero where ``local_mask`` is false. Returns accepted counts per expert, the dropped
@@ -102,9 +131,7 @@ def _select_local_assignments(
     return _pick_local_routes(order, physical_capacity)
 
 
-def _pick_local_routes(
-    order: _ExpertRouteOrder, physical_capacity: int
-) -> tuple[Int[Array, "Elocal"], jax.Array, Int[Array, "C"], Bool[Array, "C"]]:
+def _pick_local_routes(order: _ExpertRouteOrder, physical_capacity: int) -> _LocalExpertAssignments:
     counts, accepted_counts, selection_key = order
     accepted_total = jnp.sum(accepted_counts, dtype=jnp.int32)
     dropped = jnp.sum(counts, dtype=jnp.int32) - accepted_total
@@ -112,7 +139,7 @@ def _pick_local_routes(
     _, picked = jax.lax.top_k(selection_key, physical_capacity)
     # `picked` pads with invalid rows at the end. They stay outside every group, so ragged_dot skips them and leaves
     # their output unspecified; the dispatch and combine read only the valid rows.
-    return accepted_counts, dropped, picked, valid
+    return _LocalExpertAssignments(accepted_counts, dropped, picked, valid)
 
 
 def _gather_sum_slots(rows: Float[Array, "P H"], slots: Int[Array, "T K"]) -> Float[Array, "T H"]:
@@ -261,10 +288,9 @@ def _moe_mlp_ep_ring_local(
     # #2710 ring EP strategy: gather tokens and their selected-expert routing
     # assignments across expert shards, then psum-scatter back to local tokens.
     with jax.named_scope("gather"):
-        x_global = jax.lax.all_gather(x_local, "expert", tiled=True)
-        selected_experts_global = jax.lax.all_gather(selected_experts_local, "expert", tiled=True)
-        combine_weights_global = jax.lax.all_gather(combine_weights_local, "expert", tiled=True)
-        token_valid_global = jax.lax.all_gather(token_valid_local, "expert", tiled=True)
+        x_global, selected_experts_global, combine_weights_global, token_valid_global = _gather_ring_inputs(
+            x_local, selected_experts_local, combine_weights_local, token_valid_local
+        )
 
         tokens = x_global.shape[0]
         topk = selected_experts_global.shape[1]
@@ -279,8 +305,7 @@ def _moe_mlp_ep_ring_local(
             )
 
         ep_size = num_experts // local_experts
-        physical_capacity = int(math.ceil(capacity_factor * assignments / ep_size))
-        physical_capacity = min(assignments, max(local_experts, physical_capacity))
+        physical_capacity = _ring_physical_capacity(assignments, local_experts, ep_size, capacity_factor)
         order = _ring_route_order(
             expert_flat,
             token_valid_global,
@@ -336,10 +361,7 @@ def _moe_mlp_ep_small_local(
     activation: Callable[[jax.Array], jax.Array],
 ) -> jax.Array:
     """Evaluate active routes in a small decode batch with capacity for every assignment."""
-    x = jax.lax.all_gather(x, "expert", tiled=True)
-    selected = jax.lax.all_gather(selected, "expert", tiled=True)
-    weights = jax.lax.all_gather(weights, "expert", tiled=True)
-    token_valid = jax.lax.all_gather(token_valid, "expert", tiled=True)
+    x, selected, weights, token_valid = _gather_ring_inputs(x, selected, weights, token_valid)
     tokens, top_k = selected.shape
     shard_start = jax.lax.axis_index("expert") * w_gate.shape[0]
     local_experts = selected - shard_start
