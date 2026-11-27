@@ -150,19 +150,24 @@ def _score_error(actual, expected):
 @pytest.mark.tpu
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
-    "production_width,expert_axis_size",
+    "layers,expert_axis_size",
     [
-        pytest.param(False, 1, id="fixture-data4"),
-        pytest.param(True, 4, id="production-width-expert4", marks=pytest.mark.manual),
+        pytest.param(1, 1, id="fixture-data4"),
+        pytest.param(2, 4, id="production-width-expert4", marks=pytest.mark.manual),
+        pytest.param(26, 4, id="production-depth-expert4", marks=pytest.mark.manual),
     ],
 )
-def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, production_width, expert_axis_size):
+def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, layers, expert_axis_size):
     if jax.default_backend() != "tpu" or jax.device_count() != _SLOTS:
         pytest.skip("The strict replay gate requires one four-device TPU host")
-    if jax.devices()[0].device_kind.lower() not in ("tpu v4", "tpu v5", "tpu v5p", "tpu v6 lite", "tpu v6e"):
+    device_kind = jax.devices()[0].device_kind.lower()
+    if device_kind not in ("tpu v4", "tpu v5", "tpu v5p", "tpu v6 lite", "tpu v6e"):
         pytest.skip("The fixture supports TPUv4, v5p, and v6e projections")
+    if layers == 26 and device_kind not in ("tpu v5", "tpu v5p"):
+        pytest.skip("The full-depth FP32 fixture requires the v5p HBM budget")
+    production_width = layers > 1
     if production_width:
-        base = SnowballConfig(num_layers=2, max_seq_len=256, moe_capacity_factor=float(expert_axis_size))
+        base = SnowballConfig(num_layers=layers, max_seq_len=256, moe_capacity_factor=float(expert_axis_size))
     else:
         base = SnowballConfig(
             vocab_size=23,
@@ -192,6 +197,19 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(tmp_path, prod
         generations, strict_rounds = _generate(
             model, tokenizer, mesh, prompts, measured_rounds=3 if production_width else 0
         )
+        if production_width:
+            print(
+                "SNOWBALL_STRICT_THROUGHPUT "
+                + json.dumps(
+                    {
+                        "layers": layers,
+                        "first_batch_seconds": strict_rounds[0],
+                        "warmed_batch_seconds": strict_rounds[1:],
+                        "output_tokens_per_second": _SLOTS * _NEW_TOKENS / np.median(strict_rounds[1:]),
+                    }
+                ),
+                flush=True,
+            )
         batch = _rollout_batch(model, prompts, generations)
         packed = pack_policy_batch(batch, sequence_length=cfg.max_seq_len, pad_token_id=0)
         assert packed.tokens.resolve_axis("batch").size < _SLOTS
