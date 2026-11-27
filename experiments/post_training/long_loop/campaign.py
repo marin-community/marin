@@ -349,6 +349,14 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str 
 @click.option("--daytona-target", envvar="DAYTONA_TARGET", help="Daytona target used by this campaign.")
 @click.option("--daytona-api-url", envvar="DAYTONA_API_URL", default=DEFAULT_DAYTONA_API_URL, show_default=True)
 @click.option(
+    "--snapshot-demand",
+    type=click.Choice(["daytona", "zero"]),
+    default="daytona",
+    show_default=True,
+    help="Declares the mix's Daytona snapshot demand. 'zero' (coordinator-authorized, recorded in the "
+    "purge receipt) skips the purge/usage gate for mixes that provision no Daytona snapshots.",
+)
+@click.option(
     "--pool-version", default=None, help="Reuse this mix's immutable prepared-pool version for a fresh RL attempt."
 )
 @partial(rl_build_options, before_submit=purge_before_campaign_submission)
@@ -359,6 +367,7 @@ def main(
     snapshot_reference_registry: tuple[str, ...],
     daytona_target: str | None,
     daytona_api_url: str,
+    snapshot_demand: str,
     pool_version: str | None,
 ) -> ArtifactStep:
     """Build the campaign graph; --run is reserved for the coordinator's rated queue."""
@@ -404,6 +413,7 @@ def main(
                 target=daytona_target,
                 api_url=daytona_api_url,
                 receipt_path=str(validation_output / "snapshot-purge.json"),
+                snapshot_demand=snapshot_demand,
             ),
         },
     )

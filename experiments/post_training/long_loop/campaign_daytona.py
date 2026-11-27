@@ -45,6 +45,11 @@ class CampaignSnapshotPurge:
     target: str | None
     api_url: str
     receipt_path: str
+    snapshot_demand: Literal["daytona", "zero"] = "daytona"
+    """'zero' declares the mix provisions no Daytona snapshots (e.g. LOCAL in-pod sources); the
+    purge/usage gate is irrelevant for it and is skipped, logged as 'skipped: zero snapshot demand'.
+    The declaration is a launch-time authorization recorded in the purge receipt — never a silent
+    default."""
 
 
 def current_snapshot_protections(
@@ -117,6 +122,22 @@ def purge_before_campaign_submission(handles: list[ArtifactStep]) -> None:
     config = handles[-1].runtime_args.get(PURGE_RUNTIME_ARG)
     if not isinstance(config, CampaignSnapshotPurge):
         raise ValueError("Campaign snapshot-purge configuration is missing")
+    if config.snapshot_demand == "zero":
+        receipt = {
+            "state": "complete",
+            "skipped": "zero snapshot demand",
+            "ruling": ("Launch-time declaration: this mix provisions no Daytona snapshots, so the "
+                       "Daytona purge/usage gate is irrelevant and is skipped (coordinator-authorized "
+                       "for zero-demand mixes only)."),
+            "accounts": {},
+            "daytona_accounts_used": [],
+        }
+        path = Path(config.receipt_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(receipt, indent=2))
+        print("Campaign snapshot purge skipped: zero snapshot demand; "
+              f"receipt={config.receipt_path}", flush=True)
+        return
     receipt = asyncio.run(purge_campaign_snapshots(config))
     counts = "; ".join(
         f"{account}: deleted={result['deleted_count']}, free={result['snapshot_free']}"

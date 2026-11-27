@@ -150,3 +150,33 @@ def test_purge_records_deletions_before_quota_failure_and_refuses_blind_retry(tm
     with pytest.raises(RuntimeError, match="Prior snapshot purge is incomplete"):
         invoke_prelaunch(tmp_path, protection_registry())
     assert set(account_clients["DAYTONA_EVAL_API_KEY"].snapshot.snapshots) == {"reserved", "sandbox", "unused"}
+
+
+def test_zero_snapshot_demand_mix_skips_the_daytona_gate(tmp_path, account_clients):
+    """A mix that provisions no Daytona snapshots skips the purge/usage gate (coordinator-authorized)."""
+    path = tmp_path / "references.json"
+    path.write_text(json.dumps(protection_registry()))
+    config = maintenance.CampaignSnapshotPurge(
+        registry_uris=(str(path),),
+        target="fixture",
+        api_url="https://fixture.invalid/api",
+        receipt_path=str(tmp_path / "purge.json"),
+        snapshot_demand="zero",
+    )
+    step = ArtifactStep(
+        name="test/campaign",
+        version="2026.11.26",
+        artifact_type=Artifact,
+        build_config=lambda _ctx: {},
+        run=lambda _config: None,
+        runtime_args={maintenance.PURGE_RUNTIME_ARG: config},
+    )
+    maintenance.purge_before_campaign_submission([step])
+
+    receipt = json.loads((tmp_path / "purge.json").read_text())
+    assert receipt["state"] == "complete"
+    assert receipt["skipped"] == "zero snapshot demand"
+    assert receipt["accounts"] == {}
+    # The provider was never touched: every fixture snapshot the accounts started with is still there.
+    for account, secret in maintenance.CAMPAIGN_DAYTONA_ACCOUNTS:
+        assert set(account_clients[secret].snapshot.snapshots) == {"reserved", "sandbox", "unused"}
