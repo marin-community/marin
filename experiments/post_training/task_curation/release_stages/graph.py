@@ -1905,6 +1905,7 @@ def _fresh_qc_index_step(
         "catalog_target_load_id",
         "snapshot_id",
         "source_revision",
+        "removed_sources",
     )
 
     def build_inputs(ctx: StepContext) -> dict:
@@ -1933,6 +1934,7 @@ def _fresh_qc_index_step(
             "declarations": declarations_ref,
             "qc_completion": _resolved_receipt(ctx, qc_browse),
             "fresh_panels": fresh_panels,
+            "removed_sources": plan.removed_sources,
         }
 
     return _stage_step(

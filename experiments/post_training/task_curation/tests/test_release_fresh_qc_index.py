@@ -417,6 +417,62 @@ def test_cli_refreshes_selected_panel_and_reuses_verified_staged_bytes(
     assert current["snapshot_id"] == "assembly-current-v2"
 
 
+@pytest.mark.parametrize("removal", ["explicit", "unlisted", "still_declared"])
+def test_cli_defers_only_explicitly_removed_panels(tmp_path, fake_query, fresh_panel, monkeypatch, capsys, removal):
+    reference, declaration = fresh_panel
+    inputs = _inputs(tmp_path, fresh_panels={declaration["id"]: reference})
+    declarations = json.loads(StoragePath(inputs.declarations.uri).read_text())
+    declarations[declaration["id"]] = declaration
+    declaration_path = tmp_path / "with-fresh-source.json"
+    declaration_path.write_text(json.dumps(declarations))
+    inputs = dataclasses.replace(
+        inputs,
+        declarations=ArtifactRef(
+            uri=str(declaration_path), sha256=hashlib.sha256(declaration_path.read_bytes()).hexdigest()
+        ),
+    )
+    original = stage.run_fresh_qc_index(inputs, dry_run=False)
+    prior = json.loads(StoragePath(original["index"]["uri"]).read_bytes())
+    retained = next(row for row in prior["receipts"] if row["source_id"] == "Marin:fixture")
+    deferred = next(row for row in prior["receipts"] if row["source_id"] == declaration["id"])
+    original_bytes = StoragePath(deferred["reference"]["uri"]).read_bytes()
+    if removal != "still_declared":
+        declarations.pop(declaration["id"])
+    current_path = tmp_path / "without-deferred-source.json"
+    current_path.write_text(json.dumps(declarations))
+    refresh = dataclasses.replace(
+        inputs,
+        declarations=ArtifactRef(uri=str(current_path), sha256=hashlib.sha256(current_path.read_bytes()).hexdigest()),
+        prior_index=ArtifactRef(**original["index"]),
+        fresh_panels={},
+        removed_sources=() if removal == "unlisted" else (declaration["id"],),
+        output_root=str(tmp_path / "deferred"),
+    )
+
+    def no_sql(*args):
+        raise AssertionError("removing a staged panel must not export SQL again")
+
+    monkeypatch.setattr(stage.paced_query, "open_paced_query", no_sql)
+    config = tmp_path / "removal-inputs.json"
+    document = dataclasses.asdict(refresh)
+    for field in ("declarations", "qc_completion", "prior_index"):
+        document[field] = getattr(refresh, field).model_dump(mode="json")
+    config.write_text(json.dumps(document))
+    monkeypatch.setattr(sys, "argv", ["fresh_qc_index", "--inputs", str(config), "--mode", "write"])
+    if removal != "explicit":
+        with pytest.raises(ValueError):
+            stage.main()
+        assert not StoragePath(f"{refresh.output_root}/fresh-qc-index.json").exists()
+    else:
+        stage.main()
+        result = json.loads(capsys.readouterr().out)
+        current = json.loads(StoragePath(result["index"]["uri"]).read_bytes())
+        assert current["receipts"] == [retained]
+        assert current["provenance"]["removed_sources"] == [declaration["id"]]
+        assert current["provenance"]["prior_index"] == original["index"]
+    assert StoragePath(deferred["reference"]["uri"]).read_bytes() == original_bytes
+
+
 def test_refuses_a_panel_without_a_frozen_declaration(tmp_path, fake_query):
     inputs = _inputs(tmp_path)
     declarations = StoragePath(inputs.declarations.uri)

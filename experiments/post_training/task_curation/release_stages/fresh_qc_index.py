@@ -53,6 +53,7 @@ class FreshQcIndexInputs:
     qc_completion: ArtifactRef
     fresh_panels: dict[str, ArtifactRef]
     prior_index: ArtifactRef | None = None
+    removed_sources: tuple[str, ...] = ()
 
     def validate(self) -> None:
         """Refuse malformed inputs before anything runs."""
@@ -284,7 +285,7 @@ def _retained_index_rows(inputs: FreshQcIndexInputs, declarations: dict[str, dic
     rows = prior["receipts"]
     if len({row["source_id"] for row in rows}) != len(rows):
         raise ValueError("prior QC index repeats a source")
-    retained_ids = {row["source_id"] for row in rows} - inputs.fresh_panels.keys()
+    retained_ids = {row["source_id"] for row in rows} - inputs.fresh_panels.keys() - set(inputs.removed_sources)
     changed = changed_review_sources(
         {key: row for key, row in old_declarations.items() if key in retained_ids},
         {key: row for key, row in declarations.items() if key in retained_ids},
@@ -292,7 +293,7 @@ def _retained_index_rows(inputs: FreshQcIndexInputs, declarations: dict[str, dic
     retained = []
     for row in rows:
         source_id = row["source_id"]
-        if source_id in inputs.fresh_panels:
+        if source_id in inputs.fresh_panels or source_id in inputs.removed_sources:
             continue
         if source_id in changed or source_id not in declarations or source_id not in old_declarations:
             raise ValueError(f"changed QC binding requires a fresh panel: {source_id}")
@@ -334,6 +335,9 @@ def run_fresh_qc_index(
         inputs.validate()
         configure_coreweave_s3()
         declarations = _read_declarations(inputs.declarations)
+        still_declared = set(inputs.removed_sources) & (declarations.keys() | inputs.fresh_panels.keys())
+        if still_declared:
+            raise ValueError(f"removed QC sources remain declared or select fresh panels: {sorted(still_declared)}")
         if inputs.prior_index is not None:
             index_rows = _retained_index_rows(inputs, declarations)
         else:
@@ -343,6 +347,7 @@ def run_fresh_qc_index(
                 prior_load_id=inputs.prior_load_id,
                 target_load_id=inputs.target_load_id,
             )
+            rows = [row for row in rows if row["source_id"] not in inputs.removed_sources]
             carried_ids = {row["source_id"] for row in rows}
             overlap = carried_ids & inputs.fresh_panels.keys()
             if overlap:
@@ -390,6 +395,7 @@ def run_fresh_qc_index(
                 "declarations": {"uri": inputs.declarations.uri, "sha256": inputs.declarations.sha256},
                 "fresh_panels": {key: ref.model_dump(mode="json") for key, ref in sorted(inputs.fresh_panels.items())},
                 "prior_index": inputs.prior_index.model_dump(mode="json") if inputs.prior_index else None,
+                "removed_sources": sorted(inputs.removed_sources),
             },
         }
         raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode()
@@ -433,6 +439,7 @@ def main() -> None:
     if document.get("prior_index") is not None:
         document["prior_index"] = ArtifactRef(**document["prior_index"])
     document["fresh_panels"] = {key: ArtifactRef(**value) for key, value in document["fresh_panels"].items()}
+    document["removed_sources"] = tuple(document.get("removed_sources", ()))
     inputs = FreshQcIndexInputs(**document)
     proof = run_fresh_qc_index(inputs, dry_run=args.mode == "dry-run")
     print(json.dumps(proof), flush=True)

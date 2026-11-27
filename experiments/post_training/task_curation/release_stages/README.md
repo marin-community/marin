@@ -380,6 +380,12 @@ SQL requests and records the prior index in the new index's provenance. Dry run
 performs the same verification without writing. The resulting index still needs
 the normal catalog-stage and catalog-load checks before release.
 
+When a source is deferred from the release, list it in `removed_sources` and
+omit its declaration and fresh panel. The index drops only explicitly removed
+panels and records those identities in provenance. A missing declaration without
+an explicit removal still refuses. Retained panel artifacts remain unchanged;
+the stage does not delete historical evidence.
+
 The content-review loader validates the selected artifact and completes panel
 row checks before publishing its QC presentation pointer. A changed selection
 updates the pointer for that load/source pair to reference the validated panel.
