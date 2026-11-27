@@ -619,6 +619,17 @@ def sources() -> list[RlDataSource[EvaluationCorpusRecipe]]:
             job=replace(CAMPAIGN_JOB, agent_install=pi_install(CAMPAIGN_PI)),
         ),
         harbor_source(
+            DS_1000_MINI_200, terminus, max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS, protocol=PACKAGE_TIMEOUTS_PROTOCOL
+        ),
+        harbor_source(
+            BFCL_PARITY_PI,
+            CAMPAIGN_PI,
+            max_input_tokens=CAMPAIGN_MAX_INPUT_TOKENS,
+            max_output_tokens=PI_MAX_OUTPUT_TOKENS,
+            job=JobSettings(agent_install=pi_install(CAMPAIGN_PI)),
+            protocol=PACKAGE_TIMEOUTS_PROTOCOL,
+        ),
+        harbor_source(
             BIXBENCH,
             BIXBENCH_PI,
             max_input_tokens=LONG_MAX_INPUT_TOKENS,
