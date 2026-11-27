@@ -252,6 +252,12 @@ def record_sampling_result(outcome: GroupDisposition, admission_batch: int) -> N
             "dispatch_step": result.dispatch_step,
             "disposition": outcome.disposition,
             "generated_tokens": outcome.tokens,
+            "served_turns": result.served_turns,
+            "served_length_stops": result.served_length_stops,
+            "unprojected_length_stops": result.unprojected_length_stops,
+            "abandoned_retry_tokens": result.abandoned_retry_tokens,
+            "unobserved_generation_calls": result.unobserved_calls,
+            "unobserved_generation_token_limit": result.unobserved_token_limit,
             "sample_count": result.sample_count,
             "verified_zero": scores.count(0.0),
             "verified_one": scores.count(1.0),
@@ -516,6 +522,8 @@ class TrainingContext:
         loop = asyncio.get_running_loop()
         groups: list[AdmittedRollout] = []
         gross_tokens = 0
+        unobserved_calls = 0
+        unobserved_token_limit = 0
         sampling_dispositions: list[GroupDisposition] = []
         phase = self.loader.order.feedback_phase
         sampling_receipts_enabled = phase is not SamplingFeedbackPhase.NONE
@@ -526,7 +534,10 @@ class TrainingContext:
             admission = await self.wait(self._buffer.admit.remote(timeout))
             await self._release(admission)
             # Every commit appears once in generated, before rejection or admission.
-            gross_tokens += sum(work.generated_token_count for _, work in admission.generated)
+            for _, work in admission.generated:
+                gross_tokens += work.paid_tokens
+                unobserved_calls += work.unobserved_calls
+                unobserved_token_limit += work.unobserved_token_limit
             _record_admission(admission, self._rollout_spans, self._policy_step, self.config.max_untrained_groups)
             if tracks_prompt_feedback:
                 sampling_dispositions.extend(admission.dispositions)
@@ -548,7 +559,13 @@ class TrainingContext:
                 return RolloutBatchMetadata(
                     self._policy_step,
                     tuple(groups),
-                    {**admission.selection.metrics, **sampling_metrics, GROSS_ROLLOUT_TOKENS_METRIC: gross_tokens},
+                    {
+                        **admission.selection.metrics,
+                        **sampling_metrics,
+                        GROSS_ROLLOUT_TOKENS_METRIC: gross_tokens,
+                        "rollout/unobserved_generation_calls": unobserved_calls,
+                        "rollout/unobserved_generation_token_limit": unobserved_token_limit,
+                    },
                     sampling_receipts_enabled=sampling_receipts_enabled,
                     sampling_dispositions=tuple(sampling_dispositions),
                 )

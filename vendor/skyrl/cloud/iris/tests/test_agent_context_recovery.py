@@ -5,20 +5,27 @@ import asyncio
 import numpy as np
 import pytest
 from omegaconf import OmegaConf
+from ray.exceptions import ActorDiedError
+from skyrl_train.config.utils import get_default_config
+from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from rolloutengine.engine import RolloutEngine
 from marinskyrl.agent_harnesses import AgentHarnessSettings, TaskAgentHarnesses
 from rolloutengine.harness.external import AgentHarness
 from rolloutengine.harness.step import StepHarness
-from rolloutengine.models import ContextWindowExceeded, Prompt, Transition
+from rolloutengine.models import ContextWindowExceeded, ModelRequest, Prompt, Transition
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command
-from skyrl_train.rollouts.task_projections import WholeTaskProjection
+from skyrl_train.rollouts.training_record import ModelGenerationUsage
+from skyrl_train.telemetry import GeneratedWork
+from skyrl_train.rollouts.task_projections import StepTaskProjection, WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker, _model_turn
 from skyrl_train.trajectory_runners.model_clients import (
     ContextLengthExceededError,
+    DirectModelClient,
     GenerationBudgetExceededError,
+    ModelServerError,
 )
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance
+from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AgentMachine, AnswerType, ScriptGrader
@@ -118,6 +125,7 @@ async def test_native_step_harness_keeps_length_stopped_rollout():
             max_prompt_length=128,
             chat_template_kwargs={},
             session_id="native",
+            usage=ModelGenerationUsage(),
         )
 
     runner = RolloutEngine({}, {"native": StepHarness(lambda _context: Episode())})
@@ -135,7 +143,8 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
         if sample_first
         else GenerationBudgetExceededError([1, 2, 3, 4])
     )
-    replies = ([sampled_reply()] if sample_first else []) + [rejection, sampled_reply("12")]
+    first = {**sampled_reply(), "stop_reasons": ["length"]}
+    replies = ([first] if sample_first else []) + [rejection, sampled_reply("12")]
 
     async def agent(_context, complete):
         if sample_first:
@@ -167,6 +176,11 @@ async def test_native_worker_recovers_without_spending_a_turn(agent_harnesses, w
     assert batch["loss_masks"] == [[1]]
     assert batch["rollout_logprobs"][0] == pytest.approx([-0.1])
     assert np.sum(batch["rewards"]) == 1.0
+    work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"), batch["rollout_metrics"])
+    assert work.generated_token_count == 1
+    assert work.paid_tokens == 1 + int(sample_first)
+    assert work.served_length_stops == work.unprojected_length_stops == int(sample_first)
+    assert work.unobserved_calls == work.unobserved_token_limit == 0
 
 
 @pytest.mark.asyncio
@@ -295,3 +309,204 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
     assert result.failure is not None
     assert result.failure.diagnostics["setup_exit_code"] == exit_code
     assert result.metrics["rollout_retries"] == retries
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("projection", [WholeTaskProjection, StepTaskProjection])
+async def test_pi_retry_charges_engine_replies_without_turning_them_into_policy_tokens(
+    agent_harnesses, worker_config, projection
+):
+    first = sampled_reply("Working")
+    first["response_ids"] = [[3, 4, 5]]
+    first["response_logprobs"] = [[-0.1, -0.1, -0.1]]
+    last = sampled_reply("12")
+    client = ScriptedClient([first, ModelServerError("transport", "fixture", 503), last])
+    attempts = 0
+
+    async def agent(_context, complete):
+        nonlocal attempts
+        attempts += 1
+        await complete(Prompt(({"role": "user", "content": "Return twelve"},), {}))
+        if attempts == 1:
+            await complete(Prompt(({"role": "user", "content": "Check again"},), {}))
+
+    task = text_task()
+    request = TaskRequestBatch(
+        rows=(task_input(lowered_task(task, "pi", max_turns=2)),), trajectory_ids=(TrajectoryID(task.id, 0),)
+    )
+    worker = TaskRolloutWorker(
+        worker_config,
+        projection(worker_config, WorkerTokenizer()),
+        client,
+        {},
+        agents=agent_harnesses(agent),
+        retry_wait=lambda _: asyncio.sleep(0),
+        shutdown_timeout=5,
+    )
+    try:
+        (result,) = await worker.generate(request)
+        batch = await worker.training_batch(request, [result])
+    finally:
+        await worker.shutdown()
+    assert attempts == 2 and result.failure is None
+    assert batch["response_ids"] == last["response_ids"]
+    work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"), batch["rollout_metrics"])
+    assert work.generated_token_count == len(last["response_ids"][0])
+    assert work.paid_tokens == len(first["response_ids"][0]) + len(last["response_ids"][0])
+    assert work.served_turns == 2
+    assert work.abandoned_retry_tokens == 3
+    assert work.unobserved_calls == 1
+    assert work.unobserved_token_limit == worker_config.sampling_params.max_generate_length
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("projection, payload_lengths", [(WholeTaskProjection, [4]), (StepTaskProjection, [1, 1])])
+async def test_agent_tool_observations_are_payload_not_paid_generation(
+    agent_harnesses, worker_config, projection, payload_lengths
+):
+    initial = {"role": "user", "content": "Count the three items"}
+    tool = {"role": "tool", "tool_call_id": "count1", "content": "three"}
+    a, b = sampled_reply("count"), sampled_reply("3")
+    a["assistant_messages"][0]["tool_calls"] = [
+        {"id": "count1", "type": "function", "function": {"name": "count", "arguments": "{}"}}
+    ]
+    b["prompt_ids"] = [[1, 2, 3, 7, 8]]
+
+    async def agent(_context, complete):
+        first = await complete(Prompt((initial,), {}))
+        await complete(Prompt((initial, first.message, tool), {}))
+
+    task = text_task().model_copy(update={"grader": verifyit_package(NumericSpec("3", 0, 0)).grader})
+    req = TaskRequestBatch(
+        rows=(task_input(lowered_task(task, "pi", max_turns=2)),), trajectory_ids=(TrajectoryID(task.id, 0),)
+    )
+    worker = TaskRolloutWorker(
+        worker_config,
+        projection(worker_config, WorkerTokenizer()),
+        ScriptedClient([a, b]),
+        {},
+        agents=agent_harnesses(agent),
+        shutdown_timeout=5,
+    )
+    try:
+        results = await worker.generate(req)
+        batch = await worker.training_batch(req, results)
+    finally:
+        await worker.shutdown()
+    assert results[0].failure is None
+    assert list(map(len, batch["response_ids"])) == payload_lengths
+    assert sum(map(sum, batch["loss_masks"])) == 2
+    work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"), batch["rollout_metrics"])
+    assert work.paid_tokens == len(a["response_ids"][0]) + len(b["response_ids"][0])
+    assert work.generated_token_count == sum(payload_lengths)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prompt_ids,options,expected",
+    [
+        ((1, 2), {}, 18),
+        (None, {"extra_body": {"max_completion_tokens": 7}}, 7),
+        (None, {"max_completion_tokens": 5, "extra_body": {"continue_final_message": True}}, 5),
+        (None, {}, 20),
+    ],
+)
+async def test_uncertain_model_reply_uses_serving_output_allowance_with_nullable_sampling(
+    prompt_ids, options, expected
+):
+    usage = ModelGenerationUsage()
+    error = ModelServerError("transport", "fixture", 503)
+    with pytest.raises(ModelServerError):
+        await _model_turn(
+            ScriptedClient([error]),
+            ModelRequest(({"role": "user", "content": "Count to three"},), options, prompt_token_ids=prompt_ids),
+            sampling_params={"max_tokens": None},
+            max_context_length=20,
+            max_prompt_length=15,
+            chat_template_kwargs={},
+            session_id="lost-response",
+            usage=usage,
+        )
+    assert (usage.tokens, usage.unobserved_calls, usage.unobserved_token_limit) == (0, 1, expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["chat-restart", "chat-overflow", "chat-tool-cap", "raw-failover", "raw-dies"])
+async def test_direct_engine_partial_replies_are_charged_before_discard(mode):
+    returned = []
+    budgets = []
+
+    class Tokenizer(WorkerTokenizer):
+        def encode(self, _text, **_kwargs):
+            return [8, 9]
+
+    class Engine:
+        async def tokenize(self, _request):
+            return {"tokens": [1, 2]}
+
+        async def chat_completion(self, request):
+            body = request["json"]
+            budgets.append(body["max_completion_tokens"])
+            if body.get("continue_final_message"):
+                if mode == "chat-overflow":
+                    return {"error_category": "context_overflow", "error": {"code": 400, "message": "context full"}}
+                return {"error": {"code": 400, "message": "continue_final_message rejected before sampling"}}
+            ids = [5, 6] if not returned else [7]
+            reason = "abort" if not returned else "stop"
+            if mode == "chat-tool-cap":
+                ids, reason = [5, 6, 7, 8, 9], "tool_calls"
+            returned.append(ids)
+            return {
+                "prompt_token_ids": [1, 2],
+                "choices": [
+                    {"token_ids": ids, "finish_reason": reason, "message": {"role": "assistant", "content": "ok"}}
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": len(ids), "total_tokens": 2 + len(ids)},
+            }
+
+        async def generate(self, request):
+            budgets.append(request["sampling_params"]["max_tokens"])
+            if len(budgets) == 2:
+                raise ActorDiedError()
+            ids = [5, 6] if not returned else [7]
+            reason = "abort" if not returned else "stop"
+            returned.append(ids)
+            return {"responses": ["ok"], "response_ids": [ids], "stop_reasons": [reason]}
+
+    cfg = get_default_config()
+    cfg.generator.enable_http_endpoint = False
+    engines = [Engine(), Engine()] if mode == "raw-failover" else [Engine()]
+    client = DirectModelClient(InferenceEngineClient(engines, Tokenizer(), cfg))
+    usage = ModelGenerationUsage()
+    request = ModelRequest(
+        ({"role": "user", "content": "Name a color"},), {}, prompt_token_ids=(1, 2) if mode.startswith("raw") else None
+    )
+    call = _model_turn(
+        client,
+        request,
+        sampling_params={"max_tokens": 5},
+        max_context_length=16,
+        max_prompt_length=None,
+        chat_template_kwargs={},
+        session_id="meter",
+        usage=usage,
+    )
+    if mode == "chat-tool-cap":
+        turn = await call
+        assert turn.stop_reason == "length"
+        assert usage.length_stops == 1
+        assert usage.tokens == len(turn.response_token_ids) == sum(map(len, returned)) == 5
+        assert usage.abandoned_retry_tokens == usage.unobserved_calls == 0
+        return
+    if mode == "chat-overflow":
+        with pytest.raises(ContextLengthExceededError):
+            await call
+    elif mode == "raw-dies":
+        with pytest.raises(RuntimeError, match="All inference engines have died"):
+            await call
+    else:
+        assert (await call).response_token_ids == (7,)
+    assert usage.tokens == sum(map(len, returned))
+    assert usage.abandoned_retry_tokens == 2
+    assert budgets == ([5, 3, 5] if mode in ("chat-restart", "raw-failover") else [5, 3])
+    assert (usage.unobserved_calls, usage.unobserved_token_limit) == ((1, 3) if mode.startswith("raw") else (0, 0))

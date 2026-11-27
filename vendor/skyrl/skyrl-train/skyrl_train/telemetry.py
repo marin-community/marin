@@ -12,7 +12,16 @@ from loguru import logger
 
 from marinskyrl.environment_contract import RUN_MODEL_ENV, TRAINING_TYPE_ENV, TrainingType
 from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
-from skyrl_train.metric_names import ENVIRONMENT_METRIC_PREFIX
+from skyrl_train.metric_names import (
+    ABANDONED_RETRY_TOKENS,
+    ENVIRONMENT_METRIC_PREFIX,
+    SERVED_LENGTH_STOPS,
+    SERVED_TOKENS,
+    SERVED_TURNS,
+    UNPROJECTED_LENGTH_STOPS,
+    UNOBSERVED_CALLS,
+    UNOBSERVED_TOKEN_LIMIT,
+)
 
 from rigging import telemetry
 from rigging.telemetry.serialization import EventBody
@@ -296,14 +305,39 @@ class GeneratedWork:
     rollout_count: int
     sample_count: int
     generated_token_count: int
+    served_token_count: int | None = None
+    served_turns: int = 0
+    served_length_stops: int = 0
+    unprojected_length_stops: int = 0
+    abandoned_retry_tokens: int = 0
+    unobserved_calls: int = 0
+    unobserved_token_limit: int = 0
+
+    @property
+    def paid_tokens(self) -> int:
+        """Use engine receipts when available, independently of selected payload length."""
+        return self.generated_token_count if self.served_token_count is None else self.served_token_count
 
     @classmethod
-    def from_batch(cls, response_ids: Sequence[Sequence[int]], is_last_step: Sequence[bool] | None) -> "GeneratedWork":
+    def from_batch(
+        cls,
+        response_ids: Sequence[Sequence[int]],
+        is_last_step: Sequence[bool] | None,
+        metrics: Mapping[str, float] | None = None,
+    ) -> "GeneratedWork":
+        metrics = metrics or {}
         sample_count = len(response_ids)
         return cls(
             rollout_count=sample_count if is_last_step is None else sum(is_last_step),
             sample_count=sample_count,
-            generated_token_count=sum(len(response) for response in response_ids),
+            generated_token_count=sum(map(len, response_ids)),
+            served_token_count=int(metrics[SERVED_TOKENS]) if SERVED_TOKENS in metrics else None,
+            served_turns=int(metrics.get(SERVED_TURNS, 0)),
+            served_length_stops=int(metrics.get(SERVED_LENGTH_STOPS, 0)),
+            unprojected_length_stops=int(metrics.get(UNPROJECTED_LENGTH_STOPS, 0)),
+            abandoned_retry_tokens=int(metrics.get(ABANDONED_RETRY_TOKENS, 0)),
+            unobserved_calls=int(metrics.get(UNOBSERVED_CALLS, 0)),
+            unobserved_token_limit=int(metrics.get(UNOBSERVED_TOKEN_LIMIT, 0)),
         )
 
 
@@ -321,7 +355,7 @@ def record_generated_work(work: GeneratedWork, weights_step: int) -> None:
     for work_kind, count in (
         ("rollout", rollout_count),
         ("sample", work.sample_count),
-        ("generated_token", work.generated_token_count),
+        ("generated_token", work.paid_tokens),
     ):
         if count:
             work_completed.add(

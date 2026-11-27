@@ -40,6 +40,7 @@ from skyrl_train.inference_engines.chat_template import (
     template_error_from_exception,
 )
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
+from skyrl_train.inference_engines.generation_usage import current_generation_usage
 from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
 from skyrl_train.inference_engines.response_topk import select_chat_response_topk
 from skyrl_train.trajectory_runners.types import TokenProvenance
@@ -101,7 +102,18 @@ class GenerationBudgetExceededError(ContextLengthExceededError):
         super().__init__(category="context_overflow", request_id=None, status_code=None)
 
 
-def _generation_token_budget(
+def chat_row_options(options: dict[str, Any]) -> dict[str, Any]:
+    """Flatten the OpenAI extra_body fields sent to tokenization and chat completion."""
+    row_options = dict(options)
+    extra = row_options.pop("extra_body", {})
+    template = {**row_options.get("chat_template_kwargs", {}), **extra.get("chat_template_kwargs", {})}
+    row_options.update(extra)
+    if template:
+        row_options["chat_template_kwargs"] = template
+    return row_options
+
+
+def generation_token_budget(
     request: InferenceEngineInput, prompt_ids: list[int], options: dict[str, Any]
 ) -> int | None:
     """Return the tightest output cap, or None when uncapped.
@@ -332,7 +344,7 @@ class DirectModelClient:
     ) -> _ChatResult:
         prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
-        token_budget = _generation_token_budget(request, prompt_ids, options)
+        token_budget = generation_token_budget(request, prompt_ids, options)
         if token_budget is not None:
             sampling["max_tokens"] = token_budget
         sampling.pop("max_generate_length", None)
@@ -397,12 +409,7 @@ class DirectModelClient:
                 return await self._generate_assistant_prefix(request, messages, row_options, session_id)
             # Agent relays use the OpenAI client's extra_body convention. The direct client
             # sends raw vLLM requests and tokenizes that same flattened body.
-            row_options = dict(row_options)
-            extra = row_options.pop("extra_body", {})
-            template = {**row_options.get("chat_template_kwargs", {}), **extra.get("chat_template_kwargs", {})}
-            row_options.update(extra)
-            if template:
-                row_options["chat_template_kwargs"] = template
+            row_options = chat_row_options(row_options)
             chat_options = self._chat_options(row_options)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {
@@ -416,7 +423,7 @@ class DirectModelClient:
             }
             with rollout_phase("tokenize"):
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
-            token_budget = _generation_token_budget(request, prompt_ids, row_options)
+            token_budget = generation_token_budget(request, prompt_ids, row_options)
             if token_budget is not None:
                 chat_options["max_completion_tokens"] = token_budget
 
@@ -500,6 +507,8 @@ class DirectModelClient:
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"
+                if (usage := current_generation_usage.get()) is not None:
+                    usage.length_stops += 1
             reasoning_violation, reasoning_violation_token = _reasoning_violation(
                 tokenizer, response_ids, decoded, stop_reason
             )

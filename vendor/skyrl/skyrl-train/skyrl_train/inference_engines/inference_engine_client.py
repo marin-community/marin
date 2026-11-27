@@ -1,3 +1,4 @@
+from skyrl_train.inference_engines.generation_usage import current_generation_usage
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
     SESSION_ID_HEADER,
@@ -557,6 +558,8 @@ class InferenceEngineClient(InferenceEngineInterface):
 
             # 3.2. Send the request.
             logger.debug("generate() request sent (including potential retries): {}", engine_input)
+            meter = current_generation_usage.get()
+            upper = meter.begin(cur_sampling_params.get(max_key)) if meter else 0
             try:
                 partial_response: InferenceEngineOutput = await self.engines[engine_idx].generate(engine_input)
             except (ray.exceptions.ActorDiedError, ray.exceptions.RayActorError) as e:
@@ -581,6 +584,8 @@ class InferenceEngineClient(InferenceEngineInterface):
             # 3.3. Parse the partial response.
             assert len(partial_response["response_ids"]) == 1, "Expected exactly one response."
             new_response_ids: List[int] = partial_response["response_ids"][0]
+            if meter:
+                meter.observed(upper, len(new_response_ids), partial_response["stop_reasons"][0])
             text_response = partial_response["responses"][0]
             stop_reason = partial_response["stop_reasons"][0]
             if per_prompt_sampling_params is not None and stop_reason == ABORT_FINISH_REASON:
@@ -719,6 +724,8 @@ class InferenceEngineClient(InferenceEngineInterface):
 
             # 1.2. Send the request.
             logger.debug("/chat/completions request sent (including potential retries): {}", cur_request_json)
+            meter = current_generation_usage.get()
+            upper = meter.begin(cur_request_json.get(max_key)) if meter else 0
             try:
                 partial_response = await self.engines[engine_idx].chat_completion(
                     {"json": cur_request_json, "headers": headers}
@@ -747,6 +754,8 @@ class InferenceEngineClient(InferenceEngineInterface):
                 # This can happen when chat templates (e.g., Qwen3 thinking) modify assistant
                 # content in ways that make vLLM unable to find the continuation point.
                 if "continue_final_message" in error_msg and accum.completion_tokens > 0:
+                    if meter and isinstance(error_info, dict) and error_info.get("code") in (400, 422):
+                        meter.observed(upper, 0)
                     logger.warning(
                         f"continue_final_message failed after {accum.completion_tokens} tokens, retrying fresh"
                     )
@@ -766,7 +775,19 @@ class InferenceEngineClient(InferenceEngineInterface):
                     partial_response.get("error_category", "server_error"),
                     partial_response.get("request_id"),
                 )
+                if meter and partial_response.get("error_category") == "context_overflow":
+                    meter.observed(upper, 0)
                 return partial_response
+
+            if meter:
+                # Count each actor return before continuation validation or a retry
+                # can discard it. A missing token list leaves the call unresolved.
+                choice = partial_response["choices"][0]
+                ids = choice.get("token_ids")
+                if isinstance(ids, list):
+                    meter.observed(upper, len(ids), choice["finish_reason"])
+                elif choice["finish_reason"] == ABORT_FINISH_REASON and partial_response["usage"]["completion_tokens"] == 0:
+                    meter.observed(upper, 0)
 
             # 1.3. Parse partial response and in-place update accumulators.
             finish_reason, stop_reason, response_role, aborted_without_generating = (

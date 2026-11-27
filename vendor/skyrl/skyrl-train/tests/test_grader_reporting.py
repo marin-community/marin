@@ -12,6 +12,7 @@ from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAIL
 from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.io import io
+from skyrl_train.metric_names import ABANDONED_RETRY_TOKENS, SERVED_TOKENS, UNOBSERVED_CALLS, UNOBSERVED_TOKEN_LIMIT
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
     SAMPLING_SOURCE,
@@ -56,6 +57,14 @@ async def test_judged_feedback_includes_prefetched_discards_across_resume(resume
             rewards=rewards,
             verification_results=results,
         )
+        if uid == "3":
+            # The rejected group also served three tokens before an infrastructure retry.
+            batch["rollout_metrics"] = {
+                SERVED_TOKENS: 5,
+                ABANDONED_RETRY_TOKENS: 3,
+                UNOBSERVED_CALLS: 1,
+                UNOBSERVED_TOKEN_LIMIT: 8,
+            }
         verdict = policy.verdict(RolloutGroup(batch, uid, lease.policy_step, prompt))
         await buffer.commit(lease.lease_id, prompt, verdict, PayloadReference(None))
 
@@ -100,7 +109,11 @@ async def test_judged_feedback_includes_prefetched_discards_across_resume(resume
     assert receipts[current.lease_id]["verified_min"] == receipts[current.lease_id]["verified_max"] == 0.5
     rejected = next(row for row in receipts.values() if row["disposition"] == "fully_masked")
     assert rejected["feedback_batch"] is None and rejected["verified_missing"] == 2
-    assert all(row["generated_tokens"] == row["sample_count"] == 2 for row in receipts.values())
+    assert rejected["generated_tokens"] == 5 and rejected["abandoned_retry_tokens"] == 3
+    assert rejected["unobserved_generation_calls"] == 1 and rejected["unobserved_generation_token_limit"] == 8
+    assert all(row["sample_count"] == 2 for row in receipts.values())
+    assert sum(row["generated_tokens"] for row in receipts.values()) == 11
+    assert sum(work.paid_tokens for window in (initial, admission) for _, work in window.generated) == 11
     rollout_context.record_sampling_training(
         rollout_context.RolloutBatchMetadata(admission.batch_id, tuple(admission.admitted), {}), Counter({"1": 0})
     )

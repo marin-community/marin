@@ -294,7 +294,7 @@ class RolloutContentPolicy:
                 uid=group.uid, group=group, decision=decision, invariant=self.admission.invariant
             )
         batch = group.trajectory_batch
-        work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
+        work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"), batch.get("rollout_metrics"))
         grader_stats = None
         if self.report_graders:
             metadata = group.prompt["input"].metadata
@@ -325,7 +325,9 @@ async def write_trajectory_batch(task: RolloutTask, writer: RolloutWriter, batch
         await writer.write_rollout(
             task.lease, RolloutGroup(batch, task.prompt["uid"], task.lease.policy_step, task.prompt)
         )
-    return sum(len(response) for response in batch["response_ids"])
+    return GeneratedWork.from_batch(
+        batch["response_ids"], batch.get("is_last_step"), batch.get("rollout_metrics")
+    ).paid_tokens
 
 
 @dataclass(frozen=True)
@@ -365,6 +367,12 @@ class SamplingGroupResult:
     feedback_batch: int | None
     sample_count: int
     verified_scores: tuple[float | None, ...] | None
+    served_turns: int = 0
+    served_length_stops: int = 0
+    unprojected_length_stops: int = 0
+    abandoned_retry_tokens: int = 0
+    unobserved_calls: int = 0
+    unobserved_token_limit: int = 0
 
 
 @dataclass(frozen=True)
@@ -866,10 +874,14 @@ class RolloutBuffer:
                 feedback_batch,
                 verdict.work.sample_count,
                 verdict.rewards.verified_scores if verdict.rewards is not None else verdict.rejected_verifier_scores,
+                served_turns=verdict.work.served_turns,
+                served_length_stops=verdict.work.served_length_stops,
+                unprojected_length_stops=verdict.work.unprojected_length_stops,
+                abandoned_retry_tokens=verdict.work.abandoned_retry_tokens,
+                unobserved_calls=verdict.work.unobserved_calls,
+                unobserved_token_limit=verdict.work.unobserved_token_limit,
             )
-        self._dispositions.append(
-            GroupDisposition(verdict.uid, disposition, verdict.work.generated_token_count, dwell, result)
-        )
+        self._dispositions.append(GroupDisposition(verdict.uid, disposition, verdict.work.paid_tokens, dwell, result))
 
     def _batch_complete(self) -> bool:
         return not self._batch_taken and len(self._admitted[self._policy_step]) == self.config.batch_size
