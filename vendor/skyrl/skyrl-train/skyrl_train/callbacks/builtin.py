@@ -112,6 +112,10 @@ def _configured_distillation_token_budget(cfg: DictConfig) -> int | None:
     return value
 
 
+TRAINING_BUDGET_RECEIPT = "training-budget.json"
+"""Wall-time budget receipt, written to the run's export root and read back by tests."""
+
+
 @register_callback("wall_time_budget")
 class WallTimeBudgetCallback(TrainerCallback):
     """Stop at a completed-step boundary after a post-first-update budget."""
@@ -153,7 +157,7 @@ class WallTimeBudgetCallback(TrainerCallback):
             "semantics": "wall clock since first optimizer completion; includes subsequent validation/checkpoint work",
         }
         io.write_bytes_atomic(
-            join_resource_path(trainer.cfg.trainer.export_path, "training-budget.json"),
+            join_resource_path(trainer.cfg.trainer.export_path, TRAINING_BUDGET_RECEIPT),
             json.dumps(report).encode(),
         )
         if remaining <= 0:

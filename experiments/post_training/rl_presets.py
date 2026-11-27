@@ -514,9 +514,7 @@ def curriculum_preset(preset: Preset, *, name: str, holdout: int, every: int, wi
     coordinator timeout.
 
     The base's family-balanced batch mix is dropped: the arm trains on the post-holdout
-    remainder, whose per-family counts cannot guarantee the full mix's rollout pools, and the
-    pool check in native composition would otherwise open the split's not-yet-materialized
-    output at plan time.
+    remainder, whose per-family counts cannot guarantee the full mix's rollout pools.
     """
     if not preset.evaluations:
         raise ValueError(f"curriculum preset {name} requires a base preset with an evaluation")

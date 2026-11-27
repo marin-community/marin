@@ -19,6 +19,7 @@ verify_checkout(Path(sys.argv[1]), builtin)
 path = Path(sys.argv[2])
 config = OmegaConf.load(path)
 config.trainer.export_path = str(path.parent)
+receipt = path.parent / builtin.TRAINING_BUDGET_RECEIPT
 handler = CallbackHandler([builtin.create_callback_from_config(row) for row in config.trainer.callbacks])
 trainer = SimpleNamespace(cfg=config, first_optimizer_step_time=None)
 control = TrainerControl()
@@ -35,7 +36,7 @@ asyncio.run(event("on_train_begin", 7))
 with patch("skyrl_train.callbacks.builtin.time.monotonic", return_value=100000):
     asyncio.run(event("on_log", 7, logs={}))
 startup_stop = control.should_training_stop
-assert not (path.parent / "training-budget.json").exists()
+assert not receipt.exists()
 trainer.first_optimizer_step_time = 1000.0
 with patch("skyrl_train.callbacks.builtin.time.monotonic", return_value=1099):
     asyncio.run(event("on_log", 8, logs={}))
@@ -48,7 +49,7 @@ print(
             "startup_stop": startup_stop,
             "before_stop": before_stop,
             "expired_stop": control.should_training_stop,
-            "receipt": json.loads((path.parent / "training-budget.json").read_text()),
+            "receipt": json.loads(receipt.read_text()),
         }
     )
 )

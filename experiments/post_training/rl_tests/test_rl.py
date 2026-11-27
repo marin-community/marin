@@ -1831,7 +1831,6 @@ def test_sft_only_arm_exports_without_starting_rl(tmp_path, monkeypatch, selecti
     [export] = built
     assert export.name.startswith("checkpoints/snowball/")
     assert export.version == "2026.11.25.7"
-    assert skyrl_api.skyrl_execution(export) is None
     assert all(skyrl_api.skyrl_execution(step) is None for step in graph_handles([export]))
     changed = tuple("1680" if value == "1679" else value for value in arguments)
     refused = CliRunner().invoke(command, (*changed, "--run"))

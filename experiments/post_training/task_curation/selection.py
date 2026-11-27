@@ -745,7 +745,7 @@ def prepare(config: SelectionConfig) -> None:
                 for value in batch.to_pylist():
                     row = _active_selection_row(value)
                     if row.grader_kind == GraderKind.HARNESS:
-                        harness_datasets.add(row.source)
+                        harness_datasets.add(TaskSpec.model_validate_json(value[TASK_SPEC_COLUMN]).source.dataset)
                     yield row.model_dump(mode="json")
 
         write_parquet_file(manifest_rows(), str(directory / TASK_MANIFEST_FILENAME), schema=TASK_MANIFEST_SCHEMA)

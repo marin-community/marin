@@ -297,6 +297,11 @@ def _levanter_pod_config(
     gpu_allocator = not ctx.is_fingerprint and isinstance(resources.device, GpuConfig)
     if gpu_allocator:
         _validate_gpu_mesh(spec, resources)
+    env_vars = dict(spec.env_vars)
+    if spec.xla_flags:
+        # XLA_FLAGS is space-separated; append to rather than replace an env-supplied value.
+        joined = " ".join(spec.xla_flags)
+        env_vars["XLA_FLAGS"] = f"{env_vars['XLA_FLAGS']} {joined}" if "XLA_FLAGS" in env_vars else joined
     return TrainLmOnPodConfig(
         train_config=_levanter_train_config(
             spec,
@@ -311,7 +316,7 @@ def _levanter_pod_config(
         ),
         resources=resources,
         output_path=ctx.output_path,
-        env_vars=({**spec.env_vars, **({"XLA_FLAGS": " ".join(spec.xla_flags)} if spec.xla_flags else {})} or None),
+        env_vars=env_vars or None,
         auto_build_caches=data_config.auto_build_caches,
     )
 
@@ -890,33 +895,28 @@ def _trainer(
     if gpu_allocator:
         # GPU-only: TPU PJRT rejects the cuda_async allocator option.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
-    if spec.trainer_config is not None:
-        return replace(
-            spec.trainer_config,
-            id=sft_run_id(spec),
-            train_batch_size=spec.batch_size,
-            num_train_steps=num_train_steps,
-            per_device_parallelism=spec.per_device_parallelism,
-            use_explicit_mesh_axes=use_explicit_mesh_axes,
-            mesh=spec.mesh if spec.mesh is not None else spec.trainer_config.mesh,
-            checkpointer=spec.checkpointer,
-            jax_config=jax_config,
-        )
+    authored = spec.trainer_config
+    mesh = spec.mesh if spec.mesh is not None else (authored.mesh if authored is not None else MeshConfig())
+    shared = {
+        "id": sft_run_id(spec),
+        "train_batch_size": spec.batch_size,
+        "num_train_steps": num_train_steps,
+        "per_device_parallelism": spec.per_device_parallelism,
+        "use_explicit_mesh_axes": use_explicit_mesh_axes,
+        "mesh": mesh,
+        "checkpointer": spec.checkpointer,
+        "jax_config": jax_config,
+    }
+    if authored is not None:
+        return replace(authored, **shared)
     return TrainerConfig(
-        id=sft_run_id(spec),
-        train_batch_size=spec.batch_size,
-        num_train_steps=num_train_steps,
         steps_per_eval=500,
-        jax_config=jax_config,
         mp=jmp.get_policy(_MARIN_PRECISION),
-        per_device_parallelism=spec.per_device_parallelism,
-        use_explicit_mesh_axes=use_explicit_mesh_axes,
-        mesh=spec.mesh if spec.mesh is not None else MeshConfig(),
         tracker=WandbConfig(
             project=spec.wandb_project,
             tags=["sft", "levanter", spec.name.split("/")[-1]],
         ),
-        checkpointer=spec.checkpointer,
+        **shared,
     )
 
 

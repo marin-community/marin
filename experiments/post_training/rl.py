@@ -788,6 +788,16 @@ def _entry_module(module: str | None) -> str:
     return module
 
 
+def _submission_environment(context: click.Context, preset: presets.Preset) -> dict[str, str]:
+    """The coordinator submission environment: the process env plus the submitted revision and durable prefix."""
+    environment = dict(os.environ)
+    if revision := context.meta.get("sft_source_revision"):
+        environment["GIT_COMMIT"] = revision
+    if preset.output_ttl_days is not None:
+        environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
+    return environment
+
+
 def _submit_from_launcher(
     module: str | None,
     argv: tuple[str, ...],
@@ -819,17 +829,12 @@ def _submit_from_launcher(
             cached_attempts[path] = cached.attempt_id
     indexed_runs = dict.fromkeys(native_ids.values(), index)
     metadata = _SUBMITTED_INDEX.dump_json(indexed_runs).decode()
-    environment = {
-        **os.environ,
+    environment = _submission_environment(context, preset) | {
         RUN_INDEX_ENV: metadata,
         CACHED_ATTEMPTS_ENV: _CACHED_ATTEMPTS.dump_json(cached_attempts).decode(),
     }
     if cohort := context.meta.get("rl_control_cohort"):
         environment[CONTROL_COHORT_ENV] = cohort.model_dump_json()
-    if revision := context.meta.get("sft_source_revision"):
-        environment["GIT_COMMIT"] = revision
-    if preset.output_ttl_days is not None:
-        environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
     job = submit_or_run(module, handles, max_concurrent, environment, argv=argv)
     submitted = [
         {
@@ -890,18 +895,9 @@ def _run_command(
                     build_artifacts(*following, max_concurrent=max_concurrent)
             return
         if sft_only:
-            module = entry_module
-            if module is None:
-                specification = sys.modules["__main__"].__spec__
-                module = specification.name if specification is not None else None
-            if not module:
-                raise click.UsageError("submit from python -m MODULE, or pass entry_module to rl.main")
+            module = _entry_module(entry_module)
             submitted_at = datetime.now(UTC).isoformat()
-            environment = dict(os.environ)
-            if revision := context.meta.get("sft_source_revision"):
-                environment["GIT_COMMIT"] = revision
-            if preset.output_ttl_days is not None:
-                environment["MARIN_PREFIX"] = recipe.run_prefix(preset)
+            environment = _submission_environment(context, preset)
             job = submit_or_run(
                 module, handles, max_concurrent, environment, argv=argv, execution=context.meta["sft_execution"]
             )
@@ -1174,10 +1170,16 @@ def command(
                 click.get_current_context().meta["sft_source_revision"] = revision
             sft_recipe = sft.recipe
             sft_model = sft_recipe.model if isinstance(sft_recipe, SFTSpec) else None
-            if isinstance(sft_model, HFModel) and sft_model.task_timeout_seconds is not None:
-                layout = preset.recipe.layout
-                hours = layout.coordinator_timeout_hours + math.ceil(sft_model.task_timeout_seconds / 3600)
-                layout = replace(layout, coordinator_timeout_hours=hours)
+            if (
+                isinstance(sft_model, HFModel)
+                and sft_model.task_timeout_seconds is not None
+                # An unlimited coordinator (0) stays unlimited; the SFT task timeout still applies.
+                and (hours := preset.recipe.layout.coordinator_timeout_hours)
+            ):
+                layout = replace(
+                    preset.recipe.layout,
+                    coordinator_timeout_hours=hours + math.ceil(sft_model.task_timeout_seconds / 3600),
+                )
                 preset = replace(preset, recipe=replace(preset.recipe, layout=layout))
         context.meta["rl_preset"] = preset
         if resume_name is not None:

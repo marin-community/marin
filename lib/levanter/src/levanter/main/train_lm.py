@@ -36,6 +36,7 @@ from levanter.data.mixture import MixtureDataset
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval import TaggedEvaluator, eval_model, lm_eval_loss
 from levanter.eval_audit import (
+    EVAL_LOSS_METRIC,
     InitialEvalMatchConfig,
     evaluation_input_audit,
     initial_eval_match,
@@ -62,6 +63,9 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
+
+INITIAL_EVAL_RAW_STAGE = "initial-eval-raw"
+"""The pre-reseed gate's stage name; its match receipt is read back on the post-reseed stage."""
 
 
 @dataclass
@@ -172,8 +176,9 @@ def check_initial_evaluation(
 ) -> dict:
     """Compare audited initial loss, writing evidence when an output root is supplied.
 
-    A ``None`` reference records the audited loss without gating on one — the post-reseed stage
-    uses it to log the intentional reseed shift next to the raw gate's evidence.
+    A ``None`` reference records the audited loss without gating on one. The post-reseed stage
+    pairs its loss with the raw gate's receipt: it always records the intentional reseed shift,
+    and the reference shift only when it gated on its own reference.
     """
     batch = trainer.config.EvalBatch
     evaluator = TaggedEvaluator(
@@ -189,7 +194,7 @@ def check_initial_evaluation(
     audit = evaluation_input_audit(evaluator, gate.special_token_ids)
     if output_root is not None:
         write_evaluation_result(str(output_root / f"{stage}-result.json"), metrics, audit)
-    match: dict = {"initial_loss": metrics["eval/loss"], "audit": audit}
+    match: dict = {"initial_loss": metrics[EVAL_LOSS_METRIC], "audit": audit}
     if reference_path is not None:
         reference = json.loads(StoragePath(reference_path).read_text())
         match = initial_eval_match(reference, metrics, audit, gate.absolute_tolerance)
@@ -200,19 +205,17 @@ def check_initial_evaluation(
         logged[f"{prefix}/delta"] = match["delta"]
     levanter.tracker.log(logged, step=0)
     if gate.pre_reseed_reference_path is not None and stage == "initial-eval" and output_root is not None:
-        raw_match = json.loads((output_root / "initial-eval-raw-match.json").read_text())
+        raw_match = json.loads((output_root / f"{INITIAL_EVAL_RAW_STAGE}-match.json").read_text())
         match["raw_match"] = raw_match
         match["raw_loss"] = raw_match["initial_loss"]
         match["post_reseed_loss"] = match["initial_loss"]
         match["intentional_reseed_delta"] = match["initial_loss"] - raw_match["initial_loss"]
-        match["reference_reseed_delta"] = match["reference_loss"] - raw_match["reference_loss"]
-        levanter.tracker.log(
-            {
-                "initial_eval/intentional_reseed_delta": match["intentional_reseed_delta"],
-                "initial_eval/reference_reseed_delta": match["reference_reseed_delta"],
-            },
-            step=0,
-        )
+        logged_deltas = {"initial_eval/intentional_reseed_delta": match["intentional_reseed_delta"]}
+        if "reference_loss" in match:
+            # Only a post-reseed stage that gated on its own reference can compare references.
+            match["reference_reseed_delta"] = match["reference_loss"] - raw_match["reference_loss"]
+            logged_deltas["initial_eval/reference_reseed_delta"] = match["reference_reseed_delta"]
+        levanter.tracker.log(logged_deltas, step=0)
     if output_root is not None and jax.process_index() == 0:
         (output_root / f"{stage}-match.json").write_text(json.dumps(match, indent=2))
     return match
@@ -261,7 +264,7 @@ def _load_lm_model_from_configured_source(
             trainer,
             gate.pre_reseed_reference_path,
             StoragePath(config.hf_save_path).parent if config.hf_save_path is not None else None,
-            "initial-eval-raw",
+            INITIAL_EVAL_RAW_STAGE,
         )
     if config.snowball_sft is not None:
         model = reseed_snowball_head(model, config.snowball_sft)
