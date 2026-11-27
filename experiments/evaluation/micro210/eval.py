@@ -56,7 +56,7 @@ PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Native task bindings have their own artifact identity alongside the frozen source.
 NATIVE_INPUTS_VERSION = "2026.11.27"
-NATIVE_INPUTS_FINGERPRINT = "a1adbf11"
+NATIVE_INPUTS_FINGERPRINT = "7271aa72"
 
 NATIVE_ROLLOUTS = "rollouts.parquet"
 """The published native table name; the launch reads the derived artifact at this fixed
