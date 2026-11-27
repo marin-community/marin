@@ -486,7 +486,7 @@ The launch verifies the native binding receipt — frozen source, converter code
 image pins — before allocation; the artifact system owns the table's byte identity.
 The evaluation record includes the verified `native_inputs_uri` and
 `native_inputs_sha256`. The production
-native artifact pins its fingerprint; bump `PREPARED_INPUTS_VERSION` and update
+native artifact pins its fingerprint; bump `NATIVE_INPUTS_VERSION` and update
 `NATIVE_INPUTS_FINGERPRINT` when the converter or image lock changes.
 The launch uses a generation plan and retains the policy's vLLM startup settings.
 Context overflow and agent timeout retain the verifier verdict; unnamed errors

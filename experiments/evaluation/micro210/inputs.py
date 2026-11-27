@@ -57,7 +57,7 @@ JUDGED_GRADER_NAMES = frozenset({"equivalence_judge", "equivalence_label", "judg
 """The sealed grader registry names whose grade plan consults the judge."""
 
 
-def frozen_judge_plan(task: TaskSpec) -> bool:
+def frozen_plan_uses_judge(task: TaskSpec) -> bool:
     """Whether the task's frozen Evalchemy grading plan consults the judge.
 
     The frozen driver reads the judge connection only for a judged grade plan, and the sealed
@@ -112,7 +112,7 @@ def native_rollout(rollout: TaskRolloutSpec, policy: dict, image_digests: Mappin
         assert isinstance(grader, ScriptGrader)
         # Only judged grading plans read the judge connection; exact-match and code-execution
         # graders run without provider credentials.
-        if frozen_judge_plan(task):
+        if frozen_plan_uses_judge(task):
             grader = bind_script_judge(
                 grader, policy["evaluation"]["judge"]["model"], policy["evaluation"]["judge"]["request_timeout"]
             )
@@ -234,7 +234,7 @@ def task_with_judge(task: TaskSpec, judge: JudgeConfig) -> TaskSpec:
     """Replace only judge configuration and transport resources in a task package."""
     files = {resource.path: resource for resource in task.resources.verifier}
     replacements = {}
-    if "config.json" in files and frozen_judge_plan(task):
+    if "config.json" in files and frozen_plan_uses_judge(task):
         replacements.update(evalchemy_judge_resources(files, judge))
     if "bixbench" in task.id:
         replacements.update(bixbench_judge_resources(files, judge))
@@ -244,15 +244,3 @@ def task_with_judge(task: TaskSpec, judge: JudgeConfig) -> TaskSpec:
         inline_resource(path, content) for path, content in replacements.items()
     )
     return task.model_copy(update={"resources": task.resources.model_copy(update={"verifier": resources})})
-
-
-def rebind_judge_inputs(source: str, destination: str, judge: JudgeConfig) -> None:
-    """Write a derived table with the same rows, prompts, answers and rollout settings."""
-    table = pq.read_table(source)
-    rows = []
-    for row in table.to_pylist():
-        rollout = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
-        task = task_with_judge(rollout.task, judge)
-        rollout = rollout.model_copy(update={"task": task})
-        rows.append({**row, "task_spec": task.model_dump_json(), "task_rollout_spec": rollout.model_dump_json()})
-    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), destination)

@@ -30,7 +30,7 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.evaluation.judge_config import MICRO210_JUDGE
-from experiments.evaluation.micro210.inputs import native_inputs, task_with_judge
+from experiments.evaluation.micro210.inputs import JUDGE_COMMAND, native_inputs, task_with_judge
 from tests.rl.micro210_fixture import policy_fixture_reference
 
 
@@ -204,8 +204,8 @@ def test_native_inputs_bind_the_judge_only_to_judged_rows(tmp_path):
     assert unjudged_grader.judge is None
     assert unjudged_grader.argv == ("python3", "grade.py")
     assert judged_grader.judge.model == MICRO210_JUDGE.model
-    assert judged_grader.argv[:2] == ("sh", "-c") and "micro210-judge" in judged_grader.argv
-    assert judged_grader.argv[-1:] == ("grade.py",)
+    assert judged_grader.argv[:4] == JUDGE_COMMAND
+    assert judged_grader.argv[4:] == ("python3", "grade.py")
 
 
 def test_native_table_preserves_repeated_membership_and_package_provisioning(tmp_path, task):

@@ -150,7 +150,7 @@ class NativeDaytonaSessions(BaseModel):
 
 
 class NativeTaskSessions(BaseModel):
-    """The native task-session settings bound from the frozen Harbor protocol."""
+    """The native ``environment.task_sessions`` entries bound from the frozen Harbor protocol."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -159,23 +159,20 @@ class NativeTaskSessions(BaseModel):
     max_concurrent_agents: int | None
     agent_harnesses: dict[str, NativePiHarness]
 
-    def task_sessions(self) -> dict:
-        """The ``environment.task_sessions`` entries this binding sets in the runtime config."""
-        return self.model_dump()
 
-
-NATIVE_ERROR_HANDLING = {
-    "enable_error_classification": True,
-    "default_error_treatment": "mask",
-    "passthrough_exceptions": ("ContextLengthExceededError", "AgentTimeoutError"),
-}
-"""How the rollout runner treats agent failures the frozen protocol still scores."""
+def native_error_handling() -> dict:
+    """How the rollout runner treats agent failures the frozen protocol still scores."""
+    return {
+        "enable_error_classification": True,
+        "default_error_treatment": "mask",
+        "passthrough_exceptions": ("ContextLengthExceededError", "AgentTimeoutError"),
+    }
 
 
 def native_task_sessions(policy: dict) -> NativeTaskSessions:
     """Bind the frozen Harbor block into typed native task-session settings."""
-    retired = policy["evaluation"]["config"]["terminal_bench"]
-    harbor, installed = retired["harbor"], retired["installed_agent"]
+    harbor_block = policy["evaluation"]["config"]["terminal_bench"]
+    harbor, installed = harbor_block["harbor"], harbor_block["installed_agent"]
     agent = installed["agent"]
     if agent["name"] != "pi":
         raise ValueError("Micro210 requires the frozen Pi agent")
@@ -205,6 +202,6 @@ def runtime_policy_config(policy: dict) -> dict:
     config.pop("config_groups")
     config.pop("terminal_bench")
     config["trainer"]["placement"]["colocate_all"] = False
-    config["environment"]["task_sessions"].update(native_task_sessions(policy).task_sessions())
-    config["generator"]["error_handling"] = dict(NATIVE_ERROR_HANDLING)
+    config["environment"]["task_sessions"].update(native_task_sessions(policy).model_dump())
+    config["generator"]["error_handling"] = native_error_handling()
     return config

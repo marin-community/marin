@@ -66,9 +66,9 @@ def test_default_policy_references_pin_immutable_hugging_face_revisions():
         assert re.fullmatch(r"hf://datasets/open-athena/micro210-policy@[0-9a-f]{40}/policy.json", reference.uri)
 
 
-def test_micro210_launch_records_protocol_and_rejects_drift_before_gpu_allocation(
-    tmp_path, monkeypatch, policy_reference
-):
+@pytest.fixture
+def verified_launch(tmp_path, monkeypatch, policy_reference):
+    """A launch whose inputs already verified, with the handles its drift tests mutate."""
     model_dir = tmp_path / "model"
     model_dir.mkdir()
     manifest = b'{"files": []}'
@@ -145,54 +145,88 @@ def test_micro210_launch_records_protocol_and_rejects_drift_before_gpu_allocatio
     monkeypatch.setattr("marin.inference.iris.prepare_inference", refuse_hosted_judge)
     monkeypatch.setattr("experiments.evaluation.micro210.eval.run_skyrl", submit_evaluation)
     run_micro210(config)
-    launch = submitted[0]
+    return SimpleNamespace(
+        config=config,
+        output=output,
+        submitted=submitted,
+        launch=submitted[0],
+        protocol=protocol,
+        protocol_sha256=hashlib.sha256(raw).hexdigest(),
+        native_digest=native_digest,
+        native_inputs_uri=native_inputs_uri,
+        binding_path=native_root / "binding.json",
+        binding=json.loads((native_root / "binding.json").read_text()),
+        manifest_path=model_dir / ".marinskyrl-model-manifest.json",
+        manifest=manifest,
+        token_content=token_content,
+    )
+
+
+def test_verified_launch_records_inputs_and_judge_route(verified_launch):
+    launch = verified_launch.launch
     assert launch["skyrl"]["environment"]["task_sessions"]["remote_judge"]["base_url"] == "https://api.together.ai/v1"
     assert launch["skyrl"]["environment"]["task_sessions"]["agent_harnesses"]["pi"]["version"] == "0.87.0"
     assert all("test-together-key" not in str(value) for value in launch.values())
-    record = draccus.decode(Micro210Record, json.loads((output / "canonical-evaluation.json").read_text()))
-    assert record.policy_reference.sha256 == hashlib.sha256(raw).hexdigest()
-    assert record.native_inputs_sha256 == native_digest
-    assert record.native_inputs_uri == native_inputs_uri
-    assert (
-        submitted[0]["skyrl"]["generator"]["eval_sampling_params"]
-        == protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
+    record = draccus.decode(
+        Micro210Record, json.loads((verified_launch.output / "canonical-evaluation.json").read_text())
     )
+    assert record.policy_reference.sha256 == verified_launch.protocol_sha256
+    assert record.native_inputs_sha256 == verified_launch.native_digest
+    assert record.native_inputs_uri == verified_launch.native_inputs_uri
+    sampling = verified_launch.protocol["evaluation"]["config"]["generator"]["eval_sampling_params"]
+    assert launch["skyrl"]["generator"]["eval_sampling_params"] == sampling
     assert launch["skyrl"]["generator"]["error_handling"] == {
         "enable_error_classification": True,
         "default_error_treatment": "mask",
         "passthrough_exceptions": ["ContextLengthExceededError", "AgentTimeoutError"],
     }
-    assert "terminal_bench" not in submitted[0]["skyrl"]
+    assert "terminal_bench" not in launch["skyrl"]
     assert launch["skyrl"]["entrypoint"] == "generate"
-    assert submitted[0]["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
-    altered = yaml.safe_load(config.skyrl.launch_config_yaml)
+    assert launch["skyrl"]["generator"]["trajectory_retention"]["run_id"] == "test/micro210@2026.11.18"
+
+
+def test_verified_launch_refuses_modified_launch_yaml(verified_launch):
+    verified_launch.submitted.clear()
+    altered = yaml.safe_load(verified_launch.config.skyrl.launch_config_yaml)
     altered["skyrl"]["generator"]["eval_sampling_params"]["temperature"] = 0.1
-    submitted.clear()
+    config = replace(
+        verified_launch.config, skyrl=replace(verified_launch.config.skyrl, launch_config_yaml=yaml.safe_dump(altered))
+    )
     with pytest.raises(ValueError, match="launch_config_yaml"):
-        run_micro210(replace(config, skyrl=replace(config.skyrl, launch_config_yaml=yaml.safe_dump(altered))))
-    assert submitted == []
-    binding_path = native_root / "binding.json"
-    binding = json.loads(binding_path.read_text())
-    for field, value, message in (
+        run_micro210(config)
+    assert verified_launch.submitted == []
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
         ("converter_sha256", "0" * 64, "different converter"),
         ("source_sha256", "0" * 64, "different frozen source"),
         ("image_digests", {"python:3.10-slim": "sha256:" + "0" * 64}, "different image pins"),
-    ):
-        binding_path.write_text(json.dumps({**binding, field: value}))
-        with pytest.raises(ValueError, match=message):
-            run_micro210(config)
-        assert submitted == []
-    binding_path.write_text(json.dumps(binding))
-    manifest_path = model_dir / ".marinskyrl-model-manifest.json"
-    manifest_path.write_bytes(b'{"files": ["changed"]}')
+    ],
+)
+def test_verified_launch_rejects_binding_drift(verified_launch, field, value, message):
+    verified_launch.submitted.clear()
+    verified_launch.binding_path.write_text(json.dumps({**verified_launch.binding, field: value}))
+    with pytest.raises(ValueError, match=message):
+        run_micro210(verified_launch.config)
+    assert verified_launch.submitted == []
+
+
+def test_verified_launch_rejects_changed_model_manifest(verified_launch):
+    verified_launch.submitted.clear()
+    verified_launch.manifest_path.write_bytes(b'{"files": ["changed"]}')
     with pytest.raises(ValueError, match="export manifest differs"):
-        run_micro210(config)
-    assert submitted == []
-    manifest_path.write_bytes(manifest)
-    token_content[128009] = "ordinary-token"
+        run_micro210(verified_launch.config)
+    assert verified_launch.submitted == []
+
+
+def test_verified_launch_rejects_incompatible_stop_tokens(verified_launch):
+    verified_launch.submitted.clear()
+    verified_launch.token_content[128009] = "ordinary-token"
     with pytest.raises(ValueError, match="incompatible stop token ID: 128009"):
-        run_micro210(config)
-    assert submitted == []
+        run_micro210(verified_launch.config)
+    assert verified_launch.submitted == []
 
 
 def test_canonical_evaluation_graph_lowers_with_its_final_run_binding():

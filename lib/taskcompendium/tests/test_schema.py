@@ -417,7 +417,7 @@ def test_invalid_script_judge_is_schema_feedback(judge):
 def test_script_judge_contract(judge, match):
     grader = dict(argv=("true",), placement=GraderMachine(environment=GRADING_ENVIRONMENT), judge=judge)
     if match is None:
-        assert ScriptGrader(**grader).judge is judge
+        assert ScriptGrader(**grader).judge == judge
     else:
         with pytest.raises(ValidationError, match=match):
             ScriptGrader(**grader)

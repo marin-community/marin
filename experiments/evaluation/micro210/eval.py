@@ -55,8 +55,12 @@ from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 PREPARED_INPUTS = f"hf://datasets/{PREPARED_REPO}@{PREPARED_COMMIT}"
 
 # Native task bindings have their own artifact identity alongside the frozen source.
-PREPARED_INPUTS_VERSION = "2026.11.27"
+NATIVE_INPUTS_VERSION = "2026.11.27"
 NATIVE_INPUTS_FINGERPRINT = "a1adbf11"
+
+NATIVE_ROLLOUTS = "rollouts.parquet"
+"""The published native table name; the launch reads the derived artifact at this fixed
+location rather than the frozen source's policy-relative layout."""
 
 STOP_TOKEN_CONTENT = {128001: "<|end_of_text|>", 128009: "<|eot_id|>"}
 
@@ -134,7 +138,7 @@ def prepare_native_inputs(
         original.write_bytes(raw)
         native_inputs(str(original), str(native), policy, image_digests, rows=rows)
         output = StoragePath(destination)
-        (output / "rollouts.parquet").write_bytes(native.read_bytes())
+        (output / NATIVE_ROLLOUTS).write_bytes(native.read_bytes())
         binding = NativeInputsBinding(
             source_sha256=policy["prepared_rollouts_sha256"],
             converter_sha256=converter_sha256,
@@ -194,6 +198,14 @@ def run_micro210(config: Micro210Run) -> SkyRLRun:
     return run_skyrl(config.skyrl, env_vars={"JUDGE_API_KEY": api_key, "OPENAI_API_KEY": api_key})
 
 
+def finalized_launch_document(run: SkyRLRunConfig, *, run_id: str, ray_timeouts: dict) -> str:
+    """Rewrite the resolved launch document with the frozen ray timeouts and run identity."""
+    document = yaml.safe_load(run.launch_config_yaml)
+    document["ray"].update(ray_timeouts)
+    document["skyrl"]["generator"]["trajectory_retention"]["run_id"] = run_id
+    return yaml.safe_dump(document)
+
+
 def micro210_step(
     model: Micro210Model, *, name: str, version: str, smoke: Micro210Smoke | None = None
 ) -> ArtifactStep[SkyRLRun]:
@@ -221,7 +233,7 @@ def micro210_step(
         image_digests=image_lock(),
         rows=rows,
         converter_sha256=native_binding_code_sha256(),
-        version=PREPARED_INPUTS_VERSION,
+        version=NATIVE_INPUTS_VERSION,
     )
     if smoke is None:
         inputs = replace(inputs, expected_fingerprint=NATIVE_INPUTS_FINGERPRINT)
@@ -262,7 +274,7 @@ def micro210_step(
             ),
             model=ArtifactHfModel(model_artifact, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
             train_data=(),
-            validation_data=(ArtifactDataSource(inputs, relative_path=evaluation_policy["data_relative_path"]),),
+            validation_data=(ArtifactDataSource(inputs, relative_path=NATIVE_ROLLOUTS),),
             topology=SkyRLTopology(roles.num_nodes, roles.gpus_per_node, evaluation_policy["gpu_variant"], roles),
             retention=SkyRLRetentionPolicy(resume_checkpoint_count=1),
             seed=evaluation_policy["seed"],
@@ -274,10 +286,7 @@ def micro210_step(
 
     def build(context: StepContext) -> Micro210Run:
         run = builder(context)
-        document = yaml.safe_load(run.launch_config_yaml)
-        document["ray"].update(evaluation_policy["ray_timeouts"])
-        document["skyrl"]["generator"]["trajectory_retention"]["run_id"] = binding.run_id
-        rendered = yaml.safe_dump(document)
+        rendered = finalized_launch_document(run, run_id=binding.run_id, ray_timeouts=evaluation_policy["ray_timeouts"])
         return Micro210Run(
             replace(run, launch_config_yaml=rendered),
             replace(binding, output_uri=context.output_path),
