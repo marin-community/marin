@@ -61,7 +61,7 @@ trials:
   step_time_change: 0%
 potential:
   score: 7
-  rationale: −0.0174 at equal data; equal-time run pending, ladder and MFU not run → 7
+  rationale: −0.0174 at equal data, −0.0164 at equal time; ladder and MFU not run → 7
   model: claude-opus-5-5
   date: '2026-11-27'
-  inputs_digest: d7024f10a300
+  inputs_digest: 4bc94906f04c
