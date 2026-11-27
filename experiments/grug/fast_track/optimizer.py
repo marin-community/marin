@@ -882,6 +882,11 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     """With ``muonc_anneal_adamc``: the head takes ``scale_by_token_norm_momentum`` (one fp32 momentum buffer, a
     per-token normalized direction) in place of AdamC, at the same ``lr_h`` and decay ``muonc_anneal_adamc lr_h^2``.
     Everything else keeps ``muonc_anneal_adamc``'s rules."""
+    muonc_anneal_head_adamw: bool = False
+    """With ``muonc_anneal_adamc``: the head takes plain AdamW in place of AdamC, ``W <- W - lr_h (u + lambda W)`` with
+    ``u`` the per-element Adam direction (the Adam groups' betas and eps, no whole-matrix normalization),
+    ``lr_h = lr_max s(t)^2`` and ``lambda = MUONC_ANNEAL_ADAMW_DECAY``: ``muonc_anneal_decay``'s head. The router and
+    embedding keep ``muonc_anneal_adamc``'s AdamC decay; everything else keeps its rules."""
     muonh_law_cap_ball: bool = False
     """Law-cap ball (``scale_with_grug_muon_law_cap``) in place of the MuonH sphere for the ``muonh`` and ``kda_beta``
     groups, ``s(t) = lr_t / lr_max`` of the MuonH schedule: a plain Muon step at the matrix LR ``lr_m = lr_t`` until
@@ -1174,7 +1179,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     _fixed_decoupled_decay(MUONC_ANNEAL_ADAMW_DECAY),
                     optax.scale(-learning_rate * learning_rate / self.learning_rate),
                 )
-                if self.muonc_anneal_adamc:
+                if self.muonc_anneal_adamc and not self.muonc_anneal_head_adamw:
                     transforms["adamh"] = optax.chain(
                         scale_by_adamc(
                             self.beta1,
@@ -1272,6 +1277,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             raise ValueError("muonc_anneal_lr_floor needs muonc_anneal_decay")
         if self.muonc_anneal_head_token_norm and not self.muonc_anneal_adamc:
             raise ValueError("muonc_anneal_head_token_norm needs muonc_anneal_adamc")
+        if self.muonc_anneal_head_adamw and (not self.muonc_anneal_adamc or self.muonc_anneal_head_token_norm):
+            raise ValueError(
+                "muonc_anneal_head_adamw needs muonc_anneal_adamc and excludes muonc_anneal_head_token_norm"
+            )
         if self.muonc_matrix_lr_mult < 0 or (
             self.muonc_matrix_lr_mult and (not self.muonc_anneal_decay or self.muonc_anneal_law_cap_ball)
         ):
