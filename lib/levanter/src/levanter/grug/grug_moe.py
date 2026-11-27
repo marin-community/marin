@@ -22,6 +22,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
+import numpy as np
 from haliax.jax_utils import is_amd_instinct, named_call
 from jax import shard_map
 from jax.sharding import PartitionSpec as P
@@ -89,6 +90,14 @@ def _expert_assignment_counts(
     # global count passes that, and rounded counts break the valid-plus-skipped accounting of drop metrics.
     one_hot = jax.nn.one_hot(selected_experts, num_experts, dtype=jnp.int32)
     return jnp.sum(one_hot * token_valid.astype(jnp.int32)[:, None, None], axis=(0, 1))
+
+
+def validate_captured_experts(expert_ids: np.ndarray, num_experts: int) -> None:
+    """Validate the range and uniqueness of the expert IDs for each token."""
+    if np.any((expert_ids < 0) | (expert_ids >= num_experts)):
+        raise ValueError("captured expert IDs must be in [0, num_experts)")
+    if np.any(np.diff(np.sort(expert_ids, axis=-1), axis=-1) == 0):
+        raise ValueError("captured routes must not contain duplicate experts for a token")
 
 
 def moe_routing_stats(
