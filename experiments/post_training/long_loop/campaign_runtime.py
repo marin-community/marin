@@ -47,7 +47,10 @@ def bind_runtime(row: dict, environment: dict) -> dict:
         for field in ("image_verifier", "package_verifier"):
             settings[field] = {**environment[field], **shape}
         if dataset in settings["verifier_machine_by_dataset"]:
-            settings["verifier_machine_by_dataset"][dataset] = {**settings["verifier_machine_by_dataset"][dataset], **shape}
+            settings["verifier_machine_by_dataset"][dataset] = {
+                **settings["verifier_machine_by_dataset"][dataset],
+                **shape,
+            }
     # Native lowering applies the TaskSpec's declared allocation minima and
     # deadlines. Overlaying shapes afterward would erase those requirements.
     lowered = canonical_task_spec(task, settings)

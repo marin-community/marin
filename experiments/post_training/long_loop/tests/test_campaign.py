@@ -453,3 +453,14 @@ def test_original_harbor_package_survives_runtime_binding(tmp_path):
     restored = tmp_path / "restored"
     restore_harbor_trial_task(bound.task, restored)
     assert {p.name: p.read_bytes() for p in restored.iterdir()} == {p.name: p.read_bytes() for p in package.iterdir()}
+
+
+def test_missing_cohort_binds_only_its_declared_release():
+    mix = load_mix("v3-anchor-exp4-01")
+    label = "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if"
+    assert mix.catalog_divergence[label] == {
+        "status": "Missing",
+        "repo": "open-athena/allenai-dolci-think-sft-clean-v2-precise-if-37ed6d9f-retained-20261125-b-dolci-v1",
+        "revision": "3705ff47972eef44df33e4c160e7329b72af6021",
+    }
+    assert mix.sources[label]["count"] == 132151

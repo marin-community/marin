@@ -52,7 +52,47 @@
     },
     "AllenAI:Dolci-Think-SFT-Clean-v2/precise-if": {
       "status": "Missing",
-      "intended_use": null
+      "intended_use": "train",
+      "pipeline": {
+        "name": "dolci-precise-if-retained",
+        "files": [
+          "tasks.parquet"
+        ],
+        "source": "open-athena/allenai-dolci-think-sft-clean-v2-precise-if-37ed6d9f-retained-20261125-b-dolci-v1",
+        "version": "dolci-precise-if-prompt-judge-v1",
+        "revision": "3705ff47972eef44df33e4c160e7329b72af6021"
+      },
+      "current_release": {
+        "url": "https://huggingface.co/datasets/open-athena/allenai-dolci-think-sft-clean-v2-precise-if-37ed6d9f-retained-20261125-b-dolci-v1/tree/3705ff47972eef44df33e4c160e7329b72af6021",
+        "repo": "open-athena/allenai-dolci-think-sft-clean-v2-precise-if-37ed6d9f-retained-20261125-b-dolci-v1",
+        "revision": "3705ff47972eef44df33e4c160e7329b72af6021"
+      },
+      "dataset_id": "open-athena/allenai-dolci-think-sft-clean-v2-precise-if-37ed6d9f-retained-20261125-b-dolci-v1",
+      "dataset_revision": "3705ff47972eef44df33e4c160e7329b72af6021",
+      "actor_census_input": {
+        "dataset_id": "open-athena/allenai-dolci-think-sft-clean-v2-precise-if-37ed6d9f-retained-20261125-b-dolci-v1",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/dolci-precise-if/2026.11.25.1/conversion-census-v1/actor/.artifact.json",
+        "carry_forward": null,
+        "measured_tasks": 132151,
+        "dataset_revision": "3705ff47972eef44df33e4c160e7329b72af6021",
+        "converter_version": "dolci-precise-if-prompt-judge-v1",
+        "task_specs_sha256": "641747c1a4639503e4838178e32b53b802bd0ae9017a4ccb48855deba4cfb2ed",
+        "converter_revision": "1d3d5ccd4994091283c82ca482ea819455452b5f"
+      },
+      "route": "nonagentic",
+      "route_basis": {
+        "catalog": "converted_spec_census/daytona/roles/agent",
+        "counts": {
+          "role_absent": 132151
+        }
+      },
+      "binding": {
+        "declaration": "experiments/human/long-loop-data-ablation/mix-candidates/rl_sources_on_main.csv (holiday burndown worktree declaration)",
+        "evidence_commit": "2e6e32d20b",
+        "served_r40_status": "Missing",
+        "atlas_release": "atlas-2026.11.27 routes this source to R41; unpublished at binding time",
+        "census_note": "Census measured the 132,159-task conversion; the retained release keeps 132,151 after its recorded drops and duplicates."
+      }
     },
     "AllenAI:IF_multi_constraints_upto5": {
       "status": "Available",
@@ -509,7 +549,46 @@
     },
     "Nemotron:Nemotron-RL-knowledge-mcqa": {
       "status": "Missing",
-      "intended_use": null
+      "intended_use": "train",
+      "pipeline": {
+        "name": "nemotron-knowledge-mcqa-prepared-images",
+        "files": [
+          "tasks.parquet"
+        ],
+        "source": "open-athena/nemotron-knowledge-mcqa-prepared-images-20261125-b-v1",
+        "version": "2026.11.13.1",
+        "revision": "e9e0c3b8b273a0d6f7121a2b22220d02a5a836a4"
+      },
+      "current_release": {
+        "url": "https://huggingface.co/datasets/open-athena/nemotron-knowledge-mcqa-prepared-images-20261125-b-v1/tree/e9e0c3b8b273a0d6f7121a2b22220d02a5a836a4",
+        "repo": "open-athena/nemotron-knowledge-mcqa-prepared-images-20261125-b-v1",
+        "revision": "e9e0c3b8b273a0d6f7121a2b22220d02a5a836a4"
+      },
+      "dataset_id": "open-athena/nemotron-knowledge-mcqa-prepared-images-20261125-b-v1",
+      "dataset_revision": "e9e0c3b8b273a0d6f7121a2b22220d02a5a836a4",
+      "actor_census_input": {
+        "dataset_id": "open-athena/nemotron-knowledge-mcqa-prepared-images-20261125-b-v1",
+        "evidence_url": "s3://marin-us-east-02a/marin/rl-data/atlas/ingest-b/nemo-gym-remaining/2026.11.24.1/knowledge-mcqa-prepared-image-publication-census-v1/census/actor/.artifact.json",
+        "carry_forward": null,
+        "measured_tasks": 612282,
+        "dataset_revision": "e9e0c3b8b273a0d6f7121a2b22220d02a5a836a4",
+        "converter_version": "2026.11.13.1",
+        "task_specs_sha256": "71032765fed6a73106aab1bd000b2cd962bc7b57c809e11b0a9e39ed44250db2",
+        "converter_revision": "d742856b1b864856c563d77841864b8527f69ad5"
+      },
+      "route": "nonagentic",
+      "route_basis": {
+        "catalog": "converted_spec_census/daytona/roles/agent",
+        "counts": {
+          "role_absent": 612282
+        }
+      },
+      "binding": {
+        "declaration": "experiments/human/long-loop-data-ablation/mix-candidates/rl_sources_on_main.csv (holiday burndown worktree declaration)",
+        "evidence_commit": "3b4d3ab363",
+        "served_r40_status": "Missing",
+        "atlas_release": "atlas-2026.11.27 routes this source to R41; unpublished at binding time"
+      }
     },
     "Nemotron:nemotron_ultra_mopd/agent:swe_pivot_single_step_tool_use_with_argument_comparison_agent/nebius/SWE-rebench-V2": {
       "status": "Available",
@@ -4715,9 +4794,10 @@
     "admitted_statuses": [
       "Available",
       "Pending",
-      "Excluded"
+      "Excluded",
+      "Missing"
     ],
-    "authority": "Campaign user directive2026-11-26 08:22EST, recorded in BRIEF.md: accept listed mixes and record admission divergence",
+    "authority": "Campaign user directive2026-11-26 08:22EST, recorded in BRIEF.md: accept listed mixes and record admission divergence; R40-Missing sources bind only to the exact release the holiday worktree declares (same BRIEF ruling: sealed/retained release first, no population substitution)",
     "pin_policy": "Exact declared sealed/retained release first, else declared staged pin; no population substitution",
     "record_original_status": true,
     "runtime_admission": "TaskSpec requirements remain binding; unsupported environments fail closed"
