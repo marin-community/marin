@@ -58,6 +58,9 @@ from infra.marina.apps.rl_data_catalog.server.source_identity import canonical_s
 SUPPORT_ORDER = (Support.SUPPORTED, Support.VERIFY, Support.PARTIAL, Support.UNSUPPORTED)
 APPLICABLE_ORDER = (FitSupport.SUPPORTED, FitSupport.VERIFY, FitSupport.PARTIAL, FitSupport.UNSUPPORTED)
 RESOURCE_FIELDS = ("cpus", "memory_mb", "storage_mb", "gpus")
+ENVIRONMENT_KIND_REQUIREMENTS = frozenset(
+    (Requirement.HOST_IMAGE, Requirement.PACKAGE_SPEC, Requirement.DOCKER_IMAGE, Requirement.DOCKER_BUILD)
+)
 
 
 def environment_kind(source) -> Requirement:
@@ -457,6 +460,40 @@ def source_map(
             for backend in checkers
         },
     )
+
+
+def project_backend_blocker_reasons(survey: BackendSurvey) -> BackendSurvey:
+    """Label stored typed blockers while preserving every measured value and verdict."""
+    sources = []
+    for source in survey.sources:
+        if source.basis != "converted_spec_census":
+            sources.append(source)
+            continue
+        backends = {}
+        for backend, fit in source.backends.items():
+            reasons = dict(fit.blocker_reasons)
+            missing = (fit.blockers.keys() | fit.not_applicable.keys()) - reasons.keys()
+            for key in sorted(missing):
+                role, separator, demand = key.partition(":")
+                try:
+                    if not separator or role not in ("agent", "grader"):
+                        raise ValueError("blocker must name an agent or grader demand")
+                    if key in fit.not_applicable:
+                        if Requirement(demand) not in ENVIRONMENT_KIND_REQUIREMENTS:
+                            raise ValueError("not-applicable blocker must name an environment kind")
+                        reason = BackendBlockerReason.UNSUPPORTED_ENVIRONMENT_KIND.value
+                    elif demand == "required_backend":
+                        reason = BackendBlockerReason.REQUIRED_BACKEND.value
+                    else:
+                        reason = Requirement(demand).value
+                except ValueError as error:
+                    raise ValueError(f"Cannot project backend reason for {source.source_id}/{backend}/{key}") from error
+                reasons[key] = reason
+            backends[backend] = fit.model_copy(update={"blocker_reasons": reasons})
+        sources.append(source.model_copy(update={"backends": backends}))
+    projected = survey.model_copy(update={"sources": sources})
+    verify_backend_blocker_reasons(projected)
+    return projected
 
 
 def verify_backend_blocker_reasons(survey: BackendSurvey) -> None:

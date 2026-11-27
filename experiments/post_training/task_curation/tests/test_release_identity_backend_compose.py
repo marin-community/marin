@@ -38,6 +38,7 @@ from taskcompendium.source_fingerprints import (
     SourceIdentitySurvey,
 )
 
+from experiments.post_training.task_curation.backend_capabilities import verify_backend_blocker_reasons
 from experiments.post_training.task_curation.registry import RegistryReference
 from experiments.post_training.task_curation.release_stages import identity_backend_compose as compose_stage
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
@@ -92,7 +93,7 @@ def _measured_source(source_id: str, task_count: int = 3) -> BackendSourceMap:
             backend: BackendFit(
                 support=FitSupport.SUPPORTED,
                 task_counts={FitSupport.SUPPORTED: task_count},
-                roles={"agent": {FitSupport.SUPPORTED: task_count}},
+                roles={role: {FitSupport.SUPPORTED: task_count} for role in ("agent", "grader")},
                 blockers={},
                 validation_errors={},
             )
@@ -355,6 +356,63 @@ def test_metadata_snapshot_rebind_preserves_measurements_and_their_provenance(tm
     assert compose_stage.read_ref(inputs.prior_identity) == prior_identity
     assert compose_stage.read_ref(inputs.prior_backend) == prior_backend
     assert compose_stage.read_ref(fresh_ref) == fresh
+
+
+def test_composition_labels_retained_blockers_without_changing_measurements(tmp_path):
+    retained = _measured_source(PRIOR_IDS[0])
+    fits = dict(retained.backends)
+    fits["daytona"] = BackendFit(
+        support=FitSupport.NOT_APPLICABLE,
+        task_counts={FitSupport.NOT_APPLICABLE: 3},
+        roles={"agent": {FitSupport.ROLE_ABSENT: 3}, "grader": {FitSupport.NOT_APPLICABLE: 3}},
+        blockers={},
+        not_applicable={"grader:host_image": 3},
+        validation_errors={},
+    )
+    fits["qemu"] = BackendFit(
+        support=FitSupport.UNSUPPORTED,
+        task_counts={FitSupport.UNSUPPORTED: 3},
+        roles={role: {FitSupport.UNSUPPORTED: 3} for role in ("agent", "grader")},
+        blockers={"agent:required_backend": 3, "grader:network": 3},
+        validation_errors={"grader: QEMU does not provide storage resizing or GPU allocation": 3},
+    )
+    retained = retained.model_copy(update={"backends": fits})
+    prior = _backend_survey([retained, *(_measured_source(source_id) for source_id in PRIOR_IDS[1:])])
+    inputs, reader = _build(tmp_path, prior_backend=prior)
+    proof = compose_stage.run_identity_backend_compose(
+        inputs, dry_run=False, registry_reader=reader, feeds=_feeds(tmp_path)
+    )
+    output = compose_stage.read_ref(ArtifactRef(**proof["documents"]["backend_map"]))
+    verify_backend_blocker_reasons(BackendSurvey.model_validate(output))
+    rows = {row["source_id"]: row for row in output["sources"]}
+    projected = rows[retained.source_id]
+    assert projected["backends"]["daytona"]["blocker_reasons"] == {"grader:host_image": "unsupported-environment-kind"}
+    assert projected["backends"]["qemu"]["blocker_reasons"] == {
+        "agent:required_backend": "required-backend",
+        "grader:network": "network",
+    }
+    for name, fit in projected["backends"].items():
+        fit["blocker_reasons"] = retained.backends[name].blocker_reasons
+    assert projected == retained.model_dump(mode="json")
+    assert compose_stage.read_ref(inputs.prior_backend) == prior.model_dump(mode="json")
+    assert proof["backend"]["blocker_reason_labels_added"] == 3
+    assert proof["backend"]["retained_measurements_unchanged"] == 3
+    assert proof["backend"]["retained_rows_unchanged"] == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "key"),
+    [("not_applicable", "grader:network"), ("blockers", "grader:unknown-capability")],
+)
+def test_composition_refuses_unclassifiable_retained_blockers(tmp_path, field, key):
+    retained = _measured_source(PRIOR_IDS[0])
+    fit = retained.backends["daytona"].model_copy(update={field: {key: 3}})
+    retained = retained.model_copy(update={"backends": {**retained.backends, "daytona": fit}})
+    prior = _backend_survey([retained, *(_measured_source(source_id) for source_id in PRIOR_IDS[1:])])
+    inputs, reader = _build(tmp_path, prior_backend=prior)
+    with pytest.raises(ValueError, match="Cannot project backend reason"):
+        compose_stage.run_identity_backend_compose(inputs, dry_run=False, registry_reader=reader, feeds=_feeds(tmp_path))
+    assert not (tmp_path / "release").exists()
 
 
 def test_write_seals_documents_and_receipts_then_refuses_a_rerun(tmp_path):

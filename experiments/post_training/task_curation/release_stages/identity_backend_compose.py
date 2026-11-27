@@ -6,10 +6,11 @@
 One maintained module replaces the per-release compose scripts (see INVENTORY.md);
 every release-identifying value arrives as typed :class:`IdentityBackendComposeInputs`
 and the stage source carries none of them. The retained identity survey
-and backend map are carried verbatim, minus the plan's removed or replaced sources (their
+and backend measurements are preserved, minus the plan's removed or replaced sources (their
 fingerprints, backend rows and the pair reviews that touch them), and the fresh targets'
 registry fingerprints and backend survey rows are appended. Both output surveys bind the
 planned publication snapshot; their input references and measurement revisions remain intact.
+Missing reason labels are projected from stored typed blockers without changing their measurements.
 
 The stage verifies before it composes: the fresh backend survey must cover exactly the
 targets under the current requirement schema, prior and fresh runtime settings must
@@ -40,6 +41,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.source_fingerprints import SourceFingerprint, SourceIdentitySurvey
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
+from experiments.post_training.task_curation.backend_capabilities import project_backend_blocker_reasons
 from experiments.post_training.task_curation.catalog_identity import (
     canonical_backend_survey,
     canonical_identity_survey,
@@ -141,7 +143,7 @@ def compose_backend_survey(
         schema_sha256=fresh.schema_sha256,
         sources=[row.model_dump(mode="json") for row in composed_sources],
     )
-    return BackendSurvey.model_validate(composed)
+    return project_backend_blocker_reasons(BackendSurvey.model_validate(composed))
 
 
 def fetch_target_fingerprints(
@@ -286,8 +288,15 @@ def _compose(
     )
 
     # Composed counts shared by the dry-run proof and the sealed receipts.
+    prior_rows = {row.source_id: row for row in prior_backend.sources}
+    retained_rows = [row for row in backend_survey.sources if row.source_id not in targets]
     backend_counts = {
-        "retained_rows_unchanged": len(backend_survey.sources) - len(targets),
+        "retained_rows_unchanged": sum(row == prior_rows[row.source_id] for row in retained_rows),
+        "retained_measurements_unchanged": len(retained_rows),
+        "blocker_reason_labels_added": (
+            sum(len(fit.blocker_reasons) for row in backend_survey.sources for fit in row.backends.values())
+            - sum(len(fit.blocker_reasons) for row in composed_sources for fit in row.backends.values())
+        ),
         "added_rows": sorted(targets),
         "source_count": len(backend_survey.sources),
         "prior_schema_sha256": prior_backend.schema_sha256,
