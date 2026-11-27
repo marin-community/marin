@@ -23,9 +23,7 @@ Implementation: TypeAlias = Literal["reference", "pallas_tpu"]
 
 _HEAD_WIDTH = 128
 _ROW_BLOCK_SIZE = 128
-_MAX_FLATTENED_ROWS = 2048
 _EPSILON = 1e-6
-_SUPPORTED_MESH = {"replica_dcn": 1, "data": 4, "context": 1, "expert": 1, "model": 1}
 
 
 class XsaUnsupportedError(NotImplementedError):
@@ -38,8 +36,8 @@ def _validate_shape(y: jax.Array, v: jax.Array) -> tuple[int, int]:
     if y.shape[-1] < 1:
         raise ValueError(f"XSA requires a non-empty head width, got {y.shape[-1]}")
     rows = math.prod(y.shape[:-1])
-    if not 1 <= rows <= _MAX_FLATTENED_ROWS:
-        raise ValueError(f"XSA supports 1..{_MAX_FLATTENED_ROWS} flattened rows, got {rows}")
+    if rows == 0:
+        raise ValueError("XSA requires at least one row")
     if y.dtype not in (jnp.float32, jnp.bfloat16) or v.dtype not in (jnp.float32, jnp.bfloat16):
         raise TypeError(f"XSA supports float32/bfloat16 storage, got y={y.dtype}, v={v.dtype}")
     return rows, y.shape[-1]
@@ -148,8 +146,6 @@ def _validate_physical_layout(y: jax.Array, v: jax.Array) -> P | None:
         return None
     if not _meshes_match(y_sharding.mesh, v_sharding.mesh):
         raise XsaUnsupportedError("y and v must use the same mesh")
-    if dict(y_sharding.mesh.shape) != _SUPPORTED_MESH:
-        raise XsaUnsupportedError("XSA requires the bounded data4/context1/expert1/model1 mesh")
     y_spec = _canonicalize_spec(_normalize_spec(y_sharding.spec, y.ndim), y_sharding.mesh)
     v_spec = _canonicalize_spec(_normalize_spec(v_sharding.spec, v.ndim), v_sharding.mesh)
     if y_spec != v_spec:

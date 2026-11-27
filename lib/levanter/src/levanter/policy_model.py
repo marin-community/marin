@@ -9,8 +9,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax import NamedArray
+from jax.sharding import PartitionSpec as P, reshard
 
 from levanter.data.packing import pack_documents
+from levanter.grug.attention.fixed_schedule import fixed_attention_row_axis
 from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
 from levanter.layers.attention import AttentionMask
 from levanter.metrics import Metric
@@ -25,6 +27,7 @@ class PolicyRouteReplay(eqx.Module):
 
     expert_ids: NamedArray
     token_valid: NamedArray
+    source_rows: int | None = eqx.field(static=True, default=None)
 
 
 class PolicyBatch(eqx.Module):
@@ -158,6 +161,7 @@ def pack_policy_batch(
         packed_replay = PolicyRouteReplay(
             hax.named(jnp.asarray(packed_experts), (Batch, Position, "layer", "top_k")),
             hax.named(jnp.asarray(packed_route_valid), (Batch, Position)),
+            source_rows=source["tokens"].shape[0],
         )
     return PolicyBatch(
         tokens=hax.named(jnp.asarray(tokens), (Batch, Position)),
@@ -174,6 +178,36 @@ def pack_policy_batch(
     )
 
 
+def _packed_fixed_activations(model: SnowballLMHeadModel, batch: PolicyBatch) -> NamedArray:
+    """Restore the serving slots for attention and gather activations in packed order."""
+    replay = batch.route_replay
+    assert replay is not None and batch.segment_ids is not None
+    if replay.source_rows is None:
+        raise ValueError("Pack strict replay batches with pack_policy_batch")
+    row_axis = fixed_attention_row_axis(replay.source_rows)
+    length = model.config.max_seq_len
+    segments = reshard(batch.segment_ids.rearrange(("batch", "position")).array, P())
+    positions = reshard(batch.position_ids.rearrange(("batch", "position")).array, P())
+    tokens = reshard(batch.tokens.rearrange(("batch", "position")).array, P())
+    sources = jnp.where((segments >= 0) & (positions >= 0) & (positions < length), segments, replay.source_rows)
+    destination = (sources, positions)
+    shape = (replay.source_rows, length)
+    slot_tokens = jnp.zeros(shape, tokens.dtype).at[destination].set(tokens, mode="drop")
+    valid = reshard(replay.token_valid.rearrange(("batch", "position")).array, P())
+    slot_valid = jnp.zeros(shape, jnp.bool_).at[destination].set(valid, mode="drop")
+    experts = reshard(replay.expert_ids.rearrange(("batch", "position", "layer", "top_k")).array, P())
+    layer_count, top_k = experts.shape[-2:]
+    padding_experts = jnp.broadcast_to(jnp.arange(top_k, dtype=experts.dtype), (*shape, layer_count, top_k))
+    slot_experts = padding_experts.at[destination].set(experts, mode="drop")
+    slot_experts = reshard(slot_experts.transpose(2, 0, 1, 3), P(None, row_axis))
+    slot_routes = SnowballRouteReplay(slot_experts, hax.named(reshard(slot_valid, P(row_axis)), ("batch", "position")))
+    hidden = model.activations_with_replay(
+        hax.named(reshard(slot_tokens, P(row_axis)), ("batch", "position")), AttentionMask.causal(), slot_routes
+    )
+    gather = reshard(hidden.array, P()).at[destination].get(mode="fill", fill_value=0)
+    return hax.named(gather, (*batch.tokens.resolve_axis(("batch", "position")), model.Embed))
+
+
 def response_logprobs(
     model: LmHeadModel,
     batch: PolicyBatch,
@@ -184,8 +218,7 @@ def response_logprobs(
     """Score raw-policy response tokens before applying the objective weights.
 
     Both scoring and training disable dropout. Padding forms a separate
-    attention segment in standard scoring. Zero-KL scoring uses an unpacked,
-    right-padded causal layout. Returned scores at masked positions have no
+    attention segment in standard scoring. Zero-KL scoring restores independent causal slots from packed batches. Returned scores at masked positions have no
     effect on the objective.
     """
     Position = batch.tokens.resolve_axis("position")
@@ -201,14 +234,14 @@ def response_logprobs(
         model if isinstance(model, SnowballLMHeadModel) and model.config.replay_precision == "zero_kl" else None
     )
     if exact_model is not None:
-        if batch.segment_ids is not None or replay is None:
-            raise ValueError(
-                "Snowball zero-KL scoring requires unpacked, right-padded trajectories with captured routes"
-            )
+        if replay is None:
+            raise ValueError("Snowball zero-KL scoring requires captured expert routes")
     else:
         segments = batch.segment_ids if batch.segment_ids is not None else batch.attention_mask.astype(jnp.int32)
         mask = mask.with_segment_ids(segments)
-    if replay is None:
+    if exact_model is not None and batch.segment_ids is not None:
+        activations = _packed_fixed_activations(exact_model, batch)
+    elif replay is None:
         activations, _ = split_activations(model.activations(batch.tokens, mask, pos_ids=batch.position_ids, key=key))
     else:
         if not isinstance(model, SnowballLMHeadModel):

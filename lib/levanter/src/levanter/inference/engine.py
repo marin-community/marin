@@ -1133,8 +1133,12 @@ class InferenceEngine:
         assert config.max_pages is not None
 
         if isinstance(model, SnowballLMHeadModel) and model.config.replay_precision == "zero_kl":
-            if (config.max_seqs, config.max_seq_len, config.page_size, config.max_pages) != (4, 256, 128, 8):
-                raise ValueError("Zero-KL replay requires four 256-token slots and eight 128-token pages")
+            if config.page_size != 128 or config.max_seq_len != model.config.max_seq_len:
+                raise ValueError(
+                    "Zero-KL replay requires 128-token pages and a shared learner and serving context limit"
+                )
+            if config.max_pages != config.max_seqs * max_pages_per_seq:
+                raise ValueError("Zero-KL replay requires enough pages for every full sequence slot")
             if config.logprob_mode != LogprobMode.POLICY:
                 raise ValueError("Zero-KL replay requires raw policy log probabilities")
         table = PageTable.init(config.max_pages, config.max_seqs, config.page_size, max_pages_per_seq)

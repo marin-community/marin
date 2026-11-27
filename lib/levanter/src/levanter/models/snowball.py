@@ -62,6 +62,7 @@ from levanter.grug.attention._paged import (
 )
 from levanter.grug.attention.fixed_schedule import (
     FixedScheduleSpec,
+    fixed_attention_row_axis,
     fixed_schedule_attention,
     materialize_contiguous_kv,
 )
@@ -76,7 +77,6 @@ from levanter.grug.sharding import (
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.kernels.logsumexp import batch_invariant_logsumexp, batch_invariant_selected_logprobs
-from levanter.kernels.pallas.fixed_schedule_linear import _BLOCK_SIZE as _FIXED_PROJECTION_TILE
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
 from levanter.kernels.pallas.autotune_utils import named_sharding_of
@@ -522,20 +522,12 @@ class RMSNorm(eqx.Module):
 
 def _fixed_projection(x: jax.Array, weight: jax.Array) -> jax.Array:
     contraction, output = weight.shape
-    pad_contract = -contraction % _FIXED_PROJECTION_TILE
-    pad_output = -output % _FIXED_PROJECTION_TILE
     flat = x.reshape(-1, contraction)
-    if pad_contract:
-        flat = jnp.pad(flat, ((0, 0), (0, pad_contract)))
-    if pad_contract or pad_output:
-        weight = jnp.pad(weight, ((0, pad_contract), (0, pad_output)))
-        # Keep the padding adjoint outside the replicated-gradient collective.
-        weight = jax.lax.optimization_barrier(weight)
     sharding = jax.typeof(flat).sharding if isinstance(flat, core.Tracer) else flat.sharding
     if isinstance(sharding, NamedSharding):
         flat = reshard(flat, P(next(iter(sharding.spec), None), None))
         weight = reshard(weight, P())
-    projected = fixed_schedule_linear(flat, weight)[:, :output]
+    projected = fixed_schedule_linear(flat, weight)
     return projected.reshape((*x.shape[:-1], output))
 
 
@@ -787,18 +779,23 @@ def _fixed_shared_attention(
 def _fixed_shared_attention_forward(
     q: jax.Array, k: jax.Array, v: jax.Array, mask: AttentionMask, *, cfg: SnowballConfig
 ) -> jax.Array:
-    """Run the bounded four-slot fixed forward for a causal layer schedule."""
-    _validate_fixed_shared_attention_config(cfg)
-    if q.shape != (4, 256, cfg.num_heads, cfg.inferred_head_dim):
-        raise ValueError("Snowball fixed shared attention requires q shape [4, 256, Q, 128]")
-    expected_kv_shape = (4, 256, cfg.num_kv_heads, cfg.inferred_head_dim)
+    """Run the fixed forward on one complete sequence per row shard."""
+    slots, length, _, _ = q.shape
+    if length != cfg.max_seq_len:
+        raise ValueError("Fixed attention requires learner rows padded to the configured context limit")
+    expected_kv_shape = (slots, length, cfg.num_kv_heads, cfg.inferred_head_dim)
     if k.shape != expected_kv_shape or v.shape != expected_kv_shape:
-        raise ValueError("Snowball fixed shared attention requires K/V shape [4, 256, KV, 128]")
+        raise ValueError("K/V leading dimensions must match the fixed attention query geometry")
+    pages_per_seq = length // 128
     spec = FixedScheduleSpec(
+        max_num_seqs=slots,
+        max_kv_len=length,
+        num_physical_pages=slots * pages_per_seq,
+        pages_per_seq=pages_per_seq,
         num_q_heads=cfg.num_heads,
         num_kv_heads=cfg.num_kv_heads,
         head_dim=cfg.inferred_head_dim,
-        sliding_window=None if mask.sliding_window is None else min(mask.sliding_window, 256),
+        sliding_window=None if mask.sliding_window is None else min(mask.sliding_window, length),
     )
     page_indices = jnp.arange(spec.num_physical_pages, dtype=jnp.int32).reshape(spec.max_num_seqs, spec.pages_per_seq)
     pages = materialize_contiguous_kv(k, v, page_indices, spec=spec)
@@ -823,7 +820,7 @@ def _fixed_shared_attention_reference(
     if not get_abstract_mesh().empty:
         # Training can annotate the singleton expert axis on sequence. Q and K
         # form independent sequence dimensions, so contract with batch-only sharding.
-        q, k, v = (reshard(value, P("data", None, None, None)) for value in (q, k, v))
+        q, k, v = (reshard(value, P(fixed_attention_row_axis(q.shape[0]), None, None, None)) for value in (q, k, v))
     scale = jnp.asarray(1.0 / math.sqrt(q.shape[-1]), dtype=jnp.float32)
     q_compute = q.astype(jnp.float32)
     k_compute = k.astype(jnp.bfloat16)
@@ -879,7 +876,7 @@ def _fixed_shared_attention_with_vjp_bwd(
     )
     cotangent = cotangent.astype(jnp.float32)
     if not get_abstract_mesh().empty:
-        cotangent = reshard(cotangent, P("data", None, None, None))
+        cotangent = reshard(cotangent, P(fixed_attention_row_axis(q.shape[0]), None, None, None))
     dq, dk, dv = pullback(cotangent)
     return dq.astype(q.dtype), dk.astype(k.dtype), dv.astype(v.dtype)
 
@@ -896,34 +893,38 @@ def _fixed_shared_attention_decode(
     use_long: bool,
     cfg: SnowballConfig,
 ) -> jax.Array:
-    """Run fixed shared attention over the bounded cached four-slot layout."""
-    _validate_fixed_shared_attention_config(cfg)
+    """Run fixed shared attention over cached sequence slots."""
+    slots, pages_per_seq = batch_info.page_indices.array.shape
+    length = cfg.max_seq_len
     spec = FixedScheduleSpec(
+        max_num_seqs=slots,
+        max_kv_len=length,
+        num_physical_pages=cache.kv_pages.array.shape[0],
+        pages_per_seq=pages_per_seq,
+        page_size=batch_info.page_size,
         num_q_heads=cfg.num_heads,
         num_kv_heads=cfg.num_kv_heads,
         head_dim=cfg.inferred_head_dim,
-        sliding_window=None if use_long else min(cfg.sliding_window, 256),
+        sliding_window=None if use_long else min(cfg.sliding_window, length),
     )
-    if batch_info.page_indices.array.shape != (4, 2) or batch_info.slot_ids.array.shape != (4,):
-        raise ValueError("Snowball fixed shared decode requires four slots and two pages per slot")
-    if batch_info.page_size != spec.page_size:
-        raise ValueError("Snowball fixed shared decode requires page_size=128")
+    if batch_info.slot_ids.array.shape != (slots,):
+        raise ValueError("Fixed attention requires one physical slot ID per sequence")
     metadata = (batch_info.page_indices, batch_info.slot_ids, batch_info.seq_lens, batch_info.cu_q_lens)
     if any(value.array.dtype != jnp.int32 for value in metadata):
         raise ValueError("Snowball fixed shared decode requires int32 page and sequence metadata")
-    if batch_info.seq_lens.array.shape != (4,) or batch_info.cu_q_lens.array.shape != (5,):
-        raise ValueError("Snowball fixed shared decode requires four sequence lengths")
+    if batch_info.seq_lens.array.shape != (slots,) or batch_info.cu_q_lens.array.shape != (slots + 1,):
+        raise ValueError("Snowball fixed shared decode requires one set of lengths per sequence slot")
     if pos_ids.shape != (q.shape[0],) or pos_ids.dtype != jnp.int32:
         raise ValueError("Snowball fixed shared decode positions must be int32")
     token_rows = jnp.arange(q.shape[0], dtype=jnp.int32)
     starts = batch_info.cu_q_lens.array[:-1]
     used = jnp.arange(spec.max_num_seqs, dtype=jnp.int32) < batch_info.num_seqs
-    sequences = jnp.clip(jnp.sum((token_rows[:, None] >= starts[None, :]) & used[None, :], axis=1) - 1, 0, 3)
+    sequences = jnp.clip(jnp.sum((token_rows[:, None] >= starts[None, :]) & used[None, :], axis=1) - 1, 0, slots - 1)
     safe_positions = jnp.clip(pos_ids, 0, spec.max_kv_len - 1)
     position_valid = (pos_ids >= 0) & (pos_ids < spec.max_kv_len)
     active = token_rows < batch_info.num_new_tokens
-    grid = jnp.zeros((4, 256, cfg.num_heads, cfg.inferred_head_dim), dtype=jnp.float32)
-    valid = jnp.zeros((4, 256), dtype=jnp.bool_)
+    grid = jnp.zeros((slots, length, cfg.num_heads, cfg.inferred_head_dim), dtype=jnp.float32)
+    valid = jnp.zeros((slots, length), dtype=jnp.bool_)
     q_update = q[:, 0].astype(jnp.float32)
     q_sharding = jax.typeof(q_update).sharding if isinstance(q_update, core.Tracer) else q_update.sharding
     if not isinstance(q_sharding, NamedSharding):
@@ -937,8 +938,8 @@ def _fixed_shared_attention_decode(
     write_positions = jnp.where(active & position_valid, pos_ids, spec.max_kv_len)
     grid = grid.at[sequences, write_positions].set(q_update, mode="drop", out_sharding=grid_sharding)
     valid = valid.at[sequences, write_positions].set(True, mode="drop")
-    counts = jnp.zeros((4, 256), dtype=jnp.int32).at[sequences, write_positions].add(1, mode="drop")
-    slots = batch_info.slot_ids.array
+    counts = jnp.zeros((slots, length), dtype=jnp.int32).at[sequences, write_positions].add(1, mode="drop")
+    slot_ids = batch_info.slot_ids.array
     pages = batch_info.page_indices.array
     needed = jnp.arange(spec.pages_per_seq)[None, :] * spec.page_size < batch_info.seq_lens.array[:, None]
     visible_pages_valid = jnp.all(~(used[:, None] & needed) | ((pages >= 0) & (pages < spec.num_physical_pages)))
@@ -959,21 +960,26 @@ def _fixed_shared_attention_decode(
                 & (batch_info.cu_q_lens.array[1:] <= q.shape[0])
             )
         )
-        & jnp.all(~used | ((batch_info.seq_lens.array >= 0) & (batch_info.seq_lens.array <= 256)))
-        & jnp.all(~used | ((slots >= 0) & (slots < 4)))
-        & jnp.all((slots[:, None] != slots[None, :]) | ~used[:, None] | ~used[None, :] | jnp.eye(4, dtype=jnp.bool_))
+        & jnp.all(~used | ((batch_info.seq_lens.array >= 0) & (batch_info.seq_lens.array <= length)))
+        & jnp.all(~used | ((slot_ids >= 0) & (slot_ids < slots)))
+        & jnp.all(
+            (slot_ids[:, None] != slot_ids[None, :])
+            | ~used[:, None]
+            | ~used[None, :]
+            | jnp.eye(slots, dtype=jnp.bool_)
+        )
         & visible_pages_valid
         & jnp.all(~active | position_valid)
-        & jnp.all(~active | (pos_ids < batch_info.seq_lens.array[jnp.clip(sequences, 0, 3)]))
+        & jnp.all(~active | (pos_ids < batch_info.seq_lens.array[jnp.clip(sequences, 0, slots - 1)]))
         & jnp.all(counts <= 1)
     )
-    positions = jnp.broadcast_to(jnp.arange(256, dtype=jnp.int32), (4, 256))
+    positions = jnp.broadcast_to(jnp.arange(length, dtype=jnp.int32), (slots, length))
     out = fixed_schedule_attention(
         grid,
         cache.kv_pages.array,
-        jnp.full((4,), 256, dtype=jnp.int32),
+        jnp.full((slots,), length, dtype=jnp.int32),
         safe_pages,
-        jnp.full((4,), 256, dtype=jnp.int32),
+        jnp.full((slots,), length, dtype=jnp.int32),
         positions,
         valid,
         spec=spec,
@@ -984,28 +990,9 @@ def _fixed_shared_attention_decode(
 
 
 def _validate_fixed_shared_attention_config(cfg: SnowballConfig) -> None:
-    """Reject shapes outside the one qualified Snowball shared-forward fixture."""
-    expected = {
-        "hidden_dim": 128,
-        "intermediate_dim": 32,
-        "shared_expert_intermediate_dim": 32,
-        "num_experts": 2,
-        "num_experts_per_token": 1,
-        "num_layers": (1, 2),
-        "num_heads": 2,
-        "num_kv_heads": 1,
-        "head_dim": 128,
-        "vocab_size": 23,
-        "max_seq_len": 256,
-    }
-    actual = {name: cfg.inferred_head_dim if name == "head_dim" else getattr(cfg, name) for name in expected}
-    unsupported = {
-        name: (actual[name], value)
-        for name, value in expected.items()
-        if actual[name] not in (value if isinstance(value, tuple) else (value,))
-    }
-    if unsupported:
-        raise ValueError(f"Snowball fixed shared attention only supports the bounded fixture: {unsupported}")
+    """Validate the static head and page geometry used by fixed attention."""
+    if cfg.inferred_head_dim != 128 or cfg.max_seq_len < 128 or cfg.max_seq_len % 128:
+        raise ValueError("Snowball fixed attention requires width 128 and complete 128-token pages")
 
 
 def _validate_fixed_shared_attention_public_mask(mask: AttentionMask) -> None:

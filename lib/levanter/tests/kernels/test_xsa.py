@@ -134,7 +134,7 @@ def test_xsa_explicit_layout_and_vjp_reference_boundary_regression(monkeypatch):
             sizes = tuple(4 if name == axis else 1 for name in names)
             unsupported = Mesh(np.asarray(jax.devices()).reshape(sizes), names, axis_types=(AxisType.Explicit,) * 5)
             with jax.set_mesh(unsupported):
-                bad = jax.device_put(host_y, NamedSharding(unsupported, P(axis, None, None, None)))
+                bad = jax.device_put(host_y, NamedSharding(unsupported, P(None, None, None, axis)))
                 with pytest.raises(xsa_module.XsaUnsupportedError):
                     xsa_module.xsa_forward(bad, bad, "pallas_tpu")
 

@@ -1,12 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Explicitly opt-in fixed-schedule TPUv4 attention for generated fixtures.
-
-The public contract is deliberately narrow: four complete sequence slots are
-sharded over a data mesh axis, each local kernel sees one 256-row sequence,
-and all eight physical cache pages are replicated. This entry point is opt-in.
-"""
+"""Fixed-schedule TPU attention over replicated KV pages."""
 
 from dataclasses import dataclass
 import math
@@ -40,8 +35,8 @@ class FixedScheduleSpec:
     def __post_init__(self) -> None:
         if self.max_kv_len != self.pages_per_seq * self.page_size:
             raise ValueError("max_kv_len must equal pages_per_seq * page_size")
-        if (self.max_num_seqs, self.num_physical_pages) not in ((1, 4), (4, 8)):
-            raise ValueError("the bounded fixture allows only (one adapter slot, four pages) or (data=4, eight pages)")
+        if self.max_num_seqs < 1 or self.pages_per_seq < 1 or self.num_physical_pages < self.pages_per_seq:
+            raise ValueError("Fixed attention requires nonempty sequence slots with addressable KV pages")
         if self.num_q_heads % self.num_kv_heads != 0:
             raise ValueError("num_q_heads must be divisible by num_kv_heads")
         if self.head_dim != 128 or self.page_size != 128:
@@ -66,10 +61,10 @@ def _page_map_contract(
         raise ValueError("page_indices must be int32")
 
     in_range = jnp.all((page_indices >= 0) & (page_indices < spec.num_physical_pages))
-    flat = page_indices.reshape(-1)
-    distinct = (flat[:, None] != flat[None, :]) | jnp.eye(flat.size, dtype=jnp.bool_)
-    unique = jnp.all(distinct)
-    valid = in_range & (unique if require_unique else jnp.asarray(True))
+    valid = in_range
+    if require_unique:
+        ordered = jnp.sort(page_indices.reshape(-1))
+        valid = valid & jnp.all(ordered[1:] != ordered[:-1])
     safe = jnp.clip(page_indices, 0, spec.num_physical_pages - 1)
     return safe, valid
 
@@ -199,6 +194,19 @@ def _local_fixed_attention(
     return output[None, ...]
 
 
+def fixed_attention_row_axis(num_slots: int) -> str:
+    """Return the explicit mesh axis that holds one logical sequence per device."""
+    mesh = _get_mesh()
+    if mesh is not None and not mesh.empty and mesh.size == num_slots:
+        for axis in ("data", "expert"):
+            if (
+                mesh.shape.get(axis) == num_slots
+                and mesh.axis_types[mesh.axis_names.index(axis)] == jax.sharding.AxisType.Explicit
+            ):
+                return axis
+    raise ValueError("Fixed attention requires one explicit data or expert axis spanning the sequence slots")
+
+
 def fixed_schedule_attention(
     q: jax.Array,
     kv_pages: jax.Array,
@@ -210,34 +218,24 @@ def fixed_schedule_attention(
     *,
     spec: FixedScheduleSpec = FixedScheduleSpec(),
 ) -> jax.Array:
-    """Run the shared fixed-schedule forward on explicit data=4 sequence slots.
-
-    Shapes are q=[4,256,2,128], kv_pages=[8,128,2,128],
-    kv_lens=[4], page_indices=[4,2], and query metadata [4] or [4,256].
-    The function requires an explicit mesh with a data axis of size four.
-    Each shard receives one sequence's metadata and the replicated KV pages. query_lengths=L and valid rows beginning at
-    position 256-L make decode at position p use L=256-p without repacking
-    neighboring sequences.
-    """
+    """Run one sequence slot per device using the same KV reduction schedule."""
     if q.shape != (spec.max_num_seqs, spec.max_kv_len, spec.num_q_heads, spec.head_dim):
-        raise ValueError("q must have the fixed [4, 256, 2, 128] shape")
+        raise ValueError("Query shape must match the fixed attention spec")
     if q.dtype != jnp.float32:
         raise ValueError("q must be float32 at the explicit mixed-precision boundary")
-    if spec.max_num_seqs != 4 or spec.num_physical_pages != 8:
-        raise ValueError("the public forward is bounded to data=4 and eight replicated physical pages")
     if kv_pages.shape != (
         spec.num_physical_pages,
         spec.page_size,
         2 * spec.num_kv_heads,
         spec.head_dim,
     ):
-        raise ValueError("kv_pages must have the fixed [8, 128, 2, 128] shape")
+        raise ValueError("KV page shape must match the fixed attention spec")
     if kv_pages.dtype != jnp.bfloat16:
         raise ValueError("kv_pages must be BF16 at the cache boundary")
     if kv_lens.shape != (spec.max_num_seqs,) or query_lengths.shape != (spec.max_num_seqs,):
-        raise ValueError("kv_lens and query_lengths must have the fixed [4] shape")
+        raise ValueError("Lengths must have one value per sequence slot")
     if query_positions.shape != (spec.max_num_seqs, spec.max_kv_len) or query_valid.shape != query_positions.shape:
-        raise ValueError("query_positions and query_valid must have the fixed [4, 256] shape")
+        raise ValueError("Query metadata must match the sequence slot and position dimensions")
     if (
         kv_lens.dtype != jnp.int32
         or query_lengths.dtype != jnp.int32
@@ -246,36 +244,18 @@ def fixed_schedule_attention(
     ):
         raise ValueError("lengths and positions must be int32 and query_valid must be bool")
     if page_indices.shape != (spec.max_num_seqs, spec.pages_per_seq) or page_indices.dtype != jnp.int32:
-        raise ValueError("page_indices must be int32 with the fixed [4, 2] shape")
+        raise ValueError("Page indices must be int32 and match the fixed attention spec")
 
+    axis = fixed_attention_row_axis(spec.max_num_seqs)
     mesh = _get_mesh()
-    if (
-        mesh is None
-        or getattr(mesh, "empty", False)
-        or int(mesh.shape.get("data", 0)) != spec.max_num_seqs
-        or int(mesh.size) != spec.max_num_seqs
-        or mesh.axis_types[mesh.axis_names.index("data")] != jax.sharding.AxisType.Explicit
-    ):
-        raise ValueError(
-            "fixed_schedule_attention requires a four-device explicit data mesh with singleton extra axes"
-        )
-
-    in_specs = (
-        P("data", None, None, None),
-        P(),
-        P("data"),
-        P("data", None),
-        P("data"),
-        P("data", None),
-        P("data", None),
-    )
+    in_specs = (P(axis, None, None, None), P(), P(axis), P(axis, None), P(axis), P(axis, None), P(axis, None))
     shard = jax.shard_map(
         lambda q_, pages_, lens_, indices_, lengths_, positions_, valid_: _local_fixed_attention(
             q_, pages_, lens_, indices_, lengths_, positions_, valid_, spec=spec
         ),
         mesh=mesh,
         in_specs=in_specs,
-        out_specs=P("data", None, None, None),
+        out_specs=P(axis, None, None, None),
         check_vma=False,
     )
     args = (q, kv_pages, kv_lens, page_indices, query_lengths, query_positions, query_valid)
