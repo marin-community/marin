@@ -36,3 +36,9 @@ trials:
   steps: 3030
   baseline: belay-X0264-control 3.0463 (same commit, seed 0)
   step_time_change: -1%
+potential:
+  score: 3
+  rationale: -0.0027 at equal data = equal time (step time within 1%); noise band, single stage -> 3
+  model: claude-opus-5-5
+  date: '2026-11-27'
+  inputs_digest: 979efe71f9c6
