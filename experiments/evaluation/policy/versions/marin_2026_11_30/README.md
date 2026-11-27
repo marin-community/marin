@@ -11,9 +11,8 @@ uv run python -m experiments.evaluation.policy.cli show --policy marin-2026-11-3
 
 ## Baselines
 
-Every baseline is served at 147,456 tokens, the window SWE-bench Pro's protocol needs (131,072 tokens of agent input
-plus 16,384-token replies), except Muse Glimmer 30B and Granite 4.2 30B. Their checkpoints declare 131,072, so they
-are served at that.
+Every baseline is served at 131,072 tokens: SWE-bench Pro's protocol context, and the largest window that every
+baseline's checkpoint declares (Muse Glimmer 30B and Granite 4.2 30B declare exactly that).
 
 | Tier | Model | Catalog key |
 | --- | --- | --- |
@@ -63,7 +62,7 @@ Run, with a known difference:
 
 | Benchmark | October | This policy |
 | --- | --- | --- |
-| Every baseline | served at 73,728 tokens | served at 147,456 (Glimmer and Granite at 131,072) |
+| Every baseline | served at 73,728 tokens | served at 131,072 |
 | Terminal-Bench 2.1, OT-TBLite, BixBench | every agent 1,800 s and verifier 300 s | each package's own limits: up to 12,000 s on Terminal-Bench 2.1, 600–3,600 s on OT-TBLite, 3,600 s on BixBench |
 | BixBench | MiniMax-M3 judge served beside the candidate | Together `openai/gpt-oss-120b` |
 | GPQA Diamond, MRCR, IFBench, OlympiadBench and the other chat benchmarks of [#12221](https://github.com/marin-community/marin/pull/12221) | reasoning and answer graded together | final answer graded |

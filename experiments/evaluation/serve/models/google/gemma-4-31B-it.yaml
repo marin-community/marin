@@ -1,15 +1,15 @@
 # Gemma 4 31B-it: dense multimodal model, 63 GB bf16, 262k context, served text-only. Its template
 # defaults to thinking off, so the server defaults enable_thinking to true and a benchmark's own
 # enable_thinking still selects the mode. tpu-inference serves Gemma 4 natively, so this entry
-# declares an HBM budget rather than a GPU shape: 63 GB of weights plus 133 GB of KV cache at 147,456 tokens.
+# declares an HBM budget rather than a GPU shape: 63 GB of weights plus 118 GB of KV cache at 131,072 tokens.
 name: gemma-4-31b-it
 location: google/gemma-4-31B-it
 revision: 842da3794eaa0b77d5f08bae87a17459d91ff475
 apply_chat_template: true
 resource_hint:
-  hbm_gb: 200
+  hbm_gb: 190
 serve:
-  max_model_len: 147456
+  max_model_len: 131072
   limit_mm_per_prompt: '{"image":0,"video":0}'
   reasoning_parser: gemma4
   tool_call_parser: gemma4

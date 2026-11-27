@@ -21,7 +21,7 @@ serve:
   tensor_parallel_size: 4
   pipeline_parallel_size: 2
   pipeline_layer_partition: [35, 37]
-  max_model_len: 147456
+  max_model_len: 131072
   limit_mm_per_prompt: '{"image":0}'
   reasoning_parser: mistral
   tool_call_parser: mistral

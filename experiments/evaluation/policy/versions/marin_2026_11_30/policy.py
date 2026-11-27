@@ -36,7 +36,6 @@ POLICY = Policy(
         "deepseek-v4.1-flash-1017",
     ),
     evaluations=load_evaluations(Path(__file__).with_name("evaluations.yaml")),
-    # SWE-bench Pro's protocol: a 131,072-token agent input and 16,384-token replies. Glimmer and Granite serve at
-    # their own 131,072.
-    serving_window=147_456,
+    # SWE-bench Pro's protocol context, and the largest window every baseline's checkpoint declares.
+    serving_window=131_072,
 )

@@ -18,7 +18,7 @@ resource_hint:
 serve:
   tensor_parallel_size: 4
   pipeline_parallel_size: 2
-  max_model_len: 147456
+  max_model_len: 131072
   reasoning_parser: beam
   tool_call_parser: beam
   vllm_source: upstream

@@ -10,7 +10,7 @@ resource_hint:
     H100: 2
 serve:
   tensor_parallel_size: 2
-  max_model_len: 147456
+  max_model_len: 131072
   limit_mm_per_prompt: '{"image":0,"video":0}'
   reasoning_parser: qwen3
   tool_call_parser: qwen3_coder
