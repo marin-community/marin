@@ -280,13 +280,22 @@ def test_deployment_manifest_preserves_unicode_profile_instructions() -> None:
     assert json.loads(manifest)["profiles"][0]["profile"]["instructions"] == "Prefix comments with 🤖"
 
 
-def test_pull_request_rules_share_run_keys_and_channels_with_actions() -> None:
+def test_deployed_pull_request_rules_share_run_keys_and_channels_with_actions(monkeypatch: pytest.MonkeyPatch) -> None:
     stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())["config"]
+    monkeypatch.setenv(
+        "PULUMI_CONFIG",
+        json.dumps({key: value if isinstance(value, str) else json.dumps(value) for key, value in stack.items()}),
+    )
+    pulumi.runtime.set_mocks(RecordingMocks(), project="marin-loom", stack="test")
+    config = DeploymentConfig.from_pulumi()
+    manifest = json.loads(_deployment_manifest(config, _deployment_profiles(config.profiles), []))
+    rules = json.loads(manifest["settings"]["github.pull_request_rules"])
     workflow_paths = {
-        federation["name"]: federation["workflowRef"].split("/", 2)[2].split("@", 1)[0]
-        for federation in stack["marin-loom:githubFederations"]
+        federation["name"]: federation["workflow_ref"].split("/", 2)[2].split("@", 1)[0]
+        for federation in manifest["federations"]
     }
-    for rule in stack["marin-loom:githubPullRequestRules"]:
+    assert {rule["name"] for rule in rules} == {rule["name"] for rule in stack["marin-loom:githubPullRequestRules"]}
+    for rule in rules:
         federation = rule["target"].get("federation")
         if federation is None:
             continue
