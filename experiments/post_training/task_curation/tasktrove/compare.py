@@ -26,7 +26,7 @@ from experiments.post_training.task_curation.datasets.environments import VERIFY
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.sources import all_sources
+from experiments.post_training.task_curation.sources import source_declarations
 from experiments.post_training.task_curation.tasktrove.harbor_export import (
     UnsupportedHarborTask,
     archive_bytes,
@@ -294,7 +294,7 @@ def main(
 ) -> None:
     catalog = {
         source.name: source
-        for source in all_sources().values()
+        for source in source_declarations().values()
         if source.pipeline is not None and source.dataset is not None and source.dataset.name == TASKTROVE_REPO
     }
     unknown = set(selected) - catalog.keys()

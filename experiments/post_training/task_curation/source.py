@@ -121,6 +121,7 @@ class SourceReference:
     url: str
 
 
+AVAILABLE_STATUS = "Available"
 EXCLUDED_TAG = "excluded"
 """The source tag that keeps a declared source out of admission."""
 
@@ -339,7 +340,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             kind="Generator" if "generator" in tags else "Dataset",
             status=next(
                 (label for tag, label in (("deprecated", "Deprecated"), (EXCLUDED_TAG, "Excluded")) if tag in tags),
-                "Inventory" if pipeline is None else "Available",
+                "Inventory" if pipeline is None else AVAILABLE_STATUS,
             ),
             pipeline=invocation,
             independent_qc=info.independent_qc,

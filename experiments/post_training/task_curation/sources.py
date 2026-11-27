@@ -34,10 +34,16 @@ from experiments.post_training.task_curation.datasets.tasktrove import python_te
 from experiments.post_training.task_curation.datasets.tasktrove import qa as tasktrove_qa
 from experiments.post_training.task_curation.datasets.tasktrove import repositories as tasktrove_repositories
 from experiments.post_training.task_curation.datasets.tasktrove import structured_outputs as tasktrove_structured_outputs
-from experiments.post_training.task_curation.source import GRANDFATHERED_MARINSKYRL_SOURCES, RlDataSource, TaskFormat
+from experiments.post_training.task_curation.source import (
+    AVAILABLE_STATUS,
+    GRANDFATHERED_MARINSKYRL_SOURCES,
+    RlDataSource,
+    TaskFormat,
+)
 
 
-def all_sources() -> dict[str, RlDataSource]:
+def source_declarations() -> dict[str, RlDataSource]:
+    """Return authored source declarations before retained-release selection."""
     evaluation_sources = {}
     for benchmark in evaluation_benchmarks().values():
         # Shot/chat variants share invocation IDs. Keep their defaults, plus separately
@@ -77,11 +83,16 @@ def all_sources() -> dict[str, RlDataSource]:
         *campaign_releases.sources(),
         *unconverted.sources(),
     ]
-    sources = atlas_retained_pins.bind_retained_pins(sources)
     identifiers = [source.info.id for source in sources]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("Duplicate RL source identifiers")
     return {source.info.id: source for source in sources}
+
+
+def all_sources() -> dict[str, RlDataSource]:
+    """Return source declarations with their matching retained-release bindings."""
+    bound = atlas_retained_pins.bind_retained_pins(list(source_declarations().values()))
+    return {source.info.id: source for source in bound}
 
 
 def require_accepted_task_format(source: RlDataSource) -> None:
@@ -107,7 +118,7 @@ def require_accepted_task_format(source: RlDataSource) -> None:
 
 def runnable_sources() -> dict[str, RlDataSource]:
     """Available sources with dataset-owned execution, keyed by invocation name."""
-    sources = [source for source in all_sources().values() if source.declaration.status == "Available"]
+    sources = [source for source in all_sources().values() if source.declaration.status == AVAILABLE_STATUS]
     for source in sources:
         require_accepted_task_format(source)
     names = [source.name for source in sources]

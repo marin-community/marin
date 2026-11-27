@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Main declares every Atlas-admitted source at the Atlas pin.
+"""Require Atlas source coverage and pin parity, with recorded blockers and waivers.
 
 The fixture records the Atlas cut it was generated from (a pinned Atlas
 revision and the pinned release plan); its ``atlas_revision`` and ``r40_plan``

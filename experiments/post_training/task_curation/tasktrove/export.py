@@ -16,7 +16,7 @@ from experiments.post_training.task_curation.datasets.environments import VERIFY
 from experiments.post_training.task_curation.environment import PINNED_IMAGE
 from experiments.post_training.task_curation.images.build import BASE_IMAGE
 from experiments.post_training.task_curation.source import RlDataSource
-from experiments.post_training.task_curation.sources import all_sources
+from experiments.post_training.task_curation.sources import all_sources, source_declarations
 from experiments.post_training.task_curation.tasktrove import harbor_export as harbor
 from experiments.post_training.task_curation.tasktrove.harbor_export import MANIFEST_FILENAME, HarborSourceMetadata
 
@@ -103,7 +103,11 @@ def harbor_export_step(
 )
 def main(input_root: Path, output_root: Path, grader_image: str | None, verifyit_package_root: Path) -> None:
     manifest = json.loads((input_root / MANIFEST_FILENAME).read_text())
-    sources = {source.name: source for source in all_sources().values() if source.pipeline is not None}
+    sources = {
+        source.name: source
+        for source in (*source_declarations().values(), *all_sources().values())
+        if source.pipeline is not None
+    }
     source = sources[manifest["source"]]
     result = harbor.export_harbor(
         StoragePath(str(input_root)),

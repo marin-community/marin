@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.retained_admission import require_l
 from experiments.post_training.task_curation.source import EXCLUDED_TAG, RlDataSource, SourceReference
 
 FINAL_VIEW = "final"
+NORMALIZED_VIEW = "normalize"
 RETAINED_TASKS_FILE = "tasks.parquet"
 """The published cohort file the reader downloads and every view derives from."""
 RETAINED_PART_FILE = "part-000000.parquet"
@@ -111,7 +112,7 @@ def _write_evidence_views(
         with (view_dir / RETAINED_PART_FILE).open("wb") as stream:
             pq.write_table(EMPTY_EVIDENCE_TABLE, stream)
         views[view] = str(view_dir)
-    return outputs, {"normalize": str(normalized.parent), **views, FINAL_VIEW: str(final_view)}
+    return outputs, {NORMALIZED_VIEW: str(normalized.parent), **views, FINAL_VIEW: str(final_view)}
 
 
 def _retained_manifest(invocation: RetainedImport, *, seen: int, views: dict[str, str]) -> dict[str, object]:
@@ -149,7 +150,10 @@ def _retained_manifest(invocation: RetainedImport, *, seen: int, views: dict[str
     }
 
 
-def _normalize_retained_tasks(local: Path, normalized: StoragePath, expected_rows: int, admitted: bool) -> int:
+def _normalize_retained_tasks(
+    local: Path, normalized: StoragePath, expected_rows: int, mode: SourceProcessingMode
+) -> int:
+    """Verify and normalize retained rows in one pass; return their distinct task count."""
     seen = set()
     with normalized.open("wb", auto_mkdir=True) as stream, pq.ParquetWriter(stream, RETAINED_SCHEMA) as writer:
         for batch in pq.ParquetFile(local).iter_batches(batch_size=16):
@@ -157,7 +161,7 @@ def _normalize_retained_tasks(local: Path, normalized: StoragePath, expected_row
             for row in batch.to_pylist():
                 encoded = row["task_spec"]
                 task = TaskSpec.model_validate_json(encoded)
-                if admitted:
+                if mode is not SourceProcessingMode.QUICK:
                     require_runnable_grader(task)
                 if task.id in seen or hashlib.sha256(encoded.encode()).hexdigest() != row["task_sha256"]:
                     raise ValueError(f"Repeated or changed retained task: {task.id}")
@@ -194,10 +198,10 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
     if file_sha256(StoragePath(str(local))) != cohort.tasks_parquet_sha256:
         raise ValueError("Retained release differs from its publication readback receipt")
     output = StoragePath(invocation.output_path)
-    normalized = output / "normalize" / RETAINED_PART_FILE
-    seen = _normalize_retained_tasks(local, normalized, cohort.expected_rows, admitted)
+    normalized = output / NORMALIZED_VIEW / RETAINED_PART_FILE
+    seen = _normalize_retained_tasks(local, normalized, cohort.expected_rows, invocation.mode)
     (output / RETAINED_TASKS_FILE).upload_from(str(local))
-    outputs = {"tasks": str(output / RETAINED_TASKS_FILE), "normalize": str(normalized.parent)}
+    outputs = {"tasks": str(output / RETAINED_TASKS_FILE), NORMALIZED_VIEW: str(normalized.parent)}
     view_outputs, views = _write_evidence_views(output, normalized=normalized, mode=invocation.mode)
     outputs.update(view_outputs)
     manifest = _retained_manifest(invocation, seen=seen, views=views)
@@ -208,7 +212,7 @@ def run_retained_import(invocation: RetainedImport) -> CampaignArtifact:
             status=SourceStatus.COMPLETED,
             outputs=outputs,
             evidence={"manifest": str(output / RETAINED_MANIFEST_FILE)},
-            stages=("download", "validate", "normalize"),
+            stages=("download", "validate", NORMALIZED_VIEW),
         ),
     )
 

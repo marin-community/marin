@@ -40,7 +40,7 @@ from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     import_retained,
 )
-from experiments.post_training.task_curation.source import RlDataSource, SourceReference
+from experiments.post_training.task_curation.source import AVAILABLE_STATUS, RlDataSource, SourceReference
 
 PINS_REPO = "open-athena/atlas-source-pins"
 PINS_REVISION = "5ab081a1db11de1f5a3fa07563b8944b86d15541"
@@ -148,23 +148,20 @@ class RetainedPin(BaseModel):
         )
 
 
-def _pin_table_reference() -> PinnedHfFile:
-    return PinnedHfFile(
-        repo=PINS_REPO,
-        revision=PINS_REVISION,
-        filename=PINS_FILENAME,
-        sha256=PINS_SHA256,
-        byte_size=PINS_BYTES,
-    )
+PINS_REFERENCE = PinnedHfFile(
+    repo=PINS_REPO,
+    revision=PINS_REVISION,
+    filename=PINS_FILENAME,
+    sha256=PINS_SHA256,
+    byte_size=PINS_BYTES,
+)
 
 
 @cache
 def atlas_retained_pins() -> MappingProxyType[str, RetainedPin]:
     """The pinned pin table, validated entry by entry at first read."""
-    document = json.loads(read_pinned_hf_file(_pin_table_reference()))
+    document = json.loads(read_pinned_hf_file(PINS_REFERENCE))
     entries = document["pins"]
-    if len(entries) != len(set(entries)):
-        raise ValueError("Retained-pin table repeats a source id")
     return MappingProxyType({sid: RetainedPin.model_validate(entry) for sid, entry in entries.items()})
 
 
@@ -215,7 +212,12 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
 
     config = pin.cohort(name=source.name)
     release = pin.release
-    inherited = source.current_release if source.declaration.status == "Available" else None
+    inherited = source.current_release if source.declaration.status == AVAILABLE_STATUS else None
+    lineage = (
+        "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
+        if pin.intended_use is IntendedUse.TRAIN
+        else "Retained evaluation TaskSpec and runtime bytes match the measured benchmark pin; "
+    )
     info = replace(
         source.info,
         current_release=release,
@@ -229,8 +231,8 @@ def _bind(source: RlDataSource, pin: RetainedPin) -> RlDataSource:
         daytona_count_basis=pin.retained_census.count_basis,
         daytona_execution_failures=pin.retained_census.execution_failures,
         notes=(
-            "remediated: dedup/decon. Retained TaskSpec and runtime bytes match the original pin; "
-            f"original oversight and quality evidence apply through this subset lineage: {pin.evidence_url}. "
+            lineage
+            + f"original oversight and quality evidence apply through this subset lineage: {pin.evidence_url}. "
             + source.info.notes
         ),
     )

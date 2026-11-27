@@ -32,7 +32,7 @@ from zephyr.context import ZephyrContext
 from zephyr.readers import load_parquet
 
 import experiments.post_training.task_curation.retained_release as retained_release
-from experiments.post_training.task_curation.datasets import atlas_retained_pins as arp
+from experiments.post_training.task_curation.datasets import atlas_retained_pins as atlas_retained_pins
 from experiments.post_training.task_curation.retained_release import (
     RetainedCohort,
     RetainedImport,
@@ -187,6 +187,6 @@ def test_a_lineage_drift_keeps_the_raw_pin_with_a_recorded_note() -> None:
             ),
         )
     )
-    bound = arp.bind_retained_pins([wrong])
+    bound = atlas_retained_pins.bind_retained_pins([wrong])
     assert bound[0].dataset.name == "BytedTsinghua-SIA/DAPO-Math-17k"
     assert bound[0].info.notes and bound[0].info.notes != wrong.info.notes
