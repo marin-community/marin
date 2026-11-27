@@ -52,7 +52,8 @@ trials:
   batch: X0268
   date: '2026-11-27'
   comment_url: https://public.applets.marina.oa.dev/a/33801d46-e280-46f9-b994-2c78603cdf15/#status/X0268
-  wandb: []
+  wandb:
+  - belay-X0268d1024-seed0
   settings:
     muonh_radial_softcap: '2'
     muonh_air: 'true'
