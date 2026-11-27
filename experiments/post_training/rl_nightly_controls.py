@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 
@@ -33,7 +34,13 @@ from experiments.post_training.snowball_rl import SNOWBALL
 
 _TABLES = {table.model: table for table in (SNOWBALL, MOCHI)}
 _MOCHI_RACKS = 3
+_SNOWBALL_BUDGET = 60_000  # Leave 15,000 of runner's 75,000 units for the nightly GPU gates.
 _ACTIVE_STATES = (JobState.PENDING, JobState.BUILDING, JobState.RUNNING)
+
+
+def _attempt_cost(model: str, preset: Preset) -> int:
+    # Snowball: 8 * 1,000 GPU + 32 * 5 CPU + 1,800 GiB per node, plus 36 for the coordinator.
+    return 9_960 * preset.recipe.layout.workload.plan.num_nodes + 36 if model == SNOWBALL.model else 1
 
 
 def select_presets(selection: str) -> list[tuple[str, Preset]]:
@@ -106,8 +113,10 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
     configure_coreweave_s3()
     failed = False
     blocked = set()
-    mochi_jobs = set()
-    racks = _MOCHI_RACKS
+    pending_jobs = set()
+    capacity = {MOCHI.model: _MOCHI_RACKS, SNOWBALL.model: _SNOWBALL_BUDGET}
+    owner = resolve_job_user()
+    budget_models = set()
     with open_iris_client(config_file=Path(IRIS_HUB_CLUSTER_CONFIG), workspace=rl_compose.REPO_ROOT) as client:
         for model, preset in select_presets(""):
             target = (model, preset.name)
@@ -127,9 +136,10 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
                         state = None
                     if state is not None and not is_job_finished(state):
                         blocked.add(target)
-                        if model == MOCHI.model:
-                            racks -= len(submission.outputs)
-                            mochi_jobs.add(job)
+                        pending_jobs.add(job)
+                        capacity[model] -= len(submission.outputs) * _attempt_cost(model, preset)
+                        if job.user == owner:
+                            budget_models.add(model)
                         published = set()
                         for output in submission.outputs:
                             rl_publication.publish_running(
@@ -160,34 +170,69 @@ def _run_controls(batch: str, selected: Sequence[tuple[str, Preset]], state_dir:
                     print(f"{model}/{preset.name}: {error}", file=sys.stderr)
                     blocked.add(target)
                     failed = True
-        if any(model == MOCHI.model for model, _ in selected):
-            prefix = f"checkpoints-{MOCHI.namespace}-"
-            if any(
-                prefix in job.job_id.root_job.name and job.job_id.root_job not in mochi_jobs
-                for state in _ACTIVE_STATES
-                for job in client.list_jobs(state=state)
-            ):
-                # A coordinator without a handoff may still have replicas to submit.
-                racks = 0
+        if capacity[MOCHI.model] > 0 and any(model == MOCHI.model for model, _ in selected):
+            try:
+                jobs = (
+                    job.job_id
+                    for user in ("runner", "atqamar")
+                    for state in _ACTIVE_STATES
+                    for job in client.list_jobs(state=state, prefix=f"/{user}/")
+                    if job.job_id.root_job not in pending_jobs
+                )
+                for job in jobs:
+                    detail = client.job_status(job)
+                    device = detail.resources.device
+                    if device and device.variant.upper() == "GB200":
+                        capacity[MOCHI.model] -= max(1, (detail.task_count + 17) // 18)
+                        if job.user == owner:
+                            budget_models.add(MOCHI.model)
+                    elif job.is_root and f"checkpoints-{MOCHI.namespace}-" in job.name:
+                        # A coordinator without a handoff can still submit its replicas.
+                        capacity[MOCHI.model] = 0
+            except Exception as error:
+                print(f"Mochi rack scan failed: {error}", file=sys.stderr)
+                capacity[MOCHI.model] = 0
+        try:
+            prefix = f"/{owner}/checkpoints-{SNOWBALL.namespace}-controls-"
+            if any(job.root_job not in pending_jobs for job in client.active_job_names_for_prefix(prefix)):
+                capacity[SNOWBALL.model] = 0
+                budget_models.add(SNOWBALL.model)
+            if client.active_job_names_for_prefix(f"/{owner}/checkpoints-{MOCHI.namespace}-"):
+                budget_models.add(MOCHI.model)
+        except Exception as error:
+            print(f"Snowball coordinator scan failed: {error}", file=sys.stderr)
+            capacity[SNOWBALL.model] = 0
         records = rl_index.list_attempts()
-        owner = resolve_job_user()
         for position, (model, preset) in enumerate(selected):
             try:
-                if (model, preset.name) in blocked or (model == MOCHI.model and racks <= 0):
+                target = f"{model}/{preset.name}"
+                if (model, preset.name) in blocked:
+                    print(f"Skipping {target}: pending record")
                     continue
                 prefix = sanitize_job_name(f"checkpoints/{_TABLES[model].namespace}/controls/{preset.name}") + "-"
                 if client.active_job_names_for_prefix(f"/{owner}/{prefix}"):
+                    print(f"Skipping {target}: active coordinator")
+                    continue
+                cost = _attempt_cost(model, preset)
+                slots = capacity[model] // cost
+                if slots <= 0:
+                    reason = "rack" if model == MOCHI.model else "Iris budget"
+                    print(f"Skipping {target}: no free {reason}")
+                    continue
+                if budget_models - {model}:
+                    print(f"Skipping {target}: shared Iris budget reserved for the other model")
                     continue
                 version = rl_gate.config_version(rl_gate.compose_preset(preset))
                 cohort = completed_controls(records, model=model, preset=preset.name, version=version)
-                count = max(1, rl_gate.CONTROL_COUNT - len(cohort))
+                count = min(slots, max(1, rl_gate.CONTROL_COUNT - len(cohort)))
                 if model == MOCHI.model:
                     later = sum(
                         name == MOCHI.model and (name, following.name) not in blocked
                         for name, following in selected[position + 1 :]
                     )
-                    count = min(count, max(1, racks - later))
-                    racks -= count
+                    count = min(count, max(1, slots - later))
+                capacity[model] -= count * cost
+                budget_models.add(model)
                 path = state_dir / f"{model}-{preset.name}.json"
                 module = [sys.executable, "-m", f"experiments.post_training.{model}_rl"]
                 options = ["--preset", preset.name, "--control", batch, "--replicates", str(count)]
@@ -210,7 +255,11 @@ def main() -> int:
     source.add_argument("--comment-event", type=Path, help="GitHub issue_comment event payload.")
     source.add_argument("--check-presets", help="Validate a selector list before launch setup.")
     parser.add_argument("--presets", default="", help="Space-separated models or model/preset selectors.")
-    parser.add_argument("--state-dir", help="Shared directory for pending control batches.")
+    parser.add_argument(
+        "--state-dir",
+        default="s3://marin-us-east-08a/marin/ci/rl-controls/pending",
+        help="Shared directory for pending control batches.",
+    )
     args = parser.parse_args()
     try:
         if args.comment_event is not None:
@@ -223,7 +272,10 @@ def main() -> int:
     except ValueError as error:
         parser.error(str(error))
     if not args.state_dir:
-        parser.error("--batch requires --state-dir")
+        parser.error("--state-dir cannot be empty")
+    # Rotate the first preset daily so bounded cohorts share admission across ticks.
+    start = datetime.now(UTC).toordinal() % len(selected)
+    selected = selected[start:] + selected[:start]
     return _run_controls(args.batch, selected, StoragePath(args.state_dir))
 
 

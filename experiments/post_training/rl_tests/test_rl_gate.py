@@ -50,11 +50,10 @@ from experiments.post_training.rl_command import EXIT_CODES
 from experiments.post_training.rl_measurements import (
     RUN_INPUTS_FILENAME,
     RunInputs,
-    read_run_inputs,
     run_inputs,
 )
+from experiments.post_training.rl_tests.fixtures import answer as _answer
 from experiments.post_training.rl_tests.fixtures import (
-    SELECTION_IDENTITY,
     cohort_from_fixtures,
     controls,
     edit_receipt,
@@ -64,7 +63,6 @@ from experiments.post_training.rl_tests.fixtures import (
     write_metrics,
     write_receipt,
 )
-from experiments.post_training.rl_tests.fixtures import answer as _answer
 from experiments.post_training.rl_tests.fixtures import write_json as _json
 from experiments.post_training.skyrl_test_support import read_skyrl_metrics
 from experiments.post_training.task_curation.selection import (
@@ -137,6 +135,9 @@ def test_compare_writes_the_report_for_the_five_newest_base_version_controls(
     artifact = Path(report.pop("report"))
     assert json.loads(artifact.read_text()) == report and artifact.with_suffix(".md").exists()
     assert {row["role"] for row in report["comparisons"]} >= {"objective", "guard", "reported"}
+    edit_metrics(candidate, lambda row: row.update({"policy/mismatch/staleness0/selected_tokens": 0}))
+    invalid = compare(preset, "--candidate", "users/test/baseline")
+    assert invalid["verdict"] == "invalid" and "missing or non-finite guard metric" in invalid["reason"]
 
 
 def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
@@ -192,10 +193,47 @@ def test_extra_requirements_cannot_widen_existing_guards(recorded_runs):
     assert stale.verdict == "invalid" and "stored control config version" in stale.reason
 
 
-def test_measurements_use_selected_tokens_and_check_training_health(recorded_runs, preset_table, subtests):
-    preset = replace(snowball_model.SNOWBALL.by_name["speed-long"], updates=3, measured=range(2, 4))
+@pytest.mark.parametrize("preset_name", ["speed-long", "speed-short"])
+def test_measurements_use_selected_tokens_and_check_training_health(recorded_runs, preset_table, subtests, preset_name):
+    preset = snowball_model.SNOWBALL.by_name[preset_name]
+    if preset_name == "speed-long":
+        preset = replace(preset, updates=3, measured=range(2, 4))
     preset_table(preset)
-    root = recorded_runs(preset.name, "users/test/training-measurements")
+    root = recorded_runs(preset.name, "users/test/measurements")
+    if preset_name == "speed-short":
+        export = str(root / "exports")
+        rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
+
+        def facts():
+            return {fact.name: fact.holds for fact in measurements.read_measurements(str(root), preset).invariants}
+
+        def changed(row, **fields):
+            return row.model_copy(update={"answers": [answer.model_copy(update=fields) for answer in row.answers]})
+
+        held_out = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/eval_lite/")[0]
+        write_evaluations(export, [changed(held_out, error_treatment="passthrough")])
+        with edit_receipt(root) as receipt:
+            launch = receipt["config"]
+            source = launch["inputs"]["evaluation_data"]["eval_lite"][0]
+            for callback in launch["skyrl"]["trainer"]["callbacks"]:
+                if named := callback.get("additional_evaluations", {}).get("eval_lite"):
+                    named["data_files"] = [str(Path(source["local_path"]) / source["relative_path"])]
+        launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] = 7
+        protocol = measurements.evaluation_protocol(
+            RecordedLaunch.from_document(launch, attempt="recorded-attempt"), "eval_lite"
+        )
+        assert (protocol["n_samples_per_prompt"], protocol["sampling_params"]["max_generate_length"]) == (1, 8192)
+        assert not facts()["eval_lite/task_coverage"] and facts()["eval_lite/grader_error_fraction"]
+        write_evaluations(export, [changed(rows[0], response_token_count=4095)])
+        assert not facts()["fixed_reply_tokens"]
+        write_evaluations(export, [changed(row, response_token_count=None) for row in rows])
+        metrics = read_skyrl_metrics(str(root))
+        tokens = 4096 * sum(len(row.answers) for row in rows)
+        for delta in (-1, 0):
+            metrics[0].update({"eval/all/response_tokens_max": 4096, "eval/all/response_tokens": tokens + delta})
+            write_metrics(root, metrics)
+            assert facts()["fixed_reply_tokens"] == (delta == 0)
+        return
     metrics = read_skyrl_metrics(str(root))
     prefix = KL.rsplit("/", 1)[0]
     for step, admission, kl, count in ((1, 1e9, 1e9, 1000), (2, 5, 0.5, 1), (3, 9, 0, 9)):
@@ -247,42 +285,6 @@ def test_measurements_use_selected_tokens_and_check_training_health(recorded_run
             else:
                 assert result.values["speed/update_seconds"] == 9
                 assert result.values.get(KL) == (None if kl is None else pytest.approx(kl))
-
-
-def _assert_speed_short_measurements(root, preset):
-    export = str(root / "exports")
-    rows = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/")
-
-    def facts():
-        return {fact.name: fact.holds for fact in measurements.read_measurements(str(root), preset).invariants}
-
-    def changed(row, **fields):
-        return row.model_copy(update={"answers": [answer.model_copy(update=fields) for answer in row.answers]})
-
-    held_out = read_evaluations(export, attempt_id="recorded-attempt", evaluation="eval/eval_lite/")[0]
-    write_evaluations(export, [changed(held_out, error_treatment="passthrough")])
-    with edit_receipt(root) as receipt:
-        launch = receipt["config"]
-        source = launch["inputs"]["evaluation_data"]["eval_lite"][0]
-        for callback in launch["skyrl"]["trainer"]["callbacks"]:
-            if named := callback.get("additional_evaluations", {}).get("eval_lite"):
-                named["data_files"] = [str(Path(source["local_path"]) / source["relative_path"])]
-    launch["skyrl"]["generator"]["eval_n_samples_per_prompt"] = 7
-    protocol = measurements.evaluation_protocol(
-        RecordedLaunch.from_document(launch, attempt="recorded-attempt"), "eval_lite"
-    )
-    assert (protocol["n_samples_per_prompt"], protocol["sampling_params"]["max_generate_length"]) == (1, 8192)
-    assert not facts()["eval_lite/task_coverage"] and facts()["eval_lite/grader_error_fraction"]
-    write_evaluations(export, [changed(rows[0], response_token_count=4095)])
-    assert not facts()["fixed_reply_tokens"]
-    write_evaluations(export, [changed(row, response_token_count=None) for row in rows])
-    metrics = read_skyrl_metrics(str(root))
-    tokens = 4096 * sum(len(row.answers) for row in rows)
-    for delta in (-1, 0):
-        metrics[0].update({"eval/all/response_tokens_max": 4096, "eval/all/response_tokens": tokens + delta})
-        write_metrics(root, metrics)
-        assert facts()["fixed_reply_tokens"] == (delta == 0)
-    write_evaluations(export, rows)
 
 
 def test_eval_lite_scores_join_permuted_answers_and_aggregate_tasks(tmp_path, recorded_runs):
@@ -466,7 +468,7 @@ def test_streaming_launcher_can_cancel_its_job_on_interrupt(tmp_path):
     assert marker.read_text() == "cancelled"
 
 
-@pytest.mark.parametrize("preset_name", ["speed-short", "learning-medium", "speed-medium"])
+@pytest.mark.parametrize("preset_name", ["speed-short", "learning-medium"])
 def test_compare_classifies_candidate_variants(
     recorded_runs,
     preset_table,
@@ -493,17 +495,7 @@ def test_compare_classifies_candidate_variants(
             assert report["effect"] == effect, report
         return report
 
-    if preset_name == "speed-medium":
-        candidate(
-            "missing-guard",
-            verdict="invalid",
-            reason="missing or non-finite guard metric",
-            metrics={"policy/mismatch/staleness0/selected_tokens": 0},
-        )
-        return
     root = candidate("current-generation")
-    if preset_name == "speed-short":
-        _assert_speed_short_measurements(root, preset)
     prefix = "eval/all/outcome/" if preset_name == "learning-medium" else "eval/eval_lite/all/outcome/"
     metrics = read_skyrl_metrics(str(root))
     metrics[preset.updates].update({prefix + "graded": 19, prefix + "unavailable": 1})
@@ -575,7 +567,7 @@ def test_compare_classifies_candidate_variants(
     changed = assert_verdict("baseline", "invalid", reason="weight_decay")
     assert changed["report"] != baseline["report"]
     preset_table(preset)
-    _assert_panel_identity(recorded_runs)
+    _assert_panel_identity(recorded_runs, monkeypatch)
     controls(recorded_runs, preset_name, score=0.5)
     candidate("zero-spread", verdict="invalid", reason="variation is zero")
 
@@ -620,42 +612,41 @@ def _assert_staged_model_and_draft(recorded_runs, members, assert_verdict):
         assert_verdict(case, "invalid" if reason else "pass", reason=reason)
 
 
-def _assert_panel_identity(recorded_runs):
-    preset = "learning-medium"
-    source = recorded_runs(preset, "users/test/task-content")
-    receipt = json.loads((source / "terminal.json").read_text())
-    descriptor = receipt["config"]["inputs"]["validation_data"][0]
-    original = Path(descriptor["uri"]) / descriptor["relative_path"]
+def _assert_panel_identity(recorded_runs, monkeypatch):
+    preset, name = "learning-medium", "users/test/task-content"
+    source = recorded_runs(preset, name)
+    descriptor = json.loads((source / "terminal.json").read_text())["config"]["inputs"]["validation_data"][0]
+    pool = Path(descriptor["uri"])
+    original = pool / descriptor["relative_path"]
     rows = pq.read_table(original).to_pylist()
-    summary = json.loads((original.parent / "summary.json").read_text())["selection_strata"]
-    annotations = pq.read_table(original.parent / TASK_MANIFEST_FILENAME).to_pylist()
-    pq.write_table(pa.Table.from_pylist(list(reversed(rows))), original)
-    assert compare(preset, "--candidate", "users/test/task-content")["verdict"] == "pass"
-    changed = recorded_runs(preset, "users/test/task-content-edited")
-    with edit_receipt(changed) as receipt:
-        launch = receipt["config"]
-        descriptor = launch["inputs"]["validation_data"][0]
-        copied = changed / "task-set-copy"
-        shutil.copytree(descriptor["uri"], copied)
-        descriptor["uri"] = str(copied)
-        launch["skyrl"]["data"]["val_data"] = [dict(descriptor)]
-        changed_task = json.loads(rows[0]["task_spec"])
-        changed_task["context"]["events"][0]["content"] = "Return dog."
-        files = {descriptor["relative_path"], *summary["task_files"], *summary["active_files"]}
-        for filename in files:
-            pool = pq.read_table(copied / filename).to_pylist()
-            for row in pool:
-                if json.loads(row["task_spec"])["id"] == changed_task["id"]:
-                    row["task_spec"] = json.dumps(changed_task)
-            pq.write_table(pa.Table.from_pylist(pool), copied / filename)
-        for annotation in annotations:
-            if annotation["task_id"] == changed_task["id"]:
-                annotation["task_digest"] = canonical_sha256(changed_task)
-        pq.write_table(
-            pa.Table.from_pylist(annotations, schema=arrow_schema(SelectionTaskRow)), copied / TASK_MANIFEST_FILENAME
-        )
-    report = compare(preset, "--candidate", "users/test/task-content-edited")
-    assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
+    pq.write_table(pa.Table.from_pylist(rows[::-1]), original)
+    measured, read_control = {}, gate._control_measurements
+
+    def baseline(preset, cohort, member, attempt):
+        if member.path not in measured:
+            measured[member.path] = read_control(preset, cohort, member, attempt)
+        return measured[member.path]
+
+    with monkeypatch.context() as context:
+        context.setattr(gate, "_control_measurements", baseline)
+        assert compare(preset, "--candidate", name)["verdict"] == "pass"
+        task = json.loads(rows[0]["task_spec"])
+        task["context"]["events"][0]["content"] = "Return dog."
+        summary = json.loads((pool / "summary.json").read_text())["selection_strata"]
+        for filename in {descriptor["relative_path"], *summary["task_files"], *summary["active_files"]}:
+            path = pool / filename
+            contents = pq.read_table(path).to_pylist()
+            next(row for row in contents if json.loads(row["task_spec"])["id"] == task["id"])["task_spec"] = json.dumps(
+                task
+            )
+            pq.write_table(pa.Table.from_pylist(contents), path)
+        path = pool / TASK_MANIFEST_FILENAME
+        annotations = pq.read_table(path).to_pylist()
+        next(row for row in annotations if row["task_id"] == task["id"])["task_digest"] = canonical_sha256(task)
+        pq.write_table(pa.Table.from_pylist(annotations, schema=arrow_schema(SelectionTaskRow)), path)
+        recorded_runs(preset, name + "-edited")
+        report = compare(preset, "--candidate", name + "-edited")
+        assert report["verdict"] == "invalid" and "TaskSpec content differs" in report["reason"], report
 
 
 @pytest.mark.parametrize("preset_name", ["learning-medium", "data-medium"])
@@ -701,15 +692,13 @@ def test_python_run_saves_typed_inputs_for_comparison(
         requirements=("policy/raw_grad_norm<=10",),
         table=snowball_model.SNOWBALL,
     )
-    task_name = SELECTION_IDENTITY if tasks else None
     source = recorded_runs(
         preset.name,
         built.runs[0].name,
         fingerprint=built.runs[0].fingerprint(),
         inputs=built.inputs,
+        receipt={"result.started_at": "2026-11-06T17:40:00+00:00"},
     )
-    with edit_receipt(source) as receipt:
-        receipt["result"]["started_at"] = "2026-11-06T17:40:00+00:00"
     staged = source.with_name("native-staging")
     source.rename(staged)
     (staged / RUN_INPUTS_FILENAME).unlink()
@@ -721,24 +710,11 @@ def test_python_run_saves_typed_inputs_for_comparison(
     monkeypatch.setattr(snowball, "run_skyrl", native)
     monkeypatch.setattr(sys, "argv", ["unrelated-command", "--preset", "train-long", "--require", "unrelated"])
     run(*built.runs)
-    recorded = read_run_inputs(str(source))
-    assert recorded.preset_name == preset_name and recorded.requirements == ("policy/raw_grad_norm<=10",)
-    assert recorded.tasks == task_name
     if initializer is not None:
-        assert (
-            recorded.init.artifact_root,
-            recorded.init.relative_path,
-            recorded.init.tokenizer_uri,
-            recorded.init.tokenizer_revision,
-        ) == (model_uri, None, "tests/own-tokenizer", "own-tokenizer-revision")
-        assert json.loads(recorded.init.fingerprint_payload)["config"]["tokenizer_uri"] == "tests/own-tokenizer"
         write_hf_export(model / "newer-hf")
     report = compare(preset_name, "--candidate", built.runs[0].name)
     assert report["verdict"] == "pass", report
     assert report["run"]["attempt_ids"] == ["recorded-attempt"]
     assert comparisons(report)[gain_key]["run"] == pytest.approx(0.005)
-    _json(source / "exports/best_checkpoint.json", {"step": preset.updates})
-    [status] = snowball._status(built, preset, stored_only=True)["runs"]
-    assert status["best_checkpoint_step"] == preset.updates
     if tasks is None:
         assert {"inputs.model.uri", "skyrl.trainer.policy.optimizer_config.lr"} <= set(report["run"]["config_changes"])

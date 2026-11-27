@@ -11,7 +11,6 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 from urllib.parse import urlencode
 
 import marin.rl.skyrl as adapter
@@ -52,7 +51,7 @@ from finestore.rl.strata import (
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from fsspec.config import conf
-from iris.client.client import IrisClient
+from iris.client.workload import ResourceRequest
 from iris.cluster.client.job_info import set_job_info
 from iris.cluster.types import JobName
 from iris.resources.state import JobState, is_job_finished
@@ -215,44 +214,41 @@ def write_skyrl_run_record(root: Path, name: str, version: str, *, fingerprint: 
     write_artifact_record(root, name, version, SkyRLRun, fingerprint=fingerprint, result=run.result_payload())
 
 
-def fake_iris(monkeypatch, name):
-    client = MagicMock(spec=IrisClient)
-    job = JobName.from_wire(f"/test-user/{name}")
-    client.submit.return_value.job_id = job
-    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **kw: nullcontext(client))
-    monkeypatch.setattr(runner, "open_iris_client", lambda **kw: nullcontext(client))
-    return client, job
-
-
-def fake_publication(monkeypatch, capture, origin):
-    def publish(record, service_url=None):
-        capture(record)
-        return (service_url or origin) + "/#" + urlencode({"run": record.run_id, "attempt": record.attempt_id})
-
-    monkeypatch.setattr("experiments.post_training.rl_publication.publish_result", publish)
-
-
 class FakeIris:
-    def __init__(self, monkeypatch, *, on_submit=None):
+    def __init__(self, monkeypatch, *, on_submit=None, name=None, owner="runner"):
         self.jobs = {}
         self.tasks = {}
-        self.on_submit = on_submit
-        monkeypatch.setenv("IRIS_USER", "test-user")
+        self.requests = []
+        self.on_submit, self.name, self.owner = on_submit, name, owner
+        self.state_for_wait = None
+        monkeypatch.setenv("IRIS_USER", owner)
         monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
         monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_: nullcontext(self))
+        monkeypatch.setattr(runner, "open_iris_client", lambda **_: nullcontext(self))
         monkeypatch.setattr(rl_nightly_controls, "open_iris_client", lambda **_: nullcontext(self))
 
-    def set_job(self, name, state, *, tasks=None, reason=""):
+    def set_job(self, name, state, *, tasks=None, reason="", message="", device=None, nodes=1):
         job = JobName.from_wire(name)
-        self.jobs[job] = SimpleNamespace(job_id=job, state=state, task_state_counts=tasks or {}, error_message="")
+        self.jobs[job] = SimpleNamespace(
+            job_id=job,
+            state=state,
+            task_state_counts=tasks or {},
+            error_message=message,
+            resources=ResourceRequest(0, 0, 0, device),
+            task_count=nodes,
+        )
         self.tasks[job] = [SimpleNamespace(error_message=reason)] if reason else []
         return job
 
     def submit(self, **request):
-        job = JobName.root("test-user", request["name"])
+        self.requests.append(request)
+        job = JobName.root(self.owner, self.name or request["name"])
         if self.on_submit:
             self.on_submit(job, request)
         return self.jobs[self.set_job(str(job), JobState.PENDING)]
+
+    def job(self, job):
+        return SimpleNamespace(state_only=lambda: self.state_for_wait() if self.state_for_wait else self.job_state(job))
 
     def job_status(self, job):
         if job not in self.jobs:
@@ -265,8 +261,8 @@ class FakeIris:
     def list_tasks(self, job):
         return self.tasks[job]
 
-    def list_jobs(self, *, state):
-        return [job for job in self.jobs.values() if job.state == state]
+    def list_jobs(self, *, state, prefix):
+        return [job for job in self.jobs.values() if job.state == state and str(job.job_id).startswith(prefix)]
 
     def active_job_names_for_prefix(self, prefix):
         return [
@@ -275,8 +271,9 @@ class FakeIris:
 
 
 class FakeMarina:
-    def __init__(self, monkeypatch):
-        self.rows = {}
+    def __init__(self, monkeypatch, *, initial=()):
+        self.rows = {(record.run_id, record.attempt_id): record for record in initial}
+        self.history = []
         self.fail_once = set()
         monkeypatch.setattr(rl_index, "list_attempts", lambda _url=None: list(self.rows.values()))
         monkeypatch.setattr(rl_publication, "publish_result", self.publish)
@@ -286,7 +283,8 @@ class FakeMarina:
             self.fail_once.remove(record.attempt_id)
             raise RuntimeError("Marina temporarily unavailable")
         self.rows[record.run_id, record.attempt_id] = record
-        return "https://progress.test"
+        self.history.append(record)
+        return (_url or "https://progress.test") + "/#" + urlencode({"run": record.run_id, "attempt": record.attempt_id})
 
     def by_attempt(self, attempt):
         return next(row for row in self.rows.values() if row.attempt_id == attempt)

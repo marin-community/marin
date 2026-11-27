@@ -1,15 +1,13 @@
 """Tracker cleanup preserves the workload result when final uploads time out."""
 
-import asyncio
 import os
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 import wandb
 from finestore.rl.run_records import RunIndexIdentity
-from finestore.rl.run_records import read_attempt
 from loguru import logger
 from omegaconf import OmegaConf
 
@@ -143,100 +141,60 @@ def test_close_preserves_workload_result_and_reports_upload_timeout(
     assert len(warnings) == int(slow_role is not None)
 
 
-@pytest.mark.parametrize("training_fails", [False, True])
-def test_training_exit_renews_watchdog_for_records_and_timing(tmp_path, monkeypatch, training_fails):
+def test_training_exit_renews_watchdog_for_records_and_timing(tmp_path, monkeypatch):
+    events = []
     times = iter((100.0, 125.0))
     monkeypatch.setattr(main_base, "time", SimpleNamespace(monotonic=lambda: next(times)))
-    failure = RuntimeError("training failed")
-    timers, exits, executor_shutdown = [], [], []
-    close_exits, timing_exits = [], []
-
-    class Timer:
-        def __init__(self, _timeout, callback):
-            self.callback = callback
-            self.armed = False
-            timers.append(self)
-
-        def start(self):
-            self.armed = True
-
-        def cancel(self):
-            self.armed = False
-
-        def join(self):
-            pass
-
-        def expire(self):
-            if self.armed:
-                self.callback()
-
-    clock = SimpleNamespace(Timer=Timer)
-    monkeypatch.setattr(trainer_module, "threading", clock)
-    monkeypatch.setattr(trainer_module, "os", SimpleNamespace(_exit=exits.append))
-
+    config = OmegaConf.create(
+        {
+            "trainer": {"export_path": str(tmp_path), "project_name": "test", "run_name": "run", "logger": ["records"]},
+            "runtime": {"run_id": "run", "attempt_id": "attempt"},
+        }
+    )
     trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
     trainer.evaluation_wall_time = 7.0
 
-    class RecordingExecutor(ThreadPoolExecutor):
-        def shutdown(self, *args, **kwargs):
-            executor_shutdown.append(timers[0].armed)
-            super().shutdown(*args, **kwargs)
-
     async def train():
         trainer.start_exit_watchdog()
-        asyncio.get_running_loop().set_default_executor(RecordingExecutor())
-        if training_fails:
-            raise failure
+        raise RuntimeError("training failed")
 
     async def shutdown():
-        asyncio.get_running_loop().set_default_executor(RecordingExecutor())
+        events.append("shutdown")
 
-    def expire_active_timers():
-        for timer in timers:
-            timer.expire()
-        return tuple(exits)
-
-    write_attempt = main_base.write_attempt
-
-    def write_timing(*args):
-        timing_exits.append(expire_active_timers())
-        write_attempt(*args)
-
-    monkeypatch.setattr(main_base, "write_attempt", write_timing)
-
-    trainer.train = train
-    trainer.shutdown = shutdown
-    config = OmegaConf.create(
-        {
-            "trainer": {
-                "export_path": str(tmp_path),
-                "project_name": "test",
-                "run_name": "native-run",
-                "logger": ["records"],
-            },
-            "runtime": {"run_id": "native-run", "attempt_id": "native-attempt"},
-        }
-    )
-    experiment = SimpleNamespace(cfg=config, _setup_trainer=lambda tracker: trainer)
+    trainer.train, trainer.shutdown = train, shutdown
+    monkeypatch.setattr(trainer, "start_exit_watchdog", lambda: events.append("start"))
+    monkeypatch.setattr(trainer, "stop_exit_watchdog", lambda: events.append("stop"))
+    experiment = SimpleNamespace(cfg=config, _setup_trainer=lambda _: trainer)
     tracker = BasePPOExp.get_tracker(experiment)
+    experiment.get_tracker = lambda: tracker
     store = tracker.logger["records"].store
     close = store.close
 
     def close_records():
-        close_exits.append(tuple(timer.armed for timer in timers))
+        events.append("close")
         close()
 
     monkeypatch.setattr(store, "close", close_records)
-    experiment.get_tracker = lambda: tracker
-    if training_fails:
-        with pytest.raises(RuntimeError) as raised:
-            BasePPOExp._run(experiment)
-        assert raised.value is failure
-    else:
+    monkeypatch.setattr(
+        main_base, "write_attempt", lambda _, attempt: events.append(attempt.elapsed_excluding_eval_seconds)
+    )
+    with pytest.raises(RuntimeError, match="training failed"):
         BasePPOExp._run(experiment)
-    assert executor_shutdown and all(executor_shutdown)
-    assert close_exits == [(False, True)]
-    assert timing_exits == [(1,)]
-    assert expire_active_timers() == (1,)
-    assert (attempt := read_attempt(str(tmp_path), "native-attempt")) is not None
-    assert attempt.elapsed_excluding_eval_seconds == 18.0
+    assert events == ["start", "shutdown", "start", "close", 18.0, "stop"]
+
+
+def test_start_exit_watchdog_replaces_the_current_timer(monkeypatch):
+    first, second = Mock(), Mock()
+    monkeypatch.setattr(trainer_module, "threading", SimpleNamespace(Timer=Mock(side_effect=(first, second))))
+    trainer = trainer_module.RayPPOTrainer.__new__(trainer_module.RayPPOTrainer)
+    trainer.start_exit_watchdog()
+    trainer.start_exit_watchdog()
+    first.start.assert_called_once()
+    first.cancel.assert_called_once()
+    first.join.assert_called_once()
+    second.start.assert_called_once()
+    second.cancel.assert_not_called()
+    trainer.stop_exit_watchdog()
+    second.cancel.assert_called_once()
+    second.join.assert_called_once()
+    assert trainer._exit_watchdog is None

@@ -13,7 +13,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from click.testing import CliRunner
-from finestore.rl.rl_progress import AttemptSummary, Verdict
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from finestore.rl.rl_progress import Verdict
 from finestore.rl.run_records import (
     AttemptRecord,
     CheckpointReference,
@@ -24,6 +26,7 @@ from finestore.rl.run_records import (
     write_evaluations,
 )
 from fsspec.core import url_to_fs
+from iris.client.workload import Device, DeviceKind
 from iris.resources.state import JobState, TaskState
 from marin.execution.artifact import RECORD_FILENAME
 from marin.rl.skyrl_records import read_stored_skyrl_attempts, recorded_launch
@@ -50,7 +53,7 @@ from experiments.post_training.rl_tests.fixtures import (
 )
 from experiments.post_training.rl_tests.fixtures import controls as write_controls
 from experiments.post_training.skyrl_test_support import read_skyrl_metrics, selection_summary
-from infra.marina.tests.rl_progress_fixtures import grader_report, progress_record
+from infra.marina.tests.rl_progress_fixtures import grader_report
 
 pytestmark = pytest.mark.usefixtures("source_provenance")
 
@@ -249,12 +252,13 @@ def test_nightly_retries_publication_and_refills_deficit(
     recorded_runs, monkeypatch, tmp_path, cache_native_compositions
 ):
     table = snowball_model.SNOWBALL
-    preset = table.by_name["speed-medium"]
+    preset = table.by_name["speed-short"]
     state_dir = tmp_path / "pending"
     state_dir.mkdir()
-    pending = state_dir / "snowball-speed-medium.json"
-    version = gate.config_version(gate.compose_preset(preset))
-    marina = FakeMarina(monkeypatch)
+    pending = state_dir / f"snowball-{preset.name}.json"
+    for run in ("old-1", "old-2"):
+        recorded_runs(preset.name, run, control=True)
+    marina = FakeMarina(monkeypatch, initial=rl_index.list_attempts())
     launcher = FakeLauncher(monkeypatch, table=table)
 
     submissions = iter((("first", "3"), ("refill", "2")))
@@ -279,30 +283,9 @@ def test_nightly_retries_publication_and_refills_deficit(
         assert publication.CONTROL_SUBMISSION_ENV not in request["environment"].env_vars
 
     iris = FakeIris(monkeypatch, on_submit=observe_submit)
-    for run in ("old-1", "old-2"):
-        marina.publish(
-            AttemptSummary.model_validate_json(
-                json.dumps(
-                    progress_record()
-                    | {
-                        "series": preset.name,
-                        "native_run_id": run,
-                        "run_id": run,
-                        "preset_version": version,
-                        "model": "snowball",
-                        "branch": "main",
-                        "dirty": False,
-                        "is_control": True,
-                        "commit": "commit-one",
-                        "base_commit": "commit-one",
-                    }
-                )
-            ),
-            None,
-        )
 
     def tick(batch):
-        return nightly_tick(monkeypatch, state_dir, batch, "snowball/speed-medium")
+        return nightly_tick(monkeypatch, state_dir, batch, f"snowball/{preset.name}")
 
     assert tick("first") == 0
     handoff = publication.ControlSubmission.model_validate_json(pending.read_text())
@@ -342,7 +325,10 @@ def test_nightly_distinguishes_interruptions_and_failures(
         ("native-failed", JobState.FAILED, {}, "training failed", 1),
         ("worker-with-failed-task", JobState.WORKER_FAILED, {TaskState.FAILED: 1}, "worker failed", 1),
         ("oom", JobState.WORKER_FAILED, {}, "OOMKilled", 1),
-        ("host-loss", JobState.WORKER_FAILED, {}, "worker reconcile failure threshold exceeded", 1),
+        ("host-loss", JobState.WORKER_FAILED, {}, "host crash", 1),
+        ("exhausted-memory", JobState.WORKER_FAILED, {}, "out of memory", 1),
+        ("failed-reconcile", JobState.WORKER_FAILED, {}, "worker reconcile failure threshold exceeded", 1),
+        ("unhealthy-worker", JobState.WORKER_FAILED, {}, "unhealthy worker failed", 1),
         ("failed-before-preparing", JobState.FAILED, None, "", 1),
         ("lost-before-preparing", None, None, "", 0),
     )
@@ -352,7 +338,7 @@ def test_nightly_distinguishes_interruptions_and_failures(
             directory.mkdir()
             marina, iris = FakeMarina(patch), FakeIris(patch)
             FakeLauncher(patch)
-            root = f"/test-user/checkpoints-snowball-rl-controls-speed-medium-{scenario}-coordinator"
+            root = f"/runner/checkpoints-snowball-rl-controls-speed-medium-{scenario}-coordinator"
             output = tmp_path / scenario / recipe.RUN_ARTIFACT_VERSION
             if tasks is not None:
                 output = recorded_runs(
@@ -363,7 +349,8 @@ def test_nightly_distinguishes_interruptions_and_failures(
                     coordinator=root,
                     receipt={"result.iris_job_state": None if state == JobState.KILLED else state},
                 )
-                iris.set_job(root + "/training", state, tasks=tasks, reason=reason)
+                message = {"message": reason} if scenario == "host-loss" else {"reason": reason}
+                iris.set_job(root + "/training", state, tasks=tasks, **message)
             if state is not None:
                 iris.set_job(root, JobState.KILLED if state == JobState.KILLED else JobState.FAILED)
             pending = directory / (
@@ -376,34 +363,97 @@ def test_nightly_distinguishes_interruptions_and_failures(
 
 
 def test_nightly_reserves_mochi_racks_and_skips_duplicate_launches(
-    recorded_runs, monkeypatch, tmp_path, cache_native_compositions
+    monkeypatch, tmp_path, capsys, cache_native_compositions
 ):
     marina, iris = FakeMarina(monkeypatch), FakeIris(monkeypatch)
     launcher = FakeLauncher(monkeypatch)
     assert nightly_tick(monkeypatch, tmp_path, "fresh", "mochi") == 0
-    assert launcher.requests == {("speed-medium", "fresh"): 2, ("learning-medium", "fresh"): 1}
+    assert sorted(launcher.requests.values()) == [1, 2]
     launcher.requests.clear()
-    speed = "/test-user/checkpoints-mochi-rl-controls-speed-medium-running-coordinator"
+    speed = "/runner/checkpoints-mochi-rl-controls-speed-medium-running-coordinator"
     iris.set_job(speed, JobState.RUNNING)
-    path = tmp_path / "mochi-speed-medium.json"
-    path.write_text(
+    gb200 = Device(DeviceKind.GPU, "GB200", 4)
+    iris.set_job(speed + "/training", JobState.RUNNING, device=gb200, nodes=15)
+    pending = tmp_path / "mochi-speed-medium.json"
+    pending.write_text(
         publication.ControlSubmission(
             job=speed, outputs=tuple(str(tmp_path / f"unprepared-{n}") for n in range(2))
         ).model_dump_json()
     )
-    duplicate = "/test-user/checkpoints-snowball-rl-controls-speed-medium-lost-reply-coordinator"
-    iris.set_job(duplicate, JobState.BUILDING)
+    iris.set_job("/other/users-test", JobState.RUNNING, device=gb200, nodes=54)
     assert nightly_tick(monkeypatch, tmp_path, "limited", "mochi snowball/speed-medium") == 0
     assert launcher.requests == {("learning-medium", "limited"): 1}
-    branch = "/branch-user/checkpoints-mochi-rl-controls-learning-medium-branch-coordinator"
-    iris.set_job(branch, JobState.PENDING)
-    assert nightly_tick(monkeypatch, tmp_path, "branch-reserved", "mochi") == 0
+    assert "Skipping mochi/speed-medium: pending record" in capsys.readouterr().out
+
+    multi = iris.set_job("/atqamar/custom-gpu-experiment", JobState.PENDING, device=gb200, nodes=32)
+    assert nightly_tick(monkeypatch, tmp_path, "external", "mochi") == 0
+    assert "Skipping mochi/learning-medium: no free rack" in capsys.readouterr().out
     assert launcher.requests == {("learning-medium", "limited"): 1}
-    iris.set_job(branch, JobState.SUCCEEDED)
-    iris.set_job("/branch-user/users-dev-checkpoints-mochi-rl-train-long-3rack-coordinator", JobState.RUNNING)
-    assert nightly_tick(monkeypatch, tmp_path, "training-reserved", "mochi") == 0
+
+    pending.unlink()
+    iris.set_job(speed, JobState.SUCCEEDED)
+    iris.set_job(speed + "/training", JobState.SUCCEEDED)
+    iris.set_job(str(multi), JobState.BUILDING, device=gb200, nodes=32)
+    iris.set_job("/runner/another-experiment/worker", JobState.RUNNING, device=gb200, nodes=17)
+    assert nightly_tick(monkeypatch, tmp_path, "both-owners", "mochi") == 0
     assert launcher.requests == {("learning-medium", "limited"): 1}
-    assert path.exists() and not marina.rows
+
+    def unavailable(*, state, prefix):
+        assert prefix in {"/runner/", "/atqamar/"} and state in nightly._ACTIVE_STATES
+        raise ConnectError(Code.OUT_OF_RANGE, "deep offset")
+
+    monkeypatch.setattr(iris, "list_jobs", unavailable)
+    iris.set_job(speed, JobState.RUNNING)
+    pending.write_text(
+        publication.ControlSubmission(
+            job=speed, outputs=tuple(str(tmp_path / str(i)) for i in range(3))
+        ).model_dump_json()
+    )
+    assert nightly_tick(monkeypatch, tmp_path, "full", "mochi") == 0
+    assert "Mochi rack scan failed" not in capsys.readouterr().err
+    pending.unlink()
+    iris.set_job(speed, JobState.SUCCEEDED)
+
+    duplicate = "/runner/checkpoints-snowball-rl-controls-speed-medium-lost-reply-coordinator"
+    iris.set_job(duplicate, JobState.BUILDING)
+    assert nightly_tick(monkeypatch, tmp_path, "lost-reply", "snowball/speed-medium") == 0
+    assert "Skipping snowball/speed-medium: active coordinator" in capsys.readouterr().out
+    iris.set_job(duplicate, JobState.SUCCEEDED)
+    assert nightly_tick(monkeypatch, tmp_path, "scan-failed", "mochi snowball/speed-medium") == 0
+    assert "Mochi rack scan failed:" in capsys.readouterr().err
+    assert launcher.requests == {("learning-medium", "limited"): 1, ("speed-medium", "scan-failed"): 1}
+    assert not marina.rows
+
+
+def test_nightly_reserves_snowball_budget_across_ticks(monkeypatch, tmp_path, cache_native_compositions):
+    FakeMarina(monkeypatch)
+    iris, launcher = FakeIris(monkeypatch), FakeLauncher(monkeypatch)
+    models = nightly.select_presets("snowball")
+    assert {p.name: nightly._attempt_cost(model, p) for model, p in models} == {
+        "speed-short": 9_996,
+        "data-short": 9_996,
+        "speed-medium": 49_836,
+        "speed-long": 49_836,
+        "learning-medium": 49_836,
+    }
+    assert nightly_tick(monkeypatch, tmp_path, "fresh", "snowball/speed-short snowball/data-short") == 0
+    assert sorted(launcher.requests.values()) == [1, 5]
+    launcher.requests.clear()
+    running = "/runner/checkpoints-snowball-rl-controls-speed-long-running-coordinator"
+    iris.set_job(running, JobState.PENDING)
+    path = tmp_path / "snowball-speed-long.json"
+    path.write_text(publication.ControlSubmission(job=running, outputs=(str(tmp_path / "queued"),)).model_dump_json())
+    assert nightly_tick(monkeypatch, tmp_path, "reserved", "snowball/speed-medium snowball/speed-short mochi") == 0
+    assert launcher.requests == {("speed-short", "reserved"): 1}
+    iris.set_job(running, JobState.KILLED)
+    assert nightly_tick(monkeypatch, tmp_path, "refill", "snowball/speed-medium") == 0
+    assert launcher.requests[("speed-medium", "refill")] == 1
+    assert not path.exists()
+
+    mochi = "/runner/checkpoints-mochi-rl-controls-speed-medium-untracked-coordinator"
+    iris.set_job(mochi, JobState.BUILDING)
+    assert nightly_tick(monkeypatch, tmp_path, "shared", "snowball/speed-medium") == 0
+    assert ("speed-medium", "shared") not in launcher.requests
 
 
 @pytest.mark.parametrize(
@@ -483,7 +533,15 @@ def test_publication_qualifies_terminal_evidence(recorded_runs, monkeypatch, tmp
         )
         write_artifact_record(root, "report", gate.GATE_REVISION, gate.GateReport, result=report.result_payload())
 
-    for case in ("stale-gate", "guard-fail", "storage-fault", "invalid-provenance", "missing-receipt", "issue-conflict"):
+    for case in (
+        "stale-gate",
+        "guard-fail",
+        "storage-fault",
+        "invalid-provenance",
+        "missing-receipt",
+        "issue-conflict",
+        "interrupted-without-report",
+    ):
         with subtests.test(case=case), monkeypatch.context() as patch:
             marina.rows.clear()
             fields = {"result.provenance": None} if case == "invalid-provenance" else {}
@@ -518,12 +576,20 @@ def test_publication_qualifies_terminal_evidence(recorded_runs, monkeypatch, tmp
                 assert _publish_cli(table, preset.name, path, case, "--issue", "74").exit_code == 1
                 assert marina.by_attempt(case).issue == 73
                 continue
-            outcome = publication.publish_runs([str(path)], preset, table=table, gate_path=str(gate_path))
+            interrupted = case == "interrupted-without-report"
+            if interrupted:
+                gate_path = tmp_path / "unwritten-report"
+            outcome = publication.publish_runs(
+                [str(path)], preset, table=table, gate_path=str(gate_path), interrupted=interrupted
+            )
             if case in {"stale-gate", "storage-fault", "missing-receipt"}:
                 assert outcome.unserved_records and not marina.rows
             else:
                 assert not outcome.unserved_records
                 row = marina.by_attempt(case)
+                if interrupted:
+                    assert row.status == "failed" and row.failed_facts == ["required_gate_report"]
+                    continue
                 assert row.status == "succeeded" and row.failed_facts == []
                 assert row.gate_result.verdict == ("invalid" if case == "invalid-provenance" else "fail")
 

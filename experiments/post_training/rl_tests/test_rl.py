@@ -39,6 +39,7 @@ from skyrlrecipe.documents import merge_mappings
 from experiments.post_training import rl as snowball
 from experiments.post_training import rl_compose as recipe
 from experiments.post_training import rl_gate as gate
+from experiments.post_training import rl_index
 from experiments.post_training import snowball_rl as snowball_model
 from experiments.post_training.mochi_assets import (
     MOCHI_STEP_400407_EXPORT,
@@ -49,19 +50,19 @@ from experiments.post_training.mochi_rl import MOCHI
 from experiments.post_training.rl_tests import model_entry_fixture
 from experiments.post_training.rl_tests.fixtures import (
     SELECTION_IDENTITY,
+    FakeIris,
+    FakeMarina,
     append_metrics,
     cli,
     cohort_from_fixtures,
     compose_steps,
     controls,
     copy_evaluations,
-    edit_receipt,
-    fake_iris,
-    fake_publication,
     fake_s3,
     fake_s3_checkpoint,
     printed_status,
     replace_evaluations,
+    set_receipt_fields,
     write_hf_export,
     write_published_artifact,
     write_receipt,
@@ -103,10 +104,6 @@ def test_snowball_presets_plan_native_launches(selection, tmp_path, monkeypatch)
         if preset.name == "eval-short":
             assert status["inputs"]["model"].partition(":")[0] == initializer
             assert status["updates"] == 0 and status["guards"] == []
-        elif preset.name in ("speed-short", "data-short"):
-            invalid = [*arguments, "--init", initializer]
-            result = CliRunner().invoke(snowball.command(table, argv=tuple(invalid)), invalid)
-            assert result.exit_code == 4 and "does not accept --init" in result.output, result.output
 
     mochi = MOCHI.by_name["train-long-3rack"]
     [mochi_step] = snowball.build_experiment(mochi, table=MOCHI).runs
@@ -182,8 +179,7 @@ def test_insufficient_controls_restates_the_exact_base_version(recorded_runs, mo
     ],
 )
 def test_launcher_refuses_invalid_driver_settings(selection, preset_table, monkeypatch, mode, problem, reason):
-    client, _ = fake_iris(monkeypatch, "invalid-driver-config")
-    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    iris = FakeIris(monkeypatch)
     preset = snowball_model.SNOWBALL.by_name["train-long"]
     layout, settings = preset.recipe.layout, (
         "trainer.policy_mini_batch_size=2",
@@ -202,7 +198,7 @@ def test_launcher_refuses_invalid_driver_settings(selection, preset_table, monke
     assert result.exit_code == 4 and reason in result.output, (result.output, result.exception)
     if problem == "batch":
         assert json.loads(result.stdout)["verdict"] == "invalid"
-    client.submit.assert_not_called()
+    assert not iris.requests
 
 
 def test_preset_variants_compose(selection, tmp_path, monkeypatch):
@@ -262,12 +258,6 @@ def test_preset_variants_compose(selection, tmp_path, monkeypatch):
         .partition(":")[0]
         .endswith("@" + recipe.selection_artifact(speed.tasks).version)
     )
-    summary = Path(recipe.selection_artifact(learning.tasks).path()) / recipe.SUMMARY_FILENAME
-    content = json.loads(summary.read_text())
-    content["grader_kind_counts"]["train"]["remote_judge"] = 1
-    summary.write_text(json.dumps(content))
-    with pytest.raises(click.BadParameter, match="AI-judge"):
-        snowball.build_experiment(learning, table=snowball_model.SNOWBALL)
 
 
 def test_checkpoint_cohort_coverage_controls_best_checkpoint(selection, tmp_path):
@@ -463,8 +453,8 @@ def test_wait_reports_native_and_gate_exit_codes(
         controls(recorded_runs, preset.name)
     experiment = snowball.build_experiment(preset, table=table, tasks=tasks)
     step = experiment.runs[0]
-    client, job = fake_iris(monkeypatch, "dashboard-coordinator")
-    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    iris = FakeIris(monkeypatch, name="dashboard-coordinator")
+    job = JobName.root(iris.owner, iris.name)
     source = recorded_runs(
         preset.name,
         step.name,
@@ -486,13 +476,10 @@ def test_wait_reports_native_and_gate_exit_codes(
             run(gate.completed_gate(build_gate))
             return JobState.SUCCEEDED
 
-        client.job.return_value.state_only.side_effect = complete
+        iris.state_for_wait = complete
     else:
-        client.job.return_value.state_only.return_value = (
-            JobState.FAILED if case == "native-failed" else JobState.SUCCEEDED
-        )
-    rows = []
-    fake_publication(monkeypatch, rows.append, "https://progress.test")
+        iris.state_for_wait = lambda: JobState.FAILED if case == "native-failed" else JobState.SUCCEEDED
+    rows = FakeMarina(monkeypatch, initial=rl_index.list_attempts()).history
     args = ["--preset", preset.name, "--version", recipe.RUN_ARTIFACT_VERSION, "--run", "--wait"]
     if tasks:
         args += ["--tasks", SELECTION_IDENTITY]
@@ -507,7 +494,10 @@ def test_wait_reports_native_and_gate_exit_codes(
             assert row.gate_result.verdict == "fail"
 
 
-def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(recorded_runs, preset_table, monkeypatch):
+@pytest.mark.parametrize("interrupted", [False, True], ids=["completed", "interrupted"])
+def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(
+    recorded_runs, preset_table, monkeypatch, interrupted
+):
     nominal = snowball_model.SNOWBALL.by_name["train-long"]
     preset = replace(nominal.with_updates(2), checkpoints="none", export="none", checkpoint_every=None, evaluations=())
     table = preset_table(preset)
@@ -531,12 +521,15 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(recorded
     )
     receipt = json.loads((source / "terminal.json").read_text())
     launch = receipt["config"]
-    base_version = gate.config_version(gate.compose_preset(nominal))
-    client, job = fake_iris(monkeypatch, "index-coordinator")
-    monkeypatch.setenv("WANDB_API_KEY", "test-only-mocked-submission")
+    if interrupted:
+        base_version = "fixture-base"
+        monkeypatch.setattr(snowball, "_base_preset", lambda *_: (tree, base_version))
+    else:
+        base_version = gate.config_version(gate.compose_preset(nominal))
+    iris = FakeIris(monkeypatch, name="index-coordinator")
+    job = JobName.root(iris.owner, iris.name)
     monkeypatch.setattr(snowball, "_PUBLICATION_POLL_SECONDS", 0)
-    publications, followers = [], []
-    fake_publication(monkeypatch, publications.append, "https://progress.test")
+    publications, followers = FakeMarina(monkeypatch).history, []
 
     def run_local(argv, **kwargs):
         if argv[0] == "gh":
@@ -563,7 +556,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(recorded
     attempt = "native-indexed"
     export = launch["artifacts"]["export_root"]
 
-    def prepare(**kwargs):
+    def prepare(job, kwargs):
         identity = json.loads(kwargs["environment"].env_vars[RUN_INDEX_ENV])
         index = RunIndexIdentity.model_validate(identity[launch["run"]["id"]])
         config = deepcopy(launch)
@@ -578,11 +571,12 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(recorded
                 metrics_started_at=receipt["result"]["started_at"],
             ),
         )
-        return SimpleNamespace(job_id=job)
 
     def finish():
         if not publications:
             return JobState.RUNNING
+        if interrupted:
+            return JobState.FAILED
         launch["run"].update(attempt_id=attempt, coordinator_iris_job_id=str(job))
         write_receipt(source, receipt)
         metrics = read_skyrl_metrics(str(source), attempt_id="native-old")
@@ -594,8 +588,7 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(recorded
         )
         return JobState.SUCCEEDED
 
-    client.submit.side_effect = prepare
-    client.job.return_value.state_only.side_effect = finish
+    iris.on_submit, iris.state_for_wait = prepare, finish
     result = cli(table, preset.name, "--run", entry_module=module)
     assert result.exit_code == 0, (result.output, result.exception)
     assert not publications
@@ -603,14 +596,20 @@ def test_detached_ungated_launch_indexes_prepared_then_terminal_attempt(recorded
     with monkeypatch.context() as timeout:
         clock = iter((0.0, 1_000_000.0))
         timeout.setattr(snowball, "time", SimpleNamespace(monotonic=lambda: next(clock)))
-        timeout.setattr(client.job.return_value, "state_only", lambda: JobState.RUNNING)
+        timeout.setattr(iris, "state_for_wait", lambda: JobState.RUNNING)
         assert snowball.main(table, argv=follower) == 3
     assert read_attempt(export, attempt).interruption is None
     assert [row.status for row in publications] == ["running"]
     publications.clear()
-    assert snowball.main(table, argv=follower) == 0
+    assert snowball.main(table, argv=follower) == int(interrupted)
     running, finished = publications
-    assert (running.status, finished.status) == ("running", "succeeded")
+    assert running.status == "running"
+    if interrupted:
+        stored = read_attempt(export, attempt)
+        assert stored.result is None and stored.interruption == "coordinator_terminated"
+        assert finished.status == "failed" and finished.failed_facts == ["coordinator_interrupted"]
+        return
+    assert finished.status == "succeeded"
     for row in publications:
         assert (row.attempt_id, row.run_id, row.pr_number) == (attempt, finished.run_id, 124)
         assert (row.base_preset_version, row.base_commit) == (base_version, tree)
@@ -637,18 +636,6 @@ def test_control_refuses_actual_untracked_source_before_execution(selection, tmp
         snowball.build_experiment(
             snowball_model.SNOWBALL.by_name["speed-medium"], control="test-batch", table=snowball_model.SNOWBALL
         )
-
-
-def test_refusals_use_exit_four(selection, tmp_path, capsys):
-    table = snowball_model.SNOWBALL
-    initializer = table.by_name["train-long"].model
-    assert snowball.main(table, argv=["compare"], init=initializer) == 4
-    assert "Python init" in capsys.readouterr().err
-    name, version = "tests/valid-published-init", "2026.11.17"
-    write_published_artifact(tmp_path, name, version, Artifact, source=str(tmp_path / name / version))
-    args = ["--preset", "train-long", "--version", recipe.RUN_ARTIFACT_VERSION, "--init", f"{name}@{version}"]
-    result = CliRunner().invoke(snowball.command(table, argv=tuple(args), init=initializer), args)
-    assert result.exit_code == 4 and "Python init and --init" in result.output
 
 
 @pytest.mark.parametrize("recorded_runs", [2], indirect=True, ids=["one-task-per-family"])
@@ -752,9 +739,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         return subprocess.CompletedProcess(command, 0, json.dumps(receipt["result"]), "")
 
     monkeypatch.setattr(skyrl_api, "_run_launcher", native)
-    published = []
-
-    fake_publication(monkeypatch, published.append, "http://progress.test")
+    published = FakeMarina(monkeypatch).history
     arguments = [
         "--preset",
         preset.name,
@@ -768,7 +753,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         "3",
         *set_args,
     ]
-    client, job = fake_iris(monkeypatch, "train-coordinator")
+    iris = FakeIris(monkeypatch, name="train-coordinator")
     default_module = snowball_model.__name__
     second_entry = "experiments.post_training.mochi_rl"
     mode, coordinator_module = "valid", default_module
@@ -780,7 +765,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
         patch.setattr(sys.modules["__main__"], "__spec__", module_spec)
         return model_entry_fixture.main(entries[name], arguments)
 
-    def submit(**kwargs):
+    def submit(job, kwargs):
         command = kwargs["entrypoint"].command
         assert command == ["python", "-m", coordinator_module, *arguments]
         environment = kwargs["environment"].env_vars
@@ -788,24 +773,24 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
             assert environment["HF_TEST_KEY"] == "test-initializer-credential"
         assert "UNRELATED_SECRET" not in environment
         if mode == "failed-native":
-            return SimpleNamespace(job_id=job)
+            return
         with monkeypatch.context() as child:
             for key, value in environment.items():
                 child.setenv(key, value)
-            child.setenv("IRIS_TASK_ID", "/test-user/train-coordinator/0")
+            task = f"{job}/0"
+            child.setenv("IRIS_TASK_ID", task)
             child.setattr(
                 "experiments.post_training.rl_publication.publish_result",
                 lambda *args: pytest.fail("Coordinator contacted Marina"),
             )
-            info = JobInfo(task_id=JobName.from_wire("/test-user/train-coordinator/0"))
+            info = JobInfo(task_id=JobName.from_wire(task))
             with iris_ctx_scope(IrisContext.from_job_info(info)):
                 code = invoke_entry(coordinator_module, child)
             assert code == {"valid": 0, "failed-following": 3}.get(mode, 4)
         set_job_info(None)
-        return SimpleNamespace(job_id=job)
 
-    client.submit.side_effect = submit
-    client.job.return_value.state_only.side_effect = lambda: JobState.SUCCEEDED if mode == "valid" else JobState.FAILED
+    iris.on_submit = submit
+    iris.state_for_wait = lambda: JobState.SUCCEEDED if mode == "valid" else JobState.FAILED
 
     policy_uri = "s3://marin-test/models/python-policy"
     policy_path = tmp_path / "python-policy"
@@ -890,8 +875,9 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
     evaluations = read_evaluations(str(source / "exports"), attempt_id=completed_id, evaluation="eval/")
     replace_evaluations(source, [row for row in evaluations if row.step != 2])
     (source / "exports/best_checkpoint.json").unlink()
-    with edit_receipt(source) as receipt:
-        receipt["result"]["model"] = None
+    receipt = json.loads((source / "terminal.json").read_text())
+    set_receipt_fields(receipt, {"result.model": None})
+    write_receipt(source, receipt)
     step = built.runs[0]
     write_skyrl_run_record(
         source, step.name, step.version, fingerprint=step.fingerprint(), global_step=None, attempt_id=completed_id
@@ -915,7 +901,7 @@ def test_train_long_reenters_the_model_module_and_reports_checkpoint_evaluations
 
     mode, coordinator_module = "failed-native", default_module
     module(default_module)
-    with edit_receipt(source) as receipt:
-        receipt["result"]["state"] = "failed"
+    set_receipt_fields(receipt, {"result.state": "failed"})
+    write_receipt(source, receipt)
     result = invoke_with_preflight_stub(entry)
     assert result.exit_code == 3 and published[-1].status == "failed", (result.output, result.exception)

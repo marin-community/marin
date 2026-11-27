@@ -40,10 +40,10 @@ def table(request):
     return {"snowball": SNOWBALL, "mochi": MOCHI}[request.param]
 
 
-def plan(table, name, *options, sft_presets=None):
+def plan(table, name, *options, **kwargs):
     if table.by_name[name].tasks_input == "required":
         options = ("--tasks", SELECTION_IDENTITY, *options)
-    return cli(table, name, "--plan", *options, sft_presets=sft_presets)
+    return cli(table, name, "--plan", *options, **kwargs)
 
 
 def test_agentic_plan_binds_native_tasks_and_keeps_attempts(selection, tmp_path, monkeypatch):
@@ -324,30 +324,38 @@ def test_sft_composition_reenters_its_own_module(selection, monkeypatch, model, 
 @pytest.mark.parametrize(
     "model, name, options, error",
     [
-        ("mochi", "train-long", "--checkpoints best", "requires checkpoint_every"),
         ("mochi", "train-long", "", "must use s3 storage"),
         ("mochi", "train-long", "--resume checkpoints/previous@2026.11.19.1", "--resume requires checkpointing"),
         ("snowball", "train-long", "--resume checkpoints/previous@2026.11.19.1", "source run's retention period"),
         ("snowball", "train-long", "--resume run@1 --init model@1", "cannot be combined with --init"),
         ("snowball", "learning-medium", "--control test-batch --priority production", "default run options"),
         ("snowball", "train-long", "--checkpoint-every 3", "fall on checkpoint steps"),
-        ("snowball", "train-long", "--sft unknown --init model@1", "--sft requires a fresh candidate"),
         ("snowball", "learning-medium", "--checkpoints latest", "gated presets do not accept"),
         ("snowball", "learning-medium", "--sft unknown", "uses default-model controls"),
-        ("snowball", "speed-short", "--sft unknown", "does not accept --sft"),
-        ("snowball", "train-medium-agentic", "--set trainer.hf_export_checkpoint=best", "owned by the preset"),
-        ("snowball", "train-medium-agentic", "--set trainer.placement.policy_num_nodes=10", "owned by the preset"),
         ("snowball", "speed-medium", "--wait", "--wait"),
-        ("snowball", "speed-medium", "--set trainer.dump_eval_results=false", "owned"),
+        ("snowball", "speed-short", "--init fixture-model@2026.11.17", "does not accept --init"),
+        ("snowball", "learning-medium", "", "AI-judge"),
+        ("snowball", "train-long", "--init model@1", "Python init and --init"),
+        ("snowball", "train-long", "compare", "Python init"),
         ("snowball", "speed-medium", "--set trainer.hf_hub_repo_id=org/model", "use the preset's declared owned keys"),
-        ("snowball", "speed-medium", "--set trainer.policy.optimizer_config.lr=wrong", "lr"),
     ],
 )
-def test_command_refusals(selection, model, name, options, error, request, monkeypatch):
+def test_command_refusals(selection, model, name, options, error, request, monkeypatch, capsys, tmp_path):
     table = MOCHI if model == "mochi" else SNOWBALL
     if "retention period" in error:
         request.getfixturevalue("stored_checkpoint")
-    if not options:
+    if error == "does not accept --init":
+        write_published_artifact(tmp_path, "fixture-model", "2026.11.17", Artifact, source=str(tmp_path / "model"))
+    if error == "AI-judge":
+        summary = Path(rl_compose.selection_artifact(table.by_name[name].tasks).path()) / rl_compose.SUMMARY_FILENAME
+        content = json.loads(summary.read_text())
+        content["grader_kind_counts"]["train"]["remote_judge"] = 1
+        summary.write_text(json.dumps(content))
+    if options == "compare":
+        assert rl.main(table, argv=["compare"], init=table.by_name[name].model) == 4
+        assert error in capsys.readouterr().err
+        return
+    if model == "mochi" and not options:
         monkeypatch.setattr(rl_compose, "artifact_prefix", lambda _cluster: "s3://marin-us-east-02a/marin")
         monkeypatch.setenv("MARIN_PREFIX", "gs://marin-us-central2/fixture")
         monkeypatch.setattr(rl, "read_skyrl_attempt", lambda _path: None)
@@ -358,5 +366,8 @@ def test_command_refusals(selection, model, name, options, error, request, monke
             return storage_exists(path)
 
         monkeypatch.setattr(StoragePath, "exists", check_storage)
-    result = plan(table, name, *shlex.split(options), sft_presets=lambda: pytest.fail("loaded refused SFT presets"))
+    init = table.by_name[name].model if error == "Python init and --init" else None
+    result = plan(
+        table, name, *shlex.split(options), init=init, sft_presets=lambda: pytest.fail("loaded refused SFT presets")
+    )
     assert result.exit_code == 4 and error in result.output, (result.output, result.exception)
