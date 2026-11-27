@@ -4,9 +4,11 @@
 """Retained Math-TIR tasks lower to their required LOCAL backend and serve their stateful Python tool."""
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
+from marinskyrl.task_machine_factories import registry_authfile
 from rolloutengine.harness.shell import ToolContext
 from shellbox.machine import Backend, ExitReason, MachineSpec, RegistryImage, Result, UnsupportedMachineSpec
 from skyrl_gym.nemotron_python_tools import (
@@ -109,3 +111,10 @@ def test_provider_advertises_declared_tool_and_runs_calls_in_one_kernel():
     assert kernel.calls == [("print(1+1)", 10.0)]
     assert "string code" in asyncio.run(session.call("stateful_python_code_exec", {"code": 3})).content
     assert "Unknown tool" in asyncio.run(session.call("shell", {"code": "x"})).content
+
+
+def test_local_registry_credential_is_written_privately(monkeypatch):
+    monkeypatch.setenv("FIXTURE_REGISTRY_AUTH", '{"auths": {"ghcr.io": {"auth": "eA=="}}}')
+    path = registry_authfile("FIXTURE_REGISTRY_AUTH")
+    assert json.loads(path.read_text())["auths"]["ghcr.io"]["auth"] == "eA=="
+    assert path.stat().st_mode & 0o077 == 0 and path.parent.stat().st_mode & 0o077 == 0
