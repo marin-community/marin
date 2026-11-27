@@ -379,12 +379,9 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
                     parts=GeneratedRows(GENERATOR_VERSION, EXCLUDED_GENERATORS, PYTHON_HASH_SEED, GENERATOR_PARTS),
                 ),
                 convert=convert_generated,
-                # Held at the sealed version: this source's receipts are re-cut by
-                # its own re-seal, whose admission landing bumps it to "4" with
-                # them (#11951 → 2, #11987 → 3, #12238 → 4 en route). Bumping it
-                # earlier would fail the within-source dedup binding, which
-                # refuses any pin mismatch.
-                version="1",
+                # The admission landing (L2) ships this bump together with the
+                # refreshed receipt families bound at this version.
+                version="4",
                 intended_use=IntendedUse.TRAIN,
                 rubric=GENERATED_RUBRIC,
                 controls=GENERATED_CONTROLS,

@@ -1,0 +1,16 @@
+{
+  "task_id": "two-sum",
+  "difficulty": "Easy",
+  "query": "You are an expert Python programmer...",
+  "prompt": "You are an expert Python programmer. Solve the two-sum problem.\n\n```python\nclass Solution:\n    def twoSum(self, nums: List[int], target: int) -> List[int]:\n        ",
+  "starter_code": "class Solution:\n    def twoSum(self, nums: List[int], target: int) -> List[int]:\n        ",
+  "entry_point": "Solution().twoSum",
+  "test": "def check(candidate):\n    assert candidate(nums = [3, 3],target = 6) == [0, 1]\n    assert candidate(nums = [2, 7, 11, 15],target = 9) == [0, 1]",
+  "response": "class Solution:\n    def twoSum(self, nums, target):\n        seen = {}\n        for i, n in enumerate(nums):\n            if target - n in seen:\n                return [seen[target - n], i]\n            seen[n] = i",
+  "input_output": "[{'input': 'nums = [3,3], target = 6', 'output': '[0, 1]'}]",
+  "completion": "class Solution:\n    def twoSum(self, nums, target):\n        seen = {}\n        for i, n in enumerate(nums):\n            if target - n in seen:\n                return [seen[target - n], i]\n            seen[n] = i",
+  "estimated_date": "2024-01-01",
+  "tags": ["array"],
+  "question_id": 1,
+  "problem_description": "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target."
+}
