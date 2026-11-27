@@ -127,8 +127,8 @@ def test_temporary_export_is_relocated_to_a_permanent_path_before_pruning(tmp_pa
 
 
 def test_missing_completion_manifest_aborts_before_any_deletion(tmp_path):
-    training, root, export, _ = stage_run(tmp_path, export_under_temporary_root=False)
-    Path(str(StoragePath(export) / MODEL_MANIFEST_FILENAME)).unlink()
+    training, root, _export, _ = stage_run(tmp_path, export_under_temporary_root=False)
+    Path(str(StoragePath(_export) / MODEL_MANIFEST_FILENAME)).unlink()
     output = tmp_path / "storage" / "2026.11.26.532"
 
     with pytest.raises(ValueError, match="completion manifest"):
@@ -139,7 +139,7 @@ def test_missing_completion_manifest_aborts_before_any_deletion(tmp_path):
 
 
 def test_foreign_checkpoint_root_is_never_pruned(tmp_path):
-    training, root, export, _ = stage_run(tmp_path, export_under_temporary_root=False)
+    training, root, _export, _ = stage_run(tmp_path, export_under_temporary_root=False)
     output = tmp_path / "storage" / "2026.11.26.532"
     record = json.loads((Path(training) / ".artifact.json").read_text())
     record["result"]["checkpoint_root"] = f"file://{tmp_path}/someone-else/checkpoints"
@@ -152,7 +152,7 @@ def test_foreign_checkpoint_root_is_never_pruned(tmp_path):
 
 
 def test_uncommitted_final_checkpoint_aborts_before_any_deletion(tmp_path):
-    training, root, export, _ = stage_run(tmp_path, export_under_temporary_root=False)
+    training, root, _export, _ = stage_run(tmp_path, export_under_temporary_root=False)
     StoragePath(root / f"global_step_{FINAL_STEP}" / "trainer_state.pt").rm()
     output = tmp_path / "storage" / "2026.11.26.532"
 
