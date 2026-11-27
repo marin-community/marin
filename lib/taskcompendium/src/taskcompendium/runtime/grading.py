@@ -65,6 +65,7 @@ from taskcompendium.runtime.script_judge_service import (
     script_judge_service,
 )
 from taskcompendium.runtime.staging import StagedFile, resource_files, write_archive
+from taskcompendium.runtime.verifier_spec import declared_verifier_toml
 from taskcompendium.submission import conversation_messages, native_action_text, require_submission_compatibility
 
 GRADING_TIMEOUT = 600.0
@@ -475,8 +476,8 @@ def _grading_files(
     ]
     if attempt.state is not None:
         files.append(StagedFile(STATE_PATH, json.dumps(attempt.state.value, allow_nan=False).encode()))
-    if grading.spec is not None:
-        files.append(StagedFile(SPEC_PATH, render_spec(grading.spec).encode()))
+    if isinstance(grading.grader, VerifyitGrader):
+        files.append(StagedFile(SPEC_PATH, declared_verifier_toml(grading.grader)))
     if isinstance(grading.grader, ScriptGrader):
         messages = conversation_messages(attempt.conversation.events)
         files.append(StagedFile(grading.grader.conversation_path, json.dumps(messages, allow_nan=False).encode()))
