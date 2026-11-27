@@ -13,11 +13,12 @@ source has no controls and its kept rows are admitted without them.
 
 import tomllib
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.convert.answers import source_defect, unsupported
 from taskcompendium.convert.delivery import rewritten_task
 from taskcompendium.convert.tasks import conversation_task
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import TaskSpec, TextMessage
+from taskcompendium.models import GraderMachine, TaskSpec, TextMessage
 from taskcompendium.pipeline.inputs import ConversionContext, required_grader_environment
 from taskcompendium.pipeline.models import ImportRejection, IntendedUse, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import inline_resource
@@ -28,7 +29,7 @@ from experiments.post_training.task_curation.datasets.tasktrove.archives import 
 from experiments.post_training.task_curation.datasets.tasktrove.conversion.archive import archive_file
 from experiments.post_training.task_curation.datasets.tasktrove.judged import REWRITE_REASON, response_instruction
 from experiments.post_training.task_curation.pipeline import CurationRecipe, process_rows
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, TaskFormat
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin, TaskFormat
 
 CONFIG = "laion__nemotron-gym-multichallenge-advanced-v4"
 CONTEXT_FILE = "conversation.txt"
@@ -77,7 +78,7 @@ def convert_multichallenge(row: RawRow, context: ConversionContext) -> TaskSpec 
     package = verifyit_package(
         JudgeSpec(criteria=criteria, context=CONTEXT_FILE, rubric=RUBRIC_CHECKLIST),
         (inline_resource(CONTEXT_FILE, conversation), inline_resource("source/judge.toml", judge_toml)),
-        environment=required_grader_environment(context),
+        placement=GraderMachine(environment=required_grader_environment(context)),
     )
     prompt = TextMessage(role="user", content=response_instruction(instruction))
     task = conversation_task(row, events=(prompt,), package=package)
@@ -90,9 +91,12 @@ def sources() -> list[RlDataSource[CurationRecipe]]:
         RlDataSource(
             pipeline=process_rows,
             info=SourceInfo(
-                id="Task Trove:laion__nemotron-gym-multichallenge-advanced-v4",
-                title="laion/nemotron-gym-multichallenge-advanced-v4",
-                origin="Task Trove",
+                data_restriction=DataRestriction.OPEN,
+                upstream_dataset="laion__nemotron-gym-multichallenge-advanced-v4",
+                upstream_name="laion/nemotron-gym-multichallenge-advanced-v4",
+                subset=None,
+                build_path="Task Trove",
+                origin=SourceOrigin.TASKTROVE,
                 family="llm-judge-freeform",
                 tags=("agentic", "multi-turn"),
                 count=1068,

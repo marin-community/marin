@@ -16,6 +16,7 @@ from skyrl_train.trajectory_runners.types import TaskRequestBatch
 
 from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
+from skyrl_train.grader_reporting import GraderStats, write_grader_report
 from skyrl_train.metric_names import EVAL_OUTCOME_METRIC_PREFIX, GENERATE_OUTCOME_METRIC_PREFIX
 from skyrl_train.io import io
 from marinskyrl.resource_locator import join_resource_path
@@ -60,10 +61,6 @@ class _EvaluationRollouts:
     ordinals: List[int]
     example_prompt: ConversationType
     example_batch: TrajectoryBatch
-
-    @property
-    def env_classes(self) -> List[str]:
-        return [row.metric_class for row in self.metadata]
 
     @property
     def data_sources(self) -> List[str | None]:
@@ -351,7 +348,21 @@ def _dump_eval_results(
     tokenizer: AutoTokenizer,
     rollouts: _EvaluationRollouts,
     metrics: Dict[str, float],
+    *,
+    val_set_name: str | None,
 ) -> None:
+    if cfg.trainer.get("dump_grader_report", False):
+        stats = GraderStats()
+        stats.add(rollouts.batch, rollouts.metadata)
+        summary = stats.summary()
+        key = "eval_only" if global_step is None else str(global_step)
+        if val_set_name is not None:
+            key = f"{val_set_name}/{key}"
+        write_grader_report(
+            str(cfg.trainer.grader_report_dir),
+            key,
+            {"evaluation": summary["subsets"], "evaluation_tasks": summary["tasks"]},
+        )
     if not cfg.trainer.dump_eval_results:
         return
     with Timer("dump_eval_results"):
@@ -363,8 +374,7 @@ def _dump_eval_results(
             data_save_dir,
             tokenizer,
             rollouts.batch,
-            rollouts.data_sources,
-            rollouts.env_classes,
+            rollouts.metadata,
             metrics,
             rollouts.uids,
             attempt_id=str(cfg.runtime.attempt_id),
@@ -431,7 +441,7 @@ async def evaluate(
             cfg.generator.eval_n_samples_per_prompt,
         )
         _persist_evaluation(cfg, global_step, val_set_name, rollouts, records_export_root)
-        _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics)
+        _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics, val_set_name=val_set_name)
 
         return eval_metrics
     finally:
@@ -506,6 +516,6 @@ async def evaluate_step_wise(
         final_rollouts.batch, final_rollouts.uids, final_rollouts.data_sources, cfg.generator.eval_n_samples_per_prompt
     )
     _persist_evaluation(cfg, global_step, val_set_name, final_rollouts, records_export_root)
-    _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics)
+    _dump_eval_results(cfg, global_step, tokenizer, rollouts, eval_metrics, val_set_name=val_set_name)
 
     return eval_metrics

@@ -9,6 +9,8 @@ from pathlib import PurePosixPath
 
 import pytest
 from verifyit.grade import GradingInfraError
+from verifyit.modes.grade_judge import BASE_URL_ENV, MODEL_ENV
+from verifyit.spec import RUBRIC_LABELS, JudgeSpec
 
 from taskcompendium.importers.evalchemy.grader import DEPENDENCIES, scorer_files
 from taskcompendium.importers.evalchemy.scorers import minerva
@@ -153,3 +155,20 @@ def test_scorer_package_ships_every_module_its_files_import(scorer):
             if isinstance(node, ast.ImportFrom) and node.level == 1:
                 for name in [node.module] if node.module else [alias.name for alias in node.names]:
                     assert str(package / (name.replace(".", "/") + ".py")) in shipped, f"{path} imports {name}"
+
+
+def test_judged_olympiad_sends_an_unmatched_boxed_answer_to_the_supplied_judge(judge_server, monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv(BASE_URL_ENV, f"http://127.0.0.1:{judge_server.server_port}/v1")
+    monkeypatch.setenv(MODEL_ENV, "fixture-judge")
+    judge = JudgeSpec(
+        references=("1/2",),
+        rubric=RUBRIC_LABELS,
+        exact_gate=False,
+        prompt_template="Reference: {reference}\nCandidate: {candidate}",
+        label_scores={"PASS": 1.0, "FAIL": 0.0},
+    )
+    verdict = score("olympiad", {"expected": ["1/2"], "judged": True}, r"The answer is \boxed{one half}", judge)
+    assert (verdict.reward, verdict.detail["method"], verdict.detail["extracted"]) == (1.0, "llm_judge", "one half")
+    [request] = judge_server.requests
+    assert request["messages"][-1]["content"] == "Reference: 1/2\nCandidate: one half"

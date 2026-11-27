@@ -96,6 +96,8 @@ def convert_olympiad(row: RawRow, context: ConversionContext, *, judged: bool) -
             references=(json.dumps(list(answers), ensure_ascii=False),),
             question=row.data["problem"],
             rubric="labels",
+            transport_attempts=1,
+            parse_attempts=1,
             exact_gate=False,
             prompt_template=EQUIVALENCE_JUDGE_TEMPLATE.replace("{reference_answers}", "{reference}").replace(
                 "{candidate_answer}", "{candidate}"

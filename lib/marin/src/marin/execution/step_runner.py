@@ -32,12 +32,11 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 from marin.execution.artifact import (
-    FINGERPRINT_KEY,
+    EXECUTOR_INFO_FILENAME,
     STEP_RUNNER_EXECUTOR_VERSION,
-    VERSION_KEY,
     StepRecordIdentity,
     check_drift,
-    is_mutable_version,
+    is_mutable_step,
     write_step_record,
 )
 from marin.execution.remote import RemoteCallable, sanitize_job_name
@@ -88,7 +87,7 @@ def _write_executor_info(step: StepSpec) -> None:
     ``STEP_RUNNER_EXECUTOR_VERSION`` so ``read_record`` ignores it as a record source and never
     mistakes the stub for a completed cache (#6836).
     """
-    info_path = os.path.join(step.output_path, ".executor_info")
+    info_path = os.path.join(step.output_path, EXECUTOR_INFO_FILENAME)
     fs = url_to_fs(info_path, use_listings_cache=False)[0]
     if fs.exists(info_path):
         return
@@ -112,6 +111,13 @@ def _write_executor_info(step: StepSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _cached_step_is_ready(step: StepSpec, status: str | None) -> bool:
+    if step.read_only or status != STATUS_SUCCESS or is_mutable_step(step):
+        return False
+    check_drift(step)
+    return True
+
+
 def step_is_built(step: StepSpec) -> bool:
     """True when the runner will serve ``step`` from cache rather than rebuild it.
 
@@ -119,11 +125,11 @@ def step_is_built(step: StepSpec) -> bool:
     same condition the launcher uses to skip a step, evaluated here at scheduling
     time so an already-built node's dependencies are pruned from the schedule
     instead of rebuilt; the launcher re-checks authoritatively before serving the
-    node. A mutable (``dev``) artifact always rebuilds, so it is never pruned.
+    node. A mutable (``dev``) artifact always rebuilds. A read-only input always
+    checks that its source exists. Both are excluded from cache pruning.
     """
-    if step.hash_attrs.get(FINGERPRINT_KEY) is not None and is_mutable_version(step.hash_attrs.get(VERSION_KEY, "")):
-        return False
-    return StatusFile(step.output_path, worker_id="cache-check").status == STATUS_SUCCESS
+    status = StatusFile(step.output_path, worker_id="cache-check").status
+    return _cached_step_is_ready(step, status)
 
 
 def _expand_unseen(
@@ -298,9 +304,8 @@ class StepRunner:
             cascades to dependents) so a rerun rebuilds it and its now-unpruned inputs.
             """
             path = step.output_path
-            mutable = check_drift(step)
             status = StatusFile(path, worker_id="check").status
-            if status == STATUS_SUCCESS and not mutable:
+            if _cached_step_is_ready(step, status):
                 logger.info(f"Skip {step.name_with_hash}: already succeeded (pruned subtree)")
                 completed.add(path)
             else:
@@ -357,22 +362,19 @@ class StepRunner:
             logger.info(f"[DRY RUN] Would run {step_name}")
             return None
 
-        # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
-        mutable = check_drift(step)
+        if not step.read_only:
+            status = StatusFile(output_path, worker_id="check").status
+            if _cached_step_is_ready(step, status):
+                logger.info(f"Skip {step_name}: already succeeded")
+                return None
 
-        # Quick read-only status check to avoid submitting unnecessary jobs
-        status = StatusFile(output_path, worker_id="check").status
-        if status == STATUS_SUCCESS and not mutable:
-            logger.info(f"Skip {step_name}: already succeeded")
-            return None
+            if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
+                raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
 
-        if not force_run_failed and status in (STATUS_FAILED, STATUS_DEP_FAILED):
-            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
+            _write_executor_info(step)
 
-        _write_executor_info(step)
-
-        if step.fn is None:
-            raise ValueError(f"Step {step_name} has no callable fn")
+            if step.fn is None:
+                raise ValueError(f"Step {step_name} has no callable fn")
 
         captured_client = fray_client
 
@@ -418,7 +420,7 @@ def _step_record_identity(step: StepSpec) -> StepRecordIdentity:
 
 
 def run_step(step: StepSpec) -> None:
-    """Execute a single step with explicit cache check, locking, heartbeat, and artifact saving.
+    """Check a read-only input or execute a step with caching, locking, and artifact saving.
 
     An inline step that does not write its own record (``writes_record=False``) has its
     return saved via :func:`~marin.execution.artifact.write_step_record` (identity + lineage +
@@ -429,11 +431,15 @@ def run_step(step: StepSpec) -> None:
     output_path = step.output_path
     step_label = step.name_with_hash
 
-    # Advisory recipe-drift check; mutable (dev) artifacts always rebuild.
-    mutable = check_drift(step)
+    if step.read_only:
+        if not StoragePath(output_path).exists():
+            raise FileNotFoundError(f"{step_label}: no artifact at {output_path}")
+        return
 
     # 1. Cache check
+    mutable = is_mutable_step(step)
     if not mutable and check_cache(output_path):
+        check_drift(step)
         return
 
     # 2. Acquire distributed lock with heartbeat (blocks until lock obtained or step done)
@@ -461,6 +467,8 @@ def run_step(step: StepSpec) -> None:
                 status_file.write_status(STATUS_FAILED)
                 raise
     except StepAlreadyDone:
+        if not mutable:
+            check_drift(step)
         logger.info(f"Step {step_label} completed by another worker")
 
 

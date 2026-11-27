@@ -26,6 +26,58 @@ flowchart LR
     G --> R[Typed grade result]
 ```
 
+## Protected shared graders
+
+The native Harbor package adapters in `taskcompendium.harbor` prepare new,
+versioned tasks for grading in the actor's container. `shared_package.harden_shared_swe`
+protects Verifyit pytest graders and source-declared native language runners.
+`shared_source.harden_shared_source` preserves the original Scale-SWE,
+SWE-Lego, or SWE-rebench source scorer behind the same UID boundary. Callers
+supply the original package files and an explicit `SharedDependencyState`.
+These helpers do not import dataset declarations or the Atlas trial executor.
+Harbor runs the declared initialization command before actor access. The source
+adapter authorizes Git access to the declared workspace during that setup,
+because its build layer has already assigned the workspace to the actor UID.
+Use a Harbor build with task schema 1.3 support. Private bootstrap inputs are stored in a
+root-only image directory. Harbor applies the declared actor UID before actor
+commands. A runner that ignores initialization cannot read those inputs as the actor. Different
+private inputs produce different image contexts; generated images must stay private.
+
+Bootstrap saves private verifier files and a trusted test reference in a
+root-owned directory. The actor runs as UID 10001 and cannot read that private
+material. Grading stops actor processes, restores the reference, runs tests as
+UID 10002, and writes the final report as root. Product files and permitted
+dependencies stay mutable. The published integrity contract records dependency
+changes, startup hooks, and known gaps; it does not promise isolation from all
+candidate-produced output or interpreter startup hooks.
+
+Prime source adapters grant dependency writes only to each task Python's
+purelib and platlib directories. The root control interpreter and standard
+library stay read-only to the actor. Bootstrap rejects a control runtime or
+ancestor that the actor can modify.
+
+`shared_reference.harden_shared_swe_reference` compiles a previously captured
+trusted reference into a new package. The reference binds the source package,
+image context, controller, and declared actor environment. Keep source tests,
+patches, and captured references private; publish a new dataset version and
+qualify its original oracle and NoP controls after any adapter change.
+
+Portable package regressions run with the normal affected-test runner.
+`tests/test_shared_pytest.py`, `tests/test_shared_source.py`, and
+`tests/test_shared_native.py` also execute real Linux UID transitions. Run them
+only inside an isolated Linux container as root, with pytest, pytest-json-report,
+pip, setuptools, and each selected native toolchain installed. These suites use
+the `docker` marker and run in the dedicated `shared-grader-unit` CPU workflow.
+Invoke their explicit file paths with `-m docker -o addopts=--import-mode=importlib`
+to run that isolated matrix, and run native
+projects only when their declared tools are installed. `--shared-source-python`
+selects a pytest-capable source interpreter; `--shared-verifyit-source` selects
+a pinned legacy Verifyit source directory for the single-manifest regression.
+The suite uses synthetic patches and tests and includes actor read-denial checks.
+
+RST and Multi-SWE retain a root actor and require a separate Harbor entry point
+for grading-time private delivery. Their adapters are outside this package path.
+
 ## Evaluation corpora
 
 `taskcompendium.evaluation.spec` defines `EvaluationProtocol` (schema version 3),
@@ -67,10 +119,10 @@ for publication, execution, and retry/resume contracts.
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
 | `reasoning_markup` | `grade` (default) scores an attempt as usual. `reject` grades an attempt whose model reply has a malformed reasoning span (unclosed, repeated, or a stray closer) as a reward-0 `submission_failure`. Applied by the SkyRL rollout worker before grading results are grouped. |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `schema_version` | Version of the serialized spec: `0.30`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.31`. Readers upgrade `0.30` and reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
-| `labels` | String-valued annotations for queries and cohort selection. Tags and labels are also projected into normalized Parquet. |
+| `labels` | String-valued annotations for queries and cohort selection. The optional `subset_id` label names a reporting subset for training or evaluation. Tags and labels are also projected into normalized Parquet. |
 
 A task has one final result. TaskSpec does not define ordered task stages or stage-reward aggregation.
 
@@ -111,7 +163,7 @@ For text and numeric tasks, the `AnswerCall` format adds `submit_answer(answer: 
 
 ### Files and state
 
-`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires an actor runtime. These tasks still declare an `answer_format`, but grading does not read it. `file` and `workspace_state` answers require a grader with an environment. In-process grading uses supplied evidence; the optional TaskCompendium episode runtime captures declared output files. The `structured_exact` mode compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`); booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
+`answer_type=file` names a file result. `answer_type=workspace_state` names the final filesystem workspace. `answer_type=state` names arbitrary resulting environment state, including provider state outside a filesystem. Acquiring these results requires an actor runtime. These tasks still declare an `answer_format`, but grading does not read it. `file` and `workspace_state` answers require a grader with a placement. In-process grading uses supplied evidence. The TaskCompendium shell runtime captures declared output files. The `structured_exact` mode compares JSON values and ordered arrays. Numbers compare by value by default (`16` equals `16.0`). Booleans remain distinct. Set `numeric_types="strict"` to require exact numeric scalar types.
 
 `answer_type=json` is a JSON answer from the model, independent of environment state. `JsonValueAnswer` parses the complete final chat text into a `JsonSubmission` for `structured_exact`. `StateSubmission` is evidence acquired from an environment by its runtime. `structured_exact` accepts either. The `JsonAnswer` format instead unwraps an `answer` string for text or numeric tasks, or a JSON number for numeric tasks. Both JSON formats accept one Markdown code fence enclosing the whole reply and reject extra prose, duplicate keys at every nesting level, and nonfinite numbers. Tool-call arguments are decoded before entering the conversation evidence. Runtimes own provider-response decoding and may report malformed tool-call arguments as a structural submission failure with reward `0.0`. Both historical and final calls contain typed argument objects.
 
@@ -132,23 +184,30 @@ command semantics, and missing packaging never implies simulation.
 | `capabilities` | Unique operation names, such as `shell`, `network`, `filesystem`, `process`, or `browser`. Names are open so future capabilities can be represented. |
 | `command_semantics` | `LINUX_PROCESS` for native execution, `SHELL_SIMULATOR` for the simulated command language and virtual filesystem, or `None` when no shell execution is required. |
 | `docker_image` | Optional immutable image reference, such as `registry/project@sha256:<64 lowercase hex digits>`. Tags alone are rejected. |
-| `docker_build` | Optional `DockerBuildContext(files=...)` containing inline regular files relative to the build-context root, including `Dockerfile`. The recipe is unresolved data. |
+| `docker_build` | Optional `DockerBuildContext(files=...)` containing inline regular files relative to the build-context root, including `Dockerfile`. Backends that support builds build it when they create the machine. |
 | `working_directory` | Optional normalized absolute POSIX path for the main workspace. Omission declares no required working directory. |
 | `setup_commands` | Ordered commands required to establish the initial workspace. |
 | `environment_variables` | String values required in the worker or grading machine environment. |
 | `tool_providers` | Mapping from a task-local provider instance name to a required action interface and initial state. |
 | `packages_lock` | Storage URL of an artifact-backed, hash-pinned Python requirements lock. Current runtime preparation supports these through Shellbox local. |
+| `services` | Sidecar containers sharing the task's network and lifetime: a pinned image or build context, working directory, variables, entrypoint and command overrides, named TCP endpoints addressed as `<service>:<port>`, and a readiness check. The primary environment is the agent's container. Omitted from serialization when empty. |
+| `readiness` | A command the primary environment must pass, with per-attempt and overall timeouts, interval, start period and attempt limit, before the agent starts. Omitted from serialization when unset. |
 
 Each `ProviderRequirement` contains `action_interface`, a versioned contract name such as `workplace:v1`, and required `initial_state`, a JSON value such as a string, null, or an object. Two named instances can require the same interface with different initial states. No digest is required. The selected runtime owns provider implementation, transport, state initialization, reset, and tool execution. `final_tools` contains only ordered function definitions advertised at the final decision point; it supplies no implementation.
 
-The task's environment and worker file mounts describe worker initial state. A grader that runs in its own machine declares that machine's image or build recipe, capabilities, setup commands, and environment variables in `grader.environment`. A grader environment requires a `docker_image`, `docker_build`, or local `packages_lock`, and cannot declare tool providers. Runtimes keep those requirements and verifier resources separate from the worker environment.
+The task's environment and worker file mounts describe worker initial state. A grader that runs in its own machine has a `GraderMachine` placement, which declares that machine's image or build recipe, capabilities, setup commands, and environment variables in `grader.placement.environment`. A grader environment requires a `docker_image`, `docker_build`, `package_spec`, or local `packages_lock`, and cannot declare tool providers. Runtimes keep those requirements and verifier resources separate from the worker environment. A grader with an `AgentMachine` placement runs in the worker's machine after the agent finishes and declares no environment of its own.
 
 `docker_image`, `docker_build`, and `packages_lock` are mutually exclusive.
 Build files preserve bytes, modes and timestamps; paths cannot collide. Resource
-budgets count actor and grader contexts separately. Execution requires the caller
-to build each context and replace it with a digest-pinned image. All three
-dependency forms require `LINUX_PROCESS` semantics. TaskCompendium supplies no
-build resolver; runtimes and SAMPLE/FULL controls reject unresolved contexts.
+budgets count actor and grader contexts separately. Dockerfile contexts are built
+online by backends that support builds: RolloutEngine passes the context to the
+selected backend as a `shellbox.image.DockerfileSource`, and a backend that cannot
+build rejects it with `UnsupportedMachineSpec` before any machine starts.
+`taskcompendium.runtime` accepts a build context only with a `DockerfileSource`
+machine spec. All three dependency forms require `LINUX_PROCESS` semantics. The
+SAMPLE/FULL control machines admit only pinned images and package environments.
+Runtime preparation rejects `services` and `readiness` until a runtime creates
+multi-container Shellbox tasks.
 Native requirements without packaging remain representable but cannot execute
 through the current adapters. Memory settings are advisory sizing hints.
 
@@ -216,6 +275,58 @@ File materializers must reject unsafe destinations and collisions, and enforce b
 
 ## What can we import?
 
+### Harbor task packages
+
+`taskcompendium.importers.harbor` lowers a Harbor task package without importing Harbor.
+`image_references(directory)` lists every external image the package needs: the prebuilt
+image, each Dockerfile `FROM` and `COPY --from` image, Compose sidecar images, and the separate
+verifier's image or `tests/Dockerfile` bases. `resolve_image_digests` reads their current
+digests with `skopeo`. `lower_package(directory, task_id=..., source=..., rule=..., image_digests=...)`
+returns a `HarborTask` holding the `TaskSpec` and its `EpisodeInputs`.
+
+| Package part | TaskSpec |
+| --- | --- |
+| `instruction.md` | One user message. |
+| `[environment].docker_image` | `docker_image` pinned as `name:tag@sha256:...`; extra `environment/` files are worker resources under `[environment].workdir`. |
+| `environment/Dockerfile` | `docker_build` with every external `FROM` and `COPY --from` image pinned. A `FROM` naming a global `ARG` uses its default. |
+| `environment/docker-compose.yaml` | `services` for the sidecars, with endpoints and readiness from `expose` and `healthcheck`. HTTP MCP servers served by a sidecar become `mcp:v1` tool providers. |
+| `[environment]` `env`, `workdir`, `healthcheck`, `allow_internet` | Variables, working directory (else the Dockerfile's final `WORKDIR`), `readiness`, and the `network` capability. |
+| `[agent].timeout_sec`, `[verifier].timeout_sec`, `cpus`, `memory_mb`, `storage_mb` | `EpisodeInputs`, with `network` from `allow_internet`. |
+| `tests/`, `solution/`, `setup_files/` | Verifier resources at `/tests`, oracle resources at `/solution`, worker resources at `/setup_files`, with mode 0755 or 0644 from the executable bit. |
+| `[metadata]` `category`, `difficulty`, `tags` | Labels, with `harbor_path` naming the package directory. |
+
+A Compose file may instead override only `main`, as Harbor's Docker backends expect. Harbor merges
+it after its own base files and fills its placeholders, so the importer drops `main` settings that
+restate Harbor's own: a build of `.` or `${CONTEXT_DIR}`, the `${MAIN_IMAGE_NAME}` tag, the
+`sleep infinity` command, the `${HOST_*_PATH}:${ENV_*_PATH}` log mounts, `TEST_DIR=${TEST_DIR}`,
+which Harbor never sets, and `deploy.resources.limits` of `${CPUS}` and `${MEMORY}`, which Harbor
+fills from `cpus` and `memory_mb`. `network_mode` `bridge` or `${NETWORK_MODE:-bridge}` is the
+default network; `none` denies network access. The remaining `environment` entries become the
+agent machine's variables. Other values, such as literal resource limits or another network mode,
+are rejected.
+
+A variable whose whole value is `${NAME}` or `${NAME:-default}` stays a template; the runtime
+resolves it from its host environment when it creates the machine. `host_variables` in
+`taskcompendium.runtime.environment` names the variables a requirement reads, and curated
+evaluation runs supply each from secret references (see
+[evaluation tasks](../../docs/references/evaluation-tasks.md)).
+
+The dataset's grading rule selects the grader. `PackageTests` runs `bash /tests/test.sh` and
+reads `/logs/verifier/reward.json` (`json_metrics`) or `reward.txt`, with `answer_type=workspace_state`.
+Harbor's default shared verifier becomes a `ScriptGrader` with an `AgentMachine` placement, run in
+the agent's working directory with `[verifier].env`; a shared verifier with collect hooks or with
+variables that read host values (`${NAME}`) is rejected. A separate verifier becomes a
+`GraderMachine` placement whose machine comes from `[verifier.environment]` or `tests/`, with
+collect hooks, each limited to its `timeout_sec`, and `/logs/artifacts` copied over.
+`AnswerFile(path, grader)` captures one file with `answer_type=file` and grades its text on the host with a `VerifyitGrader` that has no placement.
+`package_grader` is the single place these choices are made.
+
+`UnsupportedHarborFeature.reason` explains a package the importer will not lower: multi-step
+tasks, GPUs or TPUs, non-Linux tasks, non-root agent or verifier users, collect hooks with their
+own users, agent skills, MCP servers no sidecar serves, unresolvable `ARG` bases, and Compose
+settings outside the supported subset. A dataset converter records it as an unsupported-row
+rejection.
+
 ### NeMo predicted function calls
 
 `taskcompendium.importers.nemo_predicted_action.import_row` accepts a NeMo predicted-function-call row and a caller-pinned digest of that row. `taskcompendium.identity.canonical_sha256(row)` hashes its UTF-8 JSON with sorted keys and compact separators; record the digest with the source revision before importing. The importer returns a TaskSpec with `answer_type=native_action` and a `FinalAction` answer format. The context carries the source conversation; `final_tools` carries advertised functions. `FinalAction.require_call` is set when the source requires a tool call, and `FinalAction.max_calls=1` when the source disables parallel calls. The expected function calls stay in the `predicted_action` grader. There is one stored conversation, with no second flattened prompt to keep in sync.
@@ -229,19 +340,17 @@ The runtime presents the source turns and function definitions and retains the f
 | `kind` | Class | Grading |
 | --- | --- | --- |
 | `verifyit` | `VerifyitGrader` | A stock verifyit `mode` and its `parameters`: the keys of verifyit's `verifier.toml` table other than `mode`. |
-| `script` | `ScriptGrader` | A command run after the attempt in a fresh machine built from a pinned image. |
+| `script` | `ScriptGrader` | A command run after the attempt in the machine its placement selects. |
 | `none` | `NoGrader` | The task cannot be graded here. `reason` says why; `contract` optionally keeps the source's grading terms. |
 
-A `VerifyitGrader` without an `environment` grades the extracted answer in process. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, `structure_closure`, `reasoning_markup`, or `predicted_action`. `reasoning_markup` grades the final assistant message's text, including the text before its function calls, and scores one when its reasoning markup is well formed; the attempt's stop reason excuses a span left open by a length stop. A `VerifyitGrader` with an `environment` runs the verifyit command in a fresh machine built from that environment, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
+A `VerifyitGrader` without a `placement` grades the extracted answer in process; for a `file` answer with exactly one output path, the answer is the captured file's UTF-8 text, and a missing or undecodable file is a submission failure. Its mode must be one of `verifyit.candidate.IN_PROCESS_MODES`: `exact`, `numeric`, `mcq`, `math`, `ifeval`, `json-schema`, `xml-elements`, `csv-columns`, `structured_exact`, `structure_closure`, `reasoning_markup`, or `predicted_action`. `reasoning_markup` grades the final assistant message's text, including the text before its function calls, and scores one when its reasoning markup is well formed; the attempt's stop reason excuses a span left open by a length stop. A `VerifyitGrader` with a `placement` runs the verifyit command in that machine, with verifier resources under `/tests` and the verifyit specification at `/tests/verifier.toml`. Modes that execute code, such as `pytest` and `stdio`, grade only there. `grade_task` and RolloutEngine grade a `judge` grader on the host, through its judge service (`grade_remote_judge_answer`). Construction validates `parameters` with verifyit.
 
 A `ScriptGrader` declares:
 
 | Field | Meaning |
 | --- | --- |
-| `argv`, `cwd`, `env` | The grader command, its working directory (default `/app`), and added environment variables. |
-| `environment` | The grading machine's requirements. |
-| `collect` | Commands run as root on the agent's machine before grading. |
-| `artifacts` | Files and directories copied from the agent's machine into the grading machine, with exclusions and a missing-file policy. |
+| `argv`, `cwd`, `env` | The grader command, its working directory (default `/app`; `None` keeps the machine's own, such as an image's `WORKDIR`), and added environment variables. |
+| `placement` | Where the command runs: `AgentMachine()` or `GraderMachine(environment, collect, artifacts)`. |
 | `answer_path` | Where the extracted answer is written (default `/app/answer.txt`): text as text, JSON as JSON, and a final action as the final assistant message's JSON. |
 | `conversation_path` | Where the conversation is written as OpenAI-style chat messages in JSON (default `/tests/conversation.json`). |
 | `reward` | `StdoutReward` (default), `ExitCodeReward`, or `FileReward`. |
@@ -249,7 +358,14 @@ A `ScriptGrader` declares:
 | `judge` | Optional `JudgeSpec` declaring the model service required by the script. |
 | `timeout` | Deadline in seconds for each grading command (default 600). |
 
-`StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
+`StdoutReward` requires exit code 0 and one finite number on standard output; anything else is `infra_error`. `ExitCodeReward` scores 1.0 for exit code 0 and 0.0 otherwise. `FileReward.files` lists candidate reward files in priority order; the first that exists supplies the score. Each `RewardFile` holds a number, or a JSON object whose `key` (default `reward`) holds the score and whose optional `detail` object becomes the grade detail. A `json_metrics` file is a flat object whose `key` holds the score and whose other members, all finite numbers, become the grade detail. `FileReward.pass_above` sets `GradeResult.passed`; `ExitCodeReward` sets it from the exit code. A missing, empty, or invalid reward file is `infra_error`. A timed-out command is `infra_error` for every reward source.
+
+A grader placement is one of two models in `taskcompendium.models`:
+
+| `kind` | Class | Grading machine |
+| --- | --- | --- |
+| `agent_machine` | `AgentMachine` | The agent's machine, after the harness ends. The grader sees every file and change the agent left, and the machine's network policy applies. Verifier resources, the conversation and the extracted answer are staged as root, and `/logs/verifier` is emptied, before the command runs. |
+| `grader_machine` | `GraderMachine` | A fresh machine built from `environment`. Agent state reaches it only through captured `output_paths`, `collect` commands run as root on the agent's machine, each within its `timeout` and the grader's limit, and `artifacts` copied from the agent's machine with exclusions and a missing-file policy. |
 
 `RewardFileFormat.VERDICT_JSON` reads Verifyit's structured `reward`, `status`
 and `detail` fields. It preserves unscored infrastructure failures and invalid
@@ -258,19 +374,20 @@ This format retains named metrics and reduction inputs in `detail`.
 
 A scripted judge receives its declared specification at `/tests/judge.toml`.
 The caller supplies `JudgeConnection` separately; the runtime puts credentials
-only in the verifier machine's environment. Task serialization and staged
+only in the grading command's environment: the verifier machine's, or for an
+`AgentMachine` placement, the command's own. Task serialization and staged
 archives exclude those credentials. The machine must permit network access.
 
 TaskSpec validation ties the grader to the answer:
 
 - An in-process `VerifyitGrader` cannot grade `file` or `workspace_state` answers.
-- A `VerifyitGrader` with an environment cannot grade `native_action` answers. Its workspace modes (`stdio`, `pytest`, `junit`, and `gotest`) cannot grade `text`, `number`, or `json` answers.
+- A `VerifyitGrader` with a placement cannot grade `native_action` answers. Its workspace modes (`stdio`, `pytest`, `junit`, and `gotest`) cannot grade `text`, `number`, or `json` answers.
 - `ScriptGrader.answer_path` must be `None` for `file`, `state`, and `workspace_state` answers. `conversation_path` must not replace a verifier resource.
 - Answer paths, output paths, and output directories must lie outside `/tests` and `/logs/verifier`.
 
 A `NoGrader` task grades as `unavailable`, with no reward and its `reason` as the error. Converters use `NoGrader` when the source evaluator needs a runtime this repository cannot provide; its `contract` records the evaluator, source revision, grading data and runtime requirements. `taskcompendium.grader.grader_config(task)` returns a copy of a `NoGrader`'s contract, or the `config.json` verifier resource of another grader.
 
-`taskcompendium.grader.GraderPackage` pairs a grader with its verifier resources, whose paths are relative to `/tests`. `verifyit_package(spec, resources=(), environment=None)` builds a `VerifyitGrader` from a verifyit `Spec`. Build other packages directly with `GraderPackage(grader, resources)`.
+`taskcompendium.grader.GraderPackage` pairs a grader with its verifier resources, whose paths are relative to `/tests`. `verifyit_package(spec, resources=(), placement=None)` builds a `VerifyitGrader` from a verifyit `Spec`. Build other packages directly with `GraderPackage(grader, resources)`.
 
 ```python
 from taskcompendium.grader import verifyit_package
@@ -335,9 +452,7 @@ unadvertised ejections, and continuation after ejection are `submission_failure`
 `0.0`. Completed ejection calls in the source conversation are historical input.
 
 `answer_submission` dispatches ejection before the normal answer-format extractor, without
-passing expected answers or solvability labels into extraction. The episode runtime preserves
-the terminal call and stops before executing it or any other call in its batch. Runtime
-failures remain infrastructure errors without a reward.
+passing expected answers or solvability labels into extraction.
 
 Generate paired missing-information, contradictory-constraint, and guideline examples as
 serialized TaskSpecs:
@@ -394,10 +509,11 @@ def score_final_response(content: str):
 Three functions grade an attempt:
 
 - `taskcompendium.grading.grade_answer(task, attempt)` grades with an in-process `VerifyitGrader`. The answer format extracts the submission, or `attempt.state` supplies it for a `state` answer, and `verifyit.candidate.grade_candidate` scores it. It raises `TypeError` for other graders.
-- `taskcompendium.runtime.grading.grade_in_sandbox(task, attempt, factory, machine_spec, *, task_machine=None, timeout=None)` is asynchronous. It grades with a `VerifyitGrader` that has an environment, or with a `ScriptGrader`, in a fresh machine from `factory`. `task_machine` is the agent's machine, required for `collect` and `artifacts`. Machine exceptions propagate.
-- `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None, judge_connection=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. A judge grader uses `grade_remote_judge_answer` with `judge_connection`; an in-process grader uses `grade_answer`; a sandbox grader uses shared environment preparation and `grade_in_sandbox`. Unsupported requirements raise before machine creation. A missing factory or machine specification, and machine `RuntimeError` or `OSError`, become `infra_error`.
+- `taskcompendium.runtime.grading.grade_in_sandbox(task, attempt, factory, machine_spec, *, task_machine=None, timeout=None)` is asynchronous. It grades with a `GraderMachine` placement in a fresh machine from `factory`. `task_machine` is the agent's machine, required for `collect` and `artifacts`. Machine exceptions propagate.
+- `taskcompendium.runtime.grading.grade_in_agent_machine(task, attempt, task_machine, *, timeout=None)` is asynchronous. It grades with an `AgentMachine` placement in the agent's machine after its harness has returned. Machine exceptions propagate.
+- `taskcompendium.runtime.task_grading.grade_task(task, attempt, *, machine_factory=None, machine_spec=None, judge_connection=None)` grades any task synchronously. A `NoGrader` task is `unavailable`. A judge grader uses `grade_remote_judge_answer` with `judge_connection`; an in-process grader uses `grade_answer`; a `GraderMachine` grader uses shared environment preparation and `grade_in_sandbox`; an `AgentMachine` grader is `infra_error`, because its machine ended with the attempt. Unsupported requirements raise before machine creation. A missing factory or machine specification, and machine `RuntimeError` or `OSError`, become `infra_error`.
 
-RolloutEngine calls `grade_answer`, `grade_remote_judge_answer`, or `grade_in_sandbox` after the harness ends; see [task rollouts](../../docs/references/task-rollouts.md).
+RolloutEngine calls `grade_answer`, `grade_remote_judge_answer`, `grade_in_sandbox`, or `grade_in_agent_machine` after the harness ends; see [task rollouts](../../docs/references/task-rollouts.md).
 
 The execution runtime completes file and environment-state acquisition before grading. `GradingAttempt` carries the conversation, captured file bytes keyed by absolute path, and an optional `StateSubmission`. A missing state is `None`; captured JSON null is `StateSubmission(None)`. `taskcompendium.runtime.models.grading_attempt(conversation, evidence)` builds an attempt from captured `RuntimeEvidence`. A grading machine also receives a conversational answer extracted from the conversation. Expected values remain in `task.grader` and verifier resources and must not be included in the model request.
 
@@ -430,5 +546,15 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.30` adds queryable task labels. Reconvert
-older TaskSpecs before using the updated readers; no compatibility shim is supplied.
+Schema `0.31` replaces a grader's `environment`, `collect` and `artifacts` with
+`placement`. `TaskSpec` validation upgrades a `0.30` payload deterministically
+(`taskcompendium.models.upgrade_task_payload`): those fields become a
+`GraderMachine` placement, and a `VerifyitGrader` without an environment gets no
+placement. A judge spec's `strip_candidate_reasoning_blocks` becomes the
+equivalent `candidate_steps`, in a verifyit judge's parameters and a script
+grader's `judge`, through `verifyit.spec.judge_table_with_candidate_steps`.
+Verifyit applies the same mapping when it loads any judge table, so judge TOML
+among a task's verifier resources keeps grading.
+`0.30` is the only upgradable version; reconvert older TaskSpecs.
+Stored `task_json` bytes are unchanged, so file and manifest hashes still verify;
+digests computed from a re-serialized spec differ after the upgrade.

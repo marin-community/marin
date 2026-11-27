@@ -22,8 +22,8 @@ from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.optim.config import AdamConfig
 from marin.execution.artifact import ArtifactRecord, write_record
-from marin.execution.lazy import ArtifactStep, materialized_config
-from marin.experiment.data import tokenized
+from marin.execution.lazy import ArtifactStep, StepContext, materialized_config
+from marin.experiment.data import mixture, tokenized
 from marin.experiment.train import EvalSuite, train_lm
 from marin.processing.tokenize.tokenize import TokenizedCache
 
@@ -169,6 +169,28 @@ def test_lowers_to_a_runnable_graph():
     assert spec.name == "checkpoints/unit"
     # The corpus dependency is lowered into the graph.
     assert any(dep.name == "corpus" for dep in spec.deps)
+
+
+def test_train_only_mixture_skips_the_missing_validation_split(tmp_path):
+    """A train-only cache in a mixture keeps Levanter's skip-a-missing-split behavior:
+    ``as_component()`` emits an empty-URL source, so ``build_caches("validation")`` skips
+    the missing split instead of raising (the path every default ``tokenized(...)``
+    mixture takes at eval setup).
+    """
+    corpus = _corpus()
+    write_record(
+        ArtifactRecord(
+            name=corpus.name,
+            version=corpus.version,
+            output_path=corpus.path(str(tmp_path)),
+            result_type=_TOKENIZED_CACHE,
+            config={"tokenizer": _TOKENIZER, "format": {"text_key": "text"}},
+        )
+    )
+    ctx = StepContext.for_run(output_path=str(tmp_path / "out"), prefix=str(tmp_path), deps=(corpus,))
+    cfg = mixture(ctx, {corpus: 1.0})
+    # Levanter skips the missing split (empty result); a source=None component raises here.
+    assert cfg.build_caches("validation") == {}
 
 
 def _build_epochs(*, datasets, num_train_epochs):

@@ -22,12 +22,14 @@ from finestore.layout import BlobTables
 _COMPRESSION = "zstd"
 _COMPRESSION_LEVEL = 0
 
-# Cap a shard's row groups at this many rows (finelog uses the same figure). A row group is the unit a
-# reader prunes on: with a filter it reads only the groups whose footer statistics can match, so a
-# large flush that wrote one giant group would defeat the pruning. Bounding the group keeps a
-# ``name ==`` blob lookup or a ``task ==`` sample scan reading a fraction of a big shard.
+# Cap a shard's row groups at this many rows (finelog uses the same figure) and at this many bytes of
+# Arrow data. A row group is the unit a reader prunes on: with a filter it reads only the groups whose
+# footer statistics can match, so a large flush that wrote one giant group would defeat the pruning.
+# Bounding the group keeps a ``name ==`` blob lookup or a ``task ==`` sample scan reading a fraction of
+# a big shard. A full-table read or a compaction holds every shard open, with up to two decoded row
+# groups of each, so the byte cap also bounds their memory per shard.
 ROW_GROUP_ROWS = 16_384
-ROW_GROUP_TARGET_BYTES = 100 * 1024 * 1024
+ROW_GROUP_TARGET_BYTES = 4 * 1024 * 1024
 BLOB_PART_ROW_GROUP_ROWS = 1
 BLOB_DESCRIPTOR_ROW_GROUP_ROWS = 1024
 
