@@ -178,12 +178,17 @@ def test_evaluation_mean_survives_cancellation_and_completion_order(per_token):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("keep_traces", [False, True])
-async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path, keep_traces):
+@pytest.mark.parametrize(
+    ("keep_traces", "redact_fields"),
+    [(False, []), (True, []), (True, ["response.messages", "verification_result.reason"])],
+    ids=["scores-only", "full-traces", "redacted-traces"],
+)
+async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path, keep_traces, redact_fields):
     config = get_default_config()
     config.trainer.export_path = str(tmp_path)
     config.trainer.dump_eval_results = keep_traces
     config.trainer.dump_grader_report = True
+    config.generator.trajectory_retention.redact_fields = redact_fields
     config.generator.eval_n_samples_per_prompt = 1
     OmegaConf.update(config, "runtime", {"attempt_id": "eval-attempt", "model": "test-policy"}, force_add=True)
     task = text_task("validation-task")
@@ -228,8 +233,16 @@ async def test_evaluation_collector_keeps_task_id_and_scoring_metadata(tmp_path,
         assert [trace.evaluation for trace in traces] == ["eval/", "eval/named/"]
         for trace in traces:
             assert trace.task_id == task.id
-            assert (trace.prompt_token_ids, trace.response_token_ids) == ([1], [2])
-            assert json.loads(trace.details_json)["messages"] == [{"role": "assistant", "content": "answer"}]
+            if redact_fields:
+                assert trace.messages_json is None
+                assert trace.input_prompt is None and trace.output_response is None
+                assert trace.prompt_token_ids is None and trace.response_token_ids is None
+                assert trace.verification is None
+            else:
+                assert (trace.prompt_token_ids, trace.response_token_ids) == ([1], [2])
+                assert trace.messages_json is not None
+                assert json.loads(trace.messages_json) == [{"role": "assistant", "content": "answer"}]
+                assert trace.verification is not None and trace.verification.score == 1.0
     else:
         assert not traces
     report = json.loads((tmp_path / "grader_report.json").read_text())

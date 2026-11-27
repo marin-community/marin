@@ -449,6 +449,10 @@ best checkpoint step, or `none eligible`.
 | HF policy | The completed receipt identifies the HF model for `--init`, either the initializer or a converted checkpoint under `exports/`. |
 | Gate artifact `gate_report.json`, `gate_report.md` | Calibrated comparison, invariants and breakdowns for a gated preset. Train-long has evaluation invariants without a calibrated verdict. |
 
+FineStore omits the transcript and token IDs when trajectory retention redacts prompt or response
+content. It omits the raw verifier verdict when retention redacts verifier fields. Compact scores
+remain available for gates.
+
 Evaluation summaries include the native answer-weighted overall mean, task-weighted family,
 AAII-category, source, topic and difficulty means, and an AAII-weighted mean. The category weights
 are 0.2 scientific reasoning, 0.2 coding, 0.3 General and 0.3 Agents, renormalized over represented

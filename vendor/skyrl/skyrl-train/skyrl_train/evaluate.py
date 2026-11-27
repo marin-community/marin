@@ -7,6 +7,7 @@ from typing import Dict, List, Protocol
 from loguru import logger
 from collections import defaultdict
 from dataclasses import dataclass, replace
+from collections.abc import Sequence
 from math import fsum
 import numpy as np
 
@@ -20,7 +21,6 @@ from finestore.rl.run_records import (
 from finestore.rl.strata import TaskEvaluationIdentity
 from skyrl_train.task_inputs import TrajectoryMetadata
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
-from taskcompendium.grading_result import GRADING_DURATION_SECONDS, GRADING_FAILURE
 
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.grader_reporting import GraderStats, write_grader_report
@@ -53,20 +53,12 @@ from omegaconf import DictConfig
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer
 
-# The persisted diagnostics schema excludes arbitrary provider and verifier data.
-EVAL_DIAGNOSTIC_FIELDS = frozenset(
-    {
-        GRADING_DURATION_SECONDS,
-        GRADING_FAILURE,
-        "exception_type",
-        "cause_error_type",
-        "operation",
-        "timed_out",
-        "machine_operation",
-        "provider_status_code",
-        "provider_sdk_call",
-        "provider_rate_limits",
-    }
+TRANSCRIPT_FIELDS = (
+    "prompt",
+    "response.messages",
+    "response.text",
+    "response.token_ids",
+    "response.step_boundaries",
 )
 
 
@@ -333,6 +325,14 @@ def _evaluation_task_rows(
     return rows
 
 
+def _has_redaction(redact_fields: Sequence[str], paths: tuple[str, ...]) -> bool:
+    return any(
+        field == path or field.startswith(f"{path}.") or path.startswith(f"{field}.")
+        for field in redact_fields
+        for path in paths
+    )
+
+
 def _evaluation_trace_rows(
     rollouts: _EvaluationRollouts,
     tokenizer: AutoTokenizer,
@@ -340,6 +340,7 @@ def _evaluation_trace_rows(
     attempt_id: str,
     step: int,
     evaluation: str,
+    redact_fields: Sequence[str],
 ) -> list[EvaluationTraceRow]:
     batch = rollouts.batch
     count = len(rollouts.uids)
@@ -347,19 +348,20 @@ def _evaluation_trace_rows(
     task_ids = batch.get("task_ids")
     identity_disposition = "task_spec" if task_ids else "preference_input"
     last_steps = batch.get("is_last_step") or (True,) * count
-    messages = batch.get("evidence_messages") or missing
-    verifications = batch.get("verification_results") or missing
+    # A turn's prompt and messages can repeat content from earlier turns.
+    keep_transcript = not _has_redaction(redact_fields, TRANSCRIPT_FIELDS)
+    messages = (batch.get("evidence_messages") or missing) if keep_transcript else missing
+    keep_verification = not _has_redaction(redact_fields, ("verification_result",))
+    verifications = (batch.get("verification_results") or missing) if keep_verification else missing
     stop_reasons = batch.get("stop_reasons") or missing
     exceptions = batch.get("exception_types") or missing
     treatments = batch.get("error_treatments") or missing
-    server_errors = batch.get("server_errors") or missing
-    env_metrics = batch.get("env_metrics") or ({},) * count
     rows = []
     for index, (metadata, uid, ordinal) in enumerate(
         zip(rollouts.metadata, rollouts.uids, rollouts.ordinals, strict=True)
     ):
-        prompt_ids = batch["prompt_token_ids"][index]
-        response_ids = batch["response_ids"][index]
+        prompt_ids = batch["prompt_token_ids"][index] if keep_transcript else None
+        response_ids = batch["response_ids"][index] if keep_transcript else None
         reward = batch["rewards"][index]
         verification = verifications[index]
         verification_details = None
@@ -371,10 +373,6 @@ def _evaluation_trace_rows(
                 passed=verification.passed,
                 score_min=verification.score_min,
                 score_max=verification.score_max,
-                diagnostics_json=json.dumps(
-                    {key: value for key, value in verification.diagnostics.items() if key in EVAL_DIAGNOSTIC_FIELDS},
-                    ensure_ascii=False,
-                ),
             )
         rows.append(
             EvaluationTraceRow(
@@ -390,8 +388,8 @@ def _evaluation_trace_rows(
                 identity_disposition=identity_disposition,
                 prompt_token_ids=prompt_ids,
                 response_token_ids=response_ids,
-                input_prompt=tokenizer.decode(prompt_ids),
-                output_response=tokenizer.decode(response_ids),
+                input_prompt=tokenizer.decode(prompt_ids) if prompt_ids is not None else None,
+                output_response=tokenizer.decode(response_ids) if response_ids is not None else None,
                 score=fsum(reward) if isinstance(reward, list) else reward,
                 token_rewards=reward if isinstance(reward, list) else None,
                 stop_reason=stop_reasons[index],
@@ -400,14 +398,7 @@ def _evaluation_trace_rows(
                 env_class=metadata.metric_class,
                 subset_id=metadata.subset_id,
                 verification=verification_details,
-                details_json=json.dumps(
-                    {
-                        "messages": messages[index],
-                        "server_error": server_errors[index],
-                        "env_metrics": env_metrics[index],
-                    },
-                    ensure_ascii=False,
-                ),
+                messages_json=json.dumps(messages[index], ensure_ascii=False) if messages[index] is not None else None,
             )
         )
     return rows
@@ -435,11 +426,17 @@ def _persist_evaluation(
         model_source_identity=cfg.runtime.get("model_source_identity"),
         starting_checkpoint_identity=cfg.runtime.get("starting_checkpoint_identity"),
     )
-    traces = (
-        _evaluation_trace_rows(rollouts, tokenizer, attempt_id=attempt_id, step=step, evaluation=evaluation)
-        if cfg.trainer.dump_eval_results
-        else []
-    )
+    traces = []
+    if cfg.trainer.dump_eval_results:
+        retention = cfg.generator.get("trajectory_retention") or {}
+        traces = _evaluation_trace_rows(
+            rollouts,
+            tokenizer,
+            attempt_id=attempt_id,
+            step=step,
+            evaluation=evaluation,
+            redact_fields=retention.get("redact_fields", ()),
+        )
     write_evaluations(records_export_root or str(cfg.trainer.export_path), rows, traces=traces)
     if cfg.trainer.get("dump_grader_report", False):
         stats = GraderStats()

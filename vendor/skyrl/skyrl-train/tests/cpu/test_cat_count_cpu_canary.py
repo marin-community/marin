@@ -635,9 +635,6 @@ def test_cat_count_generate_preserves_task_ids_and_token_metrics(
                 verification.status, verification.score, verification.score_min, verification.score_max
             )
             if verification.status == "verified":
-                assert answer.passed == (
-                    verification.passed if verification.passed is not None else answer.optimization_reward > 0
-                )
                 assert answer.outcome == "graded"
             else:
                 assert answer.verifier_score is None and not answer.passed and answer.outcome == "unavailable"

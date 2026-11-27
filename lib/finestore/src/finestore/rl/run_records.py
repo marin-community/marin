@@ -209,7 +209,7 @@ class EvaluationTaskRow(BaseModel):
 
 
 class EvaluationTraceVerification(BaseModel):
-    """The raw verifier verdict and its allowlisted diagnostics."""
+    """The verifier verdict before score normalization."""
 
     status: str
     reason: str | None
@@ -217,7 +217,6 @@ class EvaluationTraceVerification(BaseModel):
     passed: bool | None
     score_min: float
     score_max: float
-    diagnostics_json: str
 
 
 class EvaluationTraceRow(BaseModel):
@@ -233,10 +232,10 @@ class EvaluationTraceRow(BaseModel):
     data_source: str | None
     is_last_step: bool
     identity_disposition: str
-    prompt_token_ids: list[int]
-    response_token_ids: list[int]
-    input_prompt: str
-    output_response: str
+    prompt_token_ids: list[int] | None
+    response_token_ids: list[int] | None
+    input_prompt: str | None
+    output_response: str | None
     score: float
     token_rewards: list[float] | None
     stop_reason: str | None
@@ -245,8 +244,8 @@ class EvaluationTraceRow(BaseModel):
     env_class: str
     subset_id: str | None
     verification: EvaluationTraceVerification | None
-    # Tool messages, environment metrics and server errors have variable shapes.
-    details_json: str
+    # Harness messages may contain tool calls, multimodal content, and provider-specific fields.
+    messages_json: str | None
 
 
 _TABLES: dict[str, tuple[type[BaseModel], tuple[str, ...]]] = {
