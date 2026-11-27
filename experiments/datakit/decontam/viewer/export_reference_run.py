@@ -20,15 +20,14 @@ from bisect import bisect_left
 from collections import Counter
 
 import pyarrow.parquet as pq
-from marin.datakit.decon import DeconAttributes, NGramConfig
-from marin.datakit.decon import hash_to_evals as _hash_to_evals
+from marin.datakit.decon import DeconAttributes, NGramConfig, hash_to_evals
 from marin.execution.artifact import read_artifact
 from marin.execution.step_runner import step_is_built
 from marin.execution.step_spec import StepSpec
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.datakit.decontam.eval_families import eval_family as _eval_family
+from experiments.datakit.decontam.eval_families import eval_family
 from experiments.datakit.decontam.viewer.export_run import (
     _overlapping_ngrams,
     _window,
@@ -195,7 +194,7 @@ def main() -> None:
     if len(index_paths) != 1:
         raise ValueError(f"expected one eval hash index, found {sorted(index_paths)}")
     index_path = index_paths.pop()
-    hash_to_evals = _hash_to_evals(index_path, needed_hashes)
+    matched_eval_ids = hash_to_evals(index_path, needed_hashes)
 
     gallery: dict[str, list[dict]] = {}
     gallery_eval_ids: set[str] = set()
@@ -208,9 +207,9 @@ def main() -> None:
             eval_hits: Counter[str] = Counter()
             families: Counter[str] = Counter()
             for feature_hash in matched_hashes:
-                for eval_id in sorted(hash_to_evals.get(feature_hash, ())):
+                for eval_id in sorted(matched_eval_ids.get(feature_hash, ())):
                     eval_hits[eval_id] += 1
-                    families[_eval_family(eval_id)] += 1
+                    families[eval_family(eval_id)] += 1
             chosen_evals = eval_hits.most_common(MAX_MATCHED_EVALS)
             gallery_eval_ids.update(eval_id for eval_id, _ in chosen_evals)
             text = str(row["text"])
@@ -237,8 +236,8 @@ def main() -> None:
         total = contaminated + clean
         family_counts: Counter[str] = Counter()
         for feature_hash, count in source_hash_counts[source].items():
-            for eval_id in sorted(hash_to_evals.get(feature_hash, ())):
-                family_counts[_eval_family(eval_id)] += count
+            for eval_id in sorted(matched_eval_ids.get(feature_hash, ())):
+                family_counts[eval_family(eval_id)] += count
         for family, count in family_counts.items():
             if family in AA_BENCHMARK_NAMES:
                 total_aa_hits[family] += count
@@ -248,7 +247,7 @@ def main() -> None:
             doc["matched_evals"] = [
                 {
                     "eval_id": eval_id,
-                    "family": _eval_family(eval_id),
+                    "family": eval_family(eval_id),
                     "hits": hits,
                     "text": _window(eval_texts.get(eval_id, ""), matched_ngrams),
                 }

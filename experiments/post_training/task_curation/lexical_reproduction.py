@@ -161,21 +161,40 @@ def read_dropped_ids(path: str) -> set[str]:
     return dropped
 
 
-def read_final_population(result: SourcePipelineResult) -> dict[str, str]:
-    """The stage's retained population, rendered from the ``final/`` view."""
-    population: dict[str, str] = {}
+def read_final_population(result: SourcePipelineResult) -> set[str]:
+    """The stage's retained task IDs from the ``final/`` view."""
+    retained: set[str] = set()
     for file in _parquet_files(prefix_join(result.final_path, "*.parquet")):
+        with StoragePath(file).open("rb") as stream:
+            for batch in pq.ParquetFile(stream).iter_batches(columns=["task_id"]):
+                retained.update(batch.column("task_id").to_pylist())
+    if not retained:
+        raise FileNotFoundError(f"The stage retained no tasks: {result.final_path}")
+    return retained
+
+
+def read_measured_population(result: SourcePipelineResult, measured_ids: Iterable[str]) -> dict[str, str]:
+    """The stage's measured population, rendered from the ``normalize/`` view.
+
+    ``final/`` holds only the rows a training gate retains; the kept rows the
+    stage actually marked are every normalize row whose task ID the lexical
+    flags cover, contaminated ones included.
+    """
+    wanted = set(measured_ids)
+    population: dict[str, str] = {}
+    for file in _parquet_files(prefix_join(result.normalize_path, "*.parquet")):
         with StoragePath(file).open("rb") as stream:
             for batch in pq.ParquetFile(stream).iter_batches(columns=["task_id", "task_json"]):
                 for task_id, task_json in zip(
                     batch.column("task_id").to_pylist(), batch.column("task_json").to_pylist(), strict=True
                 ):
+                    if task_id not in wanted or task_id in population:
+                        continue
                     task = TaskSpec.model_validate_json(task_json)
-                    if task_id in population:
-                        raise ValueError(f"Duplicate task ID in final/: {task_id}")
                     population[task_id] = format_conversation(task.context.events)
-    if not population:
-        raise FileNotFoundError(f"The stage retained no tasks: {result.final_path}")
+    missing = wanted - set(population)
+    if missing:
+        raise FileNotFoundError(f"The normalize view is missing {len(missing)} measured rows")
     return population
 
 
@@ -296,41 +315,42 @@ def _compare(result: SourcePipelineResult, receipt: dict[str, Any], args: argpar
     main_flags = read_flags(prefix_join(result.lexical_path, "task_flags"))
     branch_population = read_branch_population(args.branch_population)
     branch_flags = read_flags(args.branch_flags)
-    rendered = read_final_population(result)
-    shared = sorted(set(rendered) & set(branch_flags))
+    # The per-task comparison covers the stage's whole measured population — the
+    # kept rows, contaminated ones included — not just the rows the gate retains.
+    measured = read_measured_population(result, main_flags)
+    flag_ids = sorted(set(main_flags) & set(branch_flags))
     mismatches = [
         {"id": task_id, "field": field, "main": main_flags[task_id][field], "branch": branch_flags[task_id][field]}
-        for task_id in shared
+        for task_id in flag_ids
         for field in FLAG_FIELDS
         if main_flags[task_id][field] != branch_flags[task_id][field]
     ]
-    main_summary = summarize_flags([main_flags[task_id] for task_id in shared])
-    branch_summary = summarize_flags([branch_flags[task_id] for task_id in shared])
+    main_summary = summarize_flags([main_flags[task_id] for task_id in flag_ids])
+    branch_summary = summarize_flags([branch_flags[task_id] for task_id in flag_ids])
 
     retained: dict[str, Any] = {}
     if args.branch_drop_manifest:
         branch_dropped = read_dropped_ids(args.branch_drop_manifest)
         sealed_retained = {task_id for task_id in branch_population if task_id not in branch_dropped}
-        main_retained = set(rendered)
+        main_retained = read_final_population(result)
         retained = {
             "branch_retained_tasks": len(sealed_retained),
             "main_retained_tasks": len(main_retained),
             "shared_retained_ids_equal": (
                 {task_id for task_id in sealed_retained if task_id in branch_flags} == main_retained
             ),
-            "shared_retained_tasks": len(shared) - sum(1 for task_id in shared if task_id in branch_dropped),
         }
 
     digests: dict[str, Any] = {}
     if args.branch_population_record:
         record = read_population_record(args.branch_population_record)
-        shared_tasks = {task_id: text for task_id, text in rendered.items() if task_id in branch_population}
+        shared_tasks = {task_id: text for task_id, text in measured.items() if task_id in branch_population}
         digests = {
             "branch_text_sha256": record["text_sha256"],
-            "main_retained_text_sha256": text_digest_pairs(rendered.items()),
+            "main_measured_text_sha256": text_digest_pairs(measured.items()),
             "main_shared_text_sha256": text_digest_pairs(shared_tasks.items()),
             "branch_task_count": record["task_count"],
-            "main_retained_task_count": len(rendered),
+            "main_measured_task_count": len(measured),
             "note": (
                 "task_specs_sha256 is not comparable: the sealed digest pins schema-0.30 "
                 "serializations, main's pipeline is schema-0.31; the population is identified by the "
@@ -352,7 +372,6 @@ def _compare(result: SourcePipelineResult, receipt: dict[str, Any], args: argpar
         "stage": {
             "status": manifest["status"],
             "raw_population_count": manifest["raw_population_count"],
-            "converted_rows": manifest["raw_population_count"],
             "measured_population": (
                 "kept rows of the checked audit (the converter census here, because the " "harness clears the rubric)"
             ),
@@ -361,11 +380,12 @@ def _compare(result: SourcePipelineResult, receipt: dict[str, Any], args: argpar
         "population": {
             "branch_population_tasks": len(branch_population),
             "stage_task_flags": len(main_flags),
-            "main_retained_tasks": len(rendered),
-            "shared_tasks": len(shared),
+            "shared_measured_tasks": len(flag_ids),
             "branch_only_tasks": sorted(set(branch_population) - set(main_flags)),
             "main_only_tasks": sorted(set(main_flags) - set(branch_flags)),
-            "shared_texts_equal": all(rendered[task_id] == branch_population[task_id] for task_id in shared),
+            "shared_texts_equal": all(
+                measured[task_id] == branch_population[task_id] for task_id in flag_ids if task_id in branch_population
+            ),
         },
         "shared_measurement_equal": main_summary == branch_summary,
         "retained": retained,
@@ -378,7 +398,9 @@ def _compare(result: SourcePipelineResult, receipt: dict[str, Any], args: argpar
             not mismatches
             and not (set(main_flags) - set(branch_flags))
             and main_summary == branch_summary
-            and all(rendered[task_id] == branch_population[task_id] for task_id in shared)
+            and all(
+                measured[task_id] == branch_population[task_id] for task_id in flag_ids if task_id in branch_population
+            )
             and (not retained or retained["shared_retained_ids_equal"])
         ),
     }
