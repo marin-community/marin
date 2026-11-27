@@ -7,14 +7,17 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from haliax import Axis
 
 import levanter.inference.engine as engine_module
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
-from levanter.inference.page_table import PageTableSpec
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.kv_cache import KvPageCache
+from levanter.models.apertus import ApertusConfig
+from levanter.models.llama import LlamaConfig
 from levanter.utils.mesh import create_mesh_from_axis_specs
 
 
@@ -40,9 +43,11 @@ class DummyModel(eqx.Module):
         head_size = Axis("embed", 1)
         return KvPageCache.init(spec, kv_heads, head_size, dtype=dtype)
 
-    def decode(self, input_ids, kv_cache, batch_info, pos_ids):
+    def decode(self, input_ids, kv_cache, batch_info, pos_ids, *, logit_positions=None):
         # Produce logits that prefer `eos` for every sampled position
-        Pos = input_ids.resolve_axis("position")
+        Pos = (
+            input_ids.resolve_axis("position") if logit_positions is None else logit_positions.resolve_axis("position")
+        )
         Vocab = self.Vocab
         # One-hot on vocab axis for eos token, broadcast over positions
         logits = hax.nn.one_hot(self.eos, Vocab, dtype=jnp.float32)
@@ -178,3 +183,34 @@ def test_generate_waits_for_kv_pages_when_a_slot_is_free():
         result = engine.generate(requests)
 
     assert result.tokens == [[3, 3, 3], [3], [3]]
+
+
+@pytest.mark.parametrize("config_type", [LlamaConfig, ApertusConfig], ids=["llama", "apertus"])
+def test_paged_decode_projects_selected_rows_and_keeps_the_full_cache(config_type):
+    config = config_type(max_seq_len=8, hidden_dim=16, intermediate_dim=32, num_layers=1, num_heads=2, num_kv_heads=2)
+    spec = PageTableSpec(num_pages=2, page_size=4, max_seqs=1)
+    input_ids = hax.named(jnp.array([2, 3, 4, 5]), "position")
+    positions = hax.arange(input_ids.resolve_axis("position"))
+    logit_positions = hax.named(jnp.array([3, 1, 3]), "sample")
+    batch = PageBatchInfo(
+        slot_ids=hax.named(jnp.array([0]), "seq"),
+        page_indices=hax.named(jnp.array([[1]]), ("seq", "page")),
+        seq_lens=hax.named(jnp.array([4]), "seq"),
+        cu_q_lens=hax.named(jnp.array([0, 4]), "seq"),
+        num_seqs=jnp.int32(1),
+        new_token_dests=positions + spec.page_size,
+        page_size=spec.page_size,
+    )
+    mesh = create_mesh_from_axis_specs(ici_axes={"model": jax.device_count()}, dcn_axes={})
+    with hax.partitioning.set_mesh(mesh):
+        model = config.model_type.init(Axis("vocab", 32), config, key=jax.random.key(0))
+        cache = model.initial_cache(spec, dtype=jnp.float32)
+        decode = eqx.filter_jit(model.decode)
+        full, full_cache = decode(input_ids, cache, batch, positions)
+        selected, selected_cache = decode(input_ids, cache, batch, positions, logit_positions=logit_positions)
+
+    assert selected.axes == (*logit_positions.axes, model.Vocab)
+    expected = np.asarray(full.array)[np.asarray(logit_positions.array)]
+    np.testing.assert_allclose(selected.array, expected, atol=1e-5, rtol=1e-5)
+    for full_pages, selected_pages in zip(jax.tree.leaves(full_cache), jax.tree.leaves(selected_cache), strict=True):
+        np.testing.assert_array_equal(full_pages, selected_pages)

@@ -702,8 +702,10 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        logit_positions: NamedArray | None = None,
         key=None,
-    ):
+    ) -> tuple[NamedArray, ListCache["HeroLayerCache"]]:
+        """Advance the cache for all input rows and project the requested logits."""
         cfg = self.config
         if input_ids.ndim != 1 or pos_ids.axes != input_ids.axes:
             raise ValueError("Hero decode requires matching flat token and position arrays")
@@ -733,11 +735,16 @@ class HeroLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[HeroConfig])
             layer_step, hidden, (blocks, stacked_cache, _long_layer_schedule(cfg.num_layers, cfg.global_every))
         )
         hidden = self.transformer.final_gated_norm(self.transformer.final_norm(hidden))
+        caches = ListCache(tuple(jax.tree.map(lambda array: array[i], updated) for i in range(cfg.num_layers)))
+        if logit_positions is not None:
+            selected = hidden[:, 0].at[logit_positions.array].get(out_sharding=P())
+            logits = jnp.einsum("...d,dv->...v", selected, self.transformer.output_proj, out_sharding=P())
+            return hax.named(logits, (*logit_positions.axes, self.Vocab)), caches
+
         logits = jnp.einsum(
             "bsd,dv->bsv", hidden, self.transformer.output_proj, out_sharding=P(_BATCH_AXES, None, "model")
         )[:, 0]
-        caches = tuple(jax.tree.map(lambda array: array[i], updated) for i in range(cfg.num_layers))
-        return hax.named(logits, (input_ids.axes[0], self.Vocab)), ListCache(caches)
+        return hax.named(logits, (input_ids.axes[0], self.Vocab)), caches
 
     def to_state_dict(self, prefix: str | None = None) -> StateDict:
         # Serialization imports the concrete transformer type.

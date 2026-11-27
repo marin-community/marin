@@ -36,8 +36,10 @@ def _assert_mixed_paged_decode_matches_forward(model):
         )
         reference.append(np.asarray(full_forward(model, ids).array)[0])
     cache = model.initial_cache(PageTableSpec(num_pages=6, page_size=2, max_seqs=2), dtype=jnp.float32)
-    decode = hax.named_jit(lambda m, ids, state, info, pos: m.decode(ids, state, info, pos))
-    for phase in phases:
+    decode = hax.named_jit(
+        lambda m, ids, state, info, pos, select=None: m.decode(ids, state, info, pos, logit_positions=select)
+    )
+    for phase_index, phase in enumerate(phases):
         lengths = [length for _, length in phase]
         n = sum(lengths)
         ids = np.zeros(capacity, dtype=np.int32)
@@ -61,14 +63,22 @@ def _assert_mixed_paged_decode_matches_forward(model):
             new_token_dests=hax.named(jnp.asarray(dests), token_axis),
             page_size=2,
         )
-        logits, cache = decode(
-            model,
-            hax.named(jnp.asarray(ids), token_axis),
-            cache,
-            info,
-            hax.named(jnp.asarray(positions), token_axis),
-        )
+        token_ids = hax.named(jnp.asarray(ids), token_axis)
+        position_ids = hax.named(jnp.asarray(positions), token_axis)
+        logits, full_cache = decode(model, token_ids, cache, info, position_ids)
         np.testing.assert_allclose(np.asarray(logits.array)[:n], np.concatenate(expected), rtol=1e-4, atol=1e-4)
+        if phase_index == 0:
+            indices = np.array([n - 1, 0])
+            selection = hax.named(jnp.asarray(indices), Axis("sample", 2))
+            selected, cache = decode(model, token_ids, cache, info, position_ids, selection)
+            assert selected.axes == (*selection.axes, model.Vocab)
+            np.testing.assert_allclose(
+                np.asarray(selected.array), np.asarray(logits.array)[indices], rtol=1e-4, atol=1e-4
+            )
+            for full, sparse in zip(jax.tree.leaves(full_cache), jax.tree.leaves(cache), strict=True):
+                np.testing.assert_array_equal(full, sparse)
+        else:
+            cache = full_cache
 
 
 @pytest.mark.parametrize("sliding_window", [2, 16])
