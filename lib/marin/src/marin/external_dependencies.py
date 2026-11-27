@@ -94,15 +94,15 @@ VLLM_GPU_RELEASE = VllmGpuRelease(
 
 VLLM_FORK_REQUIREMENT = (
     "vllm @ https://github.com/marin-community/vllm/releases/download/"
-    "marin-vllm-tpu-candidate-fb02daf1d713-480d505fa527-36cef9c0caf3-578aca43f87d/"
+    "marin-vllm-tpu-candidate-fb02daf1d713-3e54c8de0b31-36cef9c0caf3-d5e48752e927/"
     "vllm-0.0.0.dev20260929+marin.fb02daf1d713.tpu-cp312-cp312-"
     "linux_x86_64.whl#sha256=c29cd85e3e75761ba5c19a7ebd910b649c07ecc08dbd33498c3781ec2ff5f41b"
 )
 TPU_INFERENCE_FORK_REQUIREMENT = (
     "tpu-inference @ https://github.com/marin-community/vllm/releases/download/"
-    "marin-vllm-tpu-candidate-fb02daf1d713-480d505fa527-36cef9c0caf3-578aca43f87d/"
-    "tpu_inference-0.30.0+marin.480d505fa527-py3-none-"
-    "any.whl#sha256=a6d3b67bf3033e59a1ffa1e3fb1a62a268baa313b1b8fa687f3d59db70339fb1"
+    "marin-vllm-tpu-candidate-fb02daf1d713-3e54c8de0b31-36cef9c0caf3-d5e48752e927/"
+    "tpu_inference-0.30.0+marin.3e54c8de0b31-py3-none-"
+    "any.whl#sha256=287f6f391065b27a58c35259d03b845a8e2d0cfc72a50e7f9259ed4242cad7fc"
 )
 VLLM_TPU_EXCLUDE_NEWER = "2026-11-26T21:50:00Z"
 
