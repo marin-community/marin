@@ -31,6 +31,32 @@ outside the repository supplies any pipeline input.
 Repository-relative pins (for example the registry index under `plans/`) resolve
 from the checkout root: run `atlas-release` from the checkout.
 
+## Verify curriculum input reuse
+
+`public_input_reuse` checks every task belonging to its named target sources in a
+fresh census against the archived curriculum through `curriculum_projection.task_rebinding`. Its typed inputs
+name the release, frozen source revision, SHA-bound `archive_release` and
+`census_receipt`, target source IDs and an output root. The census must bind the
+same release and revision, and its public preparation must match its measured
+declarations and task stream. Changed public content or ambiguous correspondence
+refuses reuse.
+
+Run the comparison in the data's region:
+
+```bash
+uv run python -m experiments.post_training.task_curation.release_stages.public_input_reuse \
+  --inputs /workspace/reuse-inputs.json --mode dry-run
+uv run python -m experiments.post_training.task_curation.release_stages.public_input_reuse \
+  --inputs /workspace/reuse-inputs.json --mode write
+```
+
+The dry run checks every target population without publishing outputs. Write mode
+seals task-identity mappings and `reuse-receipt.json`. It computes no embeddings
+or alignment scores. The receipt establishes eligibility for curriculum semantic
+alignment reuse; grader execution and reward correctness retain their separate
+admission requirements. The composition stage still verifies its selected
+replacement manifests before applying a rebind.
+
 ## The release plan document
 
 Everything release-specific lives in one typed JSON document — the release plan.

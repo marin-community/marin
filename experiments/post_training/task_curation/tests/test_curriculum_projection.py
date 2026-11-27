@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pyarrow as pa
@@ -41,6 +42,8 @@ from experiments.post_training.task_curation.lexical_policy import LexicalInputU
 from experiments.post_training.task_curation.local import artifact_prefix, local_client
 from experiments.post_training.task_curation.release_stages import curriculum_compose as compose
 from experiments.post_training.task_curation.release_stages import curriculum_load
+from experiments.post_training.task_curation.release_stages import public_input_reuse as reuse
+from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
 from infra.marina.apps.rl_data_catalog.role_projection import CurriculumManifests, ManifestReference
 from lib.taskcompendium.tests.deduplication_fixtures import deduplication_evidence
 
@@ -315,6 +318,72 @@ def archived(tmp_path):
         coverage_id=coverage.coverage_id,
     )
     return release, declarations, rows, manifests
+
+
+@pytest.mark.parametrize("public", ["same-public-instruction", "changed-public-instruction"])
+def test_reuse_receipt_requires_complete_public_equivalence(tmp_path, archived, public, monkeypatch, capsys):
+    _, _, _, manifests = archived
+    changed = declaration("Marin:rebound", "2")
+    public_source(tmp_path / "current", changed, public=public, task_hash="new-task", task_id="current-task-id")
+    census = {
+        "kind": "atlas-test-admission-population-census",
+        "source_revision": "a" * 40,
+        "results": [
+            {
+                "source_id": changed.id,
+                "declaration": changed.model_dump(mode="json"),
+                "inventory": {"scanned_task_specs_sha256": "a" * 64, "retained_tasks": 1},
+                "old_task_specs_or_count_bindings_inherited": False,
+                "qa_bindings_inherited": False,
+                "public_preparation": {
+                    "manifest": reference(tmp_path / "current/manifest.json").model_dump(mode="json"),
+                    "public_inputs": reference(tmp_path / "current/public-inputs.json").model_dump(mode="json"),
+                },
+            }
+        ],
+    }
+    census_path = tmp_path / "census.json"
+    census_path.write_text(json.dumps(census))
+    inputs = reuse.PublicInputReuseInputs(
+        release_id="test",
+        source_revision="a" * 40,
+        archive_release=ArtifactRef(uri=manifests.release_uri, sha256=manifests.release_sha256),
+        census_receipt=ArtifactRef(**reference(census_path).model_dump(mode="json")),
+        targets=(changed.id,),
+        output_root=str(tmp_path / "reuse"),
+    )
+    feeds = (tmp_path / "alerts.jsonl",)
+    if public != "same-public-instruction":
+        with pytest.raises(ValueError):
+            reuse.run_public_input_reuse(inputs, dry_run=False, feeds=feeds)
+        assert not (tmp_path / "reuse").exists()
+        return
+    dry_run = reuse.run_public_input_reuse(inputs, dry_run=True, feeds=feeds)
+    assert dry_run["tasks"] == 1 and not (tmp_path / "reuse").exists()
+    cli_inputs = tmp_path / "reuse-inputs.json"
+    cli_inputs.write_text(
+        json.dumps(
+            {
+                "release_id": inputs.release_id,
+                "source_revision": inputs.source_revision,
+                "archive_release": inputs.archive_release.model_dump(mode="json"),
+                "census_receipt": inputs.census_receipt.model_dump(mode="json"),
+                "targets": inputs.targets,
+                "output_root": inputs.output_root,
+            }
+        )
+    )
+    monkeypatch.setattr(reuse.alerts, "WATCHDOG_FEED", feeds[0])
+    monkeypatch.setattr(sys, "argv", ["public_input_reuse", "--inputs", str(cli_inputs), "--mode", "write"])
+    reuse.main()
+    result = json.loads(capsys.readouterr().out)
+    receipt = json.loads(StoragePath(result["receipt"]["uri"]).read_text())
+    assert receipt["status"] == "PASS" and receipt["results"][0]["changed_task_ids"] == 1
+    mapping = receipt["task_identity_mappings"][changed.id]
+    assert file_sha256(StoragePath(mapping["uri"])) == mapping["sha256"]
+    rows = pq.read_table(mapping["uri"]).to_pylist()
+    assert [(row["old_task_id"], row["new_task_id"]) for row in rows] == [("same-id", "current-task-id")]
+    assert [(row["old_task_sha256"], row["new_task_sha256"]) for row in rows] == [("old-task", "new-task")]
 
 
 @pytest.mark.parametrize("task_id", ["same-id", "current-task-id"])
