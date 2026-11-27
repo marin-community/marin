@@ -100,6 +100,8 @@ async def _start_launcher(
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
         )
+        if state._keeper.returncode is not None:
+            raise ProcessLookupError("Local keeper exited before startup completed")
         state._keeper_pidfd = os.pidfd_open(state._keeper.pid)
 
 
