@@ -8,7 +8,14 @@ from finestore.rl.curation import QualifiedSourceDeclaration, SourceOrigin, sour
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import Backend, NetworkPolicy, UnsupportedMachineSpec
-from taskcompendium.backend_requirements import BackendFit, BackendSourceMap, BackendSurvey, FitSupport, RuntimeProfile
+from taskcompendium.backend_requirements import (
+    BackendFit,
+    BackendSourceMap,
+    BackendSurvey,
+    FitSupport,
+    RuntimeProfile,
+    backend_schema_sha256,
+)
 from taskcompendium.source_fingerprints import DuplicateGroup, DuplicateGroupMember, SourceIdentitySurvey
 
 from experiments.post_training.task_curation.backend_capabilities import production_matrix
@@ -116,7 +123,7 @@ def backend_survey(git_revision: str = REVISION) -> BackendSurvey:
         snapshot_id=SNAPSHOT_ID,
         generated_at="2026-11-23T00:00:00Z",
         git_revision=git_revision,
-        schema_sha256="0" * 64,
+        schema_sha256=backend_schema_sha256(),
         runtime_defaults={"agent": RUNTIME, "grader": RUNTIME},
         matrix=production_matrix(_checkers()),
         deployment_limits={},

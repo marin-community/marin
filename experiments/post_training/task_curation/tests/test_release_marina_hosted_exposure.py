@@ -26,8 +26,10 @@ from experiments.post_training.task_curation.release_stages import (
     hosted_check,
     live_applet,
     marina_release,
+    strict_audit,
 )
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef
+from taskcompendium.backend_requirements import backend_schema_sha256
 from experiments.post_training.task_curation.tests import release_audit_fixtures as audit_fixtures
 from infra.marina.apps.rl_data_catalog.server.content_access import LICENSE_CONTENT_MARKER, backend_metadata
 
@@ -474,6 +476,62 @@ def test_hosted_check_seals_receipt_on_a_clean_pass(tmp_path):
     ]
     assert proof["receipt"]["uri"].endswith("hosted-check.json")
     assert _last_alert(tmp_path)["kind"] == hosted_check.alerts.KIND_FINISH
+
+
+def _audit_sources(declarations: dict, survey, identity) -> dict:
+    """The api/sources projection the strict audit reads (the served fixture shape)."""
+    group = identity.groups[0].model_dump(mode="json")
+    backend_rows = {row.source_id: row.model_dump(mode="json", exclude_unset=True) for row in survey.sources}
+    return {
+        "sources": [
+            {
+                **declarations[source_id],
+                "backend_capabilities": backend_rows[source_id],
+                "duplicate_group": group,
+                "partial_overlaps": [],
+            }
+            for source_id in audit_fixtures.SOURCE_IDS
+        ],
+        "snapshot_id": audit_fixtures.SNAPSHOT_ID,
+    }
+
+
+def test_strict_audit_accepts_a_survey_produced_by_an_older_revision_with_matching_inputs():
+    """The backend survey records the revision whose checkout produced it; the release gate
+    compares the survey's input fingerprint (its recorded schema digest) instead, so a
+    provenance label alone cannot fail a release whose survey inputs did not change
+    (atlas-2026.11.27 hosted check)."""
+    declarations = audit_fixtures.declarations_document()
+    survey = audit_fixtures.backend_survey(git_revision="a" * 40).model_copy(
+        update={"schema_sha256": backend_schema_sha256()}
+    )
+    identity = audit_fixtures.identity_survey()
+    mismatches = strict_audit.audit_served_population(
+        _audit_sources(declarations, survey, identity),
+        declarations,
+        survey,
+        identity,
+        expected_source_count=len(audit_fixtures.SOURCE_IDS),
+        retained_tasks=2 * len(audit_fixtures.SOURCE_IDS),
+    )
+    assert mismatches == {}
+
+
+def test_strict_audit_refuses_a_survey_produced_by_different_survey_inputs():
+    """A survey whose recorded input fingerprint differs from the release's survey code
+    fails the gate even when its producing revision label would have matched."""
+    declarations = audit_fixtures.declarations_document()
+    survey = audit_fixtures.backend_survey().model_copy(update={"schema_sha256": "0" * 64})
+    identity = audit_fixtures.identity_survey()
+    mismatches = strict_audit.audit_served_population(
+        _audit_sources(declarations, survey, identity),
+        declarations,
+        survey,
+        identity,
+        expected_source_count=len(audit_fixtures.SOURCE_IDS),
+        retained_tasks=2 * len(audit_fixtures.SOURCE_IDS),
+    )
+    assert any("survey inputs were produced by different survey code" in item for item in mismatches["catalog"])
 
 
 def test_hosted_check_accepts_the_serving_projection_of_withheld_and_downgraded_sources(tmp_path):

@@ -154,7 +154,6 @@ def check_served_population(
         identity,
         expected_source_count=inputs.expected_source_count,
         retained_tasks=inputs.retained_tasks,
-        source_revision=inputs.source_revision,
     )
     checks = [
         {

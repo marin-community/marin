@@ -31,7 +31,7 @@ from typing import Any
 import requests
 from finestore.rl.status_taxonomy import PendingStage, SourceStatus
 from rigging.filesystem.storage_path import StoragePath
-from taskcompendium.backend_requirements import BackendSurvey
+from taskcompendium.backend_requirements import BackendSurvey, backend_schema_sha256
 from taskcompendium.source_fingerprints import SourceIdentitySurvey
 
 import experiments.post_training.task_curation.release_stages.alerts as alerts
@@ -181,7 +181,6 @@ def audit_served_population(
     *,
     expected_source_count: int,
     retained_tasks: int,
-    source_revision: str,
 ) -> dict[str, list[str]]:
     """The served sources against the sealed documents, with per-source mismatches.
 
@@ -209,9 +208,10 @@ def audit_served_population(
         mismatches.setdefault("catalog", []).append(
             f"served snapshot {served['snapshot_id']!r} differs from the backend survey {survey.snapshot_id!r}"
         )
-    if survey.git_revision != source_revision:
+    if survey.schema_sha256 != backend_schema_sha256():
         mismatches.setdefault("catalog", []).append(
-            f"backend survey pins revision {survey.git_revision!r}, expected {source_revision!r}"
+            "backend survey inputs were produced by different survey code:"
+            f" survey schema {survey.schema_sha256!r}, release schema {backend_schema_sha256()!r}"
         )
     if set(identity.fingerprints) != expected_ids:
         mismatches.setdefault("identity-survey", []).append("identity fingerprints do not cover the release population")
@@ -350,7 +350,6 @@ def run_strict_audit(
                 identity,
                 expected_source_count=inputs.expected_source_count,
                 retained_tasks=inputs.retained_tasks,
-                source_revision=inputs.source_revision,
             ),
         )
         backend_reasons = audit_backends_document(survey, reader.get("api/backends"))
