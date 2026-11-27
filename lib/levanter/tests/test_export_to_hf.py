@@ -279,6 +279,8 @@ def test_export_pinned_tokenizer_revision(tmp_path, monkeypatch):
         return snapshots[model_name_or_path, revision]
 
     monkeypatch.setattr(AutoTokenizer, "from_pretrained", from_pretrained)
+    # The synthetic repository has no Hub metadata to fetch.
+    monkeypatch.setattr("levanter.compat.hf_checkpoints.get_tokenizer_config", lambda *_args, **_kwargs: {})
     model_config = TokenizerlessGpt2Config(
         num_layers=1, num_heads=2, max_seq_len=16, use_flash_attention=False, hidden_dim=16
     )
