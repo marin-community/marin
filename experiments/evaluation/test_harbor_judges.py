@@ -23,7 +23,12 @@ from taskcompendium.importers.harbor.package import AnswerFile, JobSettings, ima
 from taskcompendium.models import ConversationTrace, GradingAttempt, Source, TaskSpec, TextMessage
 from verifyit.modes.grade_judge import JudgeConnection
 
-from experiments.evaluation.benchmarks.harbor_judges import bixbench_answer, financeagent_answer, simpleqa_answer
+from experiments.evaluation.benchmarks.harbor_judges import (
+    BIXBENCH_JUDGE_MODEL,
+    bixbench_answer,
+    financeagent_answer,
+    simpleqa_answer,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "harbor"
 SIMPLEQA = FIXTURES / "simpleqa-0"
@@ -179,6 +184,8 @@ def test_bixbench_sends_harbors_judge_request_and_reads_its_binary_score(judge_s
     expected = harbor_request("bixbench-bix-1-q1")
     expected["max_completion_tokens"] = expected.pop("max_tokens")
     del expected["stream"]
+    # Marin's judge is a hosted model, not the one Harbor's run served beside the candidate.
+    expected["model"] = BIXBENCH_JUDGE_MODEL
     assert judge_server.requests == [expected]
 
 
