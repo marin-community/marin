@@ -15,6 +15,7 @@ import pytest
 import yaml
 from fray.iris_backend import convert_constraints
 from marin.execution.lazy import materialized_config
+from marin.rl.cli import _skyrl_executions, _submission_route
 from marin.rl.curriculum import validation_payload
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import TaskRolloutSpec
@@ -345,6 +346,10 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, 
     assert (
         retry.plan["round"]["rl"]["execution"]["coordinator_name"]
         != graph.plan["round"]["rl"]["execution"]["coordinator_name"]
+    )
+    assert (
+        _submission_route(_skyrl_executions([retry.terminal])).coordinator_name
+        == retry_spec.rl.execution["coordinator_name"]
     )
 
     # Reproduce the regional CPU failure with the provider SDK absent. The pool

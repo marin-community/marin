@@ -193,7 +193,10 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str 
     lowering_recipe = copy.deepcopy(reference.rl.recipe)
     place_per_task_images(lowering_recipe, mix)
     reference = dataclasses.replace(
-        reference, rl=dataclasses.replace(reference.rl, execution=pool_round.rl.execution, recipe=lowering_recipe)
+        reference, rl=dataclasses.replace(reference.rl, execution=spec.rl.execution, recipe=lowering_recipe)
+    )
+    pool_reference = dataclasses.replace(
+        reference, rl=dataclasses.replace(reference.rl, execution=pool_round.rl.execution)
     )
     scaffold = adopted_round_rl(reference, verify_pool_at_runtime=True)
     native = materialized_config(scaffold, spec.storage.output_prefix)
@@ -220,7 +223,11 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str 
         if context.is_fingerprint:
             # The concrete launch carries an ephemeral attempt ID. Its complete
             # authored recipe, model pins and mix carry the preparation identity.
-            return {"reference": dataclasses.asdict(reference), "mix": dataclasses.asdict(mix), "version": pool_version}
+            return {
+                "reference": dataclasses.asdict(pool_reference),
+                "mix": dataclasses.asdict(mix),
+                "version": pool_version,
+            }
         return pool_build(context)
 
     pools = dataclasses.replace(pools, build_config=build_pools)
