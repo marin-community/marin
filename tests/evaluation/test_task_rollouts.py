@@ -46,7 +46,7 @@ from rolloutengine.likelihood import VllmLikelihood
 from rolloutengine.models import ModelRequest, ModelTurn, Prompt, RolloutLimits, TokenUsage
 from rolloutengine.test_support import machine_runtime
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from shellbox.machine import MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
+from shellbox.machine import CommandOutputLost, MachineDiskFull, MachineSpec, NetworkPolicy, PackageSpec
 from taskcompendium.convert.answers import answer_task, exact_answer_task, source_evidence
 from taskcompendium.evaluation.corpus import chat_item, evaluation_cases, evaluation_protocol
 from taskcompendium.evaluation.selection import SELECTIONS_TABLE
@@ -1047,7 +1047,7 @@ async def test_mixed_http_driver_preserves_wire_channels_metrics_failures_and_re
             machine_factories={"shellsim": ShellSimMachineFactory()},
             tokenizer=tokenizer,
             completion_model=CompletionModel(client, "fixture"),
-            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
+            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0, None),
         )
         model = ChatModel(client, "fixture", 16, extra_body={"skip_special_tokens": True})
         with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
@@ -1559,18 +1559,22 @@ class FullDiskFactory(ShellSimMachineFactory):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("filled_by_agent", "outcomes"),
-    [(False, ["infra_error", "graded"]), (True, ["submission_failure"])],
-    ids=["before-the-agent", "by-the-agent"],
+    ("agent_failure", "outcomes"),
+    [
+        (None, ["infra_error", "graded"]),
+        (MachineDiskFull("The sandbox is full"), ["submission_failure"]),
+        (CommandOutputLost("Failed to measure command output: cannot open /tmp/out"), ["submission_failure"]),
+    ],
+    ids=["disk-full-before-the-agent", "disk-filled-by-the-agent", "output-lost-during-the-episode"],
 )
-async def test_a_full_disk_is_retried_only_when_the_agent_did_not_fill_it(
-    tmp_path, run_config, filled_by_agent, outcomes
+async def test_a_broken_machine_is_retried_only_when_it_broke_before_the_agent_ran(
+    tmp_path, run_config, agent_failure, outcomes
 ):
     corpus = publish_episodes(tmp_path, ("episode/solve",), PiAgent())
 
     async def run_pi(context, complete):
-        if filled_by_agent:
-            raise MachineDiskFull("The sandbox is full")
+        if agent_failure is not None:
+            raise agent_failure
         await complete(Prompt(({"role": "user", "content": "Solve."},), {}))
 
     async def model(request):
@@ -1580,11 +1584,11 @@ async def test_a_full_disk_is_retried_only_when_the_agent_did_not_fill_it(
         update={"concurrency": 1, "source_limit": None, "task_machine": machine_runtime(backend="shellsim")}
     )
     arguments = {
-        "machine_factories": {"shellsim": ShellSimMachineFactory() if filled_by_agent else FullDiskFactory()},
+        "machine_factories": {"shellsim": FullDiskFactory() if agent_failure is None else ShellSimMachineFactory()},
         "harnesses": {"pi": lambda _agent, _budget: AgentHarness(run_pi)},
     }
     output = str(tmp_path / "results")
-    if not filled_by_agent:
+    if agent_failure is None:
         with pytest.raises(EvaluationInfrastructureError):
             await run_evaluation((corpus,), output, config, model, **arguments)
     await run_evaluation((corpus,), output, config, model, **arguments)
@@ -1887,7 +1891,7 @@ async def test_mixed_reuse_regrades_generations_and_rescores_likelihoods(tmp_pat
             machine_factories={"shellsim": ShellSimMachineFactory()},
             tokenizer=tokenizer,
             completion_model=CompletionModel(client, "fixture"),
-            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0),
+            likelihood=VllmLikelihood(client, "fixture", tokenizer, 64, 0, None),
         )
         model = ChatModel(client, "fixture", 16)
         with pytest.raises(EvaluationInfrastructureError, match="raw evidence is saved"):
