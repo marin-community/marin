@@ -48,6 +48,7 @@ from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.post_training.task_curation.calibration_inventory import task_blockers
+from experiments.post_training.task_curation.environment import _heredoc_delimiter
 from experiments.post_training.task_curation.harbor_cohort_conversion import (
     CONVERSION_PROTOCOL,
     CohortConversionRejected,
@@ -545,44 +546,6 @@ def _resolve_base_digest(reference: str) -> str:
     if not manifest_digest or not re.fullmatch(DIGEST_PATTERN, manifest_digest):
         raise BasePinRejected(f"The registry returned no usable manifest digest for {reference}")
     return f"{repo}@{manifest_digest}"
-
-
-def _heredoc_delimiter(argument: str) -> str | None:
-    """The heredoc delimiter an unquoted ``<<`` in the command opens, honoring quoting.
-
-    ``cat > f <<'EOF'`` opens a heredoc whose body is shell data; ``echo "a << b"``
-    does not (the operator is inside quotes). Mirrors the OpenSWE profile's
-    scanner (the shared layer cannot import the profile); the two must agree on
-    what counts as a heredoc.
-    """
-    quote: str | None = None
-    index = 0
-    while index < len(argument):
-        char = argument[index]
-        if quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif argument.startswith("<<", index):
-            index += 2
-            if index < len(argument) and argument[index] == "-":
-                index += 1
-            while index < len(argument) and argument[index].isspace():
-                index += 1
-            if index < len(argument) and argument[index] in "'\"":
-                quote_char = argument[index]
-                index += 1
-                end = argument.find(quote_char, index)
-                if end == -1:
-                    return None
-                return argument[index:end]
-            match = re.match(r"[\w.-]+", argument[index:])
-            if match:
-                return match.group(0)
-            return None
-        index += 1
-    return None
 
 
 def pinned_dockerfile(text: str, resolve: Callable[[str], str] = resolve_base_digest) -> tuple[str, tuple[BasePin, ...]]:

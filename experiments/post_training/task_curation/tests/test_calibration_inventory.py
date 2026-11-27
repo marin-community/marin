@@ -23,6 +23,7 @@ from taskcompendium.pipeline.models import RawRow
 
 from experiments.post_training.task_curation.calibration_inventory import image_blockers, inventory_source, task_blockers
 from experiments.post_training.task_curation.datasets.native_harbor import native_task
+from experiments.post_training.task_curation.environment import dockerfile_lines
 from experiments.post_training.task_curation.full_qc_artifacts import FullQCInputs
 from experiments.post_training.task_curation.lexical_artifacts import SourceTextPopulation
 from experiments.post_training.task_curation.lexical_contamination import write_text_population
@@ -89,6 +90,26 @@ def test_mutable_native_environment_is_a_repair_even_with_executable_oracle():
     )
     assert isinstance(task, TaskSpec)
     assert task_blockers(task) == {"mutable_docker_base"}
+
+
+def test_dockerfile_lines_skips_heredoc_bodies():
+    """Heredoc bodies are shell data: no continuation joining, no instruction lines.
+
+    Machine-authored recipes embed backslash-continued shell and even
+    instruction-looking text inside RUN heredocs; the scanner must neither
+    surface those lines nor trip its unterminated-continuation guard.
+    """
+    dockerfile = (
+        "FROM ubuntu:22.04\n"
+        "RUN <<'EOF'\n"
+        "write_config \\\n"
+        "  --from 'FROM nowhere'\n"
+        "FROM not-a-real-instruction\n"
+        "EOF\n"
+        "RUN echo done \\\n"
+        "  always\n"
+    )
+    assert dockerfile_lines(dockerfile) == ["FROM ubuntu:22.04", "RUN <<'EOF'", "RUN echo done always"]
 
 
 @pytest.mark.parametrize("mutable_final_stage", [False, True])
