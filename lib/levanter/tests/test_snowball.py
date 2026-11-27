@@ -303,8 +303,11 @@ def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output
         assert (tmp_path / filename).read_bytes() == original
 
 
-def test_snowball_layerwise_serving_load_preserves_sharded_snapshot(tmp_path):
-    cfg = _tiny_config(num_layers=2)
+@pytest.mark.parametrize("strict", [False, True])
+def test_snowball_layerwise_serving_load_preserves_sharded_snapshot(tmp_path, strict):
+    cfg = _tiny_config(num_layers=2, head_dim=128, max_seq_len=128)
+    if strict:
+        cfg = cfg.with_zero_kl_replay()
     converter = cfg.hf_checkpoint_converter()
     with use_cpu_devices(2), jax.set_mesh(compact_grug_mesh(expert_axis_size=2)):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(17))
@@ -319,6 +322,8 @@ def test_snowball_layerwise_serving_load_preserves_sharded_snapshot(tmp_path):
         loaded = load_snowball_serving_model(
             converter, RepoRef(str(tmp_path)), cfg, dtype=jnp.bfloat16, axis_mapping={}
         )
+        if strict:
+            model = model.with_packed_experts()
         expected, actual = list(jax.tree.leaves(model)), list(jax.tree.leaves(loaded))
         for original, restored in zip(expected, actual, strict=True):
             np.testing.assert_array_equal(np.asarray(original.astype(jnp.bfloat16)), np.asarray(restored))

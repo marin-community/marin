@@ -2074,7 +2074,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         strict = self.config.replay_precision == "zero_kl"
         experts = block.mlp.expert_mlp
         megablox_tiles = None
-        if (
+        if strict and token_rows <= 64 and experts.w_down.shape[1:] == (1280, 2560):
+            # Decode has few rows per expert. Keep the strict K/N tiles and
+            # accumulation order while reducing the number of padded rows per tile.
+            megablox_tiles = (32, None)
+        elif (
             not strict
             and self._paged_attention == "tpu_v3"
             and experts.w_down.shape[1:] == (1280, 2560)

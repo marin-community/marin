@@ -34,13 +34,17 @@ def load_snowball_serving_model(
     axis_mapping: ResourceMapping,
     pack_expert_weights: bool = False,
 ) -> SnowballLMHeadModel:
-    """Load a Snowball snapshot with device conversion memory bounded to one layer."""
+    """Load a Snowball snapshot with device conversion memory bounded to one layer.
+
+    Strict replay stores gate and up in their grouped-matmul layout at load time.
+    """
     state_dict = converter.load_state_dict(ref, dtype)
     prefix = converter.ignore_prefix
     if prefix and not any(name.startswith(f"{prefix}.") for name in state_dict):
         prefix = None
     vocab = Axis("vocab", config.vocab_size)
     template = eqx.filter_eval_shape(SnowballLMHeadModel.init, vocab, config, key=jax.random.PRNGKey(0))
+    pack_expert_weights = pack_expert_weights or config.replay_precision == "zero_kl"
     with hax.axis_mapping(axis_mapping):
         return _convert_layers(template, state_dict, prefix, pack_expert_weights=pack_expert_weights)
 

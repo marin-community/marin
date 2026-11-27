@@ -925,6 +925,7 @@ def moe_mlp(
                 make_dispatch_combine=_gather_dispatch_combine,
                 combine_in_fp32=combine_in_fp32,
                 reduce_experts=_ordered_expert_reduce,
+                megablox_tiles=megablox_tiles,
             )
         elif resolved_implementation == "ring_filtered":
             shard_local_fn = partial(
