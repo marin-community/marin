@@ -54,6 +54,7 @@ TYPES = MappingProxyType(
         "trainer.ref.megatron_config.nccl_max_channels": "int | None",
         "generator.trajectory_reward_shaping.reasoning_span.target": _literal(ReasoningSpanPenaltyTarget),
         "trainer.resume_mode": _literal(ResumeMode),
+        "trainer.checkpoint_max_staged_host_bytes": "PositiveInt",
         "trainer.progress.mode": 'Literal["auto", "tqdm", "logging"]',
         "trainer.debug_mode": _literal(DebugMode),
         "trainer.preflight_gate.on_failure": 'Literal["abort", "warn"]',

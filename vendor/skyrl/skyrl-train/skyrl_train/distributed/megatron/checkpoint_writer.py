@@ -1,16 +1,23 @@
 """Megatron checkpoint storage shared by BF16 parameters and FP32 masters."""
 
+from collections import deque
+from collections.abc import Iterator
+from concurrent.futures import Future as ThreadFuture, ThreadPoolExecutor
 from dataclasses import replace
+from io import BytesIO
 import re
+from threading import Condition, Event
 
 from fsspec import AbstractFileSystem
 from loguru import logger
 import torch
-from torch.distributed.checkpoint import SavePlan
+from torch.distributed.checkpoint import SavePlan, SavePlanner
 from torch.distributed.checkpoint.metadata import Metadata, TensorStorageMetadata
+from torch.distributed.checkpoint.planner import WriteItem, WriteItemType
 from torch.distributed.checkpoint.storage import WriteResult
+from torch.futures import Future
 
-from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
+from skyrl_train.io.torch_distributed_checkpoint import DEFAULT_TENSOR_COPY_AHEAD_BYTES, StreamingFsspecWriter
 
 
 _MASTER_WEIGHT_KEY = re.compile(r"(?:chained_\d+\.)?optimizer\.state\.(?:param|fp32_param)\.(.+)")
@@ -47,8 +54,14 @@ class MasterWeightsWriter(StreamingFsspecWriter):
     Model-only loads read the full FP32 source record before casting to BF16.
     """
 
-    def __init__(self, path: str, *, filesystem: AbstractFileSystem) -> None:
-        super().__init__(path, filesystem=filesystem)
+    def __init__(
+        self,
+        path: str,
+        *,
+        filesystem: AbstractFileSystem,
+        tensor_copy_ahead_bytes: int = DEFAULT_TENSOR_COPY_AHEAD_BYTES,
+    ) -> None:
+        super().__init__(path, filesystem=filesystem, tensor_copy_ahead_bytes=tensor_copy_ahead_bytes)
         self._model_aliases: dict[str, str] = {}
 
     def prepare_global_plan(self, plans: list[SavePlan]) -> list[SavePlan]:
@@ -79,3 +92,74 @@ class MasterWeightsWriter(StreamingFsspecWriter):
             if result.index.fqn in master_aliases
         ]
         super().finish(metadata, [*results, alias_results])
+
+
+class StagedMasterWeightsWriter(MasterWeightsWriter):
+    """Copy the rank's final write plan to host memory before streaming it."""
+
+    def __init__(self, path: str, *, filesystem: AbstractFileSystem, max_staged_bytes: int) -> None:
+        super().__init__(path, filesystem=filesystem, tensor_copy_ahead_bytes=max_staged_bytes)
+        self.staged = Event()
+
+    def write_data(self, plan: SavePlan, planner: SavePlanner) -> Future[list[WriteResult]]:
+        # The global plan has already removed replicas and aliased BF16 records.
+        ready: deque[tuple[WriteItem, torch.Tensor | BytesIO, int]] = deque()
+        condition = Condition()
+        in_flight = 0
+        stopped = False
+
+        def stage() -> None:
+            nonlocal in_flight
+            peak = total = 0
+            for item in plan.items:
+                data = planner.resolve_data(item)
+                size = data.nbytes if isinstance(data, torch.Tensor) else data.getbuffer().nbytes
+                with condition:
+                    # A DCP record is indivisible. An oversized record takes the buffer alone.
+                    condition.wait_for(
+                        lambda: stopped or not in_flight or in_flight + size <= self.tensor_copy_ahead_bytes
+                    )
+                    if stopped:
+                        return
+                    in_flight += size
+                    peak = max(peak, in_flight)
+                if isinstance(data, torch.Tensor):
+                    data = data.detach().to(device="cpu", copy=True, memory_format=torch.contiguous_format)
+                else:
+                    data = BytesIO(data.getvalue())
+                with condition:
+                    ready.append((item, data, size))
+                    del data
+                    condition.notify_all()
+                total += size
+            self.staged.set()
+            logger.info("Checkpoint staged {} bytes on rank {}, peak {} bytes", total, self.rank, peak)
+
+        def items(staging: ThreadFuture[None]) -> Iterator[tuple[WriteItem, torch.Tensor | BytesIO]]:
+            nonlocal in_flight
+            for _ in plan.items:
+                with condition:
+                    condition.wait_for(lambda: ready or staging.done())
+                    if not ready:
+                        staging.result()
+                        raise RuntimeError("Checkpoint staging ended before the write plan was buffered")
+                    item, data, size = ready.popleft()
+                yield item, data
+                del data
+                with condition:
+                    in_flight -= size
+                    condition.notify_all()
+
+        def wake_writer(_future: ThreadFuture[None]) -> None:
+            with condition:
+                condition.notify_all()
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="checkpoint-stage") as executor:
+            staging = executor.submit(stage)
+            staging.add_done_callback(wake_writer)
+            try:
+                return self._write_items(plan, items(staging))
+            finally:
+                with condition:
+                    stopped = True
+                    condition.notify_all()

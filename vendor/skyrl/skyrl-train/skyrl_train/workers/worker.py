@@ -1342,7 +1342,7 @@ class PolicyWorkerBase(Worker):
         _phase_diagnostics.log_phase(_phase_diagnostics.CollectivePhase.TRAINING_STEP_EXIT)
         return status
 
-    def save_checkpoint(self, ckpt_dir: Path, tokenizer=None):
+    def save_checkpoint(self, ckpt_dir: Path, tokenizer=None, *, staging_bytes: int | None = None):
         self.strategy.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,
@@ -1351,7 +1351,17 @@ class PolicyWorkerBase(Worker):
             node_local_rank=self.get_node_local_rank(),
             tokenizer=tokenizer,
             client_state={},
+            staging_bytes=staging_bytes,
         )
+
+    def checkpoint_write_ready(self) -> bool:
+        return self.strategy.checkpoint_write_ready()
+
+    def finish_checkpoint(self) -> None:
+        self.strategy.finish_checkpoint()
+
+    def discard_checkpoint(self) -> None:
+        self.strategy.discard_checkpoint()
 
     def load_checkpoint(
         self,

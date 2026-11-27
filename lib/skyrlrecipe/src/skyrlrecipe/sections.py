@@ -555,6 +555,9 @@ class Trainer(Section):
     reach the budget."""
     reset_distillation_token_count_on_resume: bool = field(False)
     reset_global_step_on_resume: bool = field(False)
+    checkpoint_max_staged_host_bytes: PositiveInt = field(17179869184)
+    """Periodic S3 saves stage a rank's final write plan in CPU RAM. A rank whose share exceeds this budget waits for
+    the writer to release buffer space."""
     callbacks: tuple[Callback, ...] | None = field(None)
     ckpt_interval: int = field(5)
     hf_save_interval: int = field(-1)

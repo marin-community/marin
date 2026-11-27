@@ -1,4 +1,4 @@
-from collections.abc import Buffer, Generator
+from collections.abc import Buffer, Generator, Iterable
 from contextlib import contextmanager
 import io
 import os
@@ -160,12 +160,6 @@ class StreamingFsspecWriter(FileSystemWriter):
 
     def write_data(self, plan: SavePlan, planner: SavePlanner) -> Future[list[WriteResult]]:
         """Write a rank shard without retaining serialized tensors until close."""
-        storage_plan = plan.storage_data
-        if storage_plan is None:
-            raise AssertionError("DCP storage plan is missing its rank prefix")
-        file_name = f"{storage_plan.prefix}0{DEFAULT_SUFFIX}"
-        path = self.fs.concat_path(self.path, file_name)
-
         tensor_items = [item for item in plan.items if item.type != WriteItemType.BYTE_IO]
         if torch.cuda.is_available():
             loader = _OverlappingCpuLoader(
@@ -178,38 +172,41 @@ class StreamingFsspecWriter(FileSystemWriter):
             loader.add(_item_size(item), item)
         loader.start_loading()
 
-        results: list[WriteResult] = []
-        with self.fs.create_stream(path, "wb") as stream:
+        def items() -> Generator[tuple[WriteItem, torch.Tensor | io.BytesIO], None, None]:
             for item in plan.items:
                 if item.type == WriteItemType.BYTE_IO:
-                    results.append(
-                        _write_item(
-                            self.transforms,
-                            stream,
-                            planner.resolve_data(item),
-                            item,
-                            file_name,
-                            self.serialization_format,
-                        )
-                    )
+                    yield item, planner.resolve_data(item)
+            for tensor, item in loader.values():
+                yield cast(WriteItem, item), tensor
 
-            # PyTorch's stock one-file writer fills a safetensors dictionary even
-            # for torch.save, retaining every GPU-to-CPU copy until the rank closes.
-            # Emit each result immediately so only the loader's bounded window lives.
-            for tensor, item_object in loader.values():
-                item = cast(WriteItem, item_object)
-                if not tensor.is_cpu:
+        return self._write_items(plan, items())
+
+    def _write_items(
+        self, plan: SavePlan, items: Iterable[tuple[WriteItem, torch.Tensor | io.BytesIO]]
+    ) -> Future[list[WriteResult]]:
+        storage_plan = plan.storage_data
+        if storage_plan is None:
+            raise AssertionError("DCP storage plan is missing its rank prefix")
+        file_name = f"{storage_plan.prefix}0{DEFAULT_SUFFIX}"
+        path = self.fs.concat_path(self.path, file_name)
+        results: list[WriteResult] = []
+        with self.fs.create_stream(path, "wb") as stream:
+            # Emit each record immediately. Retaining the records until close
+            # would make the host buffer grow to the full rank shard.
+            for item, data in items:
+                if isinstance(data, torch.Tensor) and not data.is_cpu:
                     raise AssertionError("DCP tensor must be on CPU before serialization")
                 results.append(
                     _write_item(
                         self.transforms,
                         stream,
-                        tensor,
+                        data,
                         item,
                         file_name,
                         self.serialization_format,
                     )
                 )
+                del data
 
         future: Future[list[WriteResult]] = Future()
         future.set_result(results)

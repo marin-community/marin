@@ -193,6 +193,24 @@ The driver builds batches by default. Recipes that support policy-worker slicing
 
 Outcome estimators and SFT/uniform support scalar and per-turn token rewards. Unexpected loop, teacher or route metadata reports its group uid. Worker mismatch metrics omit p95/p99/p999, ESS, KL/chi-square and collapse-tail statistics, plus rollout/train probability-difference standard deviation. Two-phase payload sharing precedes rank reads and assembly (`timing/load_worker_batch`). Resume rebuilds per-row summaries with bounded parallel reads for either builder. Checkpoints work in either mode.
 
+## S3 checkpoint staging
+
+SkyRL assigns checkpoint records to policy ranks before copying them into CPU
+memory. Each rank streams its assigned records to S3 and releases buffer space
+as it serializes them. Training can resume as soon as all ranks have copied
+their records. The resume marker is published after all shards and trainer state
+have committed.
+
+`trainer.checkpoint_max_staged_host_bytes` defaults to 16 GiB **per policy
+rank**. When the largest rank's share fits in its buffer, the remaining upload
+can overlap the next update. If a share exceeds the buffer, staging waits as
+records drain. A single record larger than the budget runs alone. Leave room on
+each node for the buffers of all its ranks and their separate multipart upload
+buffers. Each rank logs its assigned bytes and peak staged bytes.
+`timing/save_checkpoints` measures the staging wait and
+`timing/checkpoint_upload_blocking` measures the later wait when a complete
+checkpoint is required.
+
 ## CI checks
 
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
