@@ -16,13 +16,17 @@ from levanter.inference.window_page_map import WindowPageMap
 
 def test_window_pool_reuses_expired_page_and_preserves_live_suffix():
     page_size = 4
-    state = SequenceTable.init(max_seqs=1, pages_per_seq=3, page_size=page_size)
+    logical_pages = 3
+    state = SequenceTable.init(max_seqs=1, pages_per_seq=logical_pages, page_size=page_size)
     state = replace(state, used_mask=hax.named(jnp.array([True]), "seq"))
-    compact = WindowPageMap.init(logical_pages=3, window_pages=2, window=4)
+    compact = WindowPageMap.init(logical_pages=logical_pages, window_pages=2, window=4)
     remap = jax.jit(WindowPageMap.remap)
     translated = []
-    for logical in range(3):
-        pages = hax.named(jnp.where(jnp.arange(3)[None] <= logical, jnp.arange(3)[None], INVALID), ("seq", "page"))
+    for logical in range(logical_pages):
+        pages = hax.named(
+            jnp.where(jnp.arange(logical_pages)[None] <= logical, jnp.arange(logical_pages)[None], INVALID),
+            ("seq", "page"),
+        )
         total = (logical + 1) * page_size
         live = replace(state, seq_lens=hax.named(jnp.array([total]), "seq"), page_indices=pages)
         work = PageBatchInfo(
