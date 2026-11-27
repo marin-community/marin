@@ -11,6 +11,7 @@ at their current inputs. Run in the populations' region, this stage:
 2. fingerprints each complete population and creates its prepared content cache,
    refusing unless both task counts match the declared census;
 3. replaces the target fingerprints and prepared-population locators together,
+   discarding reviews and folds that touch replaced fingerprints while
    preserving other sources' measurements and locations;
 4. runs the deterministic content-NN neighbor survey focused on the re-pinned
    sources (no LLM), using the fresh locations during input preflight.
@@ -38,7 +39,11 @@ from experiments.post_training.task_curation.catalog_identity import (
     identity_survey_payload,
 )
 from experiments.post_training.task_curation.lexical_scan import population_key
-from experiments.post_training.task_curation.source_fingerprints import fingerprint_source
+from experiments.post_training.task_curation.source_fingerprints import (
+    SourceStanding,
+    duplicate_groups,
+    fingerprint_source,
+)
 from experiments.post_training.task_curation.source_neighbor_survey import SAMPLE_SIZE, rerun, write_json
 from experiments.post_training.task_curation.source_population_cache import (
     CONTENT_SCHEMA,
@@ -155,8 +160,27 @@ def merge_survey_input(
     if hashlib.sha256(payload).hexdigest() != served_sha256:
         raise ValueError("Served identity survey SHA-256 differs")
     survey = canonical_identity_survey(json.loads(payload))
-    for source_id, fingerprint in fingerprints.items():
-        survey.fingerprints[source_id] = fingerprint
+    replaced = {
+        source_id for source_id, fingerprint in fingerprints.items() if survey.fingerprints.get(source_id) != fingerprint
+    }
+    merged_fingerprints = {**survey.fingerprints, **fingerprints}
+    reviews = [
+        review
+        for review in survey.reviews
+        if review.similarity.left not in replaced and review.similarity.right not in replaced
+    ]
+    standings = {
+        source_id: SourceStanding(fingerprint.task_count)
+        for source_id, fingerprint in merged_fingerprints.items()
+        if fingerprint is not None
+    }
+    survey = survey.model_copy(
+        update={
+            "fingerprints": merged_fingerprints,
+            "reviews": reviews,
+            "groups": duplicate_groups(reviews, standings),
+        }
+    )
     uri = str(survey_root / "source-identities-input.json")
     sha = write_json(uri, identity_survey_payload(survey))
     logger.info("Staged survey input %s SHA256 %s", uri, sha)

@@ -868,6 +868,61 @@ def overlap_review(left: str, right: str, fraction: float, reverse: float) -> Du
     return measured_review(pair_similarity(left, empty, right, empty), *directions, 1000, "left", "right")
 
 
+def test_native_survey_replacement_invalidates_old_pair_reviews_and_groups(tmp_path):
+    fingerprints = {
+        source: fingerprint_source([task_document(source, f"Solve {source}.")], {f"{source}.parquet": source})
+        for source in ("changed", "kept", "other")
+    }
+    direction = DirectionalOverlap(
+        population=1,
+        sampled=1,
+        matched=1,
+        fraction=1,
+        ci_low=1,
+        ci_high=1,
+        exact_matched=1,
+        exact_fraction=1,
+        neighbors=[],
+        neighbors_sha256=canonical_sha256([]),
+    )
+
+    def review(left, right):
+        return measured_review(
+            pair_similarity(left, fingerprints[left], right, fingerprints[right]),
+            direction,
+            direction,
+            1,
+            canonical_sha256(fingerprints[left].inputs),
+            canonical_sha256(fingerprints[right].inputs),
+        )
+
+    stale, retained = review("changed", "kept"), review("kept", "other")
+    standings = {key: SourceStanding(value.task_count) for key, value in fingerprints.items()}
+    prior = SourceIdentitySurvey(
+        catalog_root="fixture",
+        snapshot_id="frozen",
+        generated_at="frozen",
+        fingerprints=fingerprints,
+        reviews=[stale, retained],
+        groups=duplicate_groups([stale, retained], standings),
+        judge=None,
+    )
+    prior_bytes = prior.model_dump_json().encode()
+    path = tmp_path / "prior.json"
+    path.write_bytes(prior_bytes)
+    fresh = fingerprint_source([task_document("replacement", "A different population.")], {"replacement.parquet": "new"})
+    uri, sha = native_source_survey.merge_survey_input(
+        str(path), hashlib.sha256(prior_bytes).hexdigest(), {"changed": fresh}, StoragePath(str(tmp_path / "output"))
+    )
+    raw = Path(uri).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == sha
+    result = canonical_identity_survey(json.loads(raw))
+    assert result.fingerprints == {**fingerprints, "changed": fresh}
+    assert result.reviews == [retained]
+    assert result.groups == duplicate_groups([retained], standings)
+    assert path.read_bytes() == prior_bytes
+
+
 def test_duplicate_groups_partial_chain_stays_unfolded_with_directional_notes():
     reviews = [overlap_review("a", "b", 0.23, 0.04), overlap_review("b", "c", 0.7, 0.3)]
     groups = duplicate_groups(reviews, {key: SourceStanding(1000) for key in "abc"})
