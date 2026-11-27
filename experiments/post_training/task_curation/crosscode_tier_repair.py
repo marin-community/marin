@@ -26,7 +26,7 @@ from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 from experiments.post_training.task_curation.excluded_population_conversion import repin_license_receipt
-from experiments.post_training.task_curation.harbor_cohort_release import release_repo
+from experiments.post_training.task_curation.harbor_cohort_release import release_repo as conversion_release_repo
 from experiments.post_training.task_curation.license_binding import (
     LICENSE_RECEIPT_INDEX,
     AppendWouldRewriteSharedShard,
@@ -116,7 +116,12 @@ def repair_task(task: TaskSpec) -> TaskSpec:
     if script is None or instruction is None:
         raise ValueError(f"{task.id}: the package carries no tests/test.sh or instruction.md to repair")
     original_script = resource_bytes(script).decode()
-    if "4-tier" not in original_script and "3/leading-identifier" not in original_script:
+    # A task needs the repair while EITHER surface carries the scoring hints: the
+    # v1-repaired releases cleaned the verifier but left the public message coached.
+    public_coached = any(
+        isinstance(event.content, str) and SCORING_SECTION_START in event.content for event in task.context.events
+    )
+    if "4-tier" not in original_script and "3/leading-identifier" not in original_script and not public_coached:
         return task
     provenance = {
         "version": REPAIR_VERSION,
@@ -126,13 +131,18 @@ def repair_task(task: TaskSpec) -> TaskSpec:
     }
     updated = []
     for resource in task.resources.verifier:
-        if resource.path == "tests/test.sh":
+        # Each surface repairs only when IT still carries the hints: the v1-repaired
+        # releases cleaned the verifier and the resource instruction but left the
+        # public message coached — the pass-through must not force a full rewrite.
+        if resource.path == "tests/test.sh" and (
+            "4-tier" in original_script or "3/leading-identifier" in original_script
+        ):
             updated.append(
                 inline_resource("tests/test.sh", REPAIRED_TEST_SCRIPT.encode()).model_copy(
                     update={"mode": resource.mode, "mtime_ns": resource.mtime_ns}
                 )
             )
-        elif resource.path == "instruction.md":
+        elif resource.path == "instruction.md" and SCORING_SECTION_START in resource_bytes(instruction).decode():
             updated.append(
                 inline_resource(
                     "instruction.md", repaired_instruction(resource_bytes(instruction).decode()).encode()
@@ -157,8 +167,14 @@ def repair_task(task: TaskSpec) -> TaskSpec:
             "resources": task.resources.model_copy(
                 update={
                     "verifier": tuple(updated),
+                    # The v1-repaired rows already carry a provenance resource — replace it
+                    # (a path collision) with the fresh lineage.
                     "oracle": (
-                        *task.resources.oracle,
+                        *(
+                            resource
+                            for resource in task.resources.oracle
+                            if resource.path != "taskcompendium/crosscode-tier-repair.json"
+                        ),
                         inline_resource(
                             "taskcompendium/crosscode-tier-repair.json", json.dumps(provenance, indent=1).encode()
                         ),
@@ -247,7 +263,7 @@ def publish(
         licensed_dataset_card(body, publication, pretty_name="Tier-repaired conversion release")
     )
     api = HfApi()
-    repo = release_repo(source_id, artifact_version)
+    repo = conversion_release_repo(source_id, artifact_version)
     api.create_repo(repo, repo_type="dataset", private=True, exist_ok=True)
     if not api.repo_info(repo, repo_type="dataset").private:
         raise ValueError("Conversion destination must be private")
@@ -300,7 +316,10 @@ def main() -> None:
             converted, receipts, counts, output_root=str(args.output_root), source_id=args.source_id
         )
         print(
-            json.dumps({"plan": manifest, "release_repo": release_repo(args.source_id, args.artifact_version)}, indent=2)
+            json.dumps(
+                {"plan": manifest, "release_repo": conversion_release_repo(args.source_id, args.artifact_version)},
+                indent=2,
+            )
         )
         return
     result = publish(

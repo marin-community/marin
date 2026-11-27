@@ -172,9 +172,19 @@ def test_convert_population_repairs_every_row():
 
 
 def test_repair_passes_through_an_already_clean_task():
+    """A task clean on BOTH surfaces (script + public message) passes through."""
     task = _tiered_task()
+    clean_public = (
+        "# Cross-File Code Completion Task\n\n"
+        "- The verifier compares your fragment after normalisation and accepts only an exact match.\n"
+    )
     clean = task.model_copy(
         update={
+            "context": task.context.model_copy(
+                update={
+                    "events": tuple(event.model_copy(update={"content": clean_public}) for event in task.context.events)
+                }
+            ),
             "resources": task.resources.model_copy(
                 update={
                     "verifier": tuple(
@@ -188,7 +198,7 @@ def test_repair_passes_through_an_already_clean_task():
                         for r in task.resources.verifier
                     )
                 }
-            )
+            ),
         }
     )
     assert repair_task(clean) is clean
