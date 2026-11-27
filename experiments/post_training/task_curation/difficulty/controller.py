@@ -16,7 +16,7 @@ import httpx
 import requests
 from connectrpc.errors import ConnectError
 from dotenv import dotenv_values
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
 from iris.client.client import iris_ctx
 from iris.rpc import job_pb2
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT, IapRefreshTokenProvider
@@ -35,6 +35,7 @@ from experiments.post_training.task_curation.difficulty.executor import Escalati
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
 from experiments.post_training.task_curation.difficulty.launch import cpu_job_command
 from experiments.post_training.task_curation.difficulty.ledger import read_rows
+from experiments.post_training.task_curation.difficulty.protocols import require_protocol_activation
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog
 from experiments.post_training.task_curation.difficulty.runtime import solver_pool_connection, solver_pool_record
 from experiments.post_training.task_curation.difficulty.state import CoveragePolicy, GapReason, Outcome, TerminalRuling
@@ -44,6 +45,7 @@ from experiments.post_training.task_curation.difficulty_config import (
     SOLVER_POOL_GPU_COUNT,
     TOGETHER_API_KEY_ENV,
 )
+from experiments.post_training.task_curation.difficulty_output_budget import require_solver_protocol
 from experiments.post_training.task_curation.difficulty_report import list_iris_jobs
 
 LOGGER = logging.getLogger(__name__)
@@ -77,14 +79,17 @@ def run_controller(
     *,
     excluded_sources: frozenset[str],
     excluded_cpu_tpu_names: tuple[str, ...] = (),
+    large_protocol_id: str = PROTOCOL_ID,
 ) -> None:
+    require_protocol_activation(ledger, large_protocol_id)
     context = iris_ctx()
     backend = IrisBackend(context.client, context.job_id, ledger, serving_pool, excluded_cpu_tpu_names)
     notifications = EscalationLog(ledger)
-    policy = CoveragePolicy()
+    policy = CoveragePolicy(large_protocol_id=large_protocol_id)
     campaign = campaign_record(ledger)
     if campaign is not None:
         policy = CoveragePolicy(
+            large_protocol_id=large_protocol_id,
             terminal_rulings=tuple(
                 TerminalRuling(
                     hold["source_id"],
@@ -95,7 +100,7 @@ def run_controller(
                 )
                 for hold in campaign["holds"]
                 for solver in Solver
-            )
+            ),
         )
     provider = IapRefreshTokenProvider(
         MARIN_DESKTOP_OAUTH_CLIENT.client_id,
@@ -115,7 +120,7 @@ def run_controller(
     if excluded_sources:
         LOGGER.warning("DIFFICULTY_SOURCE_QUARANTINE %s", json.dumps(sorted(excluded_sources)))
     while True:
-        qualified = qualified_tpu_solvers(serving_pool) if campaign is not None and serving_pool else None
+        qualified = qualified_tpu_solvers(serving_pool, policy) if campaign is not None and serving_pool else None
         try:
             catalog = exclude_catalog_sources(
                 served_catalog(applet_id, token_provider=provider, ledger=ledger), excluded_sources
@@ -185,7 +190,7 @@ def _tpu_pool_is_live(pool: dict) -> bool:
     return False
 
 
-def qualified_tpu_solvers(registry: str) -> frozenset[Solver]:
+def qualified_tpu_solvers(registry: str, policy: CoveragePolicy = CoveragePolicy()) -> frozenset[Solver]:
     """Admit each solver only after its complete allocation publishes measured readiness."""
     available = {Solver.HOSTED}
     chips = 0
@@ -199,6 +204,9 @@ def qualified_tpu_solvers(registry: str) -> frozenset[Solver]:
         if pool["chip_count"] > target:
             raise ValueError(f"TPU solver pool exceeds its measured allocation: {solver}")
         chips += pool["chip_count"]
+        if pool.get("solver_protocol_id", PROTOCOL_ID) != policy.solver_protocol_id(solver):
+            LOGGER.warning("DIFFICULTY_POOL_PROTOCOL_MISMATCH solver=%s", solver)
+            continue
         if pool["chip_count"] == target and _tpu_pool_is_live(pool):
             available.add(solver)
     if chips > CHIP_BUDGET:
@@ -231,9 +239,12 @@ def launch_controller(
     excluded_sources: frozenset[str],
     handover_from: str | None = None,
     excluded_cpu_tpu_names: tuple[str, ...] = (),
+    large_protocol_id: str = PROTOCOL_ID,
 ) -> None:
     """Submit a controller, optionally handing over without canceling existing children."""
     name = CONTROLLER_JOB_PREFIX + generation[:16]
+    require_solver_protocol(Solver.LARGE, large_protocol_id)
+    require_protocol_activation(ledger, large_protocol_id)
     active = [
         job for job in list_iris_jobs() if job.job_id.rsplit("/", 1)[-1].startswith(CONTROLLER_JOB_PREFIX) and job.active
     ]
@@ -310,6 +321,8 @@ def launch_controller(
     )
     if serving_pool is not None:
         command.extend(["--serving-pool", serving_pool])
+    if large_protocol_id != PROTOCOL_ID:
+        command.extend(["--large-protocol-id", large_protocol_id])
     for source in sorted(excluded_sources):
         command.extend(["--exclude-source", source])
     for name in sorted(set(excluded_cpu_tpu_names)):

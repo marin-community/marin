@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from finestore.rl.difficulty import SOLVER_MODELS, Solver
+from finestore.rl.difficulty import PROTOCOL_ID, SOLVER_MODELS, Solver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info, set_job_info
 from iris.cluster.constraints import Constraint, ConstraintOp
@@ -43,6 +43,7 @@ from experiments.post_training.task_curation.difficulty.ledger import digest
 from experiments.post_training.task_curation.difficulty.pool_receipts import publish_pool_receipt, warm_throughput
 from experiments.post_training.task_curation.difficulty.regional import immutable_json, regional_worker
 from experiments.post_training.task_curation.difficulty.tpu_router import pool_router
+from experiments.post_training.task_curation.difficulty_output_budget import require_solver_protocol
 from experiments.post_training.task_curation.difficulty_protocol import PINS
 from experiments.post_training.task_curation.difficulty_sampling import request_parameters, sampling_settings
 from experiments.post_training.task_curation.difficulty_serving_probe import (
@@ -240,8 +241,16 @@ def long_context_probe(solver: Solver, endpoint: str, root: str) -> dict:
     }
 
 
-def run_tpu_pool(solver: Solver, root: str, replicas: int, *, excluded_tpu_names: tuple[str, ...] = ()) -> None:
+def run_tpu_pool(
+    solver: Solver,
+    root: str,
+    replicas: int,
+    *,
+    excluded_tpu_names: tuple[str, ...] = (),
+    solver_protocol_id: str = PROTOCOL_ID,
+) -> None:
     """Own direct slice sessions; publish only a completely qualified generation."""
+    require_solver_protocol(solver, solver_protocol_id)
     regional_worker()
     configure_coreweave_s3()
     os.environ["HF_TOKEN"] = require_secret("HF_TOKEN")
@@ -358,6 +367,7 @@ def run_tpu_pool(solver: Solver, root: str, replicas: int, *, excluded_tpu_names
                 "compilation_cache": config.engine.compilation_cache,
                 "ready_at": datetime.now(UTC).isoformat(),
                 "excluded_tpu_names": sorted(set(excluded_tpu_names)),
+                **({"solver_protocol_id": solver_protocol_id} if solver_protocol_id != PROTOCOL_ID else {}),
             }
             # Retain expensive qualification measurements even if publication fails.
             immutable_json(StoragePath(root) / "qualification" / solver.value / (digest(receipt) + ".json"), receipt)

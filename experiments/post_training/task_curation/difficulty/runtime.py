@@ -137,6 +137,13 @@ def solver_pool_record(solver: Solver, registry: str) -> dict:
     return record
 
 
+def require_pool_protocol(record: dict, solver: Solver, protocol_id: str) -> None:
+    """Keep fixed-budget children and dynamic-budget pools on their own protocol."""
+    require_solver_protocol(solver, protocol_id)
+    if record.get("solver_protocol_id", PROTOCOL_ID) != protocol_id:
+        raise ActionFailure(GapReason.SERVING_RELEASE_MISMATCH, "Solver pool has a different solver protocol")
+
+
 def solver_pool_connection(record: dict, routing_key: str = "") -> OpenAIEndpoint:
     names = [record["endpoint_name"]] if record.get("endpoint_name") else record["endpoint_names"]
     selected = int(hashlib.sha256(routing_key.encode()).hexdigest(), 16) % len(names)
@@ -272,7 +279,11 @@ def solver_endpoint(solver: Solver, settings: SamplingSettings, priority: int):
     )
     with remote_inference(config) as session:
         ready = session.ready_direct_session()
-        if ready.effective_serving is None or ready.effective_serving.max_model_len < settings.context_tokens:
+        if (
+            ready.effective_serving is None
+            or ready.effective_serving.max_model_len is None
+            or ready.effective_serving.max_model_len < settings.context_tokens
+        ):
             raise ValueError("Running inference does not confirm the required context window")
         endpoint = ready.model.endpoint
         yield endpoint.base_url, endpoint.model, endpoint.api_key or "EMPTY", [str(job.job_id) for job in session.jobs]
@@ -605,6 +616,7 @@ def run_batch(args: argparse.Namespace) -> None:
         else None
     )
     if pool is not None:
+        require_pool_protocol(pool, args.solver, solver_protocol_id)
         model_definition = pool["effective_serving"]
         gpu_release = (
             {"platform": "tpu", "campaign_id": campaign["campaign_id"]} if campaign else asdict(VLLM_GPU_RELEASE)

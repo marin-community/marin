@@ -47,6 +47,7 @@ from experiments.post_training.task_curation.difficulty.planner import (
     action_payload,
     plan,
 )
+from experiments.post_training.task_curation.difficulty.protocols import late_protocol_supersessions
 from experiments.post_training.task_curation.difficulty.report import cells_for_catalog
 from experiments.post_training.task_curation.difficulty.source_repairs import record_source_repair
 from experiments.post_training.task_curation.difficulty.state import (
@@ -307,7 +308,10 @@ def reconcile_once(
     try:
         with lease_refresh(lease):
             rows = read_rows(ledger)
+            supersessions = late_protocol_supersessions(rows, ledger, policy.large_protocol_id)
             rows += collect_finished(rows, backend.jobs(), ledger, notifications)
+            append_rows(ledger, supersessions)
+            rows += supersessions
             tpu_campaign = campaign_record(ledger) is not None
             if serving_pool is not None:
                 pools = available_providers if tpu_campaign else frozenset(SELF_HOSTED_SOLVERS)

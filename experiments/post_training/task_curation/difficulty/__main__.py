@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from finestore.rl.difficulty import Solver
+from finestore.rl.difficulty import PROTOCOL_ID, Solver
 from iris.client.client import get_iris_ctx
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
@@ -81,6 +81,7 @@ def main() -> None:
         command.add_argument("--json", action="store_true")
         command.add_argument("--since", type=since_time)
         command.add_argument("--provider-available", action="append", type=Solver, default=[])
+        command.add_argument("--large-protocol-id", default=PROTOCOL_ID)
         if name == "reconcile":
             command.add_argument("--once", action="store_true")
             command.add_argument("--secrets-env", type=Path, help="Load controller credentials from this dotenv file")
@@ -129,6 +130,7 @@ def main() -> None:
             args.serving_pool,
             excluded_sources=frozenset(args.exclude_source),
             excluded_cpu_tpu_names=tuple(args.exclude_cpu_tpu_name),
+            large_protocol_id=args.large_protocol_id,
         )
         return
     if bool(args.queue) != bool(args.queue_sha256):
@@ -141,7 +143,7 @@ def main() -> None:
     if args.command == "reconcile":
         catalog = exclude_catalog_sources(catalog, frozenset(args.exclude_source))
     rows = read_rows(args.ledger)
-    policy = CoveragePolicy()
+    policy = CoveragePolicy(large_protocol_id=args.large_protocol_id)
     cells = cells_for_catalog(rows, catalog, policy)
     # Planning snapshots current existence. The remediation functions remain pure.
     available = available_artifact_uris(cells)
@@ -163,6 +165,7 @@ def main() -> None:
             args.serving_pool,
             excluded_sources=frozenset(args.exclude_source),
             excluded_cpu_tpu_names=tuple(args.exclude_cpu_tpu_name),
+            large_protocol_id=args.large_protocol_id,
         )
         return
     if args.command == "plan":
