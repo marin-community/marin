@@ -11,6 +11,7 @@ import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import ragged_paged_attention
+from levanter.inference.utils import INVALID
 from levanter.testing.devices import use_test_devices
 
 
@@ -110,6 +111,25 @@ def test_grug_tpu_paged_attention_matches_reference(runtime_scale, kv_heads):
     )
     expected = _dense_reference(args, 5, None, _SCALE)
     np.testing.assert_allclose(np.asarray(actual, np.float32), np.asarray(expected, np.float32), atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.tpu
+@pytest.mark.skipif(jax.default_backend() != "tpu", reason="TPU Pallas kernel")
+def test_grug_tpu_paged_attention_with_evicted_window_page():
+    page_size, head_dim = 4, 128
+    pages = jnp.zeros((2, page_size, 2, head_dim), dtype=jnp.float32)
+    pages = pages.at[1, :, 1].set(jnp.arange(1, 5, dtype=jnp.float32)[:, None])
+    q = jnp.zeros((1, 1, 4, head_dim), dtype=jnp.float32)
+    attend = jax.jit(partial(ragged_paged_attention, sm_scale=head_dim**-0.5, implementation="tpu", sliding_window=4))
+    result = attend(
+        q,
+        pages,
+        jnp.array([8], dtype=jnp.int32),
+        jnp.array([[INVALID, 1]], dtype=jnp.int32),
+        jnp.array([0, 1], dtype=jnp.int32),
+        jnp.asarray(1, dtype=jnp.int32),
+    )
+    np.testing.assert_array_equal(result, jnp.full(q.shape, 2.5))
 
 
 @pytest.mark.tpu
