@@ -1,38 +1,51 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Promote one campaign final checkpoint and remove its verified scratch payloads."""
+"""Keep one permanent copy of a campaign run's final HF export and prune its native scratch."""
 
-import hashlib
 import json
 
 from iris.cluster.client.job_info import get_job_info
 from marin.rl.skyrl import SkyRLRun, skyrl_temporary_run_path
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
-from rigging.fsutil.verified_copy import verified_copy_prefix
+from rigging.filesystem.transfer import copy as transfer_copy
 
 from vendor.skyrl.marinskyrl.checkpoint_paths import LATEST_CHECKPOINT_FILE
 from vendor.skyrl.marinskyrl.model_files import MODEL_MANIFEST_FILENAME
 from vendor.skyrl.marinskyrl.model_manifest import ModelManifest
 
+REGIONAL_OUTPUT_PREFIX = "s3://marin-us-east-08a/"
+
 
 def retain_campaign_checkpoints(*, training: str, output: str) -> None:
-    """Verify the delivered HF bytes, promote final native state, then prune run-owned scratch."""
-    if get_job_info() is None or not output.startswith("s3://marin-us-east-08a/"):
+    """Keep the delivered HF export at a permanent path, then prune the run's native scratch.
+
+    User-approved 2026-11-27 protocol: a campaign run's deliverable is its final HF export alone.
+    The export's completion manifest must exist, but its bytes are not re-hashed, and the final
+    native checkpoint is no longer copied to the run output. An export still under the run's
+    14-day temporary root is copied — only the export, never the native state — to a permanent
+    path first. The campaign-owned temporary native checkpoint root is then deleted, keeping the
+    prune-plan and storage receipts.
+    """
+    if get_job_info() is None or not output.startswith(REGIONAL_OUTPUT_PREFIX):
         raise ValueError("Campaign checkpoint housekeeping requires an 08a CPU worker")
     result = SkyRLRun.raw_load(training)
     if result.hf_model_uri is None:
         raise ValueError("Training did not commit its delivered HF export")
     hf = StoragePath(result.hf_model_uri)
-    manifest = ModelManifest.from_mapping(json.loads((hf / MODEL_MANIFEST_FILENAME).read_text()), str(hf))
-    for entry in manifest.files:
-        fs, key = filesystem_for(str(hf / entry.path))
-        if fs.size(key) != entry.size:
-            raise ValueError(f"Best export file size changed: {entry.path}")
-        with fs.open(key, "rb") as stream:
-            if hashlib.file_digest(stream, "sha256").hexdigest() != entry.sha256:
-                raise ValueError(f"Best export file checksum changed: {entry.path}")
+    manifest_path = hf / MODEL_MANIFEST_FILENAME
+    if not manifest_path.exists():
+        raise ValueError("Delivered HF export has no completion manifest")
+    manifest = ModelManifest.from_mapping(json.loads(manifest_path.read_text()), str(hf))
+    temporary_run = StoragePath(skyrl_temporary_run_path(training, ttl_days=14))
+    relocation = None
+    if hf.is_relative_to(temporary_run):
+        # Move only the export out of the TTL root; the native state stays for the prune below.
+        permanent = StoragePath(prefix_join(output, "final-hf-export/policy"))
+        transfer_copy(str(hf), str(permanent), recursive=True)
+        relocation = {"from": str(hf), "to": str(permanent)}
+        hf = permanent
     root = StoragePath(result.checkpoint_root)
     expected = prefix_join(skyrl_temporary_run_path(training, ttl_days=14), "checkpoints")
     if str(root) != expected or "rl-data-campaign" not in root.segments:
@@ -41,21 +54,18 @@ def retain_campaign_checkpoints(*, training: str, output: str) -> None:
     final = root / f"global_step_{final_step}"
     if not (final / "trainer_state.pt").exists():
         raise ValueError("Final checkpoint is not committed")
-    permanent = prefix_join(output, f"final-native/global_step_{final_step}")
-    copied = verified_copy_prefix(str(final), permanent)
-    if copied.total_files <= 1:
-        raise ValueError("Final checkpoint has no weights payload beyond its trainer state")
     fs, key = filesystem_for(str(root))
     inventory = fs.find(key, detail=True)
     deleted_bytes = sum(item["size"] for item in inventory.values() if item["type"] == "file")
     receipt = {
         "hf_export": str(hf),
         "hf_export_identity": manifest.identity,
-        "final_native": permanent,
+        "hf_export_relocation": relocation,
+        "final_native_copy": None,
         "final_step": final_step,
-        "final_copy": copied.manifest_url,
         "pruned_root": str(root),
         "deleted_bytes": deleted_bytes,
+        "protocol": "final-hf-export-only, user-approved 2026-11-27",
     }
     target = StoragePath(output)
     target.mkdirs(exist_ok=True)

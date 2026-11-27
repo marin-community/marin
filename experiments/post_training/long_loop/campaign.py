@@ -313,8 +313,11 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str 
         version=spec.version,
         serving_profile=profile,
     )
-    evaluation = dataclasses.replace(evaluation, deps=(*evaluation.deps, retained))
     evaluated = preserved_evaluation(evaluation)
+    # User order 2026-11-27 13:53/14:01: the Micro210 eval launches when training commits its
+    # final export; snapshot retention and storage bookkeeping run in parallel and gate only the
+    # preservation commit, never the eval.
+    evaluated = dataclasses.replace(evaluated, deps=(*evaluated.deps, retained))
     roles = draccus.decode(SkyRLRolePlan, spec.rl.role_plan)
     plan = {
         "round": dataclasses.asdict(spec),
