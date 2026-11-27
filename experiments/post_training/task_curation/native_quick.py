@@ -71,9 +71,7 @@ def publish_quick(
 ) -> dict:
     """Publish conversion evidence and validate every TaskSpec and uploaded byte stream."""
     require_public_data(data_restriction, entry["id"], repo)
-    require_license(
-        license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value, ban=None
-    )
+    require_license(license_receipt, entry["id"], intended_use.value, ban=None)
     require_unbanned(entry["id"], entry["dataset_id"], license_receipt)
     manifest = json.loads((output / "manifest.json").read_text())
     destination = output / "tasks.parquet"
@@ -115,8 +113,6 @@ def publish_quick(
     # publication chokepoint; the new pin's receipt registers before this returns.
     publication = publish_licensed_population(
         entry["id"],
-        entry["dataset_id"],
-        entry["dataset_revision"],
         repo,
         output,
         ("tasks.parquet", "manifest.json"),
@@ -145,9 +141,7 @@ def run_entry(
     data_restriction: DataRestriction,
 ) -> dict:
     intended_use = IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN
-    require_license(
-        license_receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value, ban=None
-    )
+    require_license(license_receipt, entry["id"], intended_use.value, ban=None)
     require_unbanned(entry["id"], entry["dataset_id"], license_receipt)
     slug = source_slug(entry["id"])
     output = root / slug
@@ -239,9 +233,7 @@ def main() -> None:
         entry = entries[source_id]
         receipt = receipts.get(entry["id"])
         intended_use = IntendedUse.EVAL if entry["id"] in CROSSCODE_EVAL_SOURCE_IDS else IntendedUse.TRAIN
-        require_license(
-            receipt, entry["id"], entry["dataset_id"], entry["dataset_revision"], intended_use.value, ban=None
-        )
+        require_license(receipt, entry["id"], intended_use.value, ban=None)
         assert receipt is not None
         result = run_entry(
             entry, args.root, args.hub_input, receipt, args.version, data_restriction=configured_restriction(source_id)

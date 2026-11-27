@@ -696,8 +696,6 @@ def main() -> None:
     # carries that licence onto the new pin and registers the receipt before returning.
     publication = publish_licensed_population(
         source.info.id,
-        source.release_repo,
-        source.release_revision,
         release_repo(source.info.id, args.artifact_version),
         Path(args.output_root),
         ("tasks.parquet", "manifest.json", "conversion-receipts.jsonl", "conversion-exclusions.jsonl"),

@@ -262,8 +262,6 @@ verbatim from the keep-only release.
 """
     publication = publish_licensed_population(
         manifest["source_id"],
-        KEEP_RELEASE_REPO,
-        KEEP_RELEASE_REVISION,
         repo,
         output,
         ("tasks.parquet", "manifest.json", RECEIPTS_FILENAME, EXCLUSIONS_FILENAME),
@@ -275,7 +273,6 @@ verbatim from the keep-only release.
         **manifest,
         "release_repo": publication.repo,
         "release_revision": publication.revision,
-        "license_index_commit": publication.registry_commit,
         "license_check_verdict": publication.license_check["verdict"],
     }
 

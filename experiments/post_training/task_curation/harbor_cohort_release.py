@@ -83,14 +83,7 @@ def require_conversion_source(source: RlDataSource) -> None:
     if dataset is None or not dataset.revision:
         raise ValueError(f"Source {source.info.id} requires an exact pinned cohort")
     require_unbanned(source.info.id, dataset.name, source.info.license_receipt, source.intended_use.value)
-    require_license(
-        source.info.license_receipt,
-        source.info.id,
-        dataset.name,
-        dataset.revision,
-        source.intended_use.value,
-        ban=None,
-    )
+    require_license(source.info.license_receipt, source.info.id, source.intended_use.value, ban=None)
     require_public_data(source.info.data_restriction, source.info.id, dataset.name)
 
 
@@ -192,8 +185,6 @@ def publish_conversion(
 
     publication = publish_licensed_population(
         source.info.id,
-        dataset.name,
-        dataset.revision,
         release_repo(source.info.id, version),
         output,
         ("tasks.parquet", "manifest.json", RECEIPTS_FILENAME),

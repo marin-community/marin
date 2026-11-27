@@ -8,13 +8,6 @@ import urllib.error
 import urllib.request
 
 import pytest
-from finestore.rl.licenses import (
-    LICENSE_RESOLVER_VERSION,
-    LicenseDecision,
-    LicenseDecisionKind,
-    LicenseReceipt,
-    LicenseSourcePin,
-)
 from taskcompendium.identity import canonical_sha256, task_spec_sha256
 from taskcompendium.models import (
     AnswerType,
@@ -35,8 +28,6 @@ from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from experiments.post_training.task_curation import native_source_conversion
 from experiments.post_training.task_curation.calibration_inventory import task_blockers
 from experiments.post_training.task_curation.harbor_cohort_conversion import CohortConversionRejected
-from experiments.post_training.task_curation.license_publication import repin_license_receipt
-from experiments.post_training.task_curation.license_resolution import license_evidence
 from experiments.post_training.task_curation.native_source_conversion import (
     BasePin,
     BasePinRejected,
@@ -213,56 +204,6 @@ def test_resolve_base_digest_caches_per_process():
         native_source_conversion._resolve_base_digest = original
         native_source_conversion._DIGEST_CACHE.clear()
     assert calls == ["python:3.9-bookworm", "ubuntu:22.04"]
-
-
-def test_release_receipt_carries_the_exception_lineage():
-    """The published card follows the original upstream, and an approved user exception
-    survives the re-pin with its original pin, date, scope and upstream grant
-    (repackager rule + coordinator ruling 2026-11-26)."""
-    card = b"---\nlicense: mit\nlicense_source:\n  dataset_id: SWE-Gym/SWE-Gym\n"
-    upstream_card = license_evidence(
-        "https://huggingface.co/datasets/SWE-Gym/SWE-Gym/resolve/" + "e" * 40 + "/README.md",
-        b"---\nlicense: mit\n---\n",
-        "dataset_card",
-    )
-    previous = LicenseReceipt(
-        resolver_version=LICENSE_RESOLVER_VERSION,
-        source_id="TaskTrove:example",
-        dataset_id="open-athena/example",
-        revision="e" * 40,
-        resolved_at="2026-11-26T00:00:00+00:00",
-        evidence=[upstream_card],
-        bundled_third_party=True,
-        model_generated_outputs=True,
-        decisions=[
-            LicenseDecision(
-                approved=True,
-                who="user",
-                when="2026-11-16T06:37:25-05:00",
-                source_id="TaskTrove:example",
-                dataset_id="open-athena/example",
-                kind=LicenseDecisionKind.EXCEPTION,
-                rationale="The user approved lifting the standing unverified-origin ban.",
-                revision="e" * 40,
-                scope=["train"],
-                evidence_urls=["https://huggingface.co/datasets/SWE-Gym/SWE-Gym"],
-                issue_url="https://github.com/marin-community/marin/issues/11497",
-            )
-        ],
-        resolved_source=LicenseSourcePin(
-            dataset_id="SWE-Gym/SWE-Gym",
-            revision="e" * 40,
-            url="https://huggingface.co/datasets/SWE-Gym/SWE-Gym/tree/" + "e" * 40,
-            declaration=upstream_card,
-        ),
-    )
-    bound = repin_license_receipt(previous, "open-athena/example-taskspec-1", "f" * 40, card)
-    assert [decision.kind for decision in bound.decisions] == [LicenseDecisionKind.EXCEPTION]
-    assert bound.resolved_source.dataset_id == "SWE-Gym/SWE-Gym"
-    assert bound.dataset_id == "open-athena/example-taskspec-1"
-    assert any(item.kind == "wrapper_source" for item in bound.evidence)
-    lineage = native_source_conversion.exception_lineage(bound)
-    assert "2026-11-16" in lineage and "train" in lineage and "mit" in lineage
 
 
 def test_resolve_base_digest_retries_429_honoring_retry_after(monkeypatch):

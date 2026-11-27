@@ -28,8 +28,6 @@ from experiments.post_training.task_curation.calibforge_publish import publish
 PUBLISH_KWARGS = {
     "data_restriction": "open",
     "source_id": "fixture:source",
-    "parent_dataset_id": "fixture/upstream",
-    "parent_revision": "a" * 40,
     "use": "train",
     "pretty_name": "Fixture retention release",
 }
@@ -101,7 +99,7 @@ def test_publish_checks_each_lowered_row_the_loader_would_refuse(cards, monkeypa
 
     calls = []
 
-    def fake_publication(source_id, parent_dataset, parent_revision, repo, folder, files, **kwargs):
+    def fake_publication(source_id, repo, folder, files, **kwargs):
         calls.append((repo, tuple(sorted(files)), kwargs["body"]))
         return SimpleNamespace(revision="f" * 40)
 

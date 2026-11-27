@@ -295,7 +295,7 @@ def main() -> None:
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     receipt = read_license_receipts(LICENSE_RECEIPT_INDEX)[EVAL_SOURCE_ID]
-    require_license(receipt, EVAL_SOURCE_ID, EVAL_DATASET, IFBENCH_REVISION, "eval", ban=None)
+    require_license(receipt, EVAL_SOURCE_ID, "eval", ban=None)
     require_unbanned(EVAL_SOURCE_ID, EVAL_DATASET, receipt)
     if file_sha256(StoragePath(str(args.populations))) != args.populations_sha256:
         raise ValueError("Frozen shared DF population inventory changed")
@@ -303,14 +303,7 @@ def main() -> None:
     if len({p.source_id for p in populations}) != len(populations):
         raise ValueError("Frozen shared DF population inventory has duplicate sources")
     (train,) = [p for p in populations if p.source_id == TRAIN_SOURCE_ID]
-    require_license(
-        read_license_receipts(LICENSE_RECEIPT_INDEX)[TRAIN_SOURCE_ID],
-        TRAIN_SOURCE_ID,
-        train.dataset_id,
-        train.dataset_revision,
-        "train",
-        ban=None,
-    )
+    require_license(read_license_receipts(LICENSE_RECEIPT_INDEX)[TRAIN_SOURCE_ID], TRAIN_SOURCE_ID, "train", ban=None)
     require_unbanned(TRAIN_SOURCE_ID, train.dataset_id)
     configure_coreweave_s3()
     runtime = CampaignRuntime()

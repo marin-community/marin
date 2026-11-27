@@ -42,7 +42,7 @@ def publish_raw_source(
     if not isinstance(raw_tier, str):
         raise ValueError(f"Staged raw snapshot declares no restriction tier: {stage['source_id']}")
     require_public_data(DataRestriction(raw_tier), stage["source_id"], "raw source archive")
-    require_publication_license(receipt, stage["source_id"], stage["dataset_id"], stage["revision"], use)
+    require_publication_license(receipt, stage["source_id"], stage["dataset_id"], use)
     identity = hashlib.sha256(stage["source_id"].encode()).hexdigest()[:8]
     receipt_path = StoragePath(evidence_root) / identity / "raw-source-archive.json"
     if receipt_path.exists():

@@ -35,7 +35,6 @@ from experiments.post_training.task_curation.datasets.openresearcher.assets impo
     CORPUS,
     DATASET,
     DATASET_REVISION,
-    EXPECTED_PINS,
     REGIONAL_PREFIX,
     RegionalInputs,
     pinned_document,
@@ -119,7 +118,7 @@ def source_licenses(config: PreparationConfig) -> dict[str, LicenseReceipt]:
     for dataset in (DATASET, CORPUS):
         source_id = "OpenResearcher:" + dataset.split("/")[1]
         receipt = LicenseReceipt.model_validate(rows[source_id])
-        require_license(receipt, source_id, dataset, EXPECTED_PINS[dataset], "train", ban=None)
+        require_license(receipt, source_id, "train", ban=None)
         receipts[source_id] = receipt
     return receipts
 

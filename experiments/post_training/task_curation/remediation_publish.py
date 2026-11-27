@@ -258,9 +258,7 @@ def publish_plan(
     if plan.data_restriction is None:
         raise ValueError(f"Staged release plan declares no restriction tier: {plan.source_id}")
     require_public_data(plan.data_restriction, plan.source_id, plan.lexical_use.value + " release")
-    require_publication_license(
-        license_receipt, plan.source_id, plan.source_dataset_id, plan.source_revision, plan.lexical_use.value
-    )
+    require_publication_license(license_receipt, plan.source_id, plan.source_dataset_id, plan.lexical_use.value)
     snapshot_required = (
         plan.lexical_use is LexicalUse.TRAIN
         and plan.raw_lexical_count > 0
@@ -355,8 +353,6 @@ def publish_plan(
         publish_kwargs = {
             "data_restriction": plan.data_restriction,
             "source_id": plan.source_id,
-            "parent_dataset_id": plan.source_dataset_id,
-            "parent_revision": plan.source_revision,
             "use": plan.lexical_use.value,
             "pretty_name": "Atlas TaskCompendium retention release",
             "index_path": index_path,
@@ -462,11 +458,7 @@ def main() -> None:
     receipts = read_license_receipts(args.license_receipts)
     for plan in plans:
         require_publication_license(
-            receipts.get(plan.source_id),
-            plan.source_id,
-            plan.source_dataset_id,
-            plan.source_revision,
-            plan.lexical_use.value,
+            receipts.get(plan.source_id), plan.source_id, plan.source_dataset_id, plan.lexical_use.value
         )
     staged_measurements = None
     if args.lexical_receipts is not None:

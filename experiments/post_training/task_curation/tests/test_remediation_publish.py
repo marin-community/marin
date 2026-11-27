@@ -29,6 +29,7 @@ from finestore.rl.curation import (
 )
 from finestore.rl.licenses import LICENSE_RESOLVER_VERSION, LicenseReceipt
 from finestore.rl.status_taxonomy import DataRestriction
+from huggingface_hub import DatasetCard
 from huggingface_hub.hf_api import RepoFile
 from marin.execution.lazy import StepContext
 from rigging.filesystem.storage_path import StoragePath
@@ -620,23 +621,14 @@ def staged_publication(tmp_path, monkeypatch, frozen_population):
     monkeypatch.setattr(
         license_publication, "read_license_receipts", lambda index_path: {plan.source_id: parent_receipt}
     )
-    adopted = {}
-    monkeypatch.setattr(
-        license_publication,
-        "adopt_license_receipt",
-        lambda index_path, receipt, *, namespace, message: adopted.setdefault(
-            namespace, {"receipt": receipt, "message": message}
-        )
-        or f"fixture-index-{namespace}",
-    )
-    return plan, receipt, canonical, hub, adopted
+    return plan, receipt, canonical, hub
 
 
 @pytest.mark.parametrize("entrypoint", ["canonical", "api", "cli"])
 def test_repaired_population_publishes_from_exact_receipt_without_replacing_selected_evidence(
     tmp_path, monkeypatch, staged_publication, entrypoint
 ):
-    plan, receipt, canonical, hub, adopted = staged_publication
+    plan, receipt, canonical, hub = staged_publication
     if entrypoint != "canonical":
         canonical[plan.source_id] = LexicalMeasurementReceipt.model_validate(
             {
@@ -703,18 +695,14 @@ def test_repaired_population_publishes_from_exact_receipt_without_replacing_sele
     assert [(row["id"], row["runtime"]) for row in tasks] == [("retained", '{ "cpus": 2 }')]
     assert json.loads((published / "manifest.json").read_text())["lexical"]["input_dataset_id"] == plan.source_dataset_id
     assert canonical[plan.source_id].model_dump_json() == selected_before
-    # The publication carried the licence forward: the new pin's receipt is registered
-    # with the card's wrapper declaration, resolved to the parent's declared upstream.
-    ((namespace, record),) = adopted.items()
-    assert record["receipt"].dataset_id == result["repo"]
-    assert record["receipt"].revision == result["revision"]
-    assert record["receipt"].resolved_source.dataset_id == plan.source_dataset_id
-    assert any(item.kind == "wrapper_source" for item in record["receipt"].evidence)
-    assert namespace == "publish-test-fixture-" + result["revision"][:12]
+    # The publication carried the licence forward mechanically: the card declares the
+    # ingest record's provenance and nothing is written to the receipts registry.
+    card = DatasetCard((hub / result["repo"] / "README.md").read_text()).data.to_dict()
+    assert card["license_source"]["dataset_id"] == plan.source_dataset_id
 
 
 def test_staged_receipt_for_same_count_but_different_tasks_cannot_publish(tmp_path, staged_publication):
-    plan, receipt, _unused, hub, _adopted = staged_publication
+    plan, receipt, _unused, hub = staged_publication
     stale = receipt.model_copy(update={"input": receipt.input.model_copy(update={"task_specs_sha256": "f" * 64})})
     with pytest.raises(ValueError, match="Frozen lexical input differs"):
         remediation_publish.publish_plan(

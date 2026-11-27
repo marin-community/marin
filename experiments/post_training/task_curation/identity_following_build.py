@@ -203,8 +203,6 @@ def publish_population(output: Path, repo: str) -> str:
     )
     publication = publish_licensed_population(
         SOURCE_ID,
-        TASKTROVE_REPO,
-        TASKTROVE_REVISION,
         repo,
         output,
         (TASKS_FILE, LEDGER_FILE, MANIFEST_FILE),

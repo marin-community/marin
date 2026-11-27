@@ -101,8 +101,6 @@ def publish_release(inputs: PublicationInputs, revision: str) -> dict:
             data_restriction=DataRestriction.OPEN,
             evidence_files=(receipt,),
             source_id=SOURCE_ID,
-            parent_dataset_id=INPUT_REPO,
-            parent_revision=INPUT_REVISION,
             use="train",
             pretty_name="MiMo code v1 backend-repair candidate",
         )

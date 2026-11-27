@@ -86,8 +86,6 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="The evidence prefix for the publication receipt")
     parser.add_argument("--policy-revision", required=True)
     parser.add_argument("--parent-task-specs-sha256", required=True)
-    parser.add_argument("--parent-dataset", required=True, help="The dataset_id the population derives from")
-    parser.add_argument("--parent-revision", required=True, help="The pinned revision the population derives from")
     parser.add_argument("--use", required=True, choices=["train", "eval"], help="The publication use")
     args = parser.parse_args()
 
@@ -107,8 +105,6 @@ def main() -> None:
         body = dataset_card(args.source_id, args.parent_task_specs_sha256, args.policy_revision, len(rows))
         publication = publish_licensed_population(
             args.source_id,
-            args.parent_dataset,
-            args.parent_revision,
             args.repo,
             root,
             ("tasks.parquet",),
@@ -129,10 +125,7 @@ def main() -> None:
         "population": args.population,
         "policy_revision": args.policy_revision,
         "parent_task_specs_sha256": args.parent_task_specs_sha256,
-        "parent_dataset_id": args.parent_dataset,
-        "parent_revision": args.parent_revision,
         "license_source": publication.license_source,
-        "license_index_commit": publication.registry_commit,
         "license_check_verdict": publication.license_check["verdict"],
     }
     output = StoragePath(args.output)

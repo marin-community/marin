@@ -796,8 +796,6 @@ def publish_revision(
     )
     publication = publish_licensed_population(
         source_id,
-        repo,
-        revision,
         target_repo,
         revision_dir,
         ("tasks.parquet", "revision-ledger.json", "revision-summary.json"),
@@ -809,7 +807,6 @@ def publish_revision(
         "repo": publication.repo,
         "revision": publication.revision,
         "summary": summary,
-        "license_index_commit": publication.registry_commit,
         "license_check_verdict": publication.license_check["verdict"],
     }
 

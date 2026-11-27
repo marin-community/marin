@@ -248,8 +248,6 @@ def publish(
     # licence onto the repaired pin and registers the receipt before returning.
     publication = publish_licensed_population(
         source_id,
-        input_repo,
-        input_revision,
         conversion_release_repo(source_id, artifact_version),
         output_root,
         ("tasks.parquet", "manifest.json", "conversion-receipts.jsonl"),
@@ -261,7 +259,6 @@ def publish(
         **manifest,
         "release_repo": publication.repo,
         "release_revision": publication.revision,
-        "license_index_commit": publication.registry_commit,
         "license_check_verdict": publication.license_check["verdict"],
     }
 

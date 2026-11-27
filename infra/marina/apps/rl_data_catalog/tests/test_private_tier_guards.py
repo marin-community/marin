@@ -360,8 +360,6 @@ def test_publish_helper_refuses_a_private_payload_before_any_upload(tmp_path, mo
 
     publish_kwargs = {
         "source_id": "Test:fixture",
-        "parent_dataset_id": "upstream/fixture",
-        "parent_revision": "a" * 40,
         "use": "train",
         "pretty_name": "Fixture cohort",
     }
@@ -375,7 +373,7 @@ def test_publish_helper_refuses_a_private_payload_before_any_upload(tmp_path, mo
     open_card.write_text("An open conversion card without restricted content.")
     delegated = {}
 
-    def fake_chokepoint(source_id, parent_dataset, parent_revision, repo, folder, files, **kwargs):
+    def fake_chokepoint(source_id, repo, folder, files, **kwargs):
         delegated["call"] = (repo, tuple(files), kwargs["body"])
         return SimpleNamespace(revision="d" * 40)
 

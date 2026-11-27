@@ -232,8 +232,6 @@ def publish_pinned_population(
     )
     publication = publish_licensed_population(
         source_id,
-        declared_release["repo"],
-        declared_release["revision"],
         release_repo(source_id, artifact_version),
         output_root,
         ("tasks.parquet", "manifest.json", "conversion-receipts.jsonl", "conversion-exclusions.jsonl"),
@@ -245,7 +243,6 @@ def publish_pinned_population(
         **manifest,
         "release_repo": publication.repo,
         "release_revision": publication.revision,
-        "license_index_commit": publication.registry_commit,
         "license_check_verdict": publication.license_check["verdict"],
     }
     return result

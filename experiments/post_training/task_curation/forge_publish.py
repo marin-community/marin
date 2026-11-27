@@ -38,8 +38,6 @@ def publish_staged_release(
     restriction: DataRestriction,
     *,
     source_id: str,
-    parent_dataset_id: str,
-    parent_revision: str,
     use: str,
     pretty_name: str,
 ) -> PublishedLicensedPopulation:
@@ -58,8 +56,6 @@ def publish_staged_release(
             repo,
             data_restriction=restriction,
             source_id=source_id,
-            parent_dataset_id=parent_dataset_id,
-            parent_revision=parent_revision,
             use=use,
             pretty_name=pretty_name,
         )
@@ -74,8 +70,6 @@ def main() -> None:
         "--data-restriction", type=DataRestriction, required=True, help="the source's typed restriction tier"
     )
     parser.add_argument("--source-id", required=True, help="the cohort source id the publication belongs to")
-    parser.add_argument("--parent-dataset", required=True, help="the dataset_id the population derives from")
-    parser.add_argument("--parent-revision", required=True, help="the pinned revision the population derives from")
     parser.add_argument("--use", required=True, choices=["train", "eval"], help="the publication use")
     parser.add_argument("--pretty-name", required=True, help="the card's pretty_name")
     args = parser.parse_args()
@@ -86,8 +80,6 @@ def main() -> None:
         args.repo,
         args.data_restriction,
         source_id=args.source_id,
-        parent_dataset_id=args.parent_dataset,
-        parent_revision=args.parent_revision,
         use=args.use,
         pretty_name=args.pretty_name,
     )

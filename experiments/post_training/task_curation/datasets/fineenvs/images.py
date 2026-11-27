@@ -31,7 +31,6 @@ from experiments.post_training.task_curation.datasets.fineenvs.image_inputs impo
 )
 from experiments.post_training.task_curation.datasets.fineenvs.metadata import (
     DATASET,
-    REVISION,
     TASK_COUNTS,
     source_info,
 )
@@ -89,7 +88,7 @@ def build_group(config: ImageConfig) -> GroupedInputImage:
     for info in infos:
         source = info.id
         receipt = LicenseReceipt.model_validate(licenses[source]["receipt"])
-        require_license(receipt, source, DATASET, REVISION, "train", ban=None)
+        require_license(receipt, source, "train", ban=None)
         require_unbanned(source, DATASET, receipt, "train")
     qualification_raw = StoragePath(config.qualifications_uri).read_bytes()
     if hashlib.sha256(qualification_raw).hexdigest() != config.qualifications_sha256:
