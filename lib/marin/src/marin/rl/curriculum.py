@@ -104,7 +104,7 @@ class ValidationRow:
 
 @dataclass(frozen=True)
 class CurriculumValidation:
-    """The recorded holdout a fixed curriculum draws from its own training distribution."""
+    """The recorded holdout; size zero explicitly keeps the whole population in training."""
 
     size: int
     """How many prompts the holdout holds; ``rows`` records exactly this many."""
@@ -113,10 +113,8 @@ class CurriculumValidation:
     rows: tuple[ValidationRow, ...]
 
     def __post_init__(self) -> None:
-        if self.size <= 0:
-            raise ValueError(f"validation size must be positive, got {self.size}")
-        if not self.rows:
-            raise ValueError("a validation split records no rows")
+        if self.size < 0:
+            raise ValueError(f"validation size must be nonnegative, got {self.size}")
         if len(self.rows) != self.size:
             raise ValueError(f"a validation split records {len(self.rows)} rows for size {self.size}")
         identities: set[tuple[str, str]] = set()
@@ -175,8 +173,8 @@ def draw_validation_split(
     seed, independent of enumeration order, and follows the mixture the trainer samples. Every row
     lands in exactly one side of the returned :class:`ValidationSplit`."""
 
-    if size <= 0:
-        raise ValueError(f"validation size must be positive, got {size}")
+    if size < 0:
+        raise ValueError(f"validation size must be nonnegative, got {size}")
     if not mixture:
         raise ValueError("the mixture names no pools")
     declared = set(mixture)

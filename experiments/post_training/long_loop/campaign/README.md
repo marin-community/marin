@@ -24,9 +24,10 @@ an unmaterialized candidate has passed data or agent admission. Before invoking
 `--run`, the operator builds the graph's canonical pool dependency in a CPU-only
 08a job. The RL graph then reuses that completed artifact. Pool preparation
 checks every published parquet SHA and population count, lowers
-the unchanged TaskSpecs through the native adapter, and removes a random
-200-prompt holdout (seed 20261020). The curriculum records the selected tasks
-and the equal source weights. Cross-source holdout leakage fails closed.
+the unchanged TaskSpecs through the native adapter, and keeps every source row
+in training. The curriculum records an explicit zero-size holdout and the equal
+source weights (seed 20261020). No validation parquet or validation evaluation
+is produced.
 The actual candidate's native real-agent and input checks must pass before
 GPU allocation.
 
@@ -37,14 +38,21 @@ failure bound. A stable coordinator name makes repeated submission of the same
 mix/version adopt its existing coordinator. Use a fresh calendar version for
 each new experiment.
 
-Intermediates use rolling temporary storage. After training commits its best
-HF export, an 08a CPU stage verifies the export, copies and verifies the final
+**Protocol change, user-authorized 2026-11-27:** validation is dropped and the
+final checkpoint is the deliverable. New campaign launches have no validation
+evaluations or best-by-val selection. This is a comparability break alongside
+the earlier repeat-stall-stop cutover; record the effective first root in #91.
+Existing .540 keeps its running config and uses its final checkpoint at completion.
+
+Intermediates use rolling temporary storage: save every five steps, retain the
+latest plus one previous resume fallback, and always save on train end even off
+cadence. After training commits its final HF export, an 08a CPU stage verifies the export, copies and verifies the final
 native checkpoint into permanent storage, then removes the run's temporary
 native checkpoint root. It records kept URIs and deleted bytes in
-`storage-receipt.json`. Frozen Micro210 evaluates the best HF export, publishes
+`storage-receipt.json`. Frozen Micro210 evaluates the final HF export, publishes
 through the existing EvalDash path, and preserves trial archives. This campaign
-keeps the final native checkpoint without making a second final HF export or
-evaluating it.
+keeps the final native checkpoint without a duplicate HF export. Pending
+evaluation inputs remain protected.
 
 The CSV snapshot is configuration metadata copied byte-for-byte from
 `experiments/human/long-loop-data-ablation/mix-candidates/mix_candidates_v{2,3}.csv`.
@@ -52,7 +60,7 @@ The CSV snapshot is configuration metadata copied byte-for-byte from
 `54405be9b4db4c2d9828549469abe759`, snapshot `assembly-r40-cut-v1`, served by Atlas
 revision 39. The CSV supplies only source IDs and k. The catalog supplies each
 release, pipeline version, admission status and measured actor route. Shared
-`curriculum_entries` and `weighted_curriculum` bind these entries and their holdout;
+`curriculum_entries` and `weighted_curriculum` bind these entries and their explicit zero-size holdout;
 the user-authorized admission divergence permits retained Pending and Excluded
 pins and records each difference in the manifest. Never substitute a population.
 An unbound source or an unresolved task-environment or grader defect holds its
@@ -65,13 +73,13 @@ catalog population counts are verified without reserializing source rows. Each
 pool manifest records its actual input readbacks. A changed catalog admission or
 release requires a fresh readback and artifact version.
 Preparation reads and lowers payloads in bounded batches, retaining task identities
-for the holdout draw. Each mix must finish its regional CPU pool build before its
+for the curriculum identity. Each mix must finish its regional CPU pool build before its
 RL coordinator is submitted.
 
 The coordinator owns the rated queue and watchdog. Take candidates in
 `experiments/human/long-loop-data-ablation/campaign/queue.json` order, keep three
 experiments active once the queue is ready, and record actual job IDs, metrics,
-best export, EvalDash URL and storage receipts in the run table of
+final export, EvalDash URL and storage receipts in the run table of
 [marin-logbooks issue91](https://github.com/marin-community/marin-logbooks/issues/91),
 using `campaign-runs set`. The CSV run tracker is retired. The example
 above is a dry-run candidate, not a queue selection. Never infer completion,

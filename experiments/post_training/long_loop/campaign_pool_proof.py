@@ -46,9 +46,11 @@ def prove_pool(mix_id: str, version: str, source_commit: str, output: str) -> di
     payload = (root / "manifest.json").read_bytes()
     manifest = json.loads(payload)
     assert manifest["mix"]["id"] == mix_id and manifest["sources"] == mix.sources
-    assert manifest["validation"]["size"] == 200
+    assert manifest["validation"]["size"] == 0
+    assert manifest["train_composition"] == manifest["composition"]
+    assert "validation.parquet" not in manifest["files"]
     checked = {}
-    files = {**manifest["training_files"], "validation": "validation.parquet"}
+    files = manifest["training_files"]
     for label, name in files.items():
         count = 0
         with (root / name).open("rb") as stream:

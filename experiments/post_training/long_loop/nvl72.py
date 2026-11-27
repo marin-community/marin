@@ -287,8 +287,8 @@ def build_run(
     """
     if profile.output_name.startswith("checkpoints/snowball") and not smoke:
         raise ValueError("Snowball NVL72 profiles are bounded parity smokes")
-    if not smoke and not validation_data:
-        raise ValueError("Normal Mochi RL requires held-out data; select smoke explicitly to omit evaluation")
+    if not smoke and not validation_data and (curriculum is None or curriculum.validation.size):
+        raise ValueError("Omitting evaluation requires an explicit zero-holdout curriculum")
     if not smoke and curriculum is None:
         raise ValueError(
             "A long-loop RL round trains only against a fixed curriculum: its holdout is the "
@@ -318,6 +318,15 @@ def build_run(
     if openresearcher_service is not None:
         recipe = recipe.merge(service_recipe())
         execution = service_execution(execution or profile.execution)
+    if (
+        not smoke
+        and not validation_data
+        and (
+            recipe.trainer.eval_interval > 0
+            or any(callback.type in {"evaluation", "best_checkpoint"} for callback in recipe.trainer.callbacks)
+        )
+    ):
+        raise ValueError("A zero-holdout curriculum cannot schedule validation or best-checkpoint selection")
     eval_interval = recipe.trainer.eval_interval if eval_interval is None else eval_interval
     checkpoint_interval = (
         checkpoint_interval if checkpoint_interval is not None else 1 if smoke else recipe.trainer.ckpt_interval

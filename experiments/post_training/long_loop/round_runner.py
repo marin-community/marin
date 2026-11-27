@@ -709,7 +709,9 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False, verify_pool_a
     if set(training_files) != set(pools_manifest["composition"]):
         raise ValueError("Round training files differ from the curriculum's source populations")
     training = tuple(ArtifactDataSource(pools, relative_path=training_files[label]) for label in sorted(training_files))
-    heldout = ArtifactDataSource(pools, relative_path="validation.parquet")
+    validation_data = (
+        (ArtifactDataSource(pools, relative_path="validation.parquet"),) if curriculum.validation.size else ()
+    )
     # The curriculum derives the rollout buffer's per-route window quotas at the
     # run's batch size; a declared value must match it exactly or name nothing.
     derived_quotas = consumed_route_quotas(curriculum, pools_manifest["routes"], roles.train_batch_size)
@@ -757,7 +759,7 @@ def adopted_round_rl(spec: AdoptedRlRound, *, smoke: bool = False, verify_pool_a
         version=spec.version,
         model=ArtifactHfModel(adopted, model.tokenizer_uri, model.tokenizer_revision, relative_path=""),
         train_data=training,
-        validation_data=(heldout,),
+        validation_data=validation_data,
         max_steps=rl.max_steps,
         resume=resume,
         smoke=smoke,

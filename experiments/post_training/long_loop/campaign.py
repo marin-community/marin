@@ -119,6 +119,14 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
         groups_per_step=reference.rl.role_plan["train_batch_size"],
         stopping=RlStopping.MAX_STEPS,
     )
+    # User-authorized 2026-11-27 protocol: all rows train, final is the deliverable.
+    trainer = recipe["trainer"]
+    trainer["callbacks"] = [
+        {**callback, "save_steps": 5, "save_on_train_end": True} if callback["type"] == "checkpoint" else callback
+        for callback in trainer["callbacks"]
+        if callback["type"] not in {"evaluation", "best_checkpoint"}
+    ]
+    trainer.update(ckpt_interval=5, eval_interval=-1, hf_export_checkpoint="latest")
     recipe["trainer"]["rollout_buffer"]["source_routes"] = {label: pin["route"] for label, pin in mix.sources.items()}
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
     # Stored TaskRolloutSpecs carry the catalog's per-task harness and machine sizing.
@@ -148,13 +156,14 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
         name=f"rl-data-campaign/{mix.id}",
         slug=f"mochi-campaign-{mix.id}",
         version=version,
-        evaluation_checkpoints="best",
+        evaluation_checkpoints="final",
         rl=dataclasses.replace(
             reference.rl,
             recipe=recipe,
             role_plan=role_plan,
             megatron=megatron,
             max_steps=max_steps,
+            retained_checkpoints=2,
             stopping=RlStopping.MAX_STEPS,
             native_checkpoint_storage=SkyRLCheckpointStorage.TEMPORARY,
             execution={
@@ -182,12 +191,11 @@ def run_validated(config: SkyRLRunConfig):
 
 
 def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str | None = None) -> CampaignGraph:
-    """Prepare data regionally, then resolve a native config against its real holdout."""
+    """Prepare all training data regionally, then resolve the native launch config."""
     pool_version = spec.version if pool_version is None else pool_version
     pool_round = campaign_round(mix, pool_version, max_steps=spec.rl.max_steps)
     spec = dataclasses.replace(spec, rl=dataclasses.replace(spec.rl, pools=pool_round.rl.pools))
-    # The existing .131 bindings validate model/role/optimizer controls without inventing
-    # future holdout identities. Only the pool producer may supply the campaign holdout.
+    # The .131 scaffold validates model/role/optimizer controls before new pools exist.
     reference = load_round(REFERENCE)
     # Pool lowering bakes each row's machines, so per-task-image placement must reach this document too.
     lowering_recipe = copy.deepcopy(reference.rl.recipe)
@@ -225,6 +233,7 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str 
             # authored recipe, model pins and mix carry the preparation identity.
             return {
                 "reference": dataclasses.asdict(pool_reference),
+                "training_protocol": "no-validation-final-2026-11-27",
                 "mix": dataclasses.asdict(mix),
                 "version": pool_version,
             }
@@ -295,7 +304,9 @@ def campaign_graph(mix: CampaignMix, spec: AdoptedRlRound, *, pool_version: str 
         "terminal_identity": evaluated.fingerprint(),
         "pool_uri": pools.path(spec.storage.output_prefix),
         "pool_version": pool_version,
-        "data_preflight": "regional pool hashes, holdout and actual-agent gate required before GPU allocation",
+        "data_preflight": (
+            "regional pool hashes, full-population training and actual-agent gate required before GPU allocation"
+        ),
         "learning_stop": {"max_steps": 50, "wall_time_budget": None},
         "gpu_footprint": {
             "trainer": roles.policy_num_nodes * roles.policy_num_gpus_per_node,
@@ -350,11 +361,16 @@ def main(
             native_checkpoint_storage=SkyRLCheckpointStorage.TEMPORARY,
         ),
     )
-    rendered = materialized_config(adopted_round_rl(controls, verify_pool_at_runtime=True), spec.storage.output_prefix)
+    if (StoragePath(plan["pool_uri"]) / "manifest.json").exists():
+        rendered = materialized_config(graph.training, spec.storage.output_prefix)
+        scope = "candidate pools and authored protocol; real-agent admission still precedes GPU allocation"
+    else:
+        rendered = materialized_config(
+            adopted_round_rl(controls, verify_pool_at_runtime=True), spec.storage.output_prefix
+        )
+        scope = "controls on .131 pools only; candidate data and authored protocol await pool materialization"
     plan["native_recipe_preflight"] = validate_launch(rendered.launch_config_yaml, validation_output / "native-controls")
-    plan["native_recipe_preflight_scope"] = (
-        "controls on existing .131 pools; candidate data/agent gate is a dependency before GPU allocation"
-    )
+    plan["native_recipe_preflight_scope"] = scope
     (validation_output / "plan.json").write_text(json.dumps(plan, indent=2))
     return dataclasses.replace(
         terminal,

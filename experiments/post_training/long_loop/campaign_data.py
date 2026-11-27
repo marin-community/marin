@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pin campaign candidates to Atlas releases and partition their regional pools."""
+"""Pin campaign candidates to Atlas releases and publish their regional training pools."""
 
 import csv
 import hashlib
@@ -18,7 +18,6 @@ from iris.cluster.client.job_info import get_job_info
 from marin.rl.curriculum import (
     PoolRow,
     SourcePin,
-    draw_validation_split,
     validation_payload,
 )
 from rigging.filesystem.storage_path import StoragePath
@@ -37,7 +36,7 @@ from experiments.post_training.task_curation.curriculum import (
 
 CAMPAIGN = Path(__file__).with_name("campaign")
 SEED = 20261020
-VALIDATION_SIZE = 200
+VALIDATION_SIZE = 0
 CATALOG_LOAD_ID = "54405be9b4db4c2d9828549469abe759"
 POOL_BATCH_SIZE = 64
 logger = logging.getLogger(__name__)
@@ -131,7 +130,7 @@ def load_mix(mix_id: str, directory: Path = CAMPAIGN) -> CampaignMix:
 
 
 def partition_mix(mix: CampaignMix, rows: dict[str, list[dict]], version: str) -> PreparedPools:
-    """Preserve source rows while removing a reproducible, mixture-weighted holdout."""
+    """Keep every pinned source row trainable under the no-validation protocol."""
     identities = {
         label: tuple(
             PoolRow(json.loads(row["task_spec"])["id"], canonical_sha256(json.loads(row["task_spec"])))
@@ -139,22 +138,7 @@ def partition_mix(mix: CampaignMix, rows: dict[str, list[dict]], version: str) -
         )
         for label, records in rows.items()
     }
-    split = draw_validation_split(mix.weights, identities, size=VALIDATION_SIZE, seed=SEED)
-    held = {(row.label, row.id) for row in split.validation.rows}
-    # Cross-source copies of a held-out task must not leak back into training.
-    held_ids = {row.id for row in split.validation.rows}
-    held_hashes = {row.sha256 for row in split.validation.rows}
-    training, validation = {}, []
-    for label, records in rows.items():
-        training[label] = []
-        for row, identity in zip(records, identities[label], strict=True):
-            stamped = {**row, "teacher_route": label}
-            if (label, identity.id) in held:
-                validation.append(stamped)
-            elif identity.id in held_ids or identity.sha256 in held_hashes:
-                raise ValueError(f"Cross-source holdout leakage: {label}/{identity.id}")
-            else:
-                training[label].append(stamped)
+    training = {label: [{**row, "teacher_route": label} for row in records] for label, records in rows.items()}
     curriculum = weighted_curriculum(
         f"rl-data-campaign/{mix.id}",
         version,
@@ -164,22 +148,7 @@ def partition_mix(mix: CampaignMix, rows: dict[str, list[dict]], version: str) -
         pool_rows=identities,
         catalog=mix.curriculum_catalog,
     )
-    return PreparedPools(curriculum, training, validation)
-
-
-def write_parquet(destination: StoragePath, name: str, rows: list[dict]) -> str:
-    """Publish complete TaskSpec/runtime rows without dropping retained columns."""
-    if not rows:
-        raise ValueError(f"Empty pool schema: {name}")
-    # Validation combines retained cohorts with different metadata columns.
-    # Give Arrow the full union: inferring keys from the first row loses extras.
-    columns = sorted({key for row in rows for key in row})
-    records = [{column: row.get(column) for column in columns} for row in rows]
-    with tempfile.TemporaryDirectory() as temporary:
-        local = Path(temporary) / "tasks.parquet"
-        pq.write_table(pa.Table.from_pylist(records), local, compression="zstd")
-        expected = publish_parquet(destination, name, local)
-    return expected
+    return PreparedPools(curriculum, training, [])
 
 
 def publish_parquet(destination: StoragePath, name: str, local: Path) -> str:
@@ -207,7 +176,7 @@ def retained_task(row: dict, label: str) -> TaskSpec:
 
 
 def partition_parquets(mix: CampaignMix, paths: dict[str, Path], version: str, destination: StoragePath) -> dict:
-    """Publish the same holdout and literal rows while keeping only identities in memory."""
+    """Publish every literal source row for training, without a validation holdout."""
     identities = {}
     for label, path in paths.items():
         records = []
@@ -225,10 +194,7 @@ def partition_parquets(mix: CampaignMix, paths: dict[str, Path], version: str, d
         pool_rows=identities,
         catalog=mix.curriculum_catalog,
     )
-    held = {(row.label, row.id) for row in curriculum.validation.rows}
-    held_ids = {row.id for row in curriculum.validation.rows}
-    held_hashes = {row.sha256 for row in curriculum.validation.rows}
-    files, training_files, train_composition, validation = {}, {}, {}, []
+    files, training_files, train_composition = {}, {}, {}
     with tempfile.TemporaryDirectory() as temporary:
         for index, (label, path) in enumerate(paths.items()):
             source = pq.ParquetFile(path)
@@ -237,20 +203,10 @@ def partition_parquets(mix: CampaignMix, paths: dict[str, Path], version: str, d
             column = schema.get_field_index("teacher_route")
             schema = schema.set(column, field) if column >= 0 else schema.append(field)
             local = Path(temporary) / "train.parquet"
-            identity_rows = iter(identities[label])
             count = 0
             with pq.ParquetWriter(local, schema, compression="zstd") as writer:
                 for batch in source.iter_batches(batch_size=POOL_BATCH_SIZE):
-                    training = []
-                    for row in batch.to_pylist():
-                        identity = next(identity_rows)
-                        stamped = {**row, "teacher_route": label}
-                        if (label, identity.id) in held:
-                            validation.append(stamped)
-                        elif identity.id in held_ids or identity.sha256 in held_hashes:
-                            raise ValueError(f"Cross-source holdout leakage: {label}/{identity.id}")
-                        else:
-                            training.append(stamped)
+                    training = [{**row, "teacher_route": label} for row in batch.to_pylist()]
                     if training:
                         writer.write_table(pa.Table.from_pylist(training, schema=schema))
                         count += len(training)
@@ -260,7 +216,6 @@ def partition_parquets(mix: CampaignMix, paths: dict[str, Path], version: str, d
             files[name] = publish_parquet(destination, name, local)
             training_files[label] = name
             train_composition[label] = count
-    files["validation.parquet"] = write_parquet(destination, "validation.parquet", validation)
     definition = asdict(curriculum)
     definition.pop("fingerprint")
     payload = json.dumps(definition, indent=2).encode()

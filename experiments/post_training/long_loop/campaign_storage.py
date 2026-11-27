@@ -18,12 +18,12 @@ from vendor.skyrl.marinskyrl.model_manifest import ModelManifest
 
 
 def retain_campaign_checkpoints(*, training: str, output: str) -> None:
-    """Verify best HF bytes, promote the final native state, then prune run-owned scratch."""
+    """Verify the delivered HF bytes, promote final native state, then prune run-owned scratch."""
     if get_job_info() is None or not output.startswith("s3://marin-us-east-08a/"):
         raise ValueError("Campaign checkpoint housekeeping requires an 08a CPU worker")
     result = SkyRLRun.raw_load(training)
     if result.hf_model_uri is None:
-        raise ValueError("Training did not commit a best HF export")
+        raise ValueError("Training did not commit its delivered HF export")
     hf = StoragePath(result.hf_model_uri)
     manifest = ModelManifest.from_mapping(json.loads((hf / MODEL_MANIFEST_FILENAME).read_text()), str(hf))
     for entry in manifest.files:
@@ -49,8 +49,8 @@ def retain_campaign_checkpoints(*, training: str, output: str) -> None:
     inventory = fs.find(key, detail=True)
     deleted_bytes = sum(item["size"] for item in inventory.values() if item["type"] == "file")
     receipt = {
-        "best_export": str(hf),
-        "best_export_identity": manifest.identity,
+        "hf_export": str(hf),
+        "hf_export_identity": manifest.identity,
         "final_native": permanent,
         "final_step": final_step,
         "final_copy": copied.manifest_url,

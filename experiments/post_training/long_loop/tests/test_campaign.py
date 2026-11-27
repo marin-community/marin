@@ -17,9 +17,13 @@ from fray.iris_backend import convert_constraints
 from marin.execution.lazy import materialized_config
 from marin.rl.cli import _skyrl_executions, _submission_route
 from marin.rl.curriculum import validation_payload
+from omegaconf import OmegaConf
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
+from skyrl_train.callbacks.base import TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import CheckpointCallback, create_callbacks_from_config
+from skyrl_train.checkpoint_listing import cleanup_old_checkpoints
 from skyrl_train.dataset.harbor_import import harbor_trial_task, restore_harbor_trial_task
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements, ExecutionRequirements
 
@@ -37,7 +41,6 @@ from experiments.post_training.long_loop.campaign_data import (
     partition_mix,
     partition_parquets,
     retained_task,
-    write_parquet,
 )
 from experiments.post_training.long_loop.campaign_runtime import bind_runtime, lower_parquet
 from experiments.post_training.long_loop.execution_policy import RlStopping, rl_training_callbacks
@@ -45,7 +48,7 @@ from experiments.post_training.long_loop.round_runner import adopted_round_rl, l
 from experiments.post_training.task_curation.curriculum_manifest import curriculum_from_manifest
 
 
-def test_equal_mix_holdout_preserves_task_bytes_and_pins():
+def test_equal_mix_keeps_full_population_and_literal_task_bytes():
     pins = {
         label: {
             "catalog_status": "Available",
@@ -72,8 +75,8 @@ def test_equal_mix_holdout_preserves_task_bytes_and_pins():
     }
     prepared = partition_mix(mix, rows, "2026.11.26.501")
     curriculum, train, held = prepared.curriculum, prepared.training, prepared.validation
-    assert len(held) == 200
-    assert {label: len(records) for label, records in train.items()} == {"first": 80, "second": 80}
+    assert held == []
+    assert {label: len(records) for label, records in train.items()} == {"first": 180, "second": 180}
     held_ids = {json.loads(row["task_spec"])["id"] for row in held}
     train_ids = {json.loads(row["task_spec"])["id"] for records in train.values() for row in records}
     assert not held_ids & train_ids
@@ -97,23 +100,7 @@ def test_equal_mix_holdout_preserves_task_bytes_and_pins():
     )
 
 
-def test_cross_source_holdout_leakage_is_rejected():
-    pin = {
-        "catalog_status": "Available",
-        "name": "fixture",
-        "version": "1",
-        "repo": "tests/pin",
-        "revision": "a" * 40,
-        "url": "https://example.org/pin",
-        "recipe": "atlas:fixture/retained@3",
-    }
-    mix = CampaignMix("v2-leak", {"first": pin, "second": pin}, "b" * 64, "c" * 64)
-    rows = [{"task_spec": json.dumps({"id": f"shared-{i}"})} for i in range(180)]
-    with pytest.raises(ValueError, match="Cross-source holdout leakage"):
-        partition_mix(mix, {"first": rows, "second": rows}, "2026.11.26.501")
-
-
-def test_batched_pool_preparation_preserves_the_original_split_and_literal_rows(tmp_path):
+def test_batched_pool_preparation_preserves_all_literal_rows_without_holdout(tmp_path):
     pins = {
         label: {
             "catalog_status": "Available",
@@ -159,13 +146,8 @@ def test_batched_pool_preparation_preserves_the_original_split_and_literal_rows(
     assert manifest["validation"] == validation_payload(reference.curriculum.validation)
     for label, name in manifest["training_files"].items():
         assert pq.read_table(destination / name).to_pylist() == reference.training[label]
-    expected_held = {row["task_sha256"]: row for row in reference.validation}
-    held = pq.read_table(destination / "validation.parquet").to_pylist()
-    assert len(held) == 200
-    for row in held:
-        assert {key: value for key, value in row.items() if value is not None} == {
-            key: value for key, value in expected_held[row["task_sha256"]].items() if value is not None
-        }
+    assert manifest["train_composition"] == {"first": 180, "second": 180}
+    assert not (destination / "validation.parquet").exists()
     for name, digest in manifest["files"].items():
         assert hashlib.sha256((destination / name).read_bytes()).hexdigest() == digest
 
@@ -189,6 +171,9 @@ def test_campaign_preserves_131_controls_and_disables_learning_clock():
         after[field] = before[field]
     for field in ("max_steps", "stopping", "native_checkpoint_storage", "pools", "role_plan", "megatron"):
         after["rl"][field] = before["rl"][field]
+    after["rl"]["retained_checkpoints"] = before["rl"]["retained_checkpoints"]
+    for field in ("ckpt_interval", "eval_interval", "hf_export_checkpoint"):
+        after["rl"]["recipe"]["trainer"][field] = before["rl"]["recipe"]["trainer"][field]
     after["rl"]["execution"]["coordinator_name"] = before["rl"]["execution"]["coordinator_name"]
     after["rl"]["execution"].pop("coordinator_secret_sources")
     after["rl"]["recipe"]["trainer"]["callbacks"] = before["rl"]["recipe"]["trainer"]["callbacks"]
@@ -271,7 +256,7 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, 
         "validation": validation_payload(curriculum.validation),
         "composition": {label: 60 for label in mix.sources},
         "routes": {label: pin["route"] for label, pin in mix.sources.items()},
-        "files": {"validation.parquet": "c" * 64},
+        "files": {f"{label}/train.parquet": "c" * 64 for label in mix.sources},
     }
     (pools / "manifest.json").write_text(json.dumps(manifest))
     model = tmp_path / "model"
@@ -313,6 +298,32 @@ def test_native_round_render_stops_at_fifty_without_reinserting_clock(tmp_path, 
     assert native["skyrl"]["generator"]["speculative_decoding"]["num_speculative_tokens"] == 4
     # Rendering must not open the intentionally absent parquet bodies on the Mac.
     assert not (pools / "validation.parquet").exists()
+    assert native["inputs"]["validation_data"] == []
+    trainer = native["skyrl"]["trainer"]
+    assert trainer["eval_interval"] == -1
+    assert trainer["ckpt_interval"] == 5
+    assert trainer["hf_export_checkpoint"] == "latest"
+    assert native["artifacts"]["resume_checkpoint_count"] == 2
+    runtime_callbacks = create_callbacks_from_config(OmegaConf.create(native["skyrl"]))
+    assert not {"evaluation", "best_checkpoint"} & {row["type"] for row in trainer["callbacks"]}
+    checkpoint = next(callback for callback in runtime_callbacks if isinstance(callback, CheckpointCallback))
+    saved = []
+    checkpoint_root = tmp_path / "native-checkpoints"
+    checkpoint_root.mkdir()
+    # Exercise the native save schedule and rolling removal, including a final
+    # stop that is off cadence. No accelerator or model state is needed.
+    for index in range(1, 54):
+        control = checkpoint.on_step_end(TrainerState(index, 0, 53, 53), TrainerControl())
+        if control.should_save:
+            saved.append(index)
+            (checkpoint_root / f"global_step_{index}").mkdir()
+            cleanup_old_checkpoints(str(checkpoint_root), native["artifacts"]["resume_checkpoint_count"])
+    assert saved == list(range(5, 51, 5))
+    final = checkpoint.on_train_end(TrainerState(53, 0, 53, 53, is_last_step=True), TrainerControl())
+    assert final.should_save
+    (checkpoint_root / "global_step_53").mkdir()
+    cleanup_old_checkpoints(str(checkpoint_root), native["artifacts"]["resume_checkpoint_count"])
+    assert {path.name for path in checkpoint_root.iterdir()} == {"global_step_50", "global_step_53"}
     dispatched = []
     real_remote = campaign.remote
 
@@ -444,20 +455,6 @@ def test_null_catalog_sizes_keep_provider_defaults_and_declared_minima():
     assert lowered.task_machine.memory_mb == 8192
     assert lowered.task_machine.storage_mb == 10240
     assert lowered.limits.total_turn_timeout == 600
-
-
-def test_mixed_validation_metadata_survives_parquet_publication(tmp_path):
-    rows = [
-        {"task_spec": '{"id": "first"}', "runtime": "{}", "teacher_route": "first", "first_metadata": "kept"},
-        {"task_spec": '{"id":"second"}', "runtime": "{}", "teacher_route": "second", "second_metadata": "also kept"},
-    ]
-    digest = write_parquet(StoragePath(str(tmp_path)), "validation.parquet", rows)
-    assert digest == hashlib.sha256((tmp_path / "validation.parquet").read_bytes()).hexdigest()
-    actual = pq.read_table(tmp_path / "validation.parquet").to_pylist()
-    assert actual == [
-        {**rows[0], "second_metadata": None},
-        {**rows[1], "first_metadata": None},
-    ]
 
 
 def test_original_harbor_package_survives_runtime_binding(tmp_path):
