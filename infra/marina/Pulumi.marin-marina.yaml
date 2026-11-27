@@ -1,9 +1,10 @@
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 encryptedkey: CiQAKk3j6QtTcc6Iec1XdmlHLA8ymrMXsDFl0jYtcfyWvoS+GysSSQCdtF6i+DeIDDdGiUGfJ9nyAG+rmhGx03VSZETlYvqY9jnZlgulAJm7gQH7M2RdK5ngnYgIdqVXupwxIfj+6hAjc9NGVQI+UDs=
 config:
-  # The oa.dev Cloudflare zone: marina, applets, echo and evaldash CNAMEs are created there
-  # and mapped to the service. Unset to serve only the run.app URL.
-  marin-marina:dns_zone_id: 169959d6aafcbfd77764b8efafa3a509
+  # Cloudflare zones by name. Each vanity host's CNAME goes in the most specific zone that
+  # contains it, and the host is mapped to its service. Unset to serve only the run.app URLs.
+  marin-marina:dns_zones:
+    oa.dev: 169959d6aafcbfd77764b8efafa3a509
   marin-marina:applet_domains:
     - filer.marina.oa.dev
   # Hosts served by the unauthenticated public reader. Each serves its bound app only while
@@ -14,3 +15,4 @@ config:
   # bind applet hosts. An empty list disables host management through the API.
   marin-marina:applet_operators:
     - ben.feuer@openathena.ai
+    - romain.yon@openathena.ai

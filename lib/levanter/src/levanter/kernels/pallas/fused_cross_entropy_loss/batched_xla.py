@@ -29,6 +29,7 @@ _AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 4096
 _GPU_MIN_B_BLOCK_SIZE = 128
 _H100_FULL_VOCAB_B_TILED_BLOCK_SIZE = 8192
 _H100_FULL_VOCAB_B_TILED_MIN_BATCH = 8192
+_NVIDIA_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB = 8192
 
 
 def _apply_logit_soft_cap(logits: jax.Array, logit_soft_cap: Optional[float]) -> jax.Array:
@@ -532,14 +533,21 @@ def _custom_backward_v_block_size(
     gb10_tuned = _gb10_custom_backward_v_block_size(x, w)
     if gb10_tuned is not None:
         return gb10_tuned
-    if w.shape[1] >= _LARGE_VOCAB_THRESHOLD and "amd instinct" in _device_kind():
-        # Each vocab block adds one full pass over the f32 [B, H] input-gradient accumulator, so the backward
-        # takes fewer, larger blocks than the forward, whose autotuned block is 1024 on MI350X and MI355X.
-        forward_v_block = block_sizes.v_block_size if block_sizes is not None else 0
+    forward_v_block = (block_sizes if block_sizes is not None else BlockSizes.get_default()).v_block_size
+    if w.shape[1] < _LARGE_VOCAB_THRESHOLD:
+        return forward_v_block
+    # Each vocab block adds one full pass over the f32 [B, H] input-gradient accumulator, so the backward
+    # takes fewer, larger blocks than the forward.
+    device_kind = _device_kind()
+    if "amd instinct" in device_kind:
+        # The forward's autotuned block is 1024 on MI350X and MI355X.
         return max(forward_v_block, _AMD_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB)
-    if block_sizes is not None:
-        return block_sizes.v_block_size
-    return BlockSizes.get_default().v_block_size
+    if "nvidia" in device_kind and "gb10" not in device_kind:
+        # The forward's block is 32-64 here because of the shared-memory limit on its weight tile, which the backward
+        # does not have. With V=128256, the full step on H100 and GB200 is 1.8-6.2x faster at 8192 than at the forward's
+        # block, and 8192 is within 5% of the fastest block from 1024 to 16384.
+        return max(forward_v_block, _NVIDIA_CUSTOM_BWD_V_BLOCK_LARGE_VOCAB)
+    return forward_v_block
 
 
 @partial(jax.jit, static_argnames=["b_block_size", "logit_soft_cap", "precision"])

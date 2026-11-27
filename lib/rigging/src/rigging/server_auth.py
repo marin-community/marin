@@ -113,12 +113,6 @@ def get_verified_identity() -> VerifiedIdentity | None:
     return _verified_identity.get()
 
 
-def get_verified_user() -> str | None:
-    """Return just the user_id for the current RPC, or None."""
-    identity = _verified_identity.get()
-    return identity.user_id if identity is not None else None
-
-
 @contextlib.contextmanager
 def identity_scope(identity: VerifiedIdentity | None):
     """Bind ``identity`` as the verified identity for the duration of the block.

@@ -16,7 +16,7 @@ def compose_recipe(recipe: SkyRLRecipe) -> DictConfig:
             exclude={"context_budget", "entrypoint", "config_groups", "extra_env", "model_num_attention_heads"},
         ),
     )
-    for path, value in recipe.context_budget.derived_values(None).items():
+    for path, value in recipe.context_budget.derived_values().items():
         if (
             path == "generator.engine_init_kwargs.max_model_len"
             and "serving_window_tokens" not in recipe.context_budget.model_fields_set

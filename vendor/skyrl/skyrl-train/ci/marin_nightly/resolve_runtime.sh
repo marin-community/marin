@@ -11,7 +11,7 @@ repository_root="$1"
 NIGHTLY_RL_ENV="$2"
 install_mode="$3"
 runtime_profile="${4:-megatron}"
-RUNTIME_ENV_FILE="$NIGHTLY_RL_ENV/marinskyrl-runtime.sh"
+RUNTIME_ENV_FILE="$NIGHTLY_RL_ENV/marinskyrl-runtime.env"
 PYTHON="$NIGHTLY_RL_ENV/bin/python"
 
 echo "::: resolving the frozen MarinSkyRL runtime"
@@ -21,4 +21,5 @@ bash "$repository_root/cloud/iris/bootstrap_runtime.sh" \
   "$RUNTIME_ENV_FILE" \
   "$runtime_profile" \
   "$install_mode"
-source "$RUNTIME_ENV_FILE"
+source "$repository_root/cloud/iris/load_runtime_environment.sh"
+load_runtime_environment "$RUNTIME_ENV_FILE"

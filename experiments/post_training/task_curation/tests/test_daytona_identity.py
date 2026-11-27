@@ -7,6 +7,7 @@ import base64
 import gzip
 import io
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,7 +16,7 @@ pytest.importorskip("harbor", reason="Requires the isolated vendor/harbor runtim
 from harbor.environments.daytona import machine_spec
 from shellbox.backends.daytona.snapshot import snapshot_request_for_spec
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import MachineSpec, UnsupportedMachineSpec
+from shellbox.machine import MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 
 from experiments.post_training.task_curation.daytona_identity import (
     count_lowered_spec_identities,
@@ -31,7 +32,8 @@ def lowered(document: dict) -> LoweredSpec:
     task = dict(document.get("task") or {})
     grader = task.get("grader") or {}
     if grader.get("environment"):
-        grader = {"kind": "script", "argv": ("bash", "/tests/test.sh"), **grader}
+        placement = {"kind": "grader_machine", "environment": grader["environment"]}
+        grader = {"kind": "script", "argv": ("bash", "/tests/test.sh"), "placement": placement}
     else:
         grader = {"kind": "none", "reason": "not measured"}
     completed = {
@@ -69,29 +71,13 @@ def test_snapshot_identity_rejects_add_dockerfiles(tmp_path):
         snapshot_request_for_spec(MachineSpec(source=DockerfileSource(context, context / "Dockerfile")))
 
 
-def test_machine_spec_maps_a_registry_source():
-    class Config:
-        docker_image = "registry.example/image@sha256:aa"
-        workdir = "/app"
-        allow_internet = True
-
-    spec = machine_spec(Config(), "/unused", {}, cpus=4, memory_mb=32768, storage_mb=10240)
-    assert spec.source.reference == "registry.example/image@sha256:aa"
-    assert (spec.cpus, spec.memory_mb, spec.storage_mb) == (4, 32768, 10240)
-
-
-def test_machine_spec_maps_a_dockerfile_source(tmp_path):
-    class Config:
-        docker_image = None
-        workdir = "/app"
-        allow_internet = False
-
-    context = tmp_path / "environment"
-    context.mkdir()
-    (context / "Dockerfile").write_text("FROM ubuntu:24.04\n")
-    spec = machine_spec(Config(), context, {}, cpus=None, memory_mb=None, storage_mb=None)
-    assert isinstance(spec.source, DockerfileSource)
-    assert spec.source.context == context
+@pytest.mark.parametrize(("allow_internet", "network"), [(True, NetworkPolicy.ALLOW), (False, NetworkPolicy.DENY)])
+def test_machine_spec_maps_internet_access_to_a_network_policy(allow_internet, network):
+    config = SimpleNamespace(
+        docker_image="registry.example/image@sha256:aa", workdir="/app", allow_internet=allow_internet
+    )
+    spec = machine_spec(config, "/unused", {}, cpus=None, memory_mb=None, storage_mb=None)
+    assert spec.network == network
 
 
 def test_identical_native_tars_share_one_snapshot_and_add_tars_fail():

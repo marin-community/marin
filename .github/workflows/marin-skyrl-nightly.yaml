@@ -5,8 +5,18 @@ on:
   schedule:
     - cron: "0 9 * * 1-6"
     - cron: "0 9 * * 0"
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
+      controls:
+        description: Run the RL controls
+        type: boolean
+        default: false
+      presets:
+        description: "Control selectors: space-separated models or model/preset pairs (blank for all)"
+        type: string
+        default: ""
       grug_cutlass:
         description: Include the weekly Grug CUTLASS case alongside nightly Triton
         type: boolean
@@ -20,11 +30,37 @@ on:
         default: ""
 
 concurrency:
-  group: marin-nightly
+  group: ${{ github.event_name == 'issue_comment' && format('marin-rl-controls-comment-{0}', github.event.comment.id) || 'marin-nightly' }}
   cancel-in-progress: false
 
 jobs:
+  dispatch-controls-comment:
+    if: >-
+      github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      (github.event.comment.body == '/rl-controls' || startsWith(github.event.comment.body, '/rl-controls '))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Dispatch controls from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run --frozen --all-packages --extra cpu --no-default-groups \
+            python -m experiments.post_training.rl_nightly_controls --comment-event "$GITHUB_EVENT_PATH"
+
   gpu-gate:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.controls)
     name: ${{ matrix.lane }}
     strategy:
       fail-fast: false
@@ -75,8 +111,6 @@ jobs:
           workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
           service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
       - uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: hai-gcp-models
       - name: Install Marin CPU launcher
         run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
 
@@ -163,8 +197,70 @@ jobs:
           path: ${{ matrix.log }}
           if-no-files-found: ignore
 
+  rl-controls:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.controls)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      CONTROL_BATCH: ${{ github.run_id }}-${{ github.run_attempt }}
+      CONTROL_PRESETS: ${{ inputs.presets }}
+    steps:
+      - name: Require main for RL controls
+        run: |
+          if [ "$GITHUB_REPOSITORY" != "marin-community/marin" ] || [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "RL controls require marin-community/marin main."
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Validate control selectors
+        if: inputs.presets != ''
+        run: |
+          uv run --frozen --all-packages --extra cpu --no-default-groups \
+            python -m experiments.post_training.rl_nightly_controls --check-presets="$CONTROL_PRESETS"
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Authenticate Marina with the main-only deployment identity
+        id: marina-auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+          export_environment_variables: false
+      - name: Submit and publish RL controls
+        env:
+          MARINA_GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.marina-auth.outputs.credentials_file_path }}
+        run: |
+          set -eo pipefail
+          uv run --frozen --all-packages --extra cpu --no-default-groups \
+            python -m experiments.post_training.rl_nightly_controls --batch "$CONTROL_BATCH" \
+            --presets="$CONTROL_PRESETS" \
+            2>&1 | tee rl-controls.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rl-control-runs
+          path: rl-controls.log
+          if-no-files-found: ignore
+
   report-failure:
-    needs: [gpu-gate]
+    needs: [gpu-gate, rl-controls]
     if: >-
       always() && github.event_name == 'schedule' &&
       (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
@@ -182,7 +278,7 @@ jobs:
           slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           triage-notes: >-
             The nightly runs OPD, Grug Megatron and the asynchronous
-            CatCount learning gate through WIF-authenticated Iris jobs. CatCount reports
+            CatCount learning gate and refreshes versioned RL controls through WIF-authenticated Iris jobs. CatCount reports
             INFRASTRUCTURE_FAILURE and retries once when no native training row reached
             the log. Failures after training starts and metric violations are GATE_FAILURE.
             Inspect the native log to distinguish placement, connection, lock,

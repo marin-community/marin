@@ -8,7 +8,6 @@ import stat
 from rigging import credential_store
 from rigging.credential_store import (
     CredentialRecord,
-    delete_credentials,
     load_credentials,
     save_credentials,
 )
@@ -45,11 +44,3 @@ def test_save_overwrites_in_place(tmp_path, monkeypatch):
     save_credentials(CredentialRecord(cluster="marin", endpoint="https://e", edge_refresh_token="new"))
     loaded = load_credentials("marin")
     assert loaded is not None and loaded.edge_refresh_token == "new"
-
-
-def test_delete(tmp_path, monkeypatch):
-    monkeypatch.setattr(credential_store, "_CREDENTIALS_DIR", tmp_path)
-    save_credentials(CredentialRecord(cluster="marin", endpoint="https://e"))
-    assert delete_credentials("marin") is True
-    assert delete_credentials("marin") is False
-    assert load_credentials("marin") is None

@@ -26,11 +26,8 @@ provide torch with the production NCCL build; the pinned image digest is the
         --task-image "$IMAGE" \
         --cpu 8 --memory 32GB --disk 200GB \
         --no-sync -- \
-        bash -c 'cd /app/vendor/skyrl && \
-        bash cloud/iris/bootstrap_runtime.sh /app/vendor/skyrl "$IRIS_VENV" \
-        /app/vendor/skyrl/.iris-runtime-env megatron production && \
-        source /app/vendor/skyrl/.iris-runtime-env && \
-        exec python /app/experiments/post_training/nccl_transport_probe.py'
+        bash /app/vendor/skyrl/cloud/iris/setup_task_runtime.sh megatron \
+        python /app/experiments/post_training/nccl_transport_probe.py
 
 The variants cover the recipe workaround (`NCCL_NET=Socket`,
 `NCCL_IB_DISABLE=1`, `NCCL_SOCKET_FAMILY=AF_INET`) as one overlay and each
@@ -42,6 +39,7 @@ variable alone, the exact production overlay that also pins
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime
 import hashlib
 import json
@@ -52,15 +50,16 @@ import socket
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
-from typing import IO
+from typing import IO, Literal
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
-from iris.cluster.client.job_info import get_job_info
+from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.types import EndpointAccess
 from rigging.filesystem.factory import open_url
 from rigging.network import interface_for_ipv4
@@ -80,10 +79,13 @@ MAX_LOCAL_GPUS = 2
 ERROR_TAIL_LINES = 12
 TRACEBACK_MAX_LINES = 80
 ENDPOINT_BASE_NAME = "nccl-probe"
+BENCHMARK_COMPLETE = "NCCL_PROBE_BENCHMARK_COMPLETE"
 
 NCCL_VERSION_RE = re.compile(r"NCCL version ([0-9.]+)")
 TRANSPORT_RE = re.compile(r"via (NET/(?:IB|Socket)\S*|NET/\S+)")
 IB_DEVICE_SELECTION_RE = re.compile(r"\bNET/IB\s*:\s*Using\b")
+NVLS_RANKS_RE = re.compile(r"\bNCCL INFO NVLS comm \S+ headRank -?\d+ nHeads \d+ nvlsRanks (\d+)\b")
+MNNVL_CHANNEL_RE = re.compile(r"\bChannel \S+\s*:\s*(\d+)\[\d+\]\s*->\s*(\d+)\[\d+\]\s+via P2P/MNNVL\b")
 
 DEFAULT_SOCKET_IFNAME = "^ibs,ibp,lo,docker,veth,cilium,lxc"
 
@@ -106,6 +108,8 @@ class NcclCensus:
     nccl_version: str
     transports: list[str]
     ib_device_lines: list[str] = field(default_factory=list)
+    nvls_rank_counts: list[int] = field(default_factory=list)
+    mnnvl_channels: list[tuple[int, int]] = field(default_factory=list)
 
 
 @dataclass
@@ -122,6 +126,7 @@ class WorkerProcess:
     result_path: Path
     log_file: IO[bytes]
     output_file: IO[bytes]
+    pynccl_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,10 +171,12 @@ def build_variants(extra_env: dict[str, str] | None = None) -> list[Variant]:
 
 
 def parse_nccl_census(lines: list[str]) -> NcclCensus:
-    """Extract the version, transports, and InfiniBand device selection from NCCL INFO output."""
+    """Extract the active NCCL channel transports, IB rails, and NVLS communicator sizes."""
     version = ""
     transports: list[str] = []
     ib_device_lines: list[str] = []
+    nvls_rank_counts = set()
+    mnnvl_channels = set()
     for line in lines:
         if not version:
             match = NCCL_VERSION_RE.search(line)
@@ -180,7 +187,11 @@ def parse_nccl_census(lines: list[str]) -> NcclCensus:
             transports.append(match.group(1))
         if IB_DEVICE_SELECTION_RE.search(line) and line not in ib_device_lines:
             ib_device_lines.append(line)
-    return NcclCensus(nccl_version=version, transports=transports, ib_device_lines=ib_device_lines)
+        if match := NVLS_RANKS_RE.search(line):
+            nvls_rank_counts.add(int(match.group(1)))
+        if match := MNNVL_CHANNEL_RE.search(line):
+            mnnvl_channels.add((int(match.group(1)), int(match.group(2))))
+    return NcclCensus(version, transports, ib_device_lines, sorted(nvls_rank_counts), sorted(mnnvl_channels))
 
 
 def allocate_port_block(count: int) -> int:
@@ -229,6 +240,8 @@ def spawn_worker(
     port: int,
     world_size: int,
     log_dir: Path,
+    *,
+    pynccl_init: bool,
 ) -> WorkerProcess:
     """Start one benchmark worker process without waiting for it.
 
@@ -238,7 +251,8 @@ def spawn_worker(
     log_path = log_dir / f"{variant.name}-rank{index}.log"
     output_path = log_dir / f"{variant.name}-rank{index}.out"
     result_path = log_dir / f"{variant.name}-rank{index}.json"
-    env = dict(os.environ)
+    env = {**os.environ, **variant.env}
+    env.pop("NCCL_DEBUG_FILE", None)
     env.update(
         {
             "MASTER_ADDR": master,
@@ -247,17 +261,17 @@ def spawn_worker(
             "RANK": str(index),
             "LOCAL_RANK": str(local_rank),
             "NCCL_DEBUG": "INFO",
+            "NCCL_DEBUG_SUBSYS": "INIT,NET,NVLS,GRAPH,P2P",
             "PROBE_RESULT_FILE": str(result_path),
-            **variant.env,
         }
     )
     if os.environ.get("PROBE_INIT_TIMEOUT"):
         env["PROBE_INIT_TIMEOUT"] = os.environ["PROBE_INIT_TIMEOUT"]
     if os.environ.get("PROBE_BUFFER_BYTES"):
         env["PROBE_BUFFER_BYTES"] = os.environ["PROBE_BUFFER_BYTES"]
-    if os.environ.get("PROBE_PYNCCL_INIT"):
-        env["PROBE_PYNCCL_INIT"] = os.environ["PROBE_PYNCCL_INIT"]
     cmd = [sys.executable, str(Path(__file__).resolve()), "--mode", "worker", "--variant", variant.name]
+    if pynccl_init:
+        cmd.append("--pynccl-init")
     log_file: IO[bytes] = open(log_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
     output_file: IO[bytes] = open(output_path, "wb")  # noqa: SIM115 - closed in collect_worker after the child exits
     process = subprocess.Popen(cmd, env=env, stdout=output_file, stderr=log_file)
@@ -272,6 +286,7 @@ def spawn_worker(
         result_path=result_path,
         log_file=log_file,
         output_file=output_file,
+        pynccl_requested=pynccl_init,
     )
 
 
@@ -340,6 +355,17 @@ def worker_traceback(lines: list[str]) -> list[str]:
     return block[:TRACEBACK_MAX_LINES]
 
 
+def read_worker_census(streams: tuple[list[str], ...]) -> NcclCensus:
+    """Bind NVLS evidence to the benchmark's default NCCL communicator."""
+    all_lines = [line for stream in streams for line in stream]
+    benchmark_lines = [
+        line for stream in streams if BENCHMARK_COMPLETE in stream for line in stream[: stream.index(BENCHMARK_COMPLETE)]
+    ]
+    census = parse_nccl_census(all_lines)
+    benchmark = parse_nccl_census(benchmark_lines)
+    return replace(census, nvls_rank_counts=benchmark.nvls_rank_counts, mnnvl_channels=benchmark.mnnvl_channels)
+
+
 def collect_worker(handle: WorkerProcess) -> RankResult:
     """Wait for one spawned worker and parse its logs and result payload."""
     try:
@@ -352,22 +378,21 @@ def collect_worker(handle: WorkerProcess) -> RankResult:
     duration = time.time() - handle.started
     # NCCL writes its INFO output to stdout and traces to stderr depending on
     # build and NCCL_DEBUG_FILE, so the census parses both streams.
-    lines = handle.log_path.read_text(errors="replace").splitlines()
-    lines += handle.output_path.read_text(errors="replace").splitlines()
-    census = parse_nccl_census(lines)
+    stderr = handle.log_path.read_text(errors="replace").splitlines()
+    stdout = handle.output_path.read_text(errors="replace").splitlines()
+    lines = [*stderr, *stdout]
+    census = read_worker_census((stderr, stdout))
     payload, result_problem = parse_worker_result(
         handle.result_path, handle.rank, handle.variant_name, handle.world_size
     )
     if result_problem:
         lines.append(result_problem)
-    pynccl_failed = bool(
-        payload is not None
-        and isinstance(payload.get("pynccl"), dict)
-        and payload["pynccl"].get("pynccl_init") == "failed"
-    )
+    pynccl = payload.get("pynccl") if payload is not None else None
+    pynccl_state = pynccl.get("pynccl_init") if isinstance(pynccl, dict) else None
+    pynccl_failed = pynccl_state == "failed" or (handle.pynccl_requested and pynccl_state not in ("pass", "skipped"))
     if pynccl_failed:
-        # A failed engine-side communicator init fails the rank closed.
-        lines.append(f"pynccl init failed: {payload['pynccl'].get('error')}")
+        problem = pynccl.get("error") if isinstance(pynccl, dict) else "missing result"
+        lines.append(f"pynccl init failed: {problem}")
     traceback_lines = worker_traceback(lines) if returncode != 0 else []
     tail = lines[-ERROR_TAIL_LINES:]
     error_tail = [*traceback_lines, "--- last output ---", *tail] if traceback_lines else tail
@@ -391,20 +416,39 @@ def run_variant(
     master: str,
     port: int,
     log_dir: Path,
+    *,
+    pynccl_init: bool,
+    allow_interhost_nvlink: bool = False,
 ) -> dict:
     """Run one variant on this task's local GPUs and summarize the ranks."""
     handles = [
-        spawn_worker(variant, rank_offset + local, local, master, port, world_size, log_dir)
+        spawn_worker(variant, rank_offset + local, local, master, port, world_size, log_dir, pynccl_init=pynccl_init)
         for local in range(local_gpus)
     ]
     ranks = [collect_worker(handle) for handle in handles]
+    interhost_nvlink = (
+        allow_interhost_nvlink
+        and 0 < local_gpus < world_size
+        and all(
+            world_size in rank.census.nvls_rank_counts
+            or any(
+                source == rank.rank and 0 <= peer < world_size and source // local_gpus != peer // local_gpus
+                for source, peer in rank.census.mnnvl_channels
+            )
+            for rank in ranks
+        )
+    )
+    passed = all(rank.passed for rank in ranks)
     return {
         "variant": variant.name,
         "env_overlay": variant.env,
-        "pass": all(rank.passed for rank in ranks),
+        "pass": passed,
         "world_size": world_size,
         "ranks": [asdict_without_worker_noise(rank) for rank in ranks],
         "transports": sorted({transport for rank in ranks for transport in rank.census.transports}),
+        "interconnect_verdict": gate_verdict(
+            passed, [rank.census.transports for rank in ranks], interhost_nvlink=interhost_nvlink
+        ),
     }
 
 
@@ -421,6 +465,8 @@ def asdict_without_worker_noise(rank: RankResult) -> dict:
         "nccl_version": rank.census.nccl_version,
         "transports": rank.census.transports,
         "ib_device_lines": rank.census.ib_device_lines,
+        "nvls_rank_counts": rank.census.nvls_rank_counts,
+        "mnnvl_channels": rank.census.mnnvl_channels,
     }
 
 
@@ -468,10 +514,11 @@ def run_launcher(args: argparse.Namespace) -> None:
         endpoint_name = args.endpoint_name
         coordinator = rank_offset == 0
     else:
-        endpoint_name = f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}"
+        endpoint_name = rendezvous_endpoint_name(job_info, mode="launcher")
         coordinator = task_index == 0
+    variants = build_variants(extra_env=args.env_pairs)
     if coordinator:
-        base_port = allocate_port_block(len(build_variants()) + 1)
+        base_port = allocate_port_block(len(variants) + 1)
         master_host = job_info.advertise_host
         access = EndpointAccess.ENDPOINT_ACCESS_LINK if args.endpoint_name else EndpointAccess.ENDPOINT_ACCESS_PRIVATE
         endpoint_id = ctx.registry.register(endpoint_name, f"{master_host}:{base_port}", access=access)
@@ -489,13 +536,12 @@ def run_launcher(args: argparse.Namespace) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     selected = set(args.variants.split(",")) if args.variants else None
     results = []
-    for offset, variant in enumerate(build_variants(extra_env=args.env_pairs)):
+    run = partial(run_variant, pynccl_init=args.pynccl_init)
+    for offset, variant in enumerate(variants):
         if selected is not None and variant.name not in selected:
             continue
         logger.info("[task %s] variant %s starting", task_index, variant.name)
-        results.append(
-            run_variant(variant, rank_offset, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir)
-        )
+        results.append(run(variant, rank_offset, local_gpus, world_size, master_host, base_port + 1 + offset, log_dir))
         logger.info("[task %s] variant %s finished pass=%s", task_index, variant.name, results[-1]["pass"])
 
     if coordinator:
@@ -515,16 +561,24 @@ def run_launcher(args: argparse.Namespace) -> None:
     (RESULT_DIR / f"results-task{task_index}.json").write_text(json.dumps(report, indent=2))
 
 
+def rendezvous_endpoint_name(job_info: JobInfo, *, mode: Literal["launcher", "gate"]) -> str:
+    """Give each worker gang and retry its own rendezvous."""
+    if mode == "launcher":
+        return job_info.job_id.child(f"{ENDPOINT_BASE_NAME}-attempt-{job_info.attempt_id}").to_wire()
+    job = hashlib.sha256(str(job_info.job_id).encode()).hexdigest()[:16]
+    return f"{ENDPOINT_BASE_NAME}-gate-{job}-attempt-{job_info.attempt_id}"
+
+
 def run_gate(args: argparse.Namespace) -> None:
-    """Launch-time interconnect check: fail closed unless cross-node NCCL rides InfiniBand.
+    """Check the launch's collectives and require InfiniBand or full-world NVLink evidence.
 
     With ``--gate-coverage first-pair`` (the default), tasks 0 and 1 each run one
     NCCL rank over the default environment; any other task exits immediately.
     With ``--gate-coverage all-gpus``, every task joins with all of its local
     GPUs, so communicator init exercises every GPU-to-NIC pairing (a 64-rank
     data-parallel engine can fail on one GPU's HCA even when the first pair is
-    healthy). The check passes when the census shows NET/IB or no NET transport
-    at all (intra-node NVLink), and fails with the NCCL error tail otherwise.
+    healthy). In a single NVLink domain, the gate also accepts a full-world
+    NVLS communicator or a peer channel to another task for each local rank.
     """
     import torch  # noqa: PLC0415 - torch is an optional dependency outside the vendor runtime env
 
@@ -544,11 +598,13 @@ def run_gate(args: argparse.Namespace) -> None:
         world_size = 2
     else:
         local_gpus = torch.cuda.device_count()
+        if local_gpus < 1:
+            raise RuntimeError(f"transport gate task {task_index} has no visible GPUs")
         world_size = num_tasks * local_gpus
     gloo_interface = resolve_gloo_socket_ifname(job_info.advertise_host)
     logger.info("gate: Gloo bootstrap interface %s for %s", gloo_interface, job_info.advertise_host)
     ctx = iris_ctx()
-    endpoint_name = f"{ENDPOINT_BASE_NAME}-gate-attempt-{job_info.attempt_id}"
+    endpoint_name = rendezvous_endpoint_name(job_info, mode="gate")
     gate_variants = [
         variant
         for variant in build_variants(extra_env=args.env_pairs or None)
@@ -567,13 +623,12 @@ def run_gate(args: argparse.Namespace) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     rank_offset = task_index if args.gate_coverage == "first-pair" else task_index * local_gpus
     results = []
+    run = partial(run_variant, pynccl_init=args.pynccl_init, allow_interhost_nvlink=args.gate_single_nvlink_domain)
     for offset, variant in enumerate(gate_variants):
-        results.append(
-            run_variant(variant, rank_offset, local_gpus, world_size, master_host, base_port + offset, log_dir)
-        )
+        results.append(run(variant, rank_offset, local_gpus, world_size, master_host, base_port + offset, log_dir))
     if task_index == 0:
         ctx.registry.unregister(endpoint_id)
-    verdicts = [gate_verdict(result["pass"], [rank["transports"] for rank in result["ranks"]]) for result in results]
+    verdicts = [result["interconnect_verdict"] for result in results]
     verdict = next((item for item in verdicts if item != "pass"), "pass")
     report = {
         "gate": {
@@ -646,17 +701,17 @@ def collect_ib_port_inventory() -> list[dict[str, str]]:
     return inventory
 
 
-def gate_verdict(passed: bool, rank_transports: list[list[str]]) -> str:
-    """Map one probe variant's outcome onto the launch-gate verdict.
-
-    NET/IB or an empty transport list (intra-node NVLink) passes; a socket
-    transport or a failed benchmark fails closed.
-    """
+def gate_verdict(passed: bool, rank_transports: list[list[str]], *, interhost_nvlink: bool = False) -> str:
+    """Require positive interconnect evidence and reject sockets and unexpected network transports."""
     if not passed:
         return "collective_failed"
     flat = {transport for transports in rank_transports for transport in transports}
     if any(transport.startswith("NET/Socket") for transport in flat):
         return "socket_transport"
+    if not flat and not interhost_nvlink:
+        return "missing_transport_evidence"
+    if any(not transport.startswith("NET/IB/") for transport in flat):
+        return "unexpected_transport"
     return "pass"
 
 
@@ -797,6 +852,11 @@ def run_worker_mode(args: argparse.Namespace) -> None:
 
     all_to_all_seconds = bench(run_all_to_all, ALLTOALL_ITERATIONS)
     all_to_all_bandwidth = a2a_bytes / all_to_all_seconds * (world_size - 1) / world_size / 1e9
+    # PyNccl creates a separate communicator after both measured collectives.
+    # Flush native NCCL output before placing a boundary on either stream.
+    ctypes.CDLL(None).fflush(None)
+    print(BENCHMARK_COMPLETE, flush=True)
+    print(BENCHMARK_COMPLETE, file=sys.stderr, flush=True)
 
     payload = {
         "variant": args.variant,
@@ -808,7 +868,7 @@ def run_worker_mode(args: argparse.Namespace) -> None:
         "alltoall_busbw_gigabytes_per_second": round(all_to_all_bandwidth, 2),
         "alltoall_bytes": a2a_bytes,
     }
-    if os.environ.get("PROBE_PYNCCL_INIT"):
+    if args.pynccl_init:
         payload["pynccl"] = run_pynccl_init_check(device)
     dist.barrier()
     dist.destroy_process_group()
@@ -850,6 +910,11 @@ def main() -> None:
         help="Gate mode: regional evidence prefix (rendezvous_dir/interconnect-gate) for the full report JSON",
     )
     parser.add_argument(
+        "--gate-single-nvlink-domain",
+        action="store_true",
+        help="Accept cross-host NVLink evidence for jobs confined to one NVLink domain",
+    )
+    parser.add_argument(
         "--env",
         action="append",
         metavar="KEY=VALUE",
@@ -873,13 +938,13 @@ def main() -> None:
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    if any("=" not in item or item.startswith("=") for item in args.env or ()):
+        parser.error("--env must be KEY=VALUE with a nonempty key")
     args.env_pairs = {key: value for key, _, value in (item.partition("=") for item in args.env or [])}
     if not args.env_pairs:
         args.env_pairs = None
     if args.buffer_bytes:
         os.environ["PROBE_BUFFER_BYTES"] = str(args.buffer_bytes)
-    if args.pynccl_init:
-        os.environ["PROBE_PYNCCL_INIT"] = "1"
     if args.init_timeout_seconds:
         os.environ["PROBE_INIT_TIMEOUT"] = str(args.init_timeout_seconds)
     if args.mode == "launcher":

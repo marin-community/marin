@@ -5,6 +5,7 @@
 
 from functools import partial
 
+from finestore.rl.status_taxonomy import DataRestriction
 from taskcompendium.evaluation.spec import (
     EvaluationProtocol,
     LikelihoodMetric,
@@ -39,7 +40,7 @@ from experiments.evaluation.prompt_compilation import (
     text_generation_evaluation,
 )
 from experiments.post_training.task_curation.pipeline import CurationRecipe, HfSource
-from experiments.post_training.task_curation.source import RlDataSource, SourceInfo
+from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceOrigin
 
 GPQA_REVISION = "83022cefff930aea54f654c0b282e74b9eeda5c6"
 MMLU_PRO_REVISION = "b189ec765aa7ed75c8acfea42df31fdae71f97be"
@@ -144,9 +145,11 @@ def choice_dataset(
 ) -> RlDataSource[EvaluationCorpusRecipe]:
     return RlDataSource(
         info=SourceInfo(
-            id="Evalchemy:" + name,
-            title=benchmark,
-            origin="Evalchemy",
+            data_restriction=DataRestriction.OPEN,
+            upstream_dataset=name,
+            upstream_name=benchmark,
+            build_path="Evalchemy",
+            origin=SourceOrigin.EVALCHEMY,
             family="generated-choice",
             tags=("eval", "source:evalchemy", "single-turn", "benchmark", "reasoning", "benchmark:" + benchmark),
             count=population,
