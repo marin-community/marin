@@ -75,6 +75,33 @@ def test_cost_aware_acquisition_prefers_cheaper_unvisited_prompts(prompts):
     assert cost_aware_expensive < contextual_expensive - 25
 
 
+def test_dispatch_prediction_uses_latest_feedback_without_changing_staged_draws(prompts):
+    acquisition = PromptAcquisition.COST_AWARE
+    order = _order(prompts, acquisition)
+    # Request the prediction for a prompt from a window drawn before feedback.
+    uid = prompts[order.next_index()].uid
+    prior = order.dispatch_prediction(uid)
+    assert (prior.mean_model_useful_probability, prior.predicted_paid_group_tokens, prior.posterior_feedback_step) == (
+        0.5,
+        100.0,
+        0,
+    )
+    order.finish_step(3, [_feedback(int(uid), 1, useful=True, tokens=25)])
+    saved = json.loads(json.dumps(order.state_dict()))
+    restored = _order(prompts, acquisition)
+    restored.load_state_dict(saved)
+
+    fitted = order.dispatch_prediction(uid)
+    assert fitted.posterior_feedback_step == 3
+    assert fitted.mean_model_useful_probability is not None
+    assert 0.5 < fitted.mean_model_useful_probability < 1
+    assert fitted.predicted_paid_group_tokens is not None
+    assert 25 < fitted.predicted_paid_group_tokens < 100
+    assert order.state_dict() == saved
+    assert [order.next_index() for _ in range(24)] == [restored.next_index() for _ in range(24)]
+    assert restored.dispatch_prediction(uid) == fitted
+
+
 def test_within_source_uses_the_same_cost_acquisition_on_a_single_source(prompts):
     original = _order(prompts, PromptAcquisition.COST_AWARE, epsilon=0.05)
     stratified = _order(prompts, PromptAcquisition.WITHIN_SOURCE_COST_AWARE, epsilon=0.05)

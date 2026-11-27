@@ -75,11 +75,12 @@ from skyrl_train.rollouts.buffer import (
     RowFacts,
     RolloutContentPolicy,
     RolloutGroup,
+    RolloutLease,
     RolloutTask,
     SourceRejections,
 )
 from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, SeededPasses
-from skyrl_train.rollouts.prompt_order import PromptFeedback, PromptOrder, SamplingFeedbackPhase
+from skyrl_train.rollouts.prompt_order import PromptFeedback, PromptOrder, PromptPrediction, SamplingFeedbackPhase
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
 from skyrl_train.rollouts.payloads import RolloutReader, PAYLOAD_IO_THREADS
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
@@ -237,6 +238,27 @@ def start_rollout_buffer(config: RolloutBufferConfig) -> ActorHandle:
     """Start the rollout buffer actor on this node, beside the trainer that reads every payload through it."""
     node = NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(), soft=False)
     return ray.remote(RolloutBuffer).options(num_cpus=0, scheduling_strategy=node).remote(config)
+
+
+def record_sampling_assignment(lease: RolloutLease, prompt: dict, prediction: PromptPrediction | None) -> None:
+    """Record a training dispatch and optional fitted-model predictions."""
+    metadata = prompt["input"].metadata
+    identity = metadata.evaluation_identity
+    record_event(
+        "sampling_group_assigned",
+        {
+            "lease_id": lease.lease_id,
+            "group_uid": prompt["uid"],
+            "assigned_unix_ns": time.time_ns(),
+            "policy_step": lease.policy_step,
+            "target_batch": lease.batch_id,
+            "task_id": metadata.task_id,
+            "task_digest": identity.task_digest if identity is not None else None,
+            "source": prompt[SAMPLING_SOURCE],
+            "family": lease.family or (identity.strata.family if identity is not None else None),
+            **(dataclasses.asdict(prediction) if prediction is not None else {}),
+        },
+    )
 
 
 def record_sampling_result(outcome: GroupDisposition, admission_batch: int) -> None:
@@ -697,22 +719,7 @@ class TrainingContext:
                 request = self._request_spec.request(prompt, lease.policy_step)
                 if (source := self.loader.order.assign(prompt["uid"])) is not None:
                     prompt = {**prompt, SAMPLING_SOURCE: source}
-                    metadata = prompt["input"].metadata
-                    identity = metadata.evaluation_identity
-                    record_event(
-                        "sampling_group_assigned",
-                        {
-                            "lease_id": lease.lease_id,
-                            "group_uid": prompt["uid"],
-                            "assigned_unix_ns": time.time_ns(),
-                            "policy_step": lease.policy_step,
-                            "target_batch": lease.batch_id,
-                            "task_id": metadata.task_id,
-                            "task_digest": identity.task_digest if identity is not None else None,
-                            "source": prompt[SAMPLING_SOURCE],
-                            "family": lease.family or (identity.strata.family if identity is not None else None),
-                        },
-                    )
+                    record_sampling_assignment(lease, prompt, self.loader.order.dispatch_prediction(prompt["uid"]))
                 task = RolloutTask(lease, prompt, request)
                 self._in_flight[lease.lease_id] = task
                 running = asyncio.create_task(self._run(task))

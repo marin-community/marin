@@ -18,7 +18,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from skyrlrecipe.declared import PromptAcquisition
-from skyrl_train.rollouts.prompt_order import PromptFeedback, PromptOrder, PromptSelection, SamplingFeedbackPhase
+from skyrl_train.rollouts.prompt_order import (
+    PromptFeedback,
+    PromptOrder,
+    PromptPrediction,
+    PromptSelection,
+    SamplingFeedbackPhase,
+)
 
 _HASH_DIMENSION = 12
 _PRIOR_PRECISION = 2.0
@@ -357,11 +363,22 @@ class PromptThompsonOrder(PromptOrder):
         return 1 / (1 + np.exp(-np.clip(logits, -40, 40)))
 
     def prediction(self, uid: str) -> tuple[float, float]:
-        """Return mean-model usefulness probability and predicted generated tokens for a training row."""
+        """Return fitted-model usefulness probability and exponentiated log cost for a training row."""
         feature = self._features[self._rows[uid]]
         logit = feature @ np.linalg.solve(self._precision, self._info)
         log_relative_cost = feature @ np.linalg.solve(self._cost_precision, self._cost_info)
         return float(self._probabilities(logit)), float(self._reference_tokens * np.exp(log_relative_cost))
+
+    def dispatch_prediction(self, uid: str) -> PromptPrediction:
+        # A staged window can have been drawn under older feedback. Report the
+        # current mean model, without drawing another sample or changing the window.
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            useful, tokens = self.prediction(uid)
+        return PromptPrediction(
+            mean_model_useful_probability=useful if math.isfinite(useful) else None,
+            predicted_paid_group_tokens=tokens if math.isfinite(tokens) else None,
+            posterior_feedback_step=self._last_step,
+        )
 
     def finish_step(self, step: int, groups: Sequence[PromptFeedback]) -> dict[str, float]:
         """Train on outcomes available after a completed step and report realized yield and spend."""

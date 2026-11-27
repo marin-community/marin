@@ -79,6 +79,15 @@ class PromptSelection:
     draw: Callable[[Callable[[], int]], int | None]
 
 
+@dataclass(frozen=True)
+class PromptPrediction:
+    """Current fitted model estimates for a training group at dispatch."""
+
+    mean_model_useful_probability: float | None
+    predicted_paid_group_tokens: float | None
+    posterior_feedback_step: int
+
+
 class PromptOrder(ABC):
     """Select prompts and receive feedback at the phases relevant to the policy."""
 
@@ -118,6 +127,10 @@ class PromptOrder(ABC):
 
     def assign(self, uid: str) -> str | None:
         """Tag the dispatch with its source when the order emits sampling receipts."""
+        return None
+
+    def dispatch_prediction(self, uid: str) -> PromptPrediction | None:
+        """Describe the fitted model at dispatch without changing sampling state."""
         return None
 
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:

@@ -9,16 +9,23 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 import torch
+from rigging.telemetry.serialization import event_fields
 from rolloutengine.models import CUMULATIVE_GROSS_ROLLOUT_TOKENS_METRIC, GROSS_ROLLOUT_TOKENS_METRIC
 from skyrlrecipe.declared import PromptAcquisition
 
+from skyrl_train.adaptive_sampling import AdaptiveSourceOrder
 from skyrl_train.callbacks.base import TrainerControl
 from skyrl_train.callbacks.builtin import DefaultCallbackHandler
 from skyrl_train.config.rollout_validation import validate_rollout_launch
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.contextual_sampling import PromptFeedback, PromptThompsonOrder, PublicPrompt
-from skyrl_train.rollouts.buffer import AdmittedRollout, GroupDisposition, SamplingGroupResult
-from skyrl_train.rollouts.context import RolloutBatchMetadata, TrainingContext, TrainingContextState
+from skyrl_train.rollouts.buffer import SAMPLING_SOURCE, AdmittedRollout, GroupDisposition, RolloutLease, SamplingGroupResult
+from skyrl_train.rollouts.context import (
+    RolloutBatchMetadata,
+    TrainingContext,
+    TrainingContextState,
+    record_sampling_assignment,
+)
 from skyrl_train.rollouts.loader import PromptLoaderState
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.training_batch import TrainingInputBatch
@@ -36,6 +43,58 @@ class CheckpointPolicy:
         else:
             raise AssertionError(operation)
         return []
+
+
+def test_sampling_assignment_serializes_predictions_for_thompson_only(monkeypatch):
+    ranked = PromptThompsonOrder(
+        [PublicPrompt("0", "math", "What is twelve plus eighteen?")],
+        set(),
+        {},
+        acquisition=PromptAcquisition.COST_AWARE,
+        seed=1,
+        window_size=1,
+        decay=0.95,
+        epsilon=1.0,
+        reference_tokens=100,
+    )
+    legacy = AdaptiveSourceOrder(
+        ["math"],
+        {},
+        seed=1,
+        window_size=1,
+        decay=0.95,
+        epsilon=0.05,
+        prior_alpha=1.0,
+        prior_beta=1.0,
+    )
+    events = []
+
+    def capture(name, body, *, attributes):
+        events.append((name, event_fields(body, budget=4096)))
+
+    monkeypatch.setattr("skyrl_train.telemetry.telemetry.event", capture)
+    lease = RolloutLease("lease", 1, 1, "arithmetic")
+    metadata = SimpleNamespace(task_id="task", evaluation_identity=None)
+    for order in (ranked, legacy):
+        prompt = {"uid": "0", "input": SimpleNamespace(metadata=metadata), SAMPLING_SOURCE: order.assign("0")}
+        record_sampling_assignment(lease, prompt, order.dispatch_prediction("0"))
+
+    assert [name for name, _ in events] == ["sampling_group_assigned"] * 2
+    native, baseline = [{key: value for key, value in event.items() if key != "assigned_unix_ns"} for _, event in events]
+    assert baseline == {
+        "lease_id": "lease",
+        "group_uid": "0",
+        "policy_step": 1,
+        "target_batch": 1,
+        "task_id": "task",
+        "source": "math",
+        "family": "arithmetic",
+    }
+    assert native == baseline | {
+        "mean_model_useful_probability": 0.5,
+        "predicted_paid_group_tokens": 100.0,
+        "posterior_feedback_step": 0,
+    }
 
 
 @pytest.fixture
