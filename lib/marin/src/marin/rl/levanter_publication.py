@@ -41,21 +41,20 @@ def dense_payload_key(name: str, offset: int, numel: int, dtype: str) -> str:
 
 
 @dataclass(frozen=True)
-class _Stage:
+class _SourceSlice:
+    rank: int
     key: str
+    local_expert: int | None = None
+
+
+@dataclass(frozen=True)
+class _Stage:
     layer: int | None
     names: tuple[str, ...]
     shape: tuple[int, ...]
     dtype: str
     sharding: NamedSharding
-    owners: tuple[tuple[int, int, int], ...]
-
-
-@dataclass(frozen=True)
-class _SourceSlice:
-    rank: int
-    key: str
-    local_expert: int | None = None
+    local_sources: tuple[_SourceSlice, ...]
 
 
 def _owner_spans(sharding: NamedSharding, shape: tuple[int, ...], devices: dict[int, jax.Device], ranks):
@@ -167,19 +166,24 @@ class SnowballPublication:
                 key = f"{prefix}.{projection}"
                 shape = (config.num_experts, *dimensions)
                 owners = _owner_spans(partitioned, shape, self.devices, tuple(self.devices))
-                stages.append(_Stage(key, layer, sources, shape, "bfloat16", partitioned, owners))
+                local_sources = []
                 for rank, start, stop in owners:
-                    inventories[rank]["experts"].extend(
-                        {
-                            "name": f"{key}.expert{expert}",
-                            "layer": layer,
-                            "pp": 0,
-                            "expert": expert,
-                            "projection": projection,
-                            "nbytes": nbytes,
-                        }
-                        for expert in range(start, stop)
-                    )
+                    for expert in range(start, stop):
+                        name = f"{key}.expert{expert}"
+                        inventories[rank]["experts"].append(
+                            {
+                                "name": name,
+                                "layer": layer,
+                                "pp": 0,
+                                "expert": expert,
+                                "projection": projection,
+                                "nbytes": nbytes,
+                            }
+                        )
+                        if rank in self.local_devices:
+                            local_sources.append(_SourceSlice(rank, expert_payload_key(name), expert - start))
+                ordered = tuple(sorted(local_sources, key=lambda source: source.key))
+                stages.append(_Stage(layer, sources, shape, "bfloat16", partitioned, ordered))
 
         for index, (name, tensor) in enumerate(sorted(abstract.items())):
             layer = int(name.split(".")[2]) if name.startswith("model.layers.") else None
@@ -190,16 +194,19 @@ class SnowballPublication:
             owners = _owner_spans(
                 sharding, tensor.shape, self.devices, tuple(self.devices) if split else (index % count,)
             )
-            stages.append(_Stage(name, layer, (name,), tensor.shape, dtype, sharding, owners))
+            local_sources = []
             row_elements = math.prod(tensor.shape[1:])
             for rank, start, stop in owners:
                 numel = (stop - start) * row_elements
                 if numel * _DTYPE_BYTES[dtype] > MAX_PUBLICATION_BYTES:
                     raise ValueError(f"Dense source shard exceeds the publication buffer budget: {name}")
+                offset = start * row_elements
+                if rank in self.local_devices:
+                    local_sources.append(_SourceSlice(rank, dense_payload_key(name, offset, numel, dtype)))
                 inventories[rank]["dense"].append(
                     {
                         "hf_name": name,
-                        "hf_offset": start * row_elements,
+                        "hf_offset": offset,
                         "numel": numel,
                         "wire_dtype": dtype,
                         "source_key": name,
@@ -207,8 +214,9 @@ class SnowballPublication:
                         "pp": 0,
                     }
                 )
+            stages.append(_Stage(layer, (name,), tensor.shape, dtype, sharding, tuple(local_sources)))
         self.inventories = inventories
-        self.stages = tuple((stage, self._local_sources(stage)) for stage in stages)
+        self.stages = tuple(stages)
         self.session: Generator[dict, None, None] | None = None
         self.version: int | None = None
         self.exhausted = False
@@ -219,7 +227,7 @@ class SnowballPublication:
             raise ValueError("SkyRL publication requires one local CPU or CUDA device platform")
         return {
             "version": version,
-            "payload_order": tuple((source.rank, source.key) for _, sources in self.stages for source in sources),
+            "payload_order": tuple((source.rank, source.key) for stage in self.stages for source in stage.local_sources),
             "inventories": tuple(self.inventories[rank] for rank in sorted(self.local_devices)),
             "devices": dict(self.local_devices),
             "device_type": "cuda" if "gpu" in platforms else "cpu",
@@ -242,38 +250,15 @@ class SnowballPublication:
         return payload
 
     def end(self) -> dict:
+        """Close the stream and report whether the caller observed exhaustion."""
         if self.session is None:
             raise RuntimeError("No Snowball publication is in progress")
         self.session.close()
         self.session = None
         return {"version": self.version, "complete": self.exhausted}
 
-    def _local_sources(self, stage: _Stage) -> tuple[_SourceSlice, ...]:
-        if len(stage.shape) == 3:
-            return tuple(
-                sorted(
-                    (
-                        _SourceSlice(rank, expert_payload_key(f"{stage.key}.expert{expert}"), expert - start)
-                        for rank, start, stop in stage.owners
-                        if rank in self.local_devices
-                        for expert in range(start, stop)
-                    ),
-                    key=lambda source: source.key,
-                )
-            )
-
-        row_elements = math.prod(stage.shape[1:])
-        return tuple(
-            _SourceSlice(
-                rank,
-                dense_payload_key(stage.key, start * row_elements, (stop - start) * row_elements, stage.dtype),
-            )
-            for rank, start, stop in stage.owners
-            if rank in self.local_devices
-        )
-
     def _payloads(self, model: SnowballLMHeadModel, version: int) -> Generator[dict, None, None]:
-        for stage, sources in self.stages:
+        for stage in self.stages:
             names = stage.names
             module = model.transformer
             if stage.layer is not None:
@@ -284,7 +269,7 @@ class SnowballPublication:
                     module
                 ).block_until_ready()
             shards = {shard.device: shard.data for shard in array.addressable_shards}
-            for source in sources:
+            for source in stage.local_sources:
                 shard = shards[self.devices[source.rank]]
                 if source.local_expert is None:
                     value = np.asarray(shard).reshape(-1)

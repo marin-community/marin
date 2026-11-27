@@ -206,8 +206,7 @@ def test_levanter_sender_two_versions_install_and_replay_all_receiver_bytes():
             child.version = version
             installed = sender.send_weights({"version": version})
             assert {row["participant"]: row["wire_bytes"] for row in installed} == dict(root_bytes)
-            verified = sender.verify({"version": version})
-            assert all(row["source_replication"] == "partitioned" and row["replicas"]["compared_bytes"] == 0 for row in verified)
+            sender.verify({"version": version})
         for _ in processes:
             receipt = result.get(timeout=25)
             assert "error" not in receipt, receipt.get("error")

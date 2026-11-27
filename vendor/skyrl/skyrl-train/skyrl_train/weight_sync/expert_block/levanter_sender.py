@@ -25,13 +25,17 @@ from skyrl_train.weight_sync.expert_block.verify_weights import ReplayReport, Re
 MAX_PUBLICATION_BYTES = 64 << 20
 
 
+def _expert_payload_key(name: str) -> str:
+    return f"expert:{name}"
+
+
 def _dense_payload_key(name: str, offset: int, numel: int, dtype: str) -> str:
     return f"dense:{name}:{offset}:{numel}:{dtype}"
 
 
 def _payload_key(item: ExpertBroadcast | DenseBroadcast) -> str:
     if isinstance(item, ExpertBroadcast):
-        return f"expert:{item.entry.name}"
+        return _expert_payload_key(item.entry.name)
     source = item.source
     return _dense_payload_key(source.hf_name, source.hf_offset, source.numel, source.wire_dtype)
 
@@ -121,7 +125,7 @@ class LevanterExpertBlockSender:
         expected = {}
         for rank, row in self.inventories.items():
             for entry in row["experts"]:
-                expected[(rank, f"expert:{entry['name']}")] = entry["nbytes"]
+                expected[(rank, _expert_payload_key(entry["name"]))] = entry["nbytes"]
             for source in row["dense"]:
                 dtype = source["wire_dtype"]
                 key = _dense_payload_key(source["hf_name"], source["hf_offset"], source["numel"], dtype)
@@ -145,11 +149,10 @@ class LevanterExpertBlockSender:
         return tuple(asdict(report) for report in self._send(update_info["version"]))
 
     def verify(self, update_info: dict) -> tuple[dict, ...]:
-        """Replay every source byte for the receiver's existing exact comparison.
+        """Replay source bytes for receiver comparison.
 
-        The publication reshard partitions each expert/dense source exactly once,
-        so there are no interchangeable trainer replicas to compare. A zero-byte
-        ReplicaReport records that fact.
+        The trainer reports zero receive bytes and zero replica bytes because
+        each shard has exactly one trainer owner.
         """
         version = update_info["version"]
         reports = self._send(version)
