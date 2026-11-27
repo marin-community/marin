@@ -3,12 +3,14 @@
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 import numpy as np
 import pytest
 
 import haliax as hax
 from levanter.layers.sampler import LogprobMode, Sampler
 from levanter.models.loss import CrossEntropyNormalization, next_token_loss
+from levanter.testing.devices import use_cpu_devices
 
 
 def test_sampler_top_p_keeps_only_the_nucleus_head():
@@ -49,14 +51,22 @@ def test_sampler_top_p_does_not_overshoot_exact_threshold():
     assert jnp.isneginf(masked_logits.array[1:]).all()
 
 
-def test_sampler_top_p_preserves_original_token_ids_with_tied_logits():
+@pytest.mark.multidevice
+def test_sampler_top_p_preserves_sharded_token_ids_with_tied_logits():
     vocab, batch = hax.Axis("vocab", 4), hax.Axis("batch", 2)
-    logits = hax.named(jnp.array([[-3.0, 0.0], [0.0, -2.0], [-3.0, 0.0], [0.0, -2.0]]), (vocab, batch))
-    top_p = hax.named(jnp.array([0.4, 1.0]), batch)
-    filtered = jax.jit(Sampler(vocab)._apply_top_p)(logits, top_p)
+    with use_cpu_devices(2):
+        mesh = Mesh(jax.devices(), ("data",), axis_types=(AxisType.Explicit,))
+        with jax.set_mesh(mesh):
+            data = jax.device_put(
+                np.array([[-3.0, 0.0], [0.0, -2.0], [-3.0, 0.0], [0.0, -2.0]], np.float32),
+                NamedSharding(mesh, P(None, "data")),
+            )
+            logits = hax.named(data, (vocab, batch))
+            top_p = hax.named(jnp.array([0.4, 1.0]), batch)
+            filtered = jax.jit(Sampler(vocab)._apply_top_p)(logits, top_p)
 
-    np.testing.assert_array_equal(filtered.array[:, 0], np.array([-np.inf, -np.inf, -np.inf, 0.0]))
-    np.testing.assert_array_equal(filtered.array[:, 1], logits.array[:, 1])
+    np.testing.assert_array_equal(np.asarray(filtered.array)[:, 0], np.array([-np.inf, -np.inf, -np.inf, 0.0]))
+    np.testing.assert_array_equal(np.asarray(filtered.array)[:, 1], np.asarray(data)[:, 1])
 
 
 def test_top_p_one_preserves_full_distribution_in_a_mixed_batch():

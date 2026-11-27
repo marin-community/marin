@@ -167,7 +167,21 @@ class Sampler(eqx.Module):
         # Full-distribution rows keep their tails even in a mixed batch.
         keep_sorted = keep_sorted | (threshold >= 1.0)
         filtered_sorted_logits = jnp.where(keep_sorted, sorted_logits, -jnp.inf)
-        filtered_logits = jnp.put_along_axis(
-            jnp.full_like(logits_array, -jnp.inf), sorted_indices, filtered_sorted_logits, axis=-1, inplace=False
+        vocab_dim = logits_array.ndim - 1
+        batch_dims = tuple(range(vocab_dim))
+        scatter_dims = jax.lax.ScatterDimensionNumbers(
+            update_window_dims=(),
+            inserted_window_dims=(vocab_dim,),
+            scatter_dims_to_operand_dims=(vocab_dim,),
+            operand_batching_dims=batch_dims,
+            scatter_indices_batching_dims=batch_dims,
+        )
+        filtered_logits = jax.lax.scatter(
+            jnp.full_like(logits_array, -jnp.inf),
+            sorted_indices[..., None],
+            filtered_sorted_logits,
+            scatter_dims,
+            unique_indices=True,
+            mode="promise_in_bounds",
         )
         return hax.named(jnp.moveaxis(filtered_logits, -1, vocab_axis_index), scaled_logits.axes)
