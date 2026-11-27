@@ -334,13 +334,16 @@ def test_cli_refreshes_selected_panel_and_reuses_verified_staged_bytes(
     inputs = _inputs(tmp_path, fresh_panels={declaration["id"]: reference})
     path = StoragePath(inputs.declarations.uri)
     declarations = json.loads(path.read_text())
-    declarations[declaration["id"]] = declaration
+    declarations[declaration["id"]] = {**declaration, "dataset_revision": "previous"}
     path.write_text(json.dumps(declarations))
     inputs = dataclasses.replace(
         inputs, declarations=ArtifactRef(uri=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
     )
     original = stage.run_fresh_qc_index(inputs, dry_run=False)
     prior = json.loads(StoragePath(original["index"]["uri"]).read_bytes())
+    previous = next(row for row in prior["receipts"] if row["source_id"] == declaration["id"])
+    previous_panel = json.loads(gzip.decompress(StoragePath(previous["reference"]["uri"]).read_bytes()))
+    assert previous_panel["receipt"]["current_pin"] is False
     retained = next(row for row in prior["receipts"] if row["source_id"] == "Marin:fixture")
     replacement = StoragePath(str(tmp_path / "replacement" / ".artifact.json"))
     replacement.write_bytes(StoragePath(reference.uri).read_bytes(), auto_mkdir=True)
