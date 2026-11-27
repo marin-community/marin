@@ -1,0 +1,12 @@
+id: X0266
+slug: x0250-matrix-lr-floor-decay-floor
+name: X0250 + matrix LR floor + decay floor f=0.05
+category: Optimizers
+summary: 🤖 Posted on behalf of @armorfaye.
+source: intake
+status: approved
+track: speedrun
+intake:
+  url: https://github.com/marin-community/marin/issues/9514#issuecomment-7212009445
+  author: armorfaye
+  approved_by: armorfaye (trusted)
