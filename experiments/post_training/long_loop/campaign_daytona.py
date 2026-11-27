@@ -126,17 +126,18 @@ def purge_before_campaign_submission(handles: list[ArtifactStep]) -> None:
         receipt = {
             "state": "complete",
             "skipped": "zero snapshot demand",
-            "ruling": ("Launch-time declaration: this mix provisions no Daytona snapshots, so the "
-                       "Daytona purge/usage gate is irrelevant and is skipped (coordinator-authorized "
-                       "for zero-demand mixes only)."),
+            "ruling": (
+                "Launch-time declaration: this mix provisions no Daytona snapshots, so the "
+                "Daytona purge/usage gate is irrelevant and is skipped (coordinator-authorized "
+                "for zero-demand mixes only)."
+            ),
             "accounts": {},
             "daytona_accounts_used": [],
         }
         path = Path(config.receipt_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(receipt, indent=2))
-        print("Campaign snapshot purge skipped: zero snapshot demand; "
-              f"receipt={config.receipt_path}", flush=True)
+        print("Campaign snapshot purge skipped: zero snapshot demand; " f"receipt={config.receipt_path}", flush=True)
         return
     receipt = asyncio.run(purge_campaign_snapshots(config))
     counts = "; ".join(

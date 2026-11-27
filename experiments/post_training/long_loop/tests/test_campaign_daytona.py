@@ -178,5 +178,5 @@ def test_zero_snapshot_demand_mix_skips_the_daytona_gate(tmp_path, account_clien
     assert receipt["skipped"] == "zero snapshot demand"
     assert receipt["accounts"] == {}
     # The provider was never touched: every fixture snapshot the accounts started with is still there.
-    for account, secret in maintenance.CAMPAIGN_DAYTONA_ACCOUNTS:
+    for _account, secret in maintenance.CAMPAIGN_DAYTONA_ACCOUNTS:
         assert set(account_clients[secret].snapshot.snapshots) == {"reserved", "sandbox", "unused"}
