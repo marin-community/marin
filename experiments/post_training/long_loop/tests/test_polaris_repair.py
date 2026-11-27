@@ -105,6 +105,23 @@ def test_categorical_answers_are_not_symbolic_products(reference, wrong, legacy_
         (r"The answer is not \boxed{63}.", "63", "Find the count.", 0.0),
         ("It is not true that the answer is 63.", "63", "Find the count.", 0.0),
         ("The answer is 62 or 63.", "63", "Find the count.", 0.0),
+        ("The average will increase by 1.2 points.", "-1.2", "What is the change in the average?", 0.0),
+        ("The average will decrease by 1.3 points.", "-1.2", "What is the change in the average?", 0.0),
+        ("The average will not decrease by 1.2 points.", "-1.2", "What is the change in the average?", 0.0),
+        ("a=2, d=3", "2", r"Find \(d\).", 0.0),
+        ("d=2, d=3", "2", r"Find \(d\).", 0.0),
+        ("a=2", "2", r"Find \(d\).", 0.0),
+        ("d=not 2", "2", r"Find \(d\).", 0.0),
+        (r"a=\boxed{2}, d=3", "2", r"Find \(d\).", 0.0),
+        ("21\n\n**Justification:**\nThe answer is 22.", "21", "Find the maximum count.", 0.0),
+        ("The probability is exactly 1/3.", "1/2", "Find the probability.", 0.0),
+        ("The answer is not exactly 1/2.", "1/2", "Find the probability.", 0.0),
+        (r"\[2\] Earlier work. \[3\] This completes the proof.", "2", "Prove the result.", 0.0),
+        (r"\[3\] Earlier work. \[2\] This completes the proof.", "2", "Prove the result.", 1.0),
+        ("A", r"\textbf{(A)}{-}z", r"Choose: $\textbf{(A) }{-}z \qquad \textbf{(B) }{-}1$", 1.0),
+        ("B", r"\textbf{(A)}{-}z", r"Choose: $\textbf{(A) }{-}z \qquad \textbf{(B) }{-}1$", 0.0),
+        ("\\frac{1+\\sqrt{3}}{2}", "1+\\frac{\\sqrt{3}}{2}", "Evaluate.", 0.0),
+        ("\\frac{1+\\sqrt{3}}{2}", "\\frac{\\sqrt{3}+1}{2}", "Evaluate.", 1.0),
     ],
 )
 def test_final_claim_extraction_stays_independent_of_the_reference(
@@ -112,16 +129,6 @@ def test_final_claim_extraction_stays_independent_of_the_reference(
 ):
     repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
     assert repaired(answer, {"problem": problem, "answer": reference}) == expected
-
-
-def test_fraction_binding_does_not_create_a_false_reward(tmp_path, monkeypatch):
-    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
-    assert repaired(r"\frac{1+\sqrt{3}}{2}", {"problem": "Evaluate.", "answer": r"1+\frac{\sqrt{3}}{2}"}) == 0.0
-
-
-def test_equivalent_fraction_numerators_keep_their_reward(tmp_path, monkeypatch):
-    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
-    assert repaired(r"\frac{1+\sqrt{3}}{2}", {"problem": "Evaluate.", "answer": r"\frac{\sqrt{3}+1}{2}"}) == 1.0
 
 
 def test_multiline_display_keeps_a_final_answer(tmp_path, monkeypatch):
@@ -179,33 +186,6 @@ def test_malformed_retained_reference_stays_unscored(tmp_path, monkeypatch):
     repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
     with pytest.raises(InvalidTask):
         repaired(case["answer"], {"problem": case["problem"], "answer": case["reference"]})
-
-
-@pytest.mark.parametrize(
-    ("answer", "reference", "problem", "expected"),
-    [
-        ("The average will increase by 1.2 points.", "-1.2", "What is the change in the average?", 0.0),
-        ("The average will decrease by 1.3 points.", "-1.2", "What is the change in the average?", 0.0),
-        ("The average will not decrease by 1.2 points.", "-1.2", "What is the change in the average?", 0.0),
-        ("a=2, d=3", "2", r"Find \(d\).", 0.0),
-        ("d=2, d=3", "2", r"Find \(d\).", 0.0),
-        ("a=2", "2", r"Find \(d\).", 0.0),
-        ("d=not 2", "2", r"Find \(d\).", 0.0),
-        (r"a=\boxed{2}, d=3", "2", r"Find \(d\).", 0.0),
-        ("21\n\n**Justification:**\nThe answer is 22.", "21", "Find the maximum count.", 0.0),
-        ("The probability is exactly 1/3.", "1/2", "Find the probability.", 0.0),
-        ("The answer is not exactly 1/2.", "1/2", "Find the probability.", 0.0),
-        (r"\[2\] Earlier work. \[3\] This completes the proof.", "2", "Prove the result.", 0.0),
-        (r"\[3\] Earlier work. \[2\] This completes the proof.", "2", "Prove the result.", 1.0),
-        ("A", r"\textbf{(A)}{-}z", r"Choose: $\textbf{(A) }{-}z \qquad \textbf{(B) }{-}1$", 1.0),
-        ("B", r"\textbf{(A)}{-}z", r"Choose: $\textbf{(A) }{-}z \qquad \textbf{(B) }{-}1$", 0.0),
-    ],
-)
-def test_structured_answers_do_not_select_an_unrelated_correct_value(
-    answer, reference, problem, expected, tmp_path, monkeypatch
-):
-    repaired = staged_score(with_final_text_grader(retained_task(), BUILT), tmp_path / "grader", monkeypatch)
-    assert repaired(answer, {"problem": problem, "answer": reference}) == expected
 
 
 @pytest.mark.parametrize(
