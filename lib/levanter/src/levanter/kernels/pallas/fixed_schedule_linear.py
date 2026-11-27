@@ -182,24 +182,23 @@ def _tpu_generation() -> str:
     raise FixedScheduleLinearUnsupportedError(f"fixed-schedule projections require TPU v4, v5p, or v6e; got {kind}")
 
 
-def _validate_four_device_mesh(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> None:
-    if jax.device_count() != 4 or jax.local_device_count() != 4:
-        raise FixedScheduleLinearUnsupportedError(
-            "multi-device fixed-schedule projections require exactly four same-process TPU devices; "
-            f"got global={jax.device_count()}, local={jax.local_device_count()}"
-        )
+def _validate_local_row_mesh(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> None:
     devices = jax.devices()
-    if tuple(size for size in mesh.shape.values() if size > 1) != (4,):
+    device_count = len(devices)
+    valid_count = device_count == 4 or (device_count == 8 and _tpu_generation() == "v6e")
+    if not valid_count or jax.local_device_count() != device_count:
         raise FixedScheduleLinearUnsupportedError(
-            "the four-device fixed-schedule mesh must have a single axis spanning all four devices"
+            "multi-device fixed-schedule projections require four local TPU devices or eight local v6e devices; "
+            f"got global={device_count}, local={jax.local_device_count()}"
         )
-    axis_types = tuple(mesh.axis_types)
-    if axis_types and any(str(axis_type).lower().endswith("explicit") is False for axis_type in axis_types):
-        raise FixedScheduleLinearUnsupportedError("the four-device fixed-schedule mesh must use Explicit axes")
+    if tuple(size for size in mesh.shape.values() if size > 1) != (device_count,):
+        raise FixedScheduleLinearUnsupportedError("fixed-schedule mesh requires one row axis spanning all devices")
+    if any(not str(axis_type).lower().endswith("explicit") for axis_type in mesh.axis_types):
+        raise FixedScheduleLinearUnsupportedError("fixed-schedule mesh must use Explicit axes")
     if isinstance(mesh, jax.sharding.Mesh):
         mesh_devices = tuple(mesh.devices.flat)
-        if len(mesh_devices) != 4 or set(mesh_devices) != set(devices):
-            raise FixedScheduleLinearUnsupportedError("the four-device mesh must contain all four local TPU devices")
+        if len(mesh_devices) != device_count or set(mesh_devices) != set(devices):
+            raise FixedScheduleLinearUnsupportedError("fixed-schedule mesh must contain all local TPU devices")
 
 
 def _validate_named_sharding(x: jax.Array, w: jax.Array) -> tuple[NamedSharding, P, P, P, P] | None:
@@ -233,11 +232,11 @@ def _validate_named_sharding(x: jax.Array, w: jax.Array) -> tuple[NamedSharding,
         if any(_partition_axes(entry) for entry in x_spec + w_spec):
             raise FixedScheduleLinearUnsupportedError("single-device NamedSharding must be fully replicated")
         return x_sharding, x_spec, w_spec, x_public_spec, w_public_spec
-    _validate_four_device_mesh(x_sharding.mesh)
+    _validate_local_row_mesh(x_sharding.mesh)
     if isinstance(x_sharding.mesh, jax.sharding.Mesh) and (
         not x_sharding.is_fully_addressable or not w_sharding.is_fully_addressable
     ):
-        raise FixedScheduleLinearUnsupportedError("four-device fixed-schedule inputs must be fully addressable")
+        raise FixedScheduleLinearUnsupportedError("fixed-schedule inputs must be fully addressable")
     if any(_partition_axes(entry) for entry in w_spec):
         raise FixedScheduleLinearUnsupportedError(
             "w must be fully replicated; contraction and output features cannot shard"
