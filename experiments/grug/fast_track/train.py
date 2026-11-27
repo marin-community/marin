@@ -77,6 +77,7 @@ from experiments.grug.fast_track.model import (
     Transformer,
     forward_flops_per_token,
 )
+from experiments.grug.fast_track.optimizer import GrugMoeMuonHConfig
 from experiments.grug.fast_track.spelling_bytes import check_token_bytes
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -647,8 +648,11 @@ def initial_state(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     key: PRNGKeyArray,
+    scale_initial_params: Callable[[Transformer], Transformer] | None = None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    if scale_initial_params is not None:
+        params = scale_initial_params(params)
     opt_state = optimizer.init(params)
     return GrugTrainState(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
@@ -1135,6 +1139,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     with set_mesh(mesh), dashboard:
         batch_schedule = trainer.batch_schedule
 
+        scale_initial_params = None
+        if isinstance(config.optimizer, GrugMoeMuonHConfig) and config.optimizer.muonc_init_mult:
+            scale_initial_params = config.optimizer.scale_initial_params
+
         @jax.jit
         def _init_state(model_rng):
             return initial_state(
@@ -1142,6 +1150,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
+                scale_initial_params=scale_initial_params,
             )
 
         state = _init_state(model_key)

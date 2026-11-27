@@ -751,6 +751,10 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     ``W <- W - c lr (O + lambda_t W)``, with ``lambda_t`` and every other group (head, router, embedding and Adam
     groups) unchanged. Raising ``learning_rate`` by ``c`` and dividing ``lambda`` by ``c`` would also move the head,
     whose LR is ``lr_max s(t)^2``; this scales only the matrix step. 0: off."""
+    muonc_init_mult: float = 0.0
+    """With ``muonc_anneal_decay``: before the first step, every rank >= 2 leaf of the ``muonh`` and ``kda_beta`` groups
+    (the matrices stepped by the MuonC rule) is multiplied by ``muonc_init_mult``, so it starts near its MuonC
+    equilibrium norm; every other leaf keeps its init. Applied by ``scale_initial_params``. 0: off."""
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -1086,6 +1090,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonc_matrix_lr_mult must be non-negative, needs muonc_anneal_decay and excludes "
                 "muonc_anneal_law_cap_ball"
             )
+        if self.muonc_init_mult < 0 or (self.muonc_init_mult and not self.muonc_anneal_decay):
+            raise ValueError("muonc_init_mult must be non-negative and needs muonc_anneal_decay")
         if self.muonh_law_cap_ball and (
             self.muonh_radial_softcap or self.muonc_decay_mult or self.muonh_nonsi_anneal or self.muonc_anneal_decay
         ):
@@ -1093,6 +1099,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "muonh_law_cap_ball excludes muonh_radial_softcap, muonc_decay_mult, muonh_nonsi_anneal and "
                 "muonc_anneal_decay"
             )
+
+    def scale_initial_params(self, params):
+        """``params`` with the MuonC matrices scaled by ``muonc_init_mult``; ``params`` itself when it is off."""
+        if not self.muonc_init_mult:
+            return params
+
+        def scale(param, label):
+            if label in ("muonh", "kda_beta") and _is_matrix_stack(param):
+                return param * jnp.asarray(self.muonc_init_mult, param.dtype)
+            return param
+
+        return jax.tree.map(scale, params, self.create_mask(params))
 
     def create_mask(self, params):
         paths = leaf_key_paths(params)
