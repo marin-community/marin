@@ -73,15 +73,19 @@ def selection_digest(task: TaskSpec) -> str:
     return canonical_sha256(task.model_dump(mode="json"))
 
 
-@pytest.mark.parametrize("selection_file", [TRAIN_FILENAME, VALIDATION_FILENAME])
-def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_path, selection_file):
+@pytest.mark.parametrize(
+    ("selection_file", "training_sources"), [(TRAIN_FILENAME, 1), (VALIDATION_FILENAME, 1), (VALIDATION_FILENAME, 2)]
+)
+def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_path, selection_file, training_sources):
     task = harbor_task("example", SHARED_IMAGE)
     killed = harbor_task("killed", "swe/killed")
     export = tmp_path / "export"
     receipts = export / ATTEMPT_RECEIPTS_DIRECTORY
     evaluating = selection_file == VALIDATION_FILENAME
+    stored_task = task.model_dump(mode="json")
     if evaluating:
         receipts = receipts / EVALUATION_RECEIPTS_DIRECTORY
+        stored_task.pop("labels")
     receipts.mkdir(parents=True)
     receipt = AttemptReceipt(
         attempt_id="trial-1",
@@ -105,21 +109,37 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
     first = receipts / "first.jsonl"
     second = receipts / "second.jsonl"
     for ordinal, path in enumerate((first, second), start=1):
-        failed_setup = receipt.model_copy(update={"attempt_id": "setup", "rollout_id": f"setup-rollout-{ordinal}"})
+        failed_setup = receipt.model_copy(
+            update={
+                "attempt_id": "setup",
+                "rollout_id": f"setup-rollout-{ordinal}",
+                "task_digest": canonical_sha256(stored_task) if ordinal == 2 else receipt.task_digest,
+            }
+        )
         killed_setup = receipt.model_copy(
             update={
                 "attempt_id": f"killed-{ordinal}",
                 "rollout_id": f"killed-rollout-{ordinal}",
                 "task_id": killed.id,
                 "task_digest": selection_digest(killed),
+                "source_row": ("fixture", "fixture-swe", "release", "killed"),
                 "docker_image": "swe/killed",
                 "setup_exit_code": 137,
             }
         )
         path.write_text("\n".join(row.model_dump_json() for row in (failed_setup, killed_setup)) + "\n")
-    sources = [{"identity": f"{SELECTION_PREFIX}/fixture-pi:1"}]
     if evaluating:
-        sources.append({"identity": f"{SELECTION_PREFIX}/another-selection:1"})
+        probe_task = harbor_task("training-probe")
+        probe = receipt.model_copy(
+            update={
+                "rollout_id": "training-probe",
+                "task_id": probe_task.id,
+                "task_digest": selection_digest(probe_task),
+                "outcome": Outcome.GRADED,
+            }
+        )
+        (receipts.parent / "training.jsonl").write_text(probe.model_dump_json() + "\n")
+    sources = [{"identity": f"{SELECTION_PREFIX}/fixture-pi-{index}:1"} for index in range(training_sources)]
     config = {
         "skyrl": {"trainer": {"export_path": str(export)}},
         "inputs": {"train_data": sources},
@@ -127,7 +147,13 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
     snapshot = task_health._extract_attempts(config, "fixture@1", StoragePath(str(tmp_path / "snapshot")))
     rows = pq.read_table(str(snapshot)).to_pylist()
 
-    assert {row["selection"] for row in rows} == {None if evaluating else "fixture-pi"}
+    if evaluating:
+        (probe,) = [row for row in rows if row["training_phase"] == "train"]
+        assert probe["rollout_id"] == "training-probe"
+        assert probe["selection"] == ("fixture-pi-0" if training_sources == 1 else None)
+        rows = [row for row in rows if row["training_phase"] == "eval"]
+    assert {row["selection"] for row in rows} == {None if evaluating else "fixture-pi-0"}
+    assert {row["training_phase"] for row in rows} == {"eval" if evaluating else "train"}
     assert {row["address"] for row in rows} == {str(first), str(second)}
     assert {(row["rollout_id"], tuple(row["source_row"])) for row in rows if row["task_id"] == task.id} == {
         ("setup-rollout-1", ("fixture", "fixture-swe", "release", "example")),
@@ -135,11 +161,14 @@ def test_native_receipts_drive_task_health_without_the_harbor_trial_store(tmp_pa
     }
     assert {(row["task_digest"], row["setup_exit_code"]) for row in rows} == {
         (receipt.task_digest, 1),
+        (canonical_sha256(stored_task), 1),
         (selection_digest(killed), 137),
     }
-    members = write_tasks(tmp_path / selection_file, [task, killed])
+    pq.write_table(
+        pa.table({TASK_SPEC_COLUMN: [json.dumps(stored_task), killed.model_dump_json()]}), tmp_path / selection_file
+    )
     skip = StoragePath(str(tmp_path / "skip"))
-    publish_skip_list(StoragePath(str(members.parent)), [snapshot], skip, "fixture")
+    publish_skip_list(StoragePath(str(tmp_path)), [snapshot], skip, "fixture")
     assert pq.read_table(str(skip / SKIP_FILENAME))["task_id"].to_pylist() == [task.id]
 
 
@@ -235,6 +264,12 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
     (store / "partial").mkdir()
     (store / "partial" / "upload-incomplete").touch()
     health_root = tmp_path / "health"
+    version_root = health_root / "attempts/fixture-run/2026.11.20.1"
+    legacy_key = canonical_sha256({"run_output": str(run_output), "attempt": "fixture-native-attempt"})[:16]
+    legacy_snapshot = version_root / legacy_key / task_health.ATTEMPTS_FILENAME
+    legacy_snapshot.parent.mkdir(parents=True)
+    pq.write_table(pa.table({"attempt_id": ["graded"]}), legacy_snapshot)
+    legacy_bytes = legacy_snapshot.read_bytes()
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path / "run-artifacts"))
     monkeypatch.setattr(task_health, "TASK_HEALTH_ROOT", str(health_root))
 
@@ -243,6 +278,7 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
     snapshot = json.loads((StoragePath(health.path) / "attempts.json").read_text())
     path = StoragePath(snapshot["attempts_uri"])
     output = path.parent
+    assert legacy_snapshot.read_bytes() == legacy_bytes
 
     rows = {row["attempt_id"]: row for row in pq.read_table(str(path)).to_pylist()}
     assert {attempt: (row["outcome"], row["grading_failure"], row["phase"]) for attempt, row in rows.items()} == {
@@ -272,8 +308,7 @@ def test_extract_records_each_attempts_grade_phase_and_output_tails(tmp_path, mo
         sys, "argv", ["task_health", "extract", "--cluster", "fixture", "--run", "fixture-run@2026.11.20.1"]
     )
     task_health.main()
-    version_root = health_root / "attempts/fixture-run/2026.11.20.1"
-    (retry_snapshot,) = set(version_root.glob(f"*/{task_health.ATTEMPTS_FILENAME}")) - {Path(str(path))}
+    (retry_snapshot,) = set(version_root.glob(f"*/{task_health.ATTEMPTS_FILENAME}")) - {Path(str(path)), legacy_snapshot}
     assert set(pq.read_table(retry_snapshot)["attempt_id"].to_pylist()) == {*rows, "later"}
     assert set(pq.read_table(str(path))["attempt_id"].to_pylist()) == rows.keys()
 
@@ -419,9 +454,10 @@ def test_skip_lists_tasks_and_environments_that_fail_setup_or_verification(tmp_p
 
     empty = StoragePath(str(tmp_path / "empty-skip"))
     one_attempt = inputs[0].parent / "one-attempt.parquet"
-    pq.write_table(pq.read_table(inputs[0]).slice(0, 1), one_attempt)
+    table = pq.read_table(inputs[0]).slice(0, 1)
+    pq.write_table(table.drop(["training_phase", "rollout_id", "source_row"]), one_attempt)
     duplicate = one_attempt.with_name("duplicate.parquet")
-    duplicate.write_bytes(one_attempt.read_bytes())
+    pq.write_table(table, duplicate)
     with pytest.raises(ValueError, match="No tasks meet the skip criteria"):
         publish_skip_list(
             StoragePath(str(selection)),

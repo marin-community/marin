@@ -18,7 +18,6 @@ import os
 import re
 import tomllib
 from collections import Counter, defaultdict
-from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 import pyarrow as pa
@@ -54,6 +53,7 @@ MIN_FAILED_TASKS_PER_ENVIRONMENT = 2
 
 TASK_HEALTH_ROOT = str(StoragePath(CANONICAL_ARTIFACT_ROOT) / "rl-data/task-health")
 ATTEMPTS_FILENAME = "attempts.parquet"
+ATTEMPT_SNAPSHOT_VERSION = 2
 SKIP_FILENAME = "skip.parquet"
 MANIFEST_FILENAME = "manifest.json"
 # The installed-agent runtime grades this reward key unless the launch names another.
@@ -78,8 +78,8 @@ NATIVE_VERIFIER_TASK_FAILURES = frozenset(
 HARBOR_SETUP_COMMAND_FAILURE = re.compile(r"^Declared task setup command \d+ exited -?[1-9]\d*\b")
 # Only ungraded attempts carry the output tails and the attempt's address.
 ATTEMPT_COLUMNS = (
-    "run selection attempt_id rollout_id task_id task_digest source_row outcome grading_failure exception_type "
-    "error phase docker_image setup_sha256 setup_completed setup_exit_code setup_stdout setup_stderr "
+    "run selection training_phase attempt_id rollout_id task_id task_digest source_row outcome grading_failure "
+    "exception_type error phase docker_image setup_sha256 setup_completed setup_exit_code setup_stdout setup_stderr "
     "verifier_stdout verifier_stderr address"
 ).split()
 ATTEMPT_COLUMN_TYPES = {
@@ -235,11 +235,9 @@ def _native_attempt_rows(root: StoragePath) -> list[dict]:
     return [{**receipt.model_dump(mode="json"), "address": address} for receipt, address in rows.values()]
 
 
-def _historical_attempt_rows(agent: dict, sources: Sequence[dict]) -> list[dict]:
-    digests = {}
-    for source in sources:
-        tasks = _tasks((StoragePath(source["uri"]) / source["relative_path"]).read_bytes())
-        digests.update({task.id: digest for digest, (task, _) in tasks.items()})
+def _historical_attempt_rows(agent: dict, source: dict) -> list[dict]:
+    tasks = _tasks((StoragePath(source["uri"]) / source["relative_path"]).read_bytes())
+    digests = {task.id: canonical_sha256(task.model_dump(mode="json")) for task, _ in tasks.values()}
     reward_key = agent.get("trial_reward_key", DEFAULT_REWARD_KEY)
     attempts = sorted(StoragePath(agent["output_path"]).ls(), key=str)
     with ThreadPoolExecutor(READ_THREADS) as pool:
@@ -256,16 +254,19 @@ def _extract_attempts(config: dict, run: str, output: StoragePath) -> StoragePat
     selection = (
         sources[0]["identity"].rpartition(":")[0].removeprefix(f"{SELECTION_PREFIX}/") if len(sources) == 1 else None
     )
-    evaluation = []
+    root = skyrl.get("trainer", {}).get("export_path")
+    receipts = StoragePath(root) / ATTEMPT_RECEIPTS_DIRECTORY if root is not None else None
     if agent := skyrl.get("terminal_bench_config", {}).get("installed_agent"):
-        training = _historical_attempt_rows(agent, sources)
+        (source,) = sources
+        training = _historical_attempt_rows(agent, source)
     else:
-        root = StoragePath(skyrl["trainer"]["export_path"]) / ATTEMPT_RECEIPTS_DIRECTORY
-        training = _native_attempt_rows(root)
-        evaluation = _native_attempt_rows(root / EVALUATION_RECEIPTS_DIRECTORY)
+        if receipts is None:
+            raise ValueError("Native task health requires a trainer export path")
+        training = _native_attempt_rows(receipts)
+    evaluation = _native_attempt_rows(receipts / EVALUATION_RECEIPTS_DIRECTORY) if receipts is not None else []
     table = pa.Table.from_pylist(
-        [{**row, "run": run, "selection": selection} for row in training]
-        + [{**row, "run": run, "selection": None} for row in evaluation],
+        [{**row, "run": run, "selection": selection, "training_phase": "train"} for row in training]
+        + [{**row, "run": run, "selection": None, "training_phase": "eval"} for row in evaluation],
         schema=ATTEMPT_SCHEMA,
     )
     publish_once(output, {ATTEMPTS_FILENAME: _parquet(table)})
@@ -285,13 +286,19 @@ def publish_skip_list(
         raise ValueError(f"No training or validation task files in {selection}")
     data = {str(path): path.read_bytes() for path in (*members, *attempts, *([release] if release else []))}
     tasks = {digest: task for path in members for digest, task in _tasks(data[str(path)]).items()}
+    normalized_digests = {digest: canonical_sha256(task.model_dump(mode="json")) for digest, (task, _) in tasks.items()}
+    stored_digests = {normalized: digest for digest, normalized in normalized_digests.items() if normalized not in tasks}
     unique = {}
     for path in dict.fromkeys(attempts):
         for row in pq.read_table(io.BytesIO(data[str(path)])).to_pylist():
-            if row["task_digest"] is None:
+            digest = row["task_digest"]
+            if digest is None:
                 continue
-            key = (row["run"], row.get("rollout_id") or row["attempt_id"])
-            row.setdefault("setup_exit_code", None)
+            row["task_digest"] = stored_digests.get(digest, digest)
+            row["training_phase"] = row.get("training_phase") or "train"
+            for column in ("setup_exit_code", "rollout_id", "source_row"):
+                row.setdefault(column, None)
+            key = (row["run"], row["rollout_id"] or row["attempt_id"])
             if unique.setdefault(key, row) != row:
                 raise ValueError(f"Conflicting records for attempt {key}")
     rows = unique.values()
@@ -339,7 +346,7 @@ def publish_skip_list(
         if replacement is not None:
             if "agentic" in task.tags:
                 replacement = with_agentic_tag(replacement)
-            if canonical_sha256(replacement.model_dump(mode="json")) != digest:
+            if canonical_sha256(replacement.model_dump(mode="json")) != normalized_digests[digest]:
                 continue
         failed = failures.get(digest, [])
         lines = Counter(row["error"].partition("\n")[0] for row in failed if row["error"])
@@ -386,7 +393,9 @@ def _extract_stopped_run(run_output: str, run: str) -> StoragePath:
     if attempt is None or attempt.native.result.state not in {LaunchState.SUCCEEDED, LaunchState.FAILED}:
         raise ValueError(f"Task health extraction requires a stopped run: {run}")
     name, version = _name_version(run)
-    location = canonical_sha256({"run_output": run_output, "attempt": attempt.attempt_id})[:16]
+    location = canonical_sha256(
+        {"run_output": run_output, "attempt": attempt.attempt_id, "schema": ATTEMPT_SNAPSHOT_VERSION}
+    )[:16]
     output = StoragePath(TASK_HEALTH_ROOT) / "attempts" / name / version / location
     return _extract_attempts(attempt.native.config, run, output)
 
@@ -399,7 +408,7 @@ def _record_attempts(run_output: str, run: str, output: str) -> None:
 def task_health_step(run: ArtifactStep) -> ArtifactStep:
     """Collect one completed run's task attempts."""
     return apply(
-        f"rl-data/task-health/attempts/by-run/{run.name}",
+        f"rl-data/task-health/attempts/v{ATTEMPT_SNAPSHOT_VERSION}/by-run/{run.name}",
         _record_attempts,
         version=run.version,
         run_output=run,

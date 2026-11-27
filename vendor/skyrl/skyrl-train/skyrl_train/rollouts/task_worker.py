@@ -532,17 +532,27 @@ class TaskRolloutWorker:
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
             engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
-        evidence: list[AttemptReceipt] = []
+        evidence: dict[str, AttemptReceipt] = {}
 
-        async def run(index, lowered):
+        def record_attempt(index: int, attempt_id: str, rollout_id: str, result: TrainingRollout | BaseException):
+            if self.task_health_export is None:
+                return
+            identity = request.rows[index].metadata.evaluation_identity
+            source_id = identity.strata.source if identity is not None else None
+            evidence[rollout_id] = attempt_receipt(
+                attempt_id,
+                lowered_tasks[index],
+                result,
+                rollout_id=rollout_id,
+                source_id=None if source_id == TaskStrata().source else source_id,
+                task_digest=None if identity is None else identity.task_digest,
+            )
+
+        async def run(index: int, lowered: TaskRolloutSpec) -> tuple[TrainingRollout, str, str]:
             task = lowered.task
             session_id = session_ids[index]
             attempt_id = session_id
             external_agent = lowered.harness in agents
-            identity = request.rows[index].metadata.evaluation_identity
-            source_id = identity.strata.source if identity is not None else None
-            if source_id == TaskStrata().source:
-                source_id = None
 
             async def model(request):
                 try:
@@ -580,21 +590,12 @@ class TaskRolloutWorker:
                         observed = error
                         raise
                     finally:
-                        if self.task_health_export is not None:
-                            evidence.append(
-                                attempt_receipt(
-                                    attempt_id,
-                                    lowered,
-                                    observed,
-                                    rollout_id=rollout_id,
-                                    source_id=source_id,
-                                    task_digest=None if identity is None else identity.task_digest,
-                                )
-                            )
+                        record_attempt(index, attempt_id, rollout_id, observed)
                 if not external_agent:
-                    return result
+                    return result, attempt_id, rollout_id
                 if retries or not _retryable_agent_attempt(result):
-                    return replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
+                    result = replace(result, metrics={**result.metrics, "rollout_retries": float(retries)})
+                    return result, attempt_id, rollout_id
                 logger.info("Retrying task {} after an infrastructure failure", task.id)
                 with rollout_wait("retry_backoff"):
                     await self.retry_wait(AGENT_RETRY_BACKOFF)
@@ -606,29 +607,35 @@ class TaskRolloutWorker:
             try:
                 async with asyncio.TaskGroup() as group:
                     pending = [group.create_task(run(index, item)) for index, item in enumerate(lowered_tasks)]
+                attempts = [done.result() for done in pending]
+                rollouts = await grade_groups(
+                    tasks,
+                    group_graders,
+                    [result for result, _, _ in attempts],
+                    [item.instance_id for item in trajectory_ids]
+                    if trajectory_ids is not None
+                    else [task.id for task in tasks],
+                    self.group_graders,
+                    phase,
+                    self.error_handling,
+                    logprobs_required=require_logprobs,
+                )
+                for index, (rollout, (result, attempt_id, rollout_id)) in enumerate(zip(rollouts, attempts, strict=True)):
+                    if rollout is not result:
+                        record_attempt(index, attempt_id, rollout_id, rollout)
             except BaseException as error:
                 batch_failure = error
                 raise
             finally:
                 if self.task_health_export is not None and evidence:
                     try:
-                        await asyncio.to_thread(write_attempt_receipts, self.task_health_export, evidence, phase=phase)
+                        await asyncio.to_thread(
+                            write_attempt_receipts, self.task_health_export, list(evidence.values()), phase=phase
+                        )
                     except Exception as error:
                         if batch_failure is None:
                             raise
                         batch_failure.add_note(f"Could not store task receipts ({type(error).__name__})")
-            rollouts = await grade_groups(
-                tasks,
-                group_graders,
-                [task.result() for task in pending],
-                [item.instance_id for item in trajectory_ids]
-                if trajectory_ids is not None
-                else [task.id for task in tasks],
-                self.group_graders,
-                phase,
-                self.error_handling,
-                logprobs_required=require_logprobs,
-            )
         return rollouts
 
     async def run(self, input_batch: TaskRequestBatch) -> TrajectoryBatch:
@@ -678,6 +685,8 @@ class TaskRolloutWorker:
                         await asyncio.to_thread(self._close_finelog)
                 except TimeoutError:
                     logger.warning("Task worker shutdown deadline expired while flushing Finelog")
+                except Exception as error:
+                    logger.warning("Finelog shutdown failed: {}", type(error).__name__)
         if failures:
             raise ExceptionGroup("Task worker shutdown failed", failures)
 

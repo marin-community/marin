@@ -415,7 +415,8 @@ def released_probe(root, release, tasks, *, graded, pin=True, include_evaluation
             }
         )
     if include_evaluation:
-        rows.append({**rows[-1], "selection": None, "outcome": Outcome.GRADED})
+        rows = [{**row, "training_phase": "train"} for row in rows]
+        rows.append({**rows[-1], "training_phase": "eval", "selection": None, "outcome": Outcome.GRADED})
     attempts = root / "attempts.parquet"
     pq.write_table(pa.Table.from_pylist(rows), attempts)
     return ReleaseAdmission(uri=str(attempts), sha256=hashlib.sha256(attempts.read_bytes()).hexdigest())

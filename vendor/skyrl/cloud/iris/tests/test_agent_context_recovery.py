@@ -21,6 +21,7 @@ from rolloutengine.models import ContextWindowExceeded, Prompt, Transition
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Command
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.rollouts.group_grader import GroupGraderSpec
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker, TaskRolloutWorkerSpec, _model_turn
 from skyrl_train.rollouts.workers import WorkerShard
@@ -29,7 +30,7 @@ from skyrl_train.trajectory_runners.model_clients import (
     GenerationBudgetExceededError,
 )
 from skyrl_train.trajectory_runners.types import BatchMetadata, TaskRequestBatch, TokenProvenance
-from taskcompendium.grading_result import Outcome
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AgentMachine, AnswerType, ScriptGrader
 from verifyit.spec import NumericSpec
@@ -308,6 +309,7 @@ async def test_agent_setup_retries_signal_exit(agent_harnesses, worker_config, e
     assert result.metrics["rollout_retries"] == retries
     receipts = read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY)
     assert len(receipts) == len({receipt.rollout_id for receipt in receipts}) == retries + 1
+    assert all(receipt.rollout_id for receipt in receipts)
     assert {receipt.setup_exit_code for receipt in receipts} == {exit_code}
 
 
@@ -422,7 +424,33 @@ async def test_cancelled_batch_retains_completed_task_receipts(worker_config, tm
         await worker.shutdown()
     with pytest.raises(asyncio.CancelledError):
         await pending
-    receipts = {receipt.task_id: receipt for receipt in read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY)}
+    rows = read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY)
+    assert len(rows) == len({receipt.task_id for receipt in rows}) == 2
+    receipts = {receipt.task_id: receipt for receipt in rows}
     assert receipts["complete"].exception_type is None
     assert receipts["complete"].source_row == (None, "fixture", "1", "0")
     assert receipts["cancelled"].exception_type == "CancelledError"
+    assert receipts["cancelled"].outcome == Outcome.INFRA_ERROR
+
+
+@pytest.mark.asyncio
+async def test_task_receipt_reflects_the_final_group_grade(worker_config, tmp_path):
+    def grade(_task, _specification, rollouts, _eligible, _phase):
+        return [replace(rollout, grade=GradeResult(Outcome.GRADED, 0.75)) for rollout in rollouts]
+
+    worker = TaskRolloutWorker(
+        worker_config,
+        WholeTaskProjection(worker_config, WorkerTokenizer()),
+        ScriptedClient([sampled_reply()]),
+        {},
+        task_health_export=str(tmp_path),
+        group_graders={"fixture": grade},
+        shutdown_timeout=5,
+    )
+    task = task_input(lowered_task(text_task()), group_grader=GroupGraderSpec(name="fixture", parameters_json="{}"))
+    try:
+        await worker.generate(TaskRequestBatch(rows=(task,)))
+    finally:
+        await worker.shutdown()
+    (receipt,) = read_receipts(tmp_path / ATTEMPT_RECEIPTS_DIRECTORY)
+    assert receipt.outcome == Outcome.GRADED
