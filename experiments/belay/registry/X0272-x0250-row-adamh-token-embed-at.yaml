@@ -4,7 +4,7 @@ name: X0250 row-AdamH token_embed at LR / 3.65
 category: Embeddings and inputs
 summary: 🤖 Posted on behalf of @armorfaye.
 source: intake
-status: running
+status: done
 track: speedrun
 intake:
   url: https://github.com/marin-community/marin/issues/9514#issuecomment-7228104770
@@ -54,6 +54,13 @@ trials:
     muonc_anneal_embed_row_adamh_lr_div: '3.65'
   commit: 98c6c00fed
   priority: interactive
+  loss:
+  - 3.0407
+  delta:
+  - -0.0058
+  steps: 3056
+  baseline: belay-X0272-control 3.0465 (same commit, seed 0)
+  step_time_change: 0%
 potential:
   score: 4
   rationale: −0.0037 at equal data (noise, favorable sign), step time −2%; equal-time run pending → 4
