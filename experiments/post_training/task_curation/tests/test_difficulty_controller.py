@@ -17,6 +17,7 @@ from connectrpc.errors import ConnectError
 from finelog.client import LogClient
 from finelog.embedded import is_available as finelog_native_available
 from finelog.embedded import require_embedded_server
+from finestore.rl.difficulty import Solver
 from iris.cli.job import run
 from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
 from iris.cluster.bundle import BundleStore
@@ -31,11 +32,21 @@ from iris.testing.controller import MockController, make_controller_state
 from rigging.secrets import resolve_secret_spec
 from rigging.server_auth import VerifiedIdentity, identity_scope
 
-from experiments.post_training.task_curation.difficulty import controller, iris_backend
+from experiments.post_training.task_curation.difficulty import controller
 from experiments.post_training.task_curation.difficulty.executor import EscalationLog, action_rows, collect_finished
 from experiments.post_training.task_curation.difficulty.iris_backend import IrisBackend
-from experiments.post_training.task_curation.difficulty.ledger import ACTIONS_DIRECTORY, LEDGER_VERSION, append_rows, read_rows
-from experiments.post_training.task_curation.difficulty.planner import RebuildEnvironmentArtifact, action_id, action_payload
+from experiments.post_training.task_curation.difficulty.ledger import (
+    ACTIONS_DIRECTORY,
+    LEDGER_VERSION,
+    RESULTS_DIRECTORY,
+    append_rows,
+    read_rows,
+)
+from experiments.post_training.task_curation.difficulty.planner import (
+    RebuildEnvironmentArtifact,
+    action_id,
+    action_payload,
+)
 from experiments.post_training.task_curation.difficulty.state import CatalogSource, Outcome
 from experiments.post_training.task_curation.tests.test_difficulty_reconciler import SOURCE
 
@@ -56,20 +67,10 @@ def test_reconcile_collects_and_recovers_submissions_beyond_iris_history_limit(t
         SimpleNamespace(job_id=JobName.root("fixture", f"atlas-difficulty-old-{i}"), state=JobState.SUCCEEDED)
         for i in range(5501)
     ]
-    children = []
-    for i, action in enumerate(actions):
-        key = action_id(action)
-        name = iris_backend.JOB_COMPONENT + key[:24]
-        child = parent.child(name)
-        children.append(str(child))
-        statuses.append(SimpleNamespace(job_id=child, state=JobState.SUCCEEDED if i == 0 else JobState.RUNNING))
-        manifest = tmp_path / "ledger/v1/actions" / (key + ".json")
-        manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(json.dumps(action_payload(action)))
-        if i < 2:
-            append_rows(ledger, action_rows(action, [SOURCE], Outcome.SUBMITTED, str(child), "2026-11-26T00:00:00Z"))
 
     class Scheduler:
+        submissions = 0
+
         def list_jobs(self, *, prefix, state=None, name=None):
             selected = [
                 job
@@ -83,15 +84,35 @@ def test_reconcile_collects_and_recovers_submissions_beyond_iris_history_limit(t
             return selected
 
         def submit(self, **kwargs):
-            pytest.fail("A lost submission reply must recover the existing job")
+            self.submissions += 1
+            status = SimpleNamespace(job_id=parent.child(kwargs["name"]), state=JobState.RUNNING)
+            statuses.append(status)
+            return status
 
-    backend = IrisBackend(Scheduler(), parent, ledger)
+    scheduler = Scheduler()
+    backend = IrisBackend(scheduler, parent, ledger)
+    children = []
+    for i, action in enumerate(actions):
+        key = action_id(action)
+        manifest = tmp_path / "ledger" / LEDGER_VERSION / ACTIONS_DIRECTORY / (key + ".json")
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps(action_payload(action)))
+        child = backend.submit(action, str(manifest))
+        children.append(child)
+        if i == 0:
+            statuses[-1].state = JobState.SUCCEEDED
+            result = tmp_path / "ledger" / LEDGER_VERSION / RESULTS_DIRECTORY / (key + ".json")
+            result.parent.mkdir(parents=True, exist_ok=True)
+            result.write_text(json.dumps({"status": "completed"}))
+        if i < 2:
+            append_rows(ledger, action_rows(action, [SOURCE], Outcome.SUBMITTED, child, "2026-11-26T00:00:00Z"))
     jobs = backend.jobs()
     assert {job.job_id for job in jobs} == set(children)
     collect_finished(read_rows(ledger), jobs, ledger, EscalationLog(ledger))
     assert [row.job_id for row in read_rows(ledger) if row.outcome == Outcome.FINISHED] == [children[0]]
-    restarted = IrisBackend(Scheduler(), JobName.root("fixture", controller.CONTROLLER_JOB_PREFIX + "new"), ledger)
+    restarted = IrisBackend(scheduler, JobName.root("fixture", controller.CONTROLLER_JOB_PREFIX + "new"), ledger)
     assert restarted.submit(actions[2], "unused") == children[2]
+    assert scheduler.submissions == len(actions)
     assert {job.job_id for job in restarted.jobs()} == set(children[1:])
 
 
@@ -229,6 +250,7 @@ def test_controller_can_delegate_child_profile_through_iris_client(tmp_path, mon
             else:
                 child = backend.submit(action, manifest)
                 assert child.startswith(str(parent) + "/difficulty-reconcile-")
+                assert client.list_jobs(prefix=str(parent) + "/", name="missing-action") == []
                 assert backend.submit(action, manifest) == child
             children = service.list_jobs(
                 controller_pb2.Controller.ListJobsRequest(

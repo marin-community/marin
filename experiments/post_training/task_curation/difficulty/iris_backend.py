@@ -17,7 +17,7 @@ from rigging.timing import Duration
 
 from experiments.post_training.task_curation.difficulty.executor import Job, action_job_slots
 from experiments.post_training.task_curation.difficulty.launch import DAYTONA_API_URL, DAYTONA_TARGET, JOB_TIMEOUT
-from experiments.post_training.task_curation.difficulty.ledger import ACTIONS_DIRECTORY, LEDGER_VERSION
+from experiments.post_training.task_curation.difficulty.ledger import ACTIONS_DIRECTORY, LEDGER_VERSION, read_rows
 from experiments.post_training.task_curation.difficulty.planner import (
     MAX_GPU_HOURS_PER_JOB,
     Action,
