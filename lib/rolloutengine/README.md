@@ -64,13 +64,13 @@ cancellable Ray stream as the result. Submission alone does not start execution.
 The recorder arms total-turn and model-turn budgets at the first request and
 rebases them at that notice; the attempt clock still bounds setup before the first
 request and starts its execution budget afresh at first admission. Later queue
-waits pause remaining execution budgets. Installed-agent
-callbacks restore the trial clock when an HTTP request enters a separate task.
+waits pause remaining execution budgets. Installed-agent callbacks restore the
+trial clock when an HTTP request enters a separate task.
 
 `trajectory_runner.inference_queue_timeout` bounds cumulative admission wait
-separately (2280 seconds by default). A never-scheduled request becomes an
-`InferenceAdmissionTimeout`, not a total-turn timeout or a scored zero. The rollout
-reports `timing/inference_queue_wait` separately from `timing/inference_generation`,
+separately (2280 seconds by default). A never-scheduled request raises
+`InferenceAdmissionTimeout`. The rollout reports `timing/inference_queue_wait`
+separately from `timing/inference_generation`,
 plus scheduled-request and queue-timeout counts. Engine `request_timing` logs retain
 the engine ID, request ID, and `QUEUED`/`SCHEDULED`/first-token evidence.
 Missing traces are not evidence that no engine work occurred.

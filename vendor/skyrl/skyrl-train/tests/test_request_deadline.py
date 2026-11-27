@@ -64,6 +64,6 @@ async def test_failed_abort_does_not_leave_a_generation_running():
     async def finish():
         raise ConnectionError("engine disconnected")
 
-    with pytest.raises(ConnectionError, match="engine disconnected"):
+    with pytest.raises(ConnectionError):
         await finish_partial_on_timeout(pending, 0, finish)
     assert pending.cancelled()

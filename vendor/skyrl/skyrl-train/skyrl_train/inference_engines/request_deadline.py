@@ -18,7 +18,7 @@ def partial_response_timeout(execution_remaining: float | None) -> float | None:
 async def finish_partial_on_timeout[T](
     request: Awaitable[T], timeout: float | None, finish_partial: Callable[[], Awaitable[bool]],
 ) -> tuple[T, bool]:
-    """Finish an active decode, leaving an unstarted request to its caller's timeout.
+    """Finish an active decode, leaving a tokenless request to its caller's timeout.
 
     ``finish_partial`` must return false without aborting when no tokens exist.
     An outer cancellation never converts a shutdown into a successful partial response.

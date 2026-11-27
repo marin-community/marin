@@ -619,7 +619,7 @@ def apply_overlong_filtering(
 
 
 def task_timing_metrics(env_metrics: Sequence[dict[str, Any]]) -> dict[str, float]:
-    """Summarize each per-answer task timer over the rows that record it."""
+    """Summarize task metrics over the rows that record them."""
     metrics = {}
     for key in TASK_METRIC_KEYS:
         values = [row[key] for row in env_metrics if key in row]
