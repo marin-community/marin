@@ -86,7 +86,6 @@ def train_job(
     pod_config: TrainLmOnPodConfig,
     *,
     timeout: Duration | None = None,
-    priority: int = 0,
     failure_budget: FailureBudget = FailureBudget(),
 ) -> None:
     """Dispatch the assembled config as its own Fray training job."""
@@ -103,7 +102,6 @@ def train_job(
         resources=pod_config.resources,
         env_vars=env_vars,
         timeout=timeout,
-        priority=priority,
         failure_budget=failure_budget,
     )(pod_config)
 
