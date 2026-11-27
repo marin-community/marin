@@ -177,12 +177,13 @@ class RolloutEngine:
     async def _attempt(self, attempt: _Attempt) -> tuple[RolloutOperation, BaseException] | None:
         """Run the attempt under its deadline and release its resources; return the failure, if any."""
         deadline = execution_timeout(attempt.spec.limits.attempt_timeout)
+        active_deadline: asyncio.Timeout | None = None
         async with AsyncExitStack() as resources:
             try:
                 async with deadline as active_deadline:
                     await self._run(attempt, resources, active_deadline)
             except TimeoutError as error:
-                if not active_deadline.expired():
+                if active_deadline is None or not active_deadline.expired():
                     raise
                 return RolloutOperation.ATTEMPT, error
             except _Interrupted as interrupted:

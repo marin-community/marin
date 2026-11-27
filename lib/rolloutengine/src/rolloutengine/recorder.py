@@ -565,7 +565,7 @@ class _Recorder:
             conversations.append(self.conversation.record(self._incomplete()))
         # The metrics of the last step, also when a new conversation failed before its first turn.
         steps = next((record.steps for record in reversed(conversations) if record.steps), ())
-        metrics = dict(steps[-1].transition.metrics) if steps else {}
+        metrics: dict[str, Any] = dict(steps[-1].transition.metrics) if steps else {}
         clock = current_inference_clock()
         if clock is not None:
             metrics.update(clock.metrics())
