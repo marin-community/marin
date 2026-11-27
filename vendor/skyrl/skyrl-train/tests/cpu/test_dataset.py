@@ -22,11 +22,11 @@ class _StubTokenizer:
         return messages if isinstance(messages, str) else "".join(message["content"] for message in messages)
 
 
-@pytest.mark.parametrize("wide_first", [False, True])
-def test_prompt_files_preserve_tasks_and_metadata_across_arrow_text_widths(tmp_path, wide_first):
+@pytest.mark.parametrize("widths", [(False, True), (True, False), (False, False)])
+def test_prompt_files_preserve_tasks_and_metadata_across_arrow_text_widths(tmp_path, widths):
     rows = []
     paths = []
-    for index, wide in enumerate((wide_first, not wide_first)):
+    for index, wide in enumerate(widths):
         task_json = text_task(f"unicode-λ-{index}").model_dump_json()
         row = {
             "task_spec": task_json,
@@ -45,7 +45,9 @@ def test_prompt_files_preserve_tasks_and_metadata_across_arrow_text_widths(tmp_p
         pq.write_table(pa.table(columns), path)
         paths.append(str(path))
         rows.append(row)
-    assert read_prompt_files(paths).to_list() == rows
+    combined = read_prompt_files(paths)
+    assert combined.to_list() == rows
+    assert combined.features["task_sha256"].dtype == "large_string"
 
 
 def test_prompt_files_reject_incompatible_non_text_metadata(tmp_path):

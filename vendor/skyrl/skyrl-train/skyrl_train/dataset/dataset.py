@@ -15,17 +15,11 @@ def dataset_num_proc(row_count: int, num_workers: int) -> int | None:
 
 def concatenate_prompt_datasets(loaded: list[datasets.Dataset]) -> datasets.Dataset:
     """Combine inputs with compatible Arrow text widths without coercing other types."""
-    wide_text_columns = {
-        name
-        for data in loaded
-        for name, feature in data.features.items()
-        if feature == datasets.Value("large_string")
-    }
     aligned = []
     for data in loaded:
         features = data.features.copy()
-        for name in wide_text_columns:
-            if features.get(name) == datasets.Value("string"):
+        for name, feature in data.features.items():
+            if feature == datasets.Value("string"):
                 features[name] = datasets.Value("large_string")
         aligned.append(data.cast(features) if features != data.features else data)
     return datasets.concatenate_datasets(aligned)
