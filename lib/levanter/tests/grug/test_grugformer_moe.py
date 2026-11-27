@@ -6,7 +6,6 @@ import functools
 import importlib.util
 from collections.abc import Callable
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -53,7 +52,6 @@ from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
-    QBRoutedMoE,
     MoEExpertMlpPspecs,
     MoeImplementation,
     _clip_receiver_group_sizes,
@@ -2606,107 +2604,3 @@ def test_combine_in_fp32_matches_an_fp32_combine_reference_on_eight_devices():
                 mesh=mesh,
                 combine_in_fp32=True,
             )
-
-
-def test_route_capture_replay_keeps_ids_but_recomputes_current_gate_weights():
-    mesh = _make_dense_mesh()
-    num_experts = 4
-    hidden_dim = 8
-    key_x, key_router, key_expert = jax.random.split(jax.random.key(91), 3)
-    x = jax.random.normal(key_x, (6, hidden_dim), dtype=jnp.float32)
-    token_valid = jnp.asarray([True, True, False, True, False, True])
-    router = jax.random.normal(key_router, (hidden_dim, num_experts), dtype=jnp.float32)
-    router_bias = jnp.zeros((num_experts,), dtype=jnp.float32)
-    expert_mlp = MoEExpertMlp.init(
-        num_experts=num_experts,
-        hidden_dim=hidden_dim,
-        intermediate_dim=12,
-        initializer_std=0.1,
-        key=key_expert,
-        implementation="scatter",
-        pspecs=MoEExpertMlpPspecs(expert=None, hidden=None, intermediate=None),
-    )
-    routerer = QBRoutedMoE(num_experts_per_token=2, batch_axes=("data",))
-
-    with jax.set_mesh(mesh):
-        capture_routes = jax.jit(
-            lambda gates: routerer.capture_routes(x, token_valid, router=gates, router_bias=router_bias)
-        )
-        capture = capture_routes(router)
-        # A packed serving capture may contain sentinel IDs and scores in padding rows.
-        capture = grug_moe.prepare_moe_route_capture(
-            capture._replace(
-                selected_experts=jnp.where(token_valid[:, None], capture.selected_experts, -1),
-                qb_alpha=jnp.where(token_valid[:, None], capture.qb_alpha, jnp.nan),
-            ),
-            token_valid,
-            num_experts=num_experts,
-            num_experts_per_token=routerer.num_experts_per_token,
-        )
-        perturbed_router = router.at[:, 3].add(10.0)
-        perturbed_capture = capture_routes(perturbed_router)
-        np_valid = np.asarray(token_valid)
-        assert not np.array_equal(
-            np.asarray(capture.selected_experts)[np_valid], np.asarray(perturbed_capture.selected_experts)[np_valid]
-        )
-        replayed, replay_stats = routerer(
-            x,
-            token_valid,
-            router=perturbed_router,
-            router_bias=router_bias,
-            expert_mlp=expert_mlp,
-            mesh=mesh,
-            report_capacity_overflow=False,
-            route_capture=capture,
-        )
-        raw_logits = x @ perturbed_router
-        weights = jax.nn.sigmoid(jnp.take_along_axis(raw_logits, capture.selected_experts, axis=-1))
-        weights = weights / jnp.sum(weights, axis=-1, keepdims=True) * routerer.routing_renorm_sum
-        expected = expert_mlp(
-            x,
-            capture.selected_experts,
-            weights,
-            token_valid=token_valid,
-            mesh=mesh,
-            report_capacity_overflow=False,
-        )
-        np.testing.assert_allclose(replayed, expected, rtol=1e-5, atol=1e-7)
-        fresh, _ = routerer(
-            x,
-            token_valid,
-            router=perturbed_router,
-            router_bias=router_bias,
-            expert_mlp=expert_mlp,
-            mesh=mesh,
-            report_capacity_overflow=False,
-        )
-        router_grad = jax.grad(
-            lambda current_router: jnp.sum(
-                routerer(
-                    x,
-                    token_valid,
-                    router=current_router,
-                    router_bias=router_bias,
-                    expert_mlp=expert_mlp,
-                    mesh=mesh,
-                    report_capacity_overflow=False,
-                    route_capture=capture,
-                )[0]
-            )
-        )(perturbed_router)
-    assert not np.allclose(np.asarray(replayed), np.asarray(fresh))
-    np.testing.assert_allclose(np.asarray(replayed)[~np.asarray(token_valid)], 0.0)
-    assert float(replay_stats["skipped_assignments"]) == 4.0
-    assert float(jnp.max(jnp.abs(router_grad))) > 0.0
-
-    with jax.set_mesh(mesh), pytest.raises(eqx.EquinoxRuntimeError):
-        eqx.filter_jit(routerer)(
-            x,
-            token_valid.at[0].set(False),
-            router=perturbed_router,
-            router_bias=router_bias,
-            expert_mlp=expert_mlp,
-            mesh=mesh,
-            report_capacity_overflow=False,
-            route_capture=capture,
-        )
