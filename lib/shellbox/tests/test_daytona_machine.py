@@ -195,16 +195,14 @@ def test_daytona_creation_recovers_named_sandbox_after_throttling(monkeypatch, f
 
 
 @pytest.mark.parametrize(
-    ("message", "budget", "posts_before_failure"),
+    ("message", "budget", "failure"),
     [
         ("Total CPU limit exceeded. Maximum allowed: 6000.", math.inf, None),
-        ("Total disk limit exceeded. Maximum allowed: 20000GiB.", 0.1, 1),
-        ("CPU request 5 exceeds maximum allowed per sandbox (4).", math.inf, 1),
+        ("Total disk limit exceeded. Maximum allowed: 20000GiB.", 0.1, MachineUnavailable),
+        ("CPU request 5 exceeds maximum allowed per sandbox (4).", math.inf, DaytonaError),
     ],
 )
-def test_daytona_creation_waits_for_exhausted_quota_until_its_deadline(
-    monkeypatch, message, budget, posts_before_failure
-):
+def test_daytona_creation_waits_for_exhausted_quota_until_its_deadline(monkeypatch, message, budget, failure):
     async def scenario():
         posts = []
 
@@ -228,14 +226,14 @@ def test_daytona_creation_waits_for_exhausted_quota_until_its_deadline(
             ) as client:
                 params = CreateSandboxFromSnapshotParams(name="fixture", snapshot="fixture")
                 deadline = asyncio.get_running_loop().time() + budget
-                if posts_before_failure is None:
+                if failure is None:
                     sandbox = await _create_sandbox(client, params, 60, deadline=deadline)
                     assert sandbox.id == "created"
                     assert len(posts) == 3
                 else:
-                    with pytest.raises(DaytonaError, match=re.escape(message.split(".")[0])):
+                    with pytest.raises(failure, match=re.escape(message.split(".")[0])):
                         await _create_sandbox(client, params, 60, deadline=deadline)
-                    assert len(posts) == posts_before_failure
+                    assert len(posts) == 1
 
     asyncio.run(scenario())
 

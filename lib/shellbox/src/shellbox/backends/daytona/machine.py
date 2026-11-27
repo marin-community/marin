@@ -132,7 +132,7 @@ async def _create_sandbox(
 
     Raises:
         MachineUnavailable: Daytona removed the sandbox before it started.
-        DaytonaError: The quota stayed exhausted until the next retry would pass ``deadline``.
+        MachineUnavailable: The quota stayed exhausted until the next retry would pass ``deadline``.
     """
     assert params.name is not None
     backoff = ExponentialBackoff(initial=1, maximum=30, factor=2, jitter=0.5)
@@ -163,7 +163,7 @@ async def _create_sandbox(
                 raise
             delay = backoff.next_interval()
             if asyncio.get_running_loop().time() + delay >= deadline:
-                raise
+                raise MachineUnavailable(f"Daytona quota stayed exhausted for {params.name}: {error}") from error
             logger.warning("Retrying Daytona creation after exhausted quota: delay=%.3f: %s", delay, error)
             await sleep(delay)
 
