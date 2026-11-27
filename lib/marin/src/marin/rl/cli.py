@@ -170,20 +170,19 @@ def _coordinator_request(
     forwarded_names = required_names | set(_COORDINATOR_ENV_VARS)
     secret_names = set(list_secret_names()) | set(secret_sources)
     secret_names.update(name for name in forwarded_names if looks_like_credential(name))
+    inherited_secrets = {name: get_secret(name) for name in forwarded_names & secret_names if name not in secret_sources}
+    secrets.update(
+        {
+            name: require_secret(name) if value is not None else env_vars[name]
+            for name, value in inherited_secrets.items()
+            if value is not None or name in env_vars
+        }
+    )
     missing_names = sorted(
-        name
-        for name in required_names
-        if not (secrets.get(name) or (get_secret(name) if name in secret_names else env_vars.get(name)))
+        name for name in required_names if not (secrets.get(name) if name in secret_names else env_vars.get(name))
     )
     if missing_names:
         raise ValueError("Missing required environment variables for RL coordinator: " + ", ".join(missing_names))
-    secrets.update(
-        {
-            name: require_secret(name)
-            for name in forwarded_names & secret_names
-            if name not in secret_sources and get_secret(name) is not None
-        }
-    )
     selected_env = {name: env_vars[name] for name in forwarded_names - secret_names if name in env_vars}
     selected_env[_COORDINATOR_GRAPH_ENV] = _COORDINATOR_GRAPH.dump_json(_coordinator_graph(handles)).decode()
     route = _submission_route(executions)
