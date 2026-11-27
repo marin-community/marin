@@ -72,8 +72,8 @@ uv run --frozen --prerelease=allow --with-editable ./lib/taskcompendium[pipeline
   --receipts-output "$CENSUS_OUT-receipts" \
   --report "$CENSUS_OUT/census-result.json"
 
-uv run --no-sync fsutil cp -r "$CENSUS_OUT" "$CENSUS_ROOT/$SLUG/"
-uv run --no-sync fsutil cp -r "$CENSUS_OUT-receipts" "$CENSUS_ROOT/$SLUG-receipts/"
+uv run --no-sync fsutil cp -r "$CENSUS_OUT/." "$CENSUS_ROOT/$SLUG/"
+uv run --no-sync fsutil cp -r "$CENSUS_OUT-receipts/." "$CENSUS_ROOT/$SLUG-receipts/"
 if [ -n "$CONTENT_IDENTITY_PROOF" ]; then
   # The staged population path doubles as the proof document's locator.
   uv run --no-sync fsutil cp "$POPULATION_RECORD/.artifact.json" "$CENSUS_ROOT/$SLUG-receipts/staged-population.record.json"
