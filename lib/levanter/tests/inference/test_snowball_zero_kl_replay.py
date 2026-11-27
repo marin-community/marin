@@ -6,6 +6,7 @@ import dataclasses
 import json
 import time
 
+import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -329,7 +330,10 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
         for name, learner_batch in (("unpacked", batch), ("packed", packed)):
             mask = np.asarray(learner_batch.response_mask.array)
             current_scores = score(model, learner_batch)
-            actual = np.asarray(current_scores.array)[mask]
+            values = np.asarray(current_scores.array)
+            if name == "packed":
+                np.testing.assert_array_equal(values[~mask], 0)
+            actual = values[mask]
             expected = np.asarray(learner_batch.old_logprobs.array)[mask]
             assert actual.size == slots * _NEW_TOKENS
             if production_width:
@@ -352,6 +356,19 @@ def test_snowball_strict_zero_kl_replays_all_served_policy_scores(
             }
             if production_width:
                 print("SNOWBALL_STRICT_PARITY " + json.dumps({name: parity[name]}), flush=True)
+
+        if not production_width:
+
+            def head_loss(weight, learner_batch):
+                candidate = eqx.tree_at(lambda m: m.transformer.output_proj, model, weight)
+                return objective(candidate, learner_batch)[0]
+
+            head_gradient = jax.jit(jax.grad(head_loss))
+            weight = model.transformer.output_proj
+            reference = head_gradient(weight, batch)
+            actual = head_gradient(weight, packed)
+            assert np.count_nonzero(reference) > 0
+            np.testing.assert_allclose(actual, reference, atol=1e-6, rtol=1e-5)
 
         if compare_native:
             template = jax.eval_shape(lambda: SnowballLMHeadModel.init(vocab, base, key=key))

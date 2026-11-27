@@ -136,11 +136,12 @@ and weight snapshot on both sides. Use FP32 weights and activations, BF16
 serving KV, and full slot capacity with 128-token pages. Fixed attention uses
 one logical slot per device on an explicit data or expert mesh axis. It
 processes up to four KV heads per call, with a separate one-head tile for
-Snowball's fifth KV head. Expert
-parallelism sums contributions in route order within each shard and then in
-mesh order across shards. Packed
-learner batches restore the independent slots before applying causal attention
-and gather the resulting activations back into packed order.
+Snowball's fifth KV head. Expert parallelism sums contributions in route
+order within each shard and then in mesh order across shards. Packed learner
+batches restore the independent slots before applying causal attention. They
+project the active response rows to the vocabulary and scatter the resulting
+scores into the packed objective layout. Power-of-two response row buckets
+bound the number of compiled projection shapes.
 
 Set `InferenceEngineConfig.logprob_mode` to `LogprobMode.POLICY` and request
 `capture_router_replay` through the exact-token gRPC endpoint. Prepare the

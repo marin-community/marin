@@ -28,6 +28,7 @@ class PolicyRouteReplay(eqx.Module):
     expert_ids: NamedArray
     token_valid: NamedArray
     source_rows: int | None = eqx.field(static=True, default=None)
+    response_rows_per_slot: int | None = eqx.field(static=True, default=None)
 
 
 class PolicyBatch(eqx.Module):
@@ -158,10 +159,16 @@ def pack_policy_batch(
 
     packed_replay = None
     if source_replay is not None:
+        source_rows = source["tokens"].shape[0]
+        active_responses = int(np.count_nonzero(objective["response_mask"]))
+        per_slot = (active_responses + source_rows - 1) // source_rows
+        # Power-of-two buckets bound recompilation as response counts vary.
+        response_rows_per_slot = 1 << (max(1, per_slot) - 1).bit_length()
         packed_replay = PolicyRouteReplay(
             hax.named(jnp.asarray(packed_experts), (Batch, Position, "layer", "top_k")),
             hax.named(jnp.asarray(packed_route_valid), (Batch, Position)),
-            source_rows=source["tokens"].shape[0],
+            source_rows=source_rows,
+            response_rows_per_slot=response_rows_per_slot,
         )
     return PolicyBatch(
         tokens=hax.named(jnp.asarray(tokens), (Batch, Position)),
@@ -178,8 +185,8 @@ def pack_policy_batch(
     )
 
 
-def _packed_fixed_activations(model: SnowballLMHeadModel, batch: PolicyBatch) -> NamedArray:
-    """Restore the serving slots for attention and gather activations in packed order."""
+def _packed_fixed_logprobs(model: SnowballLMHeadModel, batch: PolicyBatch) -> NamedArray:
+    """Score the active packed response positions in their original serving slots."""
     replay = batch.route_replay
     assert replay is not None and batch.segment_ids is not None
     if replay.source_rows is None:
@@ -204,8 +211,24 @@ def _packed_fixed_activations(model: SnowballLMHeadModel, batch: PolicyBatch) ->
     hidden = model.activations_with_replay(
         hax.named(reshard(slot_tokens, P(row_axis)), ("batch", "position")), AttentionMask.causal(), slot_routes
     )
-    gather = reshard(hidden.array, P()).at[destination].get(mode="fill", fill_value=0)
-    return hax.named(gather, (*batch.tokens.resolve_axis(("batch", "position")), model.Embed))
+    response = batch.response_mask.rearrange(("batch", "response"))
+    active = reshard(response.array, P()).reshape(-1) != 0
+    # Shard the compact projection evenly across the serving mesh. A sliced
+    # execution batch can reuse its original bound with fewer active rows.
+    local_capacity = (active.size + replay.source_rows - 1) // replay.source_rows
+    if replay.response_rows_per_slot is not None:
+        local_capacity = min(local_capacity, replay.response_rows_per_slot)
+    capacity = replay.source_rows * max(1, local_capacity)
+    packed_indices = jnp.nonzero(active, size=capacity, fill_value=active.size)[0]
+    packed_rows, predictors = jnp.divmod(packed_indices, response.axis_size("response"))
+    source = sources.at[packed_rows, predictors].get(mode="fill", fill_value=replay.source_rows)
+    position = positions.at[packed_rows, predictors].get(mode="fill", fill_value=0)
+    predictions = hidden.array.at[source, position].get(mode="fill", fill_value=0, out_sharding=P(row_axis, None))
+    targets = tokens.at[packed_rows, predictors + 1].get(mode="fill", fill_value=0, out_sharding=P(row_axis))
+    Scored = hax.Axis("scored_response", capacity)
+    scores = model.fixed_policy_logprobs(hax.named(predictions, (Scored, model.Embed)), hax.named(targets, Scored))
+    dense = jnp.zeros(active.shape, dtype=scores.dtype).at[packed_indices].set(reshard(scores.array, P()), mode="drop")
+    return hax.named(dense.reshape(response.array.shape), response.axes)
 
 
 def response_logprobs(
@@ -237,12 +260,12 @@ def response_logprobs(
     if exact_model is not None:
         if replay is None:
             raise ValueError("Snowball zero-KL scoring requires captured expert routes")
+        if batch.segment_ids is not None:
+            return _packed_fixed_logprobs(exact_model, batch)
     else:
         segments = batch.segment_ids if batch.segment_ids is not None else batch.attention_mask.astype(jnp.int32)
         mask = mask.with_segment_ids(segments)
-    if exact_model is not None and batch.segment_ids is not None:
-        activations = _packed_fixed_activations(exact_model, batch)
-    elif replay is None:
+    if replay is None:
         activations, _ = split_activations(model.activations(batch.tokens, mask, pos_ids=batch.position_ids, key=key))
     else:
         if not isinstance(model, SnowballLMHeadModel):
