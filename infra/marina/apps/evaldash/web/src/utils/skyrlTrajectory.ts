@@ -1,26 +1,17 @@
-// Adapter: SkyRL evaluation turn records onto the ATIF Trajectory type, so TrajectoryViewer
-// renders them. Two real shapes exist in published blobs:
-// - the eval-dump row: one trial's flat record (`uid`, `output_response`, `messages`,
-//   `verification`, `input_prompt`, ...) — what the long-loop archive writer stores per trial;
-// - the SkyRL schema_v7 turn record (`schema_version: 7`): `response.text`, `response.messages`,
-//   `verification_result`, `trajectory.instance_id` — what the retention archives store.
-// One artifact blob holds one record or a list of them. A list can span several uids, so records
-// group by uid and the group matching the viewed sample renders. Messages map to steps by role —
-// including assistant turns that carry tool_calls — and each record's stop_reason and verification
-// ride that record's final step as string annotations.
-import type { Trajectory, TrajectoryStep, TrajectoryToolCall } from '@/types/api'
+// Render flat SkyRL eval dumps and schema-v7 retention records as ATIF trajectories.
+import type { Trajectory, TrajectoryStep, TrajectoryToolCall } from '@/types/trajectory'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** The eval-dump row shape: one trial's flat record. `messages` may be null. */
-export function isSkyrlEvalDumpRow(value: unknown): value is Record<string, unknown> {
+function isSkyrlEvalDumpRow(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && typeof value.uid === 'string' && typeof value.output_response === 'string'
 }
 
 /** The SkyRL schema_v7 turn record shape (`schema_version: 7`, nested response/verification). */
-export function isSkyrlTurnRecord(value: unknown): value is Record<string, unknown> {
+function isSkyrlTurnRecord(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && value.schema_version === 7 && isRecord(value.response)
 }
 
@@ -95,10 +86,13 @@ function numericMetrics(value: unknown): Record<string, number> | undefined {
 }
 
 function sameMessage(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  return isRecord(left) && isRecord(right)
+    && left.role === right.role
+    && messageText(left.content) === messageText(right.content)
+    && JSON.stringify(toolCallsOf(left.tool_calls)) === JSON.stringify(toolCallsOf(right.tool_calls))
 }
 
-/** Drop the head of ``next`` that repeats ``previous`` verbatim: cumulative per-step transcripts. */
+/** Drop messages already rendered at the start of a cumulative transcript. */
 function dropRepeatedPrefix(previous: unknown[], next: unknown[]): unknown[] {
   if (previous.length === 0 || next.length < previous.length) return next
   for (let index = 0; index < previous.length; index++) {
@@ -110,6 +104,7 @@ function dropRepeatedPrefix(previous: unknown[], next: unknown[]): unknown[] {
 // One record normalized to the fields the adapter renders, whatever shape it arrived in.
 interface NormalizedTurn {
   uid: string
+  trialKey: string | null
   step: number
   kind: 'skyrl-eval-dump' | 'skyrl-turn-v7'
   sessionId: string
@@ -126,6 +121,7 @@ interface NormalizedTurn {
 function normalizeEvalDumpRow(record: Record<string, unknown>): NormalizedTurn {
   return {
     uid: typeof record.uid === 'string' ? record.uid : '',
+    trialKey: null,
     step: typeof record.ordinal === 'number' ? record.ordinal : typeof record.step === 'number' ? record.step : 0,
     kind: 'skyrl-eval-dump',
     sessionId: typeof record.attempt_id === 'string' ? record.attempt_id : '',
@@ -144,19 +140,26 @@ function normalizeTurnRecord(record: Record<string, unknown>): NormalizedTurn {
   const response = isRecord(record.response) ? record.response : {}
   const trajectory = isRecord(record.trajectory) ? record.trajectory : {}
   const disposition = isRecord(record.disposition) ? record.disposition : {}
+  const prompt = isRecord(record.prompt) ? record.prompt : {}
+  const promptMessages = Array.isArray(prompt.messages) ? prompt.messages : []
+  const responseMessages = Array.isArray(response.messages) ? response.messages : []
+  const includesPrompt = promptMessages.every((message, index) => sameMessage(message, responseMessages[index]))
   const instanceId = typeof trajectory.instance_id === 'string' ? trajectory.instance_id : ''
   const rows = Array.isArray(trajectory.row_indices) ? trajectory.row_indices : []
   const boundaries = Array.isArray(response.step_boundaries) ? response.step_boundaries : []
   const boundary = boundaries.find(isRecord)
   return {
     uid: instanceId || (typeof record.record_id === 'string' ? record.record_id : ''),
+    trialKey: instanceId && Number.isInteger(trajectory.repetition_id)
+      ? JSON.stringify(['skyrl-turn-v7', record.run_id, instanceId, trajectory.repetition_id])
+      : null,
     step: boundary && typeof boundary.row_index === 'number' ? boundary.row_index : rows.length === 1 && typeof rows[0] === 'number' ? rows[0] : 0,
     kind: 'skyrl-turn-v7',
     sessionId: typeof record.run_id === 'string' ? record.run_id : '',
     envClass: typeof trajectory.environment_class === 'string' ? trajectory.environment_class : '',
     promptText: '',
     responseText: typeof response.text === 'string' ? response.text : '',
-    messages: Array.isArray(response.messages) ? response.messages : null,
+    messages: includesPrompt ? responseMessages : [...promptMessages, ...responseMessages],
     verification: isRecord(record.verification_result) ? record.verification_result : null,
     stopReason: typeof response.stop_reason === 'string' ? response.stop_reason : null,
     exception: disposition.exception_type,
@@ -190,17 +193,16 @@ function turnSteps(turn: NormalizedTurn, firstStepId: number, includePrompt: boo
   }
   // The record's terminal step: the raw response with its think block, plus its outcome facts.
   const annotations = recordAnnotations(turn.verification, turn.stopReason, turn.exception)
-  if (turn.responseText || annotations) {
+  const last = steps[steps.length - 1]
+  if (turn.responseText && last?.source === 'agent' && last.message === turn.responseText) {
+    last.annotations = annotations
+  } else if (turn.responseText || annotations) {
     steps.push({ step_id: stepId++, source: 'agent', message: turn.responseText || undefined, annotations })
   }
   return steps
 }
 
-/**
- * Map one SkyRL record, or a list of them, onto the Trajectory type; null when not SkyRL. A list
- * groups by uid — one trial's records can span several uids — and `preferredUid` picks the group
- * matching the viewed sample (the first group renders when absent or unmatched).
- */
+/** Render one unambiguous writer-defined trial; unmatched or ambiguous lists return null. */
 export function skyrlTurnsToTrajectory(parsed: unknown, preferredUid?: string): Trajectory | null {
   const records = (Array.isArray(parsed) ? parsed : [parsed]) as unknown[]
   if (records.length === 0) return null
@@ -210,14 +212,15 @@ export function skyrlTurnsToTrajectory(parsed: unknown, preferredUid?: string): 
     if (turn === null) return null
     turns.push(turn)
   }
-  const groups = new Map<string, NormalizedTurn[]>()
-  for (const turn of turns) {
-    const group = groups.get(turn.uid) ?? []
-    group.push(turn)
-    groups.set(turn.uid, group)
+  const selected = Array.isArray(parsed) && preferredUid !== undefined
+    ? turns.filter((turn) => turn.uid === preferredUid)
+    : turns
+  if (selected.length === 0) return null
+  if (selected.length > 1) {
+    const key = selected[0].trialKey
+    // Flat dumps lack a repetition identity; matching uids alone cannot establish one trial.
+    if (key === null || selected.some((turn) => turn.trialKey !== key)) return null
   }
-  const selected = (preferredUid !== undefined && groups.get(preferredUid)) || groups.values().next().value
-  if (!selected) return null
   selected.sort((left, right) => left.step - right.step)
   const steps: TrajectoryStep[] = []
   let previous: unknown[] = []

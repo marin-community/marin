@@ -5,7 +5,7 @@
  * observation output, and the step's token metrics.
  */
 import { computed, ref } from 'vue'
-import type { TrajectoryObservationResult, TrajectoryStep } from '@/types/api'
+import type { TrajectoryObservationResult, TrajectoryStep } from '@/types/trajectory'
 import FencedText from '@/components/samples/FencedText.vue'
 
 const props = defineProps<{ step: TrajectoryStep }>()
