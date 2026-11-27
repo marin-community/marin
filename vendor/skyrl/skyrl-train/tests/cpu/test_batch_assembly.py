@@ -398,6 +398,13 @@ def test_worker_batch_rejects_settings_and_rows_that_change_driver_training_sema
         if "model_experts" in overrides
         else {"model_type": "qwen2"}
     )
+    if metadata["model_type"] == "grug_moe":
+        metadata.update(
+            qk_mult=1.5703274004183786,
+            sliding_window=2048,
+            max_position_embeddings=65536,
+            num_experts_per_tok=4,
+        )
     (tmp_path / "config.json").write_text(json.dumps(metadata))
     cfg.trainer.policy.model.path = str(tmp_path)
     batch = {

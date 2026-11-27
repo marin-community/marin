@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import math
+
 import ray
 import torch
 
@@ -49,6 +53,19 @@ def _config(model_path: str, *, world_size: int, pp: int, ep: int):
     cfg.generator.sampling_params.top_k = -1
     cfg.generator.sampling_params.max_generate_length = 4
     return cfg
+
+
+def _init_policy(cfg, world_size: int):
+    return init_worker_with_type(
+        "policy", shared_pg=None, colocate_all=False, num_gpus_per_node=world_size, num_nodes=1, cfg=cfg
+    )
+
+
+def _train_step(policy, batch: TrainingInputBatch) -> dict[str, float]:
+    train_output = ray.get(policy.async_run_ray_method("mesh", "ppo_train", batch))[0]
+    status = train_output.metadata["train_status"]
+    assert math.isfinite(status["policy_loss"])
+    return status
 
 
 def _padded_batch(
@@ -104,9 +121,3 @@ def _padded_batch(
 def _megatron_response_logprobs(policy, batch: TrainingInputBatch) -> torch.Tensor:
     outputs = ray.get(policy.async_run_ray_method("mesh", "forward", data=batch))
     return concatenate_outputs_after_mesh_dispatch(policy.actor_infos, outputs)["output"].float()
-
-
-def _init_policy(cfg, world_size: int):
-    return init_worker_with_type(
-        "policy", shared_pg=None, colocate_all=False, num_gpus_per_node=world_size, num_nodes=1, cfg=cfg
-    )

@@ -19,6 +19,10 @@ def test_schema_two_shared_experts_select_the_observed_routed_mapping(routed_key
     config = GrugMoeConfig(
         grugmoe_artifact_schema_version=GRUG_SPLIT_EXPERT_SCHEMA_VERSION,
         num_shared_experts=2,
+        qk_mult=1.5703274004183786,
+        sliding_window=2048,
+        max_position_embeddings=65536,
+        num_experts_per_tok=4,
     )
     weight_keys = {
         "model.layers.0.shared_experts.0.gate_proj.weight",

@@ -15,7 +15,7 @@ from transformers import AutoTokenizer
 from cloud.iris.hf_model_cache import stage_model_metadata
 from marinskyrl.model_manifest import snapshot_model_manifest
 from tests.gpu.grug_gpu_gates import require_hoppers
-from tests.gpu.grug_policy_training import (
+from tests.gpu.grug_megatron_policy import (
     _config,
     _init_policy,
     _megatron_response_logprobs,

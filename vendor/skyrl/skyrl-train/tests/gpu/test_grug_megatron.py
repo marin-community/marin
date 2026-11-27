@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import math
 import os
 import uuid
 from types import SimpleNamespace
@@ -54,12 +53,13 @@ from tests.batch_assertions import WORKER_OMITTED_METRICS, assert_metric_parity
 from tests.cpu.tiny_training.tiny_model import write_gsm8k_dataset
 from skyrl_train.utils.torch_utils import logprobs_from_logits
 from tests.gpu.grug_gpu_gates import require_hoppers
-from tests.gpu.grug_policy_training import (
+from tests.gpu.grug_megatron_policy import (
+    ROLLOUT_WORLD_SIZE as ROLLOUT_WORLD_SIZE,
+    _config as _config,
+    _init_policy as _init_policy,
+    _train_step as _train_step,
     PROMPT_LENGTH,
     RESPONSE_LENGTH,
-    ROLLOUT_WORLD_SIZE,
-    _config,
-    _init_policy,
     _megatron_response_logprobs,
     _padded_batch,
 )
@@ -120,6 +120,7 @@ def embedding_preprocess_model(request, tmp_path):
             vocab_size=1024,
             num_experts_per_tok=2,
             max_position_embeddings=128,
+            qk_mult=1.37,
             **{**TOY_SHAPE, "num_hidden_layers": 2},
         )
         provider = AutoBridge.from_hf_config(config).to_megatron_provider(load_weights=False)
@@ -208,13 +209,6 @@ def _assert_logprobs_close(actual: torch.Tensor, expected: torch.Tensor, respons
     )
     assert diff.max().item() < LOGPROB_MAX_ABS_TOLERANCE, diff.max()
     assert diff.mean().item() < LOGPROB_MEAN_ABS_TOLERANCE, diff.mean()
-
-
-def _train_step(policy, batch: TrainingInputBatch) -> dict[str, float]:
-    train_output = ray.get(policy.async_run_ray_method("mesh", "ppo_train", batch))[0]
-    status = train_output.metadata["train_status"]
-    assert math.isfinite(status["policy_loss"])
-    return status
 
 
 @pytest.mark.parametrize(
