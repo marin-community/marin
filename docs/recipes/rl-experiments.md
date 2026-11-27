@@ -462,7 +462,8 @@ IDs and TaskSpec digests against the saved per-task results.
 |---|---|
 | layout-p40-only | calibrated training gates cover the 40-GPU layout; other layouts need qualification |
 | mismatch-is-agreement | mismatch measures policy agreement; exactness claims need an explicit zero-mismatch bound |
-| EvalLite coverage | the current panel does not qualify multi-turn tools or long context; see the [EvalLite composition](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#evallite) |
+| aaii-coverage | the current panel does not qualify multi-turn tools or long context; see the [EvalLite composition](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/README.md#evallite) |
+| no-agentic-tasks | one-turn presets do not train on agent tasks; mixed and shell-tool presets clear this gap when selected |
 | no-image-sandbox | image-only tasks need a sandbox backend |
 
 ## Add a model entry

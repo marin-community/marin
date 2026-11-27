@@ -51,6 +51,13 @@ admitted training sources. The mixed
 SWE v4 agent tasks beside the one-turn rows. The selection manifests record the
 exact source revisions and row counts used by each published version.
 
+The ungated [Snowball](../snowball_rl.py) and [Mochi](../mochi_rl.py) presets
+default to `snowball-100k@2026.11.25.1` for training and
+`eval-lite@2026.11.25.1` for held-out evaluation. The published mixed selection
+`snowball-100k-agentic@2026.11.19.2` can be passed with `--tasks` to an agentic
+preset; its [experiment record](https://github.com/marin-community/marin/pull/11728)
+includes the release and run evidence.
+
 The original Snowball development input contains 910 tasks with string columns
 `lowered_task_spec` (TaskSpec 0.27) and `teacher_route`. Its pinned upstream is
 [`cb728a7` on Hugging Face](https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/tree/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3).
