@@ -26,6 +26,7 @@ from experiments.post_training.long_loop import campaign
 from experiments.post_training.long_loop.campaign import (
     LOCAL_DISK_ROOT,
     LOCAL_REGISTRY_AUTH_SECRET,
+    PER_TASK_IMAGE_MACHINE,
     REFERENCE,
     campaign_round,
 )
@@ -464,3 +465,13 @@ def test_missing_cohort_binds_only_its_declared_release():
         "revision": "3705ff47972eef44df33e4c160e7329b72af6021",
     }
     assert mix.sources[label]["count"] == 132151
+
+
+def test_per_task_image_mix_places_actor_and_grader_on_local():
+    mix = load_mix("v2-mix-011")
+    assert "RST:laion/rts-1k-rootless-apptainer" in mix.sources
+    task_spec = campaign_round(mix, "2026.11.27.990", max_steps=50).rl.recipe["environment"]["task_sessions"][
+        "task_spec"
+    ]
+    for placement in ("task_machine_by_dataset", "verifier_machine_by_dataset"):
+        assert task_spec[placement] == {"laion/rts-1k-rootless-apptainer": PER_TASK_IMAGE_MACHINE}

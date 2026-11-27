@@ -48,6 +48,24 @@ REFERENCE_SOURCE = "fe4695fbcd27e365284dccab649a40d6caa9fb2b"
 CAMPAIGN_PIPELINE_STAGES = 16
 LOCAL_DISK_ROOT = "/var/lib/shellbox-disk-pool"
 LOCAL_REGISTRY_AUTH_SECRET = "GHCR_READ_PULL_DOCKER_CONFIG"
+# Sources with one digest-pinned image per task run actor and grader on LOCAL: a Daytona
+# snapshot per task image would exceed the RL org's snapshot quota. Maps the campaign source
+# label to the TaskSpec source dataset that the placement keys on.
+PER_TASK_IMAGE_DATASETS = {
+    "RST:laion/rts-1k-rootless-apptainer": "laion/rts-1k-rootless-apptainer",
+    "Lego-X:Terminal-Lego-15k": "Lego-X/Terminal-Lego-15k",
+}
+PER_TASK_IMAGE_MACHINE = {
+    "backend": "local",
+    "cpus": 1,
+    "memory_mb": 2048,
+    "storage_mb": None,
+    "gpus": 0,
+    "network": "allow",
+    "user": None,
+    "startup_timeout": 600,
+    "cleanup_timeout": 60,
+}
 CAMPAIGN_SECRET_NAMES = (
     "CW_KEY_ID",
     "CW_KEY_SECRET",
@@ -92,6 +110,15 @@ def campaign_round(mix: CampaignMix, version: str, *, max_steps: int) -> Adopted
     recipe["trainer"]["rollout_buffer"].pop("consumed_route_quotas", None)
     # Stored TaskRolloutSpecs carry the catalog's per-task harness and machine sizing.
     recipe["environment"]["task_sessions"]["task_spec"]["harness_by_dataset"] = {}
+    # Only mixes with a per-task-image source change placement, so other mixes keep .131's recipe.
+    per_task = [dataset for label, dataset in PER_TASK_IMAGE_DATASETS.items() if label in mix.sources]
+    if per_task:
+        task_spec = recipe["environment"]["task_sessions"]["task_spec"]
+        for placement in ("task_machine_by_dataset", "verifier_machine_by_dataset"):
+            task_spec[placement] = {
+                **task_spec.get(placement, {}),
+                **{dataset: dict(PER_TASK_IMAGE_MACHINE) for dataset in per_task},
+            }
     # Retained lock-based verifiers declare LOCAL storage, which only the quota pool enforces.
     # LOCAL actors (Math-TIR) pull digest-pinned private GHCR images with the read-only pull credential.
     recipe["environment"]["task_sessions"]["local"] = {
