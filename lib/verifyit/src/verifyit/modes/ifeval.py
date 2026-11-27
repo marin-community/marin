@@ -394,8 +394,6 @@ def forbidden_words(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("keywords:exclude_word_harder")
 def exclude_word_harder(text: str, params: dict) -> tuple[bool, str]:
-    """The response must not contain the keyword. The source drew it from the prompt's words, at times with
-    punctuation attached, as in "piano.", and the prompt shows it that way, so it is matched as written."""
     keyword = params.get("keyword")
     if not isinstance(keyword, str) or not keyword.strip():
         return False, "missing keyword"
@@ -777,10 +775,7 @@ def bigram_wrapping(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("detectable_format:constrained_response")
 def constrained_response(text: str, params: dict) -> tuple[bool, str]:
-    """Without arguments, the response must be one of the three options that the IFEval prompts list, and nothing
-    else. The IFBench training prompts list six options, passed as ``options``, and most of them also ask for more
-    text, such as a postscript or placeholders, so there the response must name exactly one of the options, in any
-    letter case; repeating it is allowed."""
+    """Without ``options``, the response must be one of IFEval's fixed answers; with them, it must name exactly one."""
     options = params.get("options")
     if options is None:
         stripped = text.strip()
@@ -900,8 +895,7 @@ def count_unique(text: str, params: dict) -> tuple[bool, str]:
 
 
 def single_keyword(value: object) -> str | None:
-    """The keyword of a count:count_increment_word argument. IFEvalG passes a string; the TaskTrove rows from
-    Nemotron Gym pass a one-element list, which their prompts print, as in "Include keyword ['help'] once"."""
+    """The keyword given as a string or, in TaskTrove rows, a one-element list; ``None`` otherwise."""
     if isinstance(value, list) and len(value) == 1:
         value = value[0]
     return value.strip() if isinstance(value, str) and value.strip() else None
@@ -909,8 +903,7 @@ def single_keyword(value: object) -> str | None:
 
 @constraint("count:count_increment_word")
 def count_increment_word(text: str, params: dict) -> tuple[bool, str]:
-    """As the prompt says, keyword1 must appear exactly once and keyword2 exactly twice. Each is counted as a keyword,
-    so "bus" inside "abuse" does not count; no response meets a row that names the same word twice."""
+    """``keyword1`` must appear exactly once and ``keyword2`` exactly twice, as the prompt asks."""
     first = single_keyword(params.get("keyword1"))
     second = single_keyword(params.get("keyword2"))
     if first is None or second is None:
@@ -1031,14 +1024,11 @@ def repeat_phrase(text: str, params: dict) -> tuple[bool, str]:
 
 
 def copy_key(text: str) -> str:
-    """The text as the copy checks compare it: without outer whitespace and lowercased."""
     return text.strip().lower()
 
 
 def separated_parts(text: str) -> list[str] | None:
-    """The parts of the text between six-asterisk separators, stripped, or ``None`` when a part between two
-    separators holds no word. A part with no word before the first separator or after the last, such as the "."
-    after a closing separator, is no part."""
+    """The worded parts between six-asterisk separators, or ``None`` if an inner part has no word."""
     sections = TWO_RESPONSE_SEPARATOR.split(text)
     if any(not WORD.search(section) for section in sections[1:-1]):
         return None
@@ -1048,8 +1038,7 @@ def separated_parts(text: str) -> list[str] | None:
 @constraint("copy:copy")
 @constraint("copy:copying_simple")
 def copy_request(text: str, params: dict) -> tuple[bool, str]:
-    """The response must be the request and nothing else: no answer, and not the instruction sentence after the
-    request. Outer whitespace and letter case are ignored, as in combination:repeat_prompt."""
+    """The response must be the request alone, ignoring outer whitespace and case."""
     request = params.get("prompt_to_repeat")
     if not isinstance(request, str) or not request.strip():
         return False, "missing prompt_to_repeat"
@@ -1059,7 +1048,7 @@ def copy_request(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("copy:copying_multiple")
 def copying_multiple(text: str, params: dict) -> tuple[bool, str]:
-    """The response must be the request N times, separated by six asterisks as in combination:two_responses."""
+    """The response must be ``N`` copies of the request separated by six asterisks."""
     request = params.get("prompt_to_repeat")
     expected = params.get("N")
     if not isinstance(request, str) or not request.strip() or not isinstance(expected, int):
@@ -1073,9 +1062,7 @@ def copying_multiple(text: str, params: dict) -> tuple[bool, str]:
 
 @constraint("new:copy_span_idx")
 def copy_span_idx(text: str, params: dict) -> tuple[bool, str]:
-    """The response must be the request's characters from index n_start to n_end, counted from zero and both
-    included, since the prompt says "the indices are character indices"; a span that cuts a word keeps the cut.
-    Outer whitespace and letter case are ignored, as in copy:copy."""
+    """The response must be ``prompt_to_repeat[n_start : n_end + 1]``, ignoring outer whitespace and case."""
     request = params.get("prompt_to_repeat")
     start = params.get("n_start")
     end = params.get("n_end")
