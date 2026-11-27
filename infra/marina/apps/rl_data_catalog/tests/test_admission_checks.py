@@ -8,12 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 from finestore.rl.curation import ActorCensusInput, GradingEnvironmentEvidence
-from taskcompendium.backend_requirements import BackendFit, BackendSourceMap, FitSupport
+from taskcompendium.backend_requirements import BackendFit, BackendSourceMap
 
 from infra.marina.apps.rl_data_catalog.server.admission import (
-    backend_admission_review,
     population_admission_blocker,
 )
 
@@ -79,56 +77,6 @@ def test_missing_declared_environment_artifact_blocks_admission():
 
 def test_verified_environment_artifacts_do_not_block_admission():
     assert population_admission_blocker(BINDING, 3, grading_evidence({})) is None
-
-
-def backend_verdicts(supports: dict[str, str]) -> dict[str, str]:
-    """The aggregate support labels one surveyed source carries per backend."""
-    return {name: FitSupport(support).value for name, support in supports.items()}
-
-
-@pytest.mark.parametrize("status", ["Available", "Not selectable", "Excluded"])
-@pytest.mark.parametrize(
-    "supports,blocked",
-    [
-        ({"local": FitSupport.SUPPORTED}, False),
-        ({"daytona": FitSupport.PARTIAL, "local": FitSupport.UNSUPPORTED}, False),
-        ({"iris": FitSupport.UNSUPPORTED, "qemu": FitSupport.UNSUPPORTED}, True),
-        ({"iris": FitSupport.NOT_APPLICABLE, "shellsim": FitSupport.ROLE_ABSENT}, True),
-    ],
-)
-def test_backend_support_admission(status, supports, blocked):
-    blocker, _ = backend_admission_review(backend_verdicts(supports), status)
-    if status != "Available" or not blocked:
-        assert blocker is None
-    else:
-        assert blocker is not None
-        assert blocker.startswith("no surveyed production backend can run the source: ")
-        assert "iris=unsupported" in blocker or "iris=not_applicable" in blocker
-
-
-def test_backend_admission_review_lists_every_backend_deterministically():
-    blocker = backend_admission_review(
-        backend_verdicts({"iris": FitSupport.UNSUPPORTED, "local": FitSupport.UNSUPPORTED}), "Available"
-    )
-    assert blocker[0] == ("no surveyed production backend can run the source: iris=unsupported, local=unsupported")
-
-
-def test_role_absent_everywhere_needs_no_backend_and_keeps_its_labels():
-    """A source that declares no machine role on any backend is not blocked."""
-    assert (
-        backend_admission_review(
-            backend_verdicts(
-                {name: FitSupport.ROLE_ABSENT for name in ("daytona", "docker-gvisor", "iris", "local", "qemu")}
-            ),
-            "Available",
-        )[0]
-        is None
-    )
-
-
-def test_empty_backend_map_stays_blocked():
-    """An unassessed Available row with no survey cells is not exempted by the N/A rule."""
-    assert backend_admission_review({}, "Available")[0] is not None
 
 
 def test_packaged_admission_imports_without_taskcompendium():

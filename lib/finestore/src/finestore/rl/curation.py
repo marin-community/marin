@@ -930,9 +930,9 @@ def consumer_decision_status(
     findings: Sequence[ConsumerReason],
     *,
     runtime_commit: str,
-) -> Literal["Pending", "Excluded"] | None:
+) -> Literal["Excluded"] | None:
     """Apply a user decision only to its source, runtime, population and current finding."""
-    if decision is None or binding is None:
+    if decision is None or binding is None or decision.status == "Pending":
         return None
     if (decision.source_id, decision.runtime_commit, decision.task_specs_sha256) != (
         source_id,
@@ -1513,7 +1513,7 @@ def snapshot_declaration_generation(declaration: dict) -> str:
 def normalize_snapshot_declaration(
     declaration: dict,
     *,
-    pending_stage_of: Callable[[str], PendingStage] | None = None,
+    pending_stage_of: Callable[[str], PendingStage | None] | None = None,
 ) -> dict:
     """Normalize one served declaration document to the current schema.
 
@@ -1574,7 +1574,7 @@ def _current_reason_values() -> frozenset:
 _CURRENT_REASON_VALUES = _current_reason_values()
 
 
-def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str], PendingStage]) -> dict:
+def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str], PendingStage | None]) -> dict:
     """The qualified-v1 → current conversion, one named step per removed field.
 
     ``name`` — dropped: the schema removed the free-text field and derives the
@@ -1589,7 +1589,10 @@ def _normalize_pre_stage_form(declaration: dict, pending_stage_of: Callable[[str
     claims = normalized.get("exclusion_claims") or []
     normalized["exclusion_claims"] = [_normalize_legacy_claim(claim) for claim in claims]
     if normalized.get("status") == "Pending" and "stage" not in normalized:
-        normalized["stage"] = pending_stage_of(normalized["id"]).value
+        stage = pending_stage_of(normalized["id"])
+        normalized["stage"] = stage.value if stage else None
+        if stage is None:
+            normalized["status"] = SourceStatus.AVAILABLE.value
     return normalized
 
 
@@ -1774,7 +1777,7 @@ class CurationCatalog:
             yield model.model_validate(row, context=context)
 
     def sources(
-        self, snapshot_id: str, *, pending_stage_of: Callable[[str], PendingStage] | None = None
+        self, snapshot_id: str, *, pending_stage_of: Callable[[str], PendingStage | None] | None = None
     ) -> Iterator[SnapshotSource]:
         """The snapshot's typed sources, read through the versioned snapshot reader.
 

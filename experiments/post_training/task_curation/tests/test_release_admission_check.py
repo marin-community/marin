@@ -235,16 +235,14 @@ def _rejecting():
     return rejecting
 
 
-def test_review_admissions_reports_every_blocked_source_at_once():
+def test_runtime_fit_does_not_downgrade_prepared_sources():
     declarations = {SOURCE_ID: _declaration(), SECOND_ID: _declaration(identifier="fixture-two")}
     survey = _survey_with_matrix(SOURCE_ID, blocked=True, checkers=_unit_checkers()).model_copy(
         update={"sources": [_row(SOURCE_ID, _blocked_fits()), _row(SECOND_ID, _blocked_fits())]}
     )
-    with pytest.raises(ValueError) as failure:
-        admission_check.review_admissions(declarations, survey, set())
-    message = str(failure.value)
-    assert "Admission blocked for 2 source(s)" in message
-    assert SOURCE_ID in message and SECOND_ID in message
+    report = admission_check.review_admissions(declarations, survey, set())
+    assert report.ok and report.review_source_count == 2
+    assert report.downgraded == {}
 
 
 def _blocked_fits() -> dict[str, BackendFit]:
@@ -267,18 +265,18 @@ def test_review_admissions_routes_pending_and_gates(tmp_path):
     assert report.ok and report.review_source_count == 1
 
 
-def test_run_admission_check_dry_run_fails_on_blocked_source_without_writes(tmp_path):
+def test_run_admission_check_dry_run_retains_unsupported_evidence_without_writes(tmp_path):
     declarations = _declarations_document()
     survey = _survey_with_matrix(SOURCE_ID, blocked=True, checkers=_unit_checkers())
     inputs = _inputs(tmp_path, declarations, survey)
     query = _FakeQuery(set())
-    with pytest.raises(ValueError, match="no surveyed production backend"):
-        admission_check.run_admission_check(inputs, dry_run=True, query=query, feeds=_feeds(tmp_path))
+    proof = admission_check.run_admission_check(inputs, dry_run=True, query=query, feeds=_feeds(tmp_path))
+    assert proof["downgraded"] == {}
     # Read-only: the only SQL is the prior-availability lookup, and nothing is sealed.
     assert all("INSERT" not in sql.upper() for sql in query.executed)
     assert not (tmp_path / "release" / "admission" / "admission-check.json").exists()
     rows = (tmp_path / "alerts.jsonl").read_text().splitlines()
-    assert json.loads(rows[-1])["kind"] == admission_check.alerts.KIND_FAIL
+    assert json.loads(rows[-1])["kind"] == admission_check.alerts.KIND_FINISH
 
 
 def test_run_admission_check_seals_receipt_on_a_clean_population(tmp_path):
@@ -295,12 +293,13 @@ def test_run_admission_check_seals_receipt_on_a_clean_population(tmp_path):
     assert receipt["sql_writes"] == 0
 
 
-def test_run_admission_check_refuses_snapshot_and_count_drift(tmp_path):
+def test_source_evidence_applies_across_snapshots_and_inventory_count_still_matches(tmp_path):
     declarations = _declarations_document()
     survey = _survey_with_matrix(SOURCE_ID, blocked=False, checkers=_accepting_local_checkers())
     moved = _inputs(tmp_path, declarations, survey, snapshot_id="assembly-other-v1")
-    with pytest.raises(ValueError, match="binds snapshot"):
-        admission_check.run_admission_check(moved, dry_run=True, query=_FakeQuery(set()), feeds=_feeds(tmp_path))
+    proof = admission_check.run_admission_check(moved, dry_run=True, query=_FakeQuery(set()), feeds=_feeds(tmp_path))
+    assert proof["review_source_count"] == 1
+    assert proof["downgraded"] == {}
     bad_count = _inputs(tmp_path, declarations, survey, expected_source_count=2)
     with pytest.raises(ValueError, match="expected 2"):
         admission_check.run_admission_check(bad_count, dry_run=True, query=_FakeQuery(set()), feeds=_feeds(tmp_path))

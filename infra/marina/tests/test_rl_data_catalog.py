@@ -436,13 +436,17 @@ def test_retained_rows_require_a_user_decision_before_consumer_status_changes(
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         table = {row["id"]: row for row in client.get("/sources", params={"projection": "table"}).json()["sources"]}
         compact = {row["id"]: row for row in client.get("/source-statuses").json()["sources"]}
-    assert table["Marin:bespoke"]["status"] == compact["Marin:bespoke"]["status"] == (decision_status or "Available")
+    assert (
+        table["Marin:bespoke"]["status"]
+        == compact["Marin:bespoke"]["status"]
+        == ("Excluded" if decision_status == "Excluded" else "Available")
+    )
     assert (
         table["Marin:bespoke"]["consumer_findings"]
         == compact["Marin:bespoke"]["consumer_findings"]
         == [ConsumerReason.TOOL_UNREGISTERED.value]
     )
-    if decision_status is None:
+    if decision_status != "Excluded":
         assert table["Marin:bespoke"]["filtration"] == before["Marin:bespoke"]["filtration"]
     else:
         assert table["Marin:bespoke"]["filtration"]["admitted_count"] == (0 if decision_status == "Excluded" else None)
@@ -2764,7 +2768,7 @@ def test_preview_bundles_current_count_evidence_into_the_served_api(
     assert "build_command" not in staged_manifest
     assert (output / "dist/index.html").exists()
     extras = json.loads((output / "dist/measurements/source-status-extras.json").read_text())
-    assert extras["stages"], "the source build must have generated the status extras"
+    assert extras["pending"], "the source build must have generated the intake inventory"
     provenance = json.loads((output / "dist/bundled-model-provenance.json").read_text())["build_command"]
     assert provenance["prebuilt"] is True and "omits build_command" in provenance["transformation"]
     package = read_applet_package(package_applet(output))
@@ -3912,22 +3916,24 @@ def _source_load_row(catalog_query: AppletQuery, load_id: str, source_id: str) -
     return row[0]
 
 
-def test_new_verify_source_materializes_as_pending_with_marker(catalog_database, catalog_query, tmp_path):
-    """A new admission whose only positive production outcome is VERIFY loads as Pending."""
+def test_new_verify_source_is_available_with_evidence(catalog_database, catalog_query, tmp_path):
+    """A new source with a positive VERIFY outcome is Available and keeps the survey evidence."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "new-verify", source_id="Marin:newverify")
     catalog = CurationCatalog(root)
-    flipped = _verify_pending_survey(catalog_backend_map(catalog), "Marin:newverify")
+    flipped = _verify_pending_survey(catalog_backend_map(catalog), "Marin:newverify").model_copy(
+        update={"snapshot_id": "prior-source-revision", "catalog_root": "prior:catalog"}
+    )
     result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
     row = _source_load_row(catalog_query, result["load_id"], "Marin:newverify")
-    assert row["status"] == "Pending"
-    assert "Backend verification pending" in row["notes"]
+    assert row["status"] == "Available"
     assert row["backend_verification_pending"] == ["daytona", "iris", "local"]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         served = next(
             source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:newverify"
         )
-        assert served["stage"] == "Backend verification pending"
+        assert served["stage"] is None
+        assert served["status"] == "Available"
 
 
 def test_admitted_source_stays_available_when_every_production_backend_is_verify(
@@ -4022,33 +4028,39 @@ def _unsupported_profile_survey(
     )
 
 
-def test_grader_profile_conflict_ships_as_typed_pending(catalog_database, catalog_query, tmp_path):
-    """A source whose grader needs network under deny defaults loads as Pending with the stage note."""
+def test_declared_grader_network_is_available_with_survey_evidence(catalog_database, catalog_query, tmp_path):
+    """Declared grader network needs do not create a separate profile gate."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "profile-conflict", source_id="Marin:orshape")
     catalog = CurationCatalog(root)
-    flipped = _unsupported_profile_survey(catalog, "Marin:orshape", grader_demands_network=True)
+    flipped = _unsupported_profile_survey(catalog, "Marin:orshape", grader_demands_network=True).model_copy(
+        update={"snapshot_id": "prior-source-revision", "catalog_root": "prior:catalog"}
+    )
     result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
     row = _source_load_row(catalog_query, result["load_id"], "Marin:orshape")
-    assert row["status"] == "Pending"
-    assert "Backend profile pending: grader needs network allow." in row["notes"]
-    # no VERIFY cells here: the marker stays unset; the typed stage note is the visibility
+    assert row["status"] == "Available"
+    # The original unsupported survey evidence remains visible.
     assert row["backend_verification_pending"] is None
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         served = next(
             source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:orshape"
         )
-        assert served["stage"] == "Backend profile pending"
+        assert served["stage"] is None
+        assert served["status"] == "Available"
+        details = next(source for source in client.get("/sources").json()["sources"] if source["id"] == "Marin:orshape")
+        assert details["backend_capabilities"]["demands"] == next(
+            row.demands for row in flipped.sources if row.source_id == "Marin:orshape"
+        )
 
 
-def test_all_unsupported_without_a_profile_conflict_still_blocks(catalog_database, catalog_query, tmp_path):
-    """An all-unsupported Available source with no network demand keeps the hard blocker."""
+def test_backend_runtime_fit_does_not_hold_catalog_admission(catalog_database, catalog_query, tmp_path):
+    """Backend feasibility is enforced when executing the declared TaskSpec."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "plain-unsupported", source_id="Marin:plain")
     catalog = CurationCatalog(root)
     flipped = _unsupported_profile_survey(catalog, "Marin:plain", grader_demands_network=False)
-    with pytest.raises(ValueError, match="Backend admission blocked"):
-        load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    assert _source_load_row(catalog_query, result["load_id"], "Marin:plain")["status"] == "Available"
 
 
 def test_docker_build_preparation_gate_ships_as_typed_pending(catalog_database, catalog_query, tmp_path):
@@ -4089,7 +4101,6 @@ def test_docker_build_preparation_gate_ships_as_typed_pending(catalog_database, 
     result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
     served = _source_load_row(catalog_query, result["load_id"], "Marin:buildgate")
     assert served["status"] == "Pending"
-    assert "Backend preparation pending: the grader Docker build context is unresolved" in served["notes"]
     with TestClient(create_api(cast(AppletServices, CatalogServices(catalog_database)))) as client:
         served_row = next(
             source for source in client.get("/source-statuses").json()["sources"] if source["id"] == "Marin:buildgate"
@@ -4097,9 +4108,8 @@ def test_docker_build_preparation_gate_ships_as_typed_pending(catalog_database, 
         assert served_row["stage"] == "Backend preparation pending"
 
 
-def test_docker_build_gate_with_other_validation_errors_still_blocks(catalog_database, catalog_query, tmp_path):
-    """An all-unsupported source whose grader fails on something besides the build gate
-    keeps the hard blocker: only the source preparation gate downgrades."""
+def test_network_policy_validation_is_runtime_evidence(catalog_database, catalog_query, tmp_path):
+    """Network policy validation does not create a preparation hold."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "other-gate", source_id="Marin:othergate")
     catalog = CurationCatalog(root)
@@ -4128,8 +4138,8 @@ def test_docker_build_gate_with_other_validation_errors_still_blocks(catalog_dat
             ]
         }
     )
-    with pytest.raises(ValueError, match="Backend admission blocked"):
-        load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    result = load_surveyed_catalog(catalog, catalog_query, flipped, catalog_identity_map(catalog))
+    assert _source_load_row(catalog_query, result["load_id"], "Marin:othergate")["status"] == "Available"
 
 
 def test_new_train_admission_without_lexical_clearance_is_refused(catalog_database, catalog_query, tmp_path):
@@ -4141,8 +4151,8 @@ def test_new_train_admission_without_lexical_clearance_is_refused(catalog_databa
         load_surveyed_catalog(catalog, catalog_query, catalog_backend_map(catalog), catalog_identity_map(catalog))
 
 
-def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, catalog_query, tmp_path):
-    """The SAMPLE pin gate: new ARCHIVED_LINEAGE admissions refuse; grandfathered rows keep the marker."""
+def test_archived_lineage_panel_admits_with_marker(catalog_database, catalog_query, tmp_path):
+    """SAMPLE history remains visible without holding a prepared source."""
     root = str(tmp_path / "catalog")
     publish_sample(root, "stale-panel", source_id="Marin:stalepanel")
     catalog = CurationCatalog(root)
@@ -4180,10 +4190,6 @@ def test_archived_lineage_panel_grandfathered_with_marker(catalog_database, cata
             )
             tx.table(CURRENT).add(CurrentCatalog(name="latest", snapshot_id="stale-panel").model_dump())
     stale_catalog = CurationCatalog(root)
-    with pytest.raises(ValueError, match="older population pin"):
-        load_surveyed_catalog(stale_catalog, catalog_query, survey, catalog_identity_map(stale_catalog))
-    # grandfathering: seed the previous load with the same Available source, then reload
-    seed_previous_available(catalog_database, ["Marin:stalepanel"])
     result = load_surveyed_catalog(stale_catalog, catalog_query, survey, catalog_identity_map(stale_catalog))
     row = _source_load_row(catalog_query, result["load_id"], "Marin:stalepanel")
     assert row["status"] == "Available"

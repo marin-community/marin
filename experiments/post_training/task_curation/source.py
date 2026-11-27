@@ -652,25 +652,12 @@ class RlDataSource[ConfigT: CatalogConfig]:
         return self.admission_claims + manual_exclusion_claims(self.info.id)
 
     @property
-    def snapshot_repair_queued(self) -> bool:
-        """The measured provisioning exceeds the snapshot budget.
-
-        The Daytona snapshot budget is a capacity constraint, not a property of
-        the data: while it binds, the source waits Pending for the snapshot-safe
-        rebuild instead of being Excluded (ruling 2026-11-23). Other recorded
-        claims stay visible beside the repair stage.
-        """
-        return self.info.daytona_unsafe_reasons == (DaytonaUnsafeReason.TOO_MANY_SNAPSHOTS,)
-
-    @property
     def status(self) -> SourceStatus:
         """The catalog status for the Atlas taxonomy.
 
-        A superseded source is Deprecated with its typed replacement link. The
-        snapshot budget is a capacity constraint: a source whose measured
-        provisioning exceeds it waits Pending for the snapshot-safe repair,
-        whatever other claims stay visible beside the repair stage. Not
-        selectable folds into Excluded. A deprecated
+        A superseded source is Deprecated with its typed replacement link.
+        Snapshot capacity and consumer qualification are runtime concerns.
+        Not selectable folds into Excluded. A deprecated
         tag yields Deprecated only when no exclusion reason applies; a
         Deprecated source must be trainable. An ``excluded`` tag without any
         claim is a registry bug and fails loudly. A source whose only exclusion
@@ -698,8 +685,6 @@ class RlDataSource[ConfigT: CatalogConfig]:
             ):
                 return SourceStatus.PENDING
             return SourceStatus.EXCLUDED
-        if self.snapshot_repair_queued:
-            return SourceStatus.PENDING
         if "deprecated" in self.info.tags:
             return SourceStatus.DEPRECATED
         if approved := self.approved_consumer_status:
@@ -710,20 +695,12 @@ class RlDataSource[ConfigT: CatalogConfig]:
     def stage(self) -> PendingStage | None:
         """The evidence-computed intake stage of a Pending declaration.
 
-        A Pending source whose measured provisioning exceeds the snapshot
-        budget queues for the snapshot-safe repair; a Pending source with
-        claims queues for lexical remediation; a Pending source without claims
-        waits on its consumer admission decision. Any other status carries no
-        stage. Load-time backend downgrades assign the backend stages on top of
-        this value.
+        Lexical remediation requires preparing a cleaned training population.
+        Runtime backend qualification and capacity do not change source status.
         """
         if self.status is not SourceStatus.PENDING:
             return None
-        if self.exclusion_claims:
-            return PendingStage.LEXICAL_REMEDIATION_QUEUED
-        if self.snapshot_repair_queued:
-            return PendingStage.SNAPSHOT_REPAIR_QUEUED
-        return PendingStage.CONSUMER_CHECK_PENDING
+        return PendingStage.LEXICAL_REMEDIATION_QUEUED
 
     @property
     def consumer_runtime_commit(self) -> str:
@@ -750,7 +727,7 @@ class RlDataSource[ConfigT: CatalogConfig]:
             self.consumer_findings,
             runtime_commit=self.consumer_runtime_commit,
         )
-        return SourceStatus(status) if status is not None else None
+        return SourceStatus.EXCLUDED if status == "Excluded" else None
 
     @property
     def derived_turns(self) -> str:

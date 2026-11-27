@@ -136,14 +136,7 @@ def _survey_groups(survey: SourceIdentitySurvey) -> dict[str, dict]:
 
 # The catalog load serves an Available declaration as typed Pending at one of these
 # backend stages (the registry declaration is untouched); see load.py's downgrades.
-LOAD_TIME_PENDING_STAGES = frozenset(
-    stage.value
-    for stage in (
-        PendingStage.BACKEND_VERIFICATION_PENDING,
-        PendingStage.BACKEND_PROFILE_PENDING,
-        PendingStage.BACKEND_PREPARATION_PENDING,
-    )
-)
+LOAD_TIME_PENDING_STAGES = frozenset(stage.value for stage in (PendingStage.BACKEND_PREPARATION_PENDING,))
 
 
 def served_status_matches(row: dict, declaration: dict) -> bool:

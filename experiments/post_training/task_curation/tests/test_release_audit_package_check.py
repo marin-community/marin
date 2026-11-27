@@ -904,7 +904,7 @@ def test_strict_audit_reads_the_serving_projection_of_sealed_rows():
         "status": "Available",
         "grading_environment": {"evidence_url": "s3://fixture/current.json"},
     }
-    pending = {"status": "Pending", "stage": strict_audit.PendingStage.BACKEND_PROFILE_PENDING.value}
+    pending = {"status": "Pending", "stage": strict_audit.PendingStage.BACKEND_PREPARATION_PENDING.value}
     assert strict_audit.served_status_matches(pending, available)
     assert not strict_audit.served_status_matches({"status": "Pending", "stage": "Snapshot repair queued"}, available)
     assert not strict_audit.served_status_matches({"status": "Excluded"}, available)

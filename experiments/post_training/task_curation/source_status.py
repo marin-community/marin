@@ -31,19 +31,13 @@ from finestore.rl.status_taxonomy import (
 from experiments.post_training.task_curation.consumer_scope import CONSUMER_RUNTIME_COMMIT
 from experiments.post_training.task_curation.datasets.daytona_measurements import actor_census_receipts
 from experiments.post_training.task_curation.datasets.grading_measurements import grading_census_receipts
-from experiments.post_training.task_curation.datasets.lexical_measurements import lexical_measurements
-from experiments.post_training.task_curation.datasets.oracle_admitted_releases import oracle_admitted_release_receipts
-from experiments.post_training.task_curation.datasets.oracle_releases import oracle_release_receipts
-from experiments.post_training.task_curation.datasets.retained_releases import retained_release_receipts
-from experiments.post_training.task_curation.datasets.sample_qc_results import sample_qc_receipts
 from experiments.post_training.task_curation.environment_artifacts import verify_declared_environment_artifacts
 from experiments.post_training.task_curation.exclusion_registry import manual_exclusion_claims
 from experiments.post_training.task_curation.metadata_exclusions import metadata_exclusions
-from experiments.post_training.task_curation.registry import read_registry_json
 from experiments.post_training.task_curation.source import RlDataSource
 from experiments.post_training.task_curation.source_owners import source_owner
 from experiments.post_training.task_curation.sources import PENDING_MEASUREMENT_SOURCES, all_sources
-from experiments.post_training.task_curation.within_source_binding import read_dedup_receipts
+from infra.marina.apps.rl_data_catalog.server.admission import population_admission_blocker
 from infra.marina.apps.rl_data_catalog.server.methods import variant_projection
 
 
@@ -87,34 +81,24 @@ def intake_columns(source: RlDataSource) -> dict[str, Any]:
 
 
 def receipt_registry_keys() -> dict[str, set[str]]:
-    """Return each standard measurement registry's covered source IDs."""
-    keys: dict[str, set[str]] = {
-        "actor census": set(actor_census_receipts()),
-        "lexical": set(lexical_measurements()),
-        "grading": set(grading_census_receipts()),
-        "sample": set(sample_qc_receipts()),
-        "oracle": set(oracle_release_receipts()),
-        "oracle admitted": set(oracle_admitted_release_receipts()),
-        "retained": set(retained_release_receipts()),
+    """Source IDs with nonempty task data and complete executable-grader evidence."""
+    actors = actor_census_receipts()
+    graders = grading_census_receipts()
+    return {
+        "actor census": {source_id for source_id, receipt in actors.items() if receipt.input.measured_tasks > 0},
+        "grading": {
+            source_id
+            for source_id, receipt in graders.items()
+            if population_admission_blocker(receipt.input, receipt.input.measured_tasks, receipt.evidence) is None
+        },
     }
-    dedup = read_dedup_receipts(
-        Path(__file__).with_name("datasets") / "within_source_dedup.json", load_json=read_registry_json
-    )
-    keys["dedup"] = set(dedup)
-    return keys
 
 
-def pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage:
-    """Derive a pending source's stage from the measurement receipts it lacks.
-
-    The stage describes catalog-evidence state: a queued source has no
-    measurement receipts at all, a measured source has some, and an
-    admission-pending source has every receipt the standard admission path
-    produces.
-    """
+def pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage | None:
+    """Describe missing task data or graders; complete preparation has no hold stage."""
     covered = [source_id in keys for keys in receipts.values()]
-    if all(covered):
-        return PendingStage.ADMISSION_PENDING
+    if covered and all(covered):
+        return None
     if any(covered):
         return PendingStage.MEASUREMENTS_PENDING
     return PendingStage.INTAKE_QUEUED
@@ -164,30 +148,15 @@ def pending_rows() -> list[dict[str, Any]]:
                 ).payload()
             )
         else:
+            stage = pending_stage(source.info.id, receipts)
             rows.append(
                 StatusRow(
-                    status=SourceStatus.PENDING.value,
-                    stage=pending_stage(source.info.id, receipts).value,
+                    status=SourceStatus.PENDING.value if stage else SourceStatus.AVAILABLE.value,
+                    stage=stage.value if stage else None,
                     **common,
                 ).payload()
             )
     return rows
-
-
-CONSUMER_PENDING_CORE_RECEIPTS = ("actor census", "lexical", "grading", "sample", "dedup")
-
-
-def consumer_pending_stage(source_id: str, receipts: dict[str, set[str]]) -> PendingStage:
-    """The stage a consumer-decision-Pending source queues under.
-
-    Every core admission-measurement receipt present means the source awaits
-    configuration and admission only (``ADMISSION_PENDING``); a missing core
-    receipt keeps the source at its consumer check. The oracle and retained
-    registries hold release evidence rather than admission gates: no-oracle
-    sources never register there, admitted or not.
-    """
-    covered = all(source_id in receipts[name] for name in CONSUMER_PENDING_CORE_RECEIPTS)
-    return PendingStage.ADMISSION_PENDING if covered else PendingStage.CONSUMER_CHECK_PENDING
 
 
 def remediation_rows() -> list[dict[str, Any]]:
@@ -196,8 +165,7 @@ def remediation_rows() -> list[dict[str, Any]]:
     These rows keep every claim visible on the status page while their status
     is Pending: the remediation agent produces the clean or remediated
     private-release receipt, and the source returns to Available. Each row
-    carries the source's computed stage, so a source whose binding constraint
-    is the snapshot budget shows its repair stage here too.
+    carries the source's computed lexical-remediation stage.
     """
     return [
         StatusRow(
@@ -357,11 +325,6 @@ def status_extras() -> dict[str, Any]:
         "pending": pending,
         "stages": {
             **{row["id"]: row["stage"] for row in remediation if row["stage"]},
-            **{
-                source.info.id: consumer_pending_stage(source.info.id, receipt_registry_keys()).value
-                for source in all_sources().values()
-                if source.approved_consumer_status is SourceStatus.PENDING and not source.exclusion_claims
-            },
         },
         "remediation_queue": remediation,
         "metadata_exclusions": metadata,

@@ -550,7 +550,7 @@ def test_hosted_check_accepts_the_serving_projection_of_withheld_and_downgraded_
         rows[audit_fixtures.SOURCE_A]["backend_capabilities"]
     )
     rows[audit_fixtures.SOURCE_A]["notes"] = LICENSE_CONTENT_MARKER
-    rows[audit_fixtures.SOURCE_B].update(status="Pending", stage=PendingStage.BACKEND_VERIFICATION_PENDING.value)
+    rows[audit_fixtures.SOURCE_B].update(status="Pending", stage=PendingStage.BACKEND_PREPARATION_PENDING.value)
     proof = hosted_check.run_hosted_check(inputs, dry_run=False, api_client=_FakeApi(documents), feeds=_feeds(tmp_path))
     assert proof["mismatches"] == {}
 

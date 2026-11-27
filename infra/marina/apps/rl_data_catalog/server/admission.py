@@ -18,7 +18,6 @@ from finestore.rl.curation import (
     LexicalContaminationEvidence,
     LexicalUse,
     OversightLevel,
-    SamplePanelCurrency,
     SourceUse,
     consumer_blockers,
     consumer_decision_status,
@@ -35,9 +34,10 @@ from .licensing import require_unbanned, source_license_ban
 MISSING_GRADER_REASON = "No executable grader is declared"
 
 # The survey's aggregate support labels; "supported" and "partial" mean some
-# backend can run the source at all. The labels are matched as strings because
+# backend can run the source; VERIFY defers execution checks to runtime.
+# The labels are matched as strings because
 # the packaged runtime has no taskcompendium.
-RUNNABLE_FIT = frozenset({"supported", "partial"})
+RUNNABLE_FIT = frozenset({"supported", "partial", "verify"})
 
 # Deployment classes mirrored from shellbox.machine.BACKEND_DEPLOYMENT (marina
 # does not depend on shellbox at runtime). Surveys carry their own
@@ -88,53 +88,16 @@ def has_runnable_production_support(
     )
 
 
-def backend_admission_review(
-    verdicts: Mapping[str, str],
-    status: str | None,
-    deployment_classes: Mapping[str, str] | None = None,
-) -> tuple[str | None, list[str]]:
-    """Review one source's backend fit for admission.
-
-    Returns ``(blocker, verification_pending)``. A production ``verify`` cell is
-    pending live qualification, not a fit failure: it never blocks, and the
-    caller decides the status — an already-admitted source keeps its status with
-    the visible marker, a new admission materializes as Pending. Dev-only
-    backends (local Docker, Docker+runsc) are dropped before every check: a
-    DEV_ONLY SUPPORTED cell can never satisfy admission. ``None`` for every
-    non-Available status: exclusion and hold statuses never need a runnable
-    backend. ``role_absent`` marks a population that declares no environment
-    for a role at all, so a source whose every production cell is
-    ``role_absent`` needs no backend. ``not_applicable`` cells are applicability
-    outcomes on declared roles and cannot negate a pending qualification, but
-    when every production backend is ``not_applicable``/``unsupported`` the
-    blocker names them all.
-    """
-    if status != "Available":
-        return None, []
-    classes = dict.fromkeys(
-        (*PRODUCTION_BACKENDS_DEFAULT, *DEV_ONLY_BACKENDS_DEFAULT),
-        "dev_only",
-    )
-    classes.update({name: "production" for name in PRODUCTION_BACKENDS_DEFAULT})
-    if deployment_classes:
-        classes.update(deployment_classes)
-    production_verdicts = {
-        name: support for name, support in verdicts.items() if classes.get(name, "dev_only") == "production"
-    }
-    pending = sorted(name for name, support in production_verdicts.items() if support == "verify")
-    if any(support in RUNNABLE_FIT for support in production_verdicts.values()):
-        return None, pending
-    if pending:
-        # One production VERIFY cell is enough: not_applicable cells on other
-        # production backends are applicability outcomes, not fit failures, and
-        # cannot negate a pending live qualification.
-        return None, pending
-    if production_verdicts and all(support == "role_absent" for support in production_verdicts.values()):
-        return None, []
-    return (
-        "no surveyed production backend can run the source: "
-        + ", ".join(f"{name}={support}" for name, support in sorted(verdicts.items())),
-        pending,
+def backend_verification_evidence(
+    verdicts: Mapping[str, str], deployment_classes: Mapping[str, str] | None = None
+) -> list[str]:
+    """Production backends with VERIFY evidence, retained without holding admission."""
+    classes = {name: "production" for name in PRODUCTION_BACKENDS_DEFAULT}
+    classes.update(deployment_classes or {})
+    return sorted(
+        name
+        for name, support in verdicts.items()
+        if support == "verify" and classes.get(name, "dev_only") == "production"
     )
 
 
@@ -188,7 +151,7 @@ def require_population_admission(declaration: SourceDeclaration) -> None:
             reasons,
             runtime_commit=declaration.consumer_runtime_commit or CONSUMER_RUNTIME_COMMIT,
         )
-        is not None
+        == "Excluded"
     ):
         assert declaration.consumer_decision is not None
         raise ValueError(
@@ -258,20 +221,6 @@ def require_available_lexical_clearance(declaration: SourceDeclaration) -> None:
         declaration.dataset_revision,
         declaration.intended_use,
     )
-
-
-def require_sample_pin_currency(declaration: SourceDeclaration) -> None:
-    """Require the admission SAMPLE panel on the current final pin.
-
-    Filtered private releases need their OWN SAMPLE on the final pin: a panel
-    bound through an archived lineage was drawn against an older population
-    and cannot qualify a new admission (coordinator ruling, SAMPLE
-    pin-currency). Sources already Available in the previously selected
-    catalog are grandfathered by the caller with a visible marker.
-    """
-    qc = declaration.independent_qc
-    if qc is not None and qc.panel_currency is SamplePanelCurrency.ARCHIVED_LINEAGE:
-        raise ValueError(f"Admission SAMPLE panel belongs to an older population pin: {declaration.id}")
 
 
 def require_lexical_qualification(

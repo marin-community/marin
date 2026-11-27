@@ -135,7 +135,11 @@ def assess_grading_environment(task: TaskSpec) -> GradingEnvironmentAssessment:
             declared=declared,
             reason="Stdio grading reads the submitted program and its stdout in the declared verifier environment",
         )
-    if native or (isinstance(grader, ScriptGrader) and grader.answer_path is None and task.output_paths):
+    if native:
+        # Native task.toml verifiers grade against the agent's live workspace; the
+        # Harbor runtime delivers them through the root-delivery contract. TaskSpec
+        # script graders always grade the staged captured files in their own
+        # verifier environment, so their boundary is never SHARED.
         return GradingEnvironmentAssessment(
             required=GradingEnvironmentMode.SHARED,
             declared=declared,
