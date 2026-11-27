@@ -47,10 +47,19 @@ message RouterReplay {
   uint32 num_positions = 2;
   uint32 experts_per_token = 3;
 
-  // Row major [layer, position, expert slot]. Positions index the concatenated
-  // prompt and this choice's generated tokens.
-  repeated uint32 expert_ids = 4;
+  reserved 4;
 
   // One flag per position. An unprocessed final token has no recorded route.
   repeated bool valid = 5;
+
+  // Row major [layer, position, expert slot] with the width given by
+  // expert_id_dtype. Positions index the concatenated prompt and generated tokens.
+  bytes expert_ids = 6;
+  ExpertIdDtype expert_id_dtype = 7;
+}
+
+enum ExpertIdDtype {
+  EXPERT_ID_DTYPE_UNSPECIFIED = 0;
+  EXPERT_ID_DTYPE_UINT8 = 1;
+  EXPERT_ID_DTYPE_UINT16_LE = 2;
 }
