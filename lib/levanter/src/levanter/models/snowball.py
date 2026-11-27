@@ -20,6 +20,7 @@ guards against drift.
 """
 
 import dataclasses
+from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import partial
 import math
@@ -74,7 +75,7 @@ from levanter.grug.sharding import (
     unshard,
 )
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
-from levanter.kernels.logsumexp import batch_invariant_logsumexp
+from levanter.kernels.logsumexp import batch_invariant_logsumexp, batch_invariant_selected_logprobs
 from levanter.kernels.pallas.fixed_schedule_linear import _BLOCK_SIZE as _FIXED_PROJECTION_TILE
 from levanter.kernels.pallas.fixed_schedule_linear import fixed_schedule_linear
 
@@ -1660,6 +1661,11 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         ids = np.where(active[..., None], ids, np.arange(expected[-1], dtype=np.int32))
         return SnowballRouteReplay(jnp.asarray(ids, dtype=jnp.int32), token_valid)
 
+    def _policy_matmul_precision(self):
+        if self.config.replay_precision == "zero_kl":
+            return jax.default_matmul_precision("highest")
+        return nullcontext()
+
     def _activations(
         self,
         input_ids: NamedArray,
@@ -1685,14 +1691,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             replay_experts = route_replay.expert_ids.reshape(
                 self.config.num_layers, b * s, self.config.num_experts_per_token
             )
-        result = self.transformer._forward(
-            tokens,
-            mask,
-            return_routes,
-            token_valid,
-            collect_counts=collect_counts,
-            replay_experts=replay_experts,
-        )
+        with self._policy_matmul_precision():
+            result = self.transformer._forward(
+                tokens,
+                mask,
+                return_routes,
+                token_valid,
+                collect_counts=collect_counts,
+                replay_experts=replay_experts,
+            )
         hidden = (
             result.output.reshape(*lead, s, self.Embed.size) if lead else result.output.reshape(s, self.Embed.size)
         )
@@ -1729,13 +1736,12 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def fixed_policy_logprobs(self, activations: NamedArray, targets: NamedArray) -> NamedArray:
         """Score target IDs with the fixed projection and policy normalization."""
         logits = self.project_logits(activations).astype(jnp.float32)
-        selected, normalizers = self._fixed_target_logits(logits, targets)
-        return selected - normalizers
+        return self._fixed_target_logprobs(logits, targets)
 
-    def _fixed_target_logits(self, logits: NamedArray, targets: NamedArray) -> tuple[NamedArray, NamedArray]:
-        selected = hax.sum(hax.where(hax.nn.one_hot(targets, self.Vocab, dtype=bool), logits, 0), self.Vocab)
-        normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
-        return selected, normalizers
+    def _fixed_target_logprobs(self, logits: NamedArray, targets: NamedArray) -> NamedArray:
+        row_axes = logits.axes[:-1]
+        selected = batch_invariant_selected_logprobs(logits.array, targets.rearrange(row_axes).array)
+        return hax.named(selected, row_axes)
 
     def _loss_from_activations(
         self,
@@ -1766,9 +1772,9 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         if logit_soft_cap is not None:
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
         targets = next_token_ids(self.Pos.name, example.tokens)
-        selected, normalizers = self._fixed_target_logits(logits, targets)
-        loss = normalizers - selected
+        loss = -self._fixed_target_logprobs(logits, targets)
         if logsumexp_weight:
+            normalizers = hax.named(batch_invariant_logsumexp(logits.array), logits.axes[:-1])
             loss = loss + logsumexp_weight * hax.square(normalizers)
         weights = next_token_loss_weight(logits.resolve_axis(self.Pos.name), example.loss_weight)
         return hax.nn.loss.reduce_loss(loss, reduction, reduction_axis, weight=weights) + aux_loss
@@ -1906,16 +1912,17 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         capture_routes: bool = False,
     ) -> SnowballPagedResult:
         unroll = window_batch is not None or (self._unroll_decode and not prefill)
-        hidden, caches, routes = self._decode_hidden(
-            input_ids,
-            kv_cache,
-            batch_info,
-            pos_ids,
-            unroll=unroll,
-            window_batch=window_batch,
-            capture_routes=capture_routes,
-            fused_kv_tokens=(FUSED_KV_PREFILL_MAX_TOKENS if prefill else FUSED_KV_APPEND_MAX_TOKENS),
-        )
+        with self._policy_matmul_precision():
+            hidden, caches, routes = self._decode_hidden(
+                input_ids,
+                kv_cache,
+                batch_info,
+                pos_ids,
+                unroll=unroll,
+                window_batch=window_batch,
+                capture_routes=capture_routes,
+                fused_kv_tokens=(FUSED_KV_PREFILL_MAX_TOKENS if prefill else FUSED_KV_APPEND_MAX_TOKENS),
+            )
         if self.config.projection_implementation == "fixed_schedule":
             rows = hax.named(hidden[:, 0], (*input_ids.axes, self.Embed))
             if sample_indices is not None:
