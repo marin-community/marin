@@ -6,11 +6,13 @@
 import argparse
 import hashlib
 import json
+import logging
 import os
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 from finestore.rl.difficulty import PROTOCOL_ID
@@ -39,6 +41,7 @@ from experiments.post_training.task_curation.difficulty_config import JUDGE_ROUT
 from experiments.post_training.task_curation.release_stages.manifest import ArtifactRef, read_ref
 
 SCHEMA_VERSION = 1
+LOGGER = logging.getLogger(__name__)
 
 
 def json_bytes(value: object) -> bytes:
@@ -53,12 +56,32 @@ def ledger_partitions(ledger: str) -> tuple[str, ...]:
     return tuple(sorted(map(str, (StoragePath(ledger) / "v1/rows/*.jsonl").glob())))
 
 
-def verified_partition(uri: str) -> tuple[dict, tuple[LedgerRow, ...]]:
+def partition_payload(uri: str) -> tuple[dict, bytes]:
+    """Read a content-addressed partition once and verify its original bytes."""
     payload = StoragePath(uri).read_bytes()
     sha256 = hashlib.sha256(payload).hexdigest()
     if StoragePath(uri).name != sha256 + ".jsonl":
         raise ValueError(f"Ledger partition content hash differs: {uri}")
-    return {"uri": uri, "sha256": sha256, "bytes": len(payload)}, decode_partition_rows(payload)
+    return {"uri": uri, "sha256": sha256, "bytes": len(payload)}, payload
+
+
+def verified_partition(uri: str) -> tuple[dict, tuple[LedgerRow, ...]]:
+    reference, payload = partition_payload(uri)
+    return reference, decode_partition_rows(payload)
+
+
+def copy_snapshot_partition(uri: str, selected: StoragePath, boundary: datetime) -> dict:
+    """Validate a captured partition and preserve its pre-cutoff row bytes."""
+    reference, payload = partition_payload(uri)
+    decode_partition_rows(payload)
+    kept = b"".join(
+        line + b"\n"
+        for line in payload.splitlines()
+        if datetime.fromisoformat(json.loads(line)["recorded_at"]) < boundary
+    )
+    if kept:
+        write_immutable_bytes(selected / "v1/rows" / (hashlib.sha256(kept).hexdigest() + ".jsonl"), kept)
+    return reference
 
 
 def snapshot_cells(rows: list[LedgerRow], catalog: list[CatalogSource], provenance: dict) -> list[dict]:
@@ -306,20 +329,13 @@ def snapshot_active_ledger(
         verify_snapshot(reference)
         return reference
     source_inventory = []
-    for uri in frozen["partitions"]:
-        reference, _ = verified_partition(uri)
-        source_inventory.append(reference)
-        payload = StoragePath(uri).read_bytes()
-        if hashlib.sha256(payload).hexdigest() != reference["sha256"]:
-            raise ValueError("Source partition changed after verification")
-        # Keep selected rows byte-for-byte, including optional fields and original JSON formatting.
-        kept = b"".join(
-            line + b"\n"
-            for line in payload.splitlines()
-            if datetime.fromisoformat(json.loads(line)["recorded_at"]) < boundary
-        )
-        if kept:
-            write_immutable_bytes(selected / "v1/rows" / (hashlib.sha256(kept).hexdigest() + ".jsonl"), kept)
+    copy_partition = partial(copy_snapshot_partition, selected=selected, boundary=boundary)
+    with ThreadPoolExecutor(max_workers=LEDGER_READ_WORKERS) as pool:
+        # map preserves the frozen inventory order, so concurrency cannot change the snapshot identity.
+        for reference in pool.map(copy_partition, frozen["partitions"]):
+            source_inventory.append(reference)
+            if len(source_inventory) % 1024 == 0:
+                LOGGER.info("SNAPSHOT_PARTITIONS_SELECTED %d/%d", len(source_inventory), len(frozen["partitions"]))
     for item in frozen["side_objects"]:
         payload = StoragePath(item["captured_uri"]).read_bytes()
         if hashlib.sha256(payload).hexdigest() != StoragePath(item["captured_uri"]).name:

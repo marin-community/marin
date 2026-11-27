@@ -1,13 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
+from threading import Barrier
 
 import pytest
 from finestore.rl.difficulty import Solver
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.post_training.task_curation.difficulty import seal
 from experiments.post_training.task_curation.difficulty.ledger import append_rows
 from experiments.post_training.task_curation.difficulty.seal import (
     capture_snapshot_inventory,
@@ -139,3 +142,80 @@ def test_active_snapshot_freezes_cutoff_preserves_repairs_and_keeps_scoring(tmp_
     assert not (StoragePath(ledger) / "v1/closed.json").exists()
     assert snapshot_active_ledger(ledger, [], destination, {"new": "ignored"}, "2026-11-24T18:01:00-05:00") == reference
     assert verify_snapshot(reference) == manifest
+
+
+def test_active_snapshot_copies_concurrently_without_rewriting_rows(tmp_path, monkeypatch):
+    ledger = str(tmp_path / "active")
+    before = json.dumps(asdict(attempt("before", "a")), separators=(",", ":")).encode()
+    after = json.dumps(asdict(replace(attempt("at-cutoff", "b"), recorded_at="2026-11-24T18:01:00-05:00"))).encode()
+    payloads = (before + b"\n" + after + b"\n", json.dumps(asdict(attempt("other", "b"))).encode() + b"\n")
+    originals = []
+    for raw in payloads:
+        path = StoragePath(ledger) / "v1/rows" / (hashlib.sha256(raw).hexdigest() + ".jsonl")
+        path.write_bytes(raw, auto_mkdir=True)
+        originals.append(str(path))
+    destination = str(tmp_path / "cut")
+    capture_snapshot_inventory(ledger, destination, {}, "2026-11-24T18:01:00-05:00")
+    barrier = Barrier(2, timeout=5)
+    read_bytes = StoragePath.read_bytes
+    reads = []
+
+    def captured_read(path):
+        if str(path) in originals:
+            reads.append(str(path))
+            barrier.wait()
+        return read_bytes(path)
+
+    monkeypatch.setattr(StoragePath, "read_bytes", captured_read)
+    reference = snapshot_active_ledger(ledger, [], destination, {}, "2026-11-24T18:01:00-05:00")
+    assert sorted(reads) == sorted(originals)
+    selected = (
+        StoragePath(destination) / "selected-ledger/v1/rows" / (hashlib.sha256(before + b"\n").hexdigest() + ".jsonl")
+    )
+    assert selected.read_bytes() == before + b"\n"
+    manifest = verify_snapshot(reference)
+    provenance = json.loads((StoragePath(reference.uri).parent / "provenance.json").read_text())
+    assert [item["uri"] for item in provenance["source_partition_inventory"]] == sorted(originals)
+    assert manifest["final_sequence_number"] == 2
+    assert not (StoragePath(ledger) / "v1/closed.json").exists()
+
+
+def test_active_snapshot_retries_partial_copy_using_the_original_capture(tmp_path, monkeypatch):
+    ledger = str(tmp_path / "active")
+    for identity in ("first", "second"):
+        append_rows(ledger, [attempt(identity, "a")])
+    destination = str(tmp_path / "cut")
+    cutoff = "2026-11-24T18:01:00-05:00"
+    frozen = capture_snapshot_inventory(ledger, destination, {}, cutoff)
+    original_copy = seal.copy_snapshot_partition
+
+    def interrupted_copy(uri, selected, boundary):
+        if uri == frozen["partitions"][1]:
+            raise RuntimeError("Interrupted snapshot copy")
+        return original_copy(uri, selected, boundary)
+
+    monkeypatch.setattr(seal, "copy_snapshot_partition", interrupted_copy)
+    with pytest.raises(RuntimeError, match="Interrupted snapshot copy"):
+        snapshot_active_ledger(ledger, [], destination, {}, cutoff)
+    assert len((StoragePath(destination) / "selected-ledger/v1/rows/*.jsonl").glob()) == 1
+    append_rows(ledger, [attempt("late-arrival", "b")])
+    monkeypatch.setattr(seal, "copy_snapshot_partition", original_copy)
+    reference = snapshot_active_ledger(ledger, [], destination, {}, cutoff)
+    manifest = verify_snapshot(reference)
+    assert manifest["final_sequence_number"] == 2
+    assert json.loads((StoragePath(destination) / "capture.json").read_text()) == frozen
+    assert not (StoragePath(ledger) / "v1/closed.json").exists()
+
+
+def test_active_snapshot_rejects_captured_partition_corruption(tmp_path):
+    ledger = str(tmp_path / "active")
+    partition = append_rows(ledger, [attempt("first", "a")])
+    assert partition is not None
+    destination = str(tmp_path / "cut")
+    cutoff = "2026-11-24T18:01:00-05:00"
+    capture_snapshot_inventory(ledger, destination, {}, cutoff)
+    StoragePath(partition).write_bytes(b"changed")
+    with pytest.raises(ValueError, match="content hash differs"):
+        snapshot_active_ledger(ledger, [], destination, {}, cutoff)
+    assert not (StoragePath(destination) / "selected-snapshot.json").exists()
+    assert not (StoragePath(ledger) / "v1/closed.json").exists()
