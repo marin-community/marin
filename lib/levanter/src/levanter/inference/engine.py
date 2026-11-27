@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Callable
 import dataclasses
 import functools
 import logging
@@ -1164,6 +1165,13 @@ class InferenceEngine:
             raise ValueError("Prompts must be nonempty and fit within max_prefill_size")
         if any(len(request.prompt_tokens) >= self.config.max_seq_len for request in requests):
             raise ValueError("Prompts must leave room for generation within max_seq_len")
+        for request in requests:
+            stops = request.decode_params.stop_tokens
+            if stops is not None and (
+                stops.axis_size("stop_seq") > self.config.max_stop_seqs
+                or stops.axis_size("position") > self.config.max_stop_tokens
+            ):
+                raise ValueError("Requested stop-token configuration exceeds service capacity")
         if any(request.n_generations < 1 for request in requests):
             raise ValueError("Every request must ask for at least one generation")
 
@@ -1177,161 +1185,128 @@ class InferenceEngine:
     def generate(
         self, requests: Sequence[Request], step_callback=None, *, capture_routes: bool = False
     ) -> GenerationResult:
-        """Generate tokens for a batch of Requests.
+        """Generate each request and return choices in input order."""
+        results: dict[int, GenerationResult] = {}
+        self.generate_continuously(
+            requests,
+            on_complete=results.__setitem__,
+            step_callback=step_callback,
+            capture_routes=capture_routes,
+        )
+        tokens = []
+        logprobs = []
+        expert_routes = [] if capture_routes else None
+        for request in requests:
+            result = results[request.request_id]
+            tokens.extend(result.tokens)
+            assert result.logprobs is not None
+            logprobs.extend(result.logprobs)
+            if expert_routes is not None:
+                assert result.expert_routes is not None
+                expert_routes.extend(result.expert_routes)
+        return GenerationResult(tokens, logprobs, sum(map(len, tokens)), expert_routes)
 
-        Each Request provides prompt_tokens, decode_params, and n_generations (clones).
-        Return tokens, log probabilities, and optional captured routes in choice order.
+    def generate_continuously(
+        self,
+        requests: Sequence[Request],
+        *,
+        on_complete: Callable[[int, GenerationResult], None],
+        poll_requests: Callable[[int], Sequence[Request]] | None = None,
+        step_callback: Callable[[int], None] | None = None,
+        capture_routes: bool = False,
+    ) -> None:
+        """Admit more requests between rounds and publish each response when it finishes.
 
-        Args:
-            requests: Sequence of generation requests
-            step_callback: Optional callback function called at each decode iteration with iteration number.
-            capture_routes: Retain the expert IDs used to score each Snowball choice. Routes align with
-                the prompt followed by generated tokens. The unscheduled terminal row is invalid.
+        The nonblocking poll receives free sequence capacity. It returns requests
+        with unique IDs and at most that many choices in total. When no work
+        remains, the loop returns and the caller can wait for another request.
         """
         if not requests:
-            return GenerationResult(
-                tokens=[], logprobs=[], total_generated=0, expert_routes=[] if capture_routes else None
-            )
+            return
         if capture_routes and not self.supports_route_capture:
             raise ValueError("Expert route capture requires a Snowball model")
-        self._validate_generation_requests(requests)
 
-        # for now, reset the engine state between each batch - the engine cannot be called with
-        # parallel batches.
+        self._validate_generation_requests(requests)
         self.reset()
         route_chunks: dict[tuple[int, int], list[tuple[np.ndarray, np.ndarray]]] | None = (
             {} if capture_routes else None
         )
+        pending: list[Request] = []
+        outstanding: dict[int, Request] = {}
+        seen_ids: set[int] = set()
 
-        # Track outputs and finished flags using self.results for only this call's requests
-        call_rids = [int(r.request_id) for r in requests]
-        expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
-        # Initialize fresh result buckets for this call
-        for rid in call_rids:
-            self.results[rid] = {
-                k: DecodeResult(id=rid, choice=k, token_list=[]) for k in range(expected_children[rid])
-            }
+        def admit(incoming: Sequence[Request]) -> None:
+            for request in incoming:
+                request_id = request.request_id
+                if request_id in seen_ids:
+                    raise ValueError("Request IDs must be unique during continuous generation")
+                seen_ids.add(request_id)
+                outstanding[request_id] = request
+                pending.append(request)
+                self.results[request_id] = {
+                    choice: DecodeResult(id=request_id, choice=choice, token_list=[])
+                    for choice in range(request.n_generations)
+                }
 
-        # Validate requested stop-token shapes against configured capacity; do not resize dynamically
-        ds = self.gen_state.decode_state
-        cur_stop_seqs = 0 if ds.stop_tokens is None else ds.stop_tokens.axis_size("stop_seq")
-        cur_stop_len = 0 if ds.stop_tokens is None else ds.stop_tokens.axis_size("position")
-        req_stop_seqs = 0
-        req_stop_len = 0
-        for req in requests:
-            st = req.decode_params.stop_tokens
-            if st is None:
-                continue
-            req_stop_seqs = max(req_stop_seqs, int(st.axis_size("stop_seq")))
-            req_stop_len = max(req_stop_len, int(st.axis_size("position")))
-        if req_stop_seqs > 0 or req_stop_len > 0:
-            if ds.stop_tokens is None:
-                raise ValueError(
-                    f"Requested stop tokens (seqs={req_stop_seqs}, len={req_stop_len}) but service was initialized "
-                    f"without stop-token capacity. Recreate service with nonzero max_stop_seqs/max_stop_tokens."
-                )
-            if req_stop_seqs > cur_stop_seqs or req_stop_len > cur_stop_len:
-                raise ValueError(
-                    "Requested stop-token configuration exceeds service capacity: "
-                    f"required (seqs={req_stop_seqs}, len={req_stop_len}) > "
-                    f"configured (seqs={cur_stop_seqs}, len={cur_stop_len}). "
-                    "Increase max_stop_seqs/max_stop_tokens when constructing the service."
-                )
+        def publish_finished() -> None:
+            finished = [
+                request_id
+                for request_id in outstanding
+                if all(result.done for result in self.results[request_id].values())
+            ]
+            for request_id in finished:
+                request = outstanding.pop(request_id)
+                choices = self.results.pop(request_id)
+                self.sequences.pop(request_id, None)
+                tokens = [choices[i].token_list for i in range(request.n_generations)]
+                logprobs = [choices[i].logprobs or [] for i in range(request.n_generations)]
+                routes = None
+                if route_chunks is not None:
+                    routes = [
+                        self._assemble_routes(route_chunks, request, choice, len(choice_tokens))
+                        for choice, choice_tokens in enumerate(tokens)
+                    ]
+                    for choice in range(request.n_generations):
+                        route_chunks.pop((request_id, choice), None)
+                on_complete(request_id, GenerationResult(tokens, logprobs, sum(map(len, tokens)), routes))
 
-        time_in = time.time()
-
-        def _all_done() -> bool:
-            for rid, n_kids in expected_children.items():
-                kid_map = self.results.get(rid, {})
-                for cid in range(n_kids):
-                    dr = kid_map.get(cid)
-                    if dr is None or not dr.done:
-                        return False
-            return True
-
-        pending = list(requests)
+        admit(requests)
         decode_iteration = 0
-        while not _all_done():
+        while outstanding:
+            if not pending and self.free_slots and poll_requests is not None:
+                available = len(self.free_slots)
+                incoming = poll_requests(available)
+                if incoming:
+                    self._validate_generation_requests(incoming)
+                    if sum(request.n_generations for request in incoming) > available:
+                        raise ValueError("The request poll returned more choices than available slots")
+                    admit(incoming)
             if pending and self.free_slots:
                 prefill_outputs = self._prefill_batch(pending, capture_routes)
                 if prefill_outputs is not None:
                     self._extract_outputs(prefill_outputs, route_chunks)
                     pending = [request for request in pending if request.request_id not in self.sequences]
-                    continue
+                    publish_finished()
+                    if poll_requests is None or not self.local_map:
+                        continue
 
-            # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
-
-            iter_start = time.time()
-
-            future_state, decode_outputs = _run_generation_loop(
+            started = time.monotonic()
+            self.gen_state, outputs = _run_generation_loop(
                 self.gen_state,
                 self.model,
                 self.sampler,
-                # TODO: tune max_tokens_per_round
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
                 capture_routes,
             )
-            submit_done = time.time()
-            # Time spent with device executing (and the host thread waiting)
-            self.gen_state = future_state
-            device_time = time.time() - submit_done
-
-            extract_start = time.time()
-            new_tokens = self._extract_outputs(decode_outputs, route_chunks)
-            extract_time = time.time() - extract_start
-
-            iter_end = time.time()
-            iter_time = iter_end - iter_start
-            # Host time is everything except the device execution wait
-            host_time = max(iter_time - device_time, 0.0)
-            submit_time = submit_done - iter_start
-            if iter_time > 0:
-                tps_total = new_tokens / iter_time
-                logger.info(
-                    f"Decode iter: total {iter_time:.3f}s (device {device_time:.3f}s, host {host_time:.3f}s, "
-                    f"submit {submit_time:.3f}s), "
-                    f"{tps_total:.2f} tok/s, {new_tokens} new"
-                    f" (extract {extract_time:.3f}s)"
-                )
-
+            generated = self._extract_outputs(outputs, route_chunks)
+            publish_finished()
+            logger.debug("Decode iteration generated %d tokens in %.3fs", generated, time.monotonic() - started)
             decode_iteration += 1
-
-            if new_tokens == 0:
+            if generated == 0 and outstanding:
                 raise RuntimeError("Inference made no progress with unfinished requests")
-
-        # Assemble outputs in the order of the requests for this call
-        outputs_list: list[list[int]] = []
-        logprobs_list: list[list[float]] = []
-        expert_routes = [] if capture_routes else None
-        total_prompt_tokens = 0
-        for r in requests:
-            rid = int(r.request_id)
-            total_prompt_tokens += len(r.prompt_tokens) * int(r.n_generations)
-            # Initialize result buckets for this rid if not present
-            kid_map = self.results.get(rid, {})
-            for k in range(int(r.n_generations)):
-                dr = kid_map.get(k)
-                if dr is None:
-                    # Ensure a placeholder exists to avoid KeyErrors
-                    kid_map[k] = DecodeResult(id=rid, choice=k, token_list=[])
-                    dr = kid_map[k]
-                if expert_routes is not None and route_chunks is not None:
-                    expert_routes.append(self._assemble_routes(route_chunks, r, k, len(dr.token_list)))
-                outputs_list.append(dr.token_list)
-                logprobs_list.append(dr.logprobs if dr.logprobs is not None else [])
-            self.results[rid] = kid_map
-        total_generated = sum(len(seq_outputs) for seq_outputs in outputs_list)
-        total_time = time.time() - time_in
-        tps_overall = (total_generated / total_time) if total_time > 0 else 0.0
-        logger.debug(f"Batch generated in {total_time:.2f}s, {total_generated} tokens, {tps_overall:.2f} tok/s")
-        # Clear results for these requests now that we've assembled outputs
-        for rid in call_rids:
-            if rid in self.results:
-                self.results.pop(rid, None)
-        return GenerationResult(outputs_list, logprobs_list, total_generated, expert_routes)
 
     def write_kernel_jaxprs(self, path, log_artifacts: bool = True):
         """
