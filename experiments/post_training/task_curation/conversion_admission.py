@@ -173,7 +173,8 @@ def bind_conversion_admission(source: RlDataSource, receipt: ConversionAdmission
         source_revision=receipt.conversion_release.revision,
         converter_revision=actor.converter_revision,
         converter_version=actor.converter_version,
-        drop_manifest_uri=population.within_source_dedup.get("drop_manifest_uri"),
+        drop_manifest_uri=population.within_source_dedup.get("drop_manifest_uri")
+        or f"{receipt.population_record}/within-source-dedup/drops.parquet",
         evidence_url=f"{receipt.population_record}/.artifact.json",
     )
     if dedup.unique_count != count:
