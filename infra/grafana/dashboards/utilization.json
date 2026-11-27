@@ -1,0 +1,661 @@
+{
+  "uid": "marin-utilization",
+  "title": "Utilization",
+  "description": "Which node to look at: GPU use per cluster, GPU nodes ranked by busy share whose names open Node details (hardware and jobs), and TPU VMs held. Two hub queries per load.",
+  "tags": [
+    "marin"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "refresh": "",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": []
+  },
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": true,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Home",
+      "type": "link",
+      "url": "/d/marin-home"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "type": "custom",
+        "label": "Cluster",
+        "multi": true,
+        "includeAll": true,
+        "query": "marin,marin-dev,cw-rno2a,cw-us-east-02a,cw-us-east-08a",
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "bin",
+        "type": "custom",
+        "label": "Bin",
+        "query": "2 minutes,5 minutes,15 minutes",
+        "current": {
+          "text": "5 minutes",
+          "value": "5 minutes"
+        },
+        "options": [],
+        "description": "At least 2 minutes: node agent samples arrive about every 60.7 s, so a 1-minute bin can miss one."
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 101,
+      "type": "timeseries",
+      "title": "GPUs held and busy per cluster",
+      "description": "Per ${bin}, per CoreWeave cluster. GPUs held are the GPUs that reported inventory in a bin (a GPU present for part of the bin counts fully); GPUs busy and tensor-active are the sums of each GPU's mean ratio over its samples in the bin. The same query feeds Nodes to inspect; the bridge runs it once.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH gpu AS ( SELECT \"cluster\", node_name,  date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin,  json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,  max(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) AS held,  max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model,  avg(CASE WHEN name = 'gpu_sm_active_ratio' THEN value END) AS sm_active,  avg(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value END) AS tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND \"cluster\" IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}}) SELECT \"cluster\", node_name, bin, sum(held) AS gpus_held, sum(COALESCE(sm_active, 0)) AS gpus_busy,  sum(COALESCE(tensor_active, 0)) AS gpus_tensor_active, max(gpu_model) AS gpu_model FROM gpu GROUP BY 1, 2, 3 ORDER BY 3, 1, 2\n```",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH gpu AS ( SELECT \"cluster\", node_name,  date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin,  json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,  max(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) AS held,  max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model,  avg(CASE WHEN name = 'gpu_sm_active_ratio' THEN value END) AS sm_active,  avg(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value END) AS tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND \"cluster\" IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}}) SELECT \"cluster\", node_name, bin, sum(held) AS gpus_held, sum(COALESCE(sm_active, 0)) AS gpus_busy,  sum(COALESCE(tensor_active, 0)) AS gpus_tensor_active, max(gpu_model) AS gpu_model FROM gpu GROUP BY 1, 2, 3 ORDER BY 3, 1, 2"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "node_name",
+              "text": "node_name",
+              "type": "string"
+            },
+            {
+              "selector": "bin",
+              "text": "bin",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "gpus_held",
+              "text": "gpus_held",
+              "type": "number"
+            },
+            {
+              "selector": "gpus_busy",
+              "text": "gpus_busy",
+              "type": "number"
+            },
+            {
+              "selector": "gpus_tensor_active",
+              "text": "gpus_tensor_active",
+              "type": "number"
+            },
+            {
+              "selector": "gpu_model",
+              "text": "gpu_model",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "cluster": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "bin": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "gpus_held": {
+                "aggregations": [
+                  "sum"
+                ],
+                "operation": "aggregate"
+              },
+              "gpus_busy": {
+                "aggregations": [
+                  "sum"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "bin"
+              }
+            ]
+          }
+        },
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "cluster"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 102,
+      "type": "table",
+      "title": "Nodes to inspect",
+      "description": "One row per GPU node in the range: its GPU type, and GPUs held, busy and tensor-active averaged over the range's bins. GPUs held are the GPUs that reported inventory in a bin (a GPU present for part of the bin counts fully); GPUs busy and tensor-active are the sums of each GPU's mean ratio over its samples in the bin. Idle GPUs are held minus busy. Sorted by busy share, lowest first, so idle nodes come first whatever their size. Rack, slot, node pool, instance type and IB fabric come from the Kubernetes node labels (/k8s/nodes, which needs the CoreWeave read token). Click a node to open it in Node details, with its hardware and jobs.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nWITH gpu AS ( SELECT \"cluster\", node_name,  date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin,  json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,  max(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) AS held,  max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model,  avg(CASE WHEN name = 'gpu_sm_active_ratio' THEN value END) AS sm_active,  avg(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value END) AS tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND \"cluster\" IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}}) SELECT \"cluster\", node_name, bin, sum(held) AS gpus_held, sum(COALESCE(sm_active, 0)) AS gpus_busy,  sum(COALESCE(tensor_active, 0)) AS gpus_tensor_active, max(gpu_model) AS gpu_model FROM gpu GROUP BY 1, 2, 3 ORDER BY 3, 1, 2\n```",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "WITH gpu AS ( SELECT \"cluster\", node_name,  date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin,  json_get(attributes_json, 'gpu_uuid') AS gpu_uuid,  max(CASE WHEN name = 'hardware_inventory' THEN 1 ELSE 0 END) AS held,  max(CASE WHEN name = 'hardware_inventory' THEN json_get(attributes_json, 'gpu_model') END) AS gpu_model,  avg(CASE WHEN name = 'gpu_sm_active_ratio' THEN value END) AS sm_active,  avg(CASE WHEN name = 'gpu_tensor_active_ratio' THEN value END) AS tensor_active FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name IN ('hardware_inventory', 'gpu_sm_active_ratio', 'gpu_tensor_active_ratio') AND json_get(attributes_json, 'gpu_uuid') IS NOT NULL AND \"cluster\" IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3, 4 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}}) SELECT \"cluster\", node_name, bin, sum(held) AS gpus_held, sum(COALESCE(sm_active, 0)) AS gpus_busy,  sum(COALESCE(tensor_active, 0)) AS gpus_tensor_active, max(gpu_model) AS gpu_model FROM gpu GROUP BY 1, 2, 3 ORDER BY 3, 1, 2"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "node_name",
+              "text": "node_name",
+              "type": "string"
+            },
+            {
+              "selector": "bin",
+              "text": "bin",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "gpus_held",
+              "text": "gpus_held",
+              "type": "number"
+            },
+            {
+              "selector": "gpus_busy",
+              "text": "gpus_busy",
+              "type": "number"
+            },
+            {
+              "selector": "gpus_tensor_active",
+              "text": "gpus_tensor_active",
+              "type": "number"
+            },
+            {
+              "selector": "gpu_model",
+              "text": "gpu_model",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "k8s"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/nodes",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "cluster",
+                "value": "${cluster:csv}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "rack_name",
+              "text": "rack",
+              "type": "string"
+            },
+            {
+              "selector": "rack_slot",
+              "text": "slot",
+              "type": "string"
+            },
+            {
+              "selector": "node_pool",
+              "text": "node pool",
+              "type": "string"
+            },
+            {
+              "selector": "instance_type",
+              "text": "instance type",
+              "type": "string"
+            },
+            {
+              "selector": "ib_fabric",
+              "text": "IB fabric",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "cluster": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "node_name": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "gpu_model": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "gpus_held": {
+                "aggregations": [
+                  "mean"
+                ],
+                "operation": "aggregate"
+              },
+              "gpus_busy": {
+                "aggregations": [
+                  "mean"
+                ],
+                "operation": "aggregate"
+              },
+              "gpus_tensor_active": {
+                "aggregations": [
+                  "mean"
+                ],
+                "operation": "aggregate"
+              }
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "node_name": "node"
+            }
+          }
+        },
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "node",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "alias": "idle GPUs",
+            "replaceFields": false,
+            "binary": {
+              "left": "gpus_held (mean)",
+              "operator": "-",
+              "right": "gpus_busy (mean)"
+            }
+          }
+        },
+        {
+          "id": "calculateField",
+          "options": {
+            "mode": "binary",
+            "alias": "busy share",
+            "replaceFields": false,
+            "binary": {
+              "left": "gpus_busy (mean)",
+              "operator": "/",
+              "right": "gpus_held (mean)"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "busy share",
+                "desc": false
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "renameByName": {
+              "gpu_model": "GPU type",
+              "gpus_held (mean)": "GPUs held",
+              "gpus_busy (mean)": "GPUs busy",
+              "gpus_tensor_active (mean)": "GPUs tensor-active"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "node"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Inspect this node in Node details",
+                    "url": "/d/marin-nodes?var-cluster=${__data.fields.cluster}&var-node=${__value.raw}&${__url_time_range}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "GPU type"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "busy share"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-RdYlGr"
+                }
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 103,
+      "type": "text",
+      "title": "CPU and memory in use",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "CPU and memory in use need a precomputed table: the live `iris.task` scan took 3 to 28 s at a 15-minute range on the hub (median 24 s over three runs), past the bridge's 20 s deadline."
+      }
+    },
+    {
+      "id": 106,
+      "type": "text",
+      "title": "By category",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Use by category needs the job tag column, which the controller does not write yet. Splitting by category joins every attempt to its job, the costly lookback, so it will likely come from a precomputed table rather than a live query."
+      }
+    },
+    {
+      "id": 105,
+      "type": "timeseries",
+      "title": "TPU VMs held",
+      "description": "TPU VMs that reported inventory per ${bin}, per cluster and TPU type: distinct node_name, which on a TPU VM is its GCE instance name, one per worker of a multi-host slice. TPUs have no use signal; chips held is VMs times chips per VM of the type.\n\nSQL ({{from}} and {{to}} are the dashboard time range; the bridge fills them in.):\n\n```sql\nSELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS \"cluster\", date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, json_get(attributes_json, 'tpu_type') AS tpu_type, count(DISTINCT node_name) AS tpu_vms_held FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'tpu' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}} ORDER BY 1, 2, 3\n```",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/query",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "sql",
+                "value": "SELECT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS \"cluster\", date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') AS bin, json_get(attributes_json, 'tpu_type') AS tpu_type, count(DISTINCT node_name) AS tpu_vms_held FROM \"telemetry_v1.node_agent\" WHERE service = 'iris-node-agent' AND name = 'hardware_inventory' AND json_get(attributes_json, 'device_kind') = 'tpu' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT) GROUP BY 1, 2, 3 HAVING date_bin(INTERVAL ${bin:sqlstring}, to_timestamp_millis(timestamp_ms), TIMESTAMP '1970-01-01 00:00:00') + INTERVAL ${bin:sqlstring} <= {{to}} ORDER BY 1, 2, 3"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "bin",
+              "text": "bin",
+              "type": "timestamp_epoch"
+            },
+            {
+              "selector": "tpu_type",
+              "text": "tpu_type",
+              "type": "string"
+            },
+            {
+              "selector": "tpu_vms_held",
+              "text": "tpu_vms_held",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "cluster",
+              "tpu_type"
+            ],
+            "keepFields": false
+          }
+        }
+      ],
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "line",
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ]
+}

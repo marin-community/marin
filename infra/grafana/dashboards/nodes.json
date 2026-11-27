@@ -1356,6 +1356,522 @@
         }
       ],
       "maxDataPoints": 360
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Jobs on this node",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
+      "panels": [
+        {
+          "id": 12,
+          "type": "timeseries",
+          "title": "Jobs on the node",
+          "description": "One line per job: 1 while an attempt of the job runs on this node, from the controller rows; stacked so two jobs at once read 2. An attempt still running from before the range is found only if its newest controller row is at most a day old.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "maxDataPoints": 360,
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "finelog-marin"
+              },
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "parser": "backend",
+              "url": "/v1/node/jobs",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "node",
+                    "value": "${node}"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  },
+                  {
+                    "key": "bucket_ms",
+                    "value": "${__interval_ms}"
+                  },
+                  {
+                    "key": "view",
+                    "value": "job_activity"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "bucket",
+                  "text": "bucket",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "job_id",
+                  "text": "job_id",
+                  "type": "string"
+                },
+                {
+                  "selector": "active",
+                  "text": "active",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "transformations": [
+            {
+              "id": "partitionByValues",
+              "options": {
+                "fields": [
+                  "job_id"
+                ],
+                "keepFields": false
+              }
+            }
+          ],
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 48
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "custom": {
+                "drawStyle": "line",
+                "showPoints": "never",
+                "lineInterpolation": "stepAfter",
+                "fillOpacity": 30,
+                "stacking": {
+                  "mode": "normal",
+                  "group": "A"
+                }
+              },
+              "min": 0,
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 13,
+          "type": "table",
+          "title": "Task attempts on the node",
+          "description": "The attempts behind the job lines: their job and request. An attempt still running from before the range is found only if its newest controller row is at most a day old.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "maxDataPoints": 360,
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "finelog-marin"
+              },
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "parser": "backend",
+              "url": "/v1/node/jobs",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "node",
+                    "value": "${node}"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  },
+                  {
+                    "key": "bucket_ms",
+                    "value": "${__interval_ms}"
+                  },
+                  {
+                    "key": "view",
+                    "value": "attempts"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "job_id",
+                  "text": "job_id",
+                  "type": "string"
+                },
+                {
+                  "selector": "job_name",
+                  "text": "job_name",
+                  "type": "string"
+                },
+                {
+                  "selector": "task_id",
+                  "text": "task_id",
+                  "type": "string"
+                },
+                {
+                  "selector": "attempt_id",
+                  "text": "attempt_id",
+                  "type": "number"
+                },
+                {
+                  "selector": "attempt_uid",
+                  "text": "attempt_uid",
+                  "type": "string"
+                },
+                {
+                  "selector": "state",
+                  "text": "state",
+                  "type": "string"
+                },
+                {
+                  "selector": "started_at",
+                  "text": "started_at",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "finished_at",
+                  "text": "finished_at",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "cpu_request",
+                  "text": "cpu_request",
+                  "type": "number"
+                },
+                {
+                  "selector": "memory_request_bytes",
+                  "text": "memory_request_bytes",
+                  "type": "number"
+                },
+                {
+                  "selector": "accelerator_kind",
+                  "text": "accelerator_kind",
+                  "type": "string"
+                },
+                {
+                  "selector": "accelerator_type",
+                  "text": "accelerator_type",
+                  "type": "string"
+                },
+                {
+                  "selector": "accelerators_per_task",
+                  "text": "accelerators_per_task",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 55
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "memory_request_bytes"
+                },
+                "properties": [
+                  {
+                    "id": "unit",
+                    "value": "bytes"
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true
+          }
+        },
+        {
+          "id": 14,
+          "type": "timeseries",
+          "title": "CPU cores per attempt",
+          "description": "CPU cores each attempt on this node used per bucket, from iris.task.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "maxDataPoints": 360,
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "finelog-marin"
+              },
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "parser": "backend",
+              "url": "/v1/node/jobs",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "node",
+                    "value": "${node}"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  },
+                  {
+                    "key": "bucket_ms",
+                    "value": "${__interval_ms}"
+                  },
+                  {
+                    "key": "view",
+                    "value": "attempt_usage"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "bucket",
+                  "text": "bucket",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "attempt",
+                  "text": "attempt",
+                  "type": "string"
+                },
+                {
+                  "selector": "cpu_cores",
+                  "text": "cpu_cores",
+                  "type": "number"
+                },
+                {
+                  "selector": "memory_bytes",
+                  "text": "memory_bytes",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "memory_bytes": true
+                }
+              }
+            },
+            {
+              "id": "partitionByValues",
+              "options": {
+                "fields": [
+                  "attempt"
+                ],
+                "keepFields": false
+              }
+            }
+          ],
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 62
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "custom": {
+                "drawStyle": "line",
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 15,
+          "type": "timeseries",
+          "title": "Memory per attempt",
+          "description": "Memory each attempt on this node used per bucket, from iris.task.",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "finelog-marin"
+          },
+          "maxDataPoints": 360,
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "yesoreyeram-infinity-datasource",
+                "uid": "finelog-marin"
+              },
+              "type": "json",
+              "source": "url",
+              "format": "table",
+              "parser": "backend",
+              "url": "/v1/node/jobs",
+              "url_options": {
+                "method": "GET",
+                "params": [
+                  {
+                    "key": "clusters",
+                    "value": "${cluster:csv}"
+                  },
+                  {
+                    "key": "node",
+                    "value": "${node}"
+                  },
+                  {
+                    "key": "from",
+                    "value": "${__from}"
+                  },
+                  {
+                    "key": "to",
+                    "value": "${__to}"
+                  },
+                  {
+                    "key": "bucket_ms",
+                    "value": "${__interval_ms}"
+                  },
+                  {
+                    "key": "view",
+                    "value": "attempt_usage"
+                  }
+                ]
+              },
+              "columns": [
+                {
+                  "selector": "bucket",
+                  "text": "bucket",
+                  "type": "timestamp_epoch"
+                },
+                {
+                  "selector": "attempt",
+                  "text": "attempt",
+                  "type": "string"
+                },
+                {
+                  "selector": "cpu_cores",
+                  "text": "cpu_cores",
+                  "type": "number"
+                },
+                {
+                  "selector": "memory_bytes",
+                  "text": "memory_bytes",
+                  "type": "number"
+                }
+              ]
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "cpu_cores": true
+                }
+              }
+            },
+            {
+              "id": "partitionByValues",
+              "options": {
+                "fields": [
+                  "attempt"
+                ],
+                "keepFields": false
+              }
+            }
+          ],
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 62
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes",
+              "custom": {
+                "drawStyle": "line",
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right"
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        }
+      ]
     }
   ]
 }

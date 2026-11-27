@@ -88,6 +88,7 @@ def projected_rows(database: duckdb.DuckDBPyConnection, dataset: DashboardDatase
         "freshness",
         "model_power",
         "sm",
+        "node_busy",
         "temperature_distribution",
         "run_power",
     ],
@@ -132,3 +133,34 @@ def test_accelerator_panel_sources_preserve_empty_window_results(accelerator_dat
     actual = [row for row in projected_rows(accelerator_database, dataset) if row["section"] == view]
 
     assert actual == ([{"section": view, "value": None}] if view == "mean_utilization" else [])
+
+
+def test_nodes_to_inspect_ranks_nodes_idlest_first_from_the_sm_rasters_fetch(accelerator_database):
+    accelerator_database.executemany(
+        'INSERT INTO "telemetry_v1.node_agent" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+            (
+                "cw-a",
+                "idle-node",
+                "iris-node-agent",
+                name,
+                json.dumps({"gpu_uuid": gpu, "gpu_index": gpu[-1], "gpu_model": "B200"}),
+                0,
+                value,
+            )
+            for gpu in ("IDLE-0", "IDLE-1")
+            for name, value in (("gpu_power_watts", 100), ("gpu_sm_active_ratio", 0.1))
+        ],
+    )
+    ranking = accelerator_overview_dataset(("cw-a",), 0, 1_200_000, 30_000, "node_busy")
+    raster = accelerator_overview_dataset(("cw-a",), 0, 1_200_000, 30_000, "sm")
+
+    rows = [row for row in projected_rows(accelerator_database, ranking) if row["section"] == "node_busy"]
+
+    # Same source and cache key as the SM raster, so the table adds no hub query to a load.
+    assert ranking.sources == raster.sources and ranking.cache_key == raster.cache_key
+    assert [(row["node"], row["gpus"], row["gpu_model"]) for row in rows] == [
+        ("idle-node", 2, "B200"),
+        ("node-a", 1, "H200"),
+    ]
+    assert [row["busy_share"] for row in rows] == pytest.approx([10.0, 50.0])

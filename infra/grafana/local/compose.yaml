@@ -1,0 +1,51 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Run the Marin Grafana image on a workstation against the prod `marin` finelog hub,
+# to develop dashboards. See "Run locally against prod" in ../README.md.
+#
+#   uv run iris --cluster marin login        # once; caches the IAP login
+#   docker compose -f infra/grafana/local/compose.yaml up --build
+#   open http://127.0.0.1:3000
+#
+# For CoreWeave node labels (rack, node pool), also export the read-role token first:
+#   export CW_READ_TOKEN="$(gcloud secrets versions access latest \
+#       --secret=marin-grafana-cw-read-token --project=hai-gcp-models)"
+#
+# The bridge reaches finelog through the Iris IAP proxy, as `uv run finelog query
+# marin` does, with the IAP token minted from the cached login. The login file is
+# mounted read-only and nothing in this file holds a credential. Only the `marin`
+# hub is served, at most one query is in flight to it, alert rules load but never
+# evaluate, and only the dashboard mounted below is provisioned, so opening Grafana cannot
+# fire the other dashboards' queries at the hub. Change that mount to work on another one.
+name: marin-grafana-local
+
+services:
+  grafana:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: marin-grafana:local
+    ports:
+      # Loopback only: the local Grafana has no login (anonymous Admin below).
+      - "127.0.0.1:3000:8080"
+    environment:
+      GRAFANA_BRIDGE_LOCAL_FINELOG_URL: iap+https://iris.oa.dev/proxy/system.log-server
+      GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES: "1"
+      # Local editing: anonymous users can change and save dashboards.
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_UNIFIED_ALERTING_EXECUTE_ALERTS: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards-local/utilization.json
+      # Optional: the CoreWeave read-role token behind the bridge's /k8s routes (node labels such
+      # as rack). Passed through from the shell that runs compose, never written here; unset,
+      # those routes answer with auth-error rows and the panels that use them stay empty.
+      CW_READ_TOKEN: ${CW_READ_TOKEN:-}
+    volumes:
+      - ${HOME}/.config/marin/credentials/marin.json:/home/grafana/.config/marin/credentials/marin.json:ro
+      - ./dashboards.yaml:/etc/grafana/provisioning/dashboards/marin.yaml:ro
+      - ../dashboards/utilization.json:/etc/grafana/dashboards-local/utilization.json:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  # Grafana's SQLite database (local users, stars, UI edits), kept across restarts.
+  grafana-data:

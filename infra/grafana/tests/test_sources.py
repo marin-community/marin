@@ -4,19 +4,22 @@
 """Behavioral tests for live finelog, Iris, GitHub, and W&B bridge sources."""
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 
+import finelog_source
 import httpx
 import pyarrow as pa
 import pytest
-from config import ClusterTarget
+import server
+from config import CLUSTERS, LOCAL_FINELOG_MAX_QUERIES_ENV, LOCAL_FINELOG_URL_ENV, ClusterTarget
 from conftest import bridge_config
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from errors import FinelogUnavailableError, UpstreamError
 from finelog.errors import StatsError
 from finelog_health import FinelogRole
-from finelog_source import FinelogSource
+from finelog_source import FinelogSource, IapFinelogSource
 from github_source import GithubSource
 from google.api_core.exceptions import Forbidden, ServiceUnavailable
 from iris_source import IrisSource
@@ -28,6 +31,7 @@ from wandb_source import LoggedPoint, WandbSource
 
 TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
 HEALTH_QUERY = 'SELECT * FROM "log" LIMIT 1'
+LOCAL_FINELOG_URL = "iap+https://iris.example.com/proxy/system.log-server"
 
 
 def _iris(handler) -> IrisSource:
@@ -100,6 +104,12 @@ def test_finelog_query_classifies_only_retryable_rpc_failures_as_unavailable():
     assert raised.value is invalid
 
 
+def test_finelog_query_classifies_a_transport_failure_as_unavailable():
+    """A dropped connection to the finelog VM is transient, like a failed discovery."""
+    with pytest.raises(FinelogUnavailableError):
+        _finelog(ConnectionResetError("connection reset")).query(HEALTH_QUERY, max_rows=1)
+
+
 def test_finelog_query_classifies_only_retryable_discovery_failures_as_unavailable():
     with pytest.raises(FinelogUnavailableError):
         _finelog(ServiceUnavailable("temporarily unavailable")).query(HEALTH_QUERY, max_rows=1)
@@ -108,6 +118,64 @@ def test_finelog_query_classifies_only_retryable_discovery_failures_as_unavailab
     with pytest.raises(Forbidden) as raised:
         _finelog(forbidden).query(HEALTH_QUERY, max_rows=1)
     assert raised.value is forbidden
+
+
+class _GatedLogClient:
+    """Blocks each query until released, recording the most queries in flight at once."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.changed = threading.Condition()
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    def query(self, sql: str, *, max_rows: int) -> pa.Table:
+        with self.changed:
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            self.changed.notify_all()
+        self.release.wait(timeout=5)
+        with self.changed:
+            self.in_flight -= 1
+        return pa.table({"1": [1]})
+
+
+def _iap_finelog(monkeypatch, client, *, max_concurrent_queries: int) -> IapFinelogSource:
+    # No cached login is read and no connection is opened.
+    monkeypatch.setattr(finelog_source, "iap_provider_for", lambda name: object())
+    monkeypatch.setattr(finelog_source, "connect", lambda url, factory, auth: client)
+    return IapFinelogSource(
+        TARGET,
+        LOCAL_FINELOG_URL,
+        timeout_ms=5_000,
+        max_concurrent_queries=max_concurrent_queries,
+    )
+
+
+@pytest.mark.parametrize("bound", [1, 2])
+def test_a_local_source_holds_at_most_its_bound_of_queries_in_flight(monkeypatch, bound):
+    """A dashboard load fires every panel at once; the hub must see at most `bound`."""
+    client = _GatedLogClient()
+    source = _iap_finelog(monkeypatch, client, max_concurrent_queries=bound)
+    threads = [threading.Thread(target=source.query, args=(HEALTH_QUERY,), kwargs={"max_rows": 1}) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    with client.changed:
+        assert client.changed.wait_for(lambda: client.in_flight == bound, timeout=5)
+    client.release.set()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert client.max_in_flight == bound
+
+
+def test_a_local_source_classifies_retryable_rpc_failures_as_unavailable(monkeypatch):
+    unavailable = StatsError("query failed")
+    unavailable.__cause__ = ConnectError(Code.UNAVAILABLE, "down")
+    source = _iap_finelog(monkeypatch, _FakeLogClient(unavailable), max_concurrent_queries=1)
+
+    with pytest.raises(FinelogUnavailableError):
+        source.query(HEALTH_QUERY, max_rows=1)
 
 
 def test_finelog_relay_status_calls_connect_json_without_a_new_client_release():
@@ -850,3 +918,39 @@ def test_nightlies_endpoint_returns_linked_long_cells():
     assert {row["lane_id"] for row in rows} == lane_ids
     assert all("workflow_url" in row and "lane_order" in row for row in rows)
     assert any(row["url"] == "https://x" for row in rows)
+
+
+def _served_finelog_sources(monkeypatch) -> dict:
+    """Run the bridge's main() up to serving and return the finelog sources it built."""
+    served: dict = {}
+
+    def capture(config, finelog_sources, *rest):
+        served.update(finelog_sources)
+        return object()
+
+    monkeypatch.setattr(server, "create_app", capture)
+    monkeypatch.setattr(server.uvicorn, "run", lambda *args, **kwargs: None)
+    server.main()
+    return served
+
+
+def test_the_deployed_bridge_serves_every_cluster_over_vpc(monkeypatch):
+    monkeypatch.delenv(LOCAL_FINELOG_URL_ENV, raising=False)
+    monkeypatch.delenv(LOCAL_FINELOG_MAX_QUERIES_ENV, raising=False)
+
+    served = _served_finelog_sources(monkeypatch)
+
+    assert set(served) == {cluster.name for cluster in CLUSTERS}
+    assert all(isinstance(source, FinelogSource) for source in served.values())
+
+
+def test_a_local_bridge_serves_only_the_hub_through_iap(monkeypatch):
+    monkeypatch.setenv(LOCAL_FINELOG_URL_ENV, LOCAL_FINELOG_URL)
+    monkeypatch.setenv(LOCAL_FINELOG_MAX_QUERIES_ENV, "1")
+    monkeypatch.setattr(finelog_source, "iap_provider_for", lambda name: object())
+    monkeypatch.setattr(finelog_source, "connect", lambda url, factory, auth: _FakeLogClient())
+
+    served = _served_finelog_sources(monkeypatch)
+
+    assert list(served) == ["marin"]
+    assert isinstance(served["marin"], IapFinelogSource)

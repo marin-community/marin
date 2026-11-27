@@ -13,6 +13,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
 
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
     GET /finelog/{cluster}/v1/node/overview       bounded shared Node Details dataset
+    GET /finelog/{cluster}/v1/node/jobs           bounded Node Details job-row dataset
     GET /finelog/{cluster}/v1/training/overview   bounded shared Training dataset
     GET /finelog/{cluster}/v1/runs/overview       bounded shared multi-run dataset
     GET /finelog/{cluster}/v1/rl/overview         bounded shared RL core/engine dataset
@@ -105,6 +106,7 @@ from config import (
     BRIDGE_PORT,
     CLUSTERS,
     DEFAULT_OPERATOR_BEHAVIOR,
+    FINELOG_HUB_CLUSTER,
     FINELOG_SLOW_THRESHOLD_MS,
     GITHUB_REPO,
     HERO_OPERATOR_BEHAVIOR,
@@ -112,6 +114,7 @@ from config import (
     STORAGE_OPERATOR_BEHAVIOR,
     BridgeConfig,
     ClusterTarget,
+    local_finelog_from_environment,
 )
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -119,7 +122,7 @@ from dashboard_dataset import DashboardDataset, SourceQuery, project_dataset, va
 from errors import FinelogUnavailableError, UpstreamError
 from finelog.errors import QueryResultTooLargeError, QueryTimeoutError, StatsError
 from finelog_health import FinelogHealth
-from finelog_source import FinelogSource, MetricSource
+from finelog_source import FinelogSource, IapFinelogSource, MetricSource
 from github_app import GithubAppAuth
 from github_source import GithubSource
 from hero_health import (
@@ -158,6 +161,7 @@ from loom_alerts import (
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from nightly_config import NIGHTLY_LANES
+from node_jobs_observability import node_jobs_dataset
 from node_observability import node_overview_dataset
 from relay_health import relay_alert_rows
 from rl_execution_observability import rl_execution_dataset
@@ -262,7 +266,6 @@ _DATASET_CONCURRENCY = 2
 _DATASET_WINDOW_BUCKET_MS = 15_000
 _DATASET_LIVE_WINDOW_TOLERANCE_MS = 60_000
 _FINELOG_FILTER_TOKEN = "finelog"
-_FINELOG_HUB_CLUSTER = "marin"
 
 
 def workload_overview(pending_rows: list[dict], crashloop_rows: list[dict]) -> list[dict]:
@@ -754,6 +757,19 @@ def create_app(
             ),
         )
 
+    def node_jobs(request: Request) -> JSONResponse:
+        return dashboard_dataset_response(
+            request,
+            "node jobs",
+            lambda params, start_ms, end_ms: node_jobs_dataset(
+                _csv_values(params, "clusters"),
+                _require(params, "node"),
+                start_ms,
+                end_ms,
+                int(_require(params, "bucket_ms")),
+            ),
+        )
+
     def zephyr_overview(request: Request) -> JSONResponse:
         return dashboard_dataset_response(
             request,
@@ -1042,10 +1058,10 @@ def create_app(
             return JSONResponse({"error": f"{err}; narrow the time range"}, status_code=400)
 
     def fleet_health_rows() -> list[FinelogHealth]:
-        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        _target_for(FINELOG_HUB_CLUSTER, finelog_sources)
         return finelog_health_cache.get_or_compute(
             "fleet_health",
-            lambda: [finelog_sources[_FINELOG_HUB_CLUSTER].health(), *k8s_fleet.finelog_health()],
+            lambda: [finelog_sources[FINELOG_HUB_CLUSTER].health(), *k8s_fleet.finelog_health()],
         )
 
     def finelog_fleet_health(_: Request) -> JSONResponse:
@@ -1061,10 +1077,10 @@ def create_app(
             return JSONResponse({"error": str(err)}, status_code=400)
 
     def relay_status_rows():
-        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+        _target_for(FINELOG_HUB_CLUSTER, finelog_sources)
         return finelog_health_cache.get_or_compute(
             "relay_status",
-            lambda: finelog_sources[_FINELOG_HUB_CLUSTER].relay_status(),
+            lambda: finelog_sources[FINELOG_HUB_CLUSTER].relay_status(),
         )
 
     def finelog_relay_status(_: Request) -> JSONResponse:
@@ -1163,7 +1179,7 @@ def create_app(
         """Serve one finelog-backed alert projection under the hub's cache and error contract."""
         now = datetime.now(UTC)
         try:
-            target = _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+            target = _target_for(FINELOG_HUB_CLUSTER, finelog_sources)
             key = (name, _bucket(now, config.cache_ttl))
             return JSONResponse(finelog_cache.get_or_compute(key, lambda: project(target, now)))
         except FinelogUnavailableError as err:
@@ -1495,6 +1511,7 @@ def create_app(
             Route("/finelog/{cluster}/query", finelog_queries.query),
             Route("/finelog/{cluster}/alerts/query", finelog_queries.alert_query),
             Route("/finelog/{cluster}/v1/node/overview", node_overview),
+            Route("/finelog/{cluster}/v1/node/jobs", node_jobs),
             Route("/finelog/{cluster}/v1/accelerator/overview", accelerator_overview),
             Route("/finelog/{cluster}/v1/jobs/overview", jobs_overview),
             Route("/finelog/{cluster}/v1/rl/overview", rl_overview),
@@ -1506,17 +1523,17 @@ def create_app(
             Route("/finelog/{cluster}/v1/vllm/overview", vllm_overview),
             Route("/finelog/{cluster}/v1/zephyr/overview", zephyr_overview),
             Route("/finelog/{cluster}/v1/rl/producers", rl_producers),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/relay_status", finelog_alerts_relay_status),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_telemetry", finelog_alerts_training_telemetry),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_optimizer", finelog_alerts_training_optimizer),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
-            Route(f"/finelog/{_FINELOG_HUB_CLUSTER}/alerts/b200_utilization", finelog_alerts_b200_utilization),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/fleet_health", finelog_fleet_health),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/relay_status", finelog_relay_status),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/fleet_health", finelog_alerts_fleet_health),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/relay_status", finelog_alerts_relay_status),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/training_stalls", finelog_alerts_training_stalls),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/loss_spikes", finelog_alerts_loss_spikes),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/training_telemetry", finelog_alerts_training_telemetry),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/training_optimizer", finelog_alerts_training_optimizer),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/training_health", finelog_alerts_training_health),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/zephyr_stalls", finelog_alerts_zephyr_stalls),
+            Route(f"/finelog/{FINELOG_HUB_CLUSTER}/alerts/b200_utilization", finelog_alerts_b200_utilization),
             Route("/iris/{cluster}/job_counts", iris_job_counts),
             Route("/iris/{cluster}/jobs", iris_jobs),
             Route("/iris/{cluster}/workers", iris_workers),
@@ -1553,7 +1570,26 @@ def create_app(
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     config = BridgeConfig.from_environment()
-    finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
+    local_finelog = local_finelog_from_environment()
+    finelog_sources: dict[str, MetricSource]
+    if local_finelog is None:
+        finelog_sources = {c.name: FinelogSource(c, timeout_ms=config.query_timeout_ms) for c in CLUSTERS}
+    else:
+        target = next(c for c in CLUSTERS if c.name == FINELOG_HUB_CLUSTER)
+        finelog_sources = {
+            target.name: IapFinelogSource(
+                target,
+                local_finelog.url,
+                timeout_ms=config.query_timeout_ms,
+                max_concurrent_queries=local_finelog.max_concurrent_queries,
+            )
+        }
+        logger.info(
+            "local bridge: finelog %s through %s, at most %d queries in flight",
+            target.name,
+            local_finelog.url,
+            local_finelog.max_concurrent_queries,
+        )
     iris_sources = {c.name: IrisSource(c, timeout=config.http_timeout) for c in CLUSTERS}
     if config.github_app_credentials is None:
         logger.warning("no GitHub App credentials; GitHub panels run unauthenticated and the build panel shows no data")

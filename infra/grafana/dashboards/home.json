@@ -111,6 +111,16 @@
     {
       "asDropdown": false,
       "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": false,
+      "targetBlank": false,
+      "title": "Utilization",
+      "type": "link",
+      "url": "/d/marin-utilization"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
       "includeVars": true,
       "keepTime": true,
       "targetBlank": false,

@@ -1754,10 +1754,147 @@
       "maxDataPoints": 100
     },
     {
+      "id": 19,
+      "type": "table",
+      "title": "Nodes to inspect",
+      "description": "One row per GPU node: its mean SM activity over the range from the same samples as the raster below, idlest first. Click a node to open it in Node details with its hardware and jobs, on this range.",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "finelog-marin"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "interval": "1m",
+      "maxDataPoints": 100,
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "/v1/accelerator/overview",
+          "url_options": {
+            "method": "GET",
+            "params": [
+              {
+                "key": "clusters",
+                "value": "${cluster:csv}"
+              },
+              {
+                "key": "from",
+                "value": "${__from}"
+              },
+              {
+                "key": "to",
+                "value": "${__to}"
+              },
+              {
+                "key": "bucket_ms",
+                "value": "${__interval_ms}"
+              },
+              {
+                "key": "view",
+                "value": "node_busy"
+              }
+            ]
+          },
+          "columns": [
+            {
+              "selector": "cluster",
+              "text": "cluster",
+              "type": "string"
+            },
+            {
+              "selector": "node",
+              "text": "node",
+              "type": "string"
+            },
+            {
+              "selector": "gpus",
+              "text": "gpus",
+              "type": "number"
+            },
+            {
+              "selector": "gpu_model",
+              "text": "gpu_model",
+              "type": "string"
+            },
+            {
+              "selector": "busy_share",
+              "text": "busy_share",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "busy_share"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "displayName",
+                "value": "busy share (SM active)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "node"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Inspect this node in Node details",
+                    "url": "/d/marin-nodes?var-cluster=${__data.fields.cluster}&var-node=${__value.raw}&${__url_time_range}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "busy share (SM active)",
+            "desc": false
+          }
+        ]
+      }
+    },
+    {
       "id": 17,
       "type": "marin-infra-panel",
       "title": "SM utilization by GPU",
-      "description": "One time raster lane per reporting GPU, ordered by cluster, node, and device. Green is low activity, orange is high activity, and dark gaps are missing samples. SM activity is the fraction of time at least one warp was active on a streaming multiprocessor; hover for the exact GPU and value.",
+      "description": "One time raster lane per reporting GPU, ordered by cluster, node, and device. Green is low activity, orange is high activity, and dark gaps are missing samples. SM activity is the fraction of time at least one warp was active on a streaming multiprocessor; hover for the exact GPU and value, and click a cell to open its node in Node details on this range.",
       "datasource": {
         "type": "yesoreyeram-infinity-datasource",
         "uid": "finelog-marin"
@@ -1766,7 +1903,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 56
       },
       "fieldConfig": {
         "defaults": {},
@@ -1853,7 +1990,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 60
+        "y": 70
       },
       "fieldConfig": {
         "defaults": {

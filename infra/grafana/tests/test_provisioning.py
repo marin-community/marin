@@ -57,6 +57,11 @@ def _all_panels(dashboard: dict) -> list[dict]:
     return [nested for panel in dashboard["panels"] for nested in (panel, *panel.get("panels", []))]
 
 
+def _target_sql(target: dict) -> list[str]:
+    """The SQL an Infinity target sends in its `sql` URL parameter."""
+    return [param["value"] for param in target.get("url_options", {}).get("params", []) if param["key"] == "sql"]
+
+
 def _panel_sql(dashboard: dict) -> list[str]:
     """Every SQL string a dashboard sends, panels and template variables alike."""
     queries = [target for panel in _all_panels(dashboard) for target in panel.get("targets", [])]
@@ -64,12 +69,7 @@ def _panel_sql(dashboard: dict) -> list[str]:
         query = variable.get("query")
         if isinstance(query, dict) and query.get("queryType") == "infinity":
             queries.append(query["infinityQuery"])
-    return [
-        param["value"]
-        for query in queries
-        for param in query.get("url_options", {}).get("params", [])
-        if param["key"] == "sql"
-    ]
+    return [sql for query in queries for sql in _target_sql(query)]
 
 
 def _create_levanter_stream_view(database: duckdb.DuckDBPyConnection) -> None:
@@ -1359,3 +1359,68 @@ def test_training_moe_health_queries_show_routing_signals():
     assert query("token_drops") == [(at, 0.04, 0.03, 0.02, 0.07)]
     assert query("router_health") == [(at, 5.93, 390.0, -380.0, 25.0, -31.0, 5.92, 400.0, -400.0)]
     assert query("parameter_norms") == [(at, 4800.0, 200.0)]
+
+
+UTILIZATION = DASHBOARDS / "utilization.json"
+# Two fleet queries: GPUs by node and TPU VMs. The bridge's cache only shares byte-identical SQL,
+# so a later edit to one copy of a shared query would add a hub scan per load.
+UTILIZATION_MAX_DISTINCT_SQL = 2
+
+
+def _finelog_sql(panel: dict) -> list[str]:
+    """The SQL of every target in ``panel`` that queries finelog through the bridge.
+
+    A finelog datasource's URL already names its cluster
+    (provisioning/datasources/finelog.yaml), so its targets address ``/query``.
+    """
+    sql = []
+    for target in panel.get("targets") or []:
+        # A mixed panel names each target's datasource; otherwise the panel's applies.
+        datasource = target.get("datasource") or panel.get("datasource") or {}
+        if not str(datasource.get("uid", "")).startswith("finelog-"):
+            continue
+        assert target.get("url") == "/query", f"{panel.get('title')}: {target.get('url')}"
+        sql += _target_sql(target)
+    return sql
+
+
+def test_the_utilization_dashboard_bounds_its_load_on_the_hub():
+    """Every signed-in viewer's load reaches the hub, and local/compose.yaml loads the same file
+    against it live: no auto-refresh, a short default range, and every query bounded by the range."""
+    dashboard = json.loads(UTILIZATION.read_text())
+
+    assert dashboard.get("refresh", "") == ""
+    assert dashboard["time"] == {"from": "now-15m", "to": "now"}
+    queries = [sql for panel in _all_panels(dashboard) for sql in _finelog_sql(panel)]
+    assert queries
+    assert len(set(queries)) <= UTILIZATION_MAX_DISTINCT_SQL
+    # A hub-backed dropdown would run on every load, outside the bounds below.
+    assert not [v for v in dashboard.get("templating", {}).get("list", []) if v.get("type") == "query"]
+    for sql in queries:
+        assert "{{from}}" in sql and "{{to}}" in sql, sql
+        # A quoted '${var}' breaks or rewrites the query on a value with a quote; use ${var:sqlstring}.
+        assert "'${" not in sql, sql
+
+
+def test_home_opens_the_utilization_dashboard_on_its_own_short_range():
+    """Home defaults to a wider range than the utilization dashboard's queries can scan in time,
+    so its link must not carry Home's range or variables across."""
+    home = json.loads((DASHBOARDS / "home.json").read_text())
+    links = [link for link in home["links"] if link.get("url") == "/d/marin-utilization"]
+
+    assert len(links) == 1
+    assert links[0]["keepTime"] is False
+    assert links[0]["includeVars"] is False
+
+
+def test_node_details_job_row_queries_only_when_opened():
+    """Node details refreshes every minute on a 3-hour default range. Grafana sends no request for a
+    collapsed row, so the job row's dataset (the node's attempts and their usage) costs nothing
+    until someone opens it."""
+    nodes = json.loads((DASHBOARDS / "nodes.json").read_text())
+    rows = [panel for panel in nodes["panels"] if panel.get("title") == "Jobs on this node"]
+
+    assert len(rows) == 1
+    assert rows[0]["type"] == "row" and rows[0]["collapsed"] is True
+    urls = {target["url"] for panel in rows[0]["panels"] for target in panel["targets"]}
+    assert urls == {"/v1/node/jobs"}

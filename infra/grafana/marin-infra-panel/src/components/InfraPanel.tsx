@@ -8,7 +8,7 @@ import { StatusPage } from './StatusPage';
 import { WandbChart } from './WandbChart';
 import { InfraPanelOptions } from '../types';
 
-export function InfraPanel({ options, data, width, height }: PanelProps<InfraPanelOptions>) {
+export function InfraPanel({ options, data, width, height, timeRange }: PanelProps<InfraPanelOptions>) {
   if (options.view === 'status') {
     return <StatusPage frames={data.series} width={width} height={height} />;
   }
@@ -22,7 +22,7 @@ export function InfraPanel({ options, data, width, height }: PanelProps<InfraPan
     return <WandbChart frames={data.series} width={width} height={height} />;
   }
   if (options.view === 'sm') {
-    return <SmUtilizationRaster frames={data.series} width={width} height={height} />;
+    return <SmUtilizationRaster frames={data.series} width={width} height={height} timeRange={timeRange} />;
   }
   return <NightlyMatrix frames={data.series} width={width} height={height} />;
 }

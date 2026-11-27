@@ -9,7 +9,8 @@ Grafana. The `status` view combines these sections:
 - W&B hero-training series against cumulative tokens.
 
 The `cluster` view renders live cluster packing and observed resource usage. The
-`sm` view renders the fleet's per-GPU SM activity as a time raster. The separate
+`sm` view renders the fleet's per-GPU SM activity as a time raster; clicking a cell
+opens that GPU's node in Node details on the panel's time range. The separate
 `nightlies`, `commits`, and `wandb` views remain available. The panel receives
 Grafana data frames. The Python bridge owns credentials, queries, and caches.
 

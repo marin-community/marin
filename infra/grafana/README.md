@@ -32,6 +32,7 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/{cluster}/v1/{node,training,runs,rl,accelerator,jobs}/overview
                                                     bounded shared dashboard datasets
+GET /finelog/{cluster}/v1/node/jobs              one node's task attempts and their usage
 GET /finelog/{cluster}/v1/zephyr/overview        bounded ranked shuffle snapshot
 GET /finelog/{cluster}/v1/rl/recent              bounded recent RL runs
 GET /finelog/{cluster}/v1/rl/execution           selected job's executions
@@ -839,6 +840,54 @@ parses and its variables survive provisioning:
 curl -s 'http://localhost:3000/api/search?type=dash-db'
 curl -s http://localhost:3000/api/dashboards/uid/marin-accel
 ```
+
+### Run locally against prod
+
+To develop a dashboard against real data, `local/compose.yaml` runs the same image
+with the bridge reaching the prod `marin` finelog hub through the Iris IAP proxy,
+the route `uv run finelog query marin` takes:
+
+```bash
+uv run iris --cluster marin login            # once; caches the IAP login
+docker compose -f infra/grafana/local/compose.yaml up --build
+# → http://127.0.0.1:3000
+```
+
+The bridge mints the IAP token for each request from the cached login, which
+compose mounts read-only from `~/.config/marin/credentials/marin.json`. No other
+credential is needed for finelog. Setting `GRAFANA_BRIDGE_LOCAL_FINELOG_URL` (an
+`iap+https://` URL) and `GRAFANA_BRIDGE_LOCAL_FINELOG_MAX_CONCURRENT_QUERIES`
+together switches the bridge to this route; unset, it uses Direct VPC egress as
+deployed.
+
+The bridge's `/k8s` routes, such as `/k8s/nodes` with each node's rack and node pool, need the
+CoreWeave read-role token. Export `CW_READ_TOKEN` in the shell that runs compose (the command is in
+`local/compose.yaml`); compose passes it through and never writes it. Without it those routes answer
+with auth-error rows.
+
+Every panel query reaches the production hub, so the local setup holds the load down:
+
+- Only the `marin` hub is served, with at most one query in flight to it.
+- Alert rules load but never evaluate (`GF_UNIFIED_ALERTING_EXECUTE_ALERTS=false`).
+- Only the dashboard under development is provisioned: compose mounts
+  `dashboards/utilization.json` and Grafana re-reads it every 10 s, so opening Grafana
+  does not fire the other dashboards' queries. The mount follows the file, not its
+  path: after something replaces the file (`git checkout`, some editors), run
+  `docker compose -f infra/grafana/local/compose.yaml up -d` again. To work on
+  another dashboard, change that mount.
+- Grafana listens on 127.0.0.1 only. Anonymous users are Admin, so panels can be
+  edited and saved.
+
+Keep a dashboard under development on a short default range with auto-refresh
+off, and bound every query by the dashboard range.
+
+`utilization.json` is also a production dashboard: which node to look at, with each node
+linking to Node details on the same range. Node details shows the node's hardware and, in a
+collapsed row served by `/v1/node/jobs`, its jobs. In production every signed-in viewer's
+load reaches the hub, and what bounds it is the bridge's 20 s cache (shared per query and
+time window), the 20 s query deadline, auto-refresh off and the 15-minute default range; a
+test requires the last two and caps the dashboard at two distinct queries. The deployed
+bridge has no per-source concurrency bound on `/query`.
 
 ## Deploy
 
