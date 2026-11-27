@@ -1283,7 +1283,7 @@ def _public_idea(idea: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
         "result": idea["result"],
-        "note": idea["note"] if idea["state"] == IdeaState.DECLINED else None,
+        "note": idea["note"],
         "priority": (
             {"band": idea["priority_grant"], "granted_by": idea["priority_by"]} if idea["priority_grant"] else None
         ),

@@ -204,8 +204,8 @@ function detail(idea, cfg) {
     latest.length ? [el('div', { class: 'runs-k' }, 'Latest launch'), miniRuns(latest)] : null,
     earlier.length ? el('details', { class: 'earlier-runs' }, el('summary', {}, `Earlier runs (${earlier.length})`), miniRuns(earlier)) : null,
     idea.result ? el('p', { class: 'verdict-line' }, verdictChip(idea.result), ' ', idea.result.verdict) : null,
+    !idea.result ? el('p', { class: 'muted small clamp' }, plan?.summary ?? idea.body) : null,
     idea.note ? el('p', { class: 'muted small' }, idea.note) : null,
-    !idea.result && !idea.note ? el('p', { class: 'muted small clamp' }, plan?.summary ?? idea.body) : null,
   )
 }
 

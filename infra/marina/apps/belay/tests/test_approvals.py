@@ -26,6 +26,7 @@ from belay.app import (
     SessionFinish,
     SessionState,
     ThreadPost,
+    _public_idea,
     agent_caller_ok,
     approve_idea,
     approve_intake_comment,
@@ -245,6 +246,13 @@ def test_an_approval_stores_the_approvers_instructions_as_the_maintainer_note(co
     assert approve_idea(conn, idea_id(conn), "ClassicLarry", note="  Run on the d1280 track at lr 0.02.  ")
     row = conn.execute(text("SELECT note FROM ideas WHERE id = :id"), {"id": idea_id(conn)}).one()
     assert row.note == "Maintainer ClassicLarry: Run on the d1280 track at lr 0.02."
+
+
+def test_the_approvers_instructions_show_on_the_public_idea(conn) -> None:
+    record_intake_comment(conn, comment())
+    assert approve_idea(conn, idea_id(conn), "ClassicLarry", note="Run on the d1280 track at lr 0.02.")
+    idea = conn.execute(text("SELECT * FROM ideas WHERE id = :id"), {"id": idea_id(conn)}).mappings().one()
+    assert _public_idea(dict(idea))["note"] == "Maintainer ClassicLarry: Run on the d1280 track at lr 0.02."
 
 
 def test_an_approval_without_instructions_leaves_the_note_alone(conn) -> None:
