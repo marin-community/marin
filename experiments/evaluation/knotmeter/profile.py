@@ -15,7 +15,7 @@ from experiments.evaluation.knotmeter.recipe import (
     load_series,
     workload_environment,
 )
-from experiments.evaluation.knotmeter.workload import check_native_cache, preparation_recipe, restore_workload
+from experiments.evaluation.knotmeter.workload import check_native_cache, restore_workload
 
 
 def main() -> None:
@@ -31,10 +31,7 @@ def main() -> None:
     bundle = args.output / "bundle"
     args.output.mkdir(parents=True, exist_ok=False)
     receipt = read_record(args.workload)
-    expected_inputs = preparation_recipe(series)["inputs"]
-    if any(receipt["recipe"]["inputs"].get(key) != expected for key, expected in expected_inputs.items()):
-        raise ValueError("Prepared workload inputs differ from the profiling recipe")
-    restore_workload(receipt, bundle)
+    restore_workload(receipt, bundle, series=series)
     check_native_cache(bundle, SERIES_PATH, args.output / "workload-check.log")
     run_logged(
         benchmark_command(series, args.concurrency, args.url, args.output / "aiperf_artifacts"),

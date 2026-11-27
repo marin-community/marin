@@ -77,8 +77,11 @@ def check_native_cache(bundle: Path, series_path: Path, log: Path) -> None:
     )
 
 
-def restore_workload(receipt: dict, bundle: Path) -> None:
-    """Restore exact bytes from the frozen publication."""
+def restore_workload(receipt: dict, bundle: Path, *, series: dict) -> None:
+    """Verify the requested workload inputs before restoring the archived data."""
+    expected_inputs = preparation_recipe(series)["inputs"]
+    if any(receipt["recipe"]["inputs"].get(key) != expected for key, expected in expected_inputs.items()):
+        raise ValueError("Prepared workload inputs differ from the profiling recipe")
     bundle.mkdir(parents=True, exist_ok=False)
     archive = bundle.parent / "workload.tar.zst"
     copy_file(receipt["archive_uri"], str(archive))
@@ -102,7 +105,7 @@ def prepare_workload(work: Path, *, series_path: Path, cache_root: str | None = 
         if receipt["recipe"] != recipe:
             raise ValueError("Prepared workload pointer differs from its recipe")
         logger.info("AgentX workload cache HIT: %s", pointer)
-        restore_workload(receipt, bundle)
+        restore_workload(receipt, bundle, series=series)
     except FileNotFoundError:
         # TTL may remove either the pointer or its data first. Rebuild only here,
         # on CPU; children receive a frozen archive URI and never reconstruct.
